@@ -100,8 +100,10 @@ export interface Carrying {
  *   one they held in the mode that asks is reopened with `it` and whatever their own settings
  *   allow. It does what it could do with them there, and no more.
  * - Codex is run in its sandbox for a workspace, with the network allowed and It's own folder
- *   writable, which is what `it` needs. It can write in the conversation's folder and nowhere
- *   else, and nothing can ask the person for more, since they are not there.
+ *   writable, which is what `it` needs. It can write in the conversation's folder, It's folder
+ *   and the system's temporary folders, and nowhere else, and nothing can ask the person for
+ *   more, since they are not there. These settings are given on the command line, so they win
+ *   over a permissions profile the person chose in their own settings or a project's.
  * - Pi, OpenCode and Hermes are run as they are in a window, with whatever their own settings
  *   allow there. Nothing can ask the person for more, since they are not there.
  */
@@ -391,10 +393,12 @@ export async function endTree(
   // Whatever carries this run's own name, wherever it is by now: a command the run started in
   // a group of its own is in neither the run's family nor its group once the run is gone, and
   // is the run's all the same. No other run has the name, so what carries it is ended with it.
-  const markedNow = of?.run ? marked(of.run, since) : new Map<number, string>()
+  const looked = of?.run ? marked(of.run, since) : { found: new Map<number, string>(), whole: true }
+  const markedNow = looked?.found ?? null
   // Failed discovery leaves uncertainty, but does not prevent ending processes whose
-  // identities can still be checked. In particular, Stop still reaches a known leader.
-  let uncertain = markedNow === null
+  // identities can still be checked. In particular, Stop still reaches a known leader, and
+  // what was found carrying the run's name is ended though another process could not be read.
+  let uncertain = !looked?.whole
   const strays = [...(markedNow?.keys() ?? [])]
   if (reused) {
     if (!strays.length) return uncertain ? 'unknown' : 'gone'
@@ -427,9 +431,9 @@ export async function endTree(
   // have lost its mark while the system would not let us read it.
   const signalled = new Map<number, string>()
   const left = (): Map<number, string> => {
-    const found = of?.run ? marked(of.run, since) : new Map<number, string>()
-    if (found === null) uncertain = true
-    else for (const [p, at] of found) were.set(p, at)
+    const again = of?.run ? marked(of.run, since) : { found: new Map<number, string>(), whole: true }
+    if (!again?.whole) uncertain = true
+    for (const [p, at] of again?.found ?? []) were.set(p, at)
     // One identity snapshot for the whole tick. On macOS each call runs ps, so asking for
     // every process separately would keep the connector from answering while Stop runs.
     const is = processes([...were.keys()])
@@ -596,11 +600,14 @@ function belongs(pid: number, of: { harness: string; session: string }): boolean
 /**
  * The processes that carry a run's own name in what they were started with, wherever they are.
  * Null where the system could not be asked. Another person's process cannot be read and is
- * passed over: it is not this run's, which runs as this person.
+ * passed over: it is not this run's, which runs as this person. One of this person's own that
+ * cannot be read may be the run's, so then the look is not `whole`. What it found is found all
+ * the same, and is ended with the run, whatever other process of theirs began meanwhile.
  */
-function marked(run: string, since: string): Map<number, string> | null {
+function marked(run: string, since: string): { found: Map<number, string>; whole: boolean } | null {
   const mark = `IT_RUN=${run}`
   const found = new Map<number, string>()
+  let whole = true
   if (process.platform === 'linux') {
     let listed: string[]
     try {
@@ -637,7 +644,7 @@ function marked(run: string, since: string): Map<number, string> | null {
         } catch (gone) {
           if (['ENOENT', 'ESRCH'].includes((gone as NodeJS.ErrnoException).code ?? '')) continue
         }
-        return null
+        whole = false
       }
     }
   } else {
@@ -652,7 +659,7 @@ function marked(run: string, since: string): Map<number, string> | null {
     }
   }
   found.delete(process.pid)
-  return found
+  return { found, whole }
 }
 
 /**
@@ -802,10 +809,16 @@ const heldAsked = new Map<string, { at: number; held: 'elsewhere' | 'it' | false
  *
  * Codex lets one program at a time write a conversation, and says which conversations are
  * being written with a file each: `thread-writer-locks/<id>.lock` in its folder, there for as
- * long as the conversation is open in some Codex. A Codex that was ended without warning
- * leaves its file behind, so where the system says who has a file open, that is asked too, and
- * each program that has it open is asked whose it is, by the marks every run It starts carries
- * (see `carryOn`). One whose marks cannot be read is not taken for It's.
+ * long as the conversation is open in some Codex. The Codex that writes a conversation keeps
+ * its file open and holds a lock on all of it, which the system lets go of when that Codex
+ * ends, however it ends. A Codex that was ended without warning leaves the file behind, so the
+ * system is asked too. On Linux and macOS it says which programs have the file open, and each
+ * is asked whose it is, by the marks every run It starts carries (see `carryOn`): one whose
+ * marks cannot be read is not taken for It's, and one that has gone since it was listed holds
+ * nothing. On Windows it says whether a program holds that lock, and not which, so a lock that
+ * is held there is taken for some other Codex's. It's own run is not told by its lock there,
+ * and need not be: the connector knows its own run while it runs, and once the run has ended
+ * Windows has let go of its lock.
  *
  * What is found is good for a moment, since this is asked for every click that waits, on every
  * pass. `fresh` asks again all the same: whoever has just seen It's own run of the
@@ -821,11 +834,18 @@ export function codexHolder(
   const lock = path.join(codexHome, 'thread-writer-locks', `${thread}.lock`)
   const asked = heldAsked.get(lock)
   if (!fresh && asked && now - asked.at < 1500) return asked.held
-  const by = existsSync(lock) ? openBy(lock) : []
-  const whose = (by ?? []).map((pid) => [pid, belongs(pid, { harness: 'codex', session: thread }) === true] as const)
-  // One that has gone since it was listed holds nothing. One that cannot be looked for is kept
-  const others = whose.filter(([pid, its]) => !its && processes([pid])?.size !== 0)
-  const held = by === null ? null : others.length ? ('elsewhere' as const) : whose.some(([, its]) => its) ? ('it' as const) : false
+  let held: 'elsewhere' | 'it' | false | null
+  if (!existsSync(lock)) held = false
+  else if (process.platform === 'win32') {
+    const locked = lockedElsewhere(lock)
+    held = locked === null ? null : locked ? 'elsewhere' : false
+  } else {
+    const by = openBy(lock)
+    const whose = (by ?? []).map((pid) => [pid, belongs(pid, { harness: 'codex', session: thread }) === true] as const)
+    // One that has gone since it was listed holds nothing. One that cannot be looked for is kept
+    const others = whose.filter(([pid, its]) => !its && processes([pid])?.size !== 0)
+    held = by === null ? null : others.length ? 'elsewhere' : whose.some(([, its]) => its) ? 'it' : false
+  }
   if (heldAsked.size > 500) heldAsked.clear()
   heldAsked.set(lock, { at: now, held })
   return held
@@ -887,6 +907,36 @@ export function openBy(file: string): number[] | null {
     }
   }
   return null
+}
+
+/**
+ * Whether a program holds a lock on the start of a file that keeps others from reading it, as
+ * Windows tells it. Codex holds such a lock on all of a conversation's file for as long as it
+ * writes the conversation. The file is opened for reading alone, shared with every other
+ * program for reading, writing and removing it, and its first byte is read: Windows refuses
+ * that read while another program holds the lock. Nothing is locked or written. Null where the
+ * file cannot be opened or read for another reason, as when a program that has it open lets
+ * nobody else read it, which says nothing of whether it is held.
+ */
+export function lockedElsewhere(file: string): boolean | null {
+  let fd: number
+  try {
+    fd = openSync(file, 'r')
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? false : null
+  }
+  try {
+    readSync(fd, Buffer.alloc(1), 0, 1, 0)
+    return false
+  } catch (err) {
+    // A read refused for a lock, which Node and Bun both give as EBUSY. Refused at the opening,
+    // EBUSY is another program's having the file to itself, or its being removed, and not a lock.
+    return (err as NodeJS.ErrnoException).code === 'EBUSY' ? true : null
+  } finally {
+    try {
+      closeSync(fd)
+    } catch {}
+  }
 }
 
 /**

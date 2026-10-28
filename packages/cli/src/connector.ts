@@ -52,7 +52,7 @@ import { conversationFolder, conversationProfile, noteConversation } from './pub
 import { alone } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
-import { type T3, type T3Search, t3Send, t3Server, t3ThreadOf } from './t3'
+import { type T3, type T3Search, t3Running, t3Send, t3Server, t3ThreadOf } from './t3'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, begin, record, startSender, thisMachine, thisProgram, three, timeBand } from './usage'
 import {
@@ -145,6 +145,33 @@ export const infoFile = () => inHome('connector.json')
 const socketFile = () => inHome('connector.sock')
 const journalFile = () => inHome('journal.jsonl')
 const aliasFile = () => inHome('aliases.json')
+/**
+ * The ids a conversation is known by, as keys: the one it carries on under now, and the latest
+ * few it had before it was cleared, under which the pages it made then are still recorded.
+ * `aliases` leads each earlier id to the one that came after it.
+ */
+export function knownAs(aliases: ReadonlyMap<string, string>, key: string): string[] {
+  const follow = (k: string) => {
+    for (let hops = 0; hops < 10 && aliases.has(k); hops++) k = aliases.get(k)!
+    return k
+  }
+  const now = follow(key)
+  return [
+    now,
+    ...[...aliases]
+      .filter(([, to]) => follow(to) === now)
+      .map(([from]) => from)
+      .slice(-5),
+  ]
+}
+/** The conversations a conversation on this machine is known by, as the connector has written them down: itself, where nothing is written. */
+export function conversationIds(s: { harness: string; id: string }): { harness: string; id: string }[] {
+  const written = readJson<Record<string, unknown>>(aliasFile())
+  const aliases = new Map<string, string>()
+  if (written && typeof written === 'object' && !Array.isArray(written))
+    for (const [from, to] of Object.entries(written)) if (typeof to === 'string') aliases.set(from, to)
+  return knownAs(aliases, keyOf(s.harness, s.id)).map((k) => ({ harness: k.slice(0, k.indexOf(':')), id: k.slice(k.indexOf(':') + 1) }))
+}
 /** The conversations whose hooks have been heard from, so that it is known across a restart where a hook of It's runs. */
 const heardFile = () => inHome('heard.json')
 /** Where a connector that is stopping writes down which conversations it cut off in the middle of a turn. */
@@ -634,6 +661,134 @@ async function connecting(say: (line: string) => void): Promise<void> {
         soon(again)
       })
     return waiting() ? 'asking' : undefined
+  }
+  /**
+   * A person can switch a thread of T3 Code to another agent app, and the thread then runs
+   * another conversation, under another id, and lets go of the one it ran before. What the
+   * person does on that one's pages is for the thread, which is to say for the conversation the
+   * thread runs now. So when a conversation is heard from that T3 Code says a thread runs now,
+   * each conversation the thread ran before carries on as it: its pages on this machine go to
+   * this one in It, with the clicks waiting on them, and what is kept here for it is kept for
+   * this one. Only the thread's own conversations are, by what T3 Code says of that thread, and
+   * never one of another thread, however alike their folders. One that is listening or in the
+   * middle of a turn at that moment is in use, and keeps what it has until it is not.
+   *
+   * Asked when a conversation is heard from: no oftener than every minute while a thread runs
+   * it, and where none was found to, again a few times at first, since T3 Code may not yet have
+   * the conversation's id from its agent app, and then every ten minutes. Where T3 Code is not
+   * running nothing is asked, and what was handed over stays where it went.
+   *
+   * A conversation is heard from only while its add-on speaks, and Codex's speaks only at
+   * moments in a turn. The first turn after a switch may be over before T3 Code has the new
+   * conversation's id, or before the one it replaced has gone quiet, and then nothing more is
+   * heard until the person's next message. So a look that is to be had again soon is had by
+   * this connector itself, on a timer of its own, whether or not anything is heard meanwhile:
+   * no more than three times in a row, and not once the conversation has been followed, has
+   * been looked for in vain that often, or the connector stops.
+   */
+  const t3Follows = new Map<string, { at: number; misses: number; retries: number }>()
+  /** The look this connector is to have again by itself, by the conversation. */
+  const followTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** The conversation each one carries on as, since It was told so by this connector. */
+  const carriedOn = new Map<string, string>()
+  const FOLLOW_AGAIN_MS = 60_000
+  const FOLLOW_SOON_MS = 20_000
+  const FOLLOW_SELDOM_MS = 10 * 60_000
+  /** How many looks in a row this connector has by itself for one conversation. */
+  const FOLLOW_RETRIES = 3
+  const unfollowed = (key: string) => {
+    const timer = followTimers.get(key)
+    if (timer !== undefined) clearTimeout(timer)
+    followTimers.delete(key)
+  }
+  function followThread(key: string, session: { harness: string; id: string }, retrying = false): void {
+    if (session.harness !== 'codex' && session.harness !== 'claude-code') return
+    if (unfitting || closing || over || recovery.erased || !chosen(session.harness)) return
+    const last = t3Follows.get(key)
+    // One look at a time for each conversation, and none before the last one said, unless it is the look this connector put off until now
+    if (last && (last.at === Number.POSITIVE_INFINITY || (!retrying && steady() < last.at))) return
+    if (!t3Seen || Date.now() - t3Seen.at > 5000) t3Seen = { at: Date.now(), server: t3Server() }
+    const server = t3Seen.server
+    if (!server) return
+    // A look that comes before the one put off is that look
+    unfollowed(key)
+    if (t3Follows.size > 2000) {
+      for (const timer of followTimers.values()) clearTimeout(timer)
+      followTimers.clear()
+      t3Follows.clear()
+    }
+    const misses = last?.misses ?? 0
+    const retries = last?.retries ?? 0
+    t3Follows.set(key, { at: Number.POSITIVE_INFINITY, misses, retries })
+    /** When the next look is to be. One that is to be soon is had by this connector itself, so many times in a row and no more. */
+    const next = (ms: number, missed: number) => {
+      const itself = ms === FOLLOW_SOON_MS && retries < FOLLOW_RETRIES && !closing && !over
+      t3Follows.set(key, { at: steady() + ms, misses: missed, retries: itself ? retries + 1 : 0 })
+      if (!itself) return
+      const timer = setTimeout(() => {
+        if (followTimers.get(key) !== timer) return
+        followTimers.delete(key)
+        followThread(key, session, true)
+      }, ms)
+      followTimers.set(key, timer)
+    }
+    const known = t3Known.get(key)
+    const thread = known !== undefined && known !== 'asking' ? (known.thread ?? undefined) : undefined
+    // By the id it has now and by those it had before, which T3 Code may still know it by
+    const ids = [session.id, ...[...aliases].filter(([, to]) => follow(to) === key).map(([from]) => threadOf(from))]
+    const live = (k: string) => {
+      const s = sessions.get(k)
+      return (s !== undefined && Date.now() - s.seen < LIVE_MS) || turnRunning(k, Date.now())
+    }
+    void t3Running(server, { harness: session.harness, ids, cwd: conversationFolder(session) }, thread)
+      .catch(() => undefined)
+      .then(async (found) => {
+        if (!found) return next(misses < 3 ? FOLLOW_SOON_MS : FOLLOW_SELDOM_MS, misses + 1)
+        // A click for it goes to that thread wherever its add-on is not there to take it. Not
+        // where a search for it has begun meanwhile, which says so itself when it ends
+        const knownNow = t3Known.get(key)
+        if (knownNow !== 'asking' && !knownNow?.thread) t3Known.set(key, { thread: found.thread, at: Date.now() })
+        // It is the thread's own conversation now, and carries on as nothing else
+        carriedOn.delete(key)
+        let again = FOLLOW_AGAIN_MS
+        for (const was of found.before) {
+          const latest = follow(keyOf(was.harness, was.id))
+          // Under any id it had: a conversation whose app gave it a new id made its later pages under that one
+          const under = new Set([keyOf(was.harness, was.id), latest, ...[...aliases].filter(([, to]) => follow(to) === latest).map(([from]) => from)])
+          under.delete(key)
+          const due = [...under].filter((k) => carriedOn.get(k) !== key)
+          if (!due.length) continue
+          if ([...under].some(live)) {
+            again = FOLLOW_SOON_MS
+            continue
+          }
+          let moved = 0
+          for (const k of due) {
+            const from = { harness: k.slice(0, k.indexOf(':')), id: threadOf(k) }
+            const done = await call<{ moved: number }>('mutation', api.artifacts.carryOn, { from, to: session }).catch(() => null)
+            if (done === null || over) {
+              again = FOLLOW_SOON_MS
+              continue
+            }
+            moved += done.moved
+            carriedOn.set(k, key)
+            // What was last found for that one no longer holds: should the thread be switched
+            // back to it, its next hook looks again at once, however lately it was looked for
+            if (t3Follows.get(k)?.at !== Number.POSITIVE_INFINITY) {
+              t3Follows.delete(k)
+              unfollowed(k)
+            }
+            // What waits here for it, a mark's words and a waiter's copy of a click, waits for this one
+            await recovery.session(key, k).catch(() => {})
+          }
+          if (moved)
+            say(
+              `${a(agentOf(was.harness))} conversation (${short(was.id)}) carries on as ${a(agentOf(session.harness))} conversation (${short(session.id)}) in their thread of T3 Code; ${moved} page${moved === 1 ? '' : 's'} went with it`,
+            )
+        }
+        next(again, 0)
+        if (carriedOn.size > 500) carriedOn.delete(carriedOn.keys().next().value!)
+      })
   }
   /**
    * What each mark that was put into a conversation stands for, by the conversation: the
@@ -2555,6 +2710,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (isNew) say(`${a(agentOf(harness))} conversation is listening (${short(id)})`)
       if (changed && typeof body.was === 'string') say(`${a(agentOf(harness))} conversation carries on under a new id (${short(body.was)} is now ${short(id)})`)
       if (isNew || changed) watch()
+      // Where a thread of T3 Code runs it now, what that thread ran before carries on as it
+      followThread(key, { harness, id })
       // Heard from after a while: what was set aside for it, here and in It, is its to be given
       // again. Not where it is this machine's own reopening that is heard from: that is a try
       // like the ones before it, and forgetting them there would have it tried without end.
@@ -2682,15 +2839,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const s = body.session as { harness?: unknown; id?: unknown } | undefined
         const session =
           slug === null && typeof s?.harness === 'string' && typeof s?.id === 'string' ? follow(keyOf(s.harness.slice(0, 40), s.id.slice(0, 200))) : null
-        const watched = session
-          ? [
-              session,
-              ...[...aliases]
-                .filter(([, to]) => follow(to) === session)
-                .map(([from]) => from)
-                .slice(-5),
-            ]
-          : []
+        const watched = session ? knownAs(aliases, session) : []
         const waiter = { slug, sessions: new Set(watched), seen: Date.now() }
         waiters.set(who, waiter)
         // A machine that does not fit the It it joined hands nothing over, to a waiter either, and nor does a connector that is stopping
@@ -3303,6 +3452,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // was reopened for is given back, and is reopened for again when It next starts.
   closing = true
   for (const timer of markTimers) clearTimeout(timer)
+  for (const timer of followTimers.values()) clearTimeout(timer)
+  followTimers.clear()
   // Written down for the connector that starts next: each of these is given what it was
   // reopened for a second time, and must be told that its first turn at it was cut off
   // (Not the run a person has just stopped, which is ending for that reason and is noted as

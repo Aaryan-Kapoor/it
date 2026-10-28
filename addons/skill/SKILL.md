@@ -75,7 +75,7 @@ It does where It's add-on for your harness is connected and its connector is run
 | `it open <id> [--on "<display>"]` | Ask every paired display, or one by name, to bring a page up |
 | `it notify "<text>" [--id <id>] [--on "<display>"]` | A short message outside any page, which a display that is not open may get as a notification |
 | `it wait [--id <id>] [--follow] [--timeout <seconds>]` | Block until the user acts, then print the action |
-| `it actions [--id <id>]` · `it action <action-id>` · `it ack <action-id> [--failed]` | List the actions still waiting, print one in full, and mark one as handled |
+| `it actions [--id <id>]` · `it action <action-id>` · `it ack <action-id> [--failed]` | List what waits on your pages, print one in full, and mark one as handled |
 | `it list` · `it read <id>` · `it delete <id>` · `it displays` · `it status` | The pages, one page, removing one, the displays, and whether It is running and connected |
 | `it help <topic>` | More, when you need it: `showing`, `page`, `waiting`, `actions` |
 

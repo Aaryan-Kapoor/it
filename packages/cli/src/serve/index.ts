@@ -16,7 +16,7 @@ import { backendFolder, noteNetwork, readConfig, type ServiceConfig } from './co
 import { makeContent, startDoor } from './door'
 import { onTheInternet, reachable } from './network'
 import { recoverStartup } from './startup'
-import { tailnetAddresses } from './tailnet'
+import { tailnetAddresses, tailnetName } from './tailnet'
 
 /**
  * Runs the service until it is asked to stop. A backend that ends by itself, and a newer It
@@ -178,20 +178,27 @@ const ASKED_MS = 5_000
  * asked for (`wanted`), the addresses another device reaches it at, and two things that only
  * the computer It runs on can know, which the owner's settings then say as they are: whether It
  * is registered with the system to start by itself from this folder (`background`), and whether
- * counts of its use are being sent at this moment (`usage`).
+ * counts of its use are being sent at this moment (`usage`). With them, the machine's name on
+ * its tailnet where the door answers to it (`tailnetName`), which the links agents give can be at.
  */
-export const standsAs = (door: { network: boolean; tailnet?: boolean }, wanted: boolean, port: number) => ({
-  on: door.network,
-  wanted,
-  addresses: door.network ? reachable(port, undefined, door.tailnet === true) : [],
-  background: startsByItself(),
-  usage: counting(),
-  // What the site needs to offer the network as a switch: whether the door answers the tailnet
-  // alone, whether this machine is on one, and why "on" would mean the internet here
-  tailnet: door.network && door.tailnet === true,
-  canTailnet: tailnetAddresses().length > 0,
-  ...(onTheInternet() ? { exposed: onTheInternet()!.why } : {}),
-})
+export const standsAs = (door: { network: boolean; tailnet?: boolean }, wanted: boolean, port: number, named: () => string | undefined = tailnetName) => {
+  const onTailnet = tailnetAddresses().length > 0
+  // The door answers to that name kept to the tailnet, and open to every network on a machine that is on one
+  const name = door.network && (door.tailnet === true || onTailnet) ? named() : undefined
+  return {
+    on: door.network,
+    wanted,
+    addresses: door.network ? reachable(port, undefined, door.tailnet === true) : [],
+    background: startsByItself(),
+    usage: counting(),
+    // What the site needs to offer the network as a switch: whether the door answers the tailnet
+    // alone, whether this machine is on one, and why "on" would mean the internet here
+    tailnet: door.network && door.tailnet === true,
+    canTailnet: onTailnet,
+    ...(onTheInternet() ? { exposed: onTheInternet()!.why } : {}),
+    ...(name ? { tailnetName: name } : {}),
+  }
+}
 type Stands = ReturnType<typeof standsAs>
 /** What the owner may ask of the network on the site: off, on for every network this machine is on, or on for the tailnet alone. */
 type Way = 'off' | 'on' | 'tailscale'
@@ -254,10 +261,11 @@ export function teller(
 
 /**
  * What It notes in its folder of the person's conversations on this machine, beside the
- * database: the folder each was held in when it published a page, which of them an add-on has
- * been heard from in and which carried on under another id, the clicks handed to each, and
- * which are owed the word that a turn of theirs was cut off or stopped. The first is written
- * by the command that publishes, and the rest by the connector.
+ * database: the folder each was held in, which of them an add-on has been heard from in and
+ * which carried on under another id, the clicks handed to each, and which are owed the word
+ * that a turn of theirs was cut off or stopped. The first is written by the command that
+ * publishes or brings up a page, once It has accepted that, and by the connector as Codex's
+ * hooks say where a conversation is held; the rest by the connector alone.
  *
  * The note of the turns It has reopened that are running now (`runs.json`) is not among them.
  * It is what keeps a conversation from being reopened a second time while a process of its

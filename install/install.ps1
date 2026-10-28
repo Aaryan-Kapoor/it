@@ -25,6 +25,8 @@
 #
 # Everything runs inside a block of its own, so that running this as `irm ... | iex` leaves
 # nothing behind in the session it was run from: no variable, no function, no changed setting.
+# The one thing that stays is the small type it asks Windows about the processor through, since
+# PowerShell cannot take a type away again.
 & {
   # Arguments belong to this block, including when the script is invoked from downloaded text.
   $joining = @($args)
@@ -75,6 +77,33 @@
   $target = Join-Path $dir 'it.exe'
   $license = Join-Path $root 'LICENSE.md'
   $notices = Join-Path $root 'THIRD_PARTY_NOTICES.md'
+  # The program is for an Intel or AMD processor that has SSE4.2 and POPCNT, which the runtime
+  # inside it is built for, and the backend program needs no more. Windows says whether the
+  # processor has SSE4.2 from Windows 10 version 2004 on, and every Intel or AMD processor that
+  # has it has POPCNT. One without it is told so before anything is downloaded or made, and so is
+  # one in a virtual machine that is not given it. A Windows on an ARM processor runs the program
+  # through its own translation, and is not asked. Where Windows is older, or cannot be asked,
+  # nothing is refused here, and the program is still started once before it is put in place.
+  $lacking = $false
+  try {
+    if ([Environment]::OSVersion.Version.Build -ge 19041) {
+      if (-not ('ItInstall.Processor' -as [type])) {
+        Add-Type -Namespace ItInstall -Name Processor -MemberDefinition @'
+[DllImport("kernel32.dll")] static extern bool IsProcessorFeaturePresent(uint feature);
+[DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+[DllImport("kernel32.dll")] static extern bool IsWow64Process2(IntPtr process, out ushort processMachine, out ushort nativeMachine);
+// Whether this is an Intel or AMD processor, and Windows says it does not have SSE4.2
+// (PF_SSE4_2_INSTRUCTIONS_AVAILABLE)
+public static bool LacksSse42() {
+  ushort process, native;
+  return IsWow64Process2(GetCurrentProcess(), out process, out native) && native == 0x8664 && !IsProcessorFeaturePresent(38);
+}
+'@
+      }
+      $lacking = [ItInstall.Processor]::LacksSse42()
+    }
+  } catch {}
+  if ($lacking) { throw "It cannot run on this computer: its processor does not have SSE4.2. On an Intel or AMD processor It needs SSE4.2 and POPCNT, which Intel's Core i3, i5 and i7 have from their first generation on, and AMD's processors from Bulldozer on. Nothing was installed." }
   # Made by its name exactly as it is, whatever characters are in it
   [IO.Directory]::CreateDirectory($dir) | Out-Null
   # Only this user may look inside It's folder: the machine's key is kept there. Whatever access
