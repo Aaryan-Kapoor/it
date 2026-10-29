@@ -585,6 +585,8 @@ function heard(message: Extract<SiteToPage, { type: 'it:recording' }>): void {
   if (message.state === 'ended') {
     kept.why = message.why
     if (message.file instanceof Blob) kept.file = taken(message.file, message.file.type)
+    // Nothing more is said of it: what was recorded stays with the recording the page holds, and goes when the page lets go of that
+    recordings.delete(message.recording)
   }
   kept.changed(message.state, message.why)
 }
@@ -644,6 +646,7 @@ async function record(
       return over()
     }
     kept.state = 'ended'
+    recordings.delete(begun.id)
     const answer = (await ask({ type: 'it:record-stop', requestId: id(), recording: begun.id, keep })) as { file?: Blob }
     if (!keep) return undefined
     if (!answer.file) throw new Error('Nothing was recorded.')
