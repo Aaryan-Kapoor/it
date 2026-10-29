@@ -91,6 +91,8 @@ async function readInto(id: string, file: Readable, fd: number): Promise<string 
   const hash = createHash('sha256')
   let got = 0
   let grant = file.grant
+  // Grants asked for in a row with nothing arriving in between: a file that goes on arriving may
+  // outlast any number of them, and a grant that is refused as soon as it is given is no use
   let renewed = 0
   do {
     const inParts = file.bytes > UPLOAD.partBytes
@@ -103,7 +105,7 @@ async function readInto(id: string, file: Readable, fd: number): Promise<string 
     // Refused for good: the action or its page is gone, or the files with them
     if (r.status === 404) throw new Problem('That file is not kept any more: it went with its action, or with its page.', 'not_found')
     // The grant ran out part of the way through a large file: another is asked for, and it goes on
-    if (r.status === 401 && got > 0 && renewed++ < 3) {
+    if (r.status === 401 && got > 0 && ++renewed <= 3) {
       grant = (await call<Readable>('action', api.files.read, { id, number: file.number }).catch(() => null))?.grant ?? ''
       if (!grant) return 'its grant ran out'
       continue
@@ -131,6 +133,7 @@ async function readInto(id: string, file: Readable, fd: number): Promise<string 
     writeAll(fd, bytes, got)
     hash.update(bytes)
     got += bytes.length
+    renewed = 0
   } while (got < file.bytes)
   return hash.digest('hex') === file.sha256 ? null : 'it did not arrive whole'
 }

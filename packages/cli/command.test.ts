@@ -2821,6 +2821,59 @@ describe.skipIf(process.platform === 'win32')('a file an action carried that is 
       await b.close()
     }
   })
+
+  test('goes on asking for another grant for as long as the file goes on arriving, and gives up where grant after grant arrives with nothing', async () => {
+    const m = machine()
+    const take = randomBytes(4 * UPLOAD.partBytes + 10)
+    const sha = createHash('sha256').update(take).digest('hex')
+    let grants = 0
+    const b = await backend(m, (asked) =>
+      asked.path === 'delivery:get'
+        ? {
+            id: 'k61',
+            artifact: 'studio',
+            title: 'Studio',
+            name: 'take',
+            payload: JSON.stringify({ take: { file: 1 } }),
+            at: 1,
+            attended: true,
+            delivery: 'handed_off',
+            route: 'addon',
+            outcome: null,
+            files: [{ name: 'take-4.wav', type: 'audio/wav', bytes: take.length }],
+          }
+        : asked.path === 'files:read'
+          ? { url: 'http://127.0.0.1:9/download/1', grant: `read-${++grants}`, number: 1, name: 'take-4.wav', type: 'audio/wav', bytes: take.length, sha256: sha }
+          : null,
+    )
+    // On a slow line each grant runs out after one part has arrived under it
+    const used = new Set<string>()
+    let refusing = false
+    b.download.answer = (_, grant, range) => {
+      const [, from, to] = /^bytes=(\d+)-(\d+)$/.exec(range ?? '') ?? []
+      if (refusing && Number(from) > 0) return [401, Buffer.alloc(0)]
+      if (used.has(grant)) return [401, Buffer.alloc(0)]
+      used.add(grant)
+      const part = take.subarray(Number(from), Number(to) + 1)
+      return [206, part, undefined, { 'content-range': `bytes ${from}-${Number(from) + part.length - 1}/${take.length}` }]
+    }
+    try {
+      const at = path.join(m.home, 'take-4.wav')
+      const saved = await run(m, ['action', 'k61', '--save', at], b.env)
+      expect([saved.code, saved.err]).toEqual([0, ''])
+      expect(createHash('sha256').update(readFileSync(at)).digest('hex')).toBe(sha)
+      expect(grants).toBe(5)
+      // Every grant refused once the first part has arrived: given up after three in a row, and nothing is written
+      refusing = true
+      b.download.asked.length = 0
+      const stuck = path.join(m.home, 'take-4-again.wav')
+      const refused = await run(m, ['action', 'k61', '--save', stuck], b.env)
+      expect([refused.code, existsSync(stuck)]).toEqual([1, false])
+      expect(b.download.asked.filter((x) => x.range !== `bytes=0-${UPLOAD.partBytes - 1}`)).toHaveLength(4)
+    } finally {
+      await b.close()
+    }
+  })
 })
 
 describe.skipIf(process.platform === 'win32')('a page another conversation made', () => {
