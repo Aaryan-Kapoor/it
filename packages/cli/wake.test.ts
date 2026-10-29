@@ -1580,6 +1580,27 @@ setInterval(() => {}, 1000)
     expect(await endJob(run)).toBe('gone')
   }, 180_000)
 
+  test('what it left running when it ended by itself goes on until the program that started its keeper ends, and then ends with it', async () => {
+    const started = keeper(standIn(scratch, 'done').argv, randomUUID(), { ...process.env })
+    if (typeof started === 'string') throw new Error(started)
+    const how = path.join(scratch, 'how.json')
+    const ended = path.join(scratch, 'keeper-ended')
+    writeFileSync(how, JSON.stringify({ ...started, cwd: scratch, input: 'hello', ended }))
+    writeFileSync(path.join(scratch, 'service.js'), SERVICE)
+    const service = spawn(process.execPath, [path.join(scratch, 'service.js'), how], { stdio: 'ignore', windowsHide: true })
+    left.push(service.pid!)
+    await until(() => existsSync(ended))
+    expect(Number(readFileSync(ended, 'utf8'))).toBe(0)
+    const ran = ranIn(scratch)
+    left.push(ran.left)
+    // The run is over, and what it started is let be
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    expect(alive(ran.left)).toBe(true)
+    // Until the service ends: Node, as Bun does, ends what it started with it, and the run's job is inside what Node keeps
+    service.kill()
+    await until(() => !alive(ran.left), 15_000)
+  }, 180_000)
+
   test('starts nothing where the program that started it cannot be made sure of, or a job of its name is there already', async () => {
     // Told of a program that is not there
     const run = randomUUID()

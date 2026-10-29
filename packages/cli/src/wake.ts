@@ -586,9 +586,12 @@ export const jobName = (run: string): string | null => (/^[A-Za-z0-9-]{1,64}$/.t
  * everything the app starts is in it from its first moment. It then waits for the app and for
  * the program that started it, whichever ends first. The app ending by itself, the job is told
  * to end nothing more when it is let go, and what the app left running is let be, as it is on
- * Linux and macOS. The program that started it ending, the job is ended at once. A job is never
- * made where one of that name is there already. Breaking away from the job is not allowed, so a
- * program the app starts that asks to be started outside it is refused.
+ * Linux and macOS, until It's service ends. On Windows, Node and Bun alike put every program
+ * they start into a job of their own that ends them when they end, the keeper among them, and
+ * the run's job is inside that one: so what a run left running ends with the service, where on
+ * Linux and macOS it goes on. The program that started it ending, the job is ended at once. A
+ * job is never made where one of that name is there already. Breaking away from the job is not
+ * allowed, so a program the app starts that asks to be started outside it is refused.
  *
  * `End` ends everything in a job and waits until nothing is left of it. A job of that name not
  * being there says that nothing of it is left: nobody holds it, so the system ended what was in it.
@@ -759,7 +762,8 @@ const POWERSHELL = ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand
  * the app runs. The app is given the keeper's own input and output, which are what this program
  * gives the keeper, and its environment without what the keeper was told by. A run there ends
  * with the program that started it, however that program ended: on Linux and macOS it goes on
- * until the next one ends it. Why it cannot be started this way, as a string.
+ * until the next one ends it. And what a run left running when it ended by itself ends with that
+ * program too (see `JOB_CODE`). Why it cannot be started this way, as a string.
  */
 export function keeper(argv: string[], run: string, env: NodeJS.ProcessEnv): { file: string; args: string[]; env: NodeJS.ProcessEnv } | string {
   const name = jobName(run)
