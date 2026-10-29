@@ -12,7 +12,7 @@ import { dismissMessage, message, onItsWayUntil, outboxChanges, pendingMessage, 
 import { holdPending } from './pending'
 import { Preview } from './preview'
 import { type PageConnection, reportedConnection } from './readiness'
-import { CameraView, MediaAsk, RecordingBar } from './recording'
+import { CameraView, MediaAllowed, MediaAsk, RecordingNow } from './recording'
 import { useSession } from './session'
 import { Starters, useTour, Welcome } from './welcome'
 
@@ -407,9 +407,10 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
             />
           )}
         </span>
+        {/* Whether the page records on this screen, said in It's own bar where nothing on the page can cover it */}
+        <RecordingNow page={page.id} />
         <div className="page-nav-actions">
-          {/* Whether the page records on this screen, said in It's own bar where nothing on the page can cover it */}
-          <RecordingBar user={user} page={page.id} title={page.title} />
+          <MediaAllowed user={user} page={page.id} title={page.title} />
           {page.version !== null && (
             <button
               ref={talkButton}

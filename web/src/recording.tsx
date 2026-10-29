@@ -100,25 +100,28 @@ function LiveChip({ l }: { l: Live }) {
 }
 
 /**
- * What It's bar says of the microphone and the camera for the page shown: while it records, that
- * it does, with a button that stops it; and where the page is allowed them on this screen, a
- * button that takes that back.
+ * While the page shown records, a row of It's bar of its own, under the rest of it: that it
+ * records, what, for how long, and the button that stops it. It is drawn by the site, where
+ * nothing on the page can cover it.
  */
-export function RecordingBar({ user, page, title }: { user: string; page: string; title: string }) {
+export function RecordingNow({ page }: { page: string }) {
   useMediaChanges()
   const l = liveFor(page)
+  return l ? <LiveChip l={l} /> : null
+}
+
+/** Among the bar's buttons, where the page shown is allowed the microphone or the camera on this screen: the button that takes that back. */
+export function MediaAllowed({ user, page, title }: { user: string; page: string; title: string }) {
+  useMediaChanges()
   const grant = grantsOf(user).find((g) => g.page === page)
-  if (l) return <LiveChip l={l} />
-  if (!grant) return null
+  if (!grant || liveFor(page)) return null
   return (
     <button
       type="button"
       className="nav-action media-allowed"
       title={`“${title}” may use ${kindsSaid(grant.kinds)} on this screen. Press to take that back.`}
       aria-label={`Take back ${kindsSaid(grant.kinds)} from this page`}
-      onClick={() =>
-        confirm(`Take back ${kindsSaid(grant.kinds)} from “${title}” on this screen? It asks again the next time it wants it.`) && takeBack(user, page)
-      }
+      onClick={() => confirm(`Take back ${kindsSaid(grant.kinds)} from “${title}” on this screen? It asks again the next time it wants it.`) && takeBack(user, page)}
     >
       <IconMic />
     </button>
@@ -131,13 +134,15 @@ function View({ stream, onView }: { stream: MediaStream; onView?: (v: HTMLVideoE
   useEffect(() => {
     if (view.current) view.current.srcObject = stream
   }, [stream])
+  // Shown as in a mirror where the camera faces the person, as they expect to see themselves, and as it is where it faces away
+  const away = stream.getVideoTracks()[0]?.getSettings().facingMode === 'environment'
   return (
     <video
       ref={(v) => {
         view.current = v
         onView?.(v)
       }}
-      className="media-view-video"
+      className={`media-view-video${away ? '' : ' media-view-mirrored'}`}
       autoPlay
       muted
       playsInline

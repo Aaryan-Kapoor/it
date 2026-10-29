@@ -3817,18 +3817,21 @@ form.row-main {
   margin: 0.5rem 0;
 }
 
-/* The microphone and the camera (recording.tsx). While a page records, It's bar says so in red, beside the page's own buttons, where nothing on the page can cover it */
+/* The microphone and the camera (recording.tsx). While a page records, It's bar has a row of its own in red that says so, under the rest of the bar, where nothing on the page can cover it */
 .media-live {
-  display: inline-flex;
+  order: 2;
+  flex: 1 0 100%;
+  display: flex;
   align-items: center;
-  gap: 8px;
-  height: 26px;
-  padding: 0 4px 0 10px;
-  border-radius: var(--r-pill);
-  background: color-mix(in oklab, var(--danger) 18%, transparent);
-  border: 1px solid color-mix(in oklab, var(--danger) 55%, transparent);
+  justify-content: center;
+  gap: 10px;
+  min-height: 32px;
+  margin: 0 -8px;
+  padding: 0 12px;
+  background: color-mix(in oklab, var(--danger) 22%, var(--bg));
+  border-top: 1px solid color-mix(in oklab, var(--danger) 55%, var(--bg));
   color: var(--fg);
-  font-size: 12px;
+  font-size: 12.5px;
   white-space: nowrap;
 }
 .media-live-dot {
@@ -3888,8 +3891,10 @@ form.row-main {
   display: block;
   width: 100%;
   height: auto;
-  transform: scaleX(-1);
   background: #000;
+}
+.media-view-mirrored {
+  transform: scaleX(-1);
 }
 /* It's own view of the camera, for a photo a page asked for */
 .media-shoot {
@@ -3918,6 +3923,11 @@ form.row-main {
 .media-shoot-actions {
   display: flex;
   gap: 10px;
+}
+.media-shoot-actions button {
+  min-height: 40px;
+  padding: 0 20px;
+  font-size: 15px;
 }
 @media (prefers-reduced-motion: reduce) {
   .media-live-dot {
