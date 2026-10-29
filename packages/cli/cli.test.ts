@@ -524,7 +524,8 @@ describe('gathering a folder to publish', () => {
       const [held, left] = [...gather({ dir: root })].sort((a, b) => a.entry.size - b.entry.size)
       expect([held!.entry.path, held!.data?.length, held!.from, held!.sends]).toEqual(['index.html', held!.entry.size, undefined, true])
       expect(left!.entry).toEqual({ path: 'film.webm', size: film.length, sha256: createHash('sha256').update(film).digest('hex') })
-      expect([left!.data, left!.from?.path, left!.sends]).toEqual([undefined, path.join(root, 'film.webm'), false])
+      // The file itself, wherever the system says the folder is: it is read from inside, and a temporary folder may be under a link, as on macOS
+      expect([left!.data, realpathSync(left!.from!.path), left!.sends]).toEqual([undefined, realpathSync(path.join(root, 'film.webm')), false])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
