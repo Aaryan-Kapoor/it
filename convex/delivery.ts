@@ -169,7 +169,7 @@ export const inbox = query({
       const reopened = (WAKES as readonly string[]).includes(harness) && !(QUEUES as readonly string[]).includes(harness)
       if (reopened) {
         // And only on a system It reopens conversations on, whatever was switched on for this machine before that was asked
-        const on = wakesOn(machine.system) ? (machine.wakes ?? []).find((w) => w.harness === harness) : undefined
+        const on = wakesOn(machine.system, machine.reopens) ? (machine.wakes ?? []).find((w) => w.harness === harness) : undefined
         if (!on) continue
         from = on.since - WAKE_BACK_MS
       }
@@ -283,7 +283,7 @@ export const inboxPage = query({
     const asked = [...new Set(queues ?? [])].filter((h) => ([...QUEUES, ...WAKES] as readonly string[]).includes(h)).slice(0, 8)
     for (const [nth, harness] of asked.entries()) {
       const reopened = !(QUEUES as readonly string[]).includes(harness)
-      const on = wakesOn(machine.system) ? (machine.wakes ?? []).find((w) => w.harness === harness) : undefined
+      const on = wakesOn(machine.system, machine.reopens) ? (machine.wakes ?? []).find((w) => w.harness === harness) : undefined
       if (reopened && !on) continue
       const from = reopened ? on!.since - WAKE_BACK_MS : 0
       const each = reopened ? WAKE_MOST : 2
