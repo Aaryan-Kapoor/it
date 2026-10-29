@@ -104,6 +104,11 @@ export function takeBack(user: string, page: string): void {
     grantsOf(user).filter((x) => x.page !== page),
   )
 }
+/** Takes back everything this screen allowed, and stops what records: the browser is signing out, and what it allowed ends with its pairing. */
+export function forgetGrants(user: string): void {
+  keep(user, [])
+  for (const l of [...live]) l.end('taken_back')
+}
 // Another tab of this browser allowed something or took it back: this one goes by that too
 if (typeof window !== 'undefined')
   window.addEventListener('storage', (e) => {

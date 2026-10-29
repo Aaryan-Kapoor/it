@@ -3,8 +3,8 @@
 // the device. The recording itself is run in real browsers, with their own fake microphone and
 // camera, by the end-to-end run.
 import { beforeEach, describe, expect, test } from 'vitest'
-import { displayKey, forgetAll, keepFor } from './lib'
-import { allow, allowed, askPerson, cannotRecord, grantsOf, kindsOf, kindsSaid, ownerOf, specOf, takeBack } from './media'
+import { displayKey, forgetAll, forgetDisplayKey, keepFor } from './lib'
+import { allow, allowed, askPerson, cannotRecord, forgetGrants, grantsOf, kindsOf, kindsSaid, ownerOf, specOf, takeBack } from './media'
 
 const OWNER = ownerOf({ machineId: 'machine-1', session: { harness: 'claude-code', id: 'conversation-1' } })
 const grant = (page: string, kinds: ('mic' | 'camera')[], owner = OWNER) => ({ page, title: `Page ${page}`, agent: 'Claude Code', machine: 'studio', owner, kinds })
@@ -44,6 +44,16 @@ describe('what the person allowed a page on this screen', () => {
     takeBack('person-1', 'page-1')
     expect(grantsOf('person-1').map((g) => g.page)).toEqual(['page-2'])
     expect(allowed('person-1', 'page-1', OWNER, ['mic'])).toBe(false)
+  })
+
+  test('ends with the pairing: on signing out, and when the display it was allowed on is forgotten', () => {
+    allow('person-1', grant('page-1', ['mic']))
+    forgetGrants('person-1')
+    expect(grantsOf('person-1')).toEqual([])
+    allow('person-1', grant('page-1', ['mic']))
+    forgetDisplayKey()
+    expect(grantsOf('person-1')).toEqual([])
+    expect(Object.keys({ ...localStorage }).filter((name) => name.startsWith('it.media.'))).toEqual([])
   })
 
   test('goes with everything else the site keeps for the person, and is not taken from what was written by hand', () => {
