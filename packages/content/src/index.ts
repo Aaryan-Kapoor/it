@@ -835,9 +835,10 @@ async function control(it: Service, request: Request, asked: Asked): Promise<Res
     // anything is removed, so one of the two always finds the other.
     if (it.records.wasDeleted(prefix)) return refuse(409, 'version_deleted')
     // Nothing is declared that the disk has no room for beside what It leaves free. What is there
-    // already, declared before and arrived whole, takes no more room
+    // already takes no more room: a file declared before that arrived whole, and what has arrived
+    // of one that is coming in parts, as it is when the same files are declared again for a fresh grant
     const there = await it.files.stored(prefix)
-    const toCome = clean.reduce((n, f) => n + (there.get(nameOf(f.path)) === f.size ? 0 : f.size), 0)
+    const toCome = clean.reduce((n, f) => n + (there.get(nameOf(f.path)) === f.size ? 0 : f.size - it.files.nextPart(prefix, f.path, f)), 0)
     if (!(await room(it, toCome))) return noRoom(it, prefix, toCome)
     await it.files
       .declare(prefix, clean, (move) =>

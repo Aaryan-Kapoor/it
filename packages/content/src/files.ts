@@ -80,8 +80,11 @@ export interface Files {
     part: { offset: number; length: number },
     allowed: (move: () => void) => boolean,
   ): Promise<'ok' | 'more' | 'out_of_order' | 'bytes_differ' | 'size_differs' | 'cut_short' | 'no_folder'>
-  /** Where the next part of a file that is arriving in parts begins: 0 where none of it is here. */
-  nextPart(prefix: string, file: string): number
+  /**
+   * Where the next part of a file that is arriving in parts begins: 0 where none of it is here.
+   * Given what was declared of the file, 0 too where what is arriving is not that file.
+   */
+  nextPart(prefix: string, file: string, declared?: Declared): number
   remove(prefix: string, file: string): Promise<void>
   declare(prefix: string, files: ({ path: string } & Declared)[], allowed?: (move: () => void) => boolean): Promise<void>
   /** The files declared for a version, or null if none were. */
@@ -626,8 +629,10 @@ export function createFiles(folder: string): Files {
       }
     },
 
-    nextPart(prefix, file) {
-      return arrivingParts.get(partOf(prefix, file))?.received ?? 0
+    nextPart(prefix, file, declared) {
+      const p = arrivingParts.get(partOf(prefix, file))
+      if (!p || (declared && (p.declared.size !== declared.size || p.declared.sha256 !== declared.sha256))) return 0
+      return p.received
     },
 
     async remove(prefix, file) {

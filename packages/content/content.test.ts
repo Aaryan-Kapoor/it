@@ -39,7 +39,7 @@ type Content = ReturnType<typeof createContent>
 // the disk fail under it, or do something of its own at the moment one is opened or made
 vi.mock('node:fs/promises', async () => {
   const real = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
-  return { ...real, default: real, open: vi.fn(real.open), mkdir: vi.fn(real.mkdir) }
+  return { ...real, default: real, open: vi.fn(real.open), mkdir: vi.fn(real.mkdir), statfs: vi.fn(real.statfs) }
 })
 /**
  * Holds the service up at the next folder it makes, and gives two things: a promise that the
@@ -2611,6 +2611,36 @@ describe('large files', () => {
       }
     } finally {
       await roomy.content.close()
+    }
+  })
+
+  test('a file arriving in parts that is declared again, for a fresh grant, is asked room only for what is still to come of it', async () => {
+    // A disk with room for the file and the 2 GB It leaves free, and a little more: as each part
+    // arrives, it has that much less
+    let free = FILM.length + 2 * 1024 ** 3 + 1024 * 1024
+    const real = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).statfs
+    vi.mocked(fsp.statfs).mockImplementation((async () => ({ bavail: free, bsize: 1 })) as unknown as typeof real)
+    const own = make()
+    const prefix = filmPrefix('renewed')
+    const files = [entry('index.html', 'x'), entry('film.webm', FILM)]
+    try {
+      expect((await control('stage', { prefix, files }, undefined, { on: own.content })).status).toBe(200)
+      expect((await part(prefix, FILM, 0, UPLOAD.partBytes, { on: own.content })).status).toBe(200)
+      free -= UPLOAD.partBytes
+      // Declared again, as the site does when a grant runs out part of the way: what has arrived is no more to come
+      expect((await control('stage', { prefix, files }, undefined, { on: own.content })).status).toBe(200)
+      expect((await part(prefix, FILM, UPLOAD.partBytes, FILM.length - UPLOAD.partBytes, { on: own.content })).json()).toEqual({ ok: true })
+      // Where what has arrived is not the file declared now, it is no part of it, and all of the file is to come
+      free = FILM.length + 2 * 1024 ** 3 + 1024 * 1024
+      const other = randomBytes(FILM.length)
+      const again = filmPrefix('renewed-other')
+      await control('stage', { prefix: again, files: [entry('film.webm', FILM)] }, undefined, { on: own.content })
+      expect((await part(again, FILM, 0, UPLOAD.partBytes, { on: own.content })).status).toBe(200)
+      free -= UPLOAD.partBytes
+      expect((await control('stage', { prefix: again, files: [entry('film.webm', other)] }, undefined, { on: own.content })).status).toBe(507)
+    } finally {
+      vi.mocked(fsp.statfs).mockImplementation(real)
+      await own.content.close()
     }
   })
 
