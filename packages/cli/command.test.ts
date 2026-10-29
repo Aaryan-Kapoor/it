@@ -2843,7 +2843,15 @@ describe.skipIf(process.platform === 'win32')('a file an action carried that is 
             files: [{ name: 'take-4.wav', type: 'audio/wav', bytes: take.length }],
           }
         : asked.path === 'files:read'
-          ? { url: 'http://127.0.0.1:9/download/1', grant: `read-${++grants}`, number: 1, name: 'take-4.wav', type: 'audio/wav', bytes: take.length, sha256: sha }
+          ? {
+              url: 'http://127.0.0.1:9/download/1',
+              grant: `read-${++grants}`,
+              number: 1,
+              name: 'take-4.wav',
+              type: 'audio/wav',
+              bytes: take.length,
+              sha256: sha,
+            }
           : null,
     )
     // On a slow line each grant runs out after one part has arrived under it
