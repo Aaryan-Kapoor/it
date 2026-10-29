@@ -344,11 +344,12 @@ export function Mount({
       } catch (err) {
         throw deviceRefused(err)
       }
-      // The page was closed while the browser was asked: nothing is recorded for a page that is gone
-      if (!live) {
+      // The page was closed, or what it was allowed was taken back, while the browser was asked:
+      // nothing is recorded for a page that is gone, or that may not
+      if (!live || !allowedHere(user, artifactId, maker.current?.owner ?? '', kindsOf(spec))) {
         void recording.stop(false)
         recording = null
-        throw new Error('The page was closed.')
+        throw new Error(live ? 'The person took back what they had allowed this page.' : 'The page was closed.')
       }
       inSight()
       return { recording: { id, mimeType: recording.mimeType } }
