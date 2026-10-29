@@ -1,9 +1,10 @@
-import { lstatSync, readdirSync, readFileSync, rmdirSync, rmSync, unlinkSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { lstatSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, unlinkSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { INSTALLATION_FILE } from './installation'
 import { withInstallerLock } from './installer-lock'
-import { Problem } from './lib'
+import { Problem, RUN_ONCE, WINDOWS_CLEANUP, windowsDeletionCommand } from './lib'
 import { aloneAt, holderRuns, startOf } from './serve/backend'
 
 /** These are individual files It reserves in a marked home. */
@@ -224,4 +225,63 @@ export function finishInstallationRemoval(folder: string): string[] {
     }
   }
   return lstatSync(folder, { throwIfNoEntry: false }) ? readdirSync(folder) : []
+}
+
+const reg = (args: string[]) => spawnSync('reg.exe', args, { windowsHide: true, timeout: 15_000 }).status === 0
+
+/**
+ * Asks Windows to delete a file the next time this person signs in, and says whether it was
+ * asked. The file's path goes into the queue as it is, and RunOnce is given only the line that
+ * reads it from there. Where RunOnce could not be given the line, the path is taken out of the
+ * queue again. `ask` runs reg.exe, and a test stands in for it.
+ */
+export function deleteAtSignIn(file: string, entry = `ItRemoved${process.pid}-${Date.now().toString(36)}`, ask = reg): boolean {
+  const line = windowsDeletionCommand(entry, file)
+  if (line === undefined || !ask(['add', WINDOWS_CLEANUP, '/v', entry, '/t', 'REG_SZ', '/d', file, '/f'])) return false
+  if (ask(['add', RUN_ONCE, '/v', entry, '/t', 'REG_SZ', '/d', line, '/f'])) return true
+  ask(['delete', WINDOWS_CLEANUP, '/v', entry, '/f'])
+  return false
+}
+
+/**
+ * On Windows a program that is running cannot delete its own file, and can move it. So that
+ * It's folder can be deleted whole by the program that is in it, this program is moved out of
+ * the folder first, to where the system keeps what may be thrown away, or beside the folder
+ * where that is on another disk. It cannot delete itself from there either, and nothing it
+ * starts can be counted on to outlive it and do so: on the Windows runner, a program started
+ * for that was gone when this one was. So Windows is asked to delete the file the next time
+ * this person signs in, where it can be counted on to. What the person is told comes back:
+ * `said` where Windows was asked, and `left` where they are to delete the file themselves.
+ * Nothing comes back where the program did not move, and the folder is then found still to be
+ * there, which is said. A test names the program, the folders it may go to, and what stands
+ * in for reg.exe.
+ */
+export function stepOutOf(
+  folder: string,
+  { program = process.execPath, places = [os.tmpdir(), path.dirname(path.resolve(folder))], ask = reg } = {},
+): { said: string } | { left: string } | undefined {
+  const inside = path.relative(path.resolve(folder), path.resolve(program))
+  // Run as a script, the program is Node's and is not in the folder
+  if (!inside || inside.startsWith('..') || path.isAbsolute(inside)) return undefined
+  const name = `it-removed-${process.pid}-${Date.now().toString(36)}.exe`
+  for (const where of places) {
+    const at = path.join(where, name)
+    try {
+      renameSync(program, at)
+    } catch {
+      continue
+    }
+    let later = false
+    try {
+      // The queue keeps the file's whole name as the system gives it, with no short 8.3 name in
+      // it to be made longer on the way, so that the path measured is the path Windows is given
+      later = deleteAtSignIn(path.join(realpathSync.native(where), name), undefined, ask)
+    } catch {}
+    return later
+      ? {
+          said: `The program moved itself to ${at} to do this, and Windows was asked to delete it from there the next time you sign in. If it remains, delete it yourself.`,
+        }
+      : { left: `The program moved itself to ${at} to do this. Delete it to finish.` }
+  }
+  return undefined
 }

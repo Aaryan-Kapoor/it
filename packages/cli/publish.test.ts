@@ -1,5 +1,5 @@
 // The local note that lets a closed conversation be reopened in the folder it last used.
-import fs, { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import fs, { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { profileOf } from './src/profiles'
 import { conversationFolder, conversationProfile, conversationsFile, noteConversation } from './src/publish'
 
+const HOUR = 60 * 60_000
 let scratch: string
 let before: string | undefined
 beforeEach(() => {
@@ -108,7 +109,7 @@ describe('the conversation folders It remembers', () => {
     const lock = `${conversationsFile()}.lock`
     writeFileSync(lock, JSON.stringify({ pid: process.pid, holder: 'a'.repeat(16) }))
     const noted = noteConversation({ harness: 'codex', id: 'waiting' }, scratch)
-    const record = JSON.stringify({ 'codex:waiting': { cwd: scratch, at: 1, profile: profileOf('codex') } })
+    const record = JSON.stringify({ 'codex:waiting': { cwd: scratch, at: Date.now(), profile: profileOf('codex') } })
     writeFileSync(conversationsFile(), record)
     rmSync(lock)
     const flush = vi.spyOn(fs, 'fsyncSync')
@@ -122,6 +123,76 @@ describe('the conversation folders It remembers', () => {
       flush.mockRestore()
       syncBuiltinESMExports()
     }
+  })
+
+  test.each([
+    { age: HOUR - 1, written: false },
+    { age: HOUR, written: true },
+    { age: -(HOUR - 1), written: false },
+    { age: -HOUR, written: true },
+  ])(
+    'writes the time of a conversation used again in the same folder only when its note is an hour or more from the clock, at $age milliseconds',
+    async ({ age, written }) => {
+      const session = { harness: 'codex', id: 'used-again' }
+      const now = vi.spyOn(Date, 'now').mockReturnValue(100 * HOUR)
+      await noteConversation(session, scratch)
+      const before = readFileSync(conversationsFile(), 'utf8')
+      now.mockReturnValue(100 * HOUR + age)
+      const flush = vi.spyOn(fs, 'fsyncSync')
+      syncBuiltinESMExports()
+      try {
+        await noteConversation(session, scratch)
+        expect(flush.mock.calls.length > 0).toBe(written)
+      } finally {
+        flush.mockRestore()
+        syncBuiltinESMExports()
+      }
+      if (written) expect(JSON.parse(readFileSync(conversationsFile(), 'utf8'))['codex:used-again']).toMatchObject({ cwd: scratch, at: 100 * HOUR + age })
+      else expect(readFileSync(conversationsFile(), 'utf8')).toBe(before)
+    },
+  )
+
+  test('reads the note once and takes no lock, writes nothing and flushes nothing for each hook event within the hour', async () => {
+    const session = { harness: 'codex', id: 'busy-hooks' }
+    const others = Object.fromEntries(Array.from({ length: 299 }, (_, n) => [`codex:other-${n}`, { cwd: scratch, at: n + 1 }]))
+    writeFileSync(conversationsFile(), JSON.stringify(others))
+    const now = vi.spyOn(Date, 'now').mockReturnValue(100 * HOUR)
+    await noteConversation(session, scratch)
+    const before = readFileSync(conversationsFile(), 'utf8')
+    const read = vi.spyOn(fs, 'readFileSync')
+    const touched = [vi.spyOn(fs, 'openSync'), vi.spyOn(fs, 'writeFileSync'), vi.spyOn(fs, 'linkSync'), vi.spyOn(fs, 'renameSync'), vi.spyOn(fs, 'fsyncSync')]
+    syncBuiltinESMExports()
+    try {
+      // A busy conversation's hooks, every few seconds for most of an hour
+      for (let at = 0; at < HOUR; at += 12_000) {
+        now.mockReturnValue(100 * HOUR + at)
+        await noteConversation(session, scratch)
+      }
+      expect(read.mock.calls.filter(([file]) => file === conversationsFile())).toHaveLength(HOUR / 12_000)
+      for (const spy of touched) expect(spy).not.toHaveBeenCalled()
+    } finally {
+      vi.restoreAllMocks()
+      syncBuiltinESMExports()
+    }
+    expect(readFileSync(conversationsFile(), 'utf8')).toBe(before)
+    expect(existsSync(`${conversationsFile()}.lock`)).toBe(false)
+  })
+
+  test('keeps a conversation used again in the same folder when the oldest unused one is forgotten', async () => {
+    const used = { harness: 'pi', id: 'used-again' }
+    const kept = Object.fromEntries(Array.from({ length: 299 }, (_, n) => [`pi:other-${n}`, { cwd: scratch, at: n + 2 }]))
+    writeFileSync(conversationsFile(), JSON.stringify({ 'pi:used-again': { cwd: scratch, at: 1 }, ...kept }))
+    // Used again a day later, in the folder it was noted in, and then another conversation publishes for the first time
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1 + 24 * HOUR)
+    await noteConversation(used, scratch, null)
+    now.mockReturnValue(2 + 24 * HOUR)
+    await noteConversation({ harness: 'pi', id: 'new' }, scratch, null)
+    const saved = JSON.parse(readFileSync(conversationsFile(), 'utf8'))
+    expect(Object.keys(saved)).toHaveLength(300)
+    expect(saved['pi:used-again']).toEqual({ cwd: scratch, at: 1 + 24 * HOUR })
+    expect(conversationFolder(used)).toBe(scratch)
+    expect(conversationFolder({ harness: 'pi', id: 'new' })).toBe(scratch)
+    expect(conversationFolder({ harness: 'pi', id: 'other-0' })).toBeUndefined()
   })
 
   test('keeps a conversation whose folder changed when the oldest unchanged one is forgotten', () => {

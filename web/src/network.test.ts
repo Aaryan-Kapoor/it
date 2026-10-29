@@ -756,3 +756,134 @@ describe('the network as a switch', () => {
     expect(ways()).toHaveLength(3)
   })
 })
+
+describe('where the links agents give are', () => {
+  const HERE = 'http://localhost:4700'
+  const NAMED = 'http://studio.tail1234.ts.net:4700'
+  /** How the door stands, with the places the links can be at as the backend gives them. */
+  const stands = (more: Record<string, unknown> = {}) => ({
+    on: false,
+    addresses: [],
+    tailnet: false,
+    canTailnet: true,
+    exposed: null,
+    asked: null,
+    answered: null,
+    link: 'local',
+    links: { local: HERE },
+    ...more,
+  })
+  beforeEach(() => {
+    answers['network:link'] = () => null
+  })
+  const places = () => [...host.querySelectorAll<HTMLInputElement>('.link-way input')]
+  /** Each place shown, by its name and the address its links are at, which a place It cannot be reached at has none of. */
+  const offered = () =>
+    [...host.querySelectorAll('.link-way')].map((way) => [way.querySelector('b')!.firstChild!.textContent, way.querySelector('.mono')?.textContent ?? null])
+  const chosen = () => places().map((place) => place.checked)
+  async function panel() {
+    const { LinkChoice } = await import('./network')
+    await show(createElement(LinkChoice))
+  }
+
+  test('with the network off, this computer is the one place offered, and the person is told that another comes once another device can reach It', async () => {
+    watched['network:get'] = stands()
+    await panel()
+    expect(offered()).toEqual([['This computer', HERE]])
+    expect(chosen()).toEqual([true])
+    expect(text('.net-said')).toBe('Another place is offered here once another device can reach It.')
+  })
+
+  test('kept to the tailnet, the name there is offered with its address, and choosing it asks the backend for it', async () => {
+    watched['network:get'] = stands({ on: true, addresses: [NAMED], tailnet: true, links: { local: HERE, tailnet: NAMED } })
+    await panel()
+    expect(offered()).toEqual([
+      ['This computer', HERE],
+      ['My tailnet', NAMED],
+    ])
+    expect(chosen()).toEqual([true, false])
+    await act(async () => places()[1]!.click())
+    expect(calls).toEqual(['network:link'])
+    expect(asked).toEqual([{ to: 'tailnet' }])
+    // The backend took it, and says so
+    await networkIs(stands({ on: true, addresses: [NAMED], tailnet: true, link: 'tailnet', links: { local: HERE, tailnet: NAMED } }) as never)
+    expect(chosen()).toEqual([false, true])
+    expect(host.querySelector('.net-said')).toBeNull()
+  })
+
+  test('on for every network, the name on the tailnet and the address on the network are both offered, and on a machine the internet reaches the address is not called a home network’s', async () => {
+    watched['network:get'] = stands({ on: true, addresses: [LAN], links: { local: HERE, tailnet: NAMED, network: LAN } })
+    await panel()
+    expect(offered()).toEqual([
+      ['This computer', HERE],
+      ['My tailnet', NAMED],
+      ['My home network', LAN],
+    ])
+    await networkIs(stands({ on: true, addresses: [LAN], exposed: 'has a public address (203.0.113.7)', links: { local: HERE, network: LAN } }) as never)
+    expect(offered()).toEqual([
+      ['This computer', HERE],
+      ['Its address on the network', LAN],
+    ])
+  })
+
+  test('a choice It cannot be reached at any more is shown as it is, chosen and marked as not reachable now, with what the links use meanwhile', async () => {
+    watched['network:get'] = stands({ link: 'tailnet' })
+    await panel()
+    expect(offered()).toEqual([
+      ['This computer', HERE],
+      ['My tailnet', null],
+    ])
+    // The choice is the one that was made, and not this computer, which would leave nothing to choose to give it up
+    expect(chosen()).toEqual([false, true])
+    expect(places()[1]!.disabled).toBe(true)
+    const tailnet = host.querySelectorAll('.link-way')[1]!
+    expect(tailnet.querySelector('.chip')!.textContent).toBe('Not reachable now')
+    expect(tailnet.textContent).toContain(
+      'It cannot be reached there as the network stands, so agents give this computer’s link until it can. Choose This computer to keep the links there.',
+    )
+    // Two places are shown, so nothing is said of another to come
+    expect(host.querySelector('.net-said')).toBeNull()
+  })
+
+  test('choosing this computer while the choice made cannot be reached asks the backend for it, and the place that cannot be reached goes', async () => {
+    watched['network:get'] = stands({ link: 'network' })
+    await panel()
+    expect(offered()).toEqual([
+      ['This computer', HERE],
+      ['My home network', null],
+    ])
+    await act(async () => places()[0]!.click())
+    expect(calls).toEqual(['network:link'])
+    expect(asked).toEqual([{ to: 'local' }])
+    // The backend took it, and says so
+    await networkIs(stands() as never)
+    expect(offered()).toEqual([['This computer', HERE]])
+    expect(chosen()).toEqual([true])
+    expect(text('.net-said')).toBe('Another place is offered here once another device can reach It.')
+  })
+
+  test('a choice the backend refuses is said in its words, and the choice goes back to where the links are', async () => {
+    const { ConvexError } = await import('convex/values')
+    answers['network:link'] = () => Promise.reject(new ConvexError({ code: 'invalid', message: 'It answers only the machine it runs on.' }))
+    watched['network:get'] = stands({ on: true, addresses: [LAN], links: { local: HERE, network: LAN } })
+    await panel()
+    await act(async () => places()[1]!.click())
+    expect(text('[role="alert"]')).toBe('It answers only the machine it runs on.')
+    expect(chosen()).toEqual([true, false])
+    expect(host.querySelector<HTMLFieldSetElement>('.link-ways')!.disabled).toBe(false)
+  })
+
+  test('the Displays page has it under its own heading after the network, and a backend that says nothing of links is shown nothing of it', async () => {
+    watched['network:get'] = stands({ on: true, addresses: [NAMED], tailnet: true, links: { local: HERE, tailnet: NAMED } })
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    const headings = [...host.querySelectorAll('h3')].map((h) => h.textContent)
+    expect(headings.indexOf('Links agents give')).toBe(headings.indexOf('Network') + 1)
+    expect(places()).toHaveLength(2)
+    // Two places at once on the page, the network's and the links', each a choice of its own
+    expect(new Set([...host.querySelectorAll<HTMLInputElement>('input[type="radio"]')].map((r) => r.name)).size).toBe(2)
+    await networkIs({ on: true, addresses: [NAMED], tailnet: true, canTailnet: true } as never)
+    expect([...host.querySelectorAll('h3')].map((h) => h.textContent)).not.toContain('Links agents give')
+    expect(places()).toHaveLength(0)
+  })
+})
