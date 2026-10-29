@@ -2267,7 +2267,7 @@ try {
         from,
         at: v.currentTime,
         error: v.error?.code ?? null,
-        read: { status: asked.status, range: asked.headers.get('content-range'), bytes: [...new Uint8Array(await asked.arrayBuffer())] },
+        read: { status: asked.status, bytes: [...new Uint8Array(await asked.arrayBuffer())] },
       }
     })
     .catch((e) => ({ failed: String(e.message ?? e) }))
@@ -2278,11 +2278,11 @@ try {
     Math.abs(played.duration - 600) < 0.1 && played.error === null && played.at > played.from + 0.5 && Boolean(farPart),
     JSON.stringify({ played: { ...played, read: undefined }, parts: filmParts.slice(0, 8) }),
   )
+  // What the answer says of the part is not the page's to read: it is from another origin, and the
+  // answer names no header to show it beside the few any page may read. The bytes are what matter
   check(
     'and a page that reads a part of its own file is given exactly that part',
-    played.read?.status === 206 &&
-      played.read.range === `bytes 110000000-110000099/${film.length}` &&
-      Buffer.from(played.read.bytes).equals(film.subarray(110_000_000, 110_000_100)),
+    played.read?.status === 206 && Buffer.from(played.read.bytes).equals(film.subarray(110_000_000, 110_000_100)),
     JSON.stringify(played.read ? { ...played.read, bytes: played.read.bytes.length } : played),
   )
   // The tab goes back to the page the run shows from here on, before this one is deleted under it
