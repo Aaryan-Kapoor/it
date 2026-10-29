@@ -385,9 +385,11 @@ export function carryOn(
             ? end(null)
             : windows && code === KEPT_MISSING
               ? end(`${how.app} was not found`)
-              : windows && code === KEPT_NOT
-                ? end(`${how.app} could not be started: Windows would not keep it in a job of its own, which It needs to be able to end it`)
-                : end(`${how.app} exited with ${signal ?? code ?? 'an error'}`, signal === null),
+              : windows && code === KEPT_UNSTARTED
+                ? end(`${how.app} could not be started: Windows would not start its program`)
+                : windows && code === KEPT_NOT
+                  ? end(`${how.app} could not be started: Windows would not keep it in a job of its own, which It needs to be able to end it`)
+                  : end(`${how.app} exited with ${signal ?? code ?? 'an error'}`, signal === null),
     )
     child.stdin?.on('error', () => {})
     // Whoever started it is told which process it is, to write down, before it is given
@@ -563,6 +565,8 @@ export const IN_JOB = 'job'
 export const KEPT_NOT = 0x49540001
 /** And where the app's program was not there to be started. */
 export const KEPT_MISSING = 0x49540002
+/** And where Windows would not start the app's program, for another reason: it was refused, or is no program Windows can run. */
+export const KEPT_UNSTARTED = 0x49540003
 /**
  * The job a run is kept in on Windows, by the run's own name. It is in the namespace of the whole
  * machine, so that it is found from whichever session of Windows asks: in a session's own, a
@@ -599,6 +603,7 @@ using System.Threading;
 public static class ItJob {
   public const int Not = 0x49540001;
   public const int Missing = 0x49540002;
+  public const int Unstarted = 0x49540003;
   const string Named = @"^Global\\it-run-[A-Za-z0-9-]{1,64}$";
 
   [StructLayout(LayoutKind.Sequential)]
@@ -690,7 +695,7 @@ public static class ItJob {
     // With no window, in a console of its own that has none, which is then what everything it starts has as well
     if (!CreateProcessW(null, new StringBuilder(line), IntPtr.Zero, IntPtr.Zero, true, 0x08000000, IntPtr.Zero, null, ref start, out run)) {
       int why = Marshal.GetLastWin32Error();
-      return why == 2 || why == 3 ? Missing : Not;
+      return why == 2 || why == 3 ? Missing : Unstarted;
     }
     CloseHandle(run.hThread);
     uint woke = WaitForMultipleObjects(2, new IntPtr[] { run.hProcess, service }, false, 0xFFFFFFFF);
@@ -769,7 +774,7 @@ export function keeper(argv: string[], run: string, env: NodeJS.ProcessEnv): { f
     file: powershellExe(),
     args: [...POWERSHELL, KEEP],
     env: {
-      ...env,
+      ...forPowerShell(env),
       IT_JOB: name,
       IT_JOB_LINE: windowsLine(argv),
       IT_JOB_PARENT: String(process.pid),
@@ -777,6 +782,13 @@ export function keeper(argv: string[], run: string, env: NodeJS.ProcessEnv): { f
     },
   }
 }
+/**
+ * An environment for Windows PowerShell, without the folders it is to load its modules from. It
+ * finds its own where none are said, and PowerShell 7 says its own: a service started from
+ * PowerShell 7 would have Windows PowerShell load PowerShell 7's modules, which it cannot, and
+ * then it has no `Add-Type`. The app is given back what was said (`IT_JOB_MODULES`).
+ */
+const forPowerShell = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(env).filter(([k]) => k.toUpperCase() !== 'PSMODULEPATH'))
 
 /**
  * Ends everything in the job a run was kept in on Windows, and answers as `endTree` does: `ended`
@@ -790,7 +802,7 @@ export function endJob(run: string): Promise<'ended' | 'gone' | 'unknown'> {
     execFile(
       powershellExe(),
       [...POWERSHELL, END],
-      { env: { ...process.env, IT_JOB: name }, timeout: 60_000, windowsHide: true, encoding: 'utf8' },
+      { env: { ...forPowerShell(process.env), IT_JOB: name }, timeout: 60_000, windowsHide: true, encoding: 'utf8' },
       (err, out) => {
         const said = String(out ?? '')
           .trim()

@@ -1264,12 +1264,13 @@ describe('a reopened run on Windows, as it is put to the system', () => {
     expect(script).not.toContain('claude')
     expect(started.env).toMatchObject({
       KEY: 'v',
-      PSModulePath: 'C:\\mods',
       IT_JOB: `Global\\it-run-${run}`,
       IT_JOB_LINE: '"C:\\Users\\a b\\.local\\bin\\claude.exe" --resume x --allowedTools Bash(it:*)',
       IT_JOB_PARENT: String(process.pid),
       IT_JOB_MODULES: '+C:\\mods',
     })
+    // Windows PowerShell is given no folders for its modules, and finds its own: the app is given back the person's through the keeper
+    expect(Object.keys(started.env).filter((k) => k.toUpperCase() === 'PSMODULEPATH')).toEqual([])
     // An environment without the folders of PowerShell's modules has none given to the app either
     expect((keeper(['C:\\x.exe'], run, {}) as { env: NodeJS.ProcessEnv }).env.IT_JOB_MODULES).toBe('-')
   })
@@ -1605,6 +1606,29 @@ setInterval(() => {}, 1000)
     expect(existsSync(path.join(other, 'ran.json'))).toBe(false)
     first.abort()
     expect(await running).toBe(STOPPED)
+  }, 180_000)
+
+  test('started where PowerShell 7 named the folders for its modules is kept all the same, and its app is given those folders back', async () => {
+    const seven = 'C:\\Program Files\\PowerShell\\7\\Modules'
+    const modules = [seven, process.env.PSModulePath].filter(Boolean).join(';')
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== 'PSMODULEPATH')), PSModulePath: modules }
+    expect(await carryOn(standIn(scratch, 'done'), scratch, { harness: 'pi', session: 's-1', run: randomUUID() }, { env })).toBeNull()
+    const ran = ranIn(scratch)
+    left.push(ran.left)
+    expect(ran.modules).toBe(modules)
+  }, 180_000)
+
+  test('whose program Windows will not start says so, and not that a job could not be made', async () => {
+    const notAProgram = path.join(scratch, 'not-a-program.exe')
+    writeFileSync(notAProgram, 'this is text, and no program Windows can run\n')
+    expect(
+      await carryOn(
+        { argv: [notAProgram, '--print'], input: 'x', app: 'Stand-in' },
+        scratch,
+        { harness: 'pi', session: 's-1', run: randomUUID() },
+        { env: process.env },
+      ),
+    ).toBe('Stand-in could not be started: Windows would not start its program')
   }, 180_000)
 
   test('whose program is not there says so', async () => {
