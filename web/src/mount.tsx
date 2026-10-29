@@ -269,6 +269,8 @@ export function Mount({
     let recording: Begun | null = null
     let question: { cancel: () => void } | null = null
     let photo: { cancel: () => void } | null = null
+    /** A recording or a photo is being begun: the person or the browser is being asked, and nothing is under way yet to say so. */
+    let beginning = false
     let refused = false
     /** Leaves the frame in It's own place while it records: a frame that fills the screen would hide It's bar, which says that it is recording. */
     const inSight = () => {
@@ -316,22 +318,39 @@ export function Mount({
         const file = await was.stop(message.keep === true)
         return message.keep === true ? { file } : {}
       }
-      if (recording || question || photo) throw new Error('This page is using the microphone or the camera already. Stop that first.')
-      if (message.type === 'it:photo') {
-        await mayUse(['camera'])
-        const facing = message.facing === 'user' || message.facing === 'environment' ? message.facing : undefined
-        let taking: Awaited<ReturnType<typeof shoot>>
-        try {
-          taking = await shoot({ page: artifactId, title: titled.current }, facing)
-        } catch (err) {
-          throw deviceRefused(err)
-        }
-        photo = taking
-        const made = await taking.photo
-        photo = null
-        if (!made) throw new Error('The person closed the camera without taking a photo.')
-        return { file: made }
+      if (beginning || recording || question || photo) throw new Error('This page is using the microphone or the camera already. Stop that first.')
+      // Taken at once, before anything is waited for: a second asking that arrives while the
+      // person or the browser is asked about the first is refused, and is not begun beside it
+      beginning = true
+      try {
+        return message.type === 'it:photo' ? await takePhoto(message) : await beginRecording(from, message)
+      } finally {
+        beginning = false
       }
+    }
+    const takePhoto = async (message: Extract<PageToSite, { type: 'it:photo' }>) => {
+      await mayUse(['camera'])
+      const facing = message.facing === 'user' || message.facing === 'environment' ? message.facing : undefined
+      let taking: Awaited<ReturnType<typeof shoot>>
+      try {
+        taking = await shoot({ page: artifactId, title: titled.current }, facing)
+      } catch (err) {
+        throw deviceRefused(err)
+      }
+      // The page was closed while the browser was asked: the camera is closed again at once
+      if (!live) {
+        taking.cancel()
+        throw new Error('The page was closed.')
+      }
+      photo = taking
+      // Nothing more is being begun: what is open now is the person's to finish
+      beginning = false
+      const made = await taking.photo
+      photo = null
+      if (!made) throw new Error('The person closed the camera without taking a photo.')
+      return { file: made }
+    }
+    const beginRecording = async (from: MessagePort, message: Extract<PageToSite, { type: 'it:record' }>) => {
       const spec = specOf(message)
       await mayUse(kindsOf(spec))
       const id = crypto.getRandomValues(new Uint32Array(2)).join('-')
