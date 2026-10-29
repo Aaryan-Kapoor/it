@@ -3924,11 +3924,6 @@ form.row-main {
   display: flex;
   gap: 10px;
 }
-.media-shoot-actions button {
-  min-height: 40px;
-  padding: 0 20px;
-  font-size: 15px;
-}
 @media (prefers-reduced-motion: reduce) {
   .media-live-dot {
     animation: none;

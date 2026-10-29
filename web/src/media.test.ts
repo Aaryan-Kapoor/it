@@ -7,7 +7,14 @@ import { displayKey, forgetAll, forgetDisplayKey, keepFor } from './lib'
 import { allow, allowed, askPerson, cannotRecord, forgetGrants, grantsOf, kindsOf, kindsSaid, ownerOf, specOf, takeBack } from './media'
 
 const OWNER = ownerOf({ machineId: 'machine-1', session: { harness: 'claude-code', id: 'conversation-1' } })
-const grant = (page: string, kinds: ('mic' | 'camera')[], owner = OWNER) => ({ page, title: `Page ${page}`, agent: 'Claude Code', machine: 'studio', owner, kinds })
+const grant = (page: string, kinds: ('mic' | 'camera')[], owner = OWNER) => ({
+  page,
+  title: `Page ${page}`,
+  agent: 'Claude Code',
+  machine: 'studio',
+  owner,
+  kinds,
+})
 
 beforeEach(() => {
   localStorage.clear()

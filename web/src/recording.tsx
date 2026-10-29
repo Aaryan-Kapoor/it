@@ -121,7 +121,9 @@ export function MediaAllowed({ user, page, title }: { user: string; page: string
       className="nav-action media-allowed"
       title={`“${title}” may use ${kindsSaid(grant.kinds)} on this screen. Press to take that back.`}
       aria-label={`Take back ${kindsSaid(grant.kinds)} from this page`}
-      onClick={() => confirm(`Take back ${kindsSaid(grant.kinds)} from “${title}” on this screen? It asks again the next time it wants it.`) && takeBack(user, page)}
+      onClick={() =>
+        confirm(`Take back ${kindsSaid(grant.kinds)} from “${title}” on this screen? It asks again the next time it wants it.`) && takeBack(user, page)
+      }
     >
       <IconMic />
     </button>
