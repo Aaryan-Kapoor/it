@@ -287,19 +287,43 @@ export const choose = mutation({
     const { machine } = await requireMachine(ctx)
     const known = [...new Set(harnesses.filter((h) => (HARNESSES as readonly string[]).includes(h)))]
     const on = system === undefined ? machine.system : system.slice(0, 20)
-    // A setup that does not say leaves it as it was, as a report that does not say does
-    const can = reopens === undefined ? machine.reopens : reopens || undefined
-    const wakes = wakingToo(machine, known, on, can)
+    // What the setup says of it is so, and a setup that does not say is of an It that does not
+    // reopen conversations on Windows: one that does says so whenever the It it tells takes it
+    const can = reopens || undefined
+    const first = firstWord(machine, on, can)
+    const was = first ? { ...machine, ...first } : machine
+    const wakes = wakingToo(was, known, on, can) ?? first?.wakes
     await ctx.db.patch(machine._id, {
       wanted: known,
       ...(wakes ? { wakes } : {}),
+      ...(first ? { reopensFrom: first.reopensFrom } : {}),
       ...(on !== machine.system ? { system: on } : {}),
       ...(can !== machine.reopens ? { reopens: can } : {}),
     })
-    const woken = wakesOn(on, can) ? (wakes ?? machine.wakes ?? []).map((w) => w.harness).filter((h) => known.includes(h)) : []
+    const woken = wakesOn(on, can) ? (wakes ?? was.wakes ?? []).map((w) => w.harness).filter((h) => known.includes(h)) : []
     return { wakes: woken }
   },
 })
+
+/**
+ * What is kept of a machine's switches where a machine on Windows says that it reopens
+ * conversations there and did not say so before, and since when it has said so. Undefined where
+ * nothing changes. What was switched on for it before it first said so never reopened anything,
+ * and may have been noted long ago, by an It from before machines said what they run, which
+ * switched it on whatever the system. Let stand, it would come on now, and reach back to what
+ * was done then. So it is let go of, and only the person, or a setup that connects an app
+ * afresh, switches it on. What was switched on since, before an It that does not say so ran
+ * there for a while, stays as it was.
+ */
+function firstWord(
+  m: Doc<'machines'>,
+  system: string | undefined,
+  reopens: boolean | undefined,
+): { wakes: NonNullable<Doc<'machines'>['wakes']>; reopensFrom: number } | undefined {
+  if (system !== 'win32' || reopens !== true || m.reopens === true) return undefined
+  const from = m.reopensFrom ?? Date.now()
+  return { wakes: (m.wakes ?? []).filter((w) => w.since >= from), reopensFrom: from }
+}
 
 /** The machine gives up its own access. Its key is useless from here on, and what descends from it goes with it, as when the person revokes it. */
 export const leave = mutation({
@@ -425,13 +449,15 @@ export const report = mutation({
     // That it reopens closed conversations on Windows, likewise: kept from a report that does not
     // say, as the plainer report does not, and only where it comes from the same version
     const can = reopens === undefined ? (moved ? undefined : machine.reopens) : reopens || undefined
+    const first = firstWord(machine, on, can)
     const same =
       JSON.stringify(machine.harnesses ?? []) === JSON.stringify(clean) &&
       machine.connectorVersion === connectorVersion &&
       machine.latest === knows &&
       machine.system === on &&
       machine.paused === held &&
-      machine.reopens === can
+      machine.reopens === can &&
+      !first
     // Written each time it says so, less a little for a report that comes a moment early: the
     // site calls a machine off once it has been quiet for a few of these
     if (!same || machine.offAt !== undefined || Date.now() - machine.lastSeenAt > ALIVE.everyMs - 5_000) {
@@ -444,6 +470,7 @@ export const report = mutation({
         system: on,
         paused: held,
         reopens: can,
+        ...(first ?? {}),
         ...(moved ? { upgrade: undefined } : {}),
       })
     }

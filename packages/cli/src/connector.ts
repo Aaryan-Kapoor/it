@@ -252,6 +252,8 @@ export function reports<T extends object, U extends object>(platform: string, fu
   if (lately.plain) return [plainest]
   return platform === 'win32' && !lately.unsaid ? [{ ...full, reopens: true }, full, plainest] : [full, plainest]
 }
+/** Whether It refused a call for what it said, as an It that is older than this program refuses a field it does not know, and not because the call did not reach it or was not answered. */
+export const refusedFor = (err: unknown): boolean => ['error', 'invalid'].includes((err as { code?: string })?.code ?? '')
 /**
  * What setup tells It it chose, in the same way: the fullest says what system the machine runs,
  * and on Windows that it reopens closed conversations there, and the plainest says the choice alone.
@@ -271,7 +273,11 @@ export const choices = (platform: string, harnesses: string[]) => [
  */
 export function codexCommand(platform: string, pathVar: string, exists: (file: string) => boolean): string[] | null {
   if (platform !== 'win32') return ['codex']
-  const dirs = pathVar.split(';').filter(Boolean)
+  // Only folders named in full, as `windowsProgram` looks in: a folder named from wherever this program happens to be is no place to start Codex from
+  const dirs = pathVar
+    .split(';')
+    .map((d) => d.trim().replace(/^"(.*)"$/, '$1'))
+    .filter((d) => path.win32.isAbsolute(d))
   const find = (name: string) => dirs.map((d) => path.win32.join(d, name)).find(exists)
   const exe = find('codex.exe')
   if (exe) return [exe]
@@ -1574,7 +1580,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const how = carrying(now.harness, now.id, text, {
       codex: codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync),
       // On Windows an app is started by where its program is, which its name alone does not say there
-      ...(process.platform === 'win32'
+      ...(process.platform === 'win32' && now.harness !== 'codex'
         ? { start: windowsProgram(PROGRAM[now.harness] ?? now.harness, env.PATH ?? env.Path ?? '', existsSync, (f) => readFileSync(f, 'utf8')) }
         : {}),
       itHome: home(),
@@ -3259,8 +3265,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
           return
         } catch (err) {
           if ((err as { code?: string }).code === 'unauthenticated' || n === tries.length - 1) throw err
-          if ('reopens' in args) unsaidUntil = Date.now() + 10 * 60_000
-          else plainUntil = Date.now() + 10 * 60_000
+          // The word from Windows is left out only where It refused the report for what it said. A
+          // report that did not reach It, or was not answered, says nothing of that, and made again
+          // without the word just after an update, it would have It take the word away
+          if ('reopens' in args) {
+            if (!refusedFor(err)) throw err
+            unsaidUntil = Date.now() + 10 * 60_000
+          } else plainUntil = Date.now() + 10 * 60_000
         }
     })().catch((err) => {
       // The bridge would give this machine no token, even a fresh one: it has been revoked.

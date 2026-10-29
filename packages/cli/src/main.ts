@@ -25,7 +25,7 @@ import readline from 'node:readline/promises'
 import { describeClick, firstFile, HARNESSES, type Harness, isSlug, LIMITS, NOUN, newer, PROTOCOL_VERSION, parseJson, TAKES, withoutFiles } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
-import { choices, conversationIds, local } from './connector'
+import { choices, conversationIds, local, refusedFor } from './connector'
 import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
 import * as flow from './flow'
@@ -141,7 +141,8 @@ async function chosen(wanted: string[]): Promise<string[]> {
     try {
       return (await call<{ wakes?: string[] } | null>('mutation', api.machines.choose, args))?.wakes ?? []
     } catch (err) {
-      if (n === tries.length - 1) throw err
+      // As with a report: the word from Windows is left out only where It refused it
+      if (n === tries.length - 1 || ('reopens' in args && !refusedFor(err))) throw err
     }
   return []
 }

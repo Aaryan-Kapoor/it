@@ -3867,7 +3867,10 @@ describe('displays and machines', () => {
     // Nor is anything handed to that machine to be reopened for: a closed conversation's click waits
     const runBegan = await pc.as.mutation(api.machines.runBegan, { for: { harness: 'codex', id: 'x-1' }, run: 'r-1', ids: [] })
     expect(runBegan).toEqual({ stopped: false, off: true })
-    // Updated again, it says so once more, and what the person switched off stays off: only the switch puts it back
+    // A setup of that It, which does not say either, is told that nothing comes on, whatever the machine said before
+    expect(await pc.as.mutation(api.machines.choose, { harnesses: ['claude-code', 'codex'], system: 'win32' })).toEqual({ wakes: [] })
+    // Updated again, it says so once more: what was switched on while it said so is as it was, and
+    // what the person switched off stays off, for the switch alone to put back
     await pc.as.mutation(api.machines.report, { connectorVersion: '0.2.0', harnesses: apps, system: 'win32', reopens: true })
     expect(await wakes(pc)).toEqual(['codex'])
     await alice.browser.mutation(api.machines.wake, { machineId: pc.id, harness: 'claude-code', on: true })
@@ -3882,6 +3885,28 @@ describe('displays and machines', () => {
     expect(await wakes(old)).toEqual([])
     await alice.browser.mutation(api.machines.wake, { machineId: old.id, harness: 'claude-code', on: true })
     expect(await wakes(old)).toEqual(['claude-code'])
+    // What an It from before machines said what they run switched on for a Windows machine, long
+    // ago, never reopened anything: it does not come on when the machine first says it reopens
+    // conversations, and does not reach back to what was done then
+    const older = await machineOf(t, 'alice', 'older')
+    const longAgo = Date.now() - 90 * 24 * 60 * 60_000
+    await t.run((ctx) => ctx.db.patch(older.id, { system: 'win32', wanted: ['codex'], wakes: [{ harness: 'codex', since: longAgo }] }))
+    await older.as.mutation(api.machines.inventory, { harnesses: [{ id: 'codex', addon: 'connected' }] })
+    expect(await wakes(older)).toEqual([])
+    await older.as.mutation(api.machines.report, {
+      connectorVersion: '0.2.0',
+      harnesses: [{ id: 'codex', addon: 'connected' }],
+      system: 'win32',
+      reopens: true,
+    })
+    expect(await wakes(older)).toEqual([])
+    expect(((await t.run((ctx) => ctx.db.get(older.id))) as { wakes?: unknown[] }).wakes).toEqual([])
+    // The same where it is setup that first says so
+    const oldest = await machineOf(t, 'alice', 'oldest')
+    await t.run((ctx) => ctx.db.patch(oldest.id, { system: 'win32', wanted: ['codex'], wakes: [{ harness: 'codex', since: longAgo }] }))
+    await oldest.as.mutation(api.machines.inventory, { harnesses: [{ id: 'codex', addon: 'connected' }] })
+    expect(await oldest.as.mutation(api.machines.choose, { harnesses: ['codex'], system: 'win32', reopens: true })).toEqual({ wakes: [] })
+    expect(await wakes(oldest)).toEqual([])
     // On Linux and macOS the system is enough, whatever is said
     const box = await machineOf(t, 'alice', 'box')
     expect(await box.as.mutation(api.machines.choose, { harnesses: ['claude-code'], system: 'linux' })).toEqual({ wakes: ['claude-code'] })

@@ -27,7 +27,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { ADDONS, SKILL } from './src/addons.generated'
 import { agentApp, agentAppsAbove, appsFrom, linuxProc, type Proc, psAbove, psTable, psWords } from './src/ancestry'
 import { loose, nested, parse } from './src/args'
-import { choices, codexCommand, codexQueue, local, mac, reports } from './src/connector'
+import { choices, codexCommand, codexQueue, local, mac, refusedFor, reports } from './src/connector'
 import {
   backend,
   changeWhole,
@@ -741,6 +741,9 @@ describe('starting Codex to queue a click', () => {
     expect(codexCommand('win32', PATH, having(cmd, script))).toBeNull()
     expect(codexCommand('win32', PATH, having(cmd, node))).toBeNull()
     expect(codexCommand('win32', '', having(cmd, script, node))).toBeNull()
+    // A folder named from wherever this program is, and not in full, is not looked in, and a folder in quotes is
+    expect(codexCommand('win32', '.;bin', having('codex.exe', 'bin\\codex.exe'))).toBeNull()
+    expect(codexCommand('win32', '"C:\\tools"', having('C:\\tools\\codex.exe'))).toEqual(['C:\\tools\\codex.exe'])
   })
 })
 
@@ -761,6 +764,13 @@ describe('what a machine tells It of itself, to an It that may be older', () => 
       expect(reports(platform, said, plainest, { plain: false, unsaid: false })).toEqual([said, plainest])
       expect(reports(platform, said, plainest, { plain: true, unsaid: false })).toEqual([plainest])
     }
+  })
+
+  test('the word from Windows is left out only where It refused the call for what it said, and not where the call did not reach It or was not answered', () => {
+    for (const code of ['error', 'invalid']) expect(refusedFor({ code }), code).toBe(true)
+    for (const code of ['offline', 'timeout', 'unavailable', 'blocked', 'unknown_host', 'limit', 'unauthenticated', undefined])
+      expect(refusedFor({ code }), String(code)).toBe(false)
+    expect(refusedFor(new Error('no code'))).toBe(false)
   })
 
   test('setup tells It what it chose in the same way, with the system, and on Windows the word that the machine reopens conversations', () => {
