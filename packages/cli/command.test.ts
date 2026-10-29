@@ -1316,10 +1316,18 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
           'Links are set to be at It’s address on the network, and It cannot be reached there now: it is kept to the tailnet.',
         )
         // What is no page's link on the site is not given as one
-        for (const link of ['javascript:alert(1)', 'http://studio.tail1234.ts.net:21000/elsewhere', 'https://example.com/p/plan']) {
+        for (const link of [
+          'javascript:alert(1)',
+          'http://studio.tail1234.ts.net:21000/elsewhere',
+          'https://studio.tail1234.ts.net:21002/elsewhere',
+          'ftp://x/p/plan',
+        ]) {
           finished = { link }
           expect([link, (await made()).url]).toEqual([link, own])
         }
+        // A link at the tailnet's https address, which \`it https on\` gives, is one
+        finished = { link: 'https://studio.tail1234.ts.net:21002/p/plan' }
+        expect((await made()).url).toBe('https://studio.tail1234.ts.net:21002/p/plan')
       } finally {
         await b.close()
       }
