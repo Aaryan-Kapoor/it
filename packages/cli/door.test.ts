@@ -14,7 +14,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { AUDIENCE, contentPort, LIMITS, SANDBOX } from '@it/protocol'
+import { AUDIENCE, contentPort, SANDBOX, UPLOAD } from '@it/protocol'
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
@@ -2191,7 +2191,7 @@ describe('What the door will wait for', () => {
     expect((await ask(door.base, { method: 'POST', path: '/control/stage', body: 'x'.repeat(1024 * 1024 + 1) })).status).toBe(413)
     // An upload says how long it is, and is not longer than a file may be
     expect((await ask(door.base, { method: 'PUT', path: '/upload/a.bin', body: 'abc', chunked: true })).status).toBe(411)
-    expect((await ask(door.base, { method: 'PUT', path: '/upload/a.bin', length: LIMITS.fileBytes + 1 })).status).toBe(413)
+    expect((await ask(door.base, { method: 'PUT', path: '/upload/a.bin', length: UPLOAD.requestBytes + 1 })).status).toBe(413)
     expect(site.asked).toEqual([])
     expect(content.asked).toEqual([])
   })
@@ -2388,7 +2388,7 @@ describe('What the door will wait for', () => {
     try {
       const status = await new Promise<number>((resolve, reject) => {
         const req = http.request(
-          { host: '127.0.0.1', port: opened.base, method: 'PUT', path: '/upload/index.html', headers: { 'content-length': LIMITS.fileBytes } },
+          { host: '127.0.0.1', port: opened.base, method: 'PUT', path: '/upload/index.html', headers: { 'content-length': UPLOAD.requestBytes } },
           (res) => {
             res.resume()
             res.on('end', () => resolve(res.statusCode!))
@@ -2396,15 +2396,16 @@ describe('What the door will wait for', () => {
         )
         req.on('error', reject)
         req.flushHeaders()
-        setTimeout(() => req.end(Buffer.alloc(LIMITS.fileBytes)), 750)
+        setTimeout(() => req.end(Buffer.alloc(UPLOAD.requestBytes)), 750)
       })
       expect(status).toBe(200)
       const began = Date.now()
-      const stalled = await ask(opened.base, { method: 'PUT', path: '/upload/index.html', length: LIMITS.fileBytes, body: 'five!' })
+      const stalled = await ask(opened.base, { method: 'PUT', path: '/upload/index.html', length: UPLOAD.requestBytes, body: 'five!' })
       expect(stalled.status).toBe(500)
       expect(Date.now() - began).toBeLessThan(5000)
       expect(
-        (await ask(opened.base, { method: 'PUT', path: '/upload/index.html', length: LIMITS.fileBytes + 1, body: 'x'.repeat(LIMITS.fileBytes + 1) })).status,
+        (await ask(opened.base, { method: 'PUT', path: '/upload/index.html', length: UPLOAD.requestBytes + 1, body: 'x'.repeat(UPLOAD.requestBytes + 1) }))
+          .status,
       ).toBe(413)
     } finally {
       await opened.stop()

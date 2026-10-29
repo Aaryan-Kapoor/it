@@ -15,7 +15,20 @@
 // where CI is set or IT_E2E_NETWORK=1 says it may.
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash, createHmac, generateKeyPairSync, randomBytes } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  ftruncateSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
@@ -153,6 +166,31 @@ const plain = (url, { method = 'GET', headers = {}, body, localAddress } = {}) =
   })
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'it-e2e-'))
+/**
+ * A recording as a WAV file: samples one after another behind a header of 44 bytes, which a
+ * browser plays, and skips through by where each second of it begins. Each second is a tone of
+ * its own, so that no part of the file is another part of it.
+ */
+function recording(seconds, rate = 48_000, channels = 2) {
+  const each = rate * channels * 2
+  const data = seconds * each
+  const b = Buffer.alloc(44 + data)
+  b.write('RIFF', 0)
+  b.writeUInt32LE(36 + data, 4)
+  b.write('WAVEfmt ', 8)
+  b.writeUInt32LE(16, 16)
+  b.writeUInt16LE(1, 20)
+  b.writeUInt16LE(channels, 22)
+  b.writeUInt32LE(rate, 24)
+  b.writeUInt32LE(each, 28)
+  b.writeUInt16LE(channels * 2, 32)
+  b.writeUInt16LE(16, 34)
+  b.write('data', 36)
+  b.writeUInt32LE(data, 40)
+  const samples = new Int16Array(b.buffer, b.byteOffset + 44, data / 2)
+  for (let i = 0; i < samples.length; i++) samples[i] = Math.round(Math.sin((i * (1 + (Math.floor(i / (rate * channels)) % 7))) / 40) * 8000)
+  return b
+}
 /** What a showing's address answers when it is asked for one of the page's files, and when it is asked to keep the showing alive, as the page itself asks. */
 const servedAt = async (url) => [(await plain(new URL('app.js', url).href)).status, (await plain(new URL('../../__it/keep', url).href)).status].join()
 const home = (name) => path.join(tmp, name)
@@ -1981,12 +2019,34 @@ try {
       readFileSync(sheetBack, 'utf8') === readFileSync(sheetAt, 'utf8'),
     JSON.stringify({ said: asItWasSaid, files: asItWas?.files }),
   )
+  // A recording of several minutes, as a page that takes narration sends one: larger than one
+  // request carries, so it goes up in parts, and comes back down in parts
+  const takeAt = path.join(scratch, `${PRIVATE_MARK}take-3.wav`)
+  const take = recording(200)
+  writeFileSync(takeAt, take)
+  const takeSaid = await sentFrom(page, '#original', [takeAt])
+  const sentTake = await newestFiles(60_000)
+  const takeBack = savedTo('take-3.wav')
+  const takeSaved = sentTake ? await it(A, ['action', sentTake.id, '--save', takeBack]).catch((e) => ({ refused: e.code })) : {}
+  check(
+    'a recording of more than 25 MB goes with an action as it is, and the agent saves it byte for byte',
+    take.length > 25 * 1024 * 1024 &&
+      /^accepted /.test(takeSaid) &&
+      sentTake?.files?.[0]?.bytes === take.length &&
+      takeSaved.saved?.bytes === take.length &&
+      existsSync(takeBack) &&
+      sha(readFileSync(takeBack)) === sha(take),
+    JSON.stringify({ said: takeSaid, files: sentTake?.files, saved: takeSaved }),
+  )
+  // A sparse file, which says it is that large and takes nothing of the disk: the browser refuses it by its size, and reads none of it
   const tooLargeAt = path.join(scratch, 'too-large.bin')
-  writeFileSync(tooLargeAt, Buffer.alloc(25 * 1024 * 1024 + 1, 1))
+  const tooLargeFd = openSync(tooLargeAt, 'w')
+  ftruncateSync(tooLargeFd, 1024 ** 3 + 1)
+  closeSync(tooLargeFd)
   const tooLargeSaid = await sentFrom(page, '#original', [tooLargeAt])
   check(
     'a file larger than one action may carry is refused before anything is sent, and the page is told why',
-    tooLargeSaid === 'refused: A file sent with an action is at most 25 MB.' && !(await newestFiles(3000)),
+    tooLargeSaid === 'refused: A file sent with an action is at most 1 GB.' && !(await newestFiles(3000)),
     tooLargeSaid,
   )
   // A phone on a bad network: the photo is sent with no connection, the tab is closed, and the
@@ -2049,11 +2109,34 @@ try {
   )
   await away.browser.close()
   // Several clicks with files at once, as from several tabs, are held to the room the browser
-  // keeps for files all the same: each is let in or not in one step that no other comes between
+  // keeps for files all the same: each is let in or not in one step that no other comes between.
+  // The room is the files of two of the largest actions, 4 GB, and what the browser keeps already
+  // is counted by what each file says it is: so it is filled by a stand-in for clicks kept
+  // before, which says it is all of it but 70 MB, and leaves room for two of these and not three
   const crowded = began(await launch())
   await pairAsOwner(crowded.page)
   await crowded.page.goto(`${APP}/p/${fslug}`)
   const crowdedFrame = await pageIn(crowded.page, { id: fslug })
+  const owner = readdirSync(path.join(A, 'content', 'u')).find((u) => existsSync(path.join(A, 'content', 'u', u)))
+  const roomTaken = 4 * 1024 * 1024 * 1024 - 70 * 1024 * 1024
+  await crowded.page.evaluate(
+    ({ key, size }) =>
+      new Promise((resolve, reject) => {
+        const asked = indexedDB.open('it-outbox', 1)
+        asked.onupgradeneeded = () => asked.result.createObjectStore('files', { keyPath: 'key' })
+        asked.onsuccess = () => {
+          const tx = asked.result.transaction('files', 'readwrite')
+          tx.objectStore('files').put({ key, files: [{ size }], at: Date.now() })
+          tx.oncomplete = () => {
+            asked.result.close()
+            resolve()
+          }
+          tx.onerror = () => reject(tx.error)
+        }
+        asked.onerror = () => reject(asked.error)
+      }),
+    { key: `it.outbox.${owner}.kept-before.e2e-room`, size: roomTaken },
+  )
   await crowded.context.setOffline(true)
   const crowdedOffline = during(crowded, [
     { says: /ERR_INTERNET_DISCONNECTED/, of: exactly(`${APP}/upload/1`), times: 50, may: true, because: 'files were sent with no connection' },
@@ -2074,10 +2157,11 @@ try {
   await crowded.page.waitForTimeout(1000)
   const crowdKept = await keptInBrowser(crowded.page)
   check(
-    'clicks with files sent at once are held to the room the browser keeps for files, 100 MB: the one past it is refused and told why, and the others are kept',
+    'clicks with files sent at once are held to the room the browser keeps for files, 4 GB: the one past it is refused and told why, and the others are kept',
     JSON.stringify(crowdSaid) ===
       JSON.stringify(['Too many files are still waiting to be sent from this browser. Check the connection, and send this again once they have gone.']) &&
-      JSON.stringify(crowdKept.files) ===
+      Array.isArray(crowdKept.files) &&
+      JSON.stringify(crowdKept.files.filter((sizes) => sizes[0] !== roomTaken)) ===
         JSON.stringify([
           [17 * 1024 * 1024, 17 * 1024 * 1024],
           [17 * 1024 * 1024, 17 * 1024 * 1024],
@@ -2090,10 +2174,16 @@ try {
   // The agent may be on another computer: a machine that joined reads the file through the door it joined at
   const onTheOther = savedTo('from-the-other-machine.jpg')
   const fromTheOther = asItWas ? await it(B, ['action', asItWas.id, '--save', onTheOther]).catch((e) => ({ refused: e.code })) : {}
+  const takeOnTheOther = savedTo('take-on-the-other-machine.wav')
+  const takeFromTheOther = sentTake ? await it(B, ['action', sentTake.id, '--save', takeOnTheOther]).catch((e) => ({ refused: e.code })) : {}
   check(
-    'a machine that joined from elsewhere writes a file an action carried, whole, as the machine It runs on does',
-    fromTheOther.saved?.bytes === photo.length && existsSync(onTheOther) && sha(readFileSync(onTheOther)) === sha(photo),
-    JSON.stringify(fromTheOther),
+    'a machine that joined from elsewhere writes a file an action carried, whole, as the machine It runs on does, one larger than one answer carries among them',
+    fromTheOther.saved?.bytes === photo.length &&
+      existsSync(onTheOther) &&
+      sha(readFileSync(onTheOther)) === sha(photo) &&
+      takeFromTheOther.saved?.bytes === take.length &&
+      sha(readFileSync(takeOnTheOther)) === sha(take),
+    JSON.stringify({ photo: fromTheOther, take: takeFromTheOther }),
   )
   // The bytes are kept by the part of It that keeps pages' files, beside the page's versions, and go with the page
   const person = readdirSync(path.join(A, 'content', 'u')).find((u) => existsSync(path.join(A, 'content', 'u', u)))
@@ -2114,6 +2204,92 @@ try {
     JSON.stringify({ keptBefore, deleted: fdeleted, keptAfter, savedAfter }),
   )
   rmSync(scratch, { recursive: true, force: true })
+
+  // ------------------------------------------------------------------
+  section('Large files')
+  // A page with a film in it, as a demonstration is: one file of more than 100 MB, which the
+  // command sends in parts and the browser plays a part at a time, from wherever it is skipped to
+  const lslug = `${slug}-film`
+  const filmFolder = mkdtempSync(path.join(tmp, 'film-'))
+  const film = recording(600)
+  writeFileSync(path.join(filmFolder, 'film.wav'), film)
+  writeFileSync(
+    path.join(filmFolder, 'index.html'),
+    `<!doctype html><html><head><meta charset="utf-8"><title>${marked('Film')}</title></head><body><h1>${marked('Film')}</h1><video id="film" src="film.wav" preload="metadata" muted controls></video></body></html>`,
+  )
+  const filmMade = await it(A, ['create', marked('Film'), '--id', lslug, '--dir', filmFolder])
+  // Kept whole, where the part of It that keeps pages' files keeps it
+  const keptFilm = await until(() => {
+    const owner = readdirSync(path.join(A, 'content', 'u'))[0]
+    const name = createHash('sha256').update('film.wav').digest('hex')
+    for (const folder of readdirSync(path.join(A, 'content', 'u', owner))) {
+      const at = path.join(A, 'content', 'u', owner, folder, String(filmMade.version), name)
+      if (existsSync(at)) return at
+    }
+  }, 5000)
+  check(
+    'a page of more than 100 MB, with a film in it of more than 25 MB, is published, and kept byte for byte',
+    film.length > 100 * 1024 * 1024 &&
+      filmMade.id === lslug &&
+      filmMade.version === 1 &&
+      Boolean(keptFilm) &&
+      createHash('sha256').update(readFileSync(keptFilm)).digest('hex') === createHash('sha256').update(film).digest('hex'),
+    JSON.stringify({ made: filmMade, kept: Boolean(keptFilm), size: film.length }),
+  )
+  // What the browser was given of the film, part by part
+  const filmParts = []
+  const tellParts = (r) => {
+    if (/\/film\.wav$/.test(new URL(r.url()).pathname)) filmParts.push({ status: r.status(), range: r.headers()['content-range'] ?? '' })
+  }
+  page.context().on('response', tellParts)
+  await page.goto(`${APP}/p/${lslug}`)
+  const filmFrame = await pageIn(page, { id: lslug })
+  const played = await filmFrame
+    .evaluate(async () => {
+      const v = document.getElementById('film')
+      const failed = () => new Error(`the film did not play: ${v.error?.code ?? 'no error'} ${v.error?.message ?? ''}`)
+      if (v.readyState < 1)
+        await new Promise((resolve, reject) => {
+          v.addEventListener('loadedmetadata', resolve, { once: true })
+          v.addEventListener('error', () => reject(failed()), { once: true })
+        })
+      const duration = v.duration
+      // Skipped to near its end, as a viewer does, and played from there
+      const from = duration - 8
+      v.currentTime = from
+      await new Promise((resolve) => v.addEventListener('seeked', resolve, { once: true }))
+      await v.play()
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+      // And a part of it read by the page itself, as a page that reads its own files does
+      const asked = await fetch('film.wav', { headers: { range: 'bytes=110000000-110000099' } })
+      return {
+        duration,
+        from,
+        at: v.currentTime,
+        error: v.error?.code ?? null,
+        read: { status: asked.status, bytes: [...new Uint8Array(await asked.arrayBuffer())] },
+      }
+    })
+    .catch((e) => ({ failed: String(e.message ?? e) }))
+  page.context().off('response', tellParts)
+  const farPart = filmParts.find((p) => p.status === 206 && Number(/^bytes (\d+)-/.exec(p.range)?.[1]) > 100 * 1024 * 1024)
+  check(
+    'and plays in the page from wherever it is skipped to, the browser asking for the part it plays, past the first 100 MB',
+    Math.abs(played.duration - 600) < 0.1 && played.error === null && played.at > played.from + 0.5 && Boolean(farPart),
+    JSON.stringify({ played: { ...played, read: undefined }, parts: filmParts.slice(0, 8) }),
+  )
+  // What the answer says of the part is not the page's to read: it is from another origin, and the
+  // answer names no header to show it beside the few any page may read. The bytes are what matter
+  check(
+    'and a page that reads a part of its own file is given exactly that part',
+    played.read?.status === 206 && Buffer.from(played.read.bytes).equals(film.subarray(110_000_000, 110_000_100)),
+    JSON.stringify(played.read ? { ...played.read, bytes: played.read.bytes.length } : played),
+  )
+  // The tab goes back to the page the run shows from here on, before this one is deleted under it
+  await page.goto(`${APP}/p/${slug}`)
+  await pageIn(page, { id: slug })
+  await it(A, ['delete', lslug])
+  rmSync(filmFolder, { recursive: true, force: true })
 
   // ------------------------------------------------------------------
   section('Versions')

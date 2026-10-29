@@ -12,15 +12,15 @@
 // The files are kept by the content service, beside the page's versions, and go with their
 // action, with their page, or when everything is erased. A machine of the person's reads one
 // with a grant signed here (`read`), at the door.
-import { AUDIENCE, fileName, fileType, LIMITS, PUBLICATION, QUOTA, RETENTION } from '@it/protocol'
+import { AUDIENCE, fileName, fileType, LIMITS, PUBLICATION, RETENTION, STORAGE, sizeSaid } from '@it/protocol'
 import { ConvexError, v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { action, internalMutation, internalQuery, type MutationCtx } from './_generated/server'
 import { replayAllowed } from './actions'
 import { prefixOf } from './artifacts'
-import { door } from './config'
-import { removeLater } from './content'
+import { actionFilesBytes, door } from './config'
+import { isNoRoom, removeLater } from './content'
 import { ownArtifact, requireBrowser, requireMachine } from './lib/authz'
 import { overClashes } from './lib/clash'
 import { fail } from './lib/errors'
@@ -58,11 +58,11 @@ export const _prepare = internalMutation({
     if (args.files.length > LIMITS.actionFiles) fail('limit', `An action carries at most ${LIMITS.actionFiles} files.`)
     for (const f of args.files) {
       if (!Number.isInteger(f.size) || f.size < 0) fail('invalid', 'That is not a file’s size.')
-      if (f.size > LIMITS.actionFileBytes) fail('limit', `A file sent with an action is at most ${LIMITS.actionFileBytes / 1024 / 1024} MB.`)
+      if (f.size > LIMITS.actionFileBytes) fail('limit', `A file sent with an action is at most ${sizeSaid(LIMITS.actionFileBytes)}.`)
       if (!/^[0-9a-f]{64}$/.test(f.sha256)) fail('invalid', 'That is not a file’s checksum.')
     }
     const bytes = args.files.reduce((n, f) => n + f.size, 0)
-    if (bytes > LIMITS.actionFilesBytes) fail('limit', `The files sent with one action come to at most ${LIMITS.actionFilesBytes / 1024 / 1024} MB.`)
+    if (bytes > LIMITS.actionFilesBytes) fail('limit', `The files sent with one action come to at most ${sizeSaid(LIMITS.actionFilesBytes)}.`)
     const files = args.files.map((f) => ({ name: fileName(f.name), type: fileType(f.type), size: f.size, sha256: f.sha256 }))
     // Asked before: the same click, sent again after a dropped connection, from another tab, or
     // once its files have been uploaded. It is answered with what was recorded, as long as these
@@ -88,11 +88,12 @@ export const _prepare = internalMutation({
     await replayAllowed(ctx, c, artifact._id, args.clientActionId, args.replayUntil)
     await rateLimit(ctx, 'attachPage', artifact._id)
     await rateLimit(ctx, 'fileKilobytes', c.user._id, Math.max(1, Math.ceil(bytes / 1024)))
-    if ((await tally(ctx, c.user._id)).fileBytes + bytes > QUOTA.actionFileBytes) {
-      log('quota.reached', { what: 'bytes of files sent with actions', who: c.user._id, max: QUOTA.actionFileBytes }, 'warn')
+    const most = actionFilesBytes()
+    if ((await tally(ctx, c.user._id)).fileBytes + bytes > most) {
+      log('quota.reached', { what: 'bytes of files sent with actions', who: c.user._id, max: most }, 'warn')
       fail(
         'limit',
-        `It already holds ${QUOTA.actionFileBytes / 1024 / 1024 / 1024} GB of files sent from pages, which is as much as it keeps. Each goes with its action, a week after an agent was given it.`,
+        `It already holds as much of files sent from pages as it keeps, ${sizeSaid(most)}. Each goes with its action, a week after an agent was given it, and It can be let keep more with \`${STORAGE.actionFiles.setting}=<GB> it service install\`.`,
       )
     }
     const id = await ctx.db.insert('attachments', {
@@ -106,6 +107,16 @@ export const _prepare = internalMutation({
     })
     await bump(ctx, c.user._id, { fileBytes: bytes })
     return { id, prefix: filesPrefix(c.user._id, artifact._id, id), files: declared({ files }), stored: false, fresh: true }
+  },
+})
+
+/** Lets go of the files of a click that the disk had no room for, which no action names and nothing will send again. */
+export const _noRoom = internalMutation({
+  args: { id: v.id('attachments') },
+  handler: async (ctx, { id }) => {
+    const a = await ctx.db.get(id)
+    if (a && !a.stored && a.actionId === undefined) await letGoOfFiles(ctx, a._id)
+    return null
   },
 })
 
@@ -153,6 +164,11 @@ export const prepare = action({
       // Declared again each time it is asked, which declares the same files: a declaration that was lost on its way is made good
       await ctx.runAction(internal.content.stage, { prefix: r.prefix, files: r.files })
     } catch (err) {
+      // No room on the disk is the click's answer, and is not mended by sending it again
+      if (isNoRoom(err)) {
+        await overClashes(() => ctx.runMutation(internal.files._noRoom, { id: r.id }))
+        throw err
+      }
       log('files.unavailable', { attachment: r.id, kind: kind(err) }, 'error')
       throw new ConvexError({ code: 'unavailable', message: 'The file could not be sent just now. It is kept, and sent again in a moment.' })
     }

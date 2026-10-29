@@ -29,6 +29,7 @@ import {
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { STORAGE } from '@it/protocol'
 import { ConvexHttpClient } from 'convex/browser'
 import { Unzip, UnzipInflate, UnzipPassThrough } from 'fflate'
 import { FUNCTIONS, FUNCTIONS_HASH } from '../functions.generated'
@@ -44,6 +45,7 @@ import {
   readConfig,
   rename,
   type ServiceConfig,
+  storageAsked,
   unread,
   writeAll,
   writeFlushed,
@@ -2182,11 +2184,20 @@ async function up(file: string, config: ServiceConfig, lock: Held, neverLoaded: 
 
 // ---------- It's functions ----------
 
-/** The settings It's functions read, which are given to the backend with them. */
-const settings = (config: ServiceConfig) => [
-  { name: 'IT_PORT', value: String(config.port) },
-  { name: 'IT_DOOR_KEY', value: doorKey(config) },
-]
+/**
+ * The settings It's functions read, which are given to the backend with them: and how much of
+ * the files of pages and of what pages sent It keeps, which the backend holds a person to, as
+ * the service's own environment says. What is kept of the disk is the content service's to hold to.
+ */
+const settings = (config: ServiceConfig) => {
+  const storage = storageAsked()
+  return [
+    { name: 'IT_PORT', value: String(config.port) },
+    { name: 'IT_DOOR_KEY', value: doorKey(config) },
+    { name: STORAGE.pages.setting, value: String(storage.pages / 1024 ** 3) },
+    { name: STORAGE.actionFiles.setting, value: String(storage.actionFiles / 1024 ** 3) },
+  ]
+}
 /** What tells one load from another: the functions built into this program, and the settings given with them. */
 const loadOf = (config: ServiceConfig) =>
   createHash('sha256')

@@ -29,10 +29,10 @@ import net from 'node:net'
 import os from 'node:os'
 import type { Duplex } from 'node:stream'
 import { createContent, pagePolicy } from '@it/content'
-import { contentPort, LIMITS, onThisMachine, uploadBudgetMs } from '@it/protocol'
+import { contentPort, onThisMachine, UPLOAD, uploadBudgetMs } from '@it/protocol'
 import { direct, inHome, Problem } from '../lib'
 import type { Backend } from './backend'
-import { doorKey, type ServiceConfig } from './config'
+import { doorKey, type ServiceConfig, storageAsked } from './config'
 import { recordExports } from './export'
 import { createPush, type Push } from './push'
 import { answerSite, BUILT, hostOf, type Site, spelled } from './site'
@@ -361,6 +361,7 @@ export function makeContent(config: ServiceConfig, backend: Backend, say: (line:
   return createContent({
     dir: inHome('content'),
     data: inHome('content-data'),
+    keepFree: storageAsked().keepFree,
     basePort: config.port,
     backendSite: backend.site.replace(/\/$/, ''),
     fetch: direct,
@@ -715,7 +716,8 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
       if (a.method !== 'PUT') return refuse(405, 'upload_method', { allow: 'PUT' })
       const length = declared(a.headers)
       if (length === null) return refuse(411, 'length_required')
-      if (length > LIMITS.fileBytes) return unread('too_large')
+      // A larger file is sent in parts, each a request of its own
+      if (length > UPLOAD.requestBytes) return unread('too_large')
       // A file is passed on as it arrives, for as many bytes as it said and no more
       const file = a.body ? held(a.body, length, (uploadBudgetMs(length) * patience) / PATIENCE_MS) : null
       return toContent('upload', a, url, file?.stream ?? null, file?.over)
@@ -1062,7 +1064,7 @@ const listenNode: Listen = (address, port, door, api, patience) => {
     requireHostHeader: false,
     // Headers that do not arrive, and a request that never ends, are given up on
     headersTimeout: 15_000,
-    requestTimeout: (uploadBudgetMs(LIMITS.fileBytes) * patience) / PATIENCE_MS + 60_000,
+    requestTimeout: (uploadBudgetMs(UPLOAD.requestBytes) * patience) / PATIENCE_MS + 60_000,
   })
   // Inside the standalone program a connection on which nothing moves is closed, as it is on the site's port there
   if (standalone) server.setTimeout(IDLE_S * 1000)
@@ -1469,7 +1471,7 @@ const listenBun: Listen = async (address, port, door, api, patience) => {
     // A connection on which nothing moves for this many seconds is closed, which is also how
     // headers that stop arriving are given up on
     idleTimeout: IDLE_S,
-    maxRequestBodySize: LIMITS.fileBytes + SMALL,
+    maxRequestBodySize: UPLOAD.requestBytes + SMALL,
     async fetch(request, server) {
       const body = request.body ? bodyIn(request.body) : null
       const arrival: Arrival = {

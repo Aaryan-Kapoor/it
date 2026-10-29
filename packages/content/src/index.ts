@@ -22,9 +22,10 @@
 // The backend and this service share no secret. Everything the backend sends (tickets, upload
 // grants, control messages) is signed, and checked here against the backend's public keys.
 import { createHash, randomBytes } from 'node:crypto'
-import { AUDIENCE, contentPort, contentType, isSafePath, LIMITS, onThisMachine, policyHost, SANDBOX } from '@it/protocol'
+import { statfs } from 'node:fs/promises'
+import { AUDIENCE, contentPort, contentType, isSafePath, LIMITS, onThisMachine, policyHost, SANDBOX, STORAGE, UPLOAD } from '@it/protocol'
 import { createRemoteJWKSet, customFetch, errors, jwtVerify } from 'jose'
-import { createFiles, type Files, nameOf } from './files'
+import { createFiles, type Declared, type Files, nameOf } from './files'
 import { createLimits, type Limits } from './limits'
 import { createLog, kind, type Log } from './log'
 import { withTags } from './page'
@@ -38,6 +39,11 @@ export interface ContentSettings {
   dir: string
   /** A folder for the service's own small database. */
   data: string
+  /**
+   * How much of the disk the files are kept on is left free whatever else is asked, in bytes, so
+   * that what else It writes there always has room. Without it, what It leaves free by itself.
+   */
+  keepFree?: number
   /** The port the site is on. Pages are shown from the one after it. */
   basePort: number
   /** The backend's own address for HTTP: where its public keys are read, and the issuer of everything it signs. */
@@ -82,6 +88,8 @@ interface Showing {
 
 interface Service {
   settings: ContentSettings
+  /** How much of the disk is left free, in bytes. */
+  keepFree: number
   files: Files
   records: Records
   limits: Limits
@@ -544,6 +552,29 @@ async function showing(it: Service, request: Request, asked: Asked, bare: Bare, 
   return bare(404)
 }
 
+// ---------- room on the disk ----------
+
+/**
+ * Whether so many more bytes can be written to the disk the files are kept on and leave it with
+ * as much free as It keeps. A disk that cannot say how much is free is taken to have room, and
+ * that it could not say is written down: It refuses nothing it cannot tell is too much.
+ */
+async function room(it: Service, bytes: number): Promise<boolean> {
+  if (bytes <= 0) return true
+  try {
+    const disk = await statfs(it.settings.dir)
+    return Number(disk.bavail) * Number(disk.bsize) - bytes >= it.keepFree
+  } catch (err) {
+    it.log.seldom('disk.unknown', kind(err), { kind: kind(err) }, 'warn')
+    return true
+  }
+}
+/** The answer where there is not: it says how much It leaves free, for whoever asked to say so. */
+const noRoom = (it: Service, prefix: string, bytes: number) => {
+  it.log.seldom('disk.full', prefix.split('/')[1] ?? '', { prefix, bytes, keepFree: it.keepFree }, 'warn')
+  return json(507, { error: 'no_room', keepFree: it.keepFree })
+}
+
 // ---------- uploads, for machines ----------
 
 async function upload(it: Service, request: Request): Promise<Response> {
@@ -588,9 +619,21 @@ async function upload(it: Service, request: Request): Promise<Response> {
   const declared = isSafePath(file) ? (await it.files.declared(prefix))?.get(file) : undefined
   if (!declared) return refuse(403, 'not_declared')
   const length = request.headers.get('content-length')
-  if (length === null || Number(length) !== declared.size || request.headers.get('x-it-sha256') !== declared.sha256) return refuse(400, 'not_as_declared')
+  if (length === null || request.headers.get('x-it-sha256') !== declared.sha256) return refuse(400, 'not_as_declared')
+  // A file is sent whole, or in parts that each say where in it they begin, and are no larger than
+  // one request carries
+  const offset = request.headers.get('x-it-offset')
+  const part = offset === null ? null : { offset: /^\d{1,15}$/.test(offset) ? Number(offset) : -1, length: Number(length) }
+  if (
+    part === null
+      ? Number(length) !== declared.size
+      : part.offset < 0 || !(part.length > 0) || part.length > UPLOAD.requestBytes || part.offset + part.length > declared.size
+  )
+    return refuse(400, 'not_as_declared')
   // A file may be empty, and a request for one may arrive with no body at all
   if (!request.body && declared.size !== 0) return refuse(400, 'no_body')
+  // What is still to come of the file has to fit on the disk beside what It leaves free
+  if (!(await room(it, declared.size - (part?.offset ?? 0)))) return noRoom(it, prefix, declared.size - (part?.offset ?? 0))
   // The bytes are checked against the size and the checksum as they arrive, and a file is put
   // in place only when it is whole and right. Bytes that are not what was declared are the
   // caller's mistake. Anything else is the disk's trouble, and the caller is told to try again.
@@ -613,6 +656,7 @@ async function upload(it: Service, request: Request): Promise<Response> {
       move()
       return true
     })
+  if (part) return uploadPart(it, request, { prefix, file, declared, part, allowed, refuse, expired: () => expired })
   const written = await it.files.write(prefix, file, request.body, declared, allowed).catch((err) => {
     throw new Unavailable('storage', kind(err))
   })
@@ -626,6 +670,44 @@ async function upload(it: Service, request: Request): Promise<Response> {
   if (!(await it.files.declared(prefix))) {
     await it.files.remove(prefix, file)
     return refuse(403, 'version_deleted_meanwhile')
+  }
+  return json(200, { ok: true })
+}
+
+/**
+ * One part of a file that is sent in parts. Each is answered with where the next is to begin; a
+ * part that does not begin there, or that comes while another of the same file is arriving, is
+ * answered with where that is, for the sender to go on from. The last is answered as a file
+ * sent whole is.
+ */
+async function uploadPart(
+  it: Service,
+  request: Request,
+  at: {
+    prefix: string
+    file: string
+    declared: Declared
+    part: { offset: number; length: number }
+    allowed: (move: () => void) => boolean
+    refuse: (status: number, why: string) => Response
+    expired: () => boolean
+  },
+): Promise<Response> {
+  const { prefix, file } = at
+  const written = await it.files.writePart(prefix, file, request.body, at.declared, at.part, at.allowed).catch((err) => {
+    throw new Unavailable('storage', kind(err))
+  })
+  if (written === 'more') return json(200, { ok: true, next: it.files.nextPart(prefix, file) })
+  if (written === 'out_of_order') {
+    it.log.seldom('upload.refused', `${prefix}:out_of_order`, { prefix, reason: 'out_of_order' }, 'info')
+    return json(409, { error: 'out_of_order', next: it.files.nextPart(prefix, file) })
+  }
+  if (written === 'no_folder')
+    return at.expired() && (await it.files.declared(prefix)) ? at.refuse(401, 'grant_expired_meanwhile') : at.refuse(403, 'version_deleted_meanwhile')
+  if (written !== 'ok') return at.refuse(400, written)
+  if (!(await it.files.declared(prefix))) {
+    await it.files.remove(prefix, file)
+    return at.refuse(403, 'version_deleted_meanwhile')
   }
   return json(200, { ok: true })
 }
@@ -665,16 +747,30 @@ async function download(it: Service, request: Request): Promise<Response> {
     throw new Unavailable('storage', kind(err))
   })
   if (!stored) return refuse(404, 'not_there')
-  return new Response(stored.bytes(), {
-    status: 200,
-    headers: {
-      ...PLAIN,
-      'content-security-policy': "default-src 'none'; sandbox; frame-ancestors 'none'",
-      'content-type': 'application/octet-stream',
-      'content-disposition': 'attachment',
-      'content-length': String(stored.size),
-    },
-  })
+  const headers: Record<string, string> = {
+    ...PLAIN,
+    'content-security-policy': "default-src 'none'; sandbox; frame-ancestors 'none'",
+    'content-type': 'application/octet-stream',
+    'content-disposition': 'attachment',
+    'accept-ranges': 'bytes',
+  }
+  // A large file is read in parts, each asked for by where it begins and ends: the door gives
+  // out no more than it is given at once, whoever is reading
+  const range = parseRange(request.headers.get('range'), stored.size)
+  if (range === 'unsatisfiable') {
+    await stored.close()
+    return new Response(null, { status: 416, headers: { ...headers, 'content-range': `bytes */${stored.size}`, 'content-length': '0' } })
+  }
+  if (range)
+    return new Response(stored.bytes(range), {
+      status: 206,
+      headers: {
+        ...headers,
+        'content-range': `bytes ${range.offset}-${range.offset + range.length - 1}/${stored.size}`,
+        'content-length': String(range.length),
+      },
+    })
+  return new Response(stored.bytes(), { status: 200, headers: { ...headers, 'content-length': String(stored.size) } })
 }
 
 // ---------- what the backend asks ----------
@@ -738,6 +834,12 @@ async function control(it: Service, request: Request, asked: Asked): Promise<Res
     // declared, in case the version was deleted in between: the deletion is noted before
     // anything is removed, so one of the two always finds the other.
     if (it.records.wasDeleted(prefix)) return refuse(409, 'version_deleted')
+    // Nothing is declared that the disk has no room for beside what It leaves free. What is there
+    // already takes no more room: a file declared before that arrived whole, and what has arrived
+    // of one that is coming in parts, as it is when the same files are declared again for a fresh grant
+    const there = await it.files.stored(prefix)
+    const toCome = clean.reduce((n, f) => n + (there.get(nameOf(f.path)) === f.size ? 0 : f.size - it.files.nextPart(prefix, f.path, f)), 0)
+    if (!(await room(it, toCome))) return noRoom(it, prefix, toCome)
     await it.files
       .declare(prefix, clean, (move) =>
         it.records.together(() => {
@@ -858,6 +960,7 @@ export function createContent(settings: ContentSettings): {
   const backendSite = settings.backendSite.replace(/\/+$/, '')
   const it: Service = {
     settings: { ...settings, backendSite },
+    keepFree: settings.keepFree ?? STORAGE.keepFree.bytes,
     files: createFiles(settings.dir),
     records: createRecords(settings.data, LIFE_S + TICKET_S),
     limits: createLimits(),

@@ -12,8 +12,10 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { STORAGE } from '@it/protocol'
 import { home, inHome, PROFILE_VARS, psQuote, readJson, rename, writeFlushed } from './lib'
 import { holderRuns } from './serve/backend'
+import { storageAsked } from './serve/config'
 import { resetStartup, startupStatus } from './serve/startup'
 import { watch, watched } from './upgrade'
 
@@ -123,8 +125,8 @@ function must(cmd: string, args: string[], what: string): void {
 
 // The settings a service needs are passed in its definition, because it does not start from a
 // shell. This one list is what all three systems are given: where It's folder is, which port
-// It counts from, which backend program it runs or where it fetches one from, and which backend
-// it talks to, when the shell that installed it said, which harnesses the service may touch at
+// It counts from, which backend program it runs or where it fetches one from, how much it keeps
+// on the disk, and which backend it talks to, when the shell that installed it said, which harnesses the service may touch at
 // all (it reconciles add-ons by itself, and must leave alone what the shell that installed it
 // was told to leave alone), where usage is reported to, whether the person's shell may be asked
 // what it gives a program, which only the service ever asks, and where the person keeps each
@@ -138,6 +140,8 @@ function must(cmd: string, args: string[], what: string): void {
 // registers the service says that it is not to, that is written into the same file as
 // `it updates off` writes (see `install`).
 export function environment(from: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  // A service is never given an amount to keep that it would refuse once it is running
+  storageAsked(from)
   const out: Record<string, string> = { PATH: from.PATH ?? from.Path ?? '' }
   for (const k of [
     'IT_HOME',
@@ -145,6 +149,9 @@ export function environment(from: NodeJS.ProcessEnv = process.env): Record<strin
     'IT_BACKEND_BIN',
     'IT_BACKEND_RELEASES',
     'IT_BACKEND_FETCH_MINUTES',
+    STORAGE.pages.setting,
+    STORAGE.actionFiles.setting,
+    STORAGE.keepFree.setting,
     'IT_URL',
     'IT_SITE_URL',
     'IT_HARNESSES',

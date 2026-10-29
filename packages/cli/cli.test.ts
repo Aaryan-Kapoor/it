@@ -1,7 +1,7 @@
 // The parts of the CLI that can be checked without a backend: reading a command line, the
 // service definitions, and what `it setup` writes for a harness to install.
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { createHmac } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import fs, {
   chmodSync,
   closeSync,
@@ -22,7 +22,7 @@ import http from 'node:http'
 import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
-import { briefClick, describeClick, PORTS } from '@it/protocol'
+import { briefClick, describeClick, LIMITS, PORTS, STORAGE, sizeSaid } from '@it/protocol'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { ADDONS, SKILL } from './src/addons.generated'
 import { agentApp, agentAppsAbove, appsFrom, linuxProc, type Proc, psAbove, psTable, psWords } from './src/ancestry'
@@ -53,6 +53,7 @@ import {
 } from './src/lib'
 import { doorAddress } from './src/login'
 import { gather, projectKey, read } from './src/publish'
+import { storageAsked } from './src/serve/config'
 import {
   askToStop,
   command,
@@ -514,6 +515,21 @@ describe('gathering a folder to publish', () => {
     expect(files.map((f) => f.entry.path)).toEqual(['assets/app.js', 'index.html'])
     expect(files[1]!.entry).toMatchObject({ size: 11, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) })
   })
+  test('a small file is held from when it is read, and a large one is read for its checksum and left on the disk to be read again as it is sent', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    try {
+      const film = randomBytes(9 * 1024 * 1024)
+      writeFileSync(path.join(root, 'index.html'), '<button onclick="It.action(\'play\')">Play</button>')
+      writeFileSync(path.join(root, 'film.webm'), film)
+      const [held, left] = [...gather({ dir: root })].sort((a, b) => a.entry.size - b.entry.size)
+      expect([held!.entry.path, held!.data?.length, held!.from, held!.sends]).toEqual(['index.html', held!.entry.size, undefined, true])
+      expect(left!.entry).toEqual({ path: 'film.webm', size: film.length, sha256: createHash('sha256').update(film).digest('hex') })
+      // The file itself, wherever the system says the folder is: it is read from inside, and a temporary folder may be under a link, as on macOS
+      expect([left!.data, realpathSync(left!.from!.path), left!.sends]).toEqual([undefined, realpathSync(path.join(root, 'film.webm')), false])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
   test.skipIf(!canLink)('a link is never followed: a folder cannot be made to publish a file from elsewhere on the machine', () => {
     const secret = path.join(os.tmpdir(), `it-secret-${process.pid}`)
     writeFileSync(secret, 'a private key')
@@ -537,7 +553,7 @@ describe('gathering a folder to publish', () => {
       writeFileSync(path.join(root, 'real', 'machine.json'), 'fine')
       const inside = realpathSync(root)
       expect(() => read(path.join(root, 'assets', 'machine.json'), 'assets/machine.json', 17, { bytes: 0 }, inside)).toThrow(/outside the folder/)
-      expect(read(path.join(root, 'real', 'machine.json'), 'real/machine.json', 4, { bytes: 0 }, inside).data.toString()).toBe('fine')
+      expect(read(path.join(root, 'real', 'machine.json'), 'real/machine.json', 4, { bytes: 0 }, inside).data?.toString()).toBe('fine')
     } finally {
       rmSync(elsewhere, { recursive: true, force: true })
       rmSync(root, { recursive: true, force: true })
@@ -594,7 +610,7 @@ describe('gathering a folder to publish', () => {
       const grown = path.join(root, 'grown.bin')
       writeFileSync(grown, Buffer.alloc(2 * 1024 * 1024))
       const small = { bytes: 0 }
-      expect(read(grown, 'grown.bin', 1, small).data.length).toBe(2 * 1024 * 1024)
+      expect(read(grown, 'grown.bin', 1, small).data?.length).toBe(2 * 1024 * 1024)
       expect(small.bytes).toBe(2 * 1024 * 1024)
       // With ten bytes left of what a page may hold, it is refused, having been read no further than that
       const real = { readSync: fs.readSync, readFileSync: fs.readFileSync }
@@ -611,8 +627,8 @@ describe('gathering a folder to publish', () => {
       }) as typeof fs.readFileSync
       syncBuiltinESMExports()
       try {
-        const nearlyFull = { bytes: 100 * 1024 * 1024 - 10 }
-        expect(() => read(grown, 'grown.bin', 1, nearlyFull)).toThrow(/at most 100 MB/)
+        const nearlyFull = { bytes: LIMITS.versionBytes - 10 }
+        expect(() => read(grown, 'grown.bin', 1, nearlyFull)).toThrow(`at most ${sizeSaid(LIMITS.versionBytes)}`)
         expect(taken).toBeLessThanOrEqual(11)
       } finally {
         Object.assign(fs, real)
@@ -629,11 +645,11 @@ describe('gathering a folder to publish', () => {
     writeFileSync(growing, 'small')
     const real = { fstatSync: fs.fstatSync, readSync: fs.readSync, readFileSync: fs.readFileSync }
     let taken = 0
-    // Just after the open file was looked at and found small, whatever is writing it makes it forty megabytes
+    // Just after the open file was looked at and found small, whatever is writing it makes it larger than a file may be
     fs.fstatSync = ((...args: Parameters<typeof fs.fstatSync>) => {
       const stat = real.fstatSync(...args)
       const fd = openSync(growing, 'r+')
-      ftruncateSync(fd, 40 * 1024 * 1024)
+      ftruncateSync(fd, LIMITS.fileBytes + 16 * 1024 * 1024)
       closeSync(fd)
       return stat
     }) as typeof fs.fstatSync
@@ -649,8 +665,8 @@ describe('gathering a folder to publish', () => {
     }) as typeof fs.readFileSync
     syncBuiltinESMExports()
     try {
-      expect(() => read(growing, 'growing.bin', 5, { bytes: 0 })).toThrow(/larger than 25 MB/)
-      expect(taken).toBeLessThanOrEqual(25 * 1024 * 1024 + 1)
+      expect(() => read(growing, 'growing.bin', 5, { bytes: 0 })).toThrow(`larger than ${sizeSaid(LIMITS.fileBytes)}`)
+      expect(taken).toBeLessThanOrEqual(LIMITS.fileBytes + 1)
     } finally {
       Object.assign(fs, real)
       syncBuiltinESMExports()
@@ -690,10 +706,10 @@ describe('gathering a folder to publish', () => {
     const big = path.join(dir, 'big.bin')
     // A sparse file: its size is what counts, and nothing this large is ever loaded
     const fd = openSync(big, 'w')
-    ftruncateSync(fd, 26 * 1024 * 1024)
+    ftruncateSync(fd, LIMITS.fileBytes + 1024 * 1024)
     closeSync(fd)
     try {
-      expect(() => gather({ dir })).toThrow(/larger than 25 MB/)
+      expect(() => gather({ dir })).toThrow(`larger than ${sizeSaid(LIMITS.fileBytes)}`)
     } finally {
       rmSync(big)
     }
@@ -1556,6 +1572,23 @@ describe('background service definitions', () => {
     }
     // Saved in a definition, either would turn reporting off again at every start, whatever `it telemetry on` had said since
     for (const definition of [unit, plist, launcher]) expect(definition).not.toMatch(/IT_TELEMETRY_ENABLED|DO_NOT_TRACK/)
+  })
+  test('the service keeps how much It keeps on the disk, as the shell that installed it said, and is never given an amount It would refuse', () => {
+    const env = environment({ PATH: '/bin', IT_PAGES_GB: '500', IT_ACTION_FILES_GB: '0.5', IT_KEEP_FREE_GB: '10' })
+    expect(env).toEqual({ PATH: '/bin', IT_PAGES_GB: '500', IT_ACTION_FILES_GB: '0.5', IT_KEEP_FREE_GB: '10' })
+    expect(storageAsked(env)).toEqual({ pages: 500 * 1024 ** 3, actionFiles: 512 * 1024 ** 2, keepFree: 10 * 1024 ** 3 })
+    // Where none is given, what It keeps by itself
+    expect(storageAsked({})).toEqual({ pages: STORAGE.pages.bytes, actionFiles: STORAGE.actionFiles.bytes, keepFree: STORAGE.keepFree.bytes })
+    expect(storageAsked({ IT_KEEP_FREE_GB: '0' }).keepFree).toBe(0)
+    for (const [name, written] of [
+      ['IT_PAGES_GB', '500GB'],
+      ['IT_ACTION_FILES_GB', '-1'],
+      ['IT_KEEP_FREE_GB', 'lots'],
+      ['IT_PAGES_GB', '2000000'],
+    ]) {
+      expect(() => environment({ PATH: '/bin', [name!]: written })).toThrow(`${name} is a number of GB`)
+      expect(() => storageAsked({ [name!]: written })).toThrow(new RegExp(`^${name} is a number of GB, such as \\d+, and "${written}" is not one\\.$`))
+    }
   })
   test('the service looks for It’s folder where the shell that installed it did, wherever the service itself stands', () => {
     expect(environment({ PATH: '/bin', IT_HOME: 'it-here' }).IT_HOME).toBe(path.resolve('it-here'))

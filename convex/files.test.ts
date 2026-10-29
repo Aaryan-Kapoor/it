@@ -2,7 +2,7 @@
 // The files sent with an action, as the backend takes them: what is recorded and declared before
 // the click is sent, what is accepted with it, who may read one, and when they go. The content
 // service is stood in for by a stub that records what the backend asked of it.
-import { describeClick, LIMITS, QUOTA } from '@it/protocol'
+import { describeClick, LIMITS, STORAGE } from '@it/protocol'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -18,7 +18,7 @@ const PHOTO = { name: 'IMG_2041.jpg', type: 'image/jpeg', size: 402_311, sha256:
 const SHEET = { name: 'totals.csv', type: 'text/csv', size: 120, sha256: 'b'.repeat(64) }
 
 /** Stands in for the content service. */
-let content: { calls: { op: string; body: any; token: string }[]; holds: boolean; down: boolean; missing?: string[] }
+let content: { calls: { op: string; body: any; token: string }[]; holds: boolean; down: boolean; missing?: string[]; full?: boolean }
 beforeEach(() => {
   process.env.CONVEX_SITE_URL = SITE
   process.env.IT_PORT = '39000'
@@ -31,6 +31,7 @@ beforeEach(() => {
       const op = String(url).split('/control/')[1] ?? ''
       content.calls.push({ op, body: JSON.parse(String(init.body)), token: String((init.headers as Record<string, string>).authorization).slice(7) })
       if (content.down) return new Response(null, { status: 503 })
+      if (op === 'stage' && content.full) return new Response(JSON.stringify({ keepFree: 3 * 1024 ** 3 }), { status: 507 })
       if (op === 'verify') return new Response(JSON.stringify({ ok: content.holds, missing: content.holds ? [] : (content.missing ?? ['1']) }))
       if (op === 'delete') return new Response(JSON.stringify({ removed: 1, more: false }))
       return new Response(JSON.stringify({ ok: true }))
@@ -241,13 +242,40 @@ describe('the files of a click', () => {
 
   test('are refused past what It holds for the person, which says so, and writes it down', async () => {
     const { t, prepare, user } = await fixture()
-    await t.run((ctx) => ctx.db.insert('tallies', { userId: user, waiting: 0, stagingCount: 0, stagingBytes: 0, fileBytes: QUOTA.actionFileBytes - 1000 }))
+    await t.run((ctx) => ctx.db.insert('tallies', { userId: user, waiting: 0, stagingCount: 0, stagingBytes: 0, fileBytes: STORAGE.actionFiles.bytes - 1000 }))
     const refused = await prepare('click-full').then(
       () => '',
       (e) => String(e),
     )
-    expect(refused).toMatch(/already holds 1 GB of files sent from pages/)
+    expect(refused).toMatch(/already holds as much of files sent from pages as it keeps, 20 GB\./)
+    expect(refused).toContain(STORAGE.actionFiles.setting)
     expect(await t.run((ctx) => ctx.db.query('attachments').collect())).toEqual([])
+  })
+
+  test('are refused where the disk has no room for them, which says how much It leaves free, and nothing is kept of them', async () => {
+    const { t, prepare } = await fixture()
+    content.full = true
+    const refused = await prepare('click-no-room').then(
+      () => null,
+      (e) => e,
+    )
+    expect(refusal(refused)).toBe('limit')
+    expect(String(refused)).toContain(
+      'The disk It keeps its files on has too little room left for these: It always leaves 3 GB of it free. Make room on that disk, or delete some pages.',
+    )
+    expect(await t.run((ctx) => ctx.db.query('attachments').collect())).toEqual([])
+    expect((await t.run((ctx) => ctx.db.query('tallies').first()))?.fileBytes ?? 0).toBe(0)
+  })
+
+  test('are held to what It was set up to keep of them', async () => {
+    process.env[STORAGE.actionFiles.setting] = '0.25'
+    try {
+      const { t, prepare, user } = await fixture()
+      await t.run((ctx) => ctx.db.insert('tallies', { userId: user, waiting: 0, stagingCount: 0, stagingBytes: 0, fileBytes: 256 * 1024 * 1024 - 1000 }))
+      expect(String(await prepare('click-over').catch((e) => e))).toMatch(/as it keeps, 256 MB\./)
+    } finally {
+      delete process.env[STORAGE.actionFiles.setting]
+    }
   })
 
   test('are asked after only so often by one person, however the asking goes', async () => {
