@@ -697,6 +697,39 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('--media says what a page asks to use of the screen: each kind once, `none` for nothing, and an update that does not say leaves it as it was', async () => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug ?? 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: 'plan', version: 1, url: 'https://site.example/p/plan' }
+      if (fn === 'artifacts:get') return { title: 'Plan' }
+      return null
+    })
+    const begun = () => b.asked.find((x) => x.path === 'publish:begin')!.args
+    try {
+      for (const [said, sent] of [
+        ['camera,mic', ['mic', 'camera']],
+        ['MIC', ['mic']],
+        ['none', []],
+      ] as const) {
+        b.asked.length = 0
+        const ran = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>', '--media', said], b.env)
+        expect([said, ran.code, begun().media]).toEqual([said, 0, sent])
+      }
+      b.asked.length = 0
+      expect((await run(m, ['update', 'plan', '--html', '<p>again</p>'], b.env)).code).toBe(0)
+      expect(Object.hasOwn(begun(), 'media')).toBe(false)
+      // A kind It does not know is refused before It is asked anything
+      for (const said of ['speakers', 'mic;camera', '']) {
+        b.asked.length = 0
+        const ran = await run(m, ['create', 'Plan', '--html', '<p>hi</p>', `--media=${said}`], b.env)
+        expect([said, ran.code, error(ran).code, b.asked]).toEqual([said, 2, 'invalid', []])
+      }
+    } finally {
+      await b.close()
+    }
+  })
+
   test('a publish that It refuses to finish is given up on in so many words, so that it stops counting against what may be under way', async () => {
     const m = machine()
     const b = await backend(m, ({ path: fn, args }) => {

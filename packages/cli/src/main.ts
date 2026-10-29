@@ -22,7 +22,22 @@ import {
 import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline/promises'
-import { describeClick, firstFile, HARNESSES, type Harness, isSlug, LIMITS, NOUN, newer, PROTOCOL_VERSION, parseJson, TAKES, withoutFiles } from '@it/protocol'
+import {
+  describeClick,
+  firstFile,
+  HARNESSES,
+  type Harness,
+  isSlug,
+  LIMITS,
+  type MediaKind,
+  mediaAsked,
+  NOUN,
+  newer,
+  PROTOCOL_VERSION,
+  parseJson,
+  TAKES,
+  withoutFiles,
+} from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
 import { conversationIds, local } from './connector'
@@ -354,6 +369,23 @@ function object(value: unknown, what: string): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
+/**
+ * What `--media` asks for the page to use of the screen it is shown on: the microphone, the
+ * camera, both, or `none`. Nothing where it is not given, which leaves a page as it was.
+ */
+function mediaOf(a: Args): MediaKind[] | undefined {
+  const said = text(a, 'media')
+  if (said === undefined) return undefined
+  const kinds = mediaAsked(said)
+  if (!kinds)
+    throw new Problem(
+      `--media is mic, camera, mic,camera or none, and not "${said}".`,
+      'invalid',
+      `A ${NOUN.one} given the microphone records only once the person at a screen has allowed it there, with It showing that it is recording.`,
+    )
+  return kinds
+}
+
 async function create(a: Args) {
   const title = need(a._[0], `the ${NOUN.one}'s title`, 'create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)')
   const slug = text(a, 'id')
@@ -368,7 +400,8 @@ async function create(a: Args) {
   // says so, with `it open` or with --take. `it update` leaves a page with whoever has it,
   // unless told --take.
   const take = a.flags.take === true
-  const page = { slug, title, files: await source(a), agent: text(a, 'agent'), state, shown: a.flags.open === true }
+  const media = mediaOf(a)
+  const page = { slug, title, files: await source(a), agent: text(a, 'agent'), state, shown: a.flags.open === true, ...(media ? { media } : {}) }
   let done: Awaited<ReturnType<typeof publish>>
   try {
     done = await publish({ ...page, take, own: !take })
@@ -625,6 +658,7 @@ async function update(a: Args) {
   const named = text(a, 'id')
   const slug = named ?? need(a._[0], `which ${NOUN.one}`, 'update <id> (--file f | --dir d | --html "<…>" | pipe)')
   const retitled = named !== undefined && a._[0] !== undefined && a._[0] !== named ? a._[0] : undefined
+  const media = mediaOf(a)
   const existing = await call<{ title: string }>('query', api.artifacts.get, { slug })
   const done = await publish({
     slug,
@@ -633,6 +667,7 @@ async function update(a: Args) {
     agent: text(a, 'agent'),
     take: a.flags.take === true,
     shown: a.flags.open === true,
+    ...(media ? { media } : {}),
   })
   await published(done, a)
 }
@@ -2352,6 +2387,9 @@ Pages
                                  [--take], which gives the ${NOUN.one} to this conversation.
                                  Without --take, create makes nothing under an id that is
                                  another conversation's ${NOUN.one}, and says whose it is.
+                                 [--media mic], camera, mic,camera or none, lets the ${NOUN.one}
+                                 record with It.record and take photos with It.photo, once the
+                                 person at a screen allows it there. Update keeps what was said.
   it list | it read <id> | it rollback <id> <version>
   it delete <id> [--status]      Delete a page, or check its last deletion.
 

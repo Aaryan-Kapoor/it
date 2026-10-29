@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, rmSync, statSync } from 'node:fs'
 import path from 'node:path'
-import { type FileEntry, isSafePath, LIMITS, NOUN, PUBLICATION, uploadBudgetMs } from '@it/protocol'
+import { type FileEntry, isSafePath, LIMITS, type MediaKind, NOUN, PUBLICATION, uploadBudgetMs } from '@it/protocol'
 import { claimLock } from './legacy-lock'
 import { api, call, direct, doorRefusal, inHome, machine, Problem, readJson, sessionAsked, sessionNote, throughDoor, writePrivate } from './lib'
 import { type Profile, profileOf } from './profiles'
@@ -358,6 +358,8 @@ export async function publish(input: {
   itsOwn?: boolean
   /** The built-in tour step, whose ownership and state are checked by the backend. */
   tour?: string
+  /** What the page asks to use of the screen it is shown on. Where it is not said, the page asks for what it asked for before. */
+  media?: MediaKind[]
 }): Promise<{ slug: string; version: number; url: string; note?: string }> {
   const bytes = input.files.reduce((n, f) => n + f.entry.size, 0)
   if (bytes > LIMITS.versionBytes) throw new Problem(`A ${NOUN.one} is at most ${LIMITS.versionBytes / 1024 / 1024} MB.`, 'limit')
@@ -375,6 +377,7 @@ export async function publish(input: {
     ...(input.tour === undefined ? {} : { tour: input.tour }),
     ...(input.state === undefined ? {} : { state: input.state }),
     ...(input.take ? { take: true } : {}),
+    ...(input.media === undefined ? {} : { media: input.media }),
     // Only a conversation makes a page its own: from a plain terminal there is none to keep one for
     ...(input.own && !input.take && session ? { own: true } : {}),
   }

@@ -22,6 +22,8 @@ export const button = v.object({ label: v.string(), action: v.string() })
 const invitedBy = { byMachine: v.optional(v.id('machines')), bySession: v.optional(v.id('sessions')) }
 
 export const expectedOwner = v.object({ machineId: v.id('machines'), session })
+/** What a page may ask to use of the screen it is shown on (protocol's MEDIA_KINDS). */
+export const mediaKind = v.union(v.literal('mic'), v.literal('camera'))
 export const publicationResult = v.object({
   slug: v.string(),
   version: v.number(),
@@ -287,6 +289,12 @@ export default defineSchema({
     publicationId: v.optional(v.id('publications')),
     /** The title this version was published with. It becomes the page's title when the version goes live. */
     title: v.optional(v.string()),
+    /**
+     * What this version asked to use of the screen it is shown on, the microphone or the camera.
+     * None where it says nothing. A page shown at this version is recorded for only as it says,
+     * and only once the person at that screen has allowed it.
+     */
+    media: v.optional(v.array(mediaKind)),
     /** Who published it, and whether they said they were taking the page over. Acted on when the version goes live. */
     by: v.optional(
       v.object({
