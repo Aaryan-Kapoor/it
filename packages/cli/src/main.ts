@@ -26,10 +26,10 @@ import readline from 'node:readline/promises'
 import {
   contentPort,
   describeClick,
-  httpsPort,
   firstFile,
   HARNESSES,
   type Harness,
+  httpsPort,
   isSlug,
   LIMITS,
   type MediaKind,
