@@ -572,7 +572,8 @@ const recordings = new Map<string, { state: RecordingState; why?: string; file?:
 let takes = 0
 /** A recording's bytes as a file named for its kind. */
 function taken(file: Blob, mimeType: string): File {
-  const type = file.type || mimeType
+  // The kind alone, without what it says of its codecs: a file's kind is kept as a kind and nothing more
+  const type = (file.type || mimeType).split(';')[0]!.trim()
   const ending = /^audio\/mp4/.test(type) ? 'm4a' : /^video\/mp4/.test(type) ? 'mp4' : /ogg/.test(type) ? 'ogg' : /^image\/jpeg/.test(type) ? 'jpg' : 'webm'
   return new File([file], `${type.startsWith('image/') ? 'photo' : 'recording'}-${++takes}.${ending}`, { type })
 }
