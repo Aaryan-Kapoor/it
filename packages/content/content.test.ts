@@ -25,6 +25,7 @@ import type net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { pipeline, Readable } from 'node:stream'
+import { LIMITS, UPLOAD } from '@it/protocol'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
 import { type Browser, type BrowserType, chromium, firefox } from 'playwright'
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
@@ -1734,10 +1735,37 @@ describe('files sent with actions', () => {
   const NOTES = Buffer.from('a,b\n1,2\n')
   const filePrefix = (id: string, page = 'page1') => `u/${USER}/${page}/f${id}/`
   const readGrant = (prefix: string, opts: Parameters<typeof sign>[3] = {}) => sign('it-download', prefix, { p: prefix }, opts)
-  const download = async (prefix: string, over: { grant?: string | null; name?: string } = {}) =>
+  const download = async (prefix: string, over: { grant?: string | null; name?: string; range?: string } = {}) =>
     door(`/download/${over.name ?? '1'}`, {
-      headers: over.grant === null ? {} : { authorization: `Bearer ${over.grant ?? (await readGrant(prefix))}` },
+      headers: {
+        ...(over.grant === null ? {} : { authorization: `Bearer ${over.grant ?? (await readGrant(prefix))}` }),
+        ...(over.range ? { range: over.range } : {}),
+      },
     })
+
+  test('are read back in parts by where each begins and ends, for a file larger than one answer carries', async () => {
+    const prefix = filePrefix('ranges')
+    await stage(prefix, [entry('1', PHOTO)])
+    expect((await upload('1', PHOTO, { prefix })).status).toBe(200)
+    const first = await download(prefix, { range: 'bytes=0-99999' })
+    expect([first.status, first.headers.get('content-range'), first.headers.get('content-length'), first.buf.equals(PHOTO.subarray(0, 100_000))]).toEqual([
+      206,
+      `bytes 0-99999/${PHOTO.length}`,
+      '100000',
+      true,
+    ])
+    const rest = await download(prefix, { range: `bytes=100000-${PHOTO.length + 5000}` })
+    expect([rest.status, rest.headers.get('content-range'), rest.buf.equals(PHOTO.subarray(100_000))]).toEqual([
+      206,
+      `bytes 100000-${PHOTO.length - 1}/${PHOTO.length}`,
+      true,
+    ])
+    const past = await download(prefix, { range: `bytes=${PHOTO.length}-` })
+    expect([past.status, past.headers.get('content-range'), past.buf.length]).toEqual([416, `bytes */${PHOTO.length}`, 0])
+    // Asked for with no range, it is given whole, and says that it may be asked for in parts
+    const whole = await download(prefix)
+    expect([whole.status, whole.headers.get('accept-ranges'), whole.buf.equals(PHOTO)]).toEqual([200, 'bytes', true])
+  })
 
   test('are declared by their numbers in order, and held to what one action may carry', async () => {
     const prefix = filePrefix('declared')
@@ -1745,8 +1773,8 @@ describe('files sent with actions', () => {
     expect((await stage(prefix, [entry('photo.jpg', PHOTO)])).status).toBe(400)
     expect((await stage(prefix, [entry('2', PHOTO)])).status).toBe(400)
     expect((await stage(prefix, [entry('1', PHOTO), entry('3', NOTES)])).status).toBe(400)
-    expect((await stage(prefix, [big(25 * 1024 * 1024 + 1, '1')])).status).toBe(400)
-    expect((await stage(prefix, [big(25 * 1024 * 1024, '1'), big(25 * 1024 * 1024, '2'), big(1, '3')])).status).toBe(400)
+    expect((await stage(prefix, [big(LIMITS.actionFileBytes + 1, '1')])).status).toBe(400)
+    expect((await stage(prefix, [big(LIMITS.actionFileBytes, '1'), big(LIMITS.actionFileBytes, '2'), big(1, '3')])).status).toBe(400)
     expect(
       (
         await stage(
@@ -2439,6 +2467,185 @@ describe.skipIf(!canLink)('a link in the content folder', () => {
       expect((await control('delete', { prefix }, undefined, { on: through })).json()).toEqual({ removed: 2, more: false })
     } finally {
       await through.close()
+    }
+  })
+})
+
+describe('large files', () => {
+  ownService(false)
+  // Larger than one part, and no larger than a file of a page has ever been allowed to be
+  const FILM = randomBytes(UPLOAD.partBytes + 12_345)
+  const filmPrefix = (id: string) => `u/${USER}/${id}/1/`
+  const asked: Asked = { port: BASE, address: '127.0.0.1' }
+  /** One part of a file, as the command and the site send one: where it begins, beside the checksum of the whole file. */
+  async function part(
+    prefix: string,
+    whole: Buffer,
+    offset: number,
+    length: number,
+    over: { on?: Content; body?: ReadableStream<Uint8Array>; length?: number } = {},
+  ) {
+    const headers = new Headers({
+      authorization: `Bearer ${await grantFor(prefix)}`,
+      'x-it-sha256': sha256(whole),
+      'x-it-offset': String(offset),
+      'content-length': String(over.length ?? length),
+    })
+    const body = over.body ?? new Blob([whole.subarray(offset, offset + length)]).stream()
+    return reply(
+      await (over.on ?? content).upload(new Request(`${SITE}/upload/film.webm`, { method: 'PUT', headers, body, duplex: 'half' } as RequestInit), asked),
+    )
+  }
+  /** Where a stored file is kept on the disk. */
+  const keptAt = (on: { settings: ContentSettings }, prefix: string, file: string) =>
+    path.join(on.settings.dir, ...prefix.split('/').filter(Boolean), sha256(file))
+
+  test('a file larger than one request carries arrives in parts, each answered with where the next begins, and is shown whole and in any part a browser asks for', async () => {
+    const prefix = filmPrefix('film')
+    const files = [entry('index.html', '<video src="film.webm"></video>'), entry('film.webm', FILM)]
+    expect((await stage(prefix, files)).status).toBe(200)
+    expect((await upload('index.html', '<video src="film.webm"></video>', { prefix })).status).toBe(200)
+    const said = []
+    for (let at = 0; at < FILM.length; at += UPLOAD.partBytes) {
+      const r = await part(prefix, FILM, at, Math.min(UPLOAD.partBytes, FILM.length - at))
+      said.push([r.status, r.json()])
+    }
+    expect(said).toEqual([
+      [200, { ok: true, next: UPLOAD.partBytes }],
+      [200, { ok: true }],
+    ])
+    expect((await control('verify', { prefix, files })).json()).toEqual({ ok: true, missing: [] })
+    const { at } = await open({ p: prefix, a: 'film', s: 'film' })
+    const whole = await show(`${at}/v/1/film.webm`)
+    expect([whole.status, whole.buf.length, sha256(whole.buf) === sha256(FILM)]).toEqual([200, FILM.length, true])
+    // Where a viewer skips to, past the first part
+    const from = FILM.length - 100_000
+    const skipped = await show(`${at}/v/1/film.webm`, { headers: { range: `bytes=${from}-` } })
+    expect([skipped.status, skipped.headers.get('content-range'), skipped.buf.equals(FILM.subarray(from))]).toEqual([
+      206,
+      `bytes ${from}-${FILM.length - 1}/${FILM.length}`,
+      true,
+    ])
+  })
+
+  test('a part that is not the one that comes next is told where that is, one cut off leaves the file as it was, and a file begun again is begun afresh', async () => {
+    const prefix = filmPrefix('order')
+    const small = randomBytes(30)
+    await stage(prefix, [entry('index.html', 'x'), entry('film.webm', small)])
+    const json = async (r: Promise<Reply>) => {
+      const got = await r
+      return [got.status, got.json()]
+    }
+    expect(await json(part(prefix, small, 10, 10))).toEqual([409, { error: 'out_of_order', next: 0 }])
+    expect(await json(part(prefix, small, 0, 10))).toEqual([200, { ok: true, next: 10 }])
+    expect(await json(part(prefix, small, 20, 10))).toEqual([409, { error: 'out_of_order', next: 10 }])
+    // Sent again after its answer was lost: it is not taken twice
+    expect(await json(part(prefix, small, 10, 10))).toEqual([200, { ok: true, next: 20 }])
+    expect(await json(part(prefix, small, 10, 10))).toEqual([409, { error: 'out_of_order', next: 20 }])
+    // Cut off part of the way: the file is as it was before that part, which may be sent again
+    const cut = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(small.subarray(20, 25))
+        controller.error(new Error('the connection dropped'))
+      },
+    })
+    expect((await part(prefix, small, 20, 10, { body: cut })).status).toBe(400)
+    expect(await json(part(prefix, small, 20, 5))).toEqual([200, { ok: true, next: 25 }])
+    // Begun again from the start, what had arrived goes, and it arrives whole all the same
+    expect(await json(part(prefix, small, 0, 15))).toEqual([200, { ok: true, next: 15 }])
+    expect(await json(part(prefix, small, 15, 15))).toEqual([200, { ok: true }])
+    expect((await control('verify', { prefix, files: [entry('film.webm', small)] })).json()).toEqual({ ok: true, missing: [] })
+  })
+
+  test('a file sent in parts whose bytes are not the ones declared is not kept, and parts are held to the file and to what a request carries', async () => {
+    const prefix = filmPrefix('wrong')
+    const right = randomBytes(40)
+    const wrong = Buffer.from(right)
+    wrong[35] ^= 1
+    await stage(prefix, [entry('index.html', 'x'), entry('film.webm', right)])
+    expect((await part(prefix, right, 0, 20)).status).toBe(200)
+    const last = await door('/upload/film.webm', {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${await grantFor(prefix)}`, 'x-it-sha256': sha256(right), 'x-it-offset': '20' },
+      body: wrong.subarray(20),
+    })
+    expect(last.status).toBe(400)
+    expect((await control('verify', { prefix, files: [entry('film.webm', right)] })).json()).toEqual({ ok: false, missing: ['film.webm'] })
+    // Begun again, since nothing of it is kept
+    expect((await part(prefix, right, 20, 20)).json()).toEqual({ error: 'out_of_order', next: 0 })
+    // A part that goes past the end of the file, one larger than a request carries, and one that begins nowhere
+    expect((await part(prefix, right, 30, 20)).status).toBe(400)
+    expect((await part(prefix, right, 0, 10, { length: UPLOAD.requestBytes + 1 })).status).toBe(400)
+    const nowhere = await door('/upload/film.webm', {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${await grantFor(prefix)}`, 'x-it-sha256': sha256(right), 'x-it-offset': '-1' },
+      body: right.subarray(0, 10),
+    })
+    expect(nowhere.status).toBe(400)
+  })
+
+  test('nothing is declared or taken that would leave the disk with less free than It leaves, and the answer says how much that is', async () => {
+    const roomy = make({ keepFree: 0 })
+    const prefix = filmPrefix('room')
+    const files = [entry('index.html', 'x'), entry('film.webm', FILM)]
+    try {
+      expect((await control('stage', { prefix, files }, undefined, { on: roomy.content })).status).toBe(200)
+      expect((await upload('index.html', 'x', { prefix, on: roomy.content })).status).toBe(200)
+      // The same folders, with It leaving more of the disk free than any disk has
+      const tight = createContent({ ...roomy.settings, keepFree: Number.MAX_SAFE_INTEGER })
+      try {
+        const refused = await control('stage', { prefix: filmPrefix('room-2'), files }, undefined, { on: tight })
+        expect([refused.status, refused.json()]).toEqual([507, { error: 'no_room', keepFree: Number.MAX_SAFE_INTEGER }])
+        // What arrived already takes no more room, so declaring it again asks for none
+        const arrived = filmPrefix('room-arrived')
+        await control('stage', { prefix: arrived, files: files.slice(0, 1) }, undefined, { on: roomy.content })
+        expect((await upload('index.html', 'x', { prefix: arrived, on: roomy.content })).status).toBe(200)
+        expect((await control('stage', { prefix: arrived, files: files.slice(0, 1) }, undefined, { on: tight })).status).toBe(200)
+        // Nor is a file taken, whole or in parts, that has no room
+        const whole = await upload('film.webm', FILM, { prefix, on: tight })
+        expect([whole.status, whole.json()]).toEqual([507, { error: 'no_room', keepFree: Number.MAX_SAFE_INTEGER }])
+        expect((await part(prefix, FILM, 0, UPLOAD.partBytes, { on: tight })).status).toBe(507)
+        expect(written().some((e) => e.event === 'disk.full')).toBe(true)
+      } finally {
+        await tight.close()
+      }
+    } finally {
+      await roomy.content.close()
+    }
+  })
+
+  test('a file the service checked as it arrived is not read again to be checked, and one that has changed since is', async () => {
+    const own = make()
+    const prefix = filmPrefix('vouched')
+    const files = [entry('index.html', 'x'), entry('film.webm', FILM)]
+    const at = keptAt(own, prefix, 'film.webm')
+    try {
+      await control('stage', { prefix, files }, undefined, { on: own.content })
+      for (let from = 0; from < FILM.length; from += UPLOAD.partBytes)
+        expect((await part(prefix, FILM, from, Math.min(UPLOAD.partBytes, FILM.length - from), { on: own.content })).status).toBe(200)
+      expect((await upload('index.html', 'x', { prefix, on: own.content })).status).toBe(200)
+      // Nothing is left of it where its parts arrived
+      expect(arrivingUnder(path.join(own.settings.dir, 'tmp'))).toEqual([])
+      // Found as it arrived, without being opened
+      const opens = () => vi.mocked(fsp.open).mock.calls.filter(([file]) => file === at).length
+      const before = opens()
+      expect((await control('verify', { prefix, files }, undefined, { on: own.content })).json()).toEqual({ ok: true, missing: [] })
+      expect(opens()).toBe(before)
+      // A service started again on the same folders has not seen it arrive, and reads it
+      const again = createContent(own.settings)
+      try {
+        expect((await control('verify', { prefix, files }, undefined, { on: again })).json()).toEqual({ ok: true, missing: [] })
+        expect(opens()).toBe(before + 1)
+      } finally {
+        await again.close()
+      }
+      // Its bytes changed where it lies, with its size the same: read again, and found not to be what was declared
+      const changed = readFileSync(at)
+      changed[0] ^= 1
+      writeFileSync(at, changed)
+      expect((await control('verify', { prefix, files }, undefined, { on: own.content })).json()).toEqual({ ok: false, missing: ['film.webm'] })
+    } finally {
+      await own.content.close()
     }
   })
 })

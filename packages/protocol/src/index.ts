@@ -79,6 +79,16 @@ export function policyHost(name: string): string {
  */
 export const SANDBOX = 'allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock'
 
+/** Sizes as It counts them, in units of 1,024. */
+const KB = 1024
+const MB = 1024 * KB
+const GB = 1024 * MB
+/** A size as It's messages say it: in GB, MB or KB, the largest of them it comes to one of, with no more than one decimal. */
+export function sizeSaid(bytes: number): string {
+  const [unit, name] = bytes >= GB ? [GB, 'GB'] : bytes >= MB ? [MB, 'MB'] : [KB, 'KB']
+  return `${Number((bytes / unit).toFixed(1)).toLocaleString('en-US')} ${name}`
+}
+
 /** Hard limits. The backend enforces them; the CLI checks first so that errors are clear. */
 export const LIMITS = {
   slug: 64,
@@ -112,7 +122,20 @@ export const LIMITS = {
   versionsKept: 10,
 } as const
 
-/** One file gets a minute plus its size at 20,000 bytes per second. */
+/**
+ * How a file's bytes travel to It's door and back. The program people install takes in what
+ * arrives at the door's port as fast as it comes, however slowly it is handed on, and gives out
+ * what it is to send as fast as it can read it, however slowly it is taken: a large request or
+ * answer there is held in memory, nearly whole. So none carries more than `requestBytes` of a
+ * file, which is the most an `it` command from before files were sent in parts sends in one
+ * piece. A larger file is sent in parts of `partBytes`, one after another and each saying where
+ * in the file it begins (`x-it-offset`), and a file sent with an action is read back in parts
+ * of the same size. A page's files are shown from the other port, where they are given out no
+ * faster than they are taken, and a browser asks there for whatever part of a file it wants.
+ */
+export const UPLOAD = { requestBytes: 25 * MB, partBytes: 16 * MB } as const
+
+/** One file, or one part of one, gets a minute plus its size at 20,000 bytes per second. */
 export const uploadBudgetMs = (bytes: number): number => 60_000 + Math.ceil(bytes / 20_000) * 1000
 /** All layers use this finite publication lifetime, including retries. */
 export const PUBLICATION = {
@@ -138,6 +161,30 @@ export const QUOTA = {
   /** The bytes of the files sent with actions that It holds for one person, however many pages they came from. */
   actionFileBytes: 1024 * 1024 * 1024,
 } as const
+
+/**
+ * How much It keeps on the disk of the machine it runs on, where it was not set up with other
+ * amounts: what the files of pages may come to, with every kept version counted; what the
+ * files pages sent with actions may come to, however many pages they came from; and how much
+ * of the disk It leaves free whatever those say, so that its own database and records always
+ * have room to be written. Each is given in GB by the setting named beside it, in the
+ * environment of `it setup`, which keeps it for the service from then on.
+ */
+export const STORAGE = {
+  pages: { bytes: 100 * GB, setting: 'IT_PAGES_GB' },
+  actionFiles: { bytes: 20 * GB, setting: 'IT_ACTION_FILES_GB' },
+  keepFree: { bytes: 2 * GB, setting: 'IT_KEEP_FREE_GB' },
+} as const
+/**
+ * The bytes a storage setting gives, from the number of GB it was written with: a number that
+ * is not less than nothing, at most a million, with as many decimals as it likes. Null where
+ * what is written is not that.
+ */
+export function storageBytes(written: string): number | null {
+  if (!/^\s*\d{1,7}(\.\d+)?\s*$/.test(written)) return null
+  const gb = Number(written)
+  return gb <= 1_000_000 ? Math.round(gb * GB) : null
+}
 
 /** How long things are kept. */
 export const RETENTION = {
