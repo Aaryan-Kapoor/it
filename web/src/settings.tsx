@@ -11,6 +11,7 @@ import { LinkChoice, NetworkSwitch, NoAddress, OtherAddresses, useNetwork, useWh
 import { thisPairing } from './outbox'
 import { goesAlong, type Paired, PairedBrowsers } from './paired'
 import { pushSupport, turnOffPush, turnOnPush } from './push'
+import { MediaGrants } from './recording'
 import { current, signOut as endSession, recheck, spaced } from './session'
 
 interface DisplayRow {
@@ -467,6 +468,7 @@ export function Settings({ user, owner, display, onSignOut }: { user: string; ow
           </li>
         </ul>
       </section>
+      <MediaGrants user={user} />
       {owner && (
         <>
           <section>

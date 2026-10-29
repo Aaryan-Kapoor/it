@@ -3816,3 +3816,116 @@ form.row-main {
 .deletion-line {
   margin: 0.5rem 0;
 }
+
+/* The microphone and the camera (recording.tsx). While a page records, It's bar has a row of its own in red that says so, under the rest of the bar, where nothing on the page can cover it */
+.media-live {
+  order: 2;
+  flex: 1 0 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 32px;
+  margin: 0 -8px;
+  padding: 0 12px;
+  background: color-mix(in oklab, var(--danger) 22%, var(--bg));
+  border-top: 1px solid color-mix(in oklab, var(--danger) 55%, var(--bg));
+  color: var(--fg);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.media-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: media-live-pulse 1.4s ease-in-out infinite;
+}
+.media-live[data-state="paused"] .media-live-dot {
+  animation: none;
+  background: var(--wait);
+}
+.media-live-text {
+  font-variant-numeric: tabular-nums;
+}
+.media-live-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--danger-solid);
+  color: #fff;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.media-live-stop:hover {
+  background: var(--danger);
+}
+@keyframes media-live-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.nav-action.media-allowed {
+  color: var(--danger);
+}
+/* What the camera records, small, in a corner of the page */
+.media-corner {
+  margin: 0;
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 40;
+  width: min(28vw, 220px);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  border: 2px solid var(--danger);
+  box-shadow: var(--shadow-lift);
+  pointer-events: none;
+}
+.media-view-video {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #000;
+}
+.media-view-mirrored {
+  transform: scaleX(-1);
+}
+/* It's own view of the camera, for a photo a page asked for */
+.media-shoot {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 20px;
+  background: var(--scrim);
+  backdrop-filter: blur(6px);
+}
+.media-shoot .media-view-video {
+  width: auto;
+  max-width: min(92vw, 960px);
+  max-height: 70vh;
+  border-radius: var(--r-md);
+}
+.media-shoot-head {
+  color: var(--fg);
+  font-size: 14px;
+}
+.media-shoot-actions {
+  display: flex;
+  gap: 10px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .media-live-dot {
+    animation: none;
+  }
+}

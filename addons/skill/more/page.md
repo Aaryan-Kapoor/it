@@ -19,6 +19,25 @@ Put the file in what the action carries, wherever it fits: `It.action('receipt',
 - **A phone that loses its connection keeps the action and its files**, in that browser, and sends them once it is back, even if the page was closed in between. The promise stays unanswered while there is no connection, so show on the page that the photo is on its way, and say so when the promise rejects.
 - **`It.store` keeps no file.** To show a picture you were sent, on this page or on every screen, put it in the page's folder, publish again with `it update`, and refer to it by its path.
 
+## Recording sound, video or a photo
+
+A page records from the microphone or the camera of the screen it is shown on only if you said so when you published it: `it create "Narration" --id narration --file page.html --media mic`, or `--media camera`, or `--media mic,camera`. `it update` keeps what was said before, and `--media none` takes it away. The page never gets the device itself. It records for the page, after asking the user on that screen whether this page may, once per page, and It's bar says that it is recording for as long as it is.
+
+```js
+// Starts recording, and asks the user first the first time on each screen. video: true adds the camera.
+const take = await It.record({ audio: true })
+// ...later, when the user presses Stop on the page
+const file = await take.stop() // a File: audio/webm, or audio/mp4 in Safari
+await It.action('take', { take: file })
+// A photo: the user takes it in It's own view of the camera, and the page is given the JPEG
+const photo = await It.photo()
+```
+
+- **Show why it failed.** `It.record` and `It.photo` reject with a sentence that says why: the page was not published with `--media`, the user said no, the screen reaches It over plain http, or the browser refused. A browser gives the microphone only to an https address or to the machine It runs on, so on another screen It must be opened at its https address, which `it https on` on that machine sets up.
+- **The user can stop it.** `take.state` is `recording`, `paused` (while the screen does not show It) or `ended`, and `take.onchange = (state, why) => …` is called when it changes without the page asking. The user can stop a recording from It's bar, which throws it away. `take.cancel()` throws one away from the page.
+- **Settings are the page's to say.** `audio` and `video` may be objects such as `{ echoCancellation: false }` or `{ facingMode: 'environment', width: 1280 }`, and `audioBitsPerSecond`, `videoBitsPerSecond` and `mimeType` are as for a MediaRecorder. A page records one thing at a time, for an hour at most.
+- **A recording is a file like any other.** The action that carries it is held to the same limits as any file, so keep video takes short or their bit rate low, and save what arrives with `it action <id> --save take.webm`.
+
 ## Keeping something with the page
 
 `It.store.set(key, value)` and `It.store.get(key)` keep small things for the page itself. What is kept there is kept with the page, so it is there the next time the page is opened, on any display. It arrives with the page's state, which is empty until it arrives, a moment after the page opens. It is not there yet when the page's scripts first run: `It.store.get` waits for nothing and answers from what has arrived, so as the page starts it returns `undefined` even for something that was saved. Read what was saved in `It.onState`, as below.

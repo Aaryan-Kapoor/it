@@ -22,6 +22,8 @@ export const button = v.object({ label: v.string(), action: v.string() })
 const invitedBy = { byMachine: v.optional(v.id('machines')), bySession: v.optional(v.id('sessions')) }
 
 export const expectedOwner = v.object({ machineId: v.id('machines'), session })
+/** What a page may ask to use of the screen it is shown on (protocol's MEDIA_KINDS). */
+export const mediaKind = v.union(v.literal('mic'), v.literal('camera'))
 export const publicationResult = v.object({
   slug: v.string(),
   version: v.number(),
@@ -287,6 +289,12 @@ export default defineSchema({
     publicationId: v.optional(v.id('publications')),
     /** The title this version was published with. It becomes the page's title when the version goes live. */
     title: v.optional(v.string()),
+    /**
+     * What this version asked to use of the screen it is shown on, the microphone or the camera.
+     * None where it says nothing. A page shown at this version is recorded for only as it says,
+     * and only once the person at that screen has allowed it.
+     */
+    media: v.optional(v.array(mediaKind)),
     /** Who published it, and whether they said they were taking the page over. Acted on when the version goes live. */
     by: v.optional(
       v.object({
@@ -535,6 +543,12 @@ export default defineSchema({
      * be reached there, and the links are there again once it can.
      */
     link: v.optional(v.union(v.literal('tailnet'), v.literal('network'))),
+    /**
+     * The machine's name on its tailnet, where It answers there over https too, through
+     * Tailscale's own server on that machine (\`it https on\`): another device opens It at that
+     * name with https, whether or not the network is on, and the tailnet's links are there.
+     */
+    https: v.optional(v.string()),
     /**
      * What the owner asked of the network on the site, until the service has said what became
      * of it. When it was asked is also the name the asking goes by. `taken` once the service

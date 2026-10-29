@@ -28,10 +28,17 @@ export function displayKey(): string {
   return key
 }
 
-/** Forgets which display this browser was, so that it registers afresh the next time it is paired. */
+/**
+ * Forgets which display this browser was, so that it registers afresh the next time it is
+ * paired, and with it what the display allowed pages to record (media.ts), which was that
+ * display's and is no new one's.
+ */
 export const forgetDisplayKey = () => {
   localStorage.removeItem(DISPLAY)
   localStorage.removeItem(REGISTERED)
+  const allowed: string[] = []
+  for (let i = 0; i < localStorage.length; i++) if (localStorage.key(i)?.startsWith('it.media.')) allowed.push(localStorage.key(i)!)
+  for (const name of allowed) localStorage.removeItem(name)
 }
 
 /** Notes the session under which this browser last registered as the display it is. */

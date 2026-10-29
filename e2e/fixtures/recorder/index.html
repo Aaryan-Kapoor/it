@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Recorder e2e-private-page</title>
+  </head>
+  <body>
+    <h1>Recorder e2e-private-page</h1>
+    <button id="record" onclick="record()">Record</button>
+    <button id="stop" onclick="stop()">Stop and send</button>
+    <p id="out"></p>
+    <script>
+      // What a page that records a voice-over does: It records for it, and the take goes to the agent as a file
+      const out = document.getElementById('out')
+      let take = null
+      async function record() {
+        try {
+          take = await It.record({ audio: true })
+          take.onchange = (state, why) => (out.textContent = `${state}${why ? `: ${why}` : ''}`)
+          out.textContent = `recording ${take.mimeType}`
+        } catch (e) {
+          out.textContent = `refused: ${e.message}`
+        }
+      }
+      async function stop() {
+        try {
+          const file = await take.stop()
+          const r = await It.action('take', { take: file, note: 'e2e-private-take one' })
+          out.textContent = `accepted ${r.id}`
+        } catch (e) {
+          out.textContent = `refused: ${e.message}`
+        }
+      }
+    </script>
+  </body>
+</html>

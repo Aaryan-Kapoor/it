@@ -136,6 +136,25 @@ describe('what the service says of its door', () => {
   })
 })
 
+describe('over https on the tailnet', () => {
+  test('the address over https is offered first, whether or not the network is on, and only a name is kept', async () => {
+    const { t, owner } = await household()
+    const SECURE = 'https://studio.tail1234.ts.net:39002'
+    await t.mutation(internal.network.report, { on: false, wanted: false, addresses: [], https: 'studio.tail1234.ts.net' })
+    expect(await owner.query(api.network.get, {})).toMatchObject({ on: false, addresses: [SECURE], https: 'studio.tail1234.ts.net' })
+    // The command waits on this to know the service has taken it
+    expect(await t.query(internal.network.current, {})).toMatchObject({ addresses: [SECURE], https: 'studio.tail1234.ts.net' })
+    await t.mutation(internal.network.report, { on: true, wanted: true, addresses: [LAN], https: 'studio.tail1234.ts.net' })
+    expect((await owner.query(api.network.get, {})).addresses).toEqual([SECURE, LAN])
+    // What is no name is not kept, and is not made into an address
+    await t.mutation(internal.network.report, { on: true, wanted: true, addresses: [LAN], https: 'evil.example/x?' })
+    expect(await owner.query(api.network.get, {})).toMatchObject({ addresses: [LAN], https: null })
+    // Taken away, it is offered no more
+    await t.mutation(internal.network.report, { on: true, wanted: true, addresses: [LAN] })
+    expect((await owner.query(api.network.get, {})).addresses).toEqual([LAN])
+  })
+})
+
 describe('what the service says of itself', () => {
   const stands = { on: false, wanted: false, addresses: [] }
 
@@ -214,6 +233,7 @@ describe('the network as a switch on the site', () => {
     expect(await owner.query(api.network.get, {})).toEqual({
       on: false,
       addresses: [],
+      https: null,
       tailnet: false,
       canTailnet: null,
       exposed: null,
@@ -335,6 +355,17 @@ describe('where the links agents give are', () => {
       links: { local: HERE, network: LAN },
     },
     { as: 'on, with the machine on no network', said: { on: true, wanted: true, addresses: [], tailnet: false, canTailnet: false }, links: { local: HERE } },
+    // Over https through Tailscale, the tailnet's links are there whether or not the network is on
+    {
+      as: 'off, answering the tailnet over https',
+      said: { on: false, wanted: false, addresses: [], tailnet: false, canTailnet: true, https: NAME },
+      links: { local: HERE, tailnet: `https://${NAME}:39002` },
+    },
+    {
+      as: 'on for every network, answering the tailnet over https too',
+      said: { on: true, wanted: true, addresses: [LAN, TAIL], tailnet: false, canTailnet: true, tailnetName: NAME, https: NAME },
+      links: { local: HERE, tailnet: `https://${NAME}:39002`, network: LAN },
+    },
   ]
 
   test.each(settings)('with the network $as, only where It can be reached is offered and taken, and the links are then there', async ({ said, links }) => {

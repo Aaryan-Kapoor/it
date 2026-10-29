@@ -44,6 +44,7 @@ export const VALUED = new Set([
   'param',
   'save',
   'number',
+  'media',
 ])
 export interface Args {
   _: string[]
@@ -52,8 +53,8 @@ export interface Args {
 }
 /** The options each command can honour. JSON and help apply to every public command. */
 export const OPTIONS: Record<string, readonly string[]> = {
-  create: ['id', 'file', 'dir', 'html', 'state', 'agent', 'open', 'on', 'take'],
-  update: ['id', 'file', 'dir', 'html', 'title', 'agent', 'open', 'on', 'take'],
+  create: ['id', 'file', 'dir', 'html', 'state', 'agent', 'open', 'on', 'take', 'media'],
+  update: ['id', 'file', 'dir', 'html', 'title', 'agent', 'open', 'on', 'take', 'media'],
   list: [],
   read: [],
   delete: ['status'],
@@ -75,6 +76,7 @@ export const OPTIONS: Record<string, readonly string[]> = {
   uninstall: ['yes'],
   site: ['no-open'],
   network: [],
+  https: [],
   status: [],
   whoami: [],
   serve: ['log', 'supervised'],

@@ -5,12 +5,14 @@ import { useConvex, useMutation, useQuery } from 'convex/react'
 import { Component, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { copy, IconBack, IconLink, IconPin, IconSay, IconSend, IconStop, IconX, Mark } from './brand'
 import { agentName, ago, api, type Id, navigate, refusal, useNow } from './lib'
+import { ownerOf } from './media'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
 import { dismissMessage, message, onItsWayUntil, outboxChanges, pendingMessage, refusedClick, thisSession, unsaved, unsent, watchOutbox } from './outbox'
 import { holdPending } from './pending'
 import { Preview } from './preview'
 import { type PageConnection, reportedConnection } from './readiness'
+import { CameraView, MediaAllowed, MediaAsk, RecordingNow } from './recording'
 import { useSession } from './session'
 import { Starters, useTour, Welcome } from './welcome'
 
@@ -405,7 +407,10 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
             />
           )}
         </span>
+        {/* Whether the page records on this screen, said in It's own bar where nothing on the page can cover it */}
+        <RecordingNow page={page.id} />
         <div className="page-nav-actions">
+          <MediaAllowed user={user} page={page.id} title={page.title} />
           {page.version !== null && (
             <button
               ref={talkButton}
@@ -456,10 +461,13 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
           artifactId={page.id as Id<'artifacts'>}
           title={page.title}
           user={user}
+          madeBy={{ agent: agentName(page.agent), machine: page.machine, owner: ownerOf(page) }}
           // Said of the version that failed, and of no other: a new version is a new page
           onFault={(message, agentTold) => setFault({ of: `${page.id}:${page.version}`, message, agentTold })}
         />
       )}
+      <MediaAsk />
+      <CameraView />
     </main>
   )
 }
