@@ -12,11 +12,25 @@
 // this action for itself, with these files", and how much it may ask of the site is bounded
 // here, before anything reaches the backend. The site never opens a file a page sent: it keeps
 // and sends its bytes as they are.
-import { contentPort, FAULT, fileMarker, isStoreKey, LIMITS, MESSAGE, type PageToSite, parseJson, SANDBOX, type SiteToPage } from '@it/protocol'
+import {
+  contentPort,
+  FAULT,
+  fileMarker,
+  isMediaKind,
+  isStoreKey,
+  LIMITS,
+  MESSAGE,
+  type MediaKind,
+  type PageToSite,
+  parseJson,
+  SANDBOX,
+  type SiteToPage,
+} from '@it/protocol'
 import { useConvex, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { askTwice } from './backend'
 import { api, displayKey, type Id, note, refusal } from './lib'
+import { allow, allowed as allowedHere, askPerson, type Begun, begin, cannotRecord, kindsOf, kindsSaid, shoot, specOf } from './media'
 import { type Sent, submit } from './outbox'
 
 type Phase = { is: 'loading' } | { is: 'shown' } | { is: 'failed'; why: string }
@@ -102,15 +116,25 @@ export function jsonText(value: unknown, max: number, files?: Blob[]): string {
   return text
 }
 
+/** Who made a page, as the person is told when it asks for the microphone or the camera, and the conversation a grant is held to. */
+export interface MadeBy {
+  agent: string | null
+  machine: string | null
+  /** The conversation that has the page now (media.ts `ownerOf`). */
+  owner: string
+}
+
 export function Mount({
   artifactId,
   title,
   user,
+  madeBy,
   onFault,
 }: {
   artifactId: Id<'artifacts'>
   title: string
   user: string
+  madeBy?: MadeBy
   /** Told what the page's own script failed with, each time it says so. */
   /** The page's own script failed, with what it failed with; and again once its agent has been told. */
   onFault?: (message: string, agentTold: boolean) => void
@@ -118,7 +142,7 @@ export function Mount({
   const convex = useConvex()
   const frame = useRef<HTMLIFrameElement>(null)
   const [attempt, setAttempt] = useState(0)
-  const [mount, setMount] = useState<{ address: string; mountId: string; version: number } | null>(null)
+  const [mount, setMount] = useState<{ address: string; mountId: string; version: number; media: MediaKind[] } | null>(null)
   const [phase, setPhase] = useState<Phase>({ is: 'loading' })
   /** The one channel to whatever document the frame is showing now. */
   const port = useRef<MessagePort | null>(null)
@@ -128,6 +152,11 @@ export function Mount({
   /** Whoever is told of the page's faults now: kept apart from the channel, which is set up once for a showing. */
   const told = useRef(onFault)
   told.current = onFault
+  /** Who made the page, as it is now: kept apart from the channel, as `told` is. */
+  const maker = useRef(madeBy)
+  maker.current = madeBy
+  const titled = useRef(title)
+  titled.current = title
   /** The version of the page whose agent this showing has told that its script failed: it is told once for a version. */
   const faulted = useRef<number | null>(null)
   const state = useQuery(api.state.get, { artifactId })
@@ -153,7 +182,9 @@ export function Mount({
         if (!live) return null
         const { ticket } = await calls.action(api.mounts.ticket, { mountId: m.mountId })
         // The ticket is the last part of the frame's address, and is spent the moment the frame asks for it
-        return { address: `${pages()}/open/${ticket}`, mountId: m.mountId, version: m.version }
+        // What the version shown asked to use of the screen: nothing, from functions older than that
+        const media = ((m as { media?: unknown }).media ?? []) as unknown[]
+        return { address: `${pages()}/open/${ticket}`, mountId: m.mountId, version: m.version, media: media.filter(isMediaKind) }
       },
       () => live,
     ).then(
@@ -231,6 +262,97 @@ export function Mount({
       }
     }
     const toPage = (to: MessagePort, message: SiteToPage) => to.postMessage(message)
+
+    // The microphone and the camera (media.ts). The site records for the page, one thing at a
+    // time, and only as the version shown asked for when it was published and the person at
+    // this screen has allowed it. What the person said no to is not asked again in this showing.
+    let recording: Begun | null = null
+    let question: { cancel: () => void } | null = null
+    let photo: { cancel: () => void } | null = null
+    let refused = false
+    /** Leaves the frame in It's own place while it records: a frame that fills the screen would hide It's bar, which says that it is recording. */
+    const inSight = () => {
+      if (recording && document.fullscreenElement && document.fullscreenElement === frame.current) void document.exitFullscreen().catch(() => {})
+    }
+    document.addEventListener('fullscreenchange', inSight)
+    /** Settles whether the page may use these here, asking the person where they have not said. Throws, in words for the page, where it may not. */
+    const mayUse = async (kinds: MediaKind[]): Promise<void> => {
+      const missing = kinds.filter((k) => !mount.media.includes(k))
+      if (missing.length)
+        throw new Error(
+          `This page did not ask for ${kindsSaid(missing)} when it was published, so It does not record for it. Its agent publishes it again with --media ${[...new Set([...mount.media, ...kinds])].join(',')}.`,
+        )
+      const cannot = cannotRecord()
+      if (cannot) throw new Error(cannot)
+      const by = maker.current
+      const owner = by?.owner ?? ''
+      if (allowedHere(user, artifactId, owner, kinds)) return
+      if (refused) throw new Error(`The person did not allow this page to use ${kindsSaid(kinds)} on this screen.`)
+      const asked = askPerson({ page: artifactId, title: titled.current, agent: by?.agent ?? null, machine: by?.machine ?? null, kinds })
+      question = asked
+      const yes = await asked.answer
+      question = null
+      if (!live) throw new Error('The page was closed.')
+      if (!yes) {
+        refused = true
+        throw new Error(`The person did not allow this page to use ${kindsSaid(kinds)} on this screen.`)
+      }
+      allow(user, { page: artifactId, title: titled.current, agent: by?.agent ?? null, machine: by?.machine ?? null, owner, kinds })
+    }
+    /** What the browser said when it would not give the device, in words for the page and the person. */
+    const deviceRefused = (err: unknown): Error => {
+      const name = (err as { name?: unknown } | null)?.name
+      if (name === 'NotAllowedError' || name === 'SecurityError')
+        return new Error('The browser did not let It use that on this screen. Allow it for It’s site in the browser’s settings, and try again.')
+      if (name === 'NotFoundError' || name === 'OverconstrainedError') return new Error('This screen has no microphone or camera that does what was asked.')
+      if (name === 'NotReadableError' || name === 'AbortError') return new Error('The microphone or the camera is in use by something else on this screen.')
+      return err instanceof Error ? err : new Error('It could not record.')
+    }
+    const onMedia = async (from: MessagePort, message: Extract<PageToSite, { type: 'it:record' | 'it:record-stop' | 'it:photo' }>) => {
+      if (message.type === 'it:record-stop') {
+        const was = recording
+        if (!was || was.id !== message.recording) throw new Error('That recording is not under way.')
+        recording = null
+        const file = await was.stop(message.keep === true)
+        return message.keep === true ? { file } : {}
+      }
+      if (recording || question || photo) throw new Error('This page is using the microphone or the camera already. Stop that first.')
+      if (message.type === 'it:photo') {
+        await mayUse(['camera'])
+        const facing = message.facing === 'user' || message.facing === 'environment' ? message.facing : undefined
+        let taking: Awaited<ReturnType<typeof shoot>>
+        try {
+          taking = await shoot({ page: artifactId, title: titled.current }, facing)
+        } catch (err) {
+          throw deviceRefused(err)
+        }
+        photo = taking
+        const made = await taking.photo
+        photo = null
+        if (!made) throw new Error('The person closed the camera without taking a photo.')
+        return { file: made }
+      }
+      const spec = specOf(message)
+      await mayUse(kindsOf(spec))
+      const id = crypto.getRandomValues(new Uint32Array(2)).join('-')
+      const tell = (state: 'recording' | 'paused' | 'ended', why?: 'person' | 'taken_back' | 'not_shown' | 'device' | 'too_long', file?: Blob) => {
+        if (state === 'ended' && recording?.id === id) recording = null
+        if (live && port.current === from) toPage(from, { type: 'it:recording', recording: id, state, ...(why ? { why } : {}), ...(file ? { file } : {}) })
+      }
+      try {
+        recording = await begin(spec, { id, user, page: artifactId, owner: maker.current?.owner ?? '', title: titled.current, told: tell })
+      } catch (err) {
+        throw deviceRefused(err)
+      }
+      // The page was closed while the browser was asked: nothing is recorded for a page that is gone
+      if (!live) {
+        void recording.stop(false)
+        recording = null
+        throw new Error('The page was closed.')
+      }
+      inSight()
+      return { recording: { id, mimeType: recording.mimeType } }
+    }
     const allowed = () => {
       const now = Date.now()
       // Never less than nothing: a browser's clock that was set back would otherwise take an hour's worth away, and the page would be refused for an hour
@@ -289,6 +411,17 @@ export function Mount({
           told.current?.(text, true)
         } catch {
           // Refused, or too many at once: the bar has said it, which is what the person needs
+        }
+        return
+      }
+      if (message.type === 'it:record' || message.type === 'it:record-stop' || message.type === 'it:photo') {
+        const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 100) : ''
+        try {
+          // Stopping is never refused for asking too often: a page that cannot stop would go on recording
+          if (message.type !== 'it:record-stop' && !allowed()) throw new Error('This page is sending too much at once. Try again in a moment.')
+          toPage(from, { type: 'it:result', requestId, ok: true, ...(await onMedia(from, message)) })
+        } catch (err) {
+          toPage(from, { type: 'it:result', requestId, ok: false, error: err instanceof Error ? err.message.slice(0, 500) : 'It could not record.' })
         }
         return
       }
@@ -377,6 +510,12 @@ export function Mount({
       clearTimeout(later)
       clearInterval(looking)
       window.removeEventListener('message', onMessage)
+      // A page that is no longer shown records nothing, and is asked nothing
+      document.removeEventListener('fullscreenchange', inSight)
+      question?.cancel()
+      photo?.cancel()
+      void recording?.stop(false)
+      recording = null
       port.current?.close()
       port.current = null
     }

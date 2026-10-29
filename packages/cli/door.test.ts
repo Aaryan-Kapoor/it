@@ -2946,7 +2946,7 @@ describe('The site', () => {
         'content-security-policy': expect.stringMatching(/; frame-ancestors 'none'$/),
         'x-content-type-options': 'nosniff',
         'referrer-policy': 'no-referrer',
-        'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+        'permissions-policy': 'camera=(self), microphone=(self), geolocation=(), payment=()',
         'cross-origin-opener-policy': 'same-origin',
       })
       // The site is reached plainly, so no browser is told to insist on anything else

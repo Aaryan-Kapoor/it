@@ -217,9 +217,15 @@ function receive(message: SiteToPage): void {
     const w = waiting.get(message.requestId)
     if (!w) return
     waiting.delete(message.requestId)
-    if (message.ok) w.resolve({ ok: true, id: message.actionId })
+    if (message.ok)
+      w.resolve({
+        ok: true,
+        id: message.actionId,
+        ...(message.recording ? { recording: message.recording } : {}),
+        ...(message.file instanceof Blob ? { file: message.file } : {}),
+      })
     else w.reject(new Error(message.error))
-  }
+  } else if (message.type === 'it:recording') heard(message)
 }
 
 // The site answers the hello with a port. Only the window that framed this one is listened to,
@@ -535,6 +541,139 @@ function commit(name: string, extra?: Record<string, unknown>, sending?: Sending
   })
 }
 
+// The microphone and the camera. No browser gives either to a sandboxed document, which a page
+// is, so the site records for the page, and hands it what was recorded as a file. A page gets
+// them only where it asked for them when it was published (`it create --media mic`), and only
+// once the person at the screen has said yes to it there. It's own bar says that it is recording
+// for as long as it is, and the person can stop it there.
+
+type RecordingState = 'recording' | 'paused' | 'ended'
+/** Why a recording ended without the page asking, as the site says it. */
+const ENDED: Record<string, string> = {
+  person: 'The person stopped the recording in It’s bar, and what was recorded was thrown away.',
+  taken_back: 'The person took back what they had allowed this page, and what was recorded was thrown away.',
+  not_shown: 'The page was closed while it recorded, and what was recorded was thrown away.',
+  device: 'The microphone or the camera stopped giving anything.',
+  too_long: 'The recording ran as long as one may.',
+}
+interface Recording {
+  /** What kind of file the recording will be, such as `audio/webm;codecs=opus`, or `audio/mp4` in Safari. */
+  readonly mimeType: string
+  /** Recording, paused (while the screen does not show It), or ended. */
+  readonly state: RecordingState
+  /** Called each time the state changes without the page asking, with the reason where it ended. */
+  onchange: ((state: RecordingState, why?: string) => void) | null
+  /** Stops recording, and gives what was recorded, as a file to send with `It.action`. */
+  stop(): Promise<File>
+  /** Stops recording, and throws away what was recorded. */
+  cancel(): Promise<void>
+}
+const recordings = new Map<string, { state: RecordingState; why?: string; file?: File; changed: (state: RecordingState, why?: string) => void }>()
+let takes = 0
+/** A recording's bytes as a file named for its kind. */
+function taken(file: Blob, mimeType: string): File {
+  const type = file.type || mimeType
+  const ending = /^audio\/mp4/.test(type) ? 'm4a' : /^video\/mp4/.test(type) ? 'mp4' : /ogg/.test(type) ? 'ogg' : /^image\/jpeg/.test(type) ? 'jpg' : 'webm'
+  return new File([file], `${type.startsWith('image/') ? 'photo' : 'recording'}-${++takes}.${ending}`, { type })
+}
+/** What the site said of a recording that the page did not ask about. */
+function heard(message: Extract<SiteToPage, { type: 'it:recording' }>): void {
+  const kept = recordings.get(message.recording)
+  if (!kept || kept.state === 'ended') return
+  kept.state = message.state
+  if (message.state === 'ended') {
+    kept.why = message.why
+    if (message.file instanceof Blob) kept.file = taken(message.file, message.file.type)
+  }
+  kept.changed(message.state, message.why)
+}
+
+/**
+ * Begins recording from the microphone (`audio: true`) or the camera (`video: true`), or both.
+ * Resolves once recording has begun. The first time on each screen the person is asked, by It,
+ * whether this page may; a page that did not ask for the microphone or the camera when it was
+ * published is refused without anyone being asked. `audio` and `video` may instead be what is
+ * asked of the device, such as `{ echoCancellation: false }` or `{ facingMode: 'environment',
+ * width: 1280 }`, and `audioBitsPerSecond`, `videoBitsPerSecond` and `mimeType` are as for a
+ * MediaRecorder.
+ */
+async function record(
+  options: {
+    audio?: boolean | Record<string, unknown>
+    video?: boolean | Record<string, unknown>
+    audioBitsPerSecond?: number
+    videoBitsPerSecond?: number
+    mimeType?: string
+  } = {},
+): Promise<Recording> {
+  // Sound alone where nothing is said
+  const audio = options.audio ?? !options.video
+  const video = options.video ?? false
+  if (!audio && !video) throw new Error('It.record needs audio, video or both.')
+  const said = (await ask({
+    type: 'it:record',
+    requestId: id(),
+    audio,
+    video,
+    ...(options.audioBitsPerSecond === undefined ? {} : { audioBitsPerSecond: options.audioBitsPerSecond }),
+    ...(options.videoBitsPerSecond === undefined ? {} : { videoBitsPerSecond: options.videoBitsPerSecond }),
+    ...(options.mimeType === undefined ? {} : { mimeType: options.mimeType }),
+  })) as { recording?: { id: string; mimeType: string } }
+  const begun = said.recording
+  if (!begun) throw new Error('The recording did not begin.')
+  const kept: { state: RecordingState; why?: string; file?: File; changed: (state: RecordingState, why?: string) => void } = {
+    state: 'recording',
+    changed: (state, why) => {
+      const call = recording.onchange
+      if (typeof call !== 'function') return
+      try {
+        call(state, why === undefined ? undefined : (ENDED[why] ?? why))
+      } catch {
+        console.error('[It] a recording’s onchange handler threw')
+      }
+    },
+  }
+  recordings.set(begun.id, kept)
+  /** What the page is told of a recording that ended by itself. */
+  const over = (): Promise<never> => Promise.reject(new Error(ENDED[kept.why ?? ''] ?? 'The recording has ended.'))
+  const end = async (keep: boolean): Promise<File | undefined> => {
+    if (kept.state === 'ended') {
+      if (kept.file && keep) return kept.file
+      if (!keep) return undefined
+      return over()
+    }
+    kept.state = 'ended'
+    const answer = (await ask({ type: 'it:record-stop', requestId: id(), recording: begun.id, keep })) as { file?: Blob }
+    if (!keep) return undefined
+    if (!answer.file) throw new Error('Nothing was recorded.')
+    kept.file = taken(answer.file, begun.mimeType)
+    return kept.file
+  }
+  const recording: Recording = {
+    mimeType: begun.mimeType,
+    get state() {
+      return kept.state
+    },
+    onchange: null,
+    stop: () => end(true) as Promise<File>,
+    cancel: () => end(false).then(() => undefined),
+  }
+  return recording
+}
+
+/**
+ * A photo from the camera. It shows the person its own view of the camera, they take the photo
+ * there or close it, and the page is given the photo as a JPEG file, to send with `It.action`.
+ * The page asks for the camera when it is published, and the person allows it on each screen,
+ * as for `It.record`. `facing` is `user` for the camera that faces the person, and `environment`
+ * for the one on the back of a phone.
+ */
+async function photo(options: { facing?: 'user' | 'environment' } = {}): Promise<File> {
+  const said = (await ask({ type: 'it:photo', requestId: id(), ...(options.facing ? { facing: options.facing } : {}) })) as { file?: Blob }
+  if (!said.file) throw new Error('No photo was taken.')
+  return taken(said.file, 'image/jpeg')
+}
+
 const api = {
   id: config.id,
   version: config.version,
@@ -553,6 +692,8 @@ const api = {
     }
   },
   action,
+  record,
+  photo,
   stage,
   commit,
   staged: () => ({ ...staged }),

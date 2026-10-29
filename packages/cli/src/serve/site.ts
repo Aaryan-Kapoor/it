@@ -16,15 +16,17 @@ export const BUILT: Site = SITE
 
 // What every answer for the site carries. Nobody may frame the site, which is said in both of
 // the ways a browser looks for it. A file is only ever what its type says. Wherever someone
-// goes from the site is not told that they came from it. The site uses none of the device's
-// camera, microphone or position. Nothing here tells a browser to insist on https: the site is
-// reached plainly on a home network, and a browser told so for a name such as localhost would
-// hold every other program on this machine to it.
+// goes from the site is not told that they came from it. The camera and the microphone are the
+// site's own to ask for, and no frame's: the site records for a page that asked for them when it
+// was published and that the person allowed (web/src/media.ts), and a page in its frame is given
+// neither. Nothing uses the device's position. Nothing here tells a browser to insist on https:
+// the site is reached plainly on a home network, and a browser told so for a name such as
+// localhost would hold every other program on this machine to it.
 const CARRIED: Record<string, string> = {
   'x-frame-options': 'DENY',
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
-  'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+  'permissions-policy': 'camera=(self), microphone=(self), geolocation=(), payment=()',
 }
 
 /** A name in a Host header in the one spelling it has here: lower case, and an IPv6 address the way a browser writes it. */
