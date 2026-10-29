@@ -96,18 +96,22 @@ export const LIMITS = {
   filesPerVersion: 500,
   /** All of a version's file paths together, in bytes: what a version's record has to hold. */
   pathBytesPerVersion: 64 * 1024,
-  fileBytes: 25 * 1024 * 1024,
-  versionBytes: 100 * 1024 * 1024,
+  /** One file of a page: a film of an hour and more at the quality a screen shows. */
+  fileBytes: 2 * GB,
+  versionBytes: 4 * GB,
   pathLength: 300,
   stateBytes: 512 * 1024,
   /** One value a page keeps for itself with It.store. */
   storeValueBytes: 32 * 1024,
   actionPayloadBytes: 32 * 1024,
-  /** One file sent with an action, beside what it carries. */
-  actionFileBytes: 25 * 1024 * 1024,
+  /**
+   * One file sent with an action, beside what it carries. Less than a page's file may be: a
+   * browser reads the whole of it to make its checksum, and keeps a copy of it until It has it.
+   */
+  actionFileBytes: GB,
   /** How many files one action may carry, and how many bytes they may come to together. */
   actionFiles: 10,
-  actionFilesBytes: 50 * 1024 * 1024,
+  actionFilesBytes: 2 * GB,
   /** A file's name as it is kept with the action, in characters. */
   actionFileName: 200,
   actionName: 64,
@@ -146,10 +150,9 @@ export const PUBLICATION = {
   receiptDays: 30,
 } as const
 
-/** What one person may hold. */
+/** What one person may hold. How many bytes of files is said apart, in `STORAGE`. */
 export const QUOTA = {
   artifacts: 500,
-  bytes: 2 * 1024 * 1024 * 1024,
   displays: 25,
   machines: 25,
   projects: 200,
@@ -158,8 +161,6 @@ export const QUOTA = {
   pendingActionsPerPage: 500,
   /** Publishes begun and not yet finished. */
   staging: 50,
-  /** The bytes of the files sent with actions that It holds for one person, however many pages they came from. */
-  actionFileBytes: 1024 * 1024 * 1024,
 } as const
 
 /**

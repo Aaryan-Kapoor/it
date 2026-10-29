@@ -4,7 +4,7 @@
 // background service or the person's own folders: the program is given a home, a PATH and an
 // It folder that hold only what the test put there.
 import { execFile, execFileSync, spawn } from 'node:child_process'
-import { createHash, createHmac } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import {
   chmodSync,
   existsSync,
@@ -24,7 +24,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { behindMark, MARK, PORTS, TAKES, WHEN } from '@it/protocol'
+import { behindMark, MARK, PORTS, TAKES, UPLOAD, WHEN } from '@it/protocol'
 
 // What setup says last to an agent, as the program has it: said here in the program's own words, so that a change of them is a change here
 const AFTER_SETUP =
@@ -197,11 +197,17 @@ async function backend(
 ) {
   const asked: Asked[] = []
   const joined: Record<string, unknown>[] = []
-  const uploads: { path: string; bytes: number }[] = []
-  const upload: { answer: () => number | Promise<number> } = { answer: () => 200 }
-  /** What the door answers a machine that reads a file an action carried: by the path and the grant it is asked with. */
+  const uploads: { path: string; bytes: number; offset?: number }[] = []
+  /** What the door answers an upload: a status, or a status and what it says beside it. */
+  const upload: { answer: (sent: { path: string; bytes: number; offset?: number }) => number | [number, unknown] | Promise<number | [number, unknown]> } = {
+    answer: () => 200,
+  }
+  /** What the door answers a machine that reads a file an action carried: by the path and the grant it is asked with, and the part of it asked for. */
   /** `cutAfter`: how many bytes of the body are sent before the connection is dropped, as a phone's or a laptop's drops. */
-  const download: { asked: { path: string; grant: string }[]; answer: (path: string, grant: string) => [status: number, body: Buffer, cutAfter?: number] } = {
+  const download: {
+    asked: { path: string; grant: string; range?: string }[]
+    answer: (path: string, grant: string, range?: string) => [status: number, body: Buffer, cutAfter?: number, headers?: Record<string, string>]
+  } = {
     asked: [],
     answer: () => [404, Buffer.alloc(0)],
   }
@@ -227,14 +233,18 @@ async function backend(
           return typeof body === 'string' ? res.writeHead(status, { 'content-type': 'application/json' }).end(body) : json(body, status)
         }
         if (req.method === 'PUT') {
-          uploads.push({ path: req.url ?? '', bytes: Buffer.concat(chunks).length })
-          return json({}, await upload.answer())
+          const offset = req.headers['x-it-offset'] === undefined ? undefined : Number(req.headers['x-it-offset'])
+          const sent = { path: req.url ?? '', bytes: Buffer.concat(chunks).length, ...(offset === undefined ? {} : { offset }) }
+          uploads.push(sent)
+          const said = await upload.answer(sent)
+          return Array.isArray(said) ? json(said[1], said[0]) : json({}, said)
         }
         if (req.method === 'GET' && req.url?.startsWith('/download/')) {
           const grant = (req.headers.authorization ?? '').replace(/^Bearer /, '')
-          download.asked.push({ path: req.url, grant })
-          const [status, body, cutAfter] = download.answer(req.url, grant)
-          res.writeHead(status, { 'content-type': 'application/octet-stream', 'content-length': body.length })
+          const range = req.headers.range
+          download.asked.push({ path: req.url, grant, ...(range === undefined ? {} : { range }) })
+          const [status, body, cutAfter, headers] = download.answer(req.url, grant, range)
+          res.writeHead(status, { 'content-type': 'application/octet-stream', 'content-length': body.length, ...headers })
           if (cutAfter === undefined) return res.end(body)
           res.write(body.subarray(0, cutAfter))
           return setTimeout(() => req.socket.destroy(), 50)
@@ -713,6 +723,72 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
         ['publish:finish', 'artifact-1', 3],
         ['publish:abandon', 'artifact-1', 3],
       ])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a file larger than one request carries is sent in parts, each saying where it begins, and going on from where the door says the next begins', async () => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: 'film', version: 1, url: 'https://site.example/p/film' }
+      return null
+    })
+    const dir = path.join(m.home, 'film')
+    mkdirSync(dir)
+    writeFileSync(path.join(dir, 'index.html'), '<video src="film.webm" controls></video>')
+    const film = randomBytes(2 * UPLOAD.partBytes + 1000)
+    writeFileSync(path.join(dir, 'film.webm'), film)
+    const sent = new Map<number, string>()
+    // The answer to the second part was lost: asked again, the door says it has it, and where the next begins
+    let lost = true
+    b.upload.answer = ({ path: to, offset, bytes }) => {
+      if (offset === undefined) return 200
+      if (offset === UPLOAD.partBytes && lost) {
+        lost = false
+        return [409, { error: 'out_of_order', next: 2 * UPLOAD.partBytes }]
+      }
+      sent.set(offset, to)
+      return offset + bytes === film.length ? [200, { ok: true }] : [200, { ok: true, next: offset + bytes }]
+    }
+    try {
+      const ran = await run(m, ['create', 'Film', '--id', 'film', '--dir', dir], b.env)
+      expect([ran.code, ran.err]).toEqual([0, ''])
+      expect(b.uploads.filter((u) => u.path === '/upload/film.webm').map((u) => [u.offset, u.bytes])).toEqual([
+        [0, UPLOAD.partBytes],
+        [UPLOAD.partBytes, UPLOAD.partBytes],
+        [2 * UPLOAD.partBytes, 1000],
+      ])
+      expect(b.uploads.filter((u) => u.path === '/upload/index.html').map((u) => u.offset)).toEqual([undefined])
+      expect(b.asked.find((x) => x.path === 'publish:begin')!.args.files).toContainEqual({
+        path: 'film.webm',
+        size: film.length,
+        sha256: createHash('sha256').update(film).digest('hex'),
+      })
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a disk with no room for a page is said to be so, with what It leaves free, and is not tried again', async () => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn, args }) =>
+      fn === 'publish:begin' ? { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } } : null,
+    )
+    b.upload.answer = () => [507, { error: 'no_room', keepFree: 2 * 1024 ** 3 }]
+    try {
+      const ran = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], b.env)
+      expect([ran.code, error(ran)]).toEqual([
+        1,
+        {
+          code: 'limit',
+          message: 'index.html could not be uploaded: the disk It keeps its files on has too little room left, and It always leaves 2 GB of it free.',
+          hint: 'Make room on that disk, or delete some pages, then publish again.',
+        },
+      ])
+      expect(b.uploads).toHaveLength(1)
+      expect(b.asked.some((x) => x.path === 'publish:abandon')).toBe(true)
     } finally {
       await b.close()
     }
@@ -2678,6 +2754,69 @@ describe.skipIf(process.platform === 'win32')('files an action carried beside it
         'That file is not kept any more: it went with its action, or with its page.',
         1,
       ])
+    } finally {
+      await b.close()
+    }
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('a file an action carried that is larger than one answer carries', () => {
+  test('is read a part at a time, each written as it comes, with another grant asked for where one runs out on the way, and arrives whole', async () => {
+    const m = machine()
+    const take = randomBytes(2 * UPLOAD.partBytes + 777)
+    const sha = createHash('sha256').update(take).digest('hex')
+    const listed = {
+      id: 'k60',
+      artifact: 'studio',
+      title: 'Studio',
+      name: 'take',
+      payload: JSON.stringify({ take: { file: 1 } }),
+      at: 1,
+      attended: true,
+      delivery: 'handed_off',
+      route: 'addon',
+      outcome: null,
+      files: [{ name: 'take-3.wav', type: 'audio/wav', bytes: take.length }],
+    }
+    let grants = 0
+    const b = await backend(m, (asked) =>
+      asked.path === 'delivery:get'
+        ? listed
+        : asked.path === 'files:read'
+          ? {
+              url: `${'http://127.0.0.1:9'}/download/1`,
+              grant: `read-${++grants}`,
+              number: 1,
+              name: 'take-3.wav',
+              type: 'audio/wav',
+              bytes: take.length,
+              sha256: sha,
+            }
+          : null,
+    )
+    // The first grant runs out after the first part
+    b.download.answer = (_, grant, range) => {
+      const [, from, to] = /^bytes=(\d+)-(\d+)$/.exec(range ?? '') ?? []
+      if (from === undefined) return [200, take]
+      if (grant === 'read-1' && Number(from) > 0) return [401, Buffer.alloc(0)]
+      const part = take.subarray(Number(from), Number(to) + 1)
+      return [206, part, undefined, { 'content-range': `bytes ${from}-${Number(from) + part.length - 1}/${take.length}` }]
+    }
+    try {
+      const at = path.join(m.home, 'take-3.wav')
+      const saved = await run(m, ['action', 'k60', '--save', at], b.env)
+      expect([saved.code, saved.err]).toEqual([0, ''])
+      expect(printed(saved).saved).toEqual({ file: at, number: 1, name: 'take-3.wav', type: 'audio/wav', bytes: take.length })
+      expect(createHash('sha256').update(readFileSync(at)).digest('hex')).toBe(sha)
+      expect(statSync(at).mode & 0o777).toBe(0o600)
+      expect(b.download.asked.map((x) => [x.grant, x.range])).toEqual([
+        ['read-1', `bytes=0-${UPLOAD.partBytes - 1}`],
+        ['read-1', `bytes=${UPLOAD.partBytes}-${2 * UPLOAD.partBytes - 1}`],
+        ['read-2', `bytes=${UPLOAD.partBytes}-${2 * UPLOAD.partBytes - 1}`],
+        ['read-2', `bytes=${2 * UPLOAD.partBytes}-${take.length - 1}`],
+      ])
+      // Nothing is left beside it of what was written as it arrived
+      expect(readdirSync(m.home).filter((name) => name.startsWith('take-3.wav'))).toEqual(['take-3.wav'])
     } finally {
       await b.close()
     }

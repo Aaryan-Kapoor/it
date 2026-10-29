@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { accessSync, constants, existsSync, linkSync, mkdirSync, rmSync } from 'node:fs'
 import path from 'node:path'
-import { PORTS } from '@it/protocol'
+import { PORTS, STORAGE, sizeSaid, storageBytes } from '@it/protocol'
 import { asPort, home, inHome, Problem, portAsked, readJson, settingsFile, writeFlushed, writePrivate as writeWhole } from '../lib'
 
 // How a record is written lives with everything else that writes into It's folder, and is
@@ -85,6 +85,33 @@ function kept(): ServiceConfig | null {
     ...(c.functions === undefined ? {} : { functions: c.functions }),
     ...(c.backend === undefined ? {} : { backend: c.backend }),
   }
+}
+
+/** How much It keeps on this machine's disk, in bytes, as `STORAGE` says what each is. */
+export interface Storage {
+  pages: number
+  actionFiles: number
+  keepFree: number
+}
+/**
+ * How much It keeps, as the settings in the environment say: in GB, where one is given, and what
+ * It keeps without one where none is. A setting that is given and is no number of GB is
+ * refused by its name, so that a mistyped one is never taken for some other amount.
+ */
+export function storageAsked(env: NodeJS.ProcessEnv = process.env): Storage {
+  const of = (kept: (typeof STORAGE)[keyof typeof STORAGE]): number => {
+    const written = env[kept.setting]
+    if (written === undefined || written === '') return kept.bytes
+    const bytes = storageBytes(written)
+    if (bytes === null)
+      throw new Problem(
+        `${kept.setting} is a number of GB, such as ${kept.bytes / 1024 ** 3}, and "${written.slice(0, 40)}" is not one.`,
+        'invalid',
+        `Set it to a number of GB, or unset it for ${sizeSaid(kept.bytes)}.`,
+      )
+    return bytes
+  }
+  return { pages: of(STORAGE.pages), actionFiles: of(STORAGE.actionFiles), keepFree: of(STORAGE.keepFree) }
 }
 
 /** It's settings, with the port IT_PORT names in place of the file's when it names one. Null where It has not been set up. */

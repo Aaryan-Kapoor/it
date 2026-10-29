@@ -2,7 +2,7 @@
 // The backend's own tests: who may do what, and that what is stored is what was meant.
 // They run against an in-memory copy of the backend; the service that runs it, with its content
 // service, is stood in for by a stub that records what the backend asked of it.
-import { ALIVE, describeClick, LEASE_MS, LIMITS, PUBLICATION, QUOTA, STORE_KEY } from '@it/protocol'
+import { ALIVE, describeClick, LEASE_MS, LIMITS, PUBLICATION, QUOTA, STORAGE, STORE_KEY } from '@it/protocol'
 import { type FunctionReturnType, getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
@@ -46,6 +46,8 @@ let content: {
   calls: { url: string; op: string; body: any; token: string }[]
   verifyOk: boolean
   stageOk: boolean
+  /** Whether the disk has no room for what is declared. */
+  full?: boolean
   failNext: number
   moreNext: number
   /** How many deletions it is next to answer as one that got nowhere: there is more, and nothing was removed. */
@@ -94,6 +96,7 @@ beforeEach(() => {
         return new Response(null, { status: 503 })
       }
       if (op === 'stage' && !content.stageOk) return new Response(null, { status: 503 })
+      if (op === 'stage' && content.full) return new Response(JSON.stringify({ keepFree: 2 * 1024 ** 3 }), { status: 507 })
       if (content.garbleNext > 0 && op === 'delete') {
         content.garbleNext--
         return new Response('{"removed": 10, "mo', { status: 200 })
@@ -1153,16 +1156,17 @@ describe('publishing', () => {
     const t = backend()
     await person(t, 'alice')
     const m = await machineOf(t, 'alice')
+    // As large as a version may be, so that the bytes run out before the count of publishes in progress does
     const big = [
       ...page,
       { path: 'video.mp4', size: LIMITS.fileBytes, sha256: sha },
-      { path: 'b.mp4', size: LIMITS.fileBytes, sha256: sha },
-      { path: 'c.mp4', size: LIMITS.fileBytes, sha256: sha },
+      { path: 'b.mp4', size: LIMITS.versionBytes - LIMITS.fileBytes - 100, sha256: sha },
     ]
-    const each = 100 + 3 * LIMITS.fileBytes
+    const each = LIMITS.versionBytes
+    expect(Math.floor(STORAGE.pages.bytes / each)).toBeLessThan(QUOTA.staging)
     let begun = 0
     // Never finishing any of them: the quota still fills
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < QUOTA.staging; i++) {
       const r = await code(m.as.action(api.publish.begin, { slug: `p${i}`, title: 'x', files: big }))
       if (r !== 'ok') {
         expect(r).toBe('limit')
@@ -1171,7 +1175,7 @@ describe('publishing', () => {
       begun++
       await vi.advanceTimersByTimeAsync(3000)
     }
-    expect(begun).toBe(Math.floor(QUOTA.bytes / each))
+    expect(begun).toBe(Math.floor(STORAGE.pages.bytes / each))
     const user = () => totals(t)
     expect(await user()).toMatchObject({ stagingCount: begun, stagingBytes: begun * each })
     // An hour on, the sweep takes them away, gives the quota back, and has their bytes removed
@@ -1181,6 +1185,28 @@ describe('publishing', () => {
     expect(await user()).toMatchObject({ stagingCount: 0, stagingBytes: 0 })
     expect(content.calls.filter((c) => c.op === 'delete').length).toBe(begun)
     expect(await code(m.as.action(api.publish.begin, { slug: 'p-again', title: 'x', files: big }))).toBe('ok')
+  })
+
+  test('the files of pages may come to what It was set up to keep, and the refusal says how much that is and how to keep more', async () => {
+    process.env[STORAGE.pages.setting] = '0.5'
+    try {
+      const t = backend()
+      await person(t, 'alice')
+      const m = await machineOf(t, 'alice')
+      const of = (mb: number) => [...page, { path: 'film.webm', size: mb * 1024 * 1024 - 100, sha256: sha }]
+      expect(await code(m.as.action(api.publish.begin, { slug: 'first', title: 'x', files: of(300) }))).toBe('ok')
+      const refused = await m.as.action(api.publish.begin, { slug: 'second', title: 'x', files: of(300) }).then(
+        () => null,
+        (e) => e,
+      )
+      expect(refusalCode(refused)).toBe('limit')
+      expect(String(refused)).toContain(
+        `It keeps at most 512 MB of pages' files, with every kept version counted, and this would go past that. Delete some pages first, or let It keep more with \`${STORAGE.pages.setting}=<GB> it service install\`.`,
+      )
+      expect(await code(m.as.action(api.publish.begin, { slug: 'second', title: 'x', files: of(200) }))).toBe('ok')
+    } finally {
+      delete process.env[STORAGE.pages.setting]
+    }
   })
 
   test('only so many publishes may be in progress at once, and an abandoned one for the same page is cleared by the next', async () => {
@@ -1464,6 +1490,26 @@ describe('publishing', () => {
     content.stageOk = false
     expect(await code(m.as.action(api.publish.begin, { slug: 'plan', title: 'Second try', files: page }))).toBe('unavailable')
     expect((await t.run((ctx) => ctx.db.query('artifacts').collect())).map((a) => [a.slug, a.currentVersion])).toEqual([['plan', 1]])
+  })
+
+  test('a publish the disk has no room for is refused as a limit, says so, and holds nothing', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan')
+    content.full = true
+    for (const slug of ['plan', 'film']) {
+      const refused = await m.as.action(api.publish.begin, { slug, title: 'Film', files: page, operation: `no-room-for-${slug}-0001` }).then(
+        () => null,
+        (e) => e,
+      )
+      expect(refusalCode(refused)).toBe('limit')
+      expect(String(refused)).toContain('The disk It keeps its files on has too little room left for these: It always leaves 2 GB of it free.')
+    }
+    expect(await totals(t)).toEqual({ waiting: 0, stagingCount: 0, stagingBytes: 0 })
+    expect((await t.run((ctx) => ctx.db.query('artifacts').collect())).map((a) => [a.slug, a.currentVersion])).toEqual([['plan', 1]])
+    content.full = false
+    expect(await code(m.as.action(api.publish.begin, { slug: 'film', title: 'Film', files: page }))).toBe('ok')
   })
 
   test('a first publish that is abandoned takes its page record with it when it is swept', async () => {
@@ -6882,7 +6928,10 @@ describe('publication transactions', () => {
     const files = Array.from({ length: 100 }, (_, n) => ({ path: n ? `${n}.bin` : 'index.html', size: 1024 * 1024, sha256: sha }))
     const request = { slug: 'slow', title: 'Slow', files, operation: 'fixed-publication-budget' }
     const begun = await m.as.action(api.publish.begin, request)
-    const time = Math.ceil((LIMITS.versionBytes / 100_000) * 1000)
+    // A version of 100 MB at 100,000 bytes a second, and one of the largest at 2.5 MB a second:
+    // the budget is fixed, so on a slower line the largest page that arrives in time is smaller
+    const time = Math.ceil(((100 * 1024 * 1024) / 100_000) * 1000)
+    expect(PUBLICATION.budgetMs).toBeGreaterThan(Math.ceil((LIMITS.versionBytes / (2.5 * 1024 * 1024)) * 1000))
     expect(uploadBudgetMs(LIMITS.fileBytes)).toBeGreaterThan((LIMITS.fileBytes / 35_000) * 1000)
     expect(PUBLICATION.budgetMs).toBeGreaterThan(time)
     expect(PUBLICATION.deletedSeconds * 1000).toBeGreaterThan(PUBLICATION.grantTailMs)

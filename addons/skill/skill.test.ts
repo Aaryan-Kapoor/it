@@ -5,7 +5,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { JSDOM } from 'jsdom'
 import { describe, expect, onTestFinished, test } from 'vitest'
 import { RUNTIME } from '../../packages/content/src/runtime.generated'
-import { LIMITS, QUOTA, SHRINK } from '../../packages/protocol/src/index'
+import { LIMITS, QUOTA, SHRINK, STORAGE, sizeSaid } from '../../packages/protocol/src/index'
 
 const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8')
 /** What an agent reads whole each time it uses It. */
@@ -244,19 +244,19 @@ describe('the agent skill', () => {
   })
 
   test('gives the limits a page meets in the numbers the program keeps', () => {
-    const MB = 1024 * 1024
     expect(skill).toContain(
-      `A page is at most ${LIMITS.filesPerVersion} files and ${LIMITS.versionBytes / MB} MB, with no file over ${LIMITS.fileBytes / MB} MB.`,
+      `A page is at most ${LIMITS.filesPerVersion} files and ${sizeSaid(LIMITS.versionBytes)}, with no file over ${sizeSaid(LIMITS.fileBytes)}.`,
     )
     expect(skill).toContain(`A file's path is at most ${LIMITS.pathLength} bytes.`)
     expect(LIMITS.versionsKept).toBe(10)
     expect(skill).toContain('Ten versions of a page are kept')
-    expect(skill).toContain(`It holds ${QUOTA.artifacts} pages and ${QUOTA.bytes / MB / 1024} GB of their files in all`)
+    expect(skill).toContain(`It holds ${QUOTA.artifacts} pages and ${sizeSaid(STORAGE.pages.bytes)} of their files in all`)
+    expect(skill).toContain(`It always leaves some of its disk free, ${sizeSaid(STORAGE.keepFree.bytes)} unless the user said otherwise`)
     expect(skill).toContain(`State is at most ${LIMITS.stateBytes / 1024} KB of JSON,`)
     expect(skill).toContain(
-      `An action carries at most ${LIMITS.actionPayloadBytes / 1024} KB of data, and beside it up to ${LIMITS.actionFiles} files, each at most ${LIMITS.actionFileBytes / MB} MB and ${LIMITS.actionFilesBytes / MB} MB together.`,
+      `An action carries at most ${LIMITS.actionPayloadBytes / 1024} KB of data, and beside it up to ${LIMITS.actionFiles} files, each at most ${sizeSaid(LIMITS.actionFileBytes)} and ${sizeSaid(LIMITS.actionFilesBytes)} together.`,
     )
-    expect(skill).toContain(`It holds ${QUOTA.actionFileBytes / MB / 1024} GB of files sent from pages in all`)
+    expect(skill).toContain(`It holds ${sizeSaid(STORAGE.actionFiles.bytes)} of files sent from pages in all`)
     expect(skill).toContain(`Its name is 1 to ${LIMITS.actionName} letters, digits, dots, colons, dashes or underscores.`)
     expect(skill).toContain(`A value kept with \`It.store\` is at most ${LIMITS.storeValueBytes / 1024} KB too`)
     expect(skill).toContain(`At most ${QUOTA.pendingActionsPerPage} actions wait on one page.`)

@@ -1,14 +1,14 @@
 // Publishing a page, in two steps so that a crash in the middle leaves the old version live:
 // `begin` records what is about to be uploaded and returns a grant to upload it; `finish`
 // checks the upload with the content service and then switches the page to the new version.
-import { AUDIENCE, isSafePath, isSlug, LIMITS, PUBLICATION, parseJson, QUOTA, RETENTION, STORE_KEY, TOUR, TOUR_NAMES } from '@it/protocol'
+import { AUDIENCE, isSafePath, isSlug, LIMITS, PUBLICATION, parseJson, QUOTA, RETENTION, STORAGE, STORE_KEY, sizeSaid, TOUR, TOUR_NAMES } from '@it/protocol'
 import { ConvexError, v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { type ActionCtx, action, internalMutation, internalQuery, type MutationCtx, mutation, type QueryCtx } from './_generated/server'
 import { prefixOf } from './artifacts'
-import { door, site } from './config'
-import { removeLater } from './content'
+import { door, pagesBytes, site } from './config'
+import { isNoRoom, removeLater } from './content'
 import { artifactBySlug, ownArtifact, requireMachine } from './lib/authz'
 import { overClashes } from './lib/clash'
 import { fail } from './lib/errors'
@@ -163,14 +163,14 @@ export const _begin = internalMutation({
       // which file there, and a refusal's words are kept in the backend's record of what failed
       if (!isSafePath(f.path) || seen.has(f.path)) fail('invalid', 'One of the files has a path that cannot be used, or is listed twice.')
       if (!Number.isInteger(f.size) || f.size < 0 || f.size > LIMITS.fileBytes)
-        fail('limit', `One of the files is larger than the ${LIMITS.fileBytes / 1024 / 1024} MB allowed for one file.`)
+        fail('limit', `One of the files is larger than the ${sizeSaid(LIMITS.fileBytes)} allowed for one file.`)
       if (!/^[0-9a-f]{64}$/.test(f.sha256)) fail('invalid', 'One of the files has no valid checksum.')
       seen.add(f.path)
       bytes += f.size
       pathBytes += new TextEncoder().encode(f.path).length
     }
     if (!seen.has('index.html')) fail('invalid', 'A page needs an index.html.')
-    if (bytes > LIMITS.versionBytes) fail('limit', `A page is at most ${LIMITS.versionBytes / 1024 / 1024} MB.`)
+    if (bytes > LIMITS.versionBytes) fail('limit', `A page is at most ${sizeSaid(LIMITS.versionBytes)}.`)
     // A version's record holds every path, so together they are kept small enough that many
     // records can be read at once when cleaning up
     if (pathBytes > LIMITS.pathBytesPerVersion) fail('limit', 'The file names of this page are too long taken together. Use shorter paths.')
@@ -274,9 +274,13 @@ export const _begin = internalMutation({
     // anything stale was cleared away just above, so an abandoned attempt does not block its own retry.
     const totals = await tally(ctx, user._id)
     const used = mine.reduce((sum, a) => sum + a.bytes, 0) + totals.stagingBytes
-    if (used + bytes > QUOTA.bytes) {
-      log('quota.reached', { what: 'storage', who: user._id, have: used, max: QUOTA.bytes }, 'warn')
-      fail('limit', 'It has no room left for pages. Delete some pages first.')
+    const most = pagesBytes()
+    if (used + bytes > most) {
+      log('quota.reached', { what: 'storage', who: user._id, have: used, max: most }, 'warn')
+      fail(
+        'limit',
+        `It keeps at most ${sizeSaid(most)} of pages' files, with every kept version counted, and this would go past that. Delete some pages first, or let It keep more with \`${STORAGE.pages.setting}=<GB> it service install\`.`,
+      )
     }
     quota(totals.stagingCount, QUOTA.staging, 'publishes in progress', user._id)
     await ctx.db.patch(artifact._id, { lastVersion: n })
@@ -459,6 +463,12 @@ async function prepared(
     // The content service is told exactly which files to expect, so the grant allows those and nothing else
     await ctx.runAction(internal.content.stage, { prefix: r.prefix, files })
   } catch (err) {
+    // No room on the disk is no failure of the moment: the publish is given up, whoever began it,
+    // and its share of the quota comes back at once
+    if (isNoRoom(err)) {
+      if (r.versionId) await overClashes(() => ctx.runMutation(internal.publish._abandon, { versionId: r.versionId! }))
+      throw err
+    }
     log('publish.unavailable', { step: 'stage', artifactId: r.artifactId, version: r.n, kind: kind(err) }, 'error')
     // A caller may have lost this reply and resumed the same named publication already.
     // Keep its staging version for recovery or expiry; a late failure must not erase it.

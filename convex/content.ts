@@ -7,8 +7,8 @@
 // check they arrived) are asked directly. Things that must happen even if the content service
 // cannot be reached at that moment (ending a display's showings, deleting stored bytes) are
 // kept as jobs and tried again until it confirms, because a scheduled action runs at most once.
-import { AUDIENCE, PUBLICATION } from '@it/protocol'
-import { v } from 'convex/values'
+import { AUDIENCE, PUBLICATION, STORAGE, sizeSaid } from '@it/protocol'
+import { ConvexError, v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import { type ActionCtx, internalAction, internalMutation, internalQuery, type MutationCtx } from './_generated/server'
@@ -21,35 +21,66 @@ import { fileEntry } from './schema'
 
 const hex = (bytes: ArrayBuffer) => Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, '0')).join('')
 
-async function control(ctx: ActionCtx, op: string, body: string): Promise<Response> {
+async function control(ctx: ActionCtx, op: string, body: string, ms = 25_000): Promise<Response> {
   const h = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body)))
   const token = await mint(ctx, AUDIENCE.control, op, { h }, 60)
   return fetch(`${door()}/control/${op}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body,
-    signal: AbortSignal.timeout(25_000),
+    signal: AbortSignal.timeout(ms),
   })
 }
+/**
+ * How long a check of a version's files is waited for. The content service reads back every file
+ * it did not see arrive itself, which it has not when it was started again in between, and a
+ * slow disk reads a version of the largest at no more than 50 MB a second. It is never waited
+ * for as long as the command that asked waits for its answer.
+ */
+const checkMs = (files: { size: number }[]) => Math.min(80_000, 25_000 + Math.ceil(files.reduce((n, f) => n + f.size, 0) / 50_000))
 
 // ---------- asked directly ----------
 
-/** Tells the content service which files a version will have, before anyone is allowed to upload them. */
+/**
+ * Tells the content service which files a version will have, before anyone is allowed to upload
+ * them. Where the disk it keeps them on has too little room for them beside what It leaves free,
+ * that is refused as a limit, which asking again does not mend.
+ */
 export const stage = internalAction({
   args: { prefix: v.string(), files: v.array(fileEntry) },
   handler: async (ctx, args) => {
     const r = await control(ctx, 'stage', JSON.stringify(args))
+    if (r.status === 507) {
+      const said = (await r.json().catch(() => ({}))) as { keepFree?: unknown }
+      log('content.no_room', { bytes: args.files.reduce((n, f) => n + f.size, 0) }, 'warn')
+      throw noRoom(typeof said.keepFree === 'number' ? said.keepFree : STORAGE.keepFree.bytes)
+    }
     if (!r.ok) log('content.stage_failed', { status: r.status }, 'error')
     if (!r.ok) throw new Error(`the content service could not prepare the upload: ${r.status}`)
     return null
   },
 })
+/** What is said where the disk has no room for files: whoever asked is told, and nothing is asked again. */
+export const noRoom = (keepFree: number) =>
+  new ConvexError({
+    code: 'limit',
+    message: `The disk It keeps its files on has too little room left for these: It always leaves ${sizeSaid(keepFree)} of it free. Make room on that disk, or delete some pages.`,
+  })
+/** Whether what went wrong is that refusal. What a function that was run from another throws arrives with its data as text. */
+export function isNoRoom(err: unknown): boolean {
+  if (!(err instanceof ConvexError)) return false
+  let data: unknown = err.data
+  try {
+    if (typeof data === 'string') data = JSON.parse(data)
+  } catch {}
+  return (data as { code?: unknown } | null)?.code === 'limit'
+}
 
 /** Asks the content service whether every file of a version arrived intact. */
 export const verify = internalAction({
   args: { prefix: v.string(), files: v.array(fileEntry) },
   handler: async (ctx, args): Promise<{ ok: boolean; missing: string[] }> => {
-    const r = await control(ctx, 'verify', JSON.stringify(args))
+    const r = await control(ctx, 'verify', JSON.stringify(args), checkMs(args.files))
     if (!r.ok) log('content.verify_failed', { status: r.status }, 'error')
     if (!r.ok) throw new Error(`the content service could not verify: ${r.status}`)
     return (await r.json()) as { ok: boolean; missing: string[] }

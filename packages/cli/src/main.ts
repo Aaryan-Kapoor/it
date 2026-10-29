@@ -22,7 +22,21 @@ import {
 import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline/promises'
-import { describeClick, firstFile, HARNESSES, type Harness, isSlug, LIMITS, NOUN, newer, PROTOCOL_VERSION, parseJson, TAKES, withoutFiles } from '@it/protocol'
+import {
+  describeClick,
+  firstFile,
+  HARNESSES,
+  type Harness,
+  isSlug,
+  NOUN,
+  newer,
+  PROTOCOL_VERSION,
+  parseJson,
+  sizeSaid,
+  TAKES,
+  UPLOAD,
+  withoutFiles,
+} from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
 import { conversationIds, local } from './connector'
@@ -224,11 +238,17 @@ function serviceSaid(
 
 async function piped(): Promise<string | undefined> {
   if (process.stdin.isTTY) return undefined
-  // No more than the largest thing a command takes: a pipe that goes on and on, a log or a
-  // file that is no page, is given up there and not read into memory to its end
-  const all = await textOf(process.stdin, LIMITS.fileBytes).catch((err) => {
+  // What is piped in is text, a page's HTML or a value's JSON, and is read into memory whole: no
+  // more of it than one request carries, so that a pipe that goes on and on, a log or a file
+  // that is no page, is given up there and not read to its end. A larger file is published from
+  // the disk, with --file or --dir
+  const all = await textOf(process.stdin, UPLOAD.requestBytes).catch((err) => {
     if ((err as { code?: string })?.code === 'too_much')
-      throw new Problem(`What was piped in is larger than anything this command takes (${LIMITS.fileBytes / (1024 * 1024)} MB).`, 'limit')
+      throw new Problem(
+        `What was piped in is larger than this command reads from a pipe (${sizeSaid(UPLOAD.requestBytes)}).`,
+        'limit',
+        'Write it to a file and publish that with --file or --dir.',
+      )
     throw err
   })
   return all.trim() ? all : undefined
