@@ -29,7 +29,7 @@ import net from 'node:net'
 import os from 'node:os'
 import type { Duplex } from 'node:stream'
 import { createContent, pagePolicy } from '@it/content'
-import { contentPort, LIMITS, onThisMachine, uploadBudgetMs } from '@it/protocol'
+import { contentPort, httpsPort, LIMITS, onThisMachine, uploadBudgetMs } from '@it/protocol'
 import { direct, inHome, Problem } from '../lib'
 import type { Backend } from './backend'
 import { doorKey, type ServiceConfig } from './config'
@@ -436,16 +436,17 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
   /**
    * Whether a request came over https through Tailscale's own server on this machine, where the
    * settings say It answers the tailnet so (`it https on`): Tailscale took it at the machine's
-   * name there, on the port it was sent to, and handed it to the door from this machine. It says
-   * that it came over https in x-forwarded-proto, which it writes itself whatever the caller
-   * sent, and the name it came by is the one the settings hold. A program on this machine could
-   * say all of that too, and gains nothing by it: it could already ask the door anything.
+   * name there, on the https port that stands for the port it arrived at (`httpsPort`), and
+   * handed it to the door from this machine. It says that it came over https in
+   * x-forwarded-proto, which it writes itself whatever the caller sent, and the name it came by
+   * is the one the settings hold. A program on this machine could say all of that too, and
+   * gains nothing by it: it could already ask the door anything.
    */
-  const secured = (a: Arrival): boolean =>
-    config.https !== undefined &&
-    isLoopback(a.address) &&
-    a.headers.get('x-forwarded-proto') === 'https' &&
-    hostOf(a.headers.get('host'))?.name === config.https
+  const secured = (a: Arrival): boolean => {
+    if (config.https === undefined || !isLoopback(a.address) || a.headers.get('x-forwarded-proto') !== 'https') return false
+    const host = hostOf(a.headers.get('host'))
+    return host?.name === config.https && host.port === httpsPort(a.port)
+  }
   /** How a request reached the door: over https through Tailscale, or as it came. */
   const schemeOf = (a: Arrival): string => (secured(a) ? 'https' : SCHEME)
   /**
@@ -457,10 +458,11 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
     const said = secured(a) ? (a.headers.get('x-forwarded-for') ?? '').trim() : ''
     return net.isIP(said) ? said : a.address
   }
-  /** Whether a request was sent to a name this machine answers to, on the port it arrived at, from somewhere it answers. */
+  /** Whether a request was sent to a name this machine answers to, on the port it arrived at, from somewhere it answers: or came over https, through Tailscale. */
   const named = (a: Arrival): boolean => {
+    if (secured(a)) return true
     const host = hostOf(a.headers.get('host'))
-    return host !== null && host.port === a.port && (known(host.name) || secured(a)) && answered(a.address)
+    return host !== null && host.port === a.port && known(host.name) && answered(a.address)
   }
   /**
    * Where a request asks for, as an address. One that was sent written out in full is taken

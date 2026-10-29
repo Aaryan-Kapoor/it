@@ -46,9 +46,16 @@ export const onThisMachine = (address: string): boolean => address === '::1' || 
  * site, pairing, the live connection and uploads. Every page is shown from the port after
  * it. The backend's two ports are for this machine only.
  */
-export const PORTS = { base: 4700, content: 1, backendApi: 40, backendSite: 41 } as const
+export const PORTS = { base: 4700, content: 1, https: 2, backendApi: 40, backendSite: 41 } as const
 /** The port pages are shown from. */
 export const contentPort = (base: number): number => base + PORTS.content
+/**
+ * Where Tailscale takes https for one of the door's two ports, with \`it https on\`: two above it,
+ * so that the site is at 4702 and the pages at 4703, one above it as over plain http. It is a
+ * port of its own and not the door's, since Tailscale listens on the machine's address on the
+ * tailnet, and the door may listen on every address the machine has.
+ */
+export const httpsPort = (port: number): number => port + PORTS.https
 
 /**
  * A host's name as a policy can say it. A policy names a host only in letters, digits, dots and

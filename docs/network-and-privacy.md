@@ -35,8 +35,9 @@ Another port is another address for the site. A browser that was paired stays pa
 
 | Port | What listens there | Who can reach it |
 |---|---|---|
-| 4700 | The site, pairing, the browser's live connection, uploads from the `it` command, and everything a machine that joined asks | This machine only. Every device on the network once the network is on. With `it https on`, the devices of your tailnet over `https`, through Tailscale on the machine |
+| 4700 | The site, pairing, the browser's live connection, uploads from the `it` command, and everything a machine that joined asks | This machine only. Every device on the network once the network is on |
 | 4701 | The pages being shown | The same |
+| 4702, 4703 | Only with `it https on`: Tailscale's own server, taking `https` for 4700 and 4701 at the machine's name on the tailnet, and handing each request to them on this machine | The devices of your tailnet |
 | 4740 | The backend program, for calls to its functions | This machine only, always |
 | 4741 | The backend program, for its HTTP routes | This machine only, always |
 

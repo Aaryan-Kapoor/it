@@ -13,6 +13,7 @@
 // name, at the machine's name on the tailnet, or at its address on the network. Only a place It
 // can be reached at as the network stands is offered, and a link is never given at one It cannot
 // be reached at.
+import { httpsPort } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
@@ -74,11 +75,12 @@ const NOT_LINKABLE: Record<Unlinked, string> = {
 
 /**
  * Where another device opens It over https, through Tailscale on the machine It runs on, as the
- * service last said: at the machine's name on the tailnet, on the site's own port. It goes on
+ * service last said: at the machine's name on the tailnet, on the port Tailscale takes https at
+ * for the site's (protocol's \`httpsPort\`). It goes on
  * working whether or not the network is on, since Tailscale hands every request to It on that
  * machine itself.
  */
-const httpsAt = (row: Doc<'network'> | null): string | undefined => (row?.https ? `https://${row.https}:${basePort()}` : undefined)
+const httpsAt = (row: Doc<'network'> | null): string | undefined => (row?.https ? `https://${row.https}:${httpsPort(basePort())}` : undefined)
 
 async function said(ctx: QueryCtx): Promise<{ on: boolean; wanted: boolean; addresses: string[]; tailnet?: boolean; https?: string }> {
   const row = await ctx.db.query('network').first()

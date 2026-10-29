@@ -139,7 +139,7 @@ describe('what the service says of its door', () => {
 describe('over https on the tailnet', () => {
   test('the address over https is offered first, whether or not the network is on, and only a name is kept', async () => {
     const { t, owner } = await household()
-    const SECURE = 'https://studio.tail1234.ts.net:39000'
+    const SECURE = 'https://studio.tail1234.ts.net:39002'
     await t.mutation(internal.network.report, { on: false, wanted: false, addresses: [], https: 'studio.tail1234.ts.net' })
     expect(await owner.query(api.network.get, {})).toMatchObject({ on: false, addresses: [SECURE], https: 'studio.tail1234.ts.net' })
     // The command waits on this to know the service has taken it
@@ -359,12 +359,12 @@ describe('where the links agents give are', () => {
     {
       as: 'off, answering the tailnet over https',
       said: { on: false, wanted: false, addresses: [], tailnet: false, canTailnet: true, https: NAME },
-      links: { local: HERE, tailnet: `https://${NAME}:39000` },
+      links: { local: HERE, tailnet: `https://${NAME}:39002` },
     },
     {
       as: 'on for every network, answering the tailnet over https too',
       said: { on: true, wanted: true, addresses: [LAN, TAIL], tailnet: false, canTailnet: true, tailnetName: NAME, https: NAME },
-      links: { local: HERE, tailnet: `https://${NAME}:39000`, network: LAN },
+      links: { local: HERE, tailnet: `https://${NAME}:39002`, network: LAN },
     },
   ]
 

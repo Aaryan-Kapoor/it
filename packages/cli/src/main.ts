@@ -26,6 +26,7 @@ import readline from 'node:readline/promises'
 import {
   contentPort,
   describeClick,
+  httpsPort,
   firstFile,
   HARNESSES,
   type Harness,
@@ -1974,7 +1975,7 @@ function networkNow(): { on: boolean; addresses: string[]; tailnet?: true; unabl
     return {
       on,
       addresses: [
-        ...(config?.https ? [`https://${config.https}:${config.port}`] : []),
+        ...(config?.https ? [`https://${config.https}:${httpsPort(config.port)}`] : []),
         ...(on && config ? reachable(config.port, undefined, config.tailnet === true) : []),
       ],
       ...(on && config?.tailnet === true ? { tailnet: true } : {}),
@@ -2217,7 +2218,8 @@ async function httpsCommand(a: Args) {
     throw notSetUp()
   }
   const config = readConfig()!
-  const ports = [config.port, contentPort(config.port)]
+  // Each of the door's two ports, and the port Tailscale takes https at for it
+  const ports = [config.port, contentPort(config.port)].map((port) => ({ port, at: httpsPort(port) }))
   const running = await runs()
   if (to === 'on') {
     if (!tailnetAddresses().length) throw noTailnet()
@@ -2234,17 +2236,17 @@ async function httpsCommand(a: Args) {
     try {
       served = status.out.trim() ? JSON.parse(status.out) : {}
     } catch {}
-    const taken = ports.filter((port) => servedAs(served, name, port) === 'other')
+    const taken = ports.filter(({ port, at }) => servedAs(served, name, at, port) === 'other').map(({ at }) => at)
     if (taken.length)
       throw new Problem(
-        `Tailscale on this machine already serves something else on port ${taken.join(' and ')}, which It answers at.`,
+        `Tailscale on this machine already serves something else on port ${taken.join(' and ')}, which It would answer https at.`,
         'port_taken',
         `\`tailscale serve status\` says what. Take it away there, or run It on other ports with IT_PORT, and run this again.`,
       )
-    for (const port of ports) {
-      if (servedAs(served, name, port) === 'its') continue
-      const ran = tailscaleRun(['serve', '--bg', `--https=${port}`, `http://127.0.0.1:${port}`])
-      if (!ran.ok) throw tailscaleRefused(`serve https on port ${port}`, ran)
+    for (const { port, at } of ports) {
+      if (servedAs(served, name, at, port) === 'its') continue
+      const ran = tailscaleRun(['serve', '--bg', `--https=${at}`, `http://127.0.0.1:${port}`])
+      if (!ran.ok) throw tailscaleRefused(`serve https on port ${at}`, ran)
     }
     noteHttps(name)
   } else if (to === 'off') {
@@ -2255,15 +2257,15 @@ async function httpsCommand(a: Args) {
       served = status.ok && status.out.trim() ? JSON.parse(status.out) : {}
     } catch {}
     // Only what It set up is taken away: whatever else Tailscale serves here is another program's
-    for (const port of ports) {
-      if (!name || servedAs(served, name, port) !== 'its') continue
-      const ran = tailscaleRun(['serve', `--https=${port}`, 'off'])
-      if (!ran.ok) throw tailscaleRefused(`stop serving https on port ${port}`, ran)
+    for (const { port, at } of ports) {
+      if (!name || servedAs(served, name, at, port) !== 'its') continue
+      const ran = tailscaleRun(['serve', `--https=${at}`, 'off'])
+      if (!ran.ok) throw tailscaleRefused(`stop serving https on port ${at}`, ran)
     }
     noteHttps(undefined)
   }
   const now = readConfig()!
-  const address = now.https ? `https://${now.https}:${now.port}` : undefined
+  const address = now.https ? `https://${now.https}:${httpsPort(now.port)}` : undefined
   // The running service opens its door anew within a second or two of the settings changing, and says so to the backend
   if (to !== undefined && running) {
     const until = Date.now() + TAKEN_MS
