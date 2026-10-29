@@ -544,6 +544,12 @@ export default defineSchema({
      */
     link: v.optional(v.union(v.literal('tailnet'), v.literal('network'))),
     /**
+     * The machine's name on its tailnet, where It answers there over https too, through
+     * Tailscale's own server on that machine (\`it https on\`): another device opens It at that
+     * name with https, whether or not the network is on, and the tailnet's links are there.
+     */
+    https: v.optional(v.string()),
+    /**
      * What the owner asked of the network on the site, until the service has said what became
      * of it. When it was asked is also the name the asking goes by. `taken` once the service
      * has taken it up: it stays here until it is answered, so that one the service could not

@@ -700,7 +700,8 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
   test('--media says what a page asks to use of the screen: each kind once, `none` for nothing, and an update that does not say leaves it as it was', async () => {
     const m = machine()
     const b = await backend(m, ({ path: fn, args }) => {
-      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug ?? 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:begin')
+        return { artifactId: 'artifact-1', slug: args.slug ?? 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
       if (fn === 'publish:finish') return { slug: 'plan', version: 1, url: 'https://site.example/p/plan' }
       if (fn === 'artifacts:get') return { title: 'Plan' }
       return null

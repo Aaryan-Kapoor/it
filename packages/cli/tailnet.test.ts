@@ -2,7 +2,7 @@
 // are, what its name there is, and that the addresses another device is given are those alone.
 import { afterEach, describe, expect, test } from 'vitest'
 import { reachable } from './src/serve/network'
-import { forgetTailnetName, inTailnet, isLoopback, tailnetAddresses, tailnetName } from './src/serve/tailnet'
+import { forgetTailnetName, inTailnet, isLoopback, servedAs, tailnetAddresses, tailnetName } from './src/serve/tailnet'
 
 const HERE = {
   lo: [
@@ -112,5 +112,36 @@ describe('where another device is told to open It', () => {
       'http://[2001:db8:100:c690::4f1a]:4700',
       'http://[fd7a:115c:a1e0::ab12:4843]:4700',
     ])
+  })
+})
+
+describe('what Tailscale serves on It’s ports', () => {
+  const NAME = 'studio.tail1234.ts.net'
+  /** What \`tailscale serve status --json\` says, as Tailscale 1.104 writes it, with It's two ports and another program's beside them. */
+  const status = {
+    TCP: { '4700': { HTTPS: true }, '4701': { HTTPS: true }, '8443': { HTTPS: true }, '33000': { TCPForward: '127.0.0.1:33000' }, '8080': { HTTP: true } },
+    Web: {
+      [`${NAME}:4700`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:4700' } } },
+      [`${NAME}:4701`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:4701' } } },
+      [`${NAME}:8443`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:4321' } } },
+      [`${NAME}:8080`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:8080' } } },
+    },
+  }
+
+  test('a port is It’s own only where Tailscale takes https there and hands all of it to It on the same port of this machine', () => {
+    expect([4700, 4701].map((port) => servedAs(status, NAME, port))).toEqual(['its', 'its'])
+    expect(servedAs(status, NAME, 4800)).toBe('free')
+    expect(servedAs({}, NAME, 4700)).toBe('free')
+    expect(servedAs(null, NAME, 4700)).toBe('free')
+  })
+
+  test('anything else on the port is another program’s, and is not taken from it: another address, a plain forward, plain http, or more than one path', () => {
+    expect(servedAs(status, NAME, 8443)).toBe('other')
+    expect(servedAs(status, NAME, 33000)).toBe('other')
+    expect(servedAs(status, NAME, 8080)).toBe('other')
+    const split = { ...status, Web: { [`${NAME}:4700`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:4700' }, '/admin': { Proxy: 'http://127.0.0.1:9' } } } } }
+    expect(servedAs(split, NAME, 4700)).toBe('other')
+    // Served at another of the machine's names, it is not what It set up
+    expect(servedAs(status, 'other.tail1234.ts.net', 4700)).toBe('other')
   })
 })

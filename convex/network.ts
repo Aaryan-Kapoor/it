@@ -49,9 +49,10 @@ export type Unlinked = 'off' | 'no_tailnet' | 'no_name' | 'kept_to_tailnet' | 'n
  * network. That first address is the one another device is given to open the site at.
  */
 function linkable(row: Doc<'network'> | null): { local: string; tailnet?: string; network?: string } {
+  const tailnet = httpsAt(row) ?? (row?.on && row.tailnetName ? `http://${row.tailnetName}:${basePort()}` : undefined)
   return {
     local: site(),
-    ...(row?.on && row.tailnetName ? { tailnet: `http://${row.tailnetName}:${basePort()}` } : {}),
+    ...(tailnet ? { tailnet } : {}),
     ...(row?.on && !row.tailnet && row.addresses[0] ? { network: row.addresses[0] } : {}),
   }
 }
@@ -71,13 +72,24 @@ const NOT_LINKABLE: Record<Unlinked, string> = {
   no_address: 'The machine It runs on has no address on a network just now.',
 }
 
-async function said(ctx: QueryCtx): Promise<{ on: boolean; wanted: boolean; addresses: string[]; tailnet?: boolean }> {
+/**
+ * Where another device opens It over https, through Tailscale on the machine It runs on, as the
+ * service last said: at the machine's name on the tailnet, on the site's own port. It goes on
+ * working whether or not the network is on, since Tailscale hands every request to It on that
+ * machine itself.
+ */
+const httpsAt = (row: Doc<'network'> | null): string | undefined => (row?.https ? `https://${row.https}:${basePort()}` : undefined)
+
+async function said(ctx: QueryCtx): Promise<{ on: boolean; wanted: boolean; addresses: string[]; tailnet?: boolean; https?: string }> {
   const row = await ctx.db.query('network').first()
+  const secure = httpsAt(row)
   return {
     on: row?.on ?? false,
     wanted: row?.wanted ?? false,
-    addresses: row?.on ? row.addresses : [],
+    // The address over https first: there a browser lets a page It records for use the microphone
+    addresses: [...(secure ? [secure] : []), ...(row?.on ? row.addresses : [])],
     ...(typeof row?.tailnet === 'boolean' ? { tailnet: row.on && row.tailnet } : {}),
+    ...(row?.https ? { https: row.https } : {}),
   }
 }
 
@@ -103,11 +115,14 @@ export const report = internalMutation({
     exposed: v.optional(v.string()),
     // The machine's name on the tailnet, where the door answers to it: a link an agent gives can be at it
     tailnetName: v.optional(v.string()),
+    // The same name, where It answers there over https through Tailscale, whether or not the network is on
+    https: v.optional(v.string()),
   },
-  handler: async (ctx, { on, wanted, addresses, background, usage, tailnet, canTailnet, exposed, tailnetName }) => {
+  handler: async (ctx, { on, wanted, addresses, background, usage, tailnet, canTailnet, exposed, tailnetName, https }) => {
     const kept = on ? [...new Set(addresses.filter((a) => a.length <= 300 && ADDRESS.test(a)))].slice(0, MOST) : []
     const why = exposed?.slice(0, 300)
     const named = on && tailnetName !== undefined && tailnetName.length <= 253 && TAILNET_NAME.test(tailnetName) ? tailnetName : undefined
+    const secure = https !== undefined && https.length <= 253 && TAILNET_NAME.test(https) ? https : undefined
     const row = await ctx.db.query('network').first()
     if (
       row &&
@@ -119,12 +134,13 @@ export const report = internalMutation({
       row.canTailnet === canTailnet &&
       row.exposed === why &&
       row.tailnetName === named &&
+      row.https === secure &&
       JSON.stringify(row.addresses) === JSON.stringify(kept)
     )
       return null
     const stopped = row?.usage === true && usage !== true
     const usageGeneration = (row?.usageGeneration ?? 0) + (stopped ? 1 : 0)
-    const stands = { on, wanted, addresses: kept, background, usage, usageGeneration, tailnet, canTailnet, exposed: why, tailnetName: named }
+    const stands = { on, wanted, addresses: kept, background, usage, usageGeneration, tailnet, canTailnet, exposed: why, tailnetName: named, https: secure }
     if (row) await ctx.db.patch(row._id, stands)
     else await ctx.db.insert('network', stands)
     // Counts were being sent and are no more. What was noted for them goes now, and is not left
@@ -135,7 +151,7 @@ export const report = internalMutation({
       if (await forgetNoted(ctx, upTo, usageGeneration)) await ctx.scheduler.runAfter(0, internal.counted.forget, { upTo, generation: usageGeneration })
     }
     // How many, and never which: an address is the person's own
-    log('network.reported', { on, wanted, addresses: kept.length, background, usage })
+    log('network.reported', { on, wanted, addresses: kept.length, background, usage, ...(secure ? { https: true } : {}) })
     return null
   },
 })
@@ -232,6 +248,8 @@ export const get = query({
     return {
       on,
       addresses,
+      // The machine's name on the tailnet where It answers there over https, through Tailscale, or nothing
+      https: row?.https ?? null,
       tailnet: on && row?.tailnet === true,
       // Null while the service has not said, as from a service of an earlier It: the switch is then not offered
       canTailnet: row?.canTailnet ?? null,

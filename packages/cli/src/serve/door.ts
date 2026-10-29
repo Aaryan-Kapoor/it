@@ -108,8 +108,9 @@ export interface Door {
   close(): Promise<void>
 }
 
-// The door listens without TLS, so this is how every request arrives. It is what the backend
-// is told in x-forwarded-proto, whatever the caller put in that header.
+// The door listens without TLS, so this is how a request arrives, but for one that Tailscale's
+// own server on this machine took over https and handed on (`secured` below). It is what the
+// backend is told in x-forwarded-proto, whatever the caller put in that header.
 const SCHEME = 'http'
 /** The live connection, at the address the client library asks for it. */
 const LIVE = /^\/api\/[A-Za-z0-9][A-Za-z0-9._+-]{0,31}\/sync$/
@@ -142,7 +143,23 @@ const ONE_CONNECTION = [
 // whether the caller waits to be told to send it, which the door has settled by reading it, and
 // the headers by which a proxy says who asked and how. The door says those itself, so a
 // caller's are dropped.
-const NOT_PASSED = [...ONE_CONNECTION, 'host', 'content-length', 'expect', 'accept-encoding', 'forwarded', 'via', 'x-real-ip']
+//
+// Tailscale's server also says who on the tailnet asked, by their login and their name. Nothing
+// of It goes by that, and none of it goes further.
+const NOT_PASSED = [
+  ...ONE_CONNECTION,
+  'host',
+  'content-length',
+  'expect',
+  'accept-encoding',
+  'forwarded',
+  'via',
+  'x-real-ip',
+  'tailscale-user-login',
+  'tailscale-user-name',
+  'tailscale-user-profile-pic',
+  'tailscale-headers-info',
+]
 // And of an answer: how long it is, which the door says itself of the bytes it sends
 const NOT_RETURNED = [...ONE_CONNECTION, 'content-length']
 /** What a header's name is made of. */
@@ -213,13 +230,13 @@ const addressOf = (given: string | undefined | null): string => (given ?? '').re
 
 /**
  * An address written out in full, taken apart: the name and the port as a Host header's are, and
- * whatever follows them. Only an address that is reached as the door is, without TLS, is one at
- * all here. Two addresses are the same place when their names and ports are the same, however
- * each was spelled.
+ * whatever follows them. Only an address that is reached as the request it is held to was, with
+ * or without TLS, is one at all here. Two addresses are the same place when their names and
+ * ports are the same, however each was spelled.
  */
-function placeOf(address: string): { name: string; port: number; rest: string } | null {
+function placeOf(address: string, scheme: string): { name: string; port: number; rest: string } | null {
   const m = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]*)(.*)$/is.exec(address)
-  const host = m && m[1]!.toLowerCase() === SCHEME ? hostOf(m[2]!) : null
+  const host = m && m[1]!.toLowerCase() === scheme ? hostOf(m[2]!) : null
   return host ? { ...host, rest: m![3]! } : null
 }
 
@@ -416,10 +433,34 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
     noted(code)
     return json(status, { error: code }, headers)
   }
+  /**
+   * Whether a request came over https through Tailscale's own server on this machine, where the
+   * settings say It answers the tailnet so (`it https on`): Tailscale took it at the machine's
+   * name there, on the port it was sent to, and handed it to the door from this machine. It says
+   * that it came over https in x-forwarded-proto, which it writes itself whatever the caller
+   * sent, and the name it came by is the one the settings hold. A program on this machine could
+   * say all of that too, and gains nothing by it: it could already ask the door anything.
+   */
+  const secured = (a: Arrival): boolean =>
+    config.https !== undefined &&
+    isLoopback(a.address) &&
+    a.headers.get('x-forwarded-proto') === 'https' &&
+    hostOf(a.headers.get('host'))?.name === config.https
+  /** How a request reached the door: over https through Tailscale, or as it came. */
+  const schemeOf = (a: Arrival): string => (secured(a) ? 'https' : SCHEME)
+  /**
+   * Who asked, by their address: for a request that came through Tailscale, the address on the
+   * tailnet that Tailscale says it came from, which it writes itself; and for any other, the
+   * address of the connection. It is what codes that were refused are counted by.
+   */
+  const caller = (a: Arrival): string => {
+    const said = secured(a) ? (a.headers.get('x-forwarded-for') ?? '').trim() : ''
+    return net.isIP(said) ? said : a.address
+  }
   /** Whether a request was sent to a name this machine answers to, on the port it arrived at, from somewhere it answers. */
   const named = (a: Arrival): boolean => {
     const host = hostOf(a.headers.get('host'))
-    return host !== null && host.port === a.port && known(host.name) && answered(a.address)
+    return host !== null && host.port === a.port && (known(host.name) || secured(a)) && answered(a.address)
   }
   /**
    * Where a request asks for, as an address. One that was sent written out in full is taken
@@ -430,13 +471,13 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
     if (!host) return null
     let asked = a.target
     if (!asked.startsWith('/')) {
-      const full = placeOf(asked)
+      const full = placeOf(asked, schemeOf(a))
       if (!full || full.name !== host.name || full.port !== host.port) return null
       asked = full.rest
     }
     if (!asked.startsWith('/')) return null
     try {
-      return new URL(`${SCHEME}://${a.headers.get('host')}${asked}`)
+      return new URL(`${schemeOf(a)}://${a.headers.get('host')}${asked}`)
     } catch {
       return null
     }
@@ -444,7 +485,7 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
   /** Whether a request comes from the door's own pages: its Origin is the place the request itself names, and nothing more than a place. */
   const fromHere = (a: Arrival): boolean => {
     const host = hostOf(a.headers.get('host'))
-    const origin = placeOf(a.headers.get('origin') ?? '')
+    const origin = placeOf(a.headers.get('origin') ?? '', schemeOf(a))
     return host !== null && origin !== null && origin.rest === '' && origin.name === host.name && origin.port === host.port
   }
   /**
@@ -512,7 +553,7 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
       if (name.startsWith('x-forwarded-')) forwarded.push(name)
     })
     for (const name of forwarded) headers.delete(name)
-    headers.set('x-forwarded-proto', SCHEME)
+    headers.set('x-forwarded-proto', schemeOf(a))
     // The backend answers about a session only what the door passed on. A caller's own word for it is not the door's
     headers.set('x-it-door', itself)
     // The answer goes back as the bytes the backend sent, so it is asked to send them as they are
@@ -602,25 +643,26 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
   /** A request for the backend that may carry a code. Where it does, the caller's address is held to so many refusals a minute. */
   async function coded(a: Arrival, url: URL): Promise<Response> {
     if (a.method !== 'POST' || !CODES.has(url.pathname)) return toBackend(a, url)
-    const kept = counted(a.address)
+    const address = caller(a)
+    const kept = counted(address)
     const refused = kept?.count ?? 0
-    const waiting = unanswered.get(a.address) ?? 0
+    const waiting = unanswered.get(address) ?? 0
     // With ten refused it waits out the rest of the minute. With fewer, and the rest of the ten
     // not yet answered, it waits a moment for those.
     if (refused + waiting >= WRONG_MOST)
       return refuse(429, 'too_many_wrong_codes', {
         'retry-after': String(kept && refused >= WRONG_MOST ? Math.max(1, Math.ceil((kept.since + WRONG_MS - now()) / 1000)) : 1),
       })
-    unanswered.set(a.address, waiting + 1)
+    unanswered.set(address, waiting + 1)
     try {
       const answered = await toBackend(a, url)
-      if (answered.status === 401) refusedCode(a.address)
+      if (answered.status === 401) refusedCode(address)
       return answered
     } finally {
       // However it ended, it is not waited for any more
-      const left = (unanswered.get(a.address) ?? 1) - 1
-      if (left > 0) unanswered.set(a.address, left)
-      else unanswered.delete(a.address)
+      const left = (unanswered.get(address) ?? 1) - 1
+      if (left > 0) unanswered.set(address, left)
+      else unanswered.delete(address)
     }
   }
 
@@ -741,7 +783,7 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
       if (typeof body === 'string') return unread(body)
       return push.answer(new Request(url, { method: a.method, headers: a.headers, body }), { address: a.address })
     }
-    return answerSite(files, a.method, path, a.headers)
+    return answerSite(files, a.method, path, a.headers, secured(a))
   }
 
   /**
@@ -751,7 +793,7 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
    * Only the site may frame it, at the name the request was sent to when that is one of this
    * machine's, and nothing may when it is not.
    */
-  const policyFor = (a: Arrival): string => pagePolicy(config.port, named(a) ? a.headers.get('host') : null)
+  const policyFor = (a: Arrival): string => pagePolicy(config.port, named(a) ? a.headers.get('host') : null, secured(a))
   const confined = (a: Arrival, response: Response): Response => {
     const headers = new Headers(response.headers)
     headers.set('content-security-policy', policyFor(a))

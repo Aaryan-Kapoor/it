@@ -19,10 +19,12 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
+import https from 'node:https'
 import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline/promises'
 import {
+  contentPort,
   describeClick,
   firstFile,
   HARNESSES,
@@ -98,11 +100,11 @@ import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './n
 import { failure, forPerson } from './output'
 import { gather, noteConversation, publish } from './publish'
 import { alone, asAdmin, nothingLeft, standing, startBackend } from './serve/backend'
-import { noteNetwork, readConfig } from './serve/config'
+import { HTTPS_NAME, noteHttps, noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
 import { serve } from './serve/index'
 import { onTheInternet, reachable } from './serve/network'
-import { tailnetAddresses, tailnetName } from './serve/tailnet'
+import { servedAs, tailnetAddresses, tailnetName } from './serve/tailnet'
 import * as service from './service'
 import {
   AFTER,
@@ -330,6 +332,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   setup: [0, 'setup [--all | --only a,b | --none] [--name <name>] [--no-service]'],
   site: [0, 'site [--no-open]'],
   network: [1, 'network [on | off | tailscale]'],
+  https: [1, 'https [on | off]'],
   serve: [0, 'serve [--log <file>]'],
   service: [1, 'service install | uninstall | status | logs'],
   skill: [0, 'skill'],
@@ -1966,10 +1969,14 @@ function networkNow(): { on: boolean; addresses: string[]; tailnet?: true; unabl
     const config = elsewhere() ? null : readConfig()
     const on = config?.network ?? false
     // Kept to the tailnet, the door answers at this machine's addresses there and at no other:
-    // an address on the home network would be one that nothing opens
+    // an address on the home network would be one that nothing opens. The tailnet's address over
+    // https comes first where It answers there, whether or not the network is on
     return {
       on,
-      addresses: on && config ? reachable(config.port, undefined, config.tailnet === true) : [],
+      addresses: [
+        ...(config?.https ? [`https://${config.https}:${config.port}`] : []),
+        ...(on && config ? reachable(config.port, undefined, config.tailnet === true) : []),
+      ],
       ...(on && config?.tailnet === true ? { tailnet: true } : {}),
     }
   } catch {
@@ -1989,7 +1996,8 @@ async function networkAsItStands(running: boolean): Promise<ReturnType<typeof ne
   try {
     const config = readConfig()
     const stands = config ? await doorStands(config) : undefined
-    if (stands?.wanted && !stands.on) return { on: false, addresses: [], unable: true }
+    // The address over https is Tailscale's to take, and stands whether or not the door could listen on the network
+    if (stands?.wanted && !stands.on) return { on: false, addresses: asked.addresses.filter((a) => a.startsWith('https:')), unable: true }
   } catch {}
   return asked
 }
@@ -2149,6 +2157,138 @@ async function network(a: Args) {
   if (toAll) say(toAll)
   if (later) say(later)
   return out({ network: on, ...(tailnet ? { tailnet: true } : {}), addresses, ...(open ? { public: open.address ?? true } : {}) })
+}
+
+// ---------- https on the tailnet ----------
+
+/** Tailscale's own command, as it is run here: what it printed, and whether it did what it was asked. */
+type Ran = { ok: boolean; out: string; err: string }
+const tailscaleRun = (args: string[]): Ran => {
+  const ran = spawnSync('tailscale', args, { encoding: 'utf8', timeout: 60_000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  return { ok: ran.status === 0, out: ran.stdout ?? '', err: `${ran.stderr ?? ''}${ran.error ? ` ${ran.error.message}` : ''}`.trim() }
+}
+/** What is said where Tailscale could not be asked or would not do it, with its own words where it said any. */
+function tailscaleRefused(what: string, ran: Ran): Problem {
+  const said = ran.err || ran.out
+  const operator = /access denied|permission|operator/i.test(said)
+  const enable = /not enabled|https?:\/\/login\.tailscale\.com\S*/i.exec(said)
+  return new Problem(
+    `Tailscale on this machine would not ${what}.${said ? ` It said: ${said.split('\n').slice(0, 3).join(' ').trim()}` : ''}`,
+    'tailscale',
+    operator
+      ? 'Let your user run `tailscale serve` with `sudo tailscale set --operator=$USER`, and run this again.'
+      : enable
+        ? 'Turn on MagicDNS and HTTPS certificates for your tailnet in Tailscale’s admin console (DNS), as the address it gave says, and run this again.'
+        : 'Check that Tailscale is running and signed in here, and that your tailnet has MagicDNS and HTTPS certificates turned on.',
+  )
+}
+/** Asks It over https at its name on the tailnet, as another device would, which also has Tailscale fetch that name's certificate the first time. Whether it answered. */
+function answersOverHttps(address: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    // An agent of its own, which no proxy that the environment names is part of
+    const asked = https.get(`${address}/health`, { agent: new https.Agent({ keepAlive: false }), timeout: 45_000 }, (res) => {
+      res.resume()
+      resolve((res.statusCode ?? 500) < 500)
+    })
+    asked.on('timeout', () => asked.destroy())
+    asked.on('error', () => resolve(false))
+  })
+}
+
+/**
+ * `it https on` has It answer the person's tailnet over https, which a browser asks of a site
+ * before it lets a page there use the microphone or the camera: Tailscale's own server on this
+ * machine takes https at the machine's name on the tailnet, on It's two ports, with a
+ * certificate Tailscale keeps, and hands each request to It on this machine. `it https off`
+ * takes that away again, and `it https` says how it stands. Whatever else Tailscale serves here
+ * is left as it is, and a port of It's that Tailscale already serves for something else is not
+ * taken from it.
+ */
+async function httpsCommand(a: Args) {
+  const to = a._[0]
+  if (to !== undefined && to !== 'on' && to !== 'off') throw new Problem('It is `it https`, `it https on` or `it https off`.', 'invalid')
+  if (!existsSync(settingsFile()) || elsewhere()) {
+    if (enrolledHere() && elsewhere())
+      throw new Problem(
+        'This machine joined an It that runs on another machine, and serves nothing of its own.',
+        'invalid',
+        'Run `it https` on the machine It runs on.',
+      )
+    throw notSetUp()
+  }
+  const config = readConfig()!
+  const ports = [config.port, contentPort(config.port)]
+  const running = await runs()
+  if (to === 'on') {
+    if (!tailnetAddresses().length) throw noTailnet()
+    const name = tailnetName()
+    if (!name || !HTTPS_NAME.test(name))
+      throw new Problem(
+        'Tailscale does not say this machine’s name on the tailnet.',
+        'no_name',
+        'Turn on MagicDNS for your tailnet in Tailscale’s admin console, and run this again.',
+      )
+    const status = tailscaleRun(['serve', 'status', '--json'])
+    if (!status.ok) throw tailscaleRefused('say what it serves', status)
+    let served: unknown = {}
+    try {
+      served = status.out.trim() ? JSON.parse(status.out) : {}
+    } catch {}
+    const taken = ports.filter((port) => servedAs(served, name, port) === 'other')
+    if (taken.length)
+      throw new Problem(
+        `Tailscale on this machine already serves something else on port ${taken.join(' and ')}, which It answers at.`,
+        'port_taken',
+        `\`tailscale serve status\` says what. Take it away there, or run It on other ports with IT_PORT, and run this again.`,
+      )
+    for (const port of ports) {
+      if (servedAs(served, name, port) === 'its') continue
+      const ran = tailscaleRun(['serve', '--bg', `--https=${port}`, `http://127.0.0.1:${port}`])
+      if (!ran.ok) throw tailscaleRefused(`serve https on port ${port}`, ran)
+    }
+    noteHttps(name)
+  } else if (to === 'off') {
+    const name = config.https ?? tailnetName()
+    const status = tailscaleRun(['serve', 'status', '--json'])
+    let served: unknown = {}
+    try {
+      served = status.ok && status.out.trim() ? JSON.parse(status.out) : {}
+    } catch {}
+    // Only what It set up is taken away: whatever else Tailscale serves here is another program's
+    for (const port of ports) {
+      if (!name || servedAs(served, name, port) !== 'its') continue
+      const ran = tailscaleRun(['serve', `--https=${port}`, 'off'])
+      if (!ran.ok) throw tailscaleRefused(`stop serving https on port ${port}`, ran)
+    }
+    noteHttps(undefined)
+  }
+  const now = readConfig()!
+  const address = now.https ? `https://${now.https}:${now.port}` : undefined
+  // The running service opens its door anew within a second or two of the settings changing, and says so to the backend
+  if (to !== undefined && running) {
+    const until = Date.now() + TAKEN_MS
+    for (;;) {
+      const said = (await asAdmin({ api: backendAt(now.port).api, adminKey: now.adminKey }, 'network:current', {}).catch(() => undefined)) as
+        | { https?: unknown }
+        | undefined
+      if ((said?.https ?? undefined) === now.https || Date.now() > until) break
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    }
+  }
+  const answering = address && running && to === 'on' ? await answersOverHttps(address) : undefined
+  const said = !address
+    ? 'It answers over plain http only. `it https on` has it answer your tailnet over https as well, through Tailscale, where a browser lets a page use the microphone and the camera.'
+    : `It answers your tailnet over https, through Tailscale, at ${address}. Open It there on your other devices: a browser lets a page there use the microphone and the camera, once you allow that page on that screen.`
+  const later = running ? undefined : 'It is not running on this machine at the moment, so this takes effect when it starts.'
+  const unanswered =
+    answering === false
+      ? `It did not answer at ${address} just now. Tailscale may still be fetching the address's certificate, which takes a minute the first time: try it again shortly, and \`tailscale serve status\` says what Tailscale serves.`
+      : undefined
+  if (forPerson(a)) return tell([said, unanswered, later])
+  say(said)
+  if (unanswered) say(unanswered)
+  if (later) say(later)
+  return out({ https: address !== undefined, ...(address ? { url: address } : {}), ...(answering === undefined ? {} : { answering }) })
 }
 
 /**
@@ -2380,16 +2520,17 @@ async function serviceCommand(a: Args) {
 const HELP = `it ${VERSION}: put a live ${NOUN.one} on any display you own, and hear back what happens on it.
 
 Pages
-  it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)  [--state '{…}'] [--open] [--on "<display>"]
-  it update <id> (--file f | --dir d | --html "<…>" | pipe) [--title "<title>"] [--open] [--on "<display>"]
+  it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)  [--state '{…}'] [--open] [--on "<display>"] [--media <kinds>]
+  it update <id> (--file f | --dir d | --html "<…>" | pipe) [--title "<title>"] [--open] [--on "<display>"] [--media <kinds>]
                                  Both take [--agent <name>], a label for who made it,
                                  which its owning conversation can change explicitly, and
                                  [--take], which gives the ${NOUN.one} to this conversation.
                                  Without --take, create makes nothing under an id that is
                                  another conversation's ${NOUN.one}, and says whose it is.
-                                 [--media mic], camera, mic,camera or none, lets the ${NOUN.one}
-                                 record with It.record and take photos with It.photo, once the
-                                 person at a screen allows it there. Update keeps what was said.
+                                 --media lets the ${NOUN.one} record with It.record and take photos
+                                 with It.photo, once the person at a screen allows it there. Its
+                                 kinds are mic, camera, both as mic,camera, or none. Update keeps
+                                 what was said before.
   it list | it read <id> | it rollback <id> <version>
   it delete <id> [--status]      Delete a page, or check its last deletion.
 
@@ -2432,6 +2573,10 @@ This machine
                                  Say whether It answers your other devices, or turn that on or
                                  off. With tailscale it answers your tailnet alone. It answers
                                  this machine only until it is turned on.
+  it https [on | off]            Say whether It answers your tailnet over https too, or have it
+                                 do so through Tailscale, or stop. A browser lets a page use the
+                                 microphone and the camera over https, and over plain http only
+                                 on the machine It runs on.
   it status                      Say whether It is running, where its site is, and what is connected.
   it whoami                      Say what It knows this machine as.
   it serve [--log <file>]        Run It here yourself, in this terminal, as the background
@@ -2809,6 +2954,8 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'network':
       return network(a)
+    case 'https':
+      return httpsCommand(a)
     case 'serve':
       return keepRunning(a, 'It', 'it serve', serve)
     case 'whoami': {

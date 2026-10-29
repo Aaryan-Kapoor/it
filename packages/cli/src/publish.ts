@@ -551,7 +551,7 @@ export async function publish(input: {
       const said = [stays, note].filter(Boolean).join(' ')
       // The page's address is where the owner chose for links, where It can be reached there, and
       // is otherwise the site's as this machine reaches it. A link at another place says so beside it
-      const link = typeof done.link === 'string' && /^http:\/\/[^/?#]+\/p\//.test(done.link) ? done.link : undefined
+      const link = typeof done.link === 'string' && /^https?:\/\/[^/?#]+\/p\//.test(done.link) ? done.link : undefined
       const urlNote = done.unlinked ? unlinkedNote(done.unlinked) : undefined
       return {
         slug: done.slug,

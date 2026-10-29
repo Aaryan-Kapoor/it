@@ -76,6 +76,7 @@ export const OPTIONS: Record<string, readonly string[]> = {
   uninstall: ['yes'],
   site: ['no-open'],
   network: [],
+  https: [],
   status: [],
   whoami: [],
   serve: ['log', 'supervised'],

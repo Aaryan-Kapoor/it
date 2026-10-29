@@ -60,3 +60,18 @@ export function tailnetName(
 export const forgetTailnetName = () => {
   asked = undefined
 }
+
+/**
+ * What Tailscale on this machine takes on one of It's two ports: https, handed on to It there,
+ * which is It's own (`its`); nothing (`free`); or something else, which is another program's and
+ * is left as it is. Read from `tailscale serve status --json`.
+ */
+export function servedAs(status: unknown, name: string, port: number): 'its' | 'free' | 'other' {
+  const s = status as { TCP?: Record<string, Record<string, unknown>>; Web?: Record<string, { Handlers?: Record<string, { Proxy?: unknown }> }> } | null
+  const tcp = s?.TCP?.[String(port)]
+  if (!tcp) return 'free'
+  const handlers = s?.Web?.[`${name}:${port}`]?.Handlers ?? {}
+  const proxies = Object.entries(handlers)
+  const its = tcp.HTTPS === true && proxies.length === 1 && proxies[0]![0] === '/' && proxies[0]![1].Proxy === `http://127.0.0.1:${port}`
+  return its ? 'its' : 'other'
+}

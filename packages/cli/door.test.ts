@@ -3378,6 +3378,93 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
       )
 })
 
+describe('Over https, through Tailscale on this machine', () => {
+  const NAME = 'studio.tail1234.ts.net'
+  /** The door with the settings `it https on` writes: It answers at the machine's name on the tailnet over https too. Off the network, as it can be. */
+  const secure = (): ServiceConfig => ({ ...config(door.base), https: NAME })
+  /** What Tailscale's server hands the door: from this machine, at the name and port the browser asked for, saying it came over https. */
+  const viaTailscale = (port = door.base, more: Record<string, string> = {}): Record<string, string> => ({
+    host: `${NAME}:${port}`,
+    'x-forwarded-proto': 'https',
+    'x-forwarded-for': '100.101.42.17',
+    'tailscale-user-login': 'person@example.com',
+    'tailscale-user-name': 'A Person',
+    ...more,
+  })
+  const answer = (
+    kept: ServiceConfig,
+    headers: Record<string, string>,
+    o: { port?: number; address?: string; method?: string; target?: string; body?: string } = {},
+  ) =>
+    makeDoor(kept, backend, () => {}, parts()).answer({
+      method: o.method ?? 'GET',
+      target: o.target ?? '/',
+      headers: new Headers(headers),
+      body: o.body === undefined ? null : new Response(o.body).body,
+      port: o.port ?? door.base,
+      address: o.address ?? '127.0.0.1',
+    } satisfies Arrival)
+  /** A policy's words, by what each is for. */
+  const policyOf = (said: string | null) => Object.fromEntries((said ?? '').split(/;\s*/).map((part) => [part.split(' ')[0], part.split(' ').slice(1)]))
+
+  test('The site is answered at the tailnet name over https, framing its pages and opening its live connection over https too, and only as Tailscale hands it on', async () => {
+    const site = await answer(secure(), viaTailscale())
+    expect(site.status).toBe(200)
+    const said = policyOf(site.headers.get('content-security-policy'))
+    expect([said['frame-src'], said['connect-src']]).toEqual([[`https://${NAME}:${contentPort(door.base)}`], ["'self'", `wss://${NAME}:${door.base}`]])
+    // Over https a window the site opens can do nothing to it, which a browser takes only from a secure site
+    expect(site.headers.get('cross-origin-opener-policy')).toBe('same-origin')
+    // Not where the settings say nothing of https, nor at another name, nor without Tailscale's word that it came over https
+    expect((await answer(config(door.base), viaTailscale())).status).toBe(421)
+    expect((await answer(secure(), viaTailscale(door.base, { host: `other.tail1234.ts.net:${door.base}` }))).status).toBe(421)
+    expect((await answer(secure(), viaTailscale(door.base, { 'x-forwarded-proto': 'http' }))).status).toBe(421)
+    // Nor from another device: only Tailscale on this machine hands requests on, and a device on the network that says the same is not it
+    expect((await answer(secure(), viaTailscale(), { address: '192.168.1.50' })).status).toBe(421)
+    expect((await answer(secure(), viaTailscale(), { address: '100.101.42.17' })).status).toBe(421)
+    // The site as it always was, for this machine itself
+    const plain = policyOf((await answer(secure(), { host: `localhost:${door.base}` })).headers.get('content-security-policy'))
+    expect(plain['frame-src']).toEqual([`http://localhost:${contentPort(door.base)}`])
+  })
+
+  test('A page shown over https may be framed only by the site at its https address', async () => {
+    const page = await answer(secure(), viaTailscale(contentPort(door.base)), { port: contentPort(door.base), target: '/s/x/index.html' })
+    expect(page.headers.get('content-security-policy')).toContain(`frame-ancestors https://${NAME}:${door.base}`)
+  })
+
+  test('The site’s own calls are taken from its https origin and from no other, and the backend is told they came over https and not who Tailscale says asked', async () => {
+    site.asked.length = 0
+    const redeem = (origin: string) =>
+      answer(secure(), viaTailscale(door.base, { origin, 'x-it-site': '1', 'content-type': 'application/json' }), {
+        method: 'POST',
+        target: '/session/redeem',
+        body: '{"code":"right"}',
+      })
+    expect((await redeem(`https://${NAME}:${door.base}`)).status).toBe(200)
+    const seen = site.asked.at(-1)!.headers
+    expect(seen['x-forwarded-proto']).toBe('https')
+    for (const name of ['tailscale-user-login', 'tailscale-user-name', 'x-forwarded-for']) expect([name, seen[name]]).toEqual([name, undefined])
+    // The same name over plain http is another origin, and is refused as any other site is
+    expect((await redeem(`http://${NAME}:${door.base}`)).status).toBe(403)
+  })
+
+  test('Codes refused over https are counted by the address on the tailnet that Tailscale says asked, and not as this machine', async () => {
+    const door1 = makeDoor(secure(), backend, () => {}, parts())
+    const tryCode = (from: string) =>
+      door1.answer({
+        method: 'POST',
+        target: '/session/redeem',
+        headers: new Headers(viaTailscale(door.base, { 'x-forwarded-for': from, origin: `https://${NAME}:${door.base}`, 'x-it-site': '1' })),
+        body: new Response('{"code":"wrong"}').body,
+        port: door.base,
+        address: '127.0.0.1',
+      })
+    for (let i = 0; i < 10; i++) expect((await tryCode('100.101.42.17')).status).toBe(401)
+    expect((await tryCode('100.101.42.17')).status).toBe(429)
+    // Another device on the tailnet, which Tailscale also hands on from this machine, is not held up by it
+    expect((await tryCode('100.64.0.9')).status).toBe(401)
+  })
+})
+
 describe('Kept to the tailnet', () => {
   /** What a door answers a caller at an address who asks for the site by a name the machine always answers to. */
   const asked = async (kept: ServiceConfig, address: string, port = door.base) => {
