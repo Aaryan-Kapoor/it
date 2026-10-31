@@ -42,6 +42,7 @@ import {
   codexGivesNetwork,
   codexLetsItOut,
   codexRuleLetsItOut,
+  codexRunsApart,
   connect,
   detectAll,
   disconnect,
@@ -3271,6 +3272,28 @@ describe('whether Codex, as it is set, lets `it` reach It', () => {
     } finally {
       rmSync(home, { recursive: true, force: true })
     }
+  })
+  test('on Windows, a sandbox that runs commands as accounts of its own is given the network to no end, since It’s folder is closed to them', () => {
+    const elevated = 'sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\n[windows]\nsandbox = "elevated"\n'
+    expect(codexRunsApart(elevated, 'win32')).toBe(true)
+    expect(codexLetsItOut(elevated, false, 'win32')).toBe(false)
+    // A profile with the network, chosen, is the same
+    const profile =
+      'default_permissions = "mine"\n[permissions.mine]\nextends = ":workspace"\n[permissions.mine.network]\nenabled = true\n[windows]\nsandbox = "elevated"\n'
+    expect(codexLetsItOut(profile, false, 'win32')).toBe(false)
+    // The rule runs `it` as the person, and so does running with no sandbox at all
+    expect(codexLetsItOut(elevated, true, 'win32')).toBe(true)
+    expect(codexLetsItOut('sandbox_mode = "danger-full-access"\n[windows]\nsandbox = "elevated"\n', false, 'win32')).toBe(true)
+    expect(codexLetsItOut('default_permissions = ":danger-full-access"\n[windows]\nsandbox = "elevated"\n', false, 'win32')).toBe(true)
+    // Its other sandbox runs commands as the person, as the sandbox does elsewhere, and elsewhere there is no such setting
+    const unelevated = elevated.replace('"elevated"', '"unelevated"')
+    expect(codexRunsApart(unelevated, 'win32')).toBe(false)
+    expect(codexLetsItOut(unelevated, false, 'win32')).toBe(true)
+    expect(codexRunsApart(elevated, 'linux')).toBe(false)
+    expect(codexLetsItOut(elevated, false, 'darwin')).toBe(true)
+    // What says nothing of the network says the same as before
+    expect(codexLetsItOut('[windows]\nsandbox = "elevated"\n', false, 'win32')).toBe(false)
+    expect(codexLetsItOut(false, false, 'win32')).toBeUndefined()
   })
   test('what a person is told, and what an agent that is stopped there passes on, both carry the rule and the file to keep it in', () => {
     expect(CODEX_RULE).toBe('prefix_rule(pattern=["it"], decision="allow")')

@@ -60,7 +60,7 @@ With it on, a click for a conversation that is not listening is given at once to
 | Agent app | What It runs | What the conversation may do by itself |
 |---|---|---|
 | Claude Code | `claude --resume <id> --print` | What it could do the last time you had it open. It is reopened in the permission mode you last held the conversation in, where that mode asks nobody: one you held with full access, in T3 Code say, is reopened with full access. One you held in the mode that asks is reopened with `it` and whatever your own settings allow, and anything else it tries is refused |
-| Codex | `codex exec resume <id>` | Run in Codex's sandbox for a workspace, with the network allowed and It's own folder writable, which is what `it` needs. So it can write in the conversation's folder and in It's folder, `~/.it`, which holds It's own program as well: the sandbox keeps it out of the rest of your files, and not out of It |
+| Codex | `codex exec resume <id>` | Run in Codex's sandbox for a workspace, with the network allowed and It's own folder writable, which is what `it` needs. So it can write in the conversation's folder and in It's folder, `~/.it`, which holds It's own program as well: the sandbox keeps it out of the rest of your files, and not out of It. On Windows It's folder is not made writable, since Codex leaves a folder it was let write in open to every sandboxed command after, and `it` reaches It there only by [the rule that lets it out of the sandbox](#codex) |
 | Pi | `pi --print --session <id>` | Whatever it does in a window: Pi does not ask before it runs a command |
 | OpenCode | `opencode run --session <id>` | Whatever your OpenCode settings allow without asking |
 | Hermes Agent | `hermes chat --resume <id> --query-file -` | Whatever your Hermes settings allow without asking |
@@ -112,6 +112,8 @@ enabled = true
 ```
 
 The first line has to stand above every table, which is every line in square brackets, or Codex will not start. The older setting, `network_access = true` under `[sandbox_workspace_write]`, does this only together with `sandbox_mode = "workspace-write"`: by itself it gives a git folder the network and leaves any other folder read-only.
+
+On Windows the network is not enough with Codex's elevated sandbox, the one chosen with `sandbox = "elevated"` under `[windows]`. That sandbox runs commands as accounts of its own, and It's folder is kept to you, so `it` cannot read it there and answers with the code `blocked`. There the rule above is the way, since it runs `it` as you.
 
 None of the three is needed where Codex runs with full access. An app that runs Codex for you chooses the sandbox itself, whatever these files say: T3 Code gives Codex a sandbox of its own for each of its modes, and its default is full access.
 

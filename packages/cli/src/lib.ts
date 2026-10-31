@@ -9,6 +9,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -28,6 +29,7 @@ import { importJWK, type JWK, SignJWT } from 'jose'
 import { agentAppsAbove } from './ancestry'
 import { CODEX_SHUT_SAID } from './codex-settings'
 import { installationHome } from './installation'
+import { keepToOwner, keepToOwnerAsync } from './owner'
 import { keepOriginal, putAbsent, removeOriginal, restoreAbsent } from './preserve'
 import { added, shellEnv } from './shell-env'
 
@@ -328,14 +330,24 @@ export function changeWhole(file: string, change: (text: string) => string | nul
  * where the system lets a folder be. The only copy of this machine's key is kept this way, and
  * so is every record the service acts on.
  *
- * It is readable only by this user. That is the system's doing: elsewhere than Windows the
- * file is made for its owner alone. Windows takes no such word from a program, and gives a
- * file the permissions of the folder it is in, so there it is as private as It's folder is: a
- * person's own profile is, and a folder they name instead may not be.
+ * It is readable only by this user. Elsewhere than Windows the file is made for its owner alone
+ * by its mode. Windows takes no mode from a program and gives a file the permissions of the
+ * folder it is in, which another program may have opened to other accounts: Codex's sandbox
+ * opens a person's profile to accounts of its own. So there the file is given permissions of
+ * its own, which name the person and the system alone, while it is still empty, and keeps them
+ * when it is given its name. A disk that keeps no permissions, and a sandbox that lets no other
+ * program be started, leave it as private as its folder is, as it always was.
  */
 export function writePrivate(file: string, data: unknown): void {
-  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  const made = mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  if (made) keepToOwner(made, true)
   const whole = `${file}.${process.pid}.tmp`
+  if (process.platform === 'win32') {
+    // Made anew, so that one left behind by a program that ended carries nothing of its own
+    rmSync(whole, { force: true })
+    closeSync(openSync(whole, 'wx', 0o600))
+    keepToOwner(whole)
+  }
   writeFlushed(whole, typeof data === 'string' ? data : JSON.stringify(data, null, 1))
   try {
     rename(whole, file)
@@ -367,11 +379,15 @@ export function writePrivate(file: string, data: unknown): void {
  * the caller can cancel it if erasure or shutdown happened while the disk was being written.
  */
 export async function writePrivateAsync(file: string, pieces: Iterable<string>, current: () => boolean): Promise<void> {
-  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
+  const made = await mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
+  if (made) await keepToOwnerAsync(made, true)
   const whole = `${file}.${process.pid}.tmp`
   try {
-    const out = await open(whole, 'w', 0o600)
+    if (process.platform === 'win32') await rm(whole, { force: true })
+    const out = await open(whole, process.platform === 'win32' ? 'wx' : 'w', 0o600)
     try {
+      // On Windows, kept to the person before anything is written into it, as writePrivate does
+      await keepToOwnerAsync(whole)
       await out.writeFile(pieces)
       await out.chmod(0o600)
       await out.sync()
@@ -514,8 +530,12 @@ export const backendAt = (port: number): Backend => ({
   api: `http://127.0.0.1:${port + PORTS.backendApi}`,
   site: `http://127.0.0.1:${port + PORTS.backendSite}`,
 })
-/** What every command but `it setup` says on a machine where It has not been set up. */
-export const notSetUp = () => new Problem('It has not been set up on this machine, so run `it setup` first.', 'not_set_up')
+/**
+ * What every command but `it setup` says on a machine where It has not been set up. Records that
+ * are there and could not be read are not It not being set up: a command run as another account
+ * than the person's finds It's folder closed to it, and is told that instead.
+ */
+export const notSetUp = () => (keptFromHome() ? keptOut() : new Problem('It has not been set up on this machine, so run `it setup` first.', 'not_set_up'))
 /**
  * Where the backend is. On the machine It runs on, that is two ports of this machine. On a
  * machine that joined an It running on another, it is the address it joined at. IT_URL names
@@ -575,13 +595,45 @@ export const shutIn = (e: NodeJS.ProcessEnv = process.env) =>
   new Problem(
     'It could not be asked from here: this command is run where it may not open a connection, as an agent app runs commands when it gives them no network. It may well be running.',
     'blocked',
-    // Codex is the app that does this as it comes, and the person is the one who can change it:
-    // the agent is given the line to tell them, since nothing else can get word out of here
-    e.CODEX_THREAD_ID
-      ? // What is for the agent comes first and what it is to pass on comes last: an agent that is told "say this, in these words" says everything after it
-        `It may well be running: this says nothing of that, so do not start It again, and do not change Codex’s settings yourself. Ask to run this same command outside the sandbox, the way you ask for any command that needs it. If the asking is refused, or you may not ask, tell the user what follows, in these words and no others: ${CODEX_SHUT_SAID}`
-      : 'Run `it` outside that sandbox, or let commands use the network there. Do not start It again.',
+    outOfTheSandbox(e, 'Run `it` outside that sandbox, or let commands use the network there. Do not start It again.'),
   )
+/**
+ * What is said when this command runs as an account that may not read It's folder, which is
+ * kept to the person who runs It. Codex's sandbox on Windows runs a command that way: as an
+ * account of its own, which the network takes no further. What helps is running `it` as the
+ * person, outside that sandbox.
+ */
+export const keptOut = (e: NodeJS.ProcessEnv = process.env) =>
+  new Problem(
+    'It could not be asked from here: this command runs as an account that may not read It’s folder, as Codex’s sandbox on Windows runs commands. It may well be running.',
+    'blocked',
+    outOfTheSandbox(e, 'Run `it` outside that sandbox, as the account It runs as. Do not start It again.'),
+  )
+/**
+ * What an agent that is kept from It in a sandbox is told to do. Codex is the app that does
+ * this as it comes, and the person is the one who can change it: the agent is given the line to
+ * tell them, since nothing else can get word out of here.
+ */
+const outOfTheSandbox = (e: NodeJS.ProcessEnv, otherwise: string) =>
+  e.CODEX_THREAD_ID
+    ? // What is for the agent comes first and what it is to pass on comes last: an agent that is told "say this, in these words" says everything after it
+      `It may well be running: this says nothing of that, so do not start It again, and do not change Codex’s settings yourself. Ask to run this same command outside the sandbox, the way you ask for any command that needs it. If the asking is refused, or you may not ask, tell the user what follows, in these words and no others: ${CODEX_SHUT_SAID}`
+    : otherwise
+/**
+ * Whether It's folder, or a record It cannot do without, is there and this command may not read
+ * it: the system refused it, which a record that is missing is not.
+ */
+export function keptFromHome(): boolean {
+  const refused = (read: () => unknown) => {
+    try {
+      read()
+      return false
+    } catch (err) {
+      return notLet(err)
+    }
+  }
+  return refused(() => readdirSync(home())) || [settingsFile(), machineFile()].some((file) => existsSync(file) && refused(() => closeSync(openSync(file, 'r'))))
+}
 /** Whether an error says that the system refused the connecting itself, and not that nothing answered. */
 export function notLet(err: unknown): boolean {
   const codes = [(err as { code?: unknown } | null)?.code, (err as { cause?: { code?: unknown } } | null)?.cause?.code]

@@ -103,7 +103,9 @@ export interface Carrying {
  *   writable, which is what `it` needs. It can write in the conversation's folder, It's folder
  *   and the system's temporary folders, and nowhere else, and nothing can ask the person for
  *   more, since they are not there. These settings are given on the command line, so they win
- *   over a permissions profile the person chose in their own settings or a project's.
+ *   over a permissions profile the person chose in their own settings or a project's. On
+ *   Windows It's folder is left out of what it may write, and `it` reaches It by the rule that
+ *   lets it out of the sandbox.
  * - Pi, OpenCode and Hermes are run as they are in a window, with whatever their own settings
  *   allow there. Nothing can ask the person for more, since they are not there.
  */
@@ -111,7 +113,7 @@ export function carrying(
   harness: string,
   session: string,
   text: string,
-  has: { codex?: string[] | null; itHome: string; command?: string; mode?: string | null; itAt?: string[] },
+  has: { codex?: string[] | null; itHome: string; command?: string; mode?: string | null; itAt?: string[]; platform?: NodeJS.Platform },
 ): Carrying | string {
   const app = APP[harness] ?? harness
   const odd = `its conversation id is not one ${app} would have made`
@@ -127,6 +129,11 @@ export function carrying(
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(session)) return odd
     const codex = has.command ? [has.command] : has.codex
     if (!codex) return 'Codex was not found'
+    // On Windows a folder Codex's sandbox is given to write in stays open to every command any
+    // of its sandboxes runs later, whoever started it: Codex gives the writing to all of its
+    // sandbox's accounts, and does not take it back. It's folder is not given there. `it`
+    // reaches It there by the rule that lets it out of the sandbox, which runs it as the person.
+    const itsFolder = (has.platform ?? process.platform) === 'win32' ? [] : ['-c', `sandbox_workspace_write.writable_roots=[${JSON.stringify(has.itHome)}]`]
     return {
       argv: [
         ...codex,
@@ -137,8 +144,7 @@ export function carrying(
         'sandbox_mode="workspace-write"',
         '-c',
         'sandbox_workspace_write.network_access=true',
-        '-c',
-        `sandbox_workspace_write.writable_roots=[${JSON.stringify(has.itHome)}]`,
+        ...itsFolder,
         session,
         '-',
       ],
