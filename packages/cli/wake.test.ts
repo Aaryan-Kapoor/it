@@ -196,7 +196,7 @@ describe('whether a closed conversation may be reopened for a click', () => {
 })
 
 describe('the command each agent app is carried on with', () => {
-  const has = { codex: ['codex'], itHome: '/home/someone/.it' }
+  const has = { codex: ['codex'], itHome: '/home/someone/.it', platform: 'linux' as const }
   const UUID = '3f6c2f0e-1a2b-4c3d-9e8f-000000000001'
 
   test('each is the app’s own command for a conversation named by its id, with the message on its input and never among its words', () => {
@@ -225,6 +225,19 @@ describe('the command each agent app is carried on with', () => {
     expect(codex).toContain('sandbox_workspace_write.writable_roots=["/home/someone/.it"]')
     expect(codex.slice(-2)).toEqual(['01a10f7c-062c-7010-8d57-8e1007169551', '-'])
     expect(codex.join(' ')).not.toMatch(/bypass|danger/)
+  })
+
+  test('on Windows, Codex is not let write in It’s folder, which its sandbox would leave open to every sandboxed command after', () => {
+    const codex = (
+      carrying('codex', '01a10f7c-062c-7010-8d57-8e1007169551', 'x', { ...has, itHome: 'C:\\Users\\someone\\.it', platform: 'win32' }) as {
+        argv: string[]
+      }
+    ).argv
+    expect(codex).toContain('sandbox_mode="workspace-write"')
+    expect(codex).toContain('sandbox_workspace_write.network_access=true')
+    expect(codex.join(' ')).not.toContain('writable_roots')
+    expect(codex.join(' ')).not.toContain('.it')
+    expect(codex.slice(-2)).toEqual(['01a10f7c-062c-7010-8d57-8e1007169551', '-'])
   })
 
   test('an id of a shape the app does not make is never put on its command line, and an app with no such command has none', () => {

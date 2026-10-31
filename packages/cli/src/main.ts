@@ -52,7 +52,9 @@ import {
   home,
   inHome,
   joinLine,
+  keptFromHome,
   keptFromIt,
+  keptOut,
   left,
   machine,
   NOT_RUNNING,
@@ -2124,6 +2126,12 @@ async function network(a: Args) {
  * in `hint` as what to do next.
  */
 async function status(a: Args) {
+  // Run as an account It's folder is kept from, this command sees nothing of It: that is said
+  // first, and whether It is running as not known, as where it may not open a connection
+  if (keptFromHome()) {
+    const hint = inWords(keptOut())
+    return forPerson(a) ? tell([hint]) : out({ blocked: true, hint, running: null, version: VERSION, protocol: PROTOCOL_VERSION })
+  }
   const kept = readJson<{ id?: unknown; name?: unknown; at?: string }>(inHome('machine.json'))
   const enrolled = enrolledHere()
   const here = existsSync(settingsFile()) && !elsewhere()
