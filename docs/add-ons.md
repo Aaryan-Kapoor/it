@@ -32,7 +32,7 @@ Delivery is at least once, and every click carries a stable id so that an agent 
 
 ## What to expect in each agent app
 
-It has add-ons for Claude Code, Codex, Pi, OpenCode, Hermes Agent and OpenClaw, and it reaches T3 Code through two of them. `it setup` asks for these versions or later:
+It has add-ons for Claude Code, Codex, Pi, OpenCode, Hermes Agent and OpenClaw, and it reaches T3 Code through two of them and Claude's desktop app through Claude Code's. `it setup` asks for these versions or later:
 
 | Agent app | The oldest version `it setup` installs into |
 |---|---|
@@ -49,7 +49,7 @@ When the conversation is idle, a click starts a turn. While a turn runs, the cli
 
 A click that starts a turn shows in the conversation as one short line: the page, what was done, and the action's id, as in `[It] "Chess" (chess): move, with details [action …]`. A thread in T3 Code and Codex's own queue are given the same line where they are not given the mark `[It]` alone, which [T3 Code](#t3-code) and [Codex](#codex) say more of. It stands there as your own message, which is the one way Claude Code shows a message from an add-on as it is, with no lines of its own around it. Nothing the page sent is put into that line: it holds the page's title, as the agent that made the page gave it and inside quotation marks that the title cannot close, the action's name, and nothing of what the action carried. Claude reads what the action carried with `it action`, where it arrives as data and not as something you said.
 
-The add-on needs Claude Code 2.1.287 or later, with mods turned on. There is no other route for an older Claude Code, or for one where mods are turned off: a click waits in the inbox there.
+The add-on needs Claude Code 2.1.287 or later, with mods turned on. There is no other route for an older Claude Code, or for one where mods are turned off: a click waits in the inbox there. In Claude's desktop app it is the app's own copy of Claude Code that has to be that new, as [Claude's desktop app](#claudes-desktop-app) says.
 
 ### A conversation that has been closed
 
@@ -142,6 +142,22 @@ T3 Code lets you switch a thread to another agent app, from Claude Code to Codex
 It asks this at most once a minute for a conversation that a thread runs. For one that it finds in no thread, it asks again three times, twenty seconds apart, since T3 Code may not yet have the new conversation's id from its app, and it does so whether or not anything more is heard from the conversation: a first turn in Codex may be over before then. After that it asks only as the conversation is heard from, at most every ten minutes. Where a conversation still in use held a hand-over back, the same three looks are had. It reads only the threads that are in the middle of a run or changed in the last ten minutes, at most eight of them, and only the thread it already knows of where it knows one. Where T3 Code is not running nothing is asked, and pages that changed hands stay where they went. A switch is seen only between Claude Code and Codex, and only once the new conversation's add-on has been heard from: in Codex, once its hooks have been approved. What T3 Code says of a thread names the conversations of about its last ten turns, so a conversation that the thread let go of more than ten turns before It heard from the new one keeps its pages. Following a switch has been tried against a stand-in for what T3 Code answers, and not yet in a real T3 Code thread.
 
 T3 Code shows Claude's reply to a click that the add-on handed over, and not the click's text; a click that was put to the thread is shown as the message it is. Delivery in the middle of a turn is not proven inside a T3 Code thread, for Claude Code or for Codex.
+
+### Claude's desktop app
+
+It has no add-on of its own for Claude's desktop app. The app's Code tab runs Claude Code, and the sessions it runs on your computer read the same `~/.claude` as Claude Code does in a terminal, so the add-on that `it setup` puts into Claude Code loads in them as well. It is put in with the `claude` command, which the desktop app does not install: where you use Claude Code only in the desktop app, install the command too, as [Anthropic's guide](https://code.claude.com/docs/en/setup) says, and run `it setup`. Where It finds the app's Claude Code and no `claude` command, `it setup` and `it status` say so.
+
+The app runs a copy of Claude Code of its own, which it keeps up to date itself and which can be another version than the `claude` command: `/status` in one of its sessions says which, on its Claude Code line. `it setup` looks only at the version of the `claude` command, and the add-on needs 2.1.287 or later in the app's copy too.
+
+A click reaches a conversation in the app while the app is running that conversation's Claude Code. Where the conversation is idle, the click starts a turn, which the app shows as it runs: the click's one short line as your message, then what Claude does and its answer. Where a command is running, the click joins that turn with the command's result, and the app shows no line of its own for it.
+
+The app does not run every conversation all the time. It starts a conversation's Claude Code when you send a message in it, and ends it when you quit the app, and it may end it sooner for a conversation that is not on screen. While it is not running, a click on one of the conversation's pages waits where the site shows it. Once the app runs the conversation again, the click is handed over within seconds and starts a turn there. A conversation that you open again after quitting the app runs once you send a message in it.
+
+On Linux and macOS, where Auto-wake is on, a click for a conversation that the app is not running reopens it with the `claude` command, as any closed conversation is reopened. That turn runs outside the app, which does not show it as it runs. Reopening a conversation of the desktop app has not been tried. On Windows, Auto-wake is not offered, and the click waits.
+
+A session that the app runs in WSL loads no plugins, as Anthropic's documentation says, so It's add-on is not in it, and neither is it in a cloud session. A click for such a conversation waits where the site shows it. A session over SSH runs Claude Code on the other machine, where It's add-on is in only if that machine has joined It and connected Claude Code; that has not been tried.
+
+What this section says of a click in the app's sessions on your computer has been seen on Windows 11, with the app's own Claude Code 2.1.309, and not on macOS or Linux.
 
 ### Pi
 
