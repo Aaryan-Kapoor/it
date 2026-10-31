@@ -24,7 +24,9 @@
  * ("sandbox_approval: false") until the person chooses "Ask for approval" under /permissions.
  * And nothing gets out of the sandbox as it comes: a port of this machine is refused, and so
  * is a socket in a folder. So the rule is what a person is told of, and the network is only
- * looked for, as something that also lets `it` through.
+ * looked for, as something that also lets `it` through. On Windows, Codex's elevated sandbox
+ * runs commands as accounts of its own, which It's folder is closed to, and there the network
+ * lets nothing through: the rule is the one way.
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import os from 'node:os'
@@ -155,12 +157,38 @@ export function codexGivesNetwork(config: string | null | false = codexConfig())
 }
 
 /**
- * Whether Codex lets `it` reach It, as far as what is on this machine says: by a rule that lets
- * `it` out of the sandbox, or by a sandbox that has the network. False where plainly neither.
+ * Whether Codex runs the commands its agent gives it as accounts of its own, which It's folder is
+ * closed to: its elevated sandbox on Windows does, chosen with `sandbox = "elevated"` under
+ * `[windows]`. Its other sandbox there runs them as the person, with less they may write, as the
+ * sandbox does elsewhere.
  */
-export function codexLetsItOut(config: string | null | false = codexConfig(), rule = codexRuleLetsItOut()): boolean | undefined {
+export function codexRunsApart(config: string | null | false = codexConfig(), platform: NodeJS.Platform = process.platform): boolean {
+  if (platform !== 'win32' || !config) return false
+  return bare(settings(config).get('windows.sandbox') ?? '') === 'elevated'
+}
+/** Whether Codex is set to run its agent's commands with no sandbox at all. */
+function codexFullAccess(config: string): boolean {
+  const all = settings(config)
+  const word = (key: string) => (all.has(key) ? bare(all.get(key)!) : undefined)
+  const chosen = word('default_permissions')
+  return chosen !== undefined ? chosen === ':danger-full-access' : word('sandbox_mode') === 'danger-full-access'
+}
+
+/**
+ * Whether Codex lets `it` reach It, as far as what is on this machine says: by a rule that lets
+ * `it` out of the sandbox, or by a sandbox that has the network. False where plainly neither. A
+ * sandbox that runs commands as accounts of its own is given the network to no end: `it` may not
+ * read It's folder there.
+ */
+export function codexLetsItOut(
+  config: string | null | false = codexConfig(),
+  rule = codexRuleLetsItOut(),
+  platform: NodeJS.Platform = process.platform,
+): boolean | undefined {
   if (rule) return true
-  return codexGivesNetwork(config)
+  const network = codexGivesNetwork(config)
+  if (network && config && codexRunsApart(config, platform) && !codexFullAccess(config)) return false
+  return network
 }
 
 const WHY = 'Codex runs the commands its agent gives it in a sandbox that cannot reach It on this machine, so `it` is stopped there'
