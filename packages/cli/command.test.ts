@@ -4293,8 +4293,9 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
 
   test('`it status` names Claude’s desktop app where it keeps a Claude Code of its own and there is no `claude` command to put the add-on in with', async () => {
     const m = await setUp()
-    // As the app leaves its folder of data on Linux once its Code tab has downloaded Claude Code
-    mkdirSync(path.join(m.home, '.config', 'Claude', 'claude-code', '2.1.309'), { recursive: true })
+    // As the app leaves its folder of data once its Code tab has downloaded Claude Code, where the system the test runs on keeps it
+    const data = process.platform === 'darwin' ? path.join(m.home, 'Library', 'Application Support') : path.join(m.home, '.config')
+    mkdirSync(path.join(data, 'Claude', 'claude-code', '2.1.309'), { recursive: true })
     const DESKTOP =
       'Claude Code: Claude’s desktop app is on this machine, and the sessions its Code tab runs here would load It’s add-on, but It puts that add-on in with the `claude` command, which this machine does not have. Install it as https://code.claude.com/docs/en/setup says, then open a new terminal and run `it setup` again.'
     const alone = await atTerminal(m, ['status'])
