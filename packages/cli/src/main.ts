@@ -80,7 +80,7 @@ import {
 } from './lib'
 import { joinedBefore, login, runsItsOwn } from './login'
 import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
-import { failure, forPerson } from './output'
+import { failure, foldRepeats, forPerson } from './output'
 import { gather, noteConversation, publish } from './publish'
 import { alone, asAdmin, nothingLeft, standing, startBackend } from './serve/backend'
 import { noteNetwork, readConfig } from './serve/config'
@@ -2242,15 +2242,12 @@ async function status(a: Args) {
  */
 async function keepRunning(a: Args, named: string, command: string, run: (line: (l: string) => void) => Promise<void>): Promise<never> {
   const log = text(a, 'log')
-  let last = ''
-  let repeats = 0
+  const fold = foldRepeats()
   if (service.supervised() && command === 'it serve') askShell((l) => line(l))
   const line = (l: string) => {
-    // The same line over and over (the network is down, say) is written once and counted
-    if (l === last && ++repeats % 300 !== 0) return
-    if (l !== last) repeats = 0
-    last = l
-    const stamped = `${new Date().toISOString()} ${l}${repeats ? ` (${repeats} more times)` : ''}`
+    const said = fold(l)
+    if (said === null) return
+    const stamped = `${new Date().toISOString()} ${said}`
     if (!log) return say(stamped)
     try {
       // Kept to a few megabytes: the newer half stays
