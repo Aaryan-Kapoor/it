@@ -4291,6 +4291,30 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
       },
     )
 
+  test('`it status` names Claude’s desktop app where it keeps a Claude Code of its own and there is no `claude` command to put the add-on in with', async () => {
+    const m = await setUp()
+    // As the app leaves its folder of data on Linux once its Code tab has downloaded Claude Code
+    mkdirSync(path.join(m.home, '.config', 'Claude', 'claude-code', '2.1.309'), { recursive: true })
+    const DESKTOP =
+      'Claude Code: Claude’s desktop app is on this machine, and the sessions its Code tab runs here would load It’s add-on, but It puts that add-on in with the `claude` command, which this machine does not have. Install it as https://code.claude.com/docs/en/setup says, then open a new terminal and run `it setup` again.'
+    const alone = await atTerminal(m, ['status'])
+    expect(alone.code).toBe(0)
+    const lines = alone.shown.split('\n')
+    expect(lines.slice(lines.indexOf('No agent app was found on this machine.'), lines.indexOf('No agent app was found on this machine.') + 2)).toEqual([
+      'No agent app was found on this machine.',
+      DESKTOP,
+    ])
+    // Left out of what is looked for, Claude Code is not spoken of
+    expect((await atTerminal(m, ['status'], { IT_HARNESSES: 'pi' })).shown).not.toContain('desktop app')
+    // With a `claude` command there, setup has what it needs, and nothing more is said of the app
+    const app = path.join(m.bin, 'claude')
+    writeFileSync(app, `#!${process.execPath}\nif (process.argv[2] === '--version') console.log('2.1.314 (Claude Code)'); else console.log('[]')\n`)
+    chmodSync(app, 0o755)
+    const found = await atTerminal(m, ['status'])
+    expect(found.shown).toContain('Claude Code is not connected.')
+    expect(found.shown).not.toContain('desktop app')
+  })
+
   test('`it status` on a machine that joined an It says that it is running, where its site is, and which agent apps are connected', async () => {
     const m = machine(false)
     systemAnswers(m)
