@@ -111,6 +111,7 @@ import {
   asLoaded,
   CODEX_RULE_FILE,
   CODEX_SHUT,
+  claudeDesktopHere,
   codexLetsItOut,
   codexRuleLetsItOut,
   detectAll,
@@ -149,6 +150,19 @@ const inApp = (h: LoadedStatus) => h.addon === 'connected' || h.addon === 'outda
 function codexShut(found: LoadedStatus[]): string | null {
   if (!found.some((h) => h.id === 'codex' && (inApp(h) || h.addon === 'needs_approval'))) return null
   return codexLetsItOut() === false ? `Codex: ${CODEX_SHUT}` : null
+}
+/**
+ * What a person is told where Claude's desktop app has a Claude Code of its own here and no
+ * `claude` command was found: the app's sessions would load the add-on, and the add-on is put in
+ * with that command alone. Null where Claude Code was found, or was not looked for at all.
+ */
+function claudeDesktopOnly(found: HarnessStatus[]): string | null {
+  if (found.some((h) => h.id === 'claude-code')) return null
+  const only = process.env.IT_HARNESSES?.split(',').map((x) => x.trim())
+  if (only && !only.includes('claude-code')) return null
+  return claudeDesktopHere()
+    ? 'Claude Code: Claude’s desktop app is on this machine, and the sessions its Code tab runs here would load It’s add-on, but It puts that add-on in with the `claude` command, which this machine does not have. Install it as https://code.claude.com/docs/en/setup says, then open a new terminal and run `it setup` again.'
+    : null
 }
 /** What a person is told of the agent apps on this machine: each one that was found, and whether It is connected to it. */
 /**
@@ -209,7 +223,9 @@ const restartSaid = (outcomes: AddonOutcome[], before: Set<Harness>): string | n
   restartLine(outcomes.filter((o) => o.did === 'installed' && o.restart && before.has(o.id)).map((o) => KNOWN[o.id].label))
 
 function appsSaid(found: LoadedStatus[], advise = true, withCodex = true): string[] {
-  if (!found.length) return ['No agent app was found on this machine.']
+  // Said as long as it is so, as Codex's is: otherwise someone who uses Claude Code in its desktop app alone is told only that no app was found
+  const desktop = claudeDesktopOnly(found)
+  if (!found.length) return ['No agent app was found on this machine.', ...(desktop ? [desktop] : [])]
   const lines = found.map((h) => {
     const app = KNOWN[h.id].label
     if (inApp(h)) return h.runtime ? `${app}: ${h.runtime.detail}` : `${app}'s add-on is installed. Its loaded code has not been verified.`
@@ -219,6 +235,7 @@ function appsSaid(found: LoadedStatus[], advise = true, withCodex = true): strin
   // Said each time it is asked for as long as it is so: the first thing a Codex user would otherwise learn of it is a page that never appears
   const shut = withCodex ? codexShut(found) : null
   if (shut) lines.push(shut)
+  if (desktop) lines.push(desktop)
   if (advise && found.some((h) => h.addon === 'not_connected' && supported(h.id))) lines.push('Run `it setup` to choose which agent apps are connected.')
   return lines
 }
@@ -1614,6 +1631,8 @@ async function settingUpLed(a: Args, begunAlready = false) {
     // An app whose add-on was brought up to date goes on with the one it loaded until it is restarted
     const restart = restartSaid(outcomes, connectedBefore)
     if (restart) left.push(restart)
+    const desktop = claudeDesktopOnly(after)
+    if (desktop) left.push(desktop)
     // That reopening came on with this setup, said once: not again each time setup is run
     const waking = wakesSaid(cameOn(woken, wokenBefore, connectedBefore).filter((id) => on.some((h) => h.id === id)))
     if (waking) left.push(waking)
