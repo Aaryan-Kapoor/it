@@ -120,13 +120,19 @@ describe('a command that may not read It’s folder', () => {
     rmSync(folder, { recursive: true, force: true })
   })
 
-  test.skipIf(!windows && process.getuid?.() === 0)('is told it is kept out of It’s folder, and not that It is not set up', () => {
+  test('is told it is kept out of It’s folder, and not that It is not set up', (context) => {
     writeFileSync(path.join(folder, 'machine.json'), JSON.stringify({ id: 'm', name: 'here', key: {} }))
     expect(keptFromHome()).toBe(false)
     expect(notSetUp().code).toBe('not_set_up')
     // As Codex's sandbox on Windows runs a command: as an account the record is closed to
     if (windows) icacls(path.join(folder, 'machine.json'), '/deny', `*${ownSid()}:(RD)`)
     else chmodSync(path.join(folder, 'machine.json'), 0)
+    // An account that reads past what a file says, as root does and as an administrator with the
+    // right to make backups does, cannot be shown what another account is refused
+    try {
+      readFileSync(path.join(folder, 'machine.json'))
+      return context.skip()
+    } catch {}
     expect(keptFromHome()).toBe(true)
     const said = notSetUp()
     expect(said.code).toBe('blocked')
