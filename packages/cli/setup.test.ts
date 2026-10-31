@@ -39,6 +39,7 @@ import {
   alone,
   CODEX_RULE,
   CODEX_SHUT,
+  claudeDesktopHere,
   codexGivesNetwork,
   codexLetsItOut,
   codexRuleLetsItOut,
@@ -3319,5 +3320,56 @@ describe('whether Codex, as it is set, lets `it` reach It', () => {
       vi.resetModules()
       rmSync(custom, { recursive: true, force: true })
     }
+  })
+})
+
+describe('Claude’s desktop app, which keeps a Claude Code of its own', () => {
+  /** A folder of data as the app leaves it once its Code tab has downloaded a version of Claude Code into it. */
+  const downloaded = (data: string) => mkdirSync(path.join(data, 'Claude', 'claude-code', '2.1.309', '9078b9c1d466'), { recursive: true })
+  const folder = (name: string) => {
+    const made = path.join(tmp, name)
+    mkdirSync(made, { recursive: true })
+    return made
+  }
+
+  test('is found on Linux in the folder XDG_CONFIG_HOME names, and else in ~/.config', () => {
+    expect(claudeDesktopHere('linux', {}, person)).toBe(false)
+    downloaded(path.join(person, '.config'))
+    expect(claudeDesktopHere('linux', {}, person)).toBe(true)
+    const xdg = folder('xdg')
+    expect(claudeDesktopHere('linux', { XDG_CONFIG_HOME: xdg }, person)).toBe(false)
+    downloaded(xdg)
+    expect(claudeDesktopHere('linux', { XDG_CONFIG_HOME: xdg }, person)).toBe(true)
+    // A folder named by a relative path is no folder of the person's, so ~/.config is looked in as if none were named
+    expect(claudeDesktopHere('linux', { XDG_CONFIG_HOME: 'xdg' }, folder('elsewhere'))).toBe(false)
+    expect(claudeDesktopHere('linux', { XDG_CONFIG_HOME: 'xdg' }, person)).toBe(true)
+  })
+
+  test('is found on macOS in ~/Library/Application Support', () => {
+    const mac = folder('mac')
+    expect(claudeDesktopHere('darwin', {}, mac)).toBe(false)
+    downloaded(path.join(mac, 'Library', 'Application Support'))
+    expect(claudeDesktopHere('darwin', {}, mac)).toBe(true)
+  })
+
+  test('is found on Windows in the folder APPDATA names, and else in the roaming folder under the person’s own', () => {
+    const win = folder('win')
+    const roaming = folder('roaming')
+    expect(claudeDesktopHere('win32', { APPDATA: roaming }, win)).toBe(false)
+    downloaded(roaming)
+    expect(claudeDesktopHere('win32', { APPDATA: roaming }, win)).toBe(true)
+    expect(claudeDesktopHere('win32', {}, win)).toBe(false)
+    downloaded(path.join(win, 'AppData', 'Roaming'))
+    expect(claudeDesktopHere('win32', {}, win)).toBe(true)
+  })
+
+  test('is not taken to be there for a folder that holds no version of Claude Code, or a file where the folder would be', () => {
+    const empty = folder('empty')
+    mkdirSync(path.join(empty, '.config', 'Claude', 'claude-code', 'staging'), { recursive: true })
+    expect(claudeDesktopHere('linux', {}, empty)).toBe(false)
+    const file = folder('file')
+    mkdirSync(path.join(file, '.config', 'Claude'), { recursive: true })
+    writeFileSync(path.join(file, '.config', 'Claude', 'claude-code'), '')
+    expect(claudeDesktopHere('linux', {}, file)).toBe(false)
   })
 })

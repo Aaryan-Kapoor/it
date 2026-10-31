@@ -52,6 +52,7 @@ import {
   writePrivate,
 } from './src/lib'
 import { doorAddress } from './src/login'
+import { foldRepeats } from './src/output'
 import { gather, projectKey, read } from './src/publish'
 import {
   askToStop,
@@ -73,6 +74,40 @@ import {
   windowsScript,
   writeDefinition,
 } from './src/service'
+
+describe('a line the service says over and over', () => {
+  const MINUTE = 60_000
+  test('is written once, and left out while it comes again within a minute of that copy', () => {
+    const fold = foldRepeats()
+    expect(fold('could not reach It', 0)).toBe('could not reach It')
+    for (let at = 1000; at < MINUTE; at += 1000) expect(fold('could not reach It', at)).toBeNull()
+  })
+  test('is written again with how many times it was said once a minute has gone by, while it goes on', () => {
+    const fold = foldRepeats()
+    fold('could not reach It', 0)
+    fold('could not reach It', 1000)
+    fold('could not reach It', 2000)
+    expect(fold('could not reach It', MINUTE)).toBe('could not reach It (3 more times)')
+    expect(fold('could not reach It', MINUTE + 1000)).toBeNull()
+  })
+  test('is written as it is when it comes again after a quiet minute, as a conversation that starts listening again does', () => {
+    const fold = foldRepeats()
+    expect(fold('a claude-code conversation is listening (6ee03793)', 0)).toBe('a claude-code conversation is listening (6ee03793)')
+    expect(fold('a claude-code conversation is listening (6ee03793)', 20 * MINUTE)).toBe('a claude-code conversation is listening (6ee03793)')
+  })
+  test('is written again with its count after 300 in a row, however fast they come', () => {
+    const fold = foldRepeats()
+    fold('could not reach It', 0)
+    for (let n = 1; n < 300; n++) expect(fold('could not reach It', n)).toBeNull()
+    expect(fold('could not reach It', 300)).toBe('could not reach It (300 more times)')
+  })
+  test('is written again as soon as another line has come between', () => {
+    const fold = foldRepeats()
+    fold('could not reach It', 0)
+    expect(fold('a codex conversation is listening (1a2b3c4d)', 1000)).toBe('a codex conversation is listening (1a2b3c4d)')
+    expect(fold('could not reach It', 2000)).toBe('could not reach It')
+  })
+})
 
 describe('command line', () => {
   test('positional words, flags with values, and switches', () => {

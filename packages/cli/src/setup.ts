@@ -1355,6 +1355,29 @@ async function versionOf(id: Harness): Promise<string | undefined> {
   }
 }
 
+/**
+ * Whether Claude's desktop app keeps a Claude Code of its own on this machine. Its Code tab
+ * downloads one the first time it is used, into a folder for each version in the app's own
+ * folder of data, wherever Electron puts that on each system, and runs it for the sessions it
+ * holds on this machine. Those load the plugins that `claude plugin install` puts in, as the
+ * terminal's sessions do. Only the folder is looked for: nothing in it is run.
+ */
+export function claudeDesktopHere(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, home = os.homedir()): boolean {
+  const data =
+    platform === 'win32'
+      ? env.APPDATA || path.join(home, 'AppData', 'Roaming')
+      : platform === 'darwin'
+        ? path.join(home, 'Library', 'Application Support')
+        : env.XDG_CONFIG_HOME && path.isAbsolute(env.XDG_CONFIG_HOME)
+          ? env.XDG_CONFIG_HOME
+          : path.join(home, '.config')
+  try {
+    return readdirSync(path.join(data, 'Claude', 'claude-code')).some((name) => /^\d+\.\d+\.\d+$/.test(name))
+  } catch {
+    return false
+  }
+}
+
 /** Where a harness keeps its settings as things stand now: where an add-on installed now would go. */
 async function whereNow(adapter: Pick<Adapter, 'profile' | 'folder'> | undefined): Promise<Place> {
   // Each is noted by its whole address. One that depends on where a command is run from would

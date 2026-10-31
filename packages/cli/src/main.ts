@@ -80,7 +80,7 @@ import {
 } from './lib'
 import { joinedBefore, login, runsItsOwn } from './login'
 import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
-import { failure, forPerson } from './output'
+import { failure, foldRepeats, forPerson } from './output'
 import { gather, noteConversation, publish } from './publish'
 import { alone, asAdmin, nothingLeft, standing, startBackend } from './serve/backend'
 import { noteNetwork, readConfig } from './serve/config'
@@ -93,6 +93,7 @@ import {
   AFTER,
   CODEX_RULE_FILE,
   CODEX_SHUT,
+  claudeDesktopHere,
   codexLetsItOut,
   codexRuleLetsItOut,
   detectAll,
@@ -126,6 +127,19 @@ const tell = (lines: (string | undefined)[]): void => written(process.stdout, `$
 function codexShut(found: HarnessStatus[]): string | null {
   if (!found.some((h) => h.id === 'codex' && (h.addon === 'connected' || h.addon === 'needs_approval'))) return null
   return codexLetsItOut() === false ? `Codex: ${CODEX_SHUT}` : null
+}
+/**
+ * What a person is told where Claude's desktop app has a Claude Code of its own here and no
+ * `claude` command was found: the app's sessions would load the add-on, and the add-on is put in
+ * with that command alone. Null where Claude Code was found, or was not looked for at all.
+ */
+function claudeDesktopOnly(found: HarnessStatus[]): string | null {
+  if (found.some((h) => h.id === 'claude-code')) return null
+  const only = process.env.IT_HARNESSES?.split(',').map((x) => x.trim())
+  if (only && !only.includes('claude-code')) return null
+  return claudeDesktopHere()
+    ? 'Claude Code: Claude’s desktop app is on this machine, and the sessions its Code tab runs here would load It’s add-on, but It puts that add-on in with the `claude` command, which this machine does not have. Install it as https://code.claude.com/docs/en/setup says, then open a new terminal and run `it setup` again.'
+    : null
 }
 /** What a person is told of the agent apps on this machine: each one that was found, and whether It is connected to it. */
 /**
@@ -172,7 +186,9 @@ function wakesSaid(woken: string[]): string | null {
 }
 
 function appsSaid(found: HarnessStatus[], advise = true, withCodex = true): string[] {
-  if (!found.length) return ['No agent app was found on this machine.']
+  // Said as long as it is so, as Codex's is: otherwise someone who uses Claude Code in its desktop app alone is told only that no app was found
+  const desktop = claudeDesktopOnly(found)
+  if (!found.length) return ['No agent app was found on this machine.', ...(desktop ? [desktop] : [])]
   const lines = found.map((h) => {
     const app = KNOWN[h.id].label
     if (h.addon === 'connected') return h.runtime ? `${app}: ${h.runtime.detail}` : `${app}'s add-on is installed. Its loaded code has not been verified.`
@@ -182,6 +198,7 @@ function appsSaid(found: HarnessStatus[], advise = true, withCodex = true): stri
   // Said each time it is asked for as long as it is so: the first thing a Codex user would otherwise learn of it is a page that never appears
   const shut = withCodex ? codexShut(found) : null
   if (shut) lines.push(shut)
+  if (desktop) lines.push(desktop)
   if (advise && found.some((h) => h.addon === 'not_connected' && supported(h.id))) lines.push('Run `it setup` to choose which agent apps are connected.')
   return lines
 }
@@ -1544,6 +1561,8 @@ async function settingUpLed(a: Args, begunAlready = false) {
     // What decides whether Codex's first page appears at all is said by itself, and first
     const shut = codexShut(after)
     if (shut) left.push(shut)
+    const desktop = claudeDesktopOnly(after)
+    if (desktop) left.push(desktop)
     // That reopening came on with this setup, said once: not again each time setup is run
     const waking = wakesSaid(cameOn(woken, wokenBefore, connectedBefore).filter((id) => on.some((h) => h.id === id)))
     if (waking) left.push(waking)
@@ -2223,15 +2242,12 @@ async function status(a: Args) {
  */
 async function keepRunning(a: Args, named: string, command: string, run: (line: (l: string) => void) => Promise<void>): Promise<never> {
   const log = text(a, 'log')
-  let last = ''
-  let repeats = 0
+  const fold = foldRepeats()
   if (service.supervised() && command === 'it serve') askShell((l) => line(l))
   const line = (l: string) => {
-    // The same line over and over (the network is down, say) is written once and counted
-    if (l === last && ++repeats % 300 !== 0) return
-    if (l !== last) repeats = 0
-    last = l
-    const stamped = `${new Date().toISOString()} ${l}${repeats ? ` (${repeats} more times)` : ''}`
+    const said = fold(l)
+    if (said === null) return
+    const stamped = `${new Date().toISOString()} ${said}`
     if (!log) return say(stamped)
     try {
       // Kept to a few megabytes: the newer half stays

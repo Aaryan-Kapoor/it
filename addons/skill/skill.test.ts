@@ -317,7 +317,7 @@ describe('the agent skill', () => {
         .join(', ')} and \`${nine.at(-1)}\`, speak in sentences to a person at a terminal.`,
     )
     expect(skill).toContain('What you run is known to be an agent’s, so you get JSON from those too, and `--json` asks for it')
-    expect(main).toContain("import { failure, forPerson } from './output'")
+    expect(main).toMatch(/import \{[^}]*\bforPerson\b[^}]*\} from '\.\/output'/)
     expect(source('../../packages/cli/src/output.ts')).toMatch(
       /const forPerson = \(a: Args\): boolean => process\.stdout\.isTTY === true && a\.flags\.json !== true && sessionAsked\(\) === undefined/,
     )
