@@ -18,3 +18,28 @@ export function failure(p: Problem, a: Args): void {
     if (p.hint) say(p.hint)
   } else say(JSON.stringify({ error: { code: p.code, message: p.message, ...(p.hint ? { hint: p.hint } : {}) } }))
 }
+
+/**
+ * Folds a line that a long-running command says over and over (the network is down, say) into a
+ * count, so that its log is not filled with it. A line that is the same as the one before is
+ * left out while it comes within a minute of the copy last written, up to 300 in a row. Past
+ * either, it is written again, with how many times it was said since that copy. One that comes
+ * again after a quiet minute is news, such as a conversation that is listening again, and is
+ * written as it is. Answers what to write, or null where the line is left out.
+ */
+export function foldRepeats(withinMs = 60_000, most = 300): (line: string, now?: number) => string | null {
+  let last: string | undefined
+  let writtenAt = 0
+  let folded = 0
+  return (line, now = Date.now()) => {
+    if (line === last && now - writtenAt < withinMs && folded + 1 < most) {
+      folded += 1
+      return null
+    }
+    const said = line === last && folded ? `${line} (${folded + 1} more times)` : line
+    last = line
+    writtenAt = now
+    folded = 0
+    return said
+  }
+}
