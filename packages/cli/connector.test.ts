@@ -4468,6 +4468,117 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect((await waitingFor(4))?.clicks?.map((c) => c.id)).toEqual(['click-4'])
     expect((await waitingFor(4))?.clicks).toBeUndefined()
   })
+
+  test.each(['open', 'closed'] as const)(
+    'a conversation T3 Code holds in a thread goes to that thread and nowhere else: while T3 Code is not running, its click waits, though Codex has the conversation %s, and goes to the thread once T3 Code is running again',
+    async (state) => {
+      withT3Code()
+      stand.t3.threads.set('thread-1', 't3-thread-a')
+      await start()
+      if (state === 'closed') stand.closed.add('thread-1')
+      stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+      offered(click(1))
+      await until(() => stand.t3.sent.length === 1)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-a')
+      await until(() => called('delivery:handedOff').includes('click-1'))
+      // Written down, for the connector that comes next
+      expect(JSON.parse(readFileSync(path.join(home, 't3-threads.json'), 'utf8'))).toEqual({ 'codex:thread-1': 't3-thread-a' })
+      // T3 Code stops, and is seen to have stopped within a few seconds: the next click is neither
+      // put into Codex's queue nor reopened, and waits
+      stand.t3.running = false
+      await pause(5200)
+      offered({ ...click(1), id: 'click-1-later' })
+      await pause(2500)
+      expect(stand.codex).toEqual([])
+      expect(called('delivery:claim')).not.toContain('click-1-later')
+      expect(stand.calls.some((c) => c.name === 'machines:wakeFailed' || c.name === 'machines:runBegan')).toBe(false)
+      expect(said.some((line) => line.includes('waits, since T3 Code is not running here'))).toBe(true)
+      // And it goes to the thread once T3 Code is running again, which starts the thread's Codex itself
+      stand.t3.running = true
+      await until(() => stand.t3.sent.length === 2, 12_000)
+      expect(stand.t3.sent[1]!.thread).toBe('t3-thread-a')
+      expect(stand.codex).toEqual([])
+    },
+    40_000,
+  )
+
+  test('the thread a conversation is held in is known across a restart of the connector: its click waits while T3 Code is not running, and then goes to that thread without T3 Code being asked which', async () => {
+    withT3Code()
+    stand.t3.threads.set('thread-1', 't3-thread-a')
+    await start()
+    offered(click(1))
+    await until(() => stand.t3.sent.length === 1)
+    await until(() => called('delivery:handedOff').includes('click-1'))
+    const previousHome = home
+    await stop?.()
+    stop = null
+    stand.calls.length = 0
+    stand.watching.clear()
+    stand.t3.running = false
+    stand.t3.threads.clear()
+    stand.t3.asked.length = 0
+    await start('socket', {}, () => {}, previousHome)
+    offered({ ...click(1), id: 'click-1-after' })
+    await pause(2500)
+    expect(stand.codex).toEqual([])
+    expect(called('delivery:claim')).toEqual([])
+    stand.t3.running = true
+    await until(() => stand.t3.sent.length === 2, 12_000)
+    expect(stand.t3.sent[1]!.thread).toBe('t3-thread-a')
+    expect(stand.t3.asked).toEqual([])
+  }, 30_000)
+
+  test('a conversation held in a thread whose message T3 Code would not take waits for the thread, and is not put into Codex’s queue', async () => {
+    withT3Code()
+    stand.t3.threads.set('thread-1', 't3-thread-a')
+    stand.t3.refusing = 'T3 Code refused the message'
+    await start()
+    offered(click(1))
+    await until(() => stand.t3.refused.length === 1)
+    await pause(2500)
+    expect(stand.codex).toEqual([])
+    expect(called('delivery:handedOff')).toEqual([])
+    expect(said.some((line) => line.includes('waits, since T3 Code did not take the last one'))).toBe(true)
+  })
+
+  test('a Claude Code conversation is not reopened while T3 Code is running and has yet to say which of its threads holds it, and is once T3 Code says that none does', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+    stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
+    const claude = { ...click(9), session: { harness: 'claude-code', id: '11111111-2222-4333-8444-555555555555' } }
+    offered(claude)
+    await until(() => stand.t3.asked.length === 1)
+    // Past the five seconds a click waits for T3 Code, it is still not reopened beside a thread that may hold it
+    await pause(7000)
+    expect(called('delivery:claim')).toEqual([])
+    expect(stand.calls.some((c) => c.name === 'machines:wakeFailed' || c.name === 'machines:runBegan')).toBe(false)
+    // T3 Code says that no thread holds it: it is reopened as any closed conversation is. This
+    // machine was never told its folder, which is said, and stops it there
+    stand.t3.asked[0]!.answer(null)
+    await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'), 10_000)
+    expect(called('delivery:claim')).toContain('click-9')
+    expect(stand.t3.sent).toEqual([])
+  }, 30_000)
+
+  test('a note of the threads that cannot be read is left as it is and said, and a Codex conversation then goes only to a thread T3 Code finds for it until the note is taken away', async () => {
+    withT3Code()
+    stand.t3.threads.set('thread-1', 't3-thread-a')
+    await start('socket', {}, (home) => writeFileSync(path.join(home, 't3-threads.json'), 'not a note'))
+    expect(said.some((line) => line.includes('t3-threads.json') && line.includes('record_unread'))).toBe(true)
+    offered(click(1), click(2))
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-a')
+    // T3 Code has no thread of the second, which some Codex has open: it waits all the same
+    await until(() => stand.t3.asked.length === 2)
+    await pause(2500)
+    expect(stand.codex).toEqual([])
+    expect(readFileSync(path.join(home, 't3-threads.json'), 'utf8')).toBe('not a note')
+    // Taken away, the note is read as empty, and the click goes into Codex's queue as before
+    rmSync(path.join(home, 't3-threads.json'))
+    await until(() => stand.codex.length === 1, 10_000)
+    expect(stand.codex[0]!.args).toContain('--thread=thread-2')
+  }, 30_000)
 })
 
 describe.skipIf(process.platform === 'win32')('a thread of T3 Code that is switched to another agent app', () => {
