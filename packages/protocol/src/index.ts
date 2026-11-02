@@ -208,13 +208,17 @@ export const CODEX_MIN_VERSION = '0.160.0'
 export const WAKES: readonly Harness[] = ['claude-code', 'codex', 'pi', 'opencode', 'hermes']
 /**
  * Whether It reopens a closed conversation on a machine of this system, as the machine names
- * its system (`process.platform`). Not on Windows yet: a conversation reopened there cannot be
- * found again and ended after the service has died, which is what makes running an agent with
- * nobody watching safe to offer. A machine that has not said what it runs on is not taken to
- * be one of the systems this holds on: it says so in its first report, a moment after its
- * connector starts, and an It from before any machine said is to be updated first.
+ * its system (`process.platform`), and as the machine says of itself (`reopens`). On Linux and
+ * macOS the system is enough. On Windows a machine reopens conversations only where it says it
+ * does, since an It from before it did there runs on Windows too: there a reopened conversation
+ * is kept in a job of the system's, by which it is found again and ended, which is what makes
+ * running an agent with nobody watching safe to offer, and an older It has no such job. A
+ * machine that has not said what it runs on is not taken to be one of the systems this holds
+ * on: it says so in its first report, a moment after its connector starts, and an It from
+ * before any machine said is to be updated first.
  */
-export const wakesOn = (system: string | null | undefined): boolean => system === 'linux' || system === 'darwin'
+export const wakesOn = (system: string | null | undefined, reopens?: boolean | null): boolean =>
+  system === 'linux' || system === 'darwin' || (system === 'win32' && reopens === true)
 /**
  * How long an upgrade that a person asked for on the site is taken to be at work. One that has
  * said nothing more by then was cut short (its machine went off, or the program that was to
@@ -224,7 +228,7 @@ export const UPGRADE_MS = 15 * 60_000
 /** What a person is told where they would switch reopening on for a machine It does not reopen conversations on. */
 export const noWakeHere = (system: string | null | undefined): string =>
   system === 'win32'
-    ? 'It does not reopen closed conversations on a Windows machine yet. What is done on a page waits until its conversation is open again.'
+    ? 'This Windows machine runs an It that does not reopen closed conversations there. Update It on it to have them reopened. Until then, what is done on a page waits until its conversation is open again.'
     : 'This machine has not said which system it runs, so It reopens no closed conversation on it. It says so when its connector starts: update It on that machine if it does not.'
 /**
  * The agent apps with a queue of their own, which takes a click whether or not its conversation

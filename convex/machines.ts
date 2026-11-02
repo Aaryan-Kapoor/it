@@ -23,8 +23,9 @@ const view = (m: Doc<'machines'>) => ({
   upgrade: m.upgrade ?? null,
   harnesses: m.harnesses ?? [],
   wanted: m.wanted ?? [],
+  reopens: m.reopens ?? false,
   // Only where It reopens conversations at all: what was switched on for a machine of another system says nothing
-  wakes: wakesOn(m.system) ? (m.wakes ?? []) : [],
+  wakes: wakesOn(m.system, m.reopens) ? (m.wakes ?? []) : [],
   runs: m.runs ?? [],
 })
 
@@ -90,8 +91,13 @@ export const rename = mutation({
  * where nothing changes, so that a machine set up before this, and one whose setup is run
  * again, keeps its switches as they are.
  */
-function wakingToo(m: Doc<'machines'>, wanted: string[], system: string | undefined = m.system): NonNullable<Doc<'machines'>['wakes']> | undefined {
-  if (system !== undefined && !wakesOn(system)) return undefined
+function wakingToo(
+  m: Doc<'machines'>,
+  wanted: string[],
+  system: string | undefined = m.system,
+  reopens: boolean | undefined = m.reopens,
+): NonNullable<Doc<'machines'>['wakes']> | undefined {
+  if (system !== undefined && !wakesOn(system, reopens)) return undefined
   const had = new Set(m.wanted ?? [])
   const now = m.wakes ?? []
   const fresh = wanted.filter(
@@ -129,7 +135,7 @@ export const wake = mutation({
     const { user } = await requireOwner(ctx)
     const m = await ownMachine(ctx, user._id, machineId)
     if (!(WAKES as readonly string[]).includes(harness)) fail('invalid', 'It cannot reopen a closed conversation of that agent app.')
-    if (on && !wakesOn(m.system)) fail('invalid', noWakeHere(m.system))
+    if (on && !wakesOn(m.system, m.reopens)) fail('invalid', noWakeHere(m.system))
     if (
       on &&
       (!(m.wanted ?? []).includes(harness) || !(m.harnesses ?? []).some((h) => h.id === harness && (h.addon === 'connected' || h.addon === 'needs_approval')))
@@ -223,7 +229,8 @@ export const runBegan = mutation({
     // And reopening may have been switched off for this app since the machine last heard: it
     // is asked here, where it is kept, and not only of what the machine remembers of it. (A
     // connector that names no clicks is one from before this was asked, and is taken at its word)
-    if (ids !== undefined && !(wakesOn(machine.system) && (machine.wakes ?? []).some((w) => w.harness === s.harness))) return { stopped: false, off: true }
+    if (ids !== undefined && !(wakesOn(machine.system, machine.reopens) && (machine.wakes ?? []).some((w) => w.harness === s.harness)))
+      return { stopped: false, off: true }
     const others = (machine.runs ?? []).filter((r) => r.harness !== s.harness || r.sessionId !== s.id)
     await ctx.db.patch(machine._id, {
       runs: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), since: Date.now(), ...(run ? { run: run.slice(0, 64) } : {}) }].slice(
@@ -270,22 +277,53 @@ export const wakeFailed = mutation({
 
 /**
  * Which harnesses are to be connected, chosen on the machine itself by `it setup`, which also
- * says what system the machine runs: setup is run before any connector has reported it.
- * Answers with the apps of them that It reopens closed conversations of on this machine from
- * here on, for setup to say so to the person.
+ * says what system the machine runs, and on Windows that it reopens closed conversations there:
+ * setup is run before any connector has reported either. Answers with the apps of them that It
+ * reopens closed conversations of on this machine from here on, for setup to say so to the person.
  */
 export const choose = mutation({
-  args: { harnesses: v.array(v.string()), system: v.optional(v.string()) },
-  handler: async (ctx, { harnesses, system }) => {
+  args: { harnesses: v.array(v.string()), system: v.optional(v.string()), reopens: v.optional(v.boolean()) },
+  handler: async (ctx, { harnesses, system, reopens }) => {
     const { machine } = await requireMachine(ctx)
     const known = [...new Set(harnesses.filter((h) => (HARNESSES as readonly string[]).includes(h)))]
     const on = system === undefined ? machine.system : system.slice(0, 20)
-    const wakes = wakingToo(machine, known, on)
-    await ctx.db.patch(machine._id, { wanted: known, ...(wakes ? { wakes } : {}), ...(on !== machine.system ? { system: on } : {}) })
-    const woken = wakesOn(on) ? (wakes ?? machine.wakes ?? []).map((w) => w.harness).filter((h) => known.includes(h)) : []
+    // What the setup says of it is so, and a setup that does not say is of an It that does not
+    // reopen conversations on Windows: one that does says so whenever the It it tells takes it
+    const can = reopens || undefined
+    const first = firstWord(machine, on, can)
+    const was = first ? { ...machine, ...first } : machine
+    const wakes = wakingToo(was, known, on, can) ?? first?.wakes
+    await ctx.db.patch(machine._id, {
+      wanted: known,
+      ...(wakes ? { wakes } : {}),
+      ...(first ? { reopensFrom: first.reopensFrom } : {}),
+      ...(on !== machine.system ? { system: on } : {}),
+      ...(can !== machine.reopens ? { reopens: can } : {}),
+    })
+    const woken = wakesOn(on, can) ? (wakes ?? was.wakes ?? []).map((w) => w.harness).filter((h) => known.includes(h)) : []
     return { wakes: woken }
   },
 })
+
+/**
+ * What is kept of a machine's switches where a machine on Windows says that it reopens
+ * conversations there and did not say so before, and since when it has said so. Undefined where
+ * nothing changes. What was switched on for it before it first said so never reopened anything,
+ * and may have been noted long ago, by an It from before machines said what they run, which
+ * switched it on whatever the system. Let stand, it would come on now, and reach back to what
+ * was done then. So it is let go of, and only the person, or a setup that connects an app
+ * afresh, switches it on. What was switched on since, before an It that does not say so ran
+ * there for a while, stays as it was.
+ */
+function firstWord(
+  m: Doc<'machines'>,
+  system: string | undefined,
+  reopens: boolean | undefined,
+): { wakes: NonNullable<Doc<'machines'>['wakes']>; reopensFrom: number } | undefined {
+  if (system !== 'win32' || reopens !== true || m.reopens === true) return undefined
+  const from = m.reopensFrom ?? Date.now()
+  return { wakes: (m.wakes ?? []).filter((w) => w.since >= from), reopensFrom: from }
+}
 
 /** The machine gives up its own access. Its key is useless from here on, and what descends from it goes with it, as when the person revokes it. */
 export const leave = mutation({
@@ -385,8 +423,15 @@ export const inventory = mutation({
 
 /** The connector reports what it found on the machine, and that it is alive. */
 export const report = mutation({
-  args: { connectorVersion: v.string(), harnesses: found, latest: v.optional(v.string()), system: v.optional(v.string()), paused: v.optional(v.string()) },
-  handler: async (ctx, { connectorVersion, harnesses, latest, system, paused }) => {
+  args: {
+    connectorVersion: v.string(),
+    harnesses: found,
+    latest: v.optional(v.string()),
+    system: v.optional(v.string()),
+    paused: v.optional(v.string()),
+    reopens: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { connectorVersion, harnesses, latest, system, paused, reopens }) => {
     const { machine } = await requireMachine(ctx)
     const clean = kept(harnesses)
     // The newest version it has learned of is kept until it learns of another: a report made before it has looked says nothing of it
@@ -401,12 +446,18 @@ export const report = mutation({
     // its reports was refused, which a moment without a connection is enough for. Only a
     // connector of another version that does not say is taken not to be paused.
     const held = paused === undefined ? (moved ? undefined : machine.paused) : paused ? paused.slice(0, 20) : undefined
+    // That it reopens closed conversations on Windows, likewise: kept from a report that does not
+    // say, as the plainer report does not, and only where it comes from the same version
+    const can = reopens === undefined ? (moved ? undefined : machine.reopens) : reopens || undefined
+    const first = firstWord(machine, on, can)
     const same =
       JSON.stringify(machine.harnesses ?? []) === JSON.stringify(clean) &&
       machine.connectorVersion === connectorVersion &&
       machine.latest === knows &&
       machine.system === on &&
-      machine.paused === held
+      machine.paused === held &&
+      machine.reopens === can &&
+      !first
     // Written each time it says so, less a little for a report that comes a moment early: the
     // site calls a machine off once it has been quiet for a few of these
     if (!same || machine.offAt !== undefined || Date.now() - machine.lastSeenAt > ALIVE.everyMs - 5_000) {
@@ -418,6 +469,8 @@ export const report = mutation({
         latest: knows,
         system: on,
         paused: held,
+        reopens: can,
+        ...(first ?? {}),
         ...(moved ? { upgrade: undefined } : {}),
       })
     }

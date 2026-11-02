@@ -62,18 +62,19 @@ import {
   carryOn,
   claudeModeOf,
   claudeWroteAt,
-  codexHeld,
+  codexHolder,
   endTree,
   fromAnotherStart,
-  identity,
   listsProcesses,
   mayWake,
   NO_PS,
+  PROGRAM,
   SINCE_TOLD,
   STOPPED,
   WAS_CUT_OFF,
   WAS_STOPPED,
   WOKEN,
+  windowsProgram,
 } from './wake'
 
 /** A click as an add-on receives it: its data as a value, the one wording agents read, and the few words a person is shown where an app has another place for the rest. */
@@ -241,6 +242,29 @@ function claimedAndLeft(): string[] {
 }
 
 /**
+ * What a machine tells It of itself in a report, fullest first, each to be made in turn where It
+ * refuses the one before, as an It older than this program does. On Windows the fullest says as
+ * well that the machine reopens closed conversations there (see `wakesOn`). Where It refused the
+ * fuller report lately (`plain`), it is given the plainest alone, and where it refused the word
+ * from Windows lately (`unsaid`), it is given the rest.
+ */
+export function reports<T extends object, U extends object>(platform: string, full: T, plainest: U, lately: { plain: boolean; unsaid: boolean }): (T | U)[] {
+  if (lately.plain) return [plainest]
+  return platform === 'win32' && !lately.unsaid ? [{ ...full, reopens: true }, full, plainest] : [full, plainest]
+}
+/** Whether It refused a call for what it said, as an It that is older than this program refuses a field it does not know, and not because the call did not reach it or was not answered. */
+export const refusedFor = (err: unknown): boolean => ['error', 'invalid'].includes((err as { code?: string })?.code ?? '')
+/**
+ * What setup tells It it chose, in the same way: the fullest says what system the machine runs,
+ * and on Windows that it reopens closed conversations there, and the plainest says the choice alone.
+ */
+export const choices = (platform: string, harnesses: string[]) => [
+  ...(platform === 'win32' ? [{ harnesses, system: platform, reopens: true }] : []),
+  { harnesses, system: platform },
+  { harnesses },
+]
+
+/**
  * The words that start Codex with no shell in between. Elsewhere that is just `codex`. On
  * Windows, Codex installed through npm is a .cmd file, which only a shell can start, and a
  * shell would read a page's title as part of the command. So the program behind the .cmd file
@@ -249,7 +273,11 @@ function claimedAndLeft(): string[] {
  */
 export function codexCommand(platform: string, pathVar: string, exists: (file: string) => boolean): string[] | null {
   if (platform !== 'win32') return ['codex']
-  const dirs = pathVar.split(';').filter(Boolean)
+  // Only folders named in full, as `windowsProgram` looks in: a folder named from wherever this program happens to be is no place to start Codex from
+  const dirs = pathVar
+    .split(';')
+    .map((d) => d.trim().replace(/^"(.*)"$/, '$1'))
+    .filter((d) => path.win32.isAbsolute(d))
   const find = (name: string) => dirs.map((d) => path.win32.join(d, name)).find(exists)
   const exe = find('codex.exe')
   if (exe) return [exe]
@@ -467,7 +495,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // It says. Until It has said, none is.
   let wakesNow = new Map<string, number>()
   // And never on a system It does not reopen conversations on, whatever It says is switched on
-  const wakes = (harness: string, at: number) => wakesOn(process.platform) && mayWake(wakesNow, harness, at)
+  const wakes = (harness: string, at: number) => wakesOn(process.platform, true) && mayWake(wakesNow, harness, at)
 
   const sessions = new Map<string, { seen: number; busy: boolean; busyAt: number }>()
   // A conversation that was cleared carries on under a new id; its pages follow it
@@ -564,7 +592,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // with no hook to say so. No Codex holds its conversation from then on, so no turn is
     // running there. Taken for running, each click of the next half hour was kept a minute
     // for a hook that could not come, while the page said the agent was busy.
-    if (key.startsWith('codex:') && codexOpen(key) === false) {
+    if (key.startsWith('codex:') && codexHold(key) === false) {
       s.busy = false
       return false
     }
@@ -1551,6 +1579,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (typeof env === 'string') return env
     const how = carrying(now.harness, now.id, text, {
       codex: codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync),
+      // On Windows an app is started by where its program is, which its name alone does not say there
+      ...(process.platform === 'win32' && now.harness !== 'codex'
+        ? { start: windowsProgram(PROGRAM[now.harness] ?? now.harness, env.PATH ?? env.Path ?? '', existsSync, (f) => readFileSync(f, 'utf8')) }
+        : {}),
       itHome: home(),
       // The mode the person last had the conversation in, and where `it` is installed
       mode: now.harness === 'claude-code' ? (claudeModeOf(now.id, cwd, env.CLAUDE_CONFIG_DIR) ?? claudeModeOf(session.id, cwd, env.CLAUDE_CONFIG_DIR)) : null,
@@ -1635,8 +1667,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           keepIn: inHome('logs'),
           said: (words) => saidLast.set(key, words),
           // Written down before it is given anything to do, or it is not to run: see `carryOn`
-          began: (pid) => {
-            const since = identity([pid]).get(pid)
+          began: (pid, since) => {
             if (since === undefined) throw new Error('which process it is could not be told')
             const boot = bootId()
             // This conservative copy predates every signal and every possible disk failure.
@@ -1678,6 +1709,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       reopenedNow.delete(key)
       runNames.delete(key)
       stoppedRun.delete(key)
+      // Who holds the conversation is looked at again now that this run has gone. What was found
+      // while it held the conversation is over: taken for some other Codex that has it open, it
+      // would send what was done in the run's last seconds into Codex's queue, where nothing reads it.
+      if (now.harness === 'codex') codexHold(key, true)
       // Its turn was cut off, and the word of that could not be written down (a disk that is
       // full): the note of the run itself is kept on, which says as much to whichever
       // connector starts next, where letting go of it would leave no sign of the turn at all
@@ -1740,15 +1775,33 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   /** The id Codex knows a conversation by now: the one it carries on under, if it was cleared. */
   const threadOf = (key: string) => key.slice(key.indexOf(':') + 1)
-  const codexOpen = (key: string) => {
+  /** Who has a Codex conversation open, in the profile it was held in: see `codexHolder`. */
+  const codexHold = (key: string, fresh = false) => {
     const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: threadOf(key) }), harnessEnv())
-    return typeof env === 'string' ? null : codexHeld(threadOf(key), env.CODEX_HOME)
+    return typeof env === 'string' ? null : codexHolder(threadOf(key), env.CODEX_HOME, Date.now(), fresh)
+  }
+  /**
+   * Whether some Codex that takes a message from Codex's queue has a conversation open: one that
+   * It did not start. A run that It started to carry the conversation on runs one turn and ends,
+   * and what is put in the queue while it holds the conversation is cut off unanswered or waits
+   * for whatever opens the conversation next, so the conversation is not open for the queue then.
+   */
+  const codexOpen = (key: string) => {
+    const holder = codexHold(key)
+    return holder === null ? null : holder === 'elsewhere'
   }
   const codexPut = (thread: string, text: string) => {
     const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: thread }), harnessEnv())
     return typeof env === 'string' ? Promise.resolve(env) : codexQueue(thread, text, env)
   }
-  async function queueNow(click: Offered, reopening: boolean, offered: Offered[], t3?: { server: T3; thread: string }): Promise<void> {
+  async function queueNow(
+    click: Offered,
+    reopening: boolean,
+    offered: Offered[],
+    t3?: { server: T3; thread: string },
+    /** Said, for whoever put it in line, once the click was handed over. */
+    done: { handed: boolean } = { handed: false },
+  ): Promise<void> {
     let keeping: ReturnType<typeof setInterval> | undefined
     const receiptSlots: string[] = []
     /** This hand-over is finished: what its renewals are answered from now on is about nothing that is running. */
@@ -2065,6 +2118,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // waiter has it and says so to It itself, so there is nothing to try again or set aside
       if (!handed && sent.toWaiter) return
       if (handed) {
+        done.handed = true
         // The app has already taken these clicks. A failed receipt write must not turn
         // that handoff into a refusal or release the rest of its batch for redelivery.
         if (!recovery.stopped) {
@@ -2202,10 +2256,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // offers with it, especially the attended click that permits this turn. Claims still
     // check ownership and whether each click is pending when the command gets its place.
     const offered = inbox.filter((c) => c.session?.harness === click.session!.harness && c.session?.id === click.session!.id)
-    const next = Promise.all(before).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening, offered, t3)))
+    const done = { handed: false }
+    const next = Promise.all(before).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening, offered, t3, done)))
     queues.set(key, next)
     void next.then(() => {
       if (queues.get(key) === next) queues.delete(key)
+      // What waited for a hand-over that handed its click over, as what was done while a reopened
+      // run of the conversation was finishing does, is looked at again at once, and not at the
+      // next second. One that handed nothing over leaves its click as it was, and what kept it
+      // back is asked about again at the next second: asked again at once, it is asked without pause.
+      if (done.handed) soon(0)
     })
     return true
   }
@@ -2222,6 +2282,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     soonerAt = at
     sooner = setTimeout(() => {
       sooner = undefined
+      // A pass that is under way may have looked before what this is for: another follows it
+      if (routing) return soon(50)
       void route()
     }, ms)
     sooner.unref?.()
@@ -2441,8 +2503,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
           : wayOf({
               inT3: heldInT3,
               codexOpen: () => codex && connected('codex') && !reopenedNow.has(key) && codexOpen(key) === true,
+              // Only once nothing holds a Codex conversation: Codex lets one program at a time
+              // write it, and refuses another. A run of It's own that is ending holds it until it
+              // has gone, which is a moment, and the click is reopened for then.
               reopens: () =>
-                wakes(session.harness, click.at) && connected(session.harness) && (!codex || codexOpen(key) === false) && !runtimes.blocksWake(session.harness),
+                wakes(session.harness, click.at) &&
+                connected(session.harness) &&
+                (!codex || (!reopenedNow.has(key) && codexHold(key) === false)) &&
+                !runtimes.blocksWake(session.harness),
             })
         if (forAddOn) {
           // Route 1: the add-on will ask for it, or the running turn's next hook will
@@ -3002,7 +3070,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         agent: agentOf(h.id),
         addon: h.addon,
         version: /^\d{1,4}\.\d{1,4}\.\d{1,4}/.exec(h.version ?? '')?.[0] ?? 'unknown',
-        wake: wakesOn(process.platform) && wakesNow.has(h.id),
+        wake: wakesOn(process.platform, true) && wakesNow.has(h.id),
       })
   }
 
@@ -3118,6 +3186,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // so that a refusal which was something else (a moment without a connection) does not
   // leave the machine saying less for as long as it runs
   let plainUntil = 0
+  /** And until when a machine on Windows leaves out of its report that it reopens conversations there, for the same reason. */
+  let unsaidUntil = 0
   const lookForNewer = async () => {
     if (!looksForNewer()) latestKnown = ''
     else {
@@ -3215,35 +3285,38 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const told = { connectorVersion: VERSION, harnesses: found.map((h) => ({ ...h, runtime: runtimes.status(h.id) })) }
     const legacy = { connectorVersion: VERSION, harnesses: found }
     // And with the system it runs on, which an It of the same age takes too
-    const fuller = Date.now() >= plainUntil
-    await call(
-      'mutation',
-      api.machines.report,
-      fuller
-        ? {
-            ...told,
-            system: process.platform,
-            // Whether it hands nothing over for now, so that the site says so beside the machine and on its pages
-            paused: unfitting ? (unfitting === NOT_ASKED ? 'unchecked' : 'unfit') : '',
-            ...(latestKnown !== undefined ? { latest: latestKnown } : {}),
-          }
-        : legacy,
-    )
-      .catch(async (err) => {
-        if (fuller && (err as { code?: string }).code !== 'unauthenticated') {
-          plainUntil = Date.now() + 10 * 60_000
-          await call('mutation', api.machines.report, legacy)
+    const full = {
+      ...told,
+      system: process.platform,
+      // Whether it hands nothing over for now, so that the site says so beside the machine and on its pages
+      paused: unfitting ? (unfitting === NOT_ASKED ? 'unchecked' : 'unfit') : '',
+      ...(latestKnown !== undefined ? { latest: latestKnown } : {}),
+    }
+    // And on Windows that it reopens closed conversations there, which an It from before one did
+    // takes nothing of: each report that It refuses is made again with less, down to the plainest
+    const tries = reports(process.platform, full, legacy, { plain: Date.now() < plainUntil, unsaid: Date.now() < unsaidUntil })
+    await (async () => {
+      for (const [n, args] of tries.entries())
+        try {
+          await call('mutation', api.machines.report, args)
           return
+        } catch (err) {
+          if ((err as { code?: string }).code === 'unauthenticated' || n === tries.length - 1) throw err
+          // The word from Windows is left out only where It refused the report for what it said. A
+          // report that did not reach It, or was not answered, says nothing of that, and made again
+          // without the word just after an update, it would have It take the word away
+          if ('reopens' in args) {
+            if (!refusedFor(err)) throw err
+            unsaidUntil = Date.now() + 10 * 60_000
+          } else plainUntil = Date.now() + 10 * 60_000
         }
-        throw err
-      })
-      .catch((err) => {
-        // The bridge would give this machine no token, even a fresh one: it has been revoked.
-        // Found out here within half a minute, where the live connection would take until its own
-        // token ran out.
-        if ((err as { code?: string }).code === 'unauthenticated') notOursNow()
-        else say(`report: ${why(err)}`)
-      })
+    })().catch((err) => {
+      // The bridge would give this machine no token, even a fresh one: it has been revoked.
+      // Found out here within half a minute, where the live connection would take until its own
+      // token ran out.
+      if ((err as { code?: string }).code === 'unauthenticated') notOursNow()
+      else say(`report: ${why(err)}`)
+    })
   }
   lookAgain = () => report(true)
   client.onUpdate(
@@ -3342,12 +3415,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // Said to It at once, so that the site says it beside the machine and on its pages: in
       // full, whatever plainer report this machine had fallen back on for a while
       plainUntil = 0
+      unsaidUntil = 0
       void report()
     } else if (!wrong && unfitting) {
       const waited = unfitting !== NOT_ASKED
       unfitting = null
       if (waited) say('this machine and the It it joined fit again: what is done on a page is handed over again')
       plainUntil = 0
+      unsaidUntil = 0
       void report()
       void route()
     }

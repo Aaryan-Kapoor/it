@@ -343,6 +343,39 @@ class Hermes:
             self.fire("on_session_end", session_id=session, task_id="t", turn_id="turn-1", completed=True, failed=False, interrupted=False, turn_exit_reason="done", model="m", platform="cli")
 
 
+class Tui(Hermes):
+    """Stands in for Hermes's TUI and desktop app (tui_gateway): a process with no terminal, which
+    holds each open conversation by its lasting name, the id the conversation was opened under.
+
+    Opening a conversation, new or saved, builds its agent and then fires `on_session_reset` with
+    that name (tui_gateway/session_registry.py, _start_session_services). Closing one fires
+    `on_session_end` and `on_session_finalize` (tui_gateway/session_lifecycle.py). A message by
+    name reaches an open conversation of that name and no other, and is refused for a name
+    nothing has open (tui_gateway/plugin_inject.py).
+    """
+
+    def __init__(self, **more):
+        super().__init__(terminal=None, host=False, **more)
+        self._manager.has_tui_message_injector = True
+        self.open_now = set()
+
+    def open(self, key):
+        self.open_now.add(key)
+        self.fire("on_session_reset", session_id=key, platform="tui")
+
+    def close(self, key):
+        self.open_now.discard(key)
+        self.fire("on_session_end", session_id=key, completed=False, interrupted=True, model="m", platform="tui")
+        self.fire("on_session_finalize", session_id=key, platform="tui")
+
+    def inject_message(self, content, role="user", *, session_key=None):
+        self.tried += 1
+        if not self.takes or not session_key or not self.allowed or session_key not in self.open_now:
+            return False
+        self.messages.append((content, role, session_key))
+        return True
+
+
 class LaterHermes(Hermes):
     """A Hermes whose insides have changed, so that only the hooks and inject_message are left."""
 
@@ -859,6 +892,147 @@ class InTheTuiAndTheGateway(Case):
         self.connector.offer(A, click("k1"))
         self.a_while()
         self.assertEqual(self.connector.log, [])
+
+
+class TheManifest(Case):
+    def test_it_declares_every_hook_the_add_on_registers_and_no_other(self):
+        # Hermes's own check of a plugin (hermes_cli/plugin_validate.py) fails one that registers a hook it does not declare
+        manifest = (HERE / "it-bridge" / "plugin.yaml").read_text(encoding="utf-8")
+        declared = re.search(r"^provides_hooks:\n((?:  - .+\n)+)", manifest, re.MULTILINE).group(1)
+        hermes = self.terminal()
+        self.assertEqual(set(re.findall(r"  - (\S+)", declared)), set(hermes.hooks))
+
+
+class BeforeTheFirstMessage(Case):
+    """A conversation the person opens, new or saved, and has not yet written anything in."""
+
+    def tui(self, **more):
+        return self.load(Tui(**more))
+
+    def test_a_saved_conversation_opened_in_the_tui_gets_its_first_click_before_any_message(self):
+        hermes = self.tui()
+        hermes.open(A)
+        self.assertTrue(until(lambda: ("hermes", A) in self.connector.asked()), "it is listened for as soon as it is open")
+        self.connector.offer(A, click("k1"))
+        self.assertTrue(until(lambda: self.connector.acks() == [("k1",)]))
+        self.assertEqual(hermes.messages, [(TEXT, "user", A)])
+        self.assertEqual(set(self.connector.asked()), {("hermes", A)})
+
+    def test_auto_wake_still_waits_while_a_tui_is_open(self):
+        hermes = self.tui()
+        hermes.open(A)
+        self.assertTrue(until(lambda: ("hermes", A) in self.connector.asked()))
+        # A conversation the TUI holds may still not be listened for (the person has not allowed
+        # messages, or the conversation was opened in a way that builds no agent), so the app
+        # goes on saying that it cannot account for every open conversation
+        self.assertFalse(self.connector.runtime["addon"]["idle"])
+
+    def test_its_first_turn_goes_on_with_the_same_conversation(self):
+        hermes = self.tui()
+        hermes.open(A)
+        self.assertTrue(until(lambda: ("hermes", A) in self.connector.asked()))
+        bound["HERMES_SESSION_KEY"] = A
+        hermes.turn(A, running=False)
+        self.connector.offer(A, click("k1"))
+        self.assertTrue(until(lambda: self.connector.acks() == [("k1",)]))
+        self.assertEqual(hermes.messages, [(TEXT, "user", A)])
+        self.assertEqual([e for e in self.connector.log if e[0] == "session"], [], "no other id is told to the connector")
+
+    def test_a_conversation_left_for_another_before_its_click_is_not_given_it_and_the_other_gets_its_own(self):
+        hermes = self.tui()
+        hermes.open(A)
+        self.assertTrue(until(lambda: ("hermes", A) in self.connector.asked()))
+        hermes.close(A)
+        hermes.open(B)
+        self.assertTrue(until(lambda: ("hermes", B) in self.connector.asked()))
+        del self.connector.log[:]
+        self.connector.offer(A, click("k1", "[It] for A [action k1]"))
+        self.connector.offer(B, click("k2", "[It] for B [action k2]"))
+        self.assertTrue(until(lambda: self.connector.acks() == [("k2",)]))
+        self.a_while()
+        self.assertEqual(hermes.messages, [("[It] for B [action k2]", "user", B)])
+        self.assertNotIn(("hermes", A), self.connector.asked(), "the one that was left is not asked about, so its click waits for it")
+        self.assertEqual(hermes.tried, 1)
+
+    def test_a_switch_while_the_connector_answers_leaves_the_click_with_the_conversation_that_made_its_page(self):
+        hermes = self.tui()
+        went = []
+
+        def switches(session):
+            # The person goes from A to B while the connector is answering for A
+            if session == A and not went:
+                went.append(B)
+                hermes.close(A)
+                hermes.open(B)
+
+        self.connector.asking = switches
+        self.connector.offer(A, click("k1"))
+        hermes.open(A)
+        self.assertTrue(until(lambda: ("hermes", B) in self.connector.asked()))
+        self.a_while()
+        self.assertEqual(hermes.tried, 0, "nothing is handed to Hermes for a conversation that was left")
+        self.assertEqual(self.connector.acks(), [], "the click is still A's to have")
+        # Back in A, its click reaches it
+        hermes.open(A)
+        self.assertTrue(until(lambda: self.connector.acks() == [("k1",)]))
+        self.assertEqual(hermes.messages, [(TEXT, "user", A)])
+
+    def test_a_conversation_opened_again_after_hermes_refused_its_click_is_tried_at_once(self):
+        addon.REFUSED_SECONDS = 30
+        hermes = self.tui()
+        hermes.open(A)
+        self.assertTrue(until(lambda: ("hermes", A) in self.connector.asked()))
+        # The TUI let go of the conversation and its hook has not said so yet, so Hermes refuses the click
+        hermes.open_now.discard(A)
+        self.connector.offer(A, click("k1"))
+        self.assertTrue(until(lambda: hermes.tried == 1))
+        self.assertEqual(self.connector.acks(), [])
+        # Opening it again is word that it can take a message now
+        hermes.open(A)
+        self.assertTrue(until(lambda: self.connector.acks() == [("k1",)]))
+        self.assertEqual(hermes.messages, [(TEXT, "user", A)])
+
+    def test_nothing_is_asked_for_an_opened_conversation_until_the_person_has_allowed_messages(self):
+        hermes = self.tui(allowed=False)
+        hermes.open(A)
+        self.connector.offer(A, click("k1"))
+        self.a_while()
+        self.assertEqual(self.connector.asked(), [], "asking would set the click aside where nothing else could have it")
+        hermes.allowed = True
+        self.assertTrue(until(lambda: self.connector.acks() == [("k1",)]))
+
+    def test_the_terminal_listens_from_a_conversations_first_turn_and_not_before(self):
+        # The plain terminal fires the hook only for /new, and nothing at all when a saved
+        # conversation is resumed (hermes_cli/cli_session_mixin.py, cli_commands_mixin.py)
+        hermes = self.terminal(showing=B)
+        hermes.fire("on_session_reset", session_id=B, platform="cli", reason="new_session")
+        self.connector.offer(B, click("k1"))
+        self.a_while()
+        self.assertEqual(self.connector.asked(), [])
+        self.assertEqual(hermes.tried, 0)
+        hermes.turn(B, running=False)
+        self.assertTrue(until(lambda: self.connector.acks() == [("k1",)]))
+
+    def test_the_messaging_gateway_starting_another_conversation_in_a_chat_is_not_taken_for_one_opened(self):
+        # The gateway gives the conversation's id, and a message there goes by the chat's name
+        hermes = self.tui()
+        hermes._manager.has_gateway_message_injector = True
+        hermes.fire("on_session_reset", session_id=B, reason="new_session", platform="telegram", old_session_id=A, new_session_id=B)
+        self.connector.offer(B, click("k1"))
+        self.a_while()
+        self.assertEqual(self.connector.asked(), [])
+        self.assertEqual(hermes.tried, 0)
+
+    def test_a_process_that_holds_no_conversations_by_name_takes_nothing_from_the_hook(self):
+        # A messaging gateway by itself, and a Hermes that does not show whether it is a terminal
+        gateway = self.load(Hermes(terminal=None))
+        gateway.fire("on_session_reset", session_id=A, platform="telegram")
+        later = self.load(LaterHermes())
+        later.fire("on_session_reset", session_id=B, platform="cli")
+        self.connector.offer(A, click("k1"))
+        self.connector.offer(B, click("k2"))
+        self.a_while()
+        self.assertEqual(self.connector.asked(), [])
 
 
 class OverAPort(Case):
