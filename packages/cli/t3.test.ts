@@ -2,13 +2,13 @@
 // which threads are looked into first for a conversation, and which thread is the conversation's.
 // The asking and the sending themselves need a T3 Code that is running, and are tried against one.
 import { execFile } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
-import { conversationsOf, holds, likeliest, type T3Search, t3Held, t3Running, t3Search, t3Server, t3ThreadOf } from './src/t3'
+import { conversationsOf, holds, likeliest, type T3Search, t3Command, t3Held, t3Refusal, t3Running, t3Search, t3Server, t3ThreadOf } from './src/t3'
 
 const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-t3-'))
 afterAll(() => rmSync(scratch, { recursive: true, force: true }))
@@ -23,8 +23,9 @@ describe('the T3 Code server that is asked', () => {
   test('is the one T3 Code notes in its own folder, where that program is running and answers on this machine', () => {
     const folder = home({ version: 1, pid: process.pid, host: '127.0.0.1', port: 3774, origin: 'http://127.0.0.1:3774' })
     expect(t3Server(folder)).toMatchObject({ origin: 'http://127.0.0.1:3774', home: folder })
-    // The program is T3 Code's own where the system names it as that, and otherwise the one on the person's PATH: here it is the tests' runner
-    expect(t3Server(folder)?.program).toBe('t3')
+    // The program is T3 Code's own where the system names it as that, and otherwise the one T3 Code keeps in its folder or, where it keeps none, the PATH's:
+    // here the process is the tests' runner, and the folder holds no program of T3 Code's
+    if (process.platform !== 'win32') expect(t3Server(folder)?.command).toEqual(['t3'])
   })
   test('is none where T3 Code has noted nothing, where the program it noted is gone, and where what it noted is not on this machine', () => {
     expect(t3Server(home(undefined))).toBeUndefined()
@@ -41,6 +42,123 @@ describe('the T3 Code server that is asked', () => {
       expect([origin, t3Server(home({ pid: process.pid, origin }))]).toEqual([origin, undefined])
     expect(t3Server(home({ pid: 'no number', origin: 'http://127.0.0.1:3774' }))).toBeUndefined()
     expect(t3Server(home('not what T3 Code writes'))).toBeUndefined()
+  })
+})
+
+describe('T3 Code’s own command, as T3 Code keeps it', () => {
+  // A machine's files, as the test lays them out: each by its whole name, with what is in it
+  const machine = (files: Record<string, string>) => ({ exists: (file: string) => file in files, read: (file: string) => files[file] ?? '' })
+  const home = 'C:\\Users\\me\\.t3'
+  const runtime = `${home}\\runtime\\versions\\0.1.3-nightly.20261024.3643`
+  const app = 'C:\\Program Files\\T3 Code\\T3 Code.exe'
+  const script = 'C:\\Program Files\\T3 Code\\resources\\app.asar\\apps\\server\\dist\\bin.mjs'
+  /** The command the desktop app writes for a person, on Windows, as its own code writes it. */
+  const desktop = (program = app, entry = script, mark = "Written by T3 Code: runs the desktop app's bundled t3 CLI.") =>
+    [
+      '@echo off',
+      `rem ${mark}`,
+      'setlocal EnableExtensions DisableDelayedExpansion',
+      `set "T3CODE_CLI_PATH=${home}\\bin\\t3.cmd"`,
+      `if not defined T3CODE_HOME set "T3CODE_HOME=${home}"`,
+      'set "ELECTRON_RUN_AS_NODE=1"',
+      'set "T3CODE_DESKTOP_CLI_LAUNCHER=1"',
+      `if exist "${program}" goto run`,
+      'echo T3 Code has moved or been removed. Open the app once to update this command. 1>&2',
+      'exit /b 127',
+      ':run',
+      `"${program}" "${entry}" %*`,
+      'set "t3_exit=%ERRORLEVEL%"',
+      'exit /b %t3_exit%',
+      '',
+    ].join('\r\n')
+
+  test('on Windows is the program T3 Code’s own launcher runs, by the version of the server that is running, once it is installed whole', () => {
+    const at = machine({ [`${runtime}\\t3.exe`]: '', [`${runtime}\\.install-complete`]: '' })
+    expect(t3Command(home, '0.1.3-nightly.20261024.3643', 'win32', '', at.exists, at.read)).toEqual({ command: [`${runtime}\\t3.exe`] })
+    // Not one that is still being installed, and nothing where the PATH has no other
+    const half = machine({ [`${runtime}\\t3.exe`]: '' })
+    expect(t3Command(home, '0.1.3-nightly.20261024.3643', 'win32', '', half.exists, half.read)).toBeNull()
+  })
+
+  test('takes nothing but a version from T3 Code’s note to make the name of a folder of', () => {
+    const files: Record<string, string> = { [`${runtime}\\t3.exe`]: '', [`${runtime}\\.install-complete`]: '' }
+    for (const version of ['..\\..\\..\\elsewhere', '0.1.3/../../x', 'latest', '', 7, null, undefined]) {
+      const read: string[] = []
+      const at = {
+        exists: (file: string) => {
+          read.push(file)
+          return file in files
+        },
+        read: () => '',
+      }
+      expect([version, t3Command(home, version, 'win32', '', at.exists, at.read)]).toEqual([version, null])
+      expect(read.some((file) => file.includes('runtime'))).toBe(false)
+    }
+  })
+
+  test('on Windows is otherwise the desktop app’s own program, given the server’s script to run as Node, read out of the command the app keeps and started without cmd.exe', () => {
+    const at = machine({ [`${home}\\bin\\t3.cmd`]: desktop(), [app]: '', [script]: '' })
+    expect(t3Command(home, '0.1.3', 'win32', '', at.exists, at.read)).toEqual({
+      command: [app, script],
+      env: { ELECTRON_RUN_AS_NODE: '1', T3CODE_HOME: home },
+    })
+    // A percent sign in a folder's name is written twice there, and read as one
+    const odd = 'C:\\Apps\\100%\\T3 Code.exe'
+    const doubled = machine({ [`${home}\\bin\\t3.cmd`]: desktop('C:\\Apps\\100%%\\T3 Code.exe'), [odd]: '', [script]: '' })
+    expect(t3Command(home, undefined, 'win32', '', doubled.exists, doubled.read)?.command).toEqual([odd, script])
+  })
+
+  test('on Windows is not a command in T3 Code’s folder that the app did not write, nor one whose program is gone', () => {
+    const foreign = machine({ [`${home}\\bin\\t3.cmd`]: desktop(app, script, 'Written by someone else.'), [app]: '', [script]: '' })
+    expect(t3Command(home, undefined, 'win32', '', foreign.exists, foreign.read)).toBeNull()
+    const gone = machine({ [`${home}\\bin\\t3.cmd`]: desktop(), [script]: '' })
+    expect(t3Command(home, undefined, 'win32', '', gone.exists, gone.read)).toBeNull()
+    const relative = machine({ [`${home}\\bin\\t3.cmd`]: desktop('T3 Code.exe', 'bin.mjs'), 'T3 Code.exe': '', 'bin.mjs': '' })
+    expect(t3Command(home, undefined, 'win32', '', relative.exists, relative.read)).toBeNull()
+  })
+
+  test('on Windows is otherwise what the PATH gives, as a program or through Node, and never a script that cmd.exe would read', () => {
+    const exe = machine({ 'C:\\tools\\t3.exe': '' })
+    expect(t3Command(home, undefined, 'win32', 'C:\\tools', exe.exists, exe.read)).toEqual({ command: ['C:\\tools\\t3.exe'] })
+    // As npm writes a package's command
+    const npm = machine({
+      'C:\\Users\\me\\AppData\\Roaming\\npm\\t3.cmd': [
+        '@ECHO off',
+        'GOTO start',
+        ':find_dp0',
+        'SET dp0=%~dp0',
+        'EXIT /b',
+        ':start',
+        'SETLOCAL',
+        'CALL :find_dp0',
+        'IF EXIST "%dp0%\\node.exe" (',
+        '  SET "_prog=%dp0%\\node.exe"',
+        ') ELSE (',
+        '  SET "_prog=node"',
+        '  SET PATHEXT=%PATHEXT:;.JS;=;%',
+        ')',
+        'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\t3\\dist\\bin.mjs" %*',
+        '',
+      ].join('\r\n'),
+      'C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\t3\\dist\\bin.mjs': '',
+      'C:\\Program Files\\nodejs\\node.exe': '',
+    })
+    expect(t3Command(home, undefined, 'win32', 'C:\\Users\\me\\AppData\\Roaming\\npm;C:\\Program Files\\nodejs', npm.exists, npm.read)).toEqual({
+      command: ['C:\\Program Files\\nodejs\\node.exe', 'C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\t3\\dist\\bin.mjs'],
+    })
+    // The command T3 Code's own installer writes names its program in full, which only T3 Code's folder is read for
+    const pinned = machine({ 'C:\\Users\\me\\.local\\bin\\t3.cmd': `@echo off\r\n"${runtime}\\t3.exe" %*`, [`${runtime}\\t3.exe`]: '' })
+    expect(t3Command(home, undefined, 'win32', 'C:\\Users\\me\\.local\\bin', pinned.exists, pinned.read)).toBeNull()
+  })
+
+  test('elsewhere is the program the launcher runs, or the desktop app’s command, which is a program there, and otherwise the word t3', () => {
+    const unix = '/home/me/.t3'
+    const installed = machine({ [`${unix}/runtime/versions/0.1.3/t3`]: '', [`${unix}/runtime/versions/0.1.3/.install-complete`]: '' })
+    expect(t3Command(unix, '0.1.3', 'darwin', '', installed.exists, installed.read)).toEqual({ command: [`${unix}/runtime/versions/0.1.3/t3`] })
+    const app = machine({ [`${unix}/bin/t3`]: "#!/bin/sh\n# Written by T3 Code: runs the desktop app's bundled t3 CLI.\n" })
+    expect(t3Command(unix, '0.1.3', 'linux', '', app.exists, app.read)).toEqual({ command: [`${unix}/bin/t3`] })
+    const none = machine({ [`${unix}/bin/t3`]: '#!/bin/sh\necho mine\n' })
+    expect(t3Command(unix, '0.1.3', 'darwin', '', none.exists, none.read)).toEqual({ command: ['t3'] })
   })
 })
 
@@ -217,7 +335,8 @@ describe.skipIf(process.platform === 'win32')('the thread that runs a conversati
     })
     await new Promise<void>((r) => answers.listen(0, '127.0.0.1', r))
     return {
-      t3: { origin: `http://127.0.0.1:${(answers.address() as AddressInfo).port}`, home: folder, program },
+      t3: { origin: `http://127.0.0.1:${(answers.address() as AddressInfo).port}`, home: folder, command: [program] },
+      program,
       read,
       close: () => {
         answers.closeAllConnections()
@@ -324,7 +443,8 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     })
     await new Promise<void>((r) => answers.listen(0, '127.0.0.1', r))
     return {
-      t3: { origin: `http://127.0.0.1:${(answers.address() as AddressInfo).port}`, home: folder, program },
+      t3: { origin: `http://127.0.0.1:${(answers.address() as AddressInfo).port}`, home: folder, command: [program] },
+      program,
       read,
       listings: () => listings,
       close: () => {
@@ -384,7 +504,7 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
   }
   const inSite = { ...of, cwd: '/work/site/pages' }
   /** One search of its passes, until it says something other than that it has more to do. */
-  const searched = async (t3: { origin: string; home: string; program: string }, search: T3Search) => {
+  const searched = async (t3: { origin: string; home: string; command: string[] }, search: T3Search) => {
     for (;;) {
       const result = await t3ThreadOf(t3, inSite, search)
       if (result.status !== 'incomplete') return result
@@ -618,7 +738,7 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
 
   test.each(['session', 'shell'])('a failing %s does not count as progress', async (failure) => {
     const found = await server({ match: 'conversation-1' }, undefined, failure === 'shell' ? 503 : 200)
-    if (failure === 'session') writeFileSync(found.t3.program, '#!/bin/sh\nexit 1\n')
+    if (failure === 'session') writeFileSync(found.program, '#!/bin/sh\nexit 1\n')
     const search = progress()
     try {
       for (let retry = 0; retry < 2; retry++) {
@@ -644,14 +764,53 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     }
   })
 
-  test('the deadline also bounds a command that does not issue a session', async () => {
+  test('the deadline also bounds the wait for a command that does not issue a session', async () => {
     const found = await server({ match: 'conversation-1' })
-    writeFileSync(found.t3.program, '#!/bin/sh\nexec sleep 30\n')
+    writeFileSync(found.program, '#!/bin/sh\nexec sleep 3\n')
     try {
       const started = performance.now()
       expect(await t3ThreadOf(found.t3, of, progress(), AbortSignal.timeout(150))).toEqual({ status: 'incomplete', progressed: false })
       expect(performance.now() - started).toBeLessThan(2000)
       expect(found.read).toEqual([])
+    } finally {
+      found.close()
+    }
+  })
+
+  test('a command slower than a pass is let finish, and the session it gives is the next pass’s, without the command being run again', async () => {
+    const found = await server({ match: 'conversation-1' })
+    const runs = path.join(path.dirname(found.program), 'runs')
+    writeFileSync(found.program, `#!/bin/sh\necho run >> '${runs}'\nsleep 1\necho '{"token":"a-late-session"}'\n`)
+    try {
+      expect(await t3ThreadOf(found.t3, of, progress(), AbortSignal.timeout(150))).toEqual({ status: 'incomplete', progressed: false })
+      expect(found.read).toEqual([])
+      // A pass that begins while the command is still at work waits on that same command
+      const search = progress()
+      expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'found', thread: 'match' })
+      expect(readFileSync(runs, 'utf8')).toBe('run\n')
+    } finally {
+      found.close()
+    }
+  })
+
+  test('says why T3 Code gave no session, in words of its own, and forgets it once T3 Code gives one', async () => {
+    const found = await server({ match: 'conversation-1' })
+    const program = found.program
+    try {
+      writeFileSync(program, '#!/bin/sh\nexit 3\n')
+      expect(await t3ThreadOf(found.t3, of, progress())).toEqual({ status: 'incomplete', progressed: false })
+      expect(t3Refusal()).toBe('its own command ended with code 3')
+      writeFileSync(program, '#!/bin/sh\necho no session\n')
+      expect(await t3ThreadOf(found.t3, of, progress())).toEqual({ status: 'incomplete', progressed: false })
+      expect(t3Refusal()).toBe('its own command gave no session')
+      rmSync(program)
+      expect(await t3ThreadOf(found.t3, of, progress())).toEqual({ status: 'incomplete', progressed: false })
+      expect(t3Refusal()).toBe('its own command was not found')
+      writeFileSync(program, '#!/bin/sh\necho \'{"token":"a-session"}\'\n')
+      chmodSync(program, 0o755)
+      expect(await t3ThreadOf(found.t3, of, progress())).toEqual({ status: 'found', thread: 'match' })
+      expect(t3Refusal()).toBeUndefined()
+      expect(found.read).toEqual(['match'])
     } finally {
       found.close()
     }

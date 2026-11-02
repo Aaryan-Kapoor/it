@@ -69,13 +69,16 @@ const stand = vi.hoisted(() => ({
     /** By each thread, the conversation it runs now and those it ran before, and every time it was asked which thread runs one. */
     runs: new Map<string, { now: { harness: string; id: string }; before: { harness: string; id: string }[] }>(),
     looked: [] as { harness: string; ids: string[]; known?: string }[],
+    /** Why T3 Code gave It no session, as its own command would have said. */
+    refusal: null as string | null,
   },
 }))
 // T3 Code is asked over its own server and its own command (t3.test.ts tries what is read from
 // them). Here it is a stand-in, so that the way a click goes can be tried with T3 Code running.
 vi.mock('./src/t3', async (original) => ({
   T3_HELD_MOST: (await original<typeof import('./src/t3')>()).T3_HELD_MOST,
-  t3Server: () => (stand.t3.running ? { origin: 'http://127.0.0.1:1', home: '/no-t3-code', program: 't3' } : undefined),
+  t3Server: () => (stand.t3.running ? { origin: 'http://127.0.0.1:1', home: '/no-t3-code', command: ['t3'] } : undefined),
+  t3Refusal: () => stand.t3.refusal ?? undefined,
   t3Search: () => ({}),
   t3Held: (search: { held?: number }) => search.held ?? 0,
   t3ThreadOf: (_t3: unknown, of: { ids: readonly string[] }, search: { held?: number }) =>
@@ -309,7 +312,7 @@ afterEach(async () => {
   stand.answer = null
   // A lookup a test left unanswered is answered, so that nothing of it outlasts the test
   for (const asked of stand.t3.asked) asked.answer(null)
-  Object.assign(stand.t3, { running: false, slow: false, refusing: null })
+  Object.assign(stand.t3, { running: false, slow: false, refusing: null, refusal: null })
   stand.t3.threads.clear()
   stand.t3.asked.length = 0
   stand.t3.sent.length = 0

@@ -16,7 +16,9 @@
 //
 // - which server is running, from the note T3 Code keeps of it in its own folder;
 // - a session of its own, for reading threads and sending to them, from T3 Code's own command
-//   for issuing one (`t3 auth session issue`). It is kept in memory and never written down;
+//   for issuing one (`t3 auth session issue`). It is kept in memory and never written down. The
+//   command is T3 Code's own program, found where T3 Code itself keeps it, and not whatever a
+//   PATH happens to give: on Windows T3 Code puts no program on the PATH at all;
 // - which thread a conversation is: T3 Code keeps, for each thread, the id the agent app gave
 //   the conversation, and the thread whose conversation has this id is the one;
 // - which conversation a thread runs now, and which it ran before: a thread can be switched to
@@ -26,10 +28,11 @@
 // - and that a message be put to that thread, which is what a person typing into it does.
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { readlinkSync } from 'node:fs'
+import { existsSync, readFileSync, readlinkSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { direct, directWebSocket, readJson } from './lib'
+import { windowsProgram } from './wake'
 
 /** The version of T3 Code's own protocol that this speaks. A server that speaks another refuses, and the click goes the way it went before. */
 const PROTOCOL = '2'
@@ -53,11 +56,16 @@ export const T3_HELD_MOST = 20_000
 /** One pass includes issuing a session, listing threads and reading their details. */
 const DISCOVERY_MS = 5_000
 
-/** A T3 Code server that is running on this machine: where it answers, the folder it keeps its things in, and the program it is. */
+/**
+ * A T3 Code server that is running on this machine: where it answers, the folder it keeps its
+ * things in, and the words that start its own command, with what that command needs in its
+ * environment beside the service's own. The command is null where it is nowhere on this machine.
+ */
 export interface T3 {
   origin: string
   home: string
-  program: string
+  command: string[] | null
+  env?: Record<string, string>
 }
 
 /** The program a process is, by the name the system has for it, or nothing where it does not say. */
@@ -72,13 +80,69 @@ function programOf(pid: number): string | undefined {
   return undefined
 }
 
+/** A version as T3 Code writes one, and nothing else: it is made into the name of a folder. */
+const VERSION = /^\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/
+/** The line T3 Code's desktop app writes into the command it keeps in T3 Code's folder for a person, by which that command is known to be the app's. */
+const DESKTOP_MARK = "Written by T3 Code: runs the desktop app's bundled t3 CLI."
+
+/**
+ * The words that start T3 Code's own command, found where T3 Code keeps it, and what the command
+ * needs in its environment. In order:
+ *
+ * - The program T3 Code's own launcher runs, which it keeps by version under its folder, in
+ *   `runtime/versions/<version>`, and marks as whole once it is installed. The version is the
+ *   one T3 Code noted of the server that is running.
+ * - The command that T3 Code's desktop app keeps in `bin` in T3 Code's folder for a person to
+ *   run, where it carries the app's own line. On Windows that is a script that cmd.exe would
+ *   read, so what it starts is read out of it and started without it: the app's own program,
+ *   given the server's script and told to run it as Node, as the script itself tells it. Elsewhere
+ *   it is a program in its own right.
+ * - Whatever the PATH gives: on Windows a program, or a package manager's script read the way
+ *   It reads one to reopen a conversation (`windowsProgram`), and elsewhere the word `t3`.
+ *
+ * Null on Windows where none of them is there.
+ */
+export function t3Command(
+  home: string,
+  version: unknown,
+  platform: string = process.platform,
+  pathVar: string = process.env.PATH ?? process.env.Path ?? '',
+  exists: (file: string) => boolean = existsSync,
+  read: (file: string) => string = (file) => readFileSync(file, 'utf8'),
+): { command: string[]; env?: Record<string, string> } | null {
+  const windows = platform === 'win32'
+  const p = windows ? path.win32 : path.posix
+  if (typeof version === 'string' && VERSION.test(version)) {
+    const folder = p.join(home, 'runtime', 'versions', version)
+    const program = p.join(folder, windows ? 't3.exe' : 't3')
+    if (exists(program) && exists(p.join(folder, '.install-complete'))) return { command: [program] }
+  }
+  const launcher = p.join(home, 'bin', windows ? 't3.cmd' : 't3')
+  let text: string | undefined
+  try {
+    if (exists(launcher)) text = read(launcher)
+  } catch {}
+  if (text?.includes(DESKTOP_MARK)) {
+    if (!windows) return { command: [launcher] }
+    // The line that starts the app's program on the server's script, each in quotes, and with
+    // every percent sign doubled, as cmd.exe would otherwise read one as the start of a variable
+    const run = /^"([^"\r\n]+\.exe)" "([^"\r\n]+)" %\*\r?$/im.exec(text)
+    const [program, script] = run ? [run[1]!, run[2]!].map((word) => word.replaceAll('%%', '%')) : []
+    if (program && script && p.isAbsolute(program) && p.isAbsolute(script) && exists(program) && exists(script))
+      return { command: [program, script], env: { ELECTRON_RUN_AS_NODE: '1', T3CODE_HOME: home } }
+  }
+  if (!windows) return { command: ['t3'] }
+  const found = windowsProgram('t3', pathVar, exists, read)
+  return found ? { command: found } : null
+}
+
 /**
  * The T3 Code server running for this person on this machine, or nothing. T3 Code notes where
  * its server is in the folder it keeps its things in, which is `~/.t3` unless `T3CODE_HOME`
  * names another. Only a server that answers on this machine itself is ever asked anything.
  */
 export function t3Server(home = process.env.T3CODE_HOME || path.join(os.homedir(), '.t3')): T3 | undefined {
-  const noted = readJson<{ pid?: unknown; origin?: unknown }>(path.join(home, 'userdata', 'server-runtime.json'))
+  const noted = readJson<{ pid?: unknown; origin?: unknown; serverVersion?: unknown }>(path.join(home, 'userdata', 'server-runtime.json'))
   if (!noted || typeof noted.pid !== 'number' || typeof noted.origin !== 'string') return undefined
   if (!/^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d{1,5}$/.test(noted.origin)) return undefined
   try {
@@ -86,51 +150,114 @@ export function t3Server(home = process.env.T3CODE_HOME || path.join(os.homedir(
   } catch {
     return undefined
   }
-  // Its own program where the system names it and it is T3 Code's, and otherwise the one the person's PATH has
+  // Its own program where the system names it and it is T3 Code's, and otherwise the one T3 Code keeps in its folder
   const program = programOf(noted.pid)
-  return { origin: noted.origin, home, program: program && /^t3(\.exe)?$/i.test(path.basename(program)) ? program : 't3' }
+  if (program && /^t3(\.exe)?$/i.test(path.basename(program))) return { origin: noted.origin, home, command: [program] }
+  const found = t3Command(home, noted.serverVersion)
+  return { origin: noted.origin, home, command: found?.command ?? null, ...(found?.env ? { env: found.env } : {}) }
 }
 
 /** The session T3 Code issued to It, for as long as it lasts. Never written down. */
 let session: { home: string; token: string; until: number } | undefined
+/**
+ * The asking for a session that is under way. Every pass that needs a session waits on this one,
+ * and a pass that runs out of time stops waiting without ending it: T3 Code's own command can
+ * take longer to start than a pass may last, which on Windows it was not known not to, and a
+ * session it gives late is there for the next pass.
+ */
+let issuing: { home: string; answer: Promise<string | undefined> } | undefined
+/** Why T3 Code gave It no session when it was last asked, in this program's own words, and nothing once it has given one. */
+let refusal: string | undefined
 
-/** Asks T3 Code's own command for a session that may read threads and send to them. Nothing where it gave none. */
+/** Why T3 Code gave It no session when it was last asked, for the connector to say: nothing once it has given one. */
+export const t3Refusal = (): string | undefined => refusal
+
+/** Asks T3 Code's own command for a session that may read threads and send to them. Nothing where it gave none, or none before the signal. */
 function issued(t3: T3, signal?: AbortSignal): Promise<string | undefined> {
   if (signal?.aborted) return Promise.resolve(undefined)
   if (session && session.home === t3.home && Date.now() < session.until - 60_000) return Promise.resolve(session.token)
+  const command = t3.command
+  if (!command?.length) {
+    refusal = 'its own command is not on this machine'
+    return Promise.resolve(undefined)
+  }
+  if (!issuing || issuing.home !== t3.home) {
+    const answer: Promise<string | undefined> = issue(t3, command).finally(() => {
+      if (issuing?.answer === answer) issuing = undefined
+    })
+    issuing = { home: t3.home, answer }
+  }
+  const answer = issuing.answer
+  if (!signal) return answer
   return new Promise((resolve) => {
-    execFile(
-      t3.program,
-      [
-        'auth',
-        'session',
-        'issue',
-        '--base-dir',
-        t3.home,
-        '--scope',
-        'orchestration:read',
-        '--scope',
-        'orchestration:operate',
-        '--ttl',
-        '12h',
-        '--label',
-        'It',
-        '--json',
-      ],
-      { timeout: ANSWER_MS, signal, windowsHide: true, maxBuffer: 1024 * 1024 },
-      (err, stdout) => {
-        if (err) return resolve(undefined)
-        try {
-          const said = JSON.parse(String(stdout)) as { token?: unknown; expiresAt?: unknown }
-          if (typeof said.token !== 'string' || !said.token) return resolve(undefined)
-          const until = typeof said.expiresAt === 'string' ? Date.parse(said.expiresAt) : Number.NaN
-          session = { home: t3.home, token: said.token, until: Number.isFinite(until) ? until : Date.now() + 3_600_000 }
-          resolve(said.token)
-        } catch {
-          resolve(undefined)
-        }
-      },
-    )
+    const giveUp = () => resolve(undefined)
+    signal.addEventListener('abort', giveUp, { once: true })
+    void answer.then((token) => {
+      signal.removeEventListener('abort', giveUp)
+      resolve(token)
+    })
+  })
+}
+
+/** Runs T3 Code's own command once for a session, and keeps what it gives. */
+function issue(t3: T3, command: string[]): Promise<string | undefined> {
+  const refused = (why: string) => {
+    refusal = why
+    return undefined
+  }
+  return new Promise((resolve) => {
+    try {
+      execFile(
+        command[0]!,
+        [
+          ...command.slice(1),
+          'auth',
+          'session',
+          'issue',
+          '--base-dir',
+          t3.home,
+          '--scope',
+          'orchestration:read',
+          '--scope',
+          'orchestration:operate',
+          '--ttl',
+          '12h',
+          '--label',
+          'It',
+          '--json',
+        ],
+        { timeout: ANSWER_MS, windowsHide: true, maxBuffer: 1024 * 1024, ...(t3.env ? { env: { ...process.env, ...t3.env } } : {}) },
+        (err, stdout) => {
+          // Said in words of this program's own: the error's would name where the command is
+          if (err) {
+            const e = err as { code?: unknown; killed?: boolean }
+            return resolve(
+              refused(
+                e.killed
+                  ? 'its own command did not answer in twenty seconds'
+                  : e.code === 'ENOENT'
+                    ? 'its own command was not found'
+                    : typeof e.code === 'number'
+                      ? `its own command ended with code ${e.code}`
+                      : 'its own command could not be started',
+              ),
+            )
+          }
+          try {
+            const said = JSON.parse(String(stdout)) as { token?: unknown; expiresAt?: unknown }
+            if (typeof said.token !== 'string' || !said.token) return resolve(refused('its own command gave no session'))
+            const until = typeof said.expiresAt === 'string' ? Date.parse(said.expiresAt) : Number.NaN
+            session = { home: t3.home, token: said.token, until: Number.isFinite(until) ? until : Date.now() + 3_600_000 }
+            refusal = undefined
+            resolve(said.token)
+          } catch {
+            resolve(refused('its own command gave no session'))
+          }
+        },
+      )
+    } catch {
+      resolve(refused('its own command could not be started'))
+    }
   })
 }
 
