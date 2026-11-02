@@ -21,6 +21,12 @@ const RULES = {
   storeSetPage: { perMinute: 60, burst: 30 },
   storeSet: { perMinute: 120, burst: 60 },
   mount: { perMinute: 120, burst: 60 },
+  /**
+   * The pictures of pages on the grid, each a showing too. Counted apart from the showings a
+   * person opens, so that a grid on a large screen, opened again and again, never uses up what
+   * opening a page needs.
+   */
+  picture: { perMinute: 240, burst: 120 },
   publish: { perMinute: 60, burst: 30 },
   finish: { perMinute: 60, burst: 30 },
   patchState: { perMinute: 600, burst: 200 },
