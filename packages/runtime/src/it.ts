@@ -5,7 +5,18 @@
 // no credential, and it cannot talk to the backend. Everything goes through the site that
 // framed it, over a message channel: actions and stored values go up, the page's state comes
 // down. The site decides who the person is.
-import { type ActionEnvelope, type PageToSite, SHRINK, type SiteToPage } from '@it/protocol'
+import {
+  type ActionEnvelope,
+  CHANNEL_VERSION,
+  isStoreKey,
+  jsonText,
+  LIMITS,
+  type PageToSite,
+  SHRINK,
+  type SiteToPage,
+  STORE_EVERY_MS,
+  STORE_KEY,
+} from '@it/protocol'
 
 interface Config {
   app: string
@@ -15,8 +26,9 @@ interface Config {
   keep: string
 }
 type Listener = (state: Record<string, unknown>) => void
+type State = Record<string, unknown>
+type Result = Extract<SiteToPage, { type: 'it:result' }>
 
-const STORE_KEY = '_page'
 const config = (window as unknown as { __IT__: Config }).__IT__
 
 // A sandboxed document has none of the browser's storage: reading `localStorage` or
@@ -57,12 +69,18 @@ for (const name of ['localStorage', 'sessionStorage'] as const) {
   }
 }
 let port: MessagePort | null = null
-let state: Record<string, unknown> = {}
+/** What the site's channel says it speaks: see CHANNEL_VERSION. */
+let channel = 0
+/** The state as It last sent it. */
+let sent: State = {}
+/** What the page sees: that, with the values the page has set and It has not yet sent back over what the page keeps. */
+let state: State = {}
 let revision = 0
 /** Whether the state has arrived. Its revision does not say: a page made with no state is sent an empty one at revision zero. */
 let arrived = false
 const listeners: Listener[] = []
-const waiting = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
+/** What is waiting for the site's answer, by the request it answers. */
+const waiting = new Map<string, (result: Result) => void>()
 const unsent: PageToSite[] = []
 let staged: Record<string, unknown> = {}
 
@@ -189,9 +207,14 @@ function post(to: MessagePort, message: PageToSite): void {
     to.postMessage(message)
   } catch {
     if (!('requestId' in message)) return
-    const w = waiting.get(message.requestId)
+    const answer = waiting.get(message.requestId)
     waiting.delete(message.requestId)
-    w?.reject(new Error('That could not be sent: what an action or a stored value carries is plain data, with no function or element in it.'))
+    answer?.({
+      type: 'it:result',
+      requestId: message.requestId,
+      ok: false,
+      error: 'That could not be sent: what an action or a stored value carries is plain data, with no function or element in it.',
+    })
   }
 }
 
@@ -200,26 +223,212 @@ function send(message: PageToSite): void {
   else unsent.push(message)
 }
 
-function ask(message: PageToSite & { requestId: string }): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    waiting.set(message.requestId, { resolve, reject })
+/** Sends a request to the site, and is answered with what the site answered. */
+function ask(message: PageToSite & { requestId: string }): Promise<Result> {
+  return new Promise((answered) => {
+    waiting.set(message.requestId, answered)
     send(message)
   })
 }
 
+const isObject = (x: unknown): x is State => typeof x === 'object' && x !== null && !Array.isArray(x)
+/** What a state says the page keeps for itself. */
+const keptIn = (s: State): State => (isObject(s[STORE_KEY]) ? (s[STORE_KEY] as State) : {})
+/**
+ * Puts a value under a name as the object's own, whatever the name. A plain assignment under
+ * `__proto__` would change what the object is made from instead, and a state written before It
+ * held names to its rules can hold one.
+ */
+const putOwn = (o: State, key: string, value: unknown) => Object.defineProperty(o, key, { value, writable: true, enumerable: true, configurable: true })
+/** A state with what the page keeps put in place of what it said: under its own key, where the page keeps anything. */
+function withKept(s: State, kept: State): State {
+  const { [STORE_KEY]: _, ...rest } = s
+  return Object.keys(kept).length > 0 ? { ...rest, [STORE_KEY]: kept } : rest
+}
+
 function receive(message: SiteToPage): void {
   if (message.type === 'it:state') {
-    state = (message.state ?? {}) as Record<string, unknown>
+    sent = isObject(message.state) ? message.state : {}
     revision = message.revision
     arrived = true
+    shown()
+    emit()
+  } else if (message.type === 'it:changed') {
+    // What changed since the state that was sent last, which is built on. Anything older than that is passed over
+    if (!arrived || message.revision <= revision) return
+    const kept = { ...keptIn(sent) }
+    for (const [key, value] of message.kept) {
+      if (value === null) delete kept[key]
+      else putOwn(kept, key, value)
+    }
+    sent = withKept(message.state === undefined ? sent : isObject(message.state) ? message.state : {}, kept)
+    revision = message.revision
+    shown()
     emit()
   } else if (message.type === 'it:result') {
-    const w = waiting.get(message.requestId)
-    if (!w) return
+    const answer = waiting.get(message.requestId)
+    if (!answer) return
     waiting.delete(message.requestId)
-    if (message.ok) w.resolve({ ok: true, id: message.actionId })
-    else w.reject(new Error(message.error))
+    answer(message)
   }
+}
+
+// What the page keeps for itself (It.store). What is set within a moment goes to the site as
+// one write, with the last value set under each name, and one write at a time: the next is
+// sent when the last is answered, and no sooner than STORE_EVERY_MS after it, with whatever was
+// set in between. So a page that sets a value on every movement of the pen sends a few writes
+// a second, and one that sets a value now and then sends it at once.
+//
+// The page sees what it set at once, in It.store.get and in It.state, and goes on seeing it
+// until the state It sends back has it. A write It refuses for coming too fast is sent again
+// once It says it may be, with anything set under the same names meanwhile, so nothing set is
+// lost for being set quickly. One It refuses for good, as too large, is not kept, and what the
+// page sees goes back to what It has.
+interface Setting {
+  /** The value as JSON text, as it is sent, and as it was when it was set. */
+  text: string
+  value: unknown
+  /** Each It.store.set that this value answers: the one that set it, and any before it under the same name that were not yet sent. */
+  answers: { resolve: (v: unknown) => void; reject: (e: Error) => void }[]
+}
+/** Set, and not yet sent. */
+const toSend = new Map<string, Setting>()
+/** Sent, and not yet answered. */
+let sending: Map<string, Setting> | null = null
+/** Kept, at the revision of the state that has them, until a state that has them has arrived. */
+const keptAt = new Map<string, { value: unknown; revision: number }>()
+/** Whether a write was sent too lately to send another, and whether It asked the page to wait. */
+let resting = false
+let holding = false
+let flushing = false
+
+/** What the page sees: the state as It sent it, with what the page set and It has not yet sent back, newest last. */
+function shown(): void {
+  for (const [key, at] of keptAt) if (at.revision <= revision) keptAt.delete(key)
+  if (keptAt.size === 0 && !sending && toSend.size === 0) {
+    state = sent
+    return
+  }
+  const kept = { ...keptIn(sent) }
+  const over = (key: string, value: unknown) => {
+    if (value === null) delete kept[key]
+    else putOwn(kept, key, value)
+  }
+  for (const [key, at] of keptAt) over(key, at.value)
+  if (sending) for (const [key, setting] of sending) over(key, setting.value)
+  for (const [key, setting] of toSend) over(key, setting.value)
+  state = withKept(sent, kept)
+}
+
+/** Sends what was set, once nothing is on its way, the last write is long enough ago, and It has not asked the page to wait. */
+function flush(): void {
+  flushing = false
+  if (!port || sending || resting || holding || toSend.size === 0) return
+  const batch = new Map<string, Setting>()
+  for (const [key, setting] of toSend) {
+    if (batch.size >= LIMITS.storeKeysAtOnce) break
+    batch.set(key, setting)
+    toSend.delete(key)
+  }
+  sending = batch
+  resting = true
+  setTimeout(() => {
+    resting = false
+    flush()
+  }, STORE_EVERY_MS)
+  const from = revision
+  if (channel >= CHANNEL_VERSION) {
+    void ask({ type: 'it:store', requestId: id(), changes: [...batch].map(([key, setting]) => [key, setting.text]) }).then((result) =>
+      answered(batch, result, result.ok ? (result.revision ?? from + 1) : from),
+    )
+    return
+  }
+  // A site that takes one value at a time, as one still open from before may: each is sent by
+  // itself, and the next write waits for all of them
+  let left = batch.size
+  const kept = new Map<string, Setting>()
+  for (const [key, setting] of batch)
+    void ask({ type: 'it:store', requestId: id(), key, value: setting.value }).then((result) => {
+      if (result.ok) kept.set(key, setting)
+      else for (const answer of setting.answers) answer.reject(new Error(result.error))
+      if (--left > 0) return
+      const before = state
+      answered(kept, { type: 'it:result', requestId: '', ok: true }, from + 1)
+      // What was refused is no longer shown
+      if (
+        seenOtherwise(
+          before,
+          [...batch.keys()].filter((key) => !kept.has(key)),
+        )
+      )
+        emit()
+    })
+}
+
+/** What became of a write: kept, at a revision; to be sent again later; or refused. */
+function answered(batch: Map<string, Setting>, result: Result, at: number): void {
+  sending = null
+  if (result.ok) {
+    for (const [key, setting] of batch) {
+      if (at > revision) keptAt.set(key, { value: setting.value, revision: at })
+      for (const answer of setting.answers) answer.resolve({ ok: true })
+    }
+  } else if (result.retryAfterMs !== undefined) {
+    // Too fast: sent again once the wait is over, under each name with whatever was set since
+    for (const [key, setting] of batch) {
+      const later = toSend.get(key)
+      if (later) later.answers.unshift(...setting.answers)
+      else toSend.set(key, setting)
+    }
+    holding = true
+    setTimeout(
+      () => {
+        holding = false
+        flush()
+      },
+      Math.min(Math.max(result.retryAfterMs, STORE_EVERY_MS), 60_000),
+    )
+  } else {
+    for (const setting of batch.values()) for (const answer of setting.answers) answer.reject(new Error(result.error))
+  }
+  const before = state
+  shown()
+  // What the page sees changed where It refused a value, or where the state It sent while the
+  // value was on its way was already past it, and had something else under that name
+  if (seenOtherwise(before, batch.keys())) emit()
+  flush()
+}
+
+/** Whether any of these values is now seen otherwise than it was in that state. */
+function seenOtherwise(before: State, keys: Iterable<string>): boolean {
+  const was = keptIn(before)
+  const now = keptIn(state)
+  for (const key of keys) if (was[key] !== now[key] && JSON.stringify(was[key]) !== JSON.stringify(now[key])) return true
+  return false
+}
+
+function store(key: string, value: unknown): Promise<unknown> {
+  // The same rules the site and the backend keep, said here so that a page hears of a bad name or value at once
+  if (!isStoreKey(key)) return Promise.reject(new Error('A store key is 1 to 64 letters, digits, dashes or underscores.'))
+  let text: string
+  try {
+    text = jsonText(value, LIMITS.storeValueBytes)
+    if (new TextEncoder().encode(text).length > LIMITS.storeValueBytes) throw new Error(`A stored value is at most ${LIMITS.storeValueBytes / 1024} KB.`)
+  } catch (err) {
+    return Promise.reject(err)
+  }
+  return new Promise((resolve, reject) => {
+    // Taken as it is now: a change the page makes to it afterwards is not what was set
+    const setting: Setting = { text, value: JSON.parse(text), answers: [{ resolve, reject }] }
+    const earlier = toSend.get(key)
+    if (earlier) setting.answers.unshift(...earlier.answers)
+    toSend.set(key, setting)
+    shown()
+    if (!flushing) {
+      flushing = true
+      queueMicrotask(flush)
+    }
+  })
 }
 
 // The site answers the hello with a port. Only the window that framed this one is listened to,
@@ -227,8 +436,10 @@ function receive(message: SiteToPage): void {
 window.addEventListener('message', (e) => {
   if (e.source !== window.parent || e.origin !== config.app || e.data?.type !== 'it:port' || !e.ports[0] || port) return
   port = e.ports[0]
+  channel = typeof e.data.v === 'number' ? e.data.v : 0
   port.onmessage = (m) => receive(m.data as SiteToPage)
   for (const m of unsent.splice(0)) post(port, m)
+  flush()
 })
 // This document's own name. The site answers each document once, however often it asks.
 const doc = id()
@@ -471,7 +682,9 @@ function action(name: string, data?: unknown, sending?: Sending): Promise<unknow
   const carried = data ?? {}
   const post = (payload: unknown) => {
     const envelope: ActionEnvelope = { v: 1, ...at, name, payload }
-    return ask({ type: 'it:action', requestId: id(), envelope })
+    return ask({ type: 'it:action', requestId: id(), envelope }).then((result) =>
+      result.ok ? { ok: true, id: result.actionId } : Promise.reject(new Error(result.error)),
+    )
   }
   const shrinking = sending?.original !== true && holdsFile(carried)
   if (!shrinking && preparing === 0) return post(carried)
@@ -560,18 +773,14 @@ const api = {
     staged = {}
     for (const key of Object.keys(stagedAt)) delete stagedAt[key]
   },
-  /** Small things the page keeps for itself. They follow the page to every display. */
+  /** Things the page keeps for itself. They follow the page to every display. */
   store: {
     get: (key: string) => {
-      const kept = state[STORE_KEY] as Record<string, unknown> | undefined
+      const kept = keptIn(state)
       // Only what was stored under that very name: never something every object has by nature
-      return kept && Object.hasOwn(kept, key) ? kept[key] : undefined
+      return Object.hasOwn(kept, key) ? kept[key] : undefined
     },
-    set: (key: string, value: unknown) =>
-      // The same rule the backend keeps, said here so that a page hears of a bad name at once
-      /^[A-Za-z0-9_-]{1,64}$/.test(String(key)) && !['__proto__', 'constructor', 'prototype'].includes(key)
-        ? ask({ type: 'it:store', requestId: id(), key, value })
-        : Promise.reject(new Error('A store key is 1 to 64 letters, digits, dashes or underscores.')),
+    set: store,
   },
 }
 

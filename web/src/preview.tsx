@@ -2,11 +2,12 @@
 // like any other, with a ticket of its own, so what is in the frame is held to everything a page
 // is held to. Nothing done in it reaches the backend: the site gives it the page's state, so
 // that it looks as the page looks now, and takes nothing from it.
-import { contentPort, parseJson, SANDBOX, type SiteToPage } from '@it/protocol'
-import { useConvex, useQuery } from 'convex/react'
+import { CHANNEL_VERSION, contentPort, SANDBOX, type SiteToPage } from '@it/protocol'
+import { useConvex } from 'convex/react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { askTwice } from './backend'
 import { api, displayKey, type Id } from './lib'
+import { useLiveState } from './live'
 
 /** How many cards show their page at once. The rest show their cover until one of these leaves the screen. */
 const AT_ONCE = 9
@@ -21,12 +22,14 @@ const letGo = (me: symbol) => {
 
 const pages = () => `${location.protocol}//${location.hostname}:${contentPort(Number(location.port) || (location.protocol === 'https:' ? 443 : 80))}`
 
-/** The page's state, passed down to a picture of it that is being shown. */
+/** The page's state, passed down to a picture of it that is being shown: whole at first, and then what changed. */
 function StateFor({ artifactId, port }: { artifactId: Id<'artifacts'>; port: MessagePort }) {
-  const state = useQuery(api.state.get, { artifactId })
+  const live = useLiveState(artifactId)
   useEffect(() => {
-    if (state) port.postMessage({ type: 'it:state', state: parseJson(state.json) ?? {}, revision: state.revision } satisfies SiteToPage)
-  }, [state, port])
+    const whole = live.whole()
+    if (whole) port.postMessage(whole)
+    return live.listen((message) => port.postMessage(message))
+  }, [live, port])
   return null
 }
 
@@ -130,7 +133,7 @@ export function Preview({ artifactId, title, cover }: { artifactId: Id<'artifact
         const requestId = typeof asked.requestId === 'string' ? asked.requestId.slice(0, 100) : ''
         mine.postMessage({ type: 'it:result', requestId, ok: false, error: 'This is a picture of the page. Open the page to use it.' } satisfies SiteToPage)
       }
-      ;(e.source as Window).postMessage({ type: 'it:port' }, '*', [channel.port2])
+      ;(e.source as Window).postMessage({ type: 'it:port', v: CHANNEL_VERSION }, '*', [channel.port2])
       setPort(mine)
     }
     window.addEventListener('message', onMessage)

@@ -103,6 +103,10 @@ export const LIMITS = {
   stateBytes: 512 * 1024,
   /** One value a page keeps for itself with It.store. */
   storeValueBytes: 32 * 1024,
+  /** How many names a page may keep a value under with It.store. */
+  storeKeys: 5000,
+  /** How many of them one write of the page's may change: the script in a page sends more as several. */
+  storeKeysAtOnce: 500,
   actionPayloadBytes: 32 * 1024,
   /**
    * One file sent with an action, beside what it carries. Less than a page's file may be: a
@@ -256,13 +260,17 @@ export const CODEX_MIN_VERSION = '0.160.0'
 export const WAKES: readonly Harness[] = ['claude-code', 'codex', 'pi', 'opencode', 'hermes']
 /**
  * Whether It reopens a closed conversation on a machine of this system, as the machine names
- * its system (`process.platform`). Not on Windows yet: a conversation reopened there cannot be
- * found again and ended after the service has died, which is what makes running an agent with
- * nobody watching safe to offer. A machine that has not said what it runs on is not taken to
- * be one of the systems this holds on: it says so in its first report, a moment after its
- * connector starts, and an It from before any machine said is to be updated first.
+ * its system (`process.platform`), and as the machine says of itself (`reopens`). On Linux and
+ * macOS the system is enough. On Windows a machine reopens conversations only where it says it
+ * does, since an It from before it did there runs on Windows too: there a reopened conversation
+ * is kept in a job of the system's, by which it is found again and ended, which is what makes
+ * running an agent with nobody watching safe to offer, and an older It has no such job. A
+ * machine that has not said what it runs on is not taken to be one of the systems this holds
+ * on: it says so in its first report, a moment after its connector starts, and an It from
+ * before any machine said is to be updated first.
  */
-export const wakesOn = (system: string | null | undefined): boolean => system === 'linux' || system === 'darwin'
+export const wakesOn = (system: string | null | undefined, reopens?: boolean | null): boolean =>
+  system === 'linux' || system === 'darwin' || (system === 'win32' && reopens === true)
 /**
  * How long an upgrade that a person asked for on the site is taken to be at work. One that has
  * said nothing more by then was cut short (its machine went off, or the program that was to
@@ -272,7 +280,7 @@ export const UPGRADE_MS = 15 * 60_000
 /** What a person is told where they would switch reopening on for a machine It does not reopen conversations on. */
 export const noWakeHere = (system: string | null | undefined): string =>
   system === 'win32'
-    ? 'It does not reopen closed conversations on a Windows machine yet. What is done on a page waits until its conversation is open again.'
+    ? 'This Windows machine runs an It that does not reopen closed conversations there. Update It on it to have them reopened. Until then, what is done on a page waits until its conversation is open again.'
     : 'This machine has not said which system it runs, so It reopens no closed conversation on it. It says so when its connector starts: update It on that machine if it does not.'
 /**
  * The agent apps with a queue of their own, which takes a click whether or not its conversation
@@ -373,6 +381,64 @@ export interface FileMarker {
   file: number
 }
 export const fileMarker = (n: number): FileMarker => ({ file: n })
+
+/**
+ * JSON text and nothing else: what crosses from a page is copied, so it cannot carry anything
+ * live. The site reads what a page sends with it, and the script in a page reads a value with
+ * it as it is stored, so that a value It will not take is refused at once. Where `files` is
+ * given, a file the page put in it (a `File` or a `Blob`, which the channel copies as the file
+ * it is) is taken out, put in `files`, and stands in the text as which of them it is, counted
+ * from 1. The same file put in twice is one file.
+ */
+export function jsonText(value: unknown, max: number, files?: Blob[]): string {
+  // Looked over before it is written out, within a fixed amount of work. What a page sends can
+  // be a small thing that names the same piece many times over, level upon level, and writing
+  // that out in full would take all the memory the site has.
+  let looks = 20_000
+  let letters = 0
+  const look = (v: unknown, depth: number): void => {
+    if (--looks < 0 || depth > 40) throw new Error('That is too large to send.')
+    if (v instanceof Blob) {
+      if (!files) throw new Error('A file cannot be kept with It.store. Send it with It.action, which takes files beside what it carries.')
+      return
+    }
+    // What no channel can carry, and JSON would leave out without a word
+    if (typeof v === 'function' || typeof v === 'symbol') throw new Error('That cannot be sent.')
+    if (typeof v === 'string') letters += v.length
+    else if (Array.isArray(v)) {
+      // Its length is counted before anything is done with it: a list can be mostly holes
+      if (v.length > looks) throw new Error('That is too large to send.')
+      for (const x of v) look(x, depth + 1)
+    } else if (v && typeof v === 'object') {
+      // Only plain objects, which is all that JSON has. Anything else a page can send (a block
+      // of bytes, a map, a date) could be enormous in ways that are only found by unpacking it.
+      // A plain object of another document the page made is one too
+      const kind = Object.getPrototypeOf(v)
+      if (kind !== null && Object.getPrototypeOf(kind) !== null) throw new Error('That cannot be sent.')
+      // One entry at a time, so the count applies as it goes
+      for (const k in v) {
+        if (!Object.hasOwn(v, k)) continue
+        letters += k.length
+        look((v as Record<string, unknown>)[k], depth + 1)
+      }
+    }
+    if (letters > max) throw new Error('That is too large to send.')
+  }
+  look(value, 0)
+  const numbered = new Map<Blob, number>()
+  const text = JSON.stringify(
+    value === undefined ? null : value,
+    files
+      ? (_key, v: unknown) => {
+          if (!(v instanceof Blob)) return v
+          if (!numbered.has(v)) numbered.set(v, files.push(v))
+          return fileMarker(numbered.get(v)!)
+        }
+      : undefined,
+  )
+  if (typeof text !== 'string') throw new Error('That cannot be sent.')
+  return text
+}
 
 /**
  * How a picture sent with an action is made smaller before it leaves the page: to so many pixels
@@ -627,10 +693,28 @@ export function describeClicks(clicks: readonly Click[], max = CLICK_TEXT_BYTES)
 
 // ---------- between the page's runtime and the site ----------
 
+/**
+ * What the site's channel to a page says it speaks, in the message that hands the page its
+ * port. At 2 it takes several values a page keeps at once (`changes`), and sends what changed
+ * of the page's state (`it:changed`) rather than the whole of it each time. A site that says no
+ * version takes one value at a time, as `key` and `value`, and sends the whole state.
+ */
+export const CHANNEL_VERSION = 2
+/**
+ * How long the script in a page waits after one write of what the page keeps before it sends
+ * the next, gathering what is set meanwhile: a page that writes at every movement of the pen
+ * sends no more than twenty writes a second from one display. A write made after a quiet
+ * moment is sent at once.
+ */
+export const STORE_EVERY_MS = 50
+
 export type PageToSite =
   /** `doc` names the document that is asking, so that asking twice is answered once. */
   | { type: 'it:hello'; v: typeof PROTOCOL_VERSION; doc: string }
   | { type: 'it:action'; requestId: string; envelope: ActionEnvelope }
+  /** Values the page keeps for itself, set within a moment of each other: each name with the last value set under it, as JSON text, of which `null` takes the value away. */
+  | { type: 'it:store'; requestId: string; changes: [string, string][] }
+  /** One value, as a site whose channel says no version takes it. */
   | { type: 'it:store'; requestId: string; key: string; value: unknown }
   /** The page's showing is over. The site shows the page again. */
   | { type: 'it:lapsed' }
@@ -638,9 +722,14 @@ export type PageToSite =
   | { type: 'it:fault'; message: string }
 
 export type SiteToPage =
+  /** The page's whole state. */
   | { type: 'it:state'; state: unknown; revision: number }
-  | { type: 'it:result'; requestId: string; ok: true; actionId?: string }
-  | { type: 'it:result'; requestId: string; ok: false; error: string }
+  /** What changed of the page's state since what was last sent: the agent's part, whole, where it changed, and each value the page keeps that changed, with `null` for one taken away. */
+  | { type: 'it:changed'; revision: number; state?: unknown; kept: [string, unknown][] }
+  /** Accepted. Of values the page keeps, `revision` is the state's revision that has them. */
+  | { type: 'it:result'; requestId: string; ok: true; actionId?: string; revision?: number }
+  /** Refused, with why. `retryAfterMs` where it was refused for coming too fast, and is taken when it is sent again that much later. */
+  | { type: 'it:result'; requestId: string; ok: false; error: string; retryAfterMs?: number }
 
 /** The key in a page's state that belongs to the page itself (It.store). */
 export const STORE_KEY = '_page'
