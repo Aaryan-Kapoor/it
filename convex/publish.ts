@@ -1,7 +1,7 @@
 // Publishing a page, in two steps so that a crash in the middle leaves the old version live:
 // `begin` records what is about to be uploaded and returns a grant to upload it; `finish`
 // checks the upload with the content service and then switches the page to the new version.
-import { AUDIENCE, isSafePath, isSlug, LIMITS, PUBLICATION, parseJson, QUOTA, RETENTION, STORE_KEY, TOUR, TOUR_NAMES } from '@it/protocol'
+import { AUDIENCE, isSafePath, isSlug, LIMITS, MEDIA_KINDS, PUBLICATION, parseJson, QUOTA, RETENTION, STORE_KEY, TOUR, TOUR_NAMES } from '@it/protocol'
 import { ConvexError, v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -18,7 +18,7 @@ import { mint } from './lib/signing'
 import { bump, tally } from './lib/tally'
 import { adoptTourPage, isTourPage, pageState, startTourPage } from './lib/tourPages'
 import type { Unlinked } from './network'
-import { expectedOwner, fileEntry, session } from './schema'
+import { expectedOwner, fileEntry, mediaKind, session } from './schema'
 import { noteRevision } from './state'
 
 const beginArgs = {
@@ -43,6 +43,13 @@ const beginArgs = {
    * same id would otherwise end with one page, and the first would never hear of it again.
    */
   own: v.optional(v.boolean()),
+  /**
+   * What the page asks to use of the screen it is shown on: the microphone, the camera, both, or
+   * neither where the list is empty. Where it is not said, the page asks for what its version
+   * shown now asks for, so that a page that records goes on recording after an update that
+   * did not mention it, and a new page asks for nothing.
+   */
+  media: v.optional(v.array(mediaKind)),
 }
 const UPLOAD_SECONDS = PUBLICATION.grantSeconds
 /** How long after a grant was given something might still be written with it. */
@@ -270,6 +277,17 @@ export const _begin = internalMutation({
       }
     }
     const n = artifact.lastVersion + 1
+    // Each kind once, in the order It names them
+    const media = args.media
+      ? MEDIA_KINDS.filter((kind) => args.media!.includes(kind))
+      : artifact.currentVersion === undefined
+        ? []
+        : ((
+            await ctx.db
+              .query('versions')
+              .withIndex('by_artifact_n', (q) => q.eq('artifactId', artifact!._id).eq('n', artifact!.currentVersion!))
+              .unique()
+          )?.media ?? [])
     // What is stored, plus what has been declared and not yet finished, plus this. Counted after
     // anything stale was cleared away just above, so an abandoned attempt does not block its own retry.
     const totals = await tally(ctx, user._id)
@@ -310,6 +328,7 @@ export const _begin = internalMutation({
       status: 'staging',
       createdAt: now,
       title,
+      ...(media.length ? { media } : {}),
       by: who,
     })
     await bump(ctx, user._id, { stagingCount: 1, stagingBytes: bytes })

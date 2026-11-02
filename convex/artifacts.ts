@@ -96,6 +96,10 @@ export const get = query({
     const machine = a.machineId ? await ctx.db.get(a.machineId) : null
     return {
       ...card(a, a.waiting ?? 0, machine?.name ?? null),
+      // What the version shown asks to use of the screen it is on: the microphone, the camera, or
+      // nothing. Said with the history, as \`it read\` asks, from the versions read for it: a screen
+      // asks without, and learns it with each showing (mounts.ts)
+      ...(history === false ? {} : { media: versions.find((x) => x.status === 'live')?.media ?? [] }),
       // Only this page's app readiness is shared with its readers, including paired screens.
       connection: connection(machine, a),
       // Which of the person's machines has the page, by what the machine itself knows itself

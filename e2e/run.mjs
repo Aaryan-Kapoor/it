@@ -2116,6 +2116,107 @@ try {
   rmSync(scratch, { recursive: true, force: true })
 
   // ------------------------------------------------------------------
+  section('The microphone and the camera')
+  // A page that records a voice-over, as a page for a demo's narration does. It asks for the
+  // microphone when it is published, the site asks the person, and It records for the page
+  const recSlug = `${slug}-recorder`
+  const recorderDir = path.join(root, 'e2e/fixtures/recorder')
+  await it(A, ['create', marked('Recorder'), '--id', recSlug, '--dir', recorderDir, '--media', 'mic'])
+  await it(A, ['create', marked('Recorder that did not ask'), '--id', `${recSlug}-not-asked`, '--dir', recorderDir])
+  const recOut = (tab) => tab.frameLocator('.mount iframe').locator('#out')
+  /** Presses one of the page's buttons, as a person does, and says what the page then shows. */
+  const recPressed = async (tab, button, shows) => {
+    await tab.frameLocator('.mount iframe').locator(button).click()
+    await recOut(tab).filter({ hasText: shows }).waitFor({ timeout: 30_000 })
+    return recOut(tab).textContent()
+  }
+  await page.goto(`${APP}/p/${recSlug}-not-asked`)
+  await pageIn(page, { id: `${recSlug}-not-asked` })
+  const recNotAsked = await recPressed(page, '#record', /^refused/)
+  check(
+    'a page that did not ask for the microphone when it was published is refused it, and the person is asked nothing',
+    /did not ask for the microphone when it was published/.test(recNotAsked) && (await page.locator('.media-ask').count()) === 0,
+    recNotAsked,
+  )
+  await page.goto(`${APP}/p/${recSlug}`)
+  await pageIn(page, { id: recSlug })
+  await page.frameLocator('.mount iframe').locator('#record').click()
+  const mediaQuestion = page.locator('.media-ask')
+  await mediaQuestion.waitFor({ timeout: 15_000 })
+  const questionSaid = await mediaQuestion.textContent()
+  check(
+    'a page that asked is not given the microphone until the person allows it, in It’s own words that name the page, its agent and its machine',
+    questionSaid.includes(marked('Recorder')) &&
+      questionSaid.includes('the microphone') &&
+      questionSaid.includes(STACK_MACHINE) &&
+      (await recOut(page).textContent()) === '',
+    questionSaid,
+  )
+  await mediaQuestion.getByRole('button', { name: 'Allow on this screen' }).click()
+  const recSaid = await recOut(page)
+    .filter({ hasText: /^(recording|refused)/ })
+    .waitFor({ timeout: 15_000 })
+    .then(() => recOut(page).textContent())
+  await page.waitForTimeout(2000)
+  const recordingBar =
+    (await page
+      .locator('.media-live')
+      .textContent()
+      .catch(() => '')) ?? ''
+  check(
+    'allowed, It records for the page, and It’s own bar says that it is recording',
+    /^recording audio\//.test(recSaid) && /^Recording · Microphone/.test(recordingBar),
+    JSON.stringify({ recSaid, recordingBar }),
+  )
+  const recSent = await recPressed(page, '#stop', /^(accepted|refused)/)
+  const recTake = await until(async () => (await it(A, ['actions', '--id', recSlug])).find((x) => x.action === 'take'), 30_000, 500)
+  const recTakeAt = path.join(tmp, `take-${slug}.recording`)
+  const recTakeSaved = recTake ? (await it(A, ['action', recTake.id, '--save', recTakeAt])).saved : null
+  const recTakeBytes = existsSync(recTakeAt) ? readFileSync(recTakeAt) : Buffer.alloc(0)
+  // WebM begins with its own four bytes, and an MP4, as Safari records, says so in its first box
+  const isRecordingFile = recTakeBytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])) || recTakeBytes.subarray(4, 8).toString('latin1') === 'ftyp'
+  check(
+    'what was recorded reaches the agent as a file of the page’s action, and is saved as a recording',
+    /^accepted /.test(recSent) &&
+      (await page.locator('.media-live').count()) === 0 &&
+      /^audio\/(webm|mp4|ogg)$/.test(recTake?.files?.[0]?.type ?? '') &&
+      recTake.files[0].bytes > 1000 &&
+      recTakeSaved?.bytes === recTake.files[0].bytes &&
+      isRecordingFile,
+    JSON.stringify({ recSent, files: recTake?.files, saved: recTakeSaved, head: recTakeBytes.subarray(0, 8).toString('hex') }),
+  )
+  if (recTake) await it(A, ['ack', recTake.id])
+  rmSync(recTakeAt, { force: true })
+  // Taken back under Settings, the page is asked about again, and has nothing where the person says no
+  await page.goto(`${APP}/settings`)
+  const mediaRow = page.locator('.row', { hasText: marked('Recorder') })
+  const grantListed = await mediaRow.waitFor({ timeout: 15_000 }).then(
+    async () => (await mediaRow.count()) === 1,
+    () => false,
+  )
+  await mediaRow.getByRole('button', { name: 'Take back' }).click()
+  await page.goto(`${APP}/p/${recSlug}`)
+  await pageIn(page, { id: recSlug })
+  await page.frameLocator('.mount iframe').locator('#record').click()
+  const mediaAskedAgain = await mediaQuestion.waitFor({ timeout: 15_000 }).then(
+    () => true,
+    () => false,
+  )
+  if (mediaAskedAgain) await mediaQuestion.getByRole('button', { name: 'Don’t allow' }).click()
+  const mediaSaidNo = await recOut(page)
+    .filter({ hasText: /^(recording|refused)/ })
+    .waitFor({ timeout: 15_000 })
+    .then(() => recOut(page).textContent())
+  check(
+    'what was allowed is listed under Settings and taken back there, and the page is then asked about again, and refused where the person says no',
+    grantListed && mediaAskedAgain && /did not allow this page/.test(mediaSaidNo) && (await page.locator('.media-live').count()) === 0,
+    JSON.stringify({ grantListed, mediaAskedAgain, mediaSaidNo }),
+  )
+  await page.goto(`${APP}/p/${slug}`)
+  await pageIn(page, { id: slug })
+  for (const gone of [recSlug, `${recSlug}-not-asked`]) await it(A, ['delete', gone])
+
+  // ------------------------------------------------------------------
   section('Versions')
   const before2 = frameOf(page).url()
   const v2 = await it(A, ['update', slug, '--html', '<h1 id="v">version two</h1><p data-it-bind="status"></p>'])
@@ -2624,7 +2725,8 @@ try {
       offered.pinOrDelete === 0 &&
       offered.machines === 'the pages' &&
       offered.displays === 'the pages' &&
-      offered.settings === 'This browser' &&
+      // What this screen allowed pages to record is its own to see and take back
+      offered.settings === 'This browser,Microphone and camera' &&
       !/Download|Erase|Forget|Revoke|Add a display/.test(offered.buttons),
     JSON.stringify(offered),
   )

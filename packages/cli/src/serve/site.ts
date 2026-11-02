@@ -16,15 +16,17 @@ export const BUILT: Site = SITE
 
 // What every answer for the site carries. Nobody may frame the site, which is said in both of
 // the ways a browser looks for it. A file is only ever what its type says. Wherever someone
-// goes from the site is not told that they came from it. The site uses none of the device's
-// camera, microphone or position. Nothing here tells a browser to insist on https: the site is
-// reached plainly on a home network, and a browser told so for a name such as localhost would
-// hold every other program on this machine to it.
+// goes from the site is not told that they came from it. The camera and the microphone are the
+// site's own to ask for, and no frame's: the site records for a page that asked for them when it
+// was published and that the person allowed (web/src/media.ts), and a page in its frame is given
+// neither. Nothing uses the device's position. Nothing here tells a browser to insist on https:
+// the site is reached plainly on a home network, and a browser told so for a name such as
+// localhost would hold every other program on this machine to it.
 const CARRIED: Record<string, string> = {
   'x-frame-options': 'DENY',
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
-  'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+  'permissions-policy': 'camera=(self), microphone=(self), geolocation=(), payment=()',
 }
 
 /** A name in a Host header in the one spelling it has here: lower case, and an IPv6 address the way a browser writes it. */
@@ -65,8 +67,12 @@ export function hostOf(header: string | null): { name: string; port: number } | 
  * under the longest ending of the name that a policy can say, or on any host where it can say
  * none of it, which is as near as a policy comes to it. The live connection is then left to the
  * site's own address to cover.
+ *
+ * Reached over https, through Tailscale's own server (`secure`), the pages and the live
+ * connection are named at their https and wss addresses: a page reached otherwise would be one
+ * that a browser does not show inside a site that came over https.
  */
-function policy(header: string | null): string {
+function policy(header: string | null, secure: boolean): string {
   const host = hostOf(header)
   const said = host ? policyHost(host.name) : null
   return [
@@ -74,8 +80,8 @@ function policy(header: string | null): string {
     "script-src 'self'",
     "style-src 'self'",
     "img-src 'self'",
-    `connect-src 'self'${host && said === host.name ? ` ws://${host.name}:${host.port}` : ''}`,
-    `frame-src ${host ? `http://${said}:${contentPort(host.port)}` : "'none'"}`,
+    `connect-src 'self'${host && said === host.name ? ` ${secure ? 'wss' : 'ws'}://${host.name}:${host.port}` : ''}`,
+    `frame-src ${host ? `${secure ? 'https' : 'http'}://${said}:${contentPort(host.port)}` : "'none'"}`,
     "worker-src 'self'",
     "manifest-src 'self'",
     "object-src 'none'",
@@ -88,13 +94,13 @@ function policy(header: string | null): string {
  * That a window the site opens can do nothing to it. A browser takes that word only from an
  * address it counts as secure, which over plain http is this machine by its own name: sent
  * from any other, it is passed over and written into the browser's console as a fault, on every
- * load, on every screen of the home network. So it is said where it is taken.
+ * load, on every screen of the home network. So it is said where it is taken, and over https.
  */
 const AT_HOME = /^(localhost|[a-z0-9-]+\.localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\])$/
-const carried = (headers: Headers): Record<string, string> => ({
+const carried = (headers: Headers, secure = false): Record<string, string> => ({
   ...CARRIED,
-  'content-security-policy': policy(headers.get('host')),
-  ...(AT_HOME.test(hostOf(headers.get('host'))?.name ?? '') ? { 'cross-origin-opener-policy': 'same-origin' } : {}),
+  'content-security-policy': policy(headers.get('host'), secure),
+  ...(secure || AT_HOME.test(hostOf(headers.get('host'))?.name ?? '') ? { 'cross-origin-opener-policy': 'same-origin' } : {}),
 })
 
 // A file's bytes and the tag that says which bytes they are, worked out the first time it is asked for
@@ -109,8 +115,8 @@ function unpack(file: SiteFile) {
   return known
 }
 
-const nothing = (status: number, asked: Headers, headers: Record<string, string> = {}) =>
-  new Response(null, { status, headers: { ...carried(asked), 'cache-control': 'no-store', 'content-length': '0', ...headers } })
+const nothing = (status: number, asked: Headers, headers: Record<string, string> = {}, secure = false) =>
+  new Response(null, { status, headers: { ...carried(asked, secure), 'cache-control': 'no-store', 'content-length': '0', ...headers } })
 
 /**
  * Answers a request for the site. A path that names a file gets the file. Any other path that
@@ -123,30 +129,30 @@ const nothing = (status: number, asked: Headers, headers: Record<string, string>
  * files under /assets/ are named after what is in them, and are kept for a year. Everything
  * else is asked about again each time, and sent again only when it has changed.
  */
-export function answerSite(site: Site, method: string, path: string, headers: Headers): Response {
-  if (method !== 'GET' && method !== 'HEAD') return nothing(405, headers, { allow: 'GET, HEAD' })
+export function answerSite(site: Site, method: string, path: string, headers: Headers, secure = false): Response {
+  if (method !== 'GET' && method !== 'HEAD') return nothing(405, headers, { allow: 'GET, HEAD' }, secure)
   let name: string
   try {
     name = decodeURIComponent(path.slice(1))
   } catch {
-    return nothing(404, headers)
+    return nothing(404, headers, {}, secure)
   }
   let file = Object.hasOwn(site, name) ? site[name] : undefined
   if (!file) {
     const page = !name.startsWith('assets/') && (name === '' || (headers.get('accept') ?? '').includes('text/html'))
-    if (!page) return nothing(404, headers)
+    if (!page) return nothing(404, headers, {}, secure)
     name = 'index.html'
     file = Object.hasOwn(site, name) ? site[name] : undefined
     // A program built before the site was has none to show
     if (!file)
       return new Response('This copy of It was built without its site.\n', {
         status: 503,
-        headers: { ...carried(headers), 'cache-control': 'no-store', 'content-type': 'text/plain; charset=utf-8' },
+        headers: { ...carried(headers, secure), 'cache-control': 'no-store', 'content-type': 'text/plain; charset=utf-8' },
       })
   }
   const { bytes, tag } = unpack(file)
   const kept = name === 'index.html' ? 'no-store' : name.startsWith('assets/') ? 'public, max-age=31536000, immutable' : 'no-cache'
-  const says: Record<string, string> = { ...carried(headers), 'content-type': file.type, 'cache-control': kept }
+  const says: Record<string, string> = { ...carried(headers, secure), 'content-type': file.type, 'cache-control': kept }
   if (kept !== 'no-store') {
     says.etag = tag
     if (headers.get('if-none-match') === tag) return new Response(null, { status: 304, headers: says })

@@ -46,7 +46,13 @@ export const create = mutation({
     // Counted: that a page was shown, on what kind of screen, and whether an agent had just asked this display for it or the person opened it
     const asked = display.showing?.artifactId === artifactId && Date.now() - display.showing.at < ASKED_MS
     await counted(ctx, 'page.shown', { screen: display.screen ?? 'computer', by: asked ? 'agent' : 'person' })
-    return { mountId, version: artifact.currentVersion }
+    // What the version shown asked to use of the screen, which the site records for it only as
+    // it says. A showing is of one version, so a newer one that asks for more is another showing.
+    const version = await ctx.db
+      .query('versions')
+      .withIndex('by_artifact_n', (q) => q.eq('artifactId', artifactId).eq('n', artifact.currentVersion!))
+      .unique()
+    return { mountId, version: artifact.currentVersion, media: version?.media ?? [] }
   },
 })
 

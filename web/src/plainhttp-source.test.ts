@@ -20,6 +20,7 @@ const SECURE_ONLY: { call: RegExp; name: string; checkedIn: string[] }[] = [
   { call: /\bserviceWorker\b/, name: 'navigator.serviceWorker', checkedIn: ['push.ts'] },
   { call: /\bPushManager\b/, name: 'PushManager', checkedIn: ['push.ts'] },
   { call: /\bnavigator\.clipboard\b/, name: 'navigator.clipboard', checkedIn: ['brand.tsx'] },
+  { call: /\bmediaDevices\b/, name: 'navigator.mediaDevices', checkedIn: ['media.ts'] },
 ]
 
 function sources(dir: string): string[] {

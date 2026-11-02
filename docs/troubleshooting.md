@@ -82,6 +82,18 @@ A code pairs one browser, once, and works for ten minutes. An address from `it s
 - **Another screen cannot open the address at all.** `it network` says whether the network is on and at which addresses other devices open the site. A firewall on the machine has to let the site's port and the pages' port through, 4700 and 4701 unless you chose others. An address that says `localhost` is for the machine It runs on, and no other device can open it. To have the links agents give at an address another device can open, choose one under Displays, in "Links agents give".
 - **"It does not answer to this name."** It answers to the machine's own names and addresses and to nothing else. Open it by one of the addresses `it network` lists.
 
+## A page that cannot record
+
+A page records only through It, and It tells the page why where it does not, which a page should show:
+
+- **"This page did not ask for the microphone when it was published."** Its agent publishes it again with `--media mic` (or `camera`, or `mic,camera`).
+- **"This screen reaches It over plain http."** A browser lets a site record only at `localhost` on the machine It runs on, or at an `https` address. Run `it https on` on that machine, and open It at the address it prints. [Screens](screens.md#over-https-on-your-tailnet) says how.
+- **"The person did not allow this page to use the microphone on this screen."** Someone pressed "Don't allow", or closed the question. It asks again the next time the page is opened.
+- **"The browser did not let It use that on this screen."** The browser itself was told no for It's site. Allow the microphone or the camera for that address in the browser's site settings, and try again.
+- **"The microphone or the camera is in use by something else on this screen."** Another app, or another tab, has it. Close that and try again.
+
+`it https on` can fail with `tailscale` where Tailscale would not serve: Tailscale is not running or signed in, MagicDNS or HTTPS Certificates are off for the tailnet in Tailscale's admin console, or on Linux your user may not change what it serves until `sudo tailscale set --operator=$USER` lets it. It fails with `port_taken` where Tailscale already serves something else on one of It's ports. `tailscale serve status` says what Tailscale serves.
+
 ## A page that does not arrive, or a click that does not
 
 `it status` says whether each agent app is connected. Where It is running and is not handing what is done on a page to the conversations on this machine, it says so, and `it service logs` says what it met. A click on a page whose agent app is not connected waits where the site shows it, and the agent takes it with `it wait`. [Agents](agents.md) says which agent apps a click reaches by itself, and where it waits.

@@ -5,7 +5,7 @@ description: IF the user needs something to see and act on rather than text to r
 
 # It
 
-It is the user's two-way workspace. You write a page, It shows it on the screens they own (laptop, phone, TV, anything with a browser), and what they do on it comes back to you in this conversation. You drive it with one command, `it`.
+It is the user's two-way workspace. You write a page, It shows it on the screens they own (laptop, phone, TV, any browser), and what they do on it comes back to you in this conversation. You drive it with one command, `it`.
 
 ## When to use It
 
@@ -37,7 +37,7 @@ Run it by that name alone, `it`, every time. One command at a time, with its val
 - **`data-it-bind="path"`** puts a value from the state into an element's text (or the value of an input, a text box, a dropdown or a progress bar, or an image's source). **`data-it-show="path"`** shows an element only while the value is truthy, and `"!path"` reverses it.
 - **`It.store.set(key, value)` / `It.store.get(key)`** keep small things for the page itself, such as a draft, with the page and on every display. Read what was saved inside `It.onState`: before the state arrives, `It.store.get` returns `undefined`.
 
-A page is shown in a sandbox with no cookies and no storage that lasts, cannot frame its own files, and may hold and send only so much. Before you write a page that stores anything, loads a worker, frames a file, or is large or busy, or publishes again after a failure, read `it help page`.
+A page is shown in a sandbox with no cookies and no storage that lasts, cannot frame its own files, and may hold and send only so much. Before you write a page that stores anything, records, loads a worker, frames a file, or is large or busy, or publishes again after a failure, read `it help page`.
 
 ## Whether what they do arrives by itself
 

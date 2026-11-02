@@ -3337,15 +3337,40 @@ describe('showing a page', () => {
     const p = await publish(m, 'plan')
     const show = () => alice.browser.mutation(api.mounts.create, { artifactId: p.artifactId, displayKey: displayKey('alice') })
     const open = (mountId: string) => alice.browser.action(api.mounts.ticket, { mountId })
-    return { t, alice, p, show, open }
+    return { t, alice, m, p, show, open }
   }
+
+  test('a showing says what its version asked to use of the screen: an update keeps that unless it says otherwise, and a rollback brings back what that version asked', async () => {
+    const { m, show } = await showing()
+    const read = async () => ((await m.as.query(api.artifacts.get, { slug: 'plan' })) as { media?: string[] }).media
+    // Nothing, for a page that never asked
+    expect([(await show()).media, await read()]).toEqual([[], []])
+    // Each kind once, in the order It names them, however the command listed them
+    await publish(m, 'plan', { media: ['camera', 'mic', 'camera'] })
+    expect([(await show()).media, await read()]).toEqual([
+      ['mic', 'camera'],
+      ['mic', 'camera'],
+    ])
+    // An update that does not say keeps what the page asked for
+    await publish(m, 'plan')
+    expect((await show()).media).toEqual(['mic', 'camera'])
+    // An empty list asks for nothing
+    await publish(m, 'plan', { media: [] })
+    expect([(await show()).media, await read()]).toEqual([[], []])
+    // A version gone back to asks for what it asked for when it was published
+    await m.as.mutation(api.artifacts.rollback, { slug: 'plan', version: 3 })
+    expect((await show()).media).toEqual(['mic', 'camera'])
+    // And nothing else may be asked for
+    await expect(publish(m, 'plan', { media: ['speakers'] })).rejects.toThrow()
+  })
 
   test('a showing gets a mount of its own and exactly one ticket, which names the showing', async () => {
     const { t, alice, p, show, open } = await showing()
     const one = await show()
     const two = await show()
     expect(one.mountId).toMatch(/^[0-9a-f]{32}$/)
-    expect(Object.keys(one).sort()).toEqual(['mountId', 'version'])
+    expect(Object.keys(one).sort()).toEqual(['media', 'mountId', 'version'])
+    expect(one.media).toEqual([])
     expect([one.version, two.mountId === one.mountId]).toEqual([1, false])
     const { ticket } = await open(one.mountId)
     const jwks = createLocalJWKSet(await (await t.fetch('/.well-known/jwks.json')).json())

@@ -19,6 +19,12 @@ export interface ServiceConfig {
   network: boolean
   /** With the network on, whether the door answers the person's tailnet alone, and no other network this machine is on. */
   tailnet?: boolean
+  /**
+   * The machine's name on its tailnet, where It answers there over https as well: Tailscale's own
+   * server on this machine (`tailscale serve`) takes https at that name, on the door's two ports,
+   * and hands each request to the door on this machine. `it https on` sets it up and writes it.
+   */
+  https?: string
   /** What the backend program makes its own keys from. */
   instanceSecret: string
   /** What the service shows the backend to load functions into it and to run its internal ones. */
@@ -61,6 +67,7 @@ function kept(): ServiceConfig | null {
     port === undefined ||
     typeof c.network !== 'boolean' ||
     (c.tailnet !== undefined && typeof c.tailnet !== 'boolean') ||
+    (c.https !== undefined && (typeof c.https !== 'string' || !HTTPS_NAME.test(c.https))) ||
     typeof c.instanceSecret !== 'string' ||
     !/^[0-9a-f]{64}$/.test(c.instanceSecret) ||
     typeof c.adminKey !== 'string' ||
@@ -79,6 +86,7 @@ function kept(): ServiceConfig | null {
     port,
     network: c.network,
     ...(c.tailnet === true ? { tailnet: true } : {}),
+    ...(typeof c.https === 'string' ? { https: c.https } : {}),
     instanceSecret: c.instanceSecret,
     adminKey: c.adminKey,
     sessionSecret: c.sessionSecret,
@@ -224,6 +232,22 @@ export function noteNetwork(network: boolean, tailnet = false): boolean {
   if (config && (config.network !== network || (config.tailnet === true) !== only)) {
     const { tailnet: _, ...rest } = config
     writeWhole(settingsFile(), { ...rest, network, ...(only ? { tailnet: true } : {}) })
+  }
+  return config !== null
+}
+
+/**
+ * The name a machine has on its tailnet, as It keeps it for https: parts of lower-case letters,
+ * digits and hyphens joined by dots, as Tailscale gives it. A name of that shape is all the door
+ * takes, so that what the settings say is a name and nothing else.
+ */
+export const HTTPS_NAME = /^[a-z0-9-]{1,63}(\.[a-z0-9-]{1,63})+$/
+/** Writes the name It answers at over https on the tailnet, or that it answers at none. True where there were settings to write it in. */
+export function noteHttps(name: string | undefined): boolean {
+  const config = kept()
+  if (config && config.https !== name) {
+    const { https: _, ...rest } = config
+    writeWhole(settingsFile(), { ...rest, ...(name ? { https: name } : {}) })
   }
   return config !== null
 }

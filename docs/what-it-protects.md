@@ -36,7 +36,17 @@ A display keeps eight earlier pairings. Access invited by an older pairing ends 
 
 A page is written by an agent, and may show content that neither the agent nor you wrote. It is kept apart from the site that shows it and from every other page. Pages are served from a port of their own, and a browser is told to run each one as a sandboxed document that shares nothing with anything else: it has no cookies and no storage in the browser, it cannot read the site's pages or your pairing, it cannot read another page, and it cannot move the tab it is shown in. Only the site may frame a page.
 
-A page's files are at an address that cannot be guessed, made for one showing on one screen. The address stops answering when nothing has asked under it for ten minutes, when it is a day old, when the page is deleted, when its display is signed out, and when It stops. For a deleted page and a display that was signed out, that is a moment after and not the same instant, and longer where the part of It that serves the files could not be told: [What It keeps](data.md#how-long-things-are-kept) says how long. A page tells the site only that it wants to send an action for itself, with any files it attaches, and how much it may send is bounded. The site does not open a file a page sends: it keeps and uploads the bytes as they are, and the page's own frame is where a photo is made smaller.
+A page's files are at an address that cannot be guessed, made for one showing on one screen. The address stops answering when nothing has asked under it for ten minutes, when it is a day old, when the page is deleted, when its display is signed out, and when It stops. For a deleted page and a display that was signed out, that is a moment after and not the same instant, and longer where the part of It that serves the files could not be told: [What It keeps](data.md#how-long-things-are-kept) says how long. A page tells the site only that it wants to send an action for itself, with any files it attaches, or that it wants a recording or a photo, which the next section describes, and how much it may send is bounded. The site does not open a file a page sends: it keeps and uploads the bytes as they are, and the page's own frame is where a photo is made smaller.
+
+### The microphone and the camera are the site's, and a page gets only what the person allows
+
+No browser gives the microphone or the camera to a sandboxed document, so a page never has either. The site has them, under its own address, which is the one the browser asks the person about, and it records for a page only where three things hold. The page asked for the microphone, the camera or both when its agent published it, with `it create --media`, and a version of a page that did not ask is given neither. The person at that screen said yes to that page, in a question It asks in its own words, which names the page, the agent app that made it and the machine that app is on. And the browser lets the site use the device, which it asks the person once.
+
+What the person allows is kept in that browser, for that display, for that page as the conversation that has it now has it. A page that another conversation takes over is asked about again. A browser that signs out, or whose display is forgotten, lets go of everything it allowed, and erasing everything takes it away with everything else the site keeps in a browser. Settings lists every page allowed on that screen, and takes back any of them; so does a button in the page's bar. Taking back stops a recording at once, in every tab of that browser.
+
+While the site records for a page, It's bar above that page has a row of its own that says so, with what it records, for how long, and a button that stops it. Stopped there, what was recorded is thrown away and the page is not given it. A page that makes itself fill the screen while it records is put back in its frame, so that the bar stays in sight. While the screen does not show the site, as when another tab or app is in front, the recording pauses and nothing is recorded until the site is shown again. A recording also ends when the page is closed, when what was allowed is taken back, and after an hour. A page records one thing at a time. A photo is taken by the person, in It's own view of the camera, and the page is given that one photo.
+
+What was recorded is given to the page that asked, as a file, and to nothing else: the site keeps no copy and sends it nowhere. The page sends it where it sends anything. Sent to its agent with an action, it is uploaded, kept and read as any file an action carries, as the section on uploads below says.
 
 ### The site loads only itself
 
@@ -47,6 +57,12 @@ The site runs no script and uses no style, picture or anything else that does no
 It runs Convex's backend program beside itself, and that program listens on the machine's own address and nowhere else, whether or not the network is on. Other devices reach only the door, which is It's own code, and the door passes on very little: the site, pairing, a browser's live connection, the calls of a function, uploads and the pages. The backend's routes for loading functions, changing its settings and reading what it stores as its administrator cannot be reached through the door at all.
 
 The door answers only to the machine's own names and addresses. A request that names the machine by anything else is refused, which keeps a website elsewhere from reaching It through your browser by a name that it has pointed at your machine. A page of another site is refused by the origin its browser names.
+
+### Over https, the tailnet is answered through Tailscale on the machine itself
+
+`it https on` has Tailscale's own server on the machine It runs on take `https` at the machine's name on the tailnet, on two ports two above the site's and the pages' (4702 and 4703 where It is on 4700 and 4701), with a certificate Tailscale keeps for that name, and hand each request to the site's or the pages' port on the machine itself. It answers a request as one that came over `https` only where all of these hold: it came from the machine itself, it names the machine's name on the tailnet as It's settings hold it and the `https` port that stands for the port it arrived at, and it carries Tailscale's word that it came over `https`, which Tailscale writes whatever the browser sent. Over `https` the site names its pages and its live connection at their `https` and `wss` addresses, a page may be framed only by the site at its `https` address, the site's own calls are taken only from that address and not from the same name over plain `http`, and codes that were refused are counted by the address on the tailnet that Tailscale says sent them. What Tailscale says of who asked, the person's login and name, goes no further than the door.
+
+`it https on` sets up only those two ports, and refuses where Tailscale already serves something else on either of them. It's own ports, and whoever reaches them, are as `it network` has them. `it https off` takes away only what It set up there, and leaves whatever else Tailscale serves on the machine as it is.
 
 ### What It asks of itself goes to itself
 
@@ -102,7 +118,7 @@ A program running as your own user can read `~/.it` and so can do anything It ca
 
 ### On your network, everything travels in the clear
 
-It speaks plain `http` and has no encryption of its own. As it stands it also cannot be put behind a proxy that adds `https` for it: the door takes every request as having come over plain `http`, and will not pair a browser that came any other way. With the network off none of that matters, because nothing leaves the machine. With the network on:
+It speaks plain `http` and has no encryption of its own. The one way it is reached over `https` is through Tailscale on the machine It runs on, with `it https on`, as described above: a device that opens It at that address has what passes between it and the machine encrypted by `https` as well as by Tailscale, and none of what follows applies to it. Any other proxy that adds `https` is not trusted, and a request that comes through one is taken as plain `http`. With the network off none of that matters, because nothing leaves the machine but what Tailscale carries. With the network on:
 
 - Anyone who can watch the traffic on that network can read your pages, their state, what you do on them and what your agents are told.
 - They can read a pairing code as it is traded, and a session's cookie or token as it is sent, and with any of them use the site as that browser.
@@ -140,7 +156,7 @@ Browser retries of a page click or typed message share its original identity and
 
 ### It is not made for the public internet
 
-Do not forward a port to It, give it a public address, or put it where strangers can reach it. It has no encryption, it answers only to the machine's own names, and its limits on how fast a caller may try things are sized for one household.
+Do not forward a port to It, give it a public address, open it to the internet with Tailscale Funnel, or put it where strangers can reach it. It has no encryption, it answers only to the machine's own names, and its limits on how fast a caller may try things are sized for one household.
 
 ### The keys It works with are not replaced
 
@@ -152,6 +168,22 @@ It keeps a page away from the site and from the other pages. It does not limit w
 
 - A page's scripts can load anything from the internet and send anything they hold there. Do not put a secret in a page.
 - A page chooses what an action says. The site tells the agent whether someone had just used the page when an action was sent, and no more than that. A page that shows content from elsewhere, such as an email or a web page, can be made by that content to send an action that the person did not choose. An agent should not take an action alone as the person's approval of something that matters, and the agent skill says so.
+
+### A page that records holds what it recorded
+
+What the site gives a page of the microphone or the camera is the page's, and the page's scripts can send it anywhere on the internet, as they can anything else they hold. Once the person has allowed a page on a screen, the page can begin recording there whenever it is shown, without a click: the row in It's bar is what says so, and a page does not have to say anything of it on the page itself. Allow only pages whose agent you would let hear, or see, the room that screen is in.
+
+The browser's own permission is for It's site as a whole. Once the person has given it, the question It asks is what stands between the device and every page, and that question is the site's own code. Whoever can pair a browser as a screen can allow a page on that screen. A paired screen can allow a page on itself and on no other screen, and can see under Settings what is allowed there.
+
+A browser gives the microphone and the camera only to a site it reaches securely: `localhost` on the machine It runs on, or an `https` address. So on a screen that reaches It over plain `http`, no page is recorded for at all, and the page and Settings say why.
+
+### Over https, Tailscale is trusted, and the machine's name is public
+
+With `it https on`, Tailscale on the machine It runs on reads everything that passes before It does, and decides which devices reach It: those its rules let reach the machine on those ports. It answers whichever of them Tailscale hands on, whatever `it network` says, and `it network off` does not close that. `it https off` does.
+
+A program on the machine It runs on can say that a request came over `https` through Tailscale. It gains nothing by it that it could not have already, since it can ask the door anything as a program.
+
+Tailscale's certificate for the machine's name is made by Let's Encrypt, and every certificate it makes is written into public logs that anyone can read. So the machine's name on your tailnet, and your tailnet's own name, become public once `it https on` has run. Nothing else about It is in them. Do not turn on Tailscale Funnel for It's ports: Funnel opens a name to the whole internet, and It is not made for that.
 
 ### A notification passes through the browser's push service
 
