@@ -1,5 +1,6 @@
 // The backend's settings. The service that runs the backend on this machine gives them to it
 // as environment variables when it loads these functions.
+import { STORAGE, storageBytes } from '@it/protocol'
 
 /** The base port, given as IT_PORT: the door listens on it, and every other port is counted from it. */
 export function basePort(): number {
@@ -19,3 +20,10 @@ export const door = () => `http://127.0.0.1:${basePort()}`
 export const site = () => `http://localhost:${basePort()}`
 /** This backend's own address for HTTP, which is also the issuer of everything it signs. */
 export const issuer = () => process.env.CONVEX_SITE_URL as string
+
+/** What a storage setting gives in bytes, or what It keeps where none was given. The service checked it before giving it. */
+const stored = (of: (typeof STORAGE)[keyof typeof STORAGE]) => storageBytes(process.env[of.setting] ?? '') ?? of.bytes
+/** How much the files of a person's pages may come to, given as IT_PAGES_GB. */
+export const pagesBytes = () => stored(STORAGE.pages)
+/** How much the files pages sent with actions may come to, given as IT_ACTION_FILES_GB. */
+export const actionFilesBytes = () => stored(STORAGE.actionFiles)

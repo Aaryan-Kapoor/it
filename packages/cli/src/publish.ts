@@ -3,8 +3,9 @@
 import { execFileSync } from 'node:child_process'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { type FileHandle, open } from 'node:fs/promises'
 import path from 'node:path'
-import { type FileEntry, isSafePath, LIMITS, NOUN, PUBLICATION, uploadBudgetMs } from '@it/protocol'
+import { type FileEntry, isSafePath, LIMITS, NOUN, PUBLICATION, sizeSaid, UPLOAD, uploadBudgetMs } from '@it/protocol'
 import { claimLock } from './legacy-lock'
 import { api, call, direct, doorRefusal, inHome, machine, Problem, readJson, sessionAsked, sessionNote, throughDoor, writePrivate } from './lib'
 import { type Profile, profileOf } from './profiles'
@@ -14,25 +15,32 @@ import { agentOf, filesBand, record, sizeBand } from './usage'
 
 interface Gathered {
   entry: FileEntry
-  data: Buffer
+  /** The file's bytes, where they are held in memory: text that was given to publish, and a file small enough. */
+  data?: Buffer
+  /** Where a file that is not held is read again from as it is sent, and which file that was. */
+  from?: OnDisk
+  /** Whether it is markup or a script that calls It to send something back. */
+  sends?: boolean
+}
+/** A file on the disk as it was when it was read: where it is, and the device and number that are that very file. */
+interface OnDisk {
+  path: string
+  dev: bigint
+  ino: bigint
 }
 
 /**
- * What is in an open file, and never more than `most` bytes of it, however much the file has
- * grown since it was looked at. `size` is what it held then, which is read in one piece.
+ * How much of a page's files is held in memory from when it is read until it is sent: the
+ * largest one file that is, and all of them together. Any other is read from the disk again as
+ * it is sent, and has to be the very file that was read, of the same size.
  */
-function upTo(fd: number, most: number, size: number): Buffer {
-  const pieces: Buffer[] = []
-  let got = 0
-  while (got < most) {
-    const piece = Buffer.allocUnsafe(Math.min(most - got, got === 0 ? size + 1 : 64 * 1024))
-    const n = readSync(fd, piece, 0, piece.length, null)
-    if (n === 0) break
-    pieces.push(piece.subarray(0, n))
-    got += n
-  }
-  return pieces.length === 1 ? pieces[0]! : Buffer.concat(pieces, got)
-}
+const HELD = { one: 8 * 1024 * 1024, all: 100 * 1024 * 1024 }
+/** How much of a file is read at a time. */
+const PIECE = 1024 * 1024
+/** Markup and scripts of up to this size are looked in for a call to It that sends something back. */
+const LOOKED_IN = 2_000_000
+const looksIn = (as: string) => /\.(html?|m?js)$/i.test(as)
+const sendsIn = (as: string, data: Buffer) => looksIn(as) && data.length <= LOOKED_IN && /\bIt\.action\s*\(/.test(data.toString('utf8'))
 
 /**
  * Reads one file, having checked first that it is small enough to be worth reading. `size` is
@@ -40,11 +48,13 @@ function upTo(fd: number, most: number, size: number): Buffer {
  * have made it larger by the time it is opened, and larger again while it is read. So it is
  * read no further than a file may be large and than is left of what a page may hold, with one
  * byte more to tell that it went past, and what is counted against the page is what was read.
+ * Its checksum is made as it is read, a piece at a time. A small file is held in memory from
+ * then on; a larger one is let go of, and read again as it is sent.
  */
-export function read(full: string, as: string, size: number, total: { bytes: number }, inside?: string): Gathered {
+export function read(full: string, as: string, size: number, total: { bytes: number; held?: number }, inside?: string): Gathered {
   if (!isSafePath(as)) throw new Problem(`Not a usable file path: ${as}`, 'invalid')
-  const tooLarge = () => new Problem(`${as} is larger than ${LIMITS.fileBytes / 1024 / 1024} MB.`, 'limit')
-  const tooMuch = () => new Problem(`A ${NOUN.one} is at most ${LIMITS.versionBytes / 1024 / 1024} MB.`, 'limit')
+  const tooLarge = () => new Problem(`${as} is larger than ${sizeSaid(LIMITS.fileBytes)}.`, 'limit')
+  const tooMuch = () => new Problem(`A ${NOUN.one} is at most ${sizeSaid(LIMITS.versionBytes)}.`, 'limit')
   if (size > LIMITS.fileBytes) throw tooLarge()
   if (total.bytes + size > LIMITS.versionBytes) throw tooMuch()
   // Opened so that a link is refused by the system itself, in case one was put there after the
@@ -53,32 +63,86 @@ export function read(full: string, as: string, size: number, total: { bytes: num
   // until something wrote to it, with nothing said and no way for a time limit to end it
   let fd: number
   try {
-    fd = openSync(full, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
+    fd = openSync(full, OPENED)
   } catch {
     throw new Problem(`${as} could not be read, or is a link.`, 'invalid')
   }
   try {
-    const stat = fstatSync(fd)
+    const stat = fstatSync(fd, { bigint: true })
     if (!stat.isFile()) throw new Problem(`${as} is not an ordinary file.`, 'invalid')
-    if (stat.size > LIMITS.fileBytes) throw tooLarge()
+    if (stat.size > BigInt(LIMITS.fileBytes)) throw tooLarge()
     // A folder on the way to the file may have been swapped for a link after it was listed,
     // which the check on the file itself cannot see. So where the opened file really is gets
     // looked up, and it must be this very file, inside the folder being published.
     if (inside !== undefined) {
       const real = realpathSync(full)
-      const there = statSync(real)
+      const there = statSync(real, { bigint: true })
       if (!real.startsWith(inside + path.sep) || there.ino !== stat.ino || there.dev !== stat.dev)
         throw new Problem(`${as} is outside the folder being published.`, 'invalid')
     }
-    const data = upTo(fd, Math.min(LIMITS.fileBytes, LIMITS.versionBytes - total.bytes) + 1, stat.size)
-    if (data.length > LIMITS.fileBytes) throw tooLarge()
-    total.bytes += data.length
+    const most = Math.min(LIMITS.fileBytes, LIMITS.versionBytes - total.bytes) + 1
+    const hash = createHash('sha256')
+    const pieces: Buffer[] = []
+    let got = 0
+    while (got < most) {
+      // What the listing said it held is read in one piece, where that is small enough to be held
+      const piece = Buffer.allocUnsafe(Math.min(most - got, got === 0 ? Math.min(size + 1, HELD.one + 1) : PIECE))
+      const n = readSync(fd, piece, 0, piece.length, null)
+      if (n === 0) break
+      hash.update(piece.subarray(0, n))
+      got += n
+      if (got <= HELD.one) pieces.push(piece.subarray(0, n))
+      else pieces.length = 0
+    }
+    if (got > LIMITS.fileBytes) throw tooLarge()
+    total.bytes += got
     if (total.bytes > LIMITS.versionBytes) throw tooMuch()
-    return one(as, data)
+    const entry = { path: as, size: got, sha256: hash.digest('hex') }
+    const data = got <= HELD.one ? (pieces.length === 1 ? pieces[0]! : Buffer.concat(pieces, got)) : undefined
+    const sends = data !== undefined && sendsIn(as, data)
+    if (data && (total.held ?? 0) + got <= HELD.all) {
+      total.held = (total.held ?? 0) + got
+      return { entry, data, sends }
+    }
+    return { entry, from: { path: path.resolve(full), dev: stat.dev, ino: stat.ino }, sends }
   } finally {
     closeSync(fd)
   }
 }
+/** How a file of a page is opened: never through a link, and never waiting for whatever is at the other end of a pipe. */
+const OPENED = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
+
+/**
+ * The bytes of a file that is not held, from where it begins to be sent to where it ends, read
+ * from the disk a piece at a time as they are sent. It must be the very file that was read, as
+ * large as it was then: one that has been swapped for another, or has grown or shrunk, is not
+ * sent at all, and one whose bytes changed in place is refused by It, which checks them against
+ * the checksum made as it was read.
+ */
+async function* fromDisk(f: Gathered, offset: number, length: number): AsyncGenerator<Uint8Array> {
+  const from = f.from!
+  let handle: FileHandle
+  try {
+    handle = await open(from.path, OPENED)
+  } catch {
+    throw changedSince(f)
+  }
+  try {
+    const stat = await handle.stat({ bigint: true })
+    if (!stat.isFile() || stat.dev !== from.dev || stat.ino !== from.ino || stat.size !== BigInt(f.entry.size)) throw changedSince(f)
+    for (let at = offset; at < offset + length; ) {
+      const piece = Buffer.allocUnsafe(Math.min(PIECE, offset + length - at))
+      const { bytesRead } = await handle.read(piece, 0, piece.length, at)
+      if (bytesRead === 0) throw changedSince(f)
+      at += bytesRead
+      yield piece.subarray(0, bytesRead)
+    }
+  } finally {
+    await handle.close()
+  }
+}
+const changedSince = (f: Gathered) =>
+  new Problem(`${f.entry.path} changed while it was being published.`, 'invalid', 'Publish again once nothing is writing to it.')
 
 /**
  * Lists the folder this program is standing in, and goes down into its folders by standing in
@@ -110,8 +174,8 @@ function walk(as: string, out: Gathered[], total: { bytes: number }, inside?: st
 }
 function one(p: string, data: Buffer): Gathered {
   if (!isSafePath(p)) throw new Problem(`Not a usable file path: ${p}`, 'invalid')
-  if (data.length > LIMITS.fileBytes) throw new Problem(`${p} is larger than ${LIMITS.fileBytes / 1024 / 1024} MB.`, 'limit')
-  return { entry: { path: p, size: data.length, sha256: createHash('sha256').update(data).digest('hex') }, data }
+  if (data.length > LIMITS.fileBytes) throw new Problem(`${p} is larger than ${sizeSaid(LIMITS.fileBytes)}.`, 'limit')
+  return { entry: { path: p, size: data.length, sha256: createHash('sha256').update(data).digest('hex') }, data, sends: sendsIn(p, data) }
 }
 
 /** A page from a folder, one file, or HTML text. A lone file becomes the page's index.html. */
@@ -276,19 +340,80 @@ const sleep = (ms: number, ending?: AbortSignal) =>
     if (ending?.aborted) abort()
   })
 
-/** Uploads one file, waiting and trying again when told to slow down or when the connection drops. */
+/**
+ * Uploads one file: whole, where one request carries it, and otherwise in parts, one after
+ * another, each saying where in the file it begins. It is told after each part where the next
+ * is to begin, and goes on from there.
+ */
 async function put(where: string, grant: string, f: Gathered, ending: AbortSignal): Promise<void> {
+  const size = f.entry.size
+  if (size <= UPLOAD.requestBytes) {
+    await send(where, grant, f, null, ending)
+    return
+  }
+  // Told to go on from somewhere else, as where a part's answer was lost: so many times in a row and no more
+  let elsewhere = 0
+  for (let offset = 0; offset < size; ) {
+    const length = Math.min(UPLOAD.partBytes, size - offset)
+    const next = await send(where, grant, f, { offset, length }, ending)
+    if (next === offset + length || (next === undefined && offset + length === size)) elsewhere = 0
+    else if (++elsewhere > 5) throw new Problem(`${f.entry.path} could not be uploaded: its parts were not taken in order.`, 'error')
+    offset = next ?? offset + length
+  }
+}
+
+/**
+ * Sends a file, or one part of it, waiting and trying again when told to slow down or when the
+ * connection drops. Answers with where the next part is to begin, where It says.
+ */
+async function send(
+  where: string,
+  grant: string,
+  f: Gathered,
+  part: { offset: number; length: number } | null,
+  ending: AbortSignal,
+): Promise<number | undefined> {
+  const { offset, length } = part ?? { offset: 0, length: f.entry.size }
   for (let attempt = 0; ; attempt++) {
     ending.throwIfAborted()
     // Sent to the door itself, whatever proxy the environment names: a grant and a person's page go with it
     const r = await direct(where, {
       method: 'PUT',
-      headers: { authorization: `Bearer ${grant}`, 'x-it-sha256': f.entry.sha256 },
-      body: f.data,
+      headers: {
+        authorization: `Bearer ${grant}`,
+        'x-it-sha256': f.entry.sha256,
+        'content-length': String(length),
+        ...(part ? { 'x-it-offset': String(offset) } : {}),
+      },
+      body: f.data ? f.data.subarray(offset, offset + length) : fromDisk(f, offset, length),
       // A minute, and longer for a large file on a slow line: never for ever
-      signal: AbortSignal.any([ending, AbortSignal.timeout(uploadBudgetMs(f.entry.size))]),
+      signal: AbortSignal.any([ending, AbortSignal.timeout(uploadBudgetMs(length))]),
     }).catch((err) => err as Error)
-    if (r instanceof Response && r.ok) return
+    // The file itself is not what it was: nothing mends that but publishing again
+    if (r instanceof Problem) throw r
+    const said = r instanceof Response ? await r.text().catch(() => '') : ''
+    const next = (): number | undefined => {
+      try {
+        const n = (JSON.parse(said) as { next?: unknown }).next
+        return Number.isSafeInteger(n) && (n as number) >= 0 && (n as number) <= f.entry.size ? (n as number) : undefined
+      } catch {
+        return undefined
+      }
+    }
+    if (r instanceof Response && r.ok) return next()
+    // Not the part that comes next: It says which does
+    if (r instanceof Response && r.status === 409 && part && next() !== undefined) return next()
+    if (r instanceof Response && r.status === 507) {
+      let keepFree: unknown
+      try {
+        keepFree = (JSON.parse(said) as { keepFree?: unknown }).keepFree
+      } catch {}
+      throw new Problem(
+        `${f.entry.path} could not be uploaded: the disk It keeps its files on has too little room left${typeof keepFree === 'number' ? `, and It always leaves ${sizeSaid(keepFree)} of it free` : ''}.`,
+        'limit',
+        'Make room on that disk, or delete some pages, then publish again.',
+      )
+    }
     // An address that nothing can be sent to stays one however often it is tried
     const retryable = r instanceof Response ? r.status === 429 || r.status >= 500 : !(r instanceof TypeError)
     if (ending.aborted) throw new Problem('The publication exceeded its thirty-minute budget.', 'timeout')
@@ -306,7 +431,7 @@ async function put(where: string, grant: string, f: Gathered, ending: AbortSigna
         )
       }
       throw (
-        doorRefusal(await r.text().catch(() => ''), new URL(where).origin) ??
+        doorRefusal(said, new URL(where).origin) ??
         new Problem(`Uploading ${f.entry.path} was refused (${r.status}).`, r.status === 429 ? 'rate_limited' : 'error')
       )
     }
@@ -316,7 +441,7 @@ async function put(where: string, grant: string, f: Gathered, ending: AbortSigna
 
 /** Whether a page's own files call It to say what the person did: looked for in its markup and scripts, and nothing of them is kept. */
 function sendsBack(files: Gathered[]): boolean {
-  return files.some((f) => /\.(html?|m?js)$/i.test(f.entry.path) && f.data.length <= 2_000_000 && /\bIt\.action\s*\(/.test(f.data.toString('utf8')))
+  return files.some((f) => f.sends)
 }
 
 /** The place the owner chose for links, as the agent is told of it. */
@@ -360,7 +485,7 @@ export async function publish(input: {
   tour?: string
 }): Promise<{ slug: string; version: number; url: string; note?: string }> {
   const bytes = input.files.reduce((n, f) => n + f.entry.size, 0)
-  if (bytes > LIMITS.versionBytes) throw new Problem(`A ${NOUN.one} is at most ${LIMITS.versionBytes / 1024 / 1024} MB.`, 'limit')
+  if (bytes > LIMITS.versionBytes) throw new Problem(`A ${NOUN.one} is at most ${sizeSaid(LIMITS.versionBytes)}.`, 'limit')
   const asked = sessionAsked()
   const session = asked?.session
   const request = {

@@ -1,6 +1,7 @@
 // The files a page sends with a click, as the site's outbox keeps and sends them: taken by It,
 // uploaded and found whole before the click is sent; kept in this browser, apart from the click,
 // while they are not; and let go of with it.
+import { LIMITS, UPLOAD } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -15,6 +16,8 @@ let connected = true
 /** Room enough for anything, where a test only means to put files there. */
 const ANY_ROOM = { under: '', most: Number.POSITIVE_INFINITY }
 const MB = 1024 * 1024
+/** A file that says it is so large, and holds nothing: the room a browser keeps for files is counted by what they say of themselves. */
+const sized = (size: number, name: string) => Object.defineProperty(new File([], name), 'size', { value: size }) as File
 
 /**
  * Stands in for It: the backend, which takes a click's files and then the click, and the door,
@@ -25,10 +28,10 @@ function it() {
   const state = {
     holds: 0,
     files: 0,
-    uploads: [] as { n: number; grant: string; sha256: string; bytes: number }[],
+    uploads: [] as { n: number; grant: string; sha256: string; bytes: number; offset?: number }[],
     prepared: [] as Record<string, unknown>[],
     submitted: [] as Record<string, unknown>[],
-    door: (_n: number): number | 'offline' => 200,
+    door: (_n: number, _offset?: number, _grant?: string): number | 'offline' => 200,
     prepare: (): ConvexError<any> | null => null,
   }
   const action = vi.fn(async (fn: unknown, args: Record<string, unknown>) => {
@@ -51,11 +54,16 @@ function it() {
     'fetch',
     vi.fn(async (url: string, init: RequestInit) => {
       const n = Number(String(url).split('/upload/')[1])
-      const said = state.door(n)
-      if (said === 'offline') throw new TypeError('Failed to fetch')
       const headers = init.headers as Record<string, string>
-      state.uploads.push({ n, grant: headers.authorization!.slice(7), sha256: headers['x-it-sha256']!, bytes: (init.body as Blob).size })
-      if (said === 200) state.holds = Math.max(state.holds, n)
+      const offset = headers['x-it-offset'] === undefined ? undefined : Number(headers['x-it-offset'])
+      const grant = headers.authorization!.slice(7)
+      const said = state.door(n, offset, grant)
+      if (said === 'offline') throw new TypeError('Failed to fetch')
+      const bytes = (init.body as Blob).size
+      state.uploads.push({ n, grant, sha256: headers['x-it-sha256']!, bytes, ...(offset === undefined ? {} : { offset }) })
+      // A file sent in parts is whole once its last part has arrived
+      const size = ((state.prepared.at(-1)?.files as { size: number }[] | undefined) ?? [])[n - 1]?.size
+      if (said === 200 && (offset === undefined || offset + bytes === size)) state.holds = Math.max(state.holds, n)
       return new Response(null, { status: said })
     }),
   )
@@ -162,6 +170,21 @@ describe('a click with files', () => {
     expect(stored()).toHaveLength(1)
   }, 30_000)
 
+  test('sends a file larger than one request carries in parts, each saying where it begins, and goes on from where it had got to under a fresh grant', async () => {
+    const b = it()
+    const take = new File([new Uint8Array(2 * UPLOAD.partBytes + 100).map((_, i) => i % 251)], 'take-3.webm', { type: 'video/webm' })
+    // The first grant runs out after the first part
+    b.state.door = (_n, offset, grant) => (grant === 'grant-1' && (offset ?? 0) > 0 ? 401 : 200)
+    await submit(b.client, 'alice', 'page1', envelope('click-take-001', '{"take":{"file":1}}'), () => true, undefined, [take])
+    expect(b.state.uploads.map((u) => [u.grant, u.offset, u.bytes])).toEqual([
+      ['grant-1', 0, UPLOAD.partBytes],
+      ['grant-1', UPLOAD.partBytes, UPLOAD.partBytes],
+      ['grant-2', UPLOAD.partBytes, UPLOAD.partBytes],
+      ['grant-2', 2 * UPLOAD.partBytes, 100],
+    ])
+    expect(b.state.submitted).toHaveLength(1)
+  }, 30_000)
+
   test('goes on uploading once the connection is back, however often it dropped before', async () => {
     const b = it()
     // The connection drops in the middle of two uploads in a row, and is then back
@@ -244,11 +267,14 @@ describe('a click with files', () => {
         Array.from({ length: 11 }, () => photo(1)),
       ),
     ).toBe('An action carries at most 10 files.')
-    expect(await send('click-large-01', [new File([new Uint8Array(25 * 1024 * 1024 + 1)], 'big.mov')])).toBe('A file sent with an action is at most 25 MB.')
+    expect(await send('click-large-01', [sized(LIMITS.actionFileBytes + 1, 'big.mov')])).toBe('A file sent with an action is at most 1 GB.')
+    expect(await send('click-large-02', [sized(LIMITS.actionFileBytes, 'a.mov'), sized(LIMITS.actionFileBytes, 'b.mov'), photo(1)])).toBe(
+      'The files sent with one action come to at most 2 GB.',
+    )
     // What is kept unsent already, of the person's, counts, whichever tab kept it: a browser does not fill with files
-    bytes.held.set('it.outbox.alice.page2.click-waiting-1', { files: [{ size: 99 * MB } as Blob], at: Date.now() })
+    bytes.held.set('it.outbox.alice.page2.click-waiting-1', { files: [{ size: 4 * 1024 * MB - MB } as Blob], at: Date.now() })
     // Another person's files are theirs, and take none of this person's room
-    bytes.held.set('it.outbox.bob.page2.click-bobs-waiting', { files: [{ size: 99 * MB } as Blob], at: Date.now() })
+    bytes.held.set('it.outbox.bob.page2.click-bobs-waiting', { files: [{ size: 4 * 1024 * MB - MB } as Blob], at: Date.now() })
     expect(await send('click-room-001', [photo(2 * 1024 * 1024)])).toMatch(/^Too many files are still waiting to be sent from this browser/)
     expect(b.state.prepared).toEqual([])
     expect(b.state.uploads).toEqual([])
@@ -258,7 +284,8 @@ describe('a click with files', () => {
     const b = it()
     // Nothing is answered, so that each click that is let in stays kept, as with no connection
     vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
-    const half = () => [new File([new Uint8Array(17 * MB)], 'a.mov'), new File([new Uint8Array(17 * MB)], 'b.mov')]
+    // Two of them fit in the room, which is the files of two of the largest actions, and three do not
+    const half = () => [sized(768 * MB, 'a.mov'), sized(768 * MB, 'b.mov')]
     const sent = await Promise.allSettled(
       ['click-at-once-1', 'click-at-once-2', 'click-at-once-3'].map((id) =>
         Promise.race([
@@ -270,7 +297,7 @@ describe('a click with files', () => {
     const said = sent.map((r) => (r.status === 'fulfilled' ? r.value : (r.reason as Error).message))
     expect(said.filter((s) => s === 'still on its way')).toHaveLength(2)
     expect(said.filter((s) => /^Too many files are still waiting to be sent from this browser/.test(String(s)))).toHaveLength(1)
-    expect([...bytes.held.values()].map((v) => v.files.reduce((n, f) => n + f.size, 0))).toEqual([34 * MB, 34 * MB])
+    expect([...bytes.held.values()].map((v) => v.files.reduce((n, f) => n + f.size, 0))).toEqual([1536 * MB, 1536 * MB])
     expect(stored()).toHaveLength(2)
   }, 30_000)
 

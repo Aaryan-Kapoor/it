@@ -13,7 +13,7 @@
 // whole: only then is the click itself sent, naming them. Each of those steps may be done
 // again, after a dropped connection, a closed tab or from another tab, and carries on from
 // where it stopped, so the click is still sent once.
-import { type ActionEnvelope, fileName, fileType, LIMITS, MESSAGE } from '@it/protocol'
+import { type ActionEnvelope, fileName, fileType, LIMITS, MESSAGE, sizeSaid, UPLOAD } from '@it/protocol'
 import type { ConvexReactClient } from 'convex/react'
 import { ConvexError } from 'convex/values'
 import { kept as kept_ } from './kept'
@@ -33,8 +33,8 @@ const FRESH_MS = 10_000
 /** How long a tab's hold on a click it is sending lasts without being renewed, and how often it is renewed. */
 const HOLD_MS = 15_000
 const HOLD_EVERY_MS = 5_000
-/** How many bytes of files may be kept unsent in this browser for one person. */
-const MAX_FILE_BYTES = 100 * 1024 * 1024
+/** How many bytes of files may be kept unsent in this browser for one person: the files of two of the largest actions. */
+const MAX_FILE_BYTES = 2 * LIMITS.actionFilesBytes
 /** How long the bytes of a click may be kept with no click of their own, while that click is being saved. */
 const BYTES_ALONE_MS = 60_000
 /** What the site sends for a page: the page's envelope with its data as JSON text. */
@@ -307,8 +307,13 @@ async function attach(
   }
 }
 
-/** Sends one file to the door, under the grant It gave for exactly its bytes. 'again' where the grant has run out and another is to be asked for. */
+/**
+ * Sends one file to the door, under the grant It gave for exactly its bytes: whole, where one
+ * request carries it, and otherwise in parts. 'again' where the grant has run out and another
+ * is to be asked for.
+ */
 async function upload(n: number, file: Blob, what: Carried, grant: string): Promise<'done' | 'again'> {
+  if (file.size > UPLOAD.requestBytes) return inParts(n, file, what, grant)
   let answered: Response
   try {
     answered = await fetch(`/upload/${n}`, {
@@ -319,11 +324,74 @@ async function upload(n: number, file: Blob, what: Carried, grant: string): Prom
       credentials: 'omit',
     })
   } catch {
-    throw new ConvexError({ code: 'unavailable', message: 'The file could not be sent. Check the connection: it is kept, and sent again when it can be.' })
+    throw cannotSend()
   }
   if (answered.ok) return 'done'
+  return refused(answered)
+}
+
+/**
+ * Sends a file in parts, one after another, each saying where in the file it begins, and going
+ * on from wherever the door says the next is to begin. A file whose grant runs out part of the
+ * way goes on, under the next, from where it had got to.
+ */
+async function inParts(n: number, file: Blob, what: Carried, grant: string): Promise<'done' | 'again'> {
+  const which = `${what.sha256}:${n}`
+  // Told to go on from somewhere else, as where a part's answer was lost: so many times in a row and no more
+  let elsewhere = 0
+  try {
+    for (let offset = reached.get(which) ?? 0; offset < file.size; ) {
+      const length = Math.min(UPLOAD.partBytes, file.size - offset)
+      let answered: Response
+      try {
+        answered = await fetch(`/upload/${n}`, {
+          method: 'PUT',
+          headers: { authorization: `Bearer ${grant}`, 'x-it-sha256': what.sha256, 'x-it-offset': String(offset) },
+          body: file.slice(offset, offset + length),
+          cache: 'no-store',
+          credentials: 'omit',
+        })
+      } catch {
+        throw cannotSend()
+      }
+      const said = (await answered
+        .clone()
+        .json()
+        .catch(() => ({}))) as { next?: unknown }
+      const next = Number.isSafeInteger(said.next) && (said.next as number) >= 0 && (said.next as number) <= file.size ? (said.next as number) : undefined
+      // Not the part that comes next: the door says which does
+      if (!answered.ok && !(answered.status === 409 && next !== undefined)) {
+        const outcome = await refused(answered)
+        if (outcome === 'again') return 'again'
+      }
+      if (next === offset + length || (next === undefined && offset + length === file.size)) elsewhere = 0
+      else if (++elsewhere > 5) throw new ConvexError({ code: 'unavailable', message: 'The file could not be sent just now.' })
+      offset = next ?? offset + length
+      reached.set(which, offset)
+    }
+    reached.delete(which)
+    return 'done'
+  } catch (err) {
+    reached.delete(which)
+    throw err
+  }
+}
+/** How far each file that is being sent in parts has got, by its checksum and number, while it is being sent from this tab. */
+const reached = new Map<string, number>()
+
+const cannotSend = () =>
+  new ConvexError({ code: 'unavailable', message: 'The file could not be sent. Check the connection: it is kept, and sent again when it can be.' })
+/** What an upload the door did not take comes to: 'again' where the grant has run out, and otherwise thrown as what the click is told. */
+async function refused(answered: Response): Promise<'again'> {
   if (answered.status === 401) return 'again'
   if (answered.status === 429) throw new ConvexError({ code: 'rate_limited', message: 'Too many requests. Try again shortly.', retryAfterMs: 2000 })
+  if (answered.status === 507) {
+    const keepFree = ((await answered.json().catch(() => ({}))) as { keepFree?: unknown }).keepFree
+    throw new ConvexError({
+      code: 'limit',
+      message: `The disk It keeps its files on has too little room left for these${typeof keepFree === 'number' ? `: It always leaves ${sizeSaid(keepFree)} of it free` : ''}. Make room on that disk, or delete some pages.`,
+    })
+  }
   if (answered.status >= 500 || answered.status === 408) throw new ConvexError({ code: 'unavailable', message: 'The file could not be sent just now.' })
   // Not what It took, or nowhere to put it any more: its page was deleted, say
   throw new ConvexError({ code: 'invalid', message: 'This file could not be sent as it was taken.' })
@@ -552,9 +620,9 @@ export async function submit(
     throw new Error(`An action carries at most ${LIMITS.actionPayloadBytes / 1024} KB.`)
   // The same rules the site's frame keeps, kept here too: this is what decides what is stored
   if (files.length > LIMITS.actionFiles) throw new Error(`An action carries at most ${LIMITS.actionFiles} files.`)
-  if (files.some((f) => f.size > LIMITS.actionFileBytes)) throw new Error(`A file sent with an action is at most ${LIMITS.actionFileBytes / 1024 / 1024} MB.`)
+  if (files.some((f) => f.size > LIMITS.actionFileBytes)) throw new Error(`A file sent with an action is at most ${sizeSaid(LIMITS.actionFileBytes)}.`)
   if (files.reduce((n, f) => n + f.size, 0) > LIMITS.actionFilesBytes)
-    throw new Error(`The files sent with one action come to at most ${LIMITS.actionFilesBytes / 1024 / 1024} MB.`)
+    throw new Error(`The files sent with one action come to at most ${sizeSaid(LIMITS.actionFilesBytes)}.`)
   // The same rules the backend applies, applied before anything is stored here
   if (!/^[A-Za-z0-9_.:-]{8,128}$/.test(envelope.clientActionId) || !/^[A-Za-z0-9_.:-]{1,64}$/.test(envelope.name))
     throw new Error('That is not an action this page can send.')

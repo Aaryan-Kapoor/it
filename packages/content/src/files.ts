@@ -15,8 +15,9 @@
 // not followed. A link where a folder should be refuses whatever was asked, reading, writing
 // and deleting alike, so that nothing outside the folder is ever read as a page's, written
 // to, or removed; and a link where a file should be is no file.
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, type Hash, randomUUID } from 'node:crypto'
 import {
+  type BigIntStats,
   closeSync,
   constants,
   type Dirent,
@@ -64,6 +65,26 @@ export interface Files {
     /** Moves the file synchronously while deletion is excluded, or returns false without moving it. */
     allowed: (move: () => void) => boolean,
   ): Promise<'ok' | 'bytes_differ' | 'size_differs' | 'cut_short' | 'no_folder'>
+  /**
+   * Stores one part of a file that is sent in parts, which arrive one after another, beginning at
+   * the start. A part is taken whole or not at all, and the file is checked against its size and
+   * checksum as the parts arrive and put in place only once the last has, as `write` puts one.
+   * Answers `more` while parts are still to come, and `out_of_order` for a part that does not
+   * begin where the next is to, or that arrives while another of the same file is arriving.
+   */
+  writePart(
+    prefix: string,
+    file: string,
+    body: ReadableStream<Uint8Array> | null,
+    declared: Declared,
+    part: { offset: number; length: number },
+    allowed: (move: () => void) => boolean,
+  ): Promise<'ok' | 'more' | 'out_of_order' | 'bytes_differ' | 'size_differs' | 'cut_short' | 'no_folder'>
+  /**
+   * Where the next part of a file that is arriving in parts begins: 0 where none of it is here.
+   * Given what was declared of the file, 0 too where what is arriving is not that file.
+   */
+  nextPart(prefix: string, file: string, declared?: Declared): number
   remove(prefix: string, file: string): Promise<void>
   declare(prefix: string, files: ({ path: string } & Declared)[], allowed?: (move: () => void) => boolean): Promise<void>
   /** The files declared for a version, or null if none were. */
@@ -118,6 +139,59 @@ function pieces(handle: FileHandle, offset: number, length: number): ReadableStr
     },
   })
 }
+
+/** Writes all of some bytes at a place in an open file: one write may take fewer than it is given. */
+async function writeAll(handle: FileHandle, bytes: Uint8Array, at: number): Promise<void> {
+  let written = 0
+  while (written < bytes.byteLength) written += (await handle.write(bytes, written, bytes.byteLength - written, at + written)).bytesWritten
+}
+
+/**
+ * The whole of a body that is to be so many bytes long, held in memory: one part of a file, which
+ * is never larger than a request carries. More bytes than that, or fewer once it has ended, is
+ * the sender's mistake; a body that stops arriving part of the way is cut short.
+ */
+async function allOf(body: ReadableStream<Uint8Array> | null, length: number): Promise<Uint8Array | 'size_differs' | 'cut_short'> {
+  const all = new Uint8Array(length)
+  let size = 0
+  const reader = body?.getReader()
+  for (;;) {
+    let piece: Uint8Array | undefined
+    try {
+      piece = (await reader?.read())?.value
+    } catch {
+      return 'cut_short'
+    }
+    if (!piece) break
+    if (size + piece.byteLength > length) {
+      await reader?.cancel().catch(() => {})
+      return 'size_differs'
+    }
+    all.set(piece, size)
+    size += piece.byteLength
+  }
+  return size === length ? all : 'size_differs'
+}
+
+/** How many files may be arriving in parts at once, and how long one may wait for its next part before what had arrived of it goes. */
+const PARTS_AT_ONCE = 64
+const PART_IDLE_MS = 10 * 60_000
+/** How many stored files this service remembers having checked as they arrived. */
+const VOUCHED_MOST = 20_000
+
+/** A file that is arriving in parts: where what has arrived of it is written, and its checksum so far. */
+interface Arriving {
+  temp: string
+  handle: FileHandle
+  hash: Hash
+  received: number
+  declared: Declared
+  /** A part of it is arriving at this moment. */
+  busy: boolean
+  touched: number
+}
+/** What a stored file is on the disk, by which a file that has been changed or put in its place since is told from it. */
+const identity = (info: BigIntStats) => `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
 
 /** The folders, by name, that hold what is arriving at the services this program has open. */
 const OPEN_HERE = new Set<string>()
@@ -278,16 +352,30 @@ export function createFiles(folder: string): Files {
     // Until the file is in its place, whatever becomes of it, what was written under the other
     // name is removed: when it was not whole, and when the disk failed while it was being
     // written, made safe, closed or moved
-    let placed = false
+    let whole = false
+    let safe = false
     try {
-      let whole = false
       try {
         whole = await write(handle)
         if (whole) await handle.sync()
       } finally {
         await handle.close()
       }
-      if (!whole) return 'not_whole'
+      safe = whole
+    } finally {
+      if (!safe) await unlink(temp).catch(() => {})
+    }
+    return safe ? settle(temp, to, allowed) : 'not_whole'
+  }
+
+  /**
+   * Moves a file that was written whole under another name, and made safe on the disk, into its
+   * place. Answers whether it was placed, or its version was no longer writable. Where it was
+   * not placed, whatever became of it, what was written under the other name is removed.
+   */
+  async function settle(temp: string, to: string, allowed: ((move: () => void) => boolean) | undefined): Promise<'placed' | 'no_folder'> {
+    let placed = false
+    try {
       try {
         if (allowed) {
           if (!allowed(() => renameSync(temp, to))) return 'no_folder'
@@ -367,6 +455,68 @@ export function createFiles(folder: string): Files {
     }
   }
 
+  /** Makes the folder a version's file is put in, and answers where the file goes: or null where what was declared for the version is not there, and nothing is left made. */
+  async function folderFor(prefix: string, file: string): Promise<string | null> {
+    const to = kept(prefix, file)
+    // Looked at before the folder is made, so that none is made through a link, and after
+    await there(path.dirname(to))
+    await mkdir(path.dirname(to), { recursive: true, mode: 0o700 })
+    if (!(await there(path.dirname(to)))) return null
+    // The folder may have been made just now for a version that is deleted already, with
+    // everything of its person's: whoever sends the file read what was declared before that.
+    // So what was declared is looked for once more, now that the folder is there. Without it
+    // nothing is written, and the folders just made go again. Deletion is checked again
+    // when the file is moved into place, since another upload can recreate this folder.
+    if (!(await there(manifestFolder(prefix))) || !(await isFile(path.join(manifestFolder(prefix), 'files.json')))) {
+      await emptied(path.dirname(to))
+      return null
+    }
+    return to
+  }
+  /**
+   * A restored database can reuse a version's prefix. The manifest may have changed while a
+   * file's bytes arrived: its actual contents are checked under the same lock as declaration
+   * replacement and cleanup, immediately before the rename. An old upload cannot restore a
+   * removed file or overwrite a replacement with different bytes.
+   */
+  const stillDeclared =
+    (prefix: string, file: string, declared: Declared, allowed: (move: () => void) => boolean) =>
+    (move: () => void): boolean => {
+      let placed = false
+      allowed(() => {
+        const current = declaredNow(prefix)?.find((f) => f.path === file)
+        if (current?.size !== declared.size || current.sha256 !== declared.sha256) return
+        move()
+        placed = true
+      })
+      return placed
+    }
+
+  // What this service checked as it arrived: each file it put in place, as it is on the disk,
+  // and the checksum of the bytes it was written with. A file that is the same on the disk now,
+  // the same file with the same size, and neither written to nor changed in any way since, holds
+  // those bytes, and is not read again to be checked. Anything else is read. Nothing of this is
+  // kept anywhere but in memory, so a service that was started again reads what it finds.
+  const vouched = new Map<string, { is: string; sha256: string }>()
+  async function vouch(file: string, sha256: string): Promise<void> {
+    const info = await lstat(file, { bigint: true }).catch(() => null)
+    if (!info?.isFile()) return
+    vouched.delete(file)
+    vouched.set(file, { is: identity(info), sha256 })
+    if (vouched.size > VOUCHED_MOST) vouched.delete(vouched.keys().next().value!)
+  }
+
+  // The files arriving in parts, by version and path
+  const arrivingParts = new Map<string, Arriving>()
+  const partOf = (prefix: string, file: string) => `${prefix}\u0000${file}`
+  async function letGoOfPart(key: string): Promise<void> {
+    const p = arrivingParts.get(key)
+    if (!p) return
+    arrivingParts.delete(key)
+    await p.handle.close().catch(() => {})
+    await unlink(p.temp).catch(() => {})
+  }
+
   return {
     async open(prefix, file) {
       const handle = await opened(versionFolder(prefix), nameOf(file))
@@ -385,36 +535,10 @@ export function createFiles(folder: string): Files {
     },
 
     async write(prefix, file, body, declared, allowed) {
-      const to = kept(prefix, file)
-      // Looked at before the folder is made, so that none is made through a link, and after
-      await there(path.dirname(to))
-      await mkdir(path.dirname(to), { recursive: true, mode: 0o700 })
-      if (!(await there(path.dirname(to)))) return 'no_folder'
-      // The folder may have been made just now for a version that is deleted already, with
-      // everything of its person's: whoever sends the file read what was declared before that.
-      // So what was declared is looked for once more, now that the folder is there. Without it
-      // nothing is written, and the folders just made go again. Deletion is checked again
-      // when the file is moved into place, since another upload can recreate this folder.
-      if (!(await there(manifestFolder(prefix))) || !(await isFile(path.join(manifestFolder(prefix), 'files.json')))) {
-        await emptied(path.dirname(to))
-        return 'no_folder'
-      }
+      const to = await folderFor(prefix, file)
+      if (!to) return 'no_folder'
       let fault: 'bytes_differ' | 'size_differs' | 'cut_short' = 'cut_short'
-      // A restored database can reuse this version's prefix. The manifest may have changed
-      // while these bytes arrived: check its actual contents under the same lock as declaration
-      // replacement and cleanup, immediately before the rename. An old upload cannot restore
-      // a removed file or overwrite a replacement with different bytes.
-      const stillDeclared = (move: () => void) => {
-        let placed = false
-        allowed(() => {
-          const current = declaredNow(prefix)?.find((f) => f.path === file)
-          if (current?.size !== declared.size || current.sha256 !== declared.sha256) return
-          move()
-          placed = true
-        })
-        return placed
-      }
-      const placed = await place(to, stillDeclared, async (handle) => {
+      const placed = await place(to, stillDeclared(prefix, file, declared, allowed), async (handle) => {
         const hash = createHash('sha256')
         let size = 0
         const reader = body?.getReader()
@@ -434,20 +558,86 @@ export function createFiles(folder: string): Files {
             return false
           }
           hash.update(piece)
-          let written = 0
-          while (written < piece.byteLength) written += (await handle.write(piece, written, piece.byteLength - written)).bytesWritten
+          await writeAll(handle, piece, size - piece.byteLength)
         }
         if (size !== declared.size) fault = 'size_differs'
         else if (hash.digest('hex') !== declared.sha256) fault = 'bytes_differ'
         else return true
         return false
       })
+      if (placed === 'placed') await vouch(to, declared.sha256)
       // The folder or permission to put the file in it can go while its bytes are arriving.
       return placed === 'placed' ? 'ok' : placed === 'no_folder' ? 'no_folder' : fault
     },
 
+    async writePart(prefix, file, body, declared, part, allowed) {
+      const key = partOf(prefix, file)
+      const now = Date.now()
+      for (const [k, p] of arrivingParts) if (!p.busy && now - p.touched >= PART_IDLE_MS) await letGoOfPart(k)
+      let p = arrivingParts.get(key)
+      // One part of a file at a time, in order: another is arriving at this moment, or this one
+      // is not the one that comes next. Whoever sends it is told where the next begins
+      if (p?.busy) return 'out_of_order'
+      if (part.offset === 0) {
+        // A file that is begun again is begun afresh, and what had arrived of it goes
+        if (p) await letGoOfPart(key)
+        // So many files may be arriving in parts at once. Past that, the one that has waited
+        // longest for its next part makes room, and is begun again when it comes
+        if (arrivingParts.size >= PARTS_AT_ONCE) {
+          const idlest = [...arrivingParts].filter(([, q]) => !q.busy).sort((a, b) => a[1].touched - b[1].touched)[0]
+          if (!idlest) return 'out_of_order'
+          await letGoOfPart(idlest[0])
+        }
+        const temp = path.join(arriving, randomUUID())
+        p = { temp, handle: await open(temp, 'wx', 0o600), hash: createHash('sha256'), received: 0, declared, busy: false, touched: now }
+        arrivingParts.set(key, p)
+      } else if (!p || p.received !== part.offset || p.declared.size !== declared.size || p.declared.sha256 !== declared.sha256) return 'out_of_order'
+      const taking = p
+      taking.busy = true
+      try {
+        // A part is taken whole or not at all: one that is cut off leaves the file as it was
+        // before it, and may be sent again
+        const bytes = await allOf(body, part.length)
+        if (typeof bytes === 'string') return bytes
+        await writeAll(taking.handle, bytes, taking.received)
+        taking.hash.update(bytes)
+        taking.received += bytes.byteLength
+        taking.touched = Date.now()
+        if (taking.received < declared.size) return 'more'
+        // The last part: the file is whole, and is put in place as one sent in one piece is
+        arrivingParts.delete(key)
+        await taking.handle.sync()
+        await taking.handle.close()
+        if (taking.hash.digest('hex') !== declared.sha256) {
+          await unlink(taking.temp).catch(() => {})
+          return 'bytes_differ'
+        }
+        const to = await folderFor(prefix, file)
+        if (!to) {
+          await unlink(taking.temp).catch(() => {})
+          return 'no_folder'
+        }
+        const placed = await settle(taking.temp, to, stillDeclared(prefix, file, declared, allowed))
+        if (placed === 'placed') await vouch(to, declared.sha256)
+        return placed === 'placed' ? 'ok' : 'no_folder'
+      } catch (err) {
+        // The disk's trouble: what had arrived of the file goes, and it is begun again
+        await letGoOfPart(key)
+        throw err
+      } finally {
+        taking.busy = false
+      }
+    },
+
+    nextPart(prefix, file, declared) {
+      const p = arrivingParts.get(partOf(prefix, file))
+      if (!p || (declared && (p.declared.size !== declared.size || p.declared.sha256 !== declared.sha256))) return 0
+      return p.received
+    },
+
     async remove(prefix, file) {
       const at = kept(prefix, file)
+      vouched.delete(at)
       if (!(await there(path.dirname(at)))) return
       await unlink(at).catch((err) => {
         if (!gone(err)) throw err
@@ -501,6 +691,13 @@ export function createFiles(folder: string): Files {
 
     async checksum(prefix, name) {
       if (!/^[0-9a-f]{64}$/.test(name)) return null
+      // A file this service checked as it arrived, and that is as it was then, is not read again
+      const at = path.join(versionFolder(prefix), name)
+      const known = vouched.get(at)
+      if (known && (await there(path.dirname(at)))) {
+        const info = await lstat(at, { bigint: true }).catch(() => null)
+        if (info?.isFile() && identity(info) === known.is) return known.sha256
+      }
       const handle = await opened(versionFolder(prefix), name)
       if (!handle) return null
       const hash = createHash('sha256')
@@ -550,6 +747,8 @@ export function createFiles(folder: string): Files {
     },
 
     async clear(prefix, most) {
+      // What was arriving in parts under it goes first, and is not put in place
+      for (const key of [...arrivingParts.keys()]) if (key.startsWith(prefix)) await letGoOfPart(key)
       const left = { files: most }
       // What was declared goes first: from that moment no upload under the prefix is accepted,
       // and one that is arriving now removes what it wrote
@@ -558,6 +757,8 @@ export function createFiles(folder: string): Files {
     },
 
     close() {
+      for (const p of arrivingParts.values()) void p.handle.close().catch(() => {})
+      arrivingParts.clear()
       OPEN_HERE.delete(own)
       rmSync(arriving, { recursive: true, force: true })
     },

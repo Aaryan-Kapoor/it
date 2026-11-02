@@ -762,7 +762,13 @@ describe.skipIf(!program)('the backend program, started by the service', () => {
       ).json()) as {
         environmentVariables: Record<string, string>
       }
-      expect(settings.environmentVariables).toEqual({ IT_PORT: String(config.port), IT_DOOR_KEY: doorKey(config) })
+      // And how much of the files of pages and of what pages sent It keeps, which is what it keeps unless the service was given other amounts
+      expect(settings.environmentVariables).toEqual({
+        IT_PORT: String(config.port),
+        IT_DOOR_KEY: doorKey(config),
+        IT_PAGES_GB: '100',
+        IT_ACTION_FILES_GB: '20',
+      })
       // The backend signs under its own HTTP address, which is where this machine reaches it
       const signs = (await (await fetch(`${backend.site}/cli/config`)).json()) as { issuer?: string }
       if (signs.issuer !== undefined) expect(signs.issuer).toBe(backend.site)

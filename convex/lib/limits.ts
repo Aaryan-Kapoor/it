@@ -1,5 +1,6 @@
 // Rate limits and quotas. A limit is a token bucket kept in a table, taken inside the same
 // transaction as the work it guards, so two requests cannot both spend the last token.
+import { LIMITS } from '@it/protocol'
 import { internal } from '../_generated/api'
 import type { MutationCtx } from '../_generated/server'
 import { fail } from './errors'
@@ -17,7 +18,8 @@ const RULES = {
   attachPage: { perMinute: 60, burst: 30 },
   /** Asking after a click's files at all, by person: each asking may have the content service read them back whole. */
   attachAsk: { perMinute: 240, burst: 120 },
-  fileKilobytes: { perMinute: 100 * 1024, burst: 200 * 1024 },
+  /** Two of the largest actions' files at once, and then one a minute. */
+  fileKilobytes: { perMinute: LIMITS.actionFilesBytes / 1024, burst: (2 * LIMITS.actionFilesBytes) / 1024 },
   /**
    * Writes a page makes to what it keeps for itself (It.store). The script in a page sends what
    * was set within a moment as one write, and one write at a time, no oftener than twenty times a
