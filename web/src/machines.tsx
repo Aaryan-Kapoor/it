@@ -32,6 +32,8 @@ interface Machine {
   connectorVersion: string | null
   /** The system it runs on, as its connector names it, where it has said. */
   system?: string | null
+  /** That it reopens closed conversations on its system, as a machine on Windows says of itself. False from functions that do not say. */
+  reopens?: boolean
   /** Why it hands nothing to an agent for now, though it is there. Null where it does, and from functions that do not say. */
   paused?: string | null
   /** Its connector said it was stopping, and has not been heard from since. */
@@ -340,7 +342,7 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
             // Only for a selected app It can reopen a closed conversation of
             const couldWake = wanted && !fixed && (WAKES as readonly string[]).includes(h.id)
             // And only on a machine of a system It reopens conversations on
-            const wakeable = couldWake && wakesOn(m.system)
+            const wakeable = couldWake && wakesOn(m.system, m.reopens)
             const wakes = m.wakes.some((w) => w.harness === h.id)
             return (
               <li key={h.id} className="row">
