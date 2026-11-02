@@ -1,13 +1,15 @@
 // The site, served from inside the program: every file of it was packed in when the program
 // was built (packages/cli/site.mjs), and nothing is read from disk or fetched.
 import { createHash } from 'node:crypto'
+import { gunzipSync } from 'node:zlib'
 import { contentPort, policyHost } from '@it/protocol'
 import { SITE } from '../site.generated'
 
-/** One file of the site: what a browser is told it is, and its bytes in base64. */
+/** One file of the site: its type and stored bytes in base64, compressed only when that is smaller. */
 export interface SiteFile {
   type: string
   bytes: string
+  encoding?: 'gzip'
 }
 /** The site's files, each by its path inside the site. */
 export type Site = Record<string, SiteFile>
@@ -97,20 +99,48 @@ const carried = (headers: Headers): Record<string, string> => ({
   ...(AT_HOME.test(hostOf(headers.get('host'))?.name ?? '') ? { 'cross-origin-opener-policy': 'same-origin' } : {}),
 })
 
-// A file's bytes and the tag that says which bytes they are, worked out the first time it is asked for
-const unpacked = new WeakMap<SiteFile, { bytes: Uint8Array<ArrayBuffer>; tag: string }>()
-function unpack(file: SiteFile) {
+interface Representation {
+  bytes: Uint8Array<ArrayBuffer>
+  tag: string
+}
+const representation = (bytes: Uint8Array<ArrayBuffer>): Representation => ({
+  bytes,
+  tag: `"${createHash('sha256').update(bytes).digest('base64url').slice(0, 22)}"`,
+})
+// Only a requested file is decoded. Its original bytes are expanded only for a caller that
+// needs them, so starting the command or serving gzip expands nothing else in the site.
+const unpacked = new WeakMap<SiteFile, { stored: Representation; identity?: Representation }>()
+function unpack(file: SiteFile, gzip: boolean) {
   let known = unpacked.get(file)
   if (!known) {
-    const bytes = new Uint8Array(Buffer.from(file.bytes, 'base64'))
-    known = { bytes, tag: `"${createHash('sha256').update(bytes).digest('base64url').slice(0, 22)}"` }
+    known = { stored: representation(new Uint8Array(Buffer.from(file.bytes, 'base64'))) }
     unpacked.set(file, known)
   }
-  return known
+  if (file.encoding !== 'gzip' || gzip) return known.stored
+  known.identity ??= representation(new Uint8Array(gunzipSync(known.stored.bytes)))
+  return known.identity
 }
 
 const nothing = (status: number, asked: Headers, headers: Record<string, string> = {}) =>
   new Response(null, { status, headers: { ...carried(asked), 'cache-control': 'no-store', 'content-length': '0', ...headers } })
+
+/** Choose only a representation the caller accepts, preferring gzip when equally wanted. */
+function encodingFor(file: SiteFile, asked: string | null): 'gzip' | 'identity' | null {
+  const qualities = new Map<string, number>()
+  for (const entry of (asked ?? '').split(',')) {
+    const [name, parameter, ...extra] = entry.trim().toLowerCase().split(';')
+    const coding = name?.trim()
+    if (coding !== 'gzip' && coding !== 'identity' && coding !== '*') continue
+    const weight = parameter?.trim().match(/^q\s*=\s*(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/)?.[1]
+    const quality = extra.length ? 0 : parameter === undefined ? 1 : weight === undefined ? 0 : Number(weight)
+    qualities.set(coding, Math.max(qualities.get(coding) ?? 0, quality))
+  }
+  // Identity is acceptable unless expressly excluded. An absent or empty header uses it.
+  const identity = qualities.get('identity') ?? (qualities.get('*') === 0 ? 0 : 1)
+  const gzip = file.encoding === 'gzip' ? (qualities.get('gzip') ?? qualities.get('*') ?? 0) : 0
+  if (gzip > 0 && gzip >= identity) return 'gzip'
+  return identity > 0 ? 'identity' : null
+}
 
 /**
  * Answers a request for the site. A path that names a file gets the file. Any other path that
@@ -144,9 +174,13 @@ export function answerSite(site: Site, method: string, path: string, headers: He
         headers: { ...carried(headers), 'cache-control': 'no-store', 'content-type': 'text/plain; charset=utf-8' },
       })
   }
-  const { bytes, tag } = unpack(file)
+  const encoding = encodingFor(file, headers.get('accept-encoding'))
+  if (encoding === null) return nothing(406, headers, { vary: 'Accept-Encoding' })
+  const gzip = encoding === 'gzip'
+  const { bytes, tag } = unpack(file, gzip)
   const kept = name === 'index.html' ? 'no-store' : name.startsWith('assets/') ? 'public, max-age=31536000, immutable' : 'no-cache'
-  const says: Record<string, string> = { ...carried(headers), 'content-type': file.type, 'cache-control': kept }
+  const says: Record<string, string> = { ...carried(headers), 'content-type': file.type, 'cache-control': kept, vary: 'Accept-Encoding' }
+  if (gzip) says['content-encoding'] = 'gzip'
   if (kept !== 'no-store') {
     says.etag = tag
     if (headers.get('if-none-match') === tag) return new Response(null, { status: 304, headers: says })
