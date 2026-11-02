@@ -31,7 +31,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { ConvexHttpClient } from 'convex/browser'
 import { Unzip, UnzipInflate, UnzipPassThrough } from 'fflate'
-import { FUNCTIONS, FUNCTIONS_HASH } from '../functions.generated'
+import { FUNCTIONS_HASH, functions } from '../functions.generated'
 import { ask, backendAt, direct, inHome, Problem, psQuote, readJson, VERSION } from '../lib'
 import {
   backendFolder,
@@ -2231,7 +2231,7 @@ async function load(config: ServiceConfig, say: (line: string) => void, signal?:
       typeof refusal.message === 'string' ? refusal.message.slice(0, 1000) : undefined,
     )
   }
-  const started = await ask('deploy2/start_push', { ...JSON.parse(FUNCTIONS), adminKey: config.adminKey })
+  const started = await ask('deploy2/start_push', { ...JSON.parse(functions()), adminKey: config.adminKey })
   for (;;) {
     const schema = await ask('deploy2/wait_for_schema', { adminKey: config.adminKey, schemaChange: started.schemaChange, timeoutMs: 10_000, dryRun: false })
     if (schema.type === 'complete') break

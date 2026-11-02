@@ -25,7 +25,7 @@ import readline from 'node:readline/promises'
 import { describeClick, firstFile, HARNESSES, type Harness, isSlug, LIMITS, NOUN, newer, PROTOCOL_VERSION, parseJson, TAKES, withoutFiles } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
-import { conversationIds, local } from './connector'
+import { choices, conversationIds, local, refusedFor } from './connector'
 import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
 import * as flow from './flow'
@@ -130,15 +130,21 @@ function codexShut(found: HarnessStatus[]): string | null {
 /** What a person is told of the agent apps on this machine: each one that was found, and whether It is connected to it. */
 /**
  * Tells It which agent apps were chosen on this machine, and what system the machine runs,
- * which no connector has reported yet when setup is first run. Answers with the apps of them
- * that It reopens closed conversations of here. An It from before it took the system is told
- * the choice alone, and says nothing of that.
+ * which no connector has reported yet when setup is first run, and on Windows that It reopens
+ * closed conversations there. Answers with the apps of them that It reopens closed
+ * conversations of here. An It from before it took the system is told the choice alone, and
+ * says nothing of that, and one from before it took the word from Windows is told the rest.
  */
 async function chosen(wanted: string[]): Promise<string[]> {
-  const said = await call<{ wakes?: string[] } | null>('mutation', api.machines.choose, { harnesses: wanted, system: process.platform }).catch(() =>
-    call<{ wakes?: string[] } | null>('mutation', api.machines.choose, { harnesses: wanted }),
-  )
-  return said?.wakes ?? []
+  const tries = choices(process.platform, wanted)
+  for (const [n, args] of tries.entries())
+    try {
+      return (await call<{ wakes?: string[] } | null>('mutation', api.machines.choose, args))?.wakes ?? []
+    } catch (err) {
+      // As with a report: the word from Windows is left out only where It refused it
+      if (n === tries.length - 1 || ('reopens' in args && !refusedFor(err))) throw err
+    }
+  return []
 }
 /**
  * The apps It reopens closed conversations of on this machine as things stand, asked before a
@@ -2559,6 +2565,11 @@ async function main(argv: string[]): Promise<void> {
       ])
     }
     case 'runs': {
+      // Where a person looks at what is running on this machine
+      const LOOK_AT_PROCESSES =
+        process.platform === 'win32'
+          ? 'in Task Manager, or with `Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CreationDate, CommandLine`'
+          : '`ps -u "$USER" -o pid,lstart,args`'
       // The conversations It is not reopening, because a turn of theirs from before could not be checked on or ended
       type Held = {
         unread: boolean
@@ -2616,8 +2627,8 @@ async function main(argv: string[]): Promise<void> {
         ...(now.unread || now.held.length
           ? [
               now.unread
-                ? 'To let them be reopened again, look that no agent It started is still running here (`ps -u "$USER" -o pid,lstart,args`), and then run `it runs clear`. Starting this machine again does not do it where the note could not be read.'
-                : 'They are reopened again once this machine has been started again. To let them be reopened sooner, look that no agent It started is still running here (`ps -u "$USER" -o pid,lstart,args`), and then run `it runs clear`.',
+                ? `To let them be reopened again, look that no agent It started is still running here (${LOOK_AT_PROCESSES}), and then run \`it runs clear\`. Starting this machine again does not do it where the note could not be read.`
+                : `They are reopened again once this machine has been started again. To let them be reopened sooner, look that no agent It started is still running here (${LOOK_AT_PROCESSES}), and then run \`it runs clear\`.`,
             ]
           : ['Nothing is held back.']),
       ])
