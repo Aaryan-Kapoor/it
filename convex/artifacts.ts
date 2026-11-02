@@ -107,7 +107,7 @@ export const get = query({
       wake:
         machine !== null &&
         !machine.revoked &&
-        wakesOn(machine.system) &&
+        wakesOn(machine.system, machine.reopens) &&
         a.session &&
         (machine.wanted ?? []).includes(a.session.harness) &&
         (machine.harnesses ?? []).some((h) => h.id === a.session?.harness && (h.addon === 'connected' || h.addon === 'needs_approval')) &&
