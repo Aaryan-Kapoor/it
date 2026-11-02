@@ -3,6 +3,8 @@
 // is the page's only if it came from that frame's window, each document in the frame gets one
 // channel and no more, and what the site says about whether the person was at the page is the
 // site's own judgement, never the page's.
+
+import { CHANNEL_VERSION, LIMITS } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { act, createElement } from 'react'
@@ -22,6 +24,10 @@ const client = {
     calls.push({ fn: name, args })
     if (name === 'mounts:create') return { mountId: `mount-${calls.filter((c) => c.fn === name).length}`, version: 7 }
     if (name === 'actions:submit') return { actionId: 'action-1' }
+    if (name === 'state:store') {
+      if (storeRefusal) throw new ConvexError(storeRefusal)
+      return { revision: 4 }
+    }
     return null
   }),
   action: vi.fn(async (fn: unknown, args: { mountId: string }) => {
@@ -31,9 +37,18 @@ const client = {
     return { ticket: `ticket-for-${args.mountId}` }
   }),
 }
-// The page's state, which is the same thing each time it is asked for until it changes
-const state = { json: '{"n":1}', revision: 3 }
-vi.mock('convex/react', () => ({ useConvex: () => client, useQuery: () => state }))
+/** What the stand-in backend refuses a page's write of what it keeps with, where it refuses it. */
+let storeRefusal: Record<string, string | number> | null = null
+// The page's state, which is the same thing each time it is asked for until it changes: whole
+// to a display that has none, and nothing new to one that has this revision. `changed` is what
+// the backend answers next to a display that has it, where something has changed
+const state = { revision: 3, whole: true, state: '{"n":1}', kept: [] as [string, string | null][] }
+let changed: Record<string, unknown> | null = null
+vi.mock('convex/react', () => ({
+  useConvex: () => client,
+  useQuery: (_fn: unknown, args: { since?: number }) =>
+    args.since === undefined ? state : changed && args.since < (changed.revision as number) ? changed : { revision: args.since },
+}))
 
 // Where pages are shown from: the name the site itself was reached by, on the port after its own
 const PAGES = `http://${location.hostname}:${Number(location.port) + 1}`
@@ -50,6 +65,14 @@ async function render() {
   outboxBelongsTo('alice')
   host = document.body.appendChild(document.createElement('div'))
   root = createRoot(host)
+  await act(async () => {
+    root.render(createElement(Mount, { artifactId: 'page1' as never, title: 'Plan', user: 'alice' }))
+    await tick()
+  })
+}
+/** Draws the page again, as the site does when what it shows changes: here, when the backend has something new to say. */
+async function rerender() {
+  const { Mount } = await import('./mount')
   await act(async () => {
     root.render(createElement(Mount, { artifactId: 'page1' as never, title: 'Plan', user: 'alice' }))
     await tick()
@@ -117,6 +140,8 @@ const asked = (fn: string) => calls.filter((c) => c.fn === fn)
 
 beforeEach(() => {
   calls.length = 0
+  storeRefusal = null
+  changed = null
   refuseTicket = false
   troubled = 0
   client.action.mockClear()
@@ -414,11 +439,12 @@ describe('the frame around a page', () => {
       requestId: 'r-bomb',
       envelope: { clientActionId: 'click-9000', name: 'approve', payload: bomb, contentVersion: 1 },
     })
-    const asStored = await page.send(port, { type: 'it:store', requestId: 'r-bomb-2', key: 'k', value: bomb })
+    // What the page keeps comes as text, which the script in the page wrote out within its own bounds: anything else is refused unread
+    const asStored = await page.send(port, { type: 'it:store', requestId: 'r-bomb-2', changes: [['k', bomb]] } as never)
     expect(Date.now() - started).toBeLessThan(2000)
     expect(asAction.find((m) => m.requestId === 'r-bomb')).toMatchObject({ ok: false, error: 'That is too large to send.' })
-    expect(asStored.find((m) => m.requestId === 'r-bomb-2')).toMatchObject({ ok: false, error: 'That is too large to send.' })
-    expect(calls.some((c) => c.fn === 'actions:submit' || c.fn === 'state:storeSet')).toBe(false)
+    expect(asStored.find((m) => m.requestId === 'r-bomb-2')).toMatchObject({ ok: false, error: 'That cannot be sent.' })
+    expect(calls.some((c) => c.fn === 'actions:submit' || c.fn === 'state:store')).toBe(false)
     // Nor is anything that is not plain data unpacked to see how big it is: a block of bytes,
     // a list that is mostly holes
     const bytes = await page.send(port, {
@@ -427,8 +453,8 @@ describe('the frame around a page', () => {
       envelope: { clientActionId: 'click-9001', name: 'approve', payload: new Uint8Array(5_000_000), contentVersion: 1 },
     })
     expect(bytes.find((m) => m.requestId === 'r-bytes')).toMatchObject({ ok: false, error: 'That cannot be sent.' })
-    const holes = await page.send(port, { type: 'it:store', requestId: 'r-holes', key: 'k', value: new Array(50_000_000) })
-    expect(holes.find((m) => m.requestId === 'r-holes')).toMatchObject({ ok: false, error: 'That is too large to send.' })
+    const holes = await page.send(port, { type: 'it:store', requestId: 'r-holes', changes: new Array(50_000_000) } as never)
+    expect(holes.find((m) => m.requestId === 'r-holes')).toMatchObject({ ok: false, error: 'One write keeps 1 to 500 values.' })
     expect(Date.now() - started).toBeLessThan(4000)
     // The same goes for what should be a name or an id: a thing that is not text is never written out to see
     const nested = (levels: number) => {
@@ -448,9 +474,135 @@ describe('the frame around a page', () => {
     expect(calls.length).toBe(before)
     expect(Date.now() - started).toBeLessThan(5000)
     // A name for a stored value that is not one never reaches the backend either
-    const badKey = await page.send(port, { type: 'it:store', requestId: 'r-key', key: 'x'.repeat(100_000), value: 1 })
-    expect(badKey.find((m) => m.requestId === 'r-key')).toMatchObject({ ok: false })
-    expect(calls.some((c) => c.fn === 'state:storeSet')).toBe(false)
+    const badKey = await page.send(port, { type: 'it:store', requestId: 'r-key', changes: [['x'.repeat(100_000), '1']] } as never)
+    expect(badKey.find((m) => m.requestId === 'r-key')).toMatchObject({ ok: false, error: /store key/ })
+    expect(calls.some((c) => c.fn === 'state:store')).toBe(false)
+  })
+
+  test('a page’s channel says that it takes several stored values at once, and what the page keeps goes to the backend as one write', async () => {
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    expect(page.posted.find((p) => p.data.type === 'it:port')?.data).toEqual({ type: 'it:port', v: CHANNEL_VERSION })
+    const port = page.ports()[0]!
+    const heard = await page.send(port, {
+      type: 'it:store',
+      requestId: 'r-keep',
+      changes: [
+        ['stroke-1', '{"x":1}'],
+        ['stroke-2', 'null'],
+      ],
+    })
+    expect(heard.find((m) => m.requestId === 'r-keep')).toEqual({ type: 'it:result', requestId: 'r-keep', ok: true, revision: 4 })
+    expect(asked('state:store').map((c) => c.args)).toEqual([
+      {
+        artifactId: 'page1',
+        changes: [
+          { key: 'stroke-1', value: '{"x":1}' },
+          { key: 'stroke-2', value: 'null' },
+        ],
+      },
+    ])
+    // Refused for coming too fast, the page is told how long to wait, as the backend said
+    storeRefusal = { code: 'rate_limited', message: 'Too many requests. Try again shortly.', retryAfterMs: 1234 }
+    const slow = await page.send(port, { type: 'it:store', requestId: 'r-slow', changes: [['a', '1']] })
+    expect(slow.find((m) => m.requestId === 'r-slow')).toEqual({
+      type: 'it:result',
+      requestId: 'r-slow',
+      ok: false,
+      error: 'Too many requests. Try again shortly.',
+      retryAfterMs: 1234,
+    })
+    // Refused for good, it is told why and no more
+    storeRefusal = { code: 'limit', message: "A page's state is at most 512 KB." }
+    const full = await page.send(port, { type: 'it:store', requestId: 'r-full', changes: [['a', '1']] })
+    expect(full.find((m) => m.requestId === 'r-full')).toEqual({
+      type: 'it:result',
+      requestId: 'r-full',
+      ok: false,
+      error: "A page's state is at most 512 KB.",
+    })
+    // What the backend would refuse anyway is refused here, unsent
+    storeRefusal = null
+    const before = asked('state:store').length
+    for (const [changes, error] of [
+      [[], 'One write keeps 1 to 500 values.'],
+      [[['a', 1]], 'That cannot be sent.'],
+      [[['a.b', '1']], /store key/],
+      [[['a', JSON.stringify('x'.repeat(LIMITS.storeValueBytes))]], 'A stored value is at most 32 KB.'],
+      [Array.from({ length: 20 }, (_, i) => [`k${i}`, JSON.stringify('x'.repeat(30 * 1024))]), "A page's state is at most 512 KB."],
+    ] as const) {
+      const said = await page.send(port, { type: 'it:store', requestId: 'r-bad', changes })
+      expect(said.find((m) => m.requestId === 'r-bad')).toMatchObject({ ok: false, error })
+    }
+    expect(asked('state:store').length).toBe(before)
+  })
+
+  test('one value sent by itself, as a page’s script sends it to a site that takes one at a time, is kept as one write', async () => {
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    const port = page.ports()[0]!
+    const heard = await page.send(port, { type: 'it:store', requestId: 'r-one', key: 'draft', value: { text: 'hello' } })
+    expect(heard.find((m) => m.requestId === 'r-one')).toEqual({ type: 'it:result', requestId: 'r-one', ok: true, revision: 4 })
+    // Written out as JSON here, as the value it is, and not taken for JSON text already
+    const said = await page.send(port, { type: 'it:store', requestId: 'r-text', key: 'note', value: 'plain words' })
+    expect(said.find((m) => m.requestId === 'r-text')).toMatchObject({ ok: true })
+    expect(asked('state:store').map((c) => c.args.changes)).toEqual([[{ key: 'draft', value: '{"text":"hello"}' }], [{ key: 'note', value: '"plain words"' }]])
+    // And held to the same rules as several
+    const before = asked('state:store').length
+    for (const [key, value, error] of [
+      ['a.b', 1, /store key/],
+      ['k', new Date(), 'That cannot be sent.'],
+      ['k', 'x'.repeat(LIMITS.storeValueBytes), 'A stored value is at most 32 KB.'],
+    ] as const) {
+      const refused = await page.send(port, { type: 'it:store', requestId: 'r-bad', key, value })
+      expect(refused.find((m) => m.requestId === 'r-bad')).toMatchObject({ ok: false, error })
+    }
+    expect(asked('state:store').length).toBe(before)
+  })
+
+  test('what a page may keep at once is counted apart from its actions, and a page past it is told how long to wait', async () => {
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    const port = page.ports()[0]!
+    const heard: any[] = []
+    port.onmessage = (m) => heard.push(m.data)
+    for (let i = 0; i < 60; i++) port.postMessage({ type: 'it:store', requestId: `r-s${i}`, changes: [[`k${i}`, '1']] })
+    await act(() => tick(200))
+    const results = heard.filter((m) => m.type === 'it:result')
+    expect(results.length).toBe(60)
+    const kept = results.filter((m) => m.ok).length
+    expect(kept).toBeGreaterThanOrEqual(40)
+    expect(kept).toBeLessThan(55)
+    expect(results.filter((m) => !m.ok).every((m) => /storing too much at once/.test(m.error) && m.retryAfterMs > 0)).toBe(true)
+    expect(asked('state:store').length).toBe(kept)
+    // Actions have their own allowance still
+    const acted = await page.send(port, action('click-2000'))
+    expect(acted.find((m) => m.requestId === 'r-click-2000')).toMatchObject({ ok: true })
+  })
+
+  test('the page is sent its whole state once, and then only what changed', async () => {
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    const port = page.ports()[0]!
+    const heard: any[] = []
+    port.onmessage = (m) => heard.push(m.data)
+    changed = { revision: 5, kept: [['stroke-1', '{"x":1}']] }
+    await rerender()
+    expect(heard).toEqual([
+      { type: 'it:state', state: { n: 1 }, revision: 3 },
+      { type: 'it:changed', revision: 5, kept: [['stroke-1', { x: 1 }]] },
+    ])
+    // The agent's part comes whole where it changed, and a value taken away comes as nothing
+    changed = { revision: 6, state: '{"n":2}', kept: [['stroke-1', null]] }
+    await rerender()
+    expect(heard.at(-1)).toEqual({ type: 'it:changed', revision: 6, state: { n: 2 }, kept: [['stroke-1', null]] })
+    // A document shown afresh is given the whole state as it now stands
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-2' })
+    expect(page.posted.filter((p) => p.data.type === 'it:port').length).toBe(2)
+    const fresh: any[] = []
+    page.ports()[1]!.onmessage = (m) => fresh.push(m.data)
+    await act(() => tick(20))
+    expect(fresh).toEqual([{ type: 'it:state', state: { n: 2 }, revision: 6 }])
   })
 
   test('a page that asks for too much at once is told to slow down before the backend hears of it', async () => {
@@ -471,7 +623,7 @@ describe('the frame around a page', () => {
 
 describe('what a page sends, as the site takes it', () => {
   test('a file anywhere in what an action carries is taken out, in order, and stands there as which of the files it is; the same file named twice is one', async () => {
-    const { jsonText } = await import('./mount')
+    const { jsonText } = await import('@it/protocol')
     const photo = new File([new Uint8Array(3)], 'a.jpg', { type: 'image/jpeg' })
     const sheet = new Blob(['a,b'], { type: 'text/csv' })
     const files: Blob[] = []
@@ -483,7 +635,7 @@ describe('what a page sends, as the site takes it', () => {
   })
 
   test('a file is not kept with It.store, and the page is told where it goes instead', async () => {
-    const { jsonText } = await import('./mount')
+    const { jsonText } = await import('@it/protocol')
     expect(() => jsonText({ photo: new Blob(['x']) }, 32 * 1024)).toThrow(
       'A file cannot be kept with It.store. Send it with It.action, which takes files beside what it carries.',
     )

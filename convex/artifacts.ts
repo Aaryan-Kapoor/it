@@ -85,14 +85,21 @@ export const get = query({
       .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
       .unique()
     // A record of the revision from before it kept when the agent last wrote, or none at all,
-    // says nothing of that: the state is read for it then, until it is next written
-    const state =
-      noted?.agentAt !== undefined
-        ? { revision: noted.revision, agentAt: noted.agentAt }
-        : await ctx.db
+    // says nothing of that: the state is read for it then, until it is next written. Of the
+    // two revisions the later is the page's: the state's own moves only when its agent writes
+    const read =
+      noted?.agentAt === undefined
+        ? await ctx.db
             .query('states')
             .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
             .unique()
+        : null
+    const state =
+      noted?.agentAt !== undefined
+        ? { revision: noted.revision, agentAt: noted.agentAt }
+        : read || noted
+          ? { revision: Math.max(noted?.revision ?? 0, read?.revision ?? 0), agentAt: read?.agentAt }
+          : null
     const machine = a.machineId ? await ctx.db.get(a.machineId) : null
     return {
       ...card(a, a.waiting ?? 0, machine?.name ?? null),

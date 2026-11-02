@@ -16,6 +16,7 @@ import { forgetCounts } from './lib/limits'
 import { log } from './lib/log'
 import { dropStaging, STAGING_MS } from './publish'
 import { endSession, pairedOf, UNUSED_MS } from './sessions'
+import { forgetKept } from './state'
 
 /** Rows that can each hold a lot (a click's data) are taken fewer at a time, and a version's record, which lists every file, fewer still. */
 const HEAVY = 50
@@ -39,6 +40,8 @@ async function removeHangers(ctx: MutationCtx, artifactId: Id<'artifacts'>): Pro
     .withIndex('by_artifact', (q) => q.eq('artifactId', artifactId))
     .take(2)
   for (const r of revisions) await ctx.db.delete(r._id)
+  // What the page kept for itself, value by value
+  const kept = await forgetKept(ctx, artifactId, LIGHT)
   const starts = await ctx.db
     .query('starts')
     .withIndex('by_artifact', (q) => q.eq('artifactId', artifactId))
@@ -77,7 +80,12 @@ async function removeHangers(ctx: MutationCtx, artifactId: Id<'artifacts'>): Pro
     .take(LIGHT)
   for (const p of publications) await ctx.db.delete(p._id)
   const more =
-    publications.length === LIGHT || versions.length === VERSIONS || actions.length === HEAVY || attachments.length === HEAVY || notifications.length === LIGHT
+    kept ||
+    publications.length === LIGHT ||
+    versions.length === VERSIONS ||
+    actions.length === HEAVY ||
+    attachments.length === HEAVY ||
+    notifications.length === LIGHT
   if (!more) await forgetCounts(ctx, artifactId)
   return more
 }

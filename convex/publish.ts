@@ -16,10 +16,10 @@ import { quota, rateLimit } from './lib/limits'
 import { kind, log } from './lib/log'
 import { mint } from './lib/signing'
 import { bump, tally } from './lib/tally'
-import { adoptTourPage, isTourPage, pageState, startTourPage } from './lib/tourPages'
+import { adoptTourPage, isTourPage, startTourPage } from './lib/tourPages'
 import type { Unlinked } from './network'
 import { expectedOwner, fileEntry, session } from './schema'
-import { noteRevision } from './state'
+import { checkKept, revisionNow, startState } from './state'
 
 const beginArgs = {
   /** Only the built-in tour asks for this. A matching legacy page may be adopted once. */
@@ -178,6 +178,8 @@ export const _begin = internalMutation({
       if (new TextEncoder().encode(args.state).length > LIMITS.stateBytes) fail('limit', 'The starting state is too large.')
       const parsed = parseJson(args.state)
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) fail('invalid', 'State is a JSON object.')
+      // What it says the page keeps is held to what a page could keep, as a patch's is
+      if (Object.hasOwn(parsed, STORE_KEY)) checkKept((parsed as Record<string, unknown>)[STORE_KEY])
     }
     if (args.session && (args.session.harness.length > 40 || args.session.id.length > 200)) fail('invalid', 'That is not a session.')
     // Taking a page over means its clicks come to the conversation that said so, so there has to be one
@@ -298,7 +300,7 @@ export const _begin = internalMutation({
               name: args.tour,
               identity: artifact.tour!.identity,
               version: artifact.currentVersion,
-              revision: (await pageState(ctx, artifact._id))?.revision ?? 0,
+              revision: await revisionNow(ctx, artifact._id),
             },
           }),
       publicationId,
@@ -555,7 +557,7 @@ export const _finish = internalMutation({
       (!isTourPage(a, ver.tour.name) ||
         a.tour?.identity !== ver.tour.identity ||
         a.currentVersion !== ver.tour.version ||
-        ((await pageState(ctx, a._id))?.revision ?? 0) !== ver.tour.revision)
+        (await revisionNow(ctx, a._id)) !== ver.tour.revision)
     ) {
       await takeStart(ctx, ver._id)
       await ctx.db.delete(ver._id)
@@ -599,29 +601,9 @@ export const _finish = internalMutation({
     if (ver.tour !== undefined && start !== null) {
       await startTourPage(ctx, a, ver.tour.name, start)
     } else if (start !== null) {
-      const state = await ctx.db
-        .query('states')
-        .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
-        .unique()
-      if (!state) {
-        await ctx.db.insert('states', { artifactId: a._id, userId: user._id, json: start, revision: 1 })
-        await noteRevision(ctx, a._id, 1, 0)
-      } else {
-        // A state that holds only what the page stored for itself is no state of the agent's:
-        // the starting state goes in beside it, and what the page stored stays
-        const now = parseJson(state.json)
-        const own = now !== null && typeof now === 'object' && !Array.isArray(now) ? (now as Record<string, unknown>) : {}
-        if (Object.keys(own).every((k) => k === STORE_KEY)) {
-          const begun = parseJson(start)
-          const json = JSON.stringify({ ...(begun !== null && typeof begun === 'object' && !Array.isArray(begun) ? begun : {}), ...own })
-          // Each half was within the limit by itself. Together they may not be, and a state over
-          // the limit could never be changed again: the publish is refused, and nothing of it is kept.
-          if (new TextEncoder().encode(json).length > LIMITS.stateBytes)
-            fail('limit', `The starting state and what the page has stored for itself are together more than ${LIMITS.stateBytes / 1024} KB.`)
-          await ctx.db.patch(state._id, { json, revision: state.revision + 1 })
-          await noteRevision(ctx, a._id, state.revision + 1, state.agentAt ?? 0)
-        }
-      }
+      // A state that holds only what the page stored for itself is no state of the agent's:
+      // the starting state goes in beside it, and what the page stored stays
+      await startState(ctx, user._id, a._id, start)
     }
     // Keep the newest few; the rest go, bytes included
     const retired = await ctx.db

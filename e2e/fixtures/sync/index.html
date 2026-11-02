@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sync</title>
+  </head>
+  <body>
+    <p>Stored here: <span id="count">0</span></p>
+    <script>
+      // A page that stores as a busy page does, for the run that measures how soon its other
+      // displays show what it stored. Each display notes when it first saw each key, by a clock
+      // all the browsers on one machine share, and the display that stored a key notes when it
+      // asked to. A page that is told a value was refused tries again a second later, as the
+      // pages agents write do, so that every value is there in the end.
+      const now = () => performance.timeOrigin + performance.now()
+      const sync = { seen: {}, asked: {}, kept: {}, refused: 0, reasons: {}, states: 0 }
+      window.sync = sync
+      It.onState((state) => {
+        sync.states++
+        const kept = state._page || {}
+        for (const key of Object.keys(kept)) if (!(key in sync.seen)) sync.seen[key] = now()
+        document.getElementById('count').textContent = String(Object.keys(kept).length)
+      })
+      function store(key, value, retry) {
+        if (!(key in sync.asked)) sync.asked[key] = now()
+        It.store.set(key, value).then(
+          () => {
+            sync.kept[key] = now()
+          },
+          (err) => {
+            sync.refused++
+            const why = String((err && err.message) || err)
+            sync.reasons[why] = (sync.reasons[why] || 0) + 1
+            if (retry) setTimeout(() => store(key, value, retry), 1000)
+          },
+        )
+      }
+      /** A stroke on a whiteboard, as one stores it: where it goes, its colour, and the points the pen passed through. */
+      function stroke(id, n, points) {
+        const at = []
+        for (let i = 0; i < points; i++) at.push([Math.round(100 + 40 * Math.cos(n + i / 3)) + i * 7, Math.round(100 + 40 * Math.sin(n + i / 4)) + i * 5])
+        return { id, kind: 'pen', color: ['#222', '#d33', '#36c', '#2a2'][n % 4], width: 3, points: at, by: 'person', at: Date.now() }
+      }
+      /** So many values, one after another, over so long: all at once where that is 0. */
+      sync.burst = (prefix, count, overMs, retry) =>
+        new Promise((done) => {
+          let n = 0
+          const one = () => store(`${prefix}${n}`, { n, text: `value ${n}` }, retry)
+          if (overMs === 0) {
+            for (; n < count; n++) one()
+            return done()
+          }
+          const every = overMs / count
+          const tick = () => {
+            one()
+            if (++n < count) setTimeout(tick, every)
+            else done()
+          }
+          tick()
+        })
+      /** A stroke every so often, for so long, each under a key of its own. */
+      sync.draw = (prefix, everyMs, forMs, points, retry) =>
+        new Promise((done) => {
+          let n = 0
+          const until = now() + forMs
+          const tick = () => {
+            const id = `${prefix}${n}`
+            store(id, stroke(id, n, points), retry)
+            n++
+            if (now() + everyMs <= until) setTimeout(tick, everyMs)
+            else done(n)
+          }
+          tick()
+        })
+    </script>
+  </body>
+</html>

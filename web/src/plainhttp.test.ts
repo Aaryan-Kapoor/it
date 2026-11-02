@@ -41,7 +41,12 @@ vi.mock('convex/react', () => ({
   useConvex: () => client,
   useConvexAuth: () => ({ isLoading: false, isAuthenticated: true }),
   useMutation: (fn: unknown) => (args: unknown) => client.mutation(fn, args),
-  useQuery: (fn: unknown, args?: unknown) => (args === 'skip' ? undefined : watched[getFunctionName(fn as never)]),
+  // A query answers by its arguments where the stand-in gives it a function, and with the same thing however it is asked otherwise
+  useQuery: (fn: unknown, args?: unknown) => {
+    if (args === 'skip') return undefined
+    const answer = watched[getFunctionName(fn as never)]
+    return typeof answer === 'function' ? answer(args) : answer
+  },
 }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -348,6 +353,7 @@ describe('the whole site, paired, on plain http', () => {
       'files:prepare': () => (uploaded.length ? { id: 'attachment-1', stored: true } : { id: 'attachment-1', stored: false, missing: [1], grant: 'grant-1' }),
       'actions:submit': () => ({ actionId: 'action-1' }),
       'actions:message': () => ({ actionId: 'action-2' }),
+      'state:store': () => ({ revision: 2 }),
       'sessions:inviteScreen': () => ({ code: 'screencode0000000002', expiresAt: Date.now() + 600_000 }),
     })
     watched = {
@@ -355,7 +361,8 @@ describe('the whole site, paired, on plain http', () => {
       'artifacts:list': [CARD],
       'artifacts:get': { ...CARD, machineSeenAt: NOW, run: null },
       'actions:forArtifact': [],
-      'state:get': { json: '{"plan":"A"}', revision: 1 },
+      // The whole state to a display that has none, and nothing new to one that has revision 1
+      'state:live': ({ since }: { since?: number }) => (since === 1 ? { revision: 1 } : { revision: 1, whole: true, state: '{"plan":"A"}', kept: [] }),
       'deletions:list': [],
       'notifications:list': [NOTE],
       'tour:get': { waitingUntil: null, by: null, askedAt: null, takenAt: null, doneAt: null },
@@ -551,18 +558,18 @@ describe('the whole site, paired, on plain http', () => {
         requestId: 'r-1',
         envelope: { clientActionId: 'click-0001', name: 'approve', payload: { plan: 'B', photo }, contentVersion: 1 },
       })
-      port.postMessage({ type: 'it:store', requestId: 'r-2', key: 'draft', value: { plan: 'B' } })
+      port.postMessage({ type: 'it:store', requestId: 'r-2', changes: [['draft', '{"plan":"B"}']] })
       await vi.waitFor(() => expect(heard).toHaveLength(3))
     })
     expect(heard.slice(1)).toEqual(
       expect.arrayContaining([
         { type: 'it:result', requestId: 'r-1', ok: true, actionId: 'action-1' },
-        { type: 'it:result', requestId: 'r-2', ok: true },
+        { type: 'it:result', requestId: 'r-2', ok: true, revision: 2 },
       ]),
     )
     // The photo went to the door under its SHA-256, which the site worked out without the browser's own
     expect(uploaded).toEqual([{ n: 1, sha256: createHash('sha256').update(new Uint8Array(5000).fill(7)).digest('hex') }])
-    expect(calls).toEqual(expect.arrayContaining(['files:prepare', 'actions:submit', 'state:storeSet']))
+    expect(calls).toEqual(expect.arrayContaining(['files:prepare', 'actions:submit', 'state:store']))
 
     // Typed to the page's agent
     await press('Type to Claude Code')

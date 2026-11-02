@@ -18,19 +18,26 @@ const RULES = {
   /** Asking after a click's files at all, by person: each asking may have the content service read them back whole. */
   attachAsk: { perMinute: 240, burst: 120 },
   fileKilobytes: { perMinute: 100 * 1024, burst: 200 * 1024 },
-  storeSetPage: { perMinute: 60, burst: 30 },
-  storeSet: { perMinute: 120, burst: 60 },
+  /**
+   * Writes a page makes to what it keeps for itself (It.store). The script in a page sends what
+   * was set within a moment as one write, and one write at a time, no oftener than twenty times a
+   * second from one display: so a page drawn on from three displays at once stays within its
+   * own allowance. A write costs what it changes and no more, which the kilobytes below count.
+   */
+  storeSetPage: { perMinute: 3600, burst: 600 },
+  storeSet: { perMinute: 7200, burst: 1200 },
   mount: { perMinute: 120, burst: 60 },
   publish: { perMinute: 60, burst: 30 },
   finish: { perMinute: 60, burst: 30 },
   patchState: { perMinute: 600, burst: 200 },
   /**
-   * In kilobytes of the state as it stands after a write, since every write stores the whole of
-   * it again and sends it to every display showing the page. One page gets less than all of them together.
+   * In kilobytes of what an agent's write puts in the state: its whole part, which is stored
+   * again and sent whole to every display showing the page, and any value of the page's it
+   * changes. One page gets less than all of them together.
    */
   stateKilobytesPage: { perMinute: 2048, burst: 8192 },
   stateKilobytes: { perMinute: 4096, burst: 16384 },
-  /** The same for what a page stores by itself, kept apart so that a page can use up only its own. */
+  /** In kilobytes of the values a page's write changes, which are all that is stored and sent of it. Kept apart, so that a page can use up only its own. */
   storeKilobytesPage: { perMinute: 2048, burst: 8192 },
   storeKilobytes: { perMinute: 4096, burst: 16384 },
   notify: { perMinute: 30, burst: 15 },

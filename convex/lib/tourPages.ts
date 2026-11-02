@@ -1,4 +1,4 @@
-import { parseJson, TOUR } from '@it/protocol'
+import { parseJson, STORE_KEY, TOUR } from '@it/protocol'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { write } from '../state'
@@ -52,7 +52,11 @@ export async function progress(ctx: QueryCtx, userId: Id<'users'>): Promise<stri
 /** Resets the step and merges progress while the publication still owns the transaction. */
 export async function startTourPage(ctx: MutationCtx, page: Doc<'artifacts'>, name: string, json: string): Promise<void> {
   const fresh = parseJson(json) as Record<string, unknown>
-  await write(ctx, page.userId, page._id, (current) => (name === TOUR.menu ? { ...fresh, seen: seenIn(current) } : fresh))
+  // The step starts afresh, and so does what the page kept for itself
+  const kept = fresh[STORE_KEY]
+  await write(ctx, page.userId, page._id, (current) => (name === TOUR.menu ? { ...fresh, seen: seenIn(current) } : fresh), {
+    kept: { replace: kept !== null && typeof kept === 'object' && !Array.isArray(kept) ? (kept as Record<string, unknown>) : {} },
+  })
   if (!(TOUR.steps as readonly string[]).includes(name)) return
   const menu = await artifactBySlug(ctx, page.userId, `${TOUR.prefix}${TOUR.menu}`)
   if (!menu || !isTourPage(menu, TOUR.menu)) return
