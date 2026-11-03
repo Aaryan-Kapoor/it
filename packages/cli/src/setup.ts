@@ -633,11 +633,13 @@ const unplaced = async (adapter: Pick<Adapter, 'present'>, at: Place, was: Insta
   was !== undefined && !placed(was) && (await adapter.present(at)) === false
 
 /** What Claude Code says of our plugin. Null when it could not be asked, and nothing when it has none. */
-async function claudeHas(at: Place): Promise<{ enabled?: boolean; installPath?: unknown } | undefined | null> {
+async function claudeHas(at: Place): Promise<{ enabled?: boolean; installPath?: unknown; version?: unknown; readFromFolder?: unknown } | undefined | null> {
   const r = await run('claude', ['plugin', 'list', '--json'], 60_000, envAt(['CLAUDE_CONFIG_DIR'], at))
   if (!r.ok) return null
   try {
-    return (JSON.parse(r.out) as { id: string; enabled?: boolean; installPath?: unknown }[]).find((p) => p.id === `${PLUGIN}@${MARKET}`)
+    return (JSON.parse(r.out) as { id: string; enabled?: boolean; installPath?: unknown; version?: unknown; readFromFolder?: unknown }[]).find(
+      (p) => p.id === `${PLUGIN}@${MARKET}`,
+    )
   } catch {
     return null
   }
@@ -736,6 +738,25 @@ async function marketplacePreflight(id: 'claude-code' | 'codex', at: Place, was:
   }
 }
 
+/**
+ * Whether It's marketplace is registered in the app, which the preflight has already found to
+ * be this folder's where it is. Null where the app's answer could not be had or read.
+ */
+async function marketplaceHere(bin: 'claude' | 'codex', env: NodeJS.ProcessEnv): Promise<boolean | null> {
+  const result = await run(bin, ['plugin', 'marketplace', 'list', '--json'], 60_000, env)
+  if (!result.ok) return null
+  try {
+    const parsed = JSON.parse(result.out)
+    const entries = bin === 'claude' ? parsed : parsed?.marketplaces
+    if (!Array.isArray(entries) || !entries.every((entry) => entry && typeof entry.name === 'string')) return null
+    return entries.some((entry) => entry.name === MARKET)
+  } catch {
+    return null
+  }
+}
+/** What an install says where the app could not say what it has: nothing has been changed. */
+const UNASKED = (label: string): Ran => ({ ok: false, out: '', err: `${label} could not say which plugins and marketplaces it has, so nothing was changed.` })
+
 /** Only a well-formed empty listing confirms that the marketplace registration has gone. */
 async function marketplaceGone(bin: 'claude' | 'codex', env: NodeJS.ProcessEnv): Promise<boolean> {
   const result = await run(bin, ['plugin', 'marketplace', 'list', '--json'], 60_000, env)
@@ -804,14 +825,31 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       return typeof ours?.installPath === 'string' && path.isAbsolute(ours.installPath) ? path.join(ours.installPath, HOME_NOTE) : null
     },
     async install(dir, at, was, wrote) {
-      // Looked at before anything is taken out, so that an install that cannot go ahead leaves what was there
+      // Looked at before anything is changed, so that an install that cannot go ahead leaves what was there
       if (unsafe([dir])) return UNSAFE
       const env = envAt(this.profile, at)
-      await run('claude', ['plugin', 'uninstall', `${PLUGIN}@${MARKET}`], 60_000, env)
-      await run('claude', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
-      const added = await run('claude', ['plugin', 'marketplace', 'add', dir], 60_000, env)
-      if (!added.ok) return added
-      const installed = await run('claude', ['plugin', 'install', `${PLUGIN}@${MARKET}`, '--scope', 'user'], 60_000, env)
+      // Nothing is taken out first, so that the app is never without the add-on while this
+      // runs, nor after it where a step fails: the add-on that was there stays, and still takes
+      // clicks. The marketplace is this folder, which unpacking has just brought up to date, and
+      // where it is registered already it is read again. The plugin is then updated in place:
+      // Claude Code copies it anew whenever the version in its manifest changes, which each
+      // build of it does, and keeps the copy a running session loaded.
+      const registered = await marketplaceHere('claude', env)
+      if (registered === null) return UNASKED('Claude Code')
+      const placed = registered
+        ? await run('claude', ['plugin', 'marketplace', 'update', MARKET], 60_000, env)
+        : await run('claude', ['plugin', 'marketplace', 'add', dir], 60_000, env)
+      if (!placed.ok) return placed
+      const had = await claudeHas(at)
+      if (had === null) return UNASKED('Claude Code')
+      const installed = await run('claude', ['plugin', had ? 'update' : 'install', `${PLUGIN}@${MARKET}`, '--scope', 'user'], 60_000, env)
+      if (!installed.ok) return installed
+      // And it is seen to be the plugin of this build, or one read from this very folder
+      const now = await claudeHas(at)
+      const wanted = readJson<{ version?: unknown }>(path.join(dir, 'it-bridge', '.claude-plugin', 'plugin.json'))?.version
+      const fromHere = typeof now?.readFromFolder === 'string' && real(now.readFromFolder) === real(path.join(dir, 'it-bridge'))
+      if (!now || (!fromHere && now.version !== wanted))
+        return { ok: false, out: '', err: 'Claude Code did not take the new build of the add-on, and keeps the one it had.' }
       return withSkill(installed, settingsAt(at, 'CLAUDE_CONFIG_DIR', '.claude'), dir, was, wrote)
     },
     async remove(at, was) {
@@ -844,13 +882,18 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       return from && path.isAbsolute(from) ? path.join(from, HOME_NOTE) : null
     },
     async install(dir, at, was, wrote) {
-      // Looked at before anything is taken out, so that an install that cannot go ahead leaves what was there
+      // Looked at before anything is changed, so that an install that cannot go ahead leaves what was there
       if (unsafe([dir])) return UNSAFE
       const env = envAt(this.profile, at)
-      await run('codex', ['plugin', 'remove', `${PLUGIN}@${MARKET}`], 60_000, env)
-      await run('codex', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
-      const added = await run('codex', ['plugin', 'marketplace', 'add', dir], 60_000, env)
-      if (!added.ok) return added
+      // Nothing is taken out first, as in Claude Code. Codex reads a local marketplace from its
+      // folder, which unpacking has just brought up to date, and its own command for adding a
+      // plugin copies it anew over the one it had, which keeps the approval of its hooks.
+      const registered = await marketplaceHere('codex', env)
+      if (registered === null) return UNASKED('Codex')
+      if (!registered) {
+        const added = await run('codex', ['plugin', 'marketplace', 'add', dir], 60_000, env)
+        if (!added.ok) return added
+      }
       const installed = await run('codex', ['plugin', 'add', `${PLUGIN}@${MARKET}`], 60_000, env)
       return withSkill(installed, settingsAt(at, 'CODEX_HOME', '.codex'), dir, was, wrote)
     },

@@ -70,7 +70,7 @@ let ran: { bin: string; args: string; env: NodeJS.ProcessEnv }[]
 /** Commands a stand-in was given that the real app does not have, or that this file does not know. */
 let unknown: string[]
 /** What each stand-in app has installed, for each folder it has been told to keep its settings in. */
-let kept: Record<string, Map<string, { from?: string; on?: boolean; packages?: Set<string> }>>
+let kept: Record<string, Map<string, { from?: string; on?: boolean; version?: string; packages?: Set<string> }>>
 /** A command a test has made fail, as `<app> <words>`. */
 let failing: string[]
 /** Exact replies used to exercise incomplete or changed app output. */
@@ -111,16 +111,22 @@ function standIn(bin: string, words: string[], env: NodeJS.ProcessEnv): string {
   if (!kept[bin].has(key)) kept[bin].set(key, {})
   const has = kept[bin].get(key)!
   if (bin === 'claude') {
-    // Claude Code keeps a copy of the plugin, and says where
-    const copy = path.join(folder, 'plugins/cache/it/it-bridge/0.1.0')
+    // Claude Code keeps a copy of the plugin for each version its manifest names, and says where
+    // the one it has is. It copies the plugin anew only where the version has changed, and
+    // keeps the copy it had for whatever session loaded it
+    const copyOf = (version: string) => path.join(folder, 'plugins/cache/it/it-bridge', version)
+    const offered = () => JSON.parse(readFileSync(path.join(has.from!, 'it-bridge/.claude-plugin/plugin.json'), 'utf8')).version as string
     if (said === 'plugin marketplace list --json')
       return JSON.stringify(has.from ? [{ name: 'it', source: 'directory', path: has.from, installLocation: has.from }] : [])
     if (said === 'plugin list --json')
-      return JSON.stringify(has.on === undefined ? [] : [{ id: ID, version: '0.1.0', scope: 'user', enabled: has.on, installPath: copy }])
+      return JSON.stringify(
+        has.on === undefined ? [] : [{ id: ID, version: has.version ?? '0.1.0', scope: 'user', enabled: has.on, installPath: copyOf(has.version ?? '0.1.0') }],
+      )
     if (said === `plugin uninstall ${ID}`) {
       if (has.on === undefined) throw new Error('not installed')
-      rmSync(copy, { recursive: true, force: true })
+      rmSync(copyOf(has.version ?? '0.1.0'), { recursive: true, force: true })
       has.on = undefined
+      has.version = undefined
       return ''
     }
     if (said === 'plugin marketplace remove it') {
@@ -129,14 +135,28 @@ function standIn(bin: string, words: string[], env: NodeJS.ProcessEnv): string {
       return ''
     }
     if (words.length === 4 && said.startsWith('plugin marketplace add ')) {
+      if (has.from) throw new Error('a marketplace of that name is there already')
       has.from = words[3]
+      return ''
+    }
+    if (said === 'plugin marketplace update it') {
+      if (!has.from) throw new Error('no such marketplace')
       return ''
     }
     if (said === `plugin install ${ID} --scope user`) {
       if (!has.from) throw new Error('no such marketplace')
-      cpSync(path.join(has.from, 'it-bridge'), copy, { recursive: true })
+      if (has.on !== undefined) throw new Error('already installed')
+      has.version = offered()
+      cpSync(path.join(has.from, 'it-bridge'), copyOf(has.version), { recursive: true })
       has.on = true
       return ''
+    }
+    if (said === `plugin update ${ID} --scope user`) {
+      if (!has.from || has.on === undefined) throw new Error('not installed')
+      if (offered() === has.version) return 'already at the latest version'
+      has.version = offered()
+      cpSync(path.join(has.from, 'it-bridge'), copyOf(has.version), { recursive: true })
+      return 'updated'
     }
   }
   if (bin === 'codex') {
@@ -170,6 +190,7 @@ function standIn(bin: string, words: string[], env: NodeJS.ProcessEnv): string {
       return ''
     }
     if (words.length === 4 && said.startsWith('plugin marketplace add ')) {
+      if (has.from) throw new Error('a marketplace of that name is there already')
       has.from = words[3]
       return ''
     }
@@ -280,9 +301,19 @@ const lines = () => {
   return { said, say: (line: string) => void said.push(line) }
 }
 
+/** Gives Claude Code's manifest of the add-on another version, as a build with other files has, and answers with the manifest as it was. */
+const bumpClaude = (files: Record<string, string>): string => {
+  const was = files['it-bridge/.claude-plugin/plugin.json']!
+  files['it-bridge/.claude-plugin/plugin.json'] = was.replace(/"version": "([^"]+)"/, '"version": "$1x"')
+  return was
+}
+/** The manifest a test gave another version, to be put back when the test ends. */
+let manifestNow: string | undefined
+/** The version Claude Code's manifest of the add-on names, which is the folder Claude Code keeps its copy in. */
+const claudeVersion = (files = ADDONS['claude-code']!.files) => JSON.parse(files['it-bridge/.claude-plugin/plugin.json']!).version as string
 /** The apps a second It folder can share a settings folder with, the name of the variable that says where that folder is, and where the add-on's note ends up in it. */
 const SHARED: { id: Harness; bin: string; variable: string; note: (folder: string) => string }[] = [
-  { id: 'claude-code', bin: 'claude', variable: 'CLAUDE_CONFIG_DIR', note: (f) => path.join(f, 'plugins/cache/it/it-bridge/0.1.0/it-home.json') },
+  { id: 'claude-code', bin: 'claude', variable: 'CLAUDE_CONFIG_DIR', note: (f) => path.join(f, 'plugins/cache/it/it-bridge', claudeVersion(), 'it-home.json') },
   { id: 'codex', bin: 'codex', variable: 'CODEX_HOME', note: () => path.join(process.env.IT_HOME!, 'addons/codex/plugins/it-bridge/it-home.json') },
   { id: 'opencode', bin: 'opencode', variable: 'XDG_CONFIG_HOME', note: (f) => path.join(f, 'opencode/skills/it/it-home.json') },
   { id: 'hermes', bin: 'hermes', variable: 'HERMES_HOME', note: (f) => path.join(f, 'plugins/it-bridge/it-home.json') },
@@ -2102,6 +2133,8 @@ describe('managed plugin and marketplace ownership', () => {
       manifest: '.claude-plugin/marketplace.json',
       list: 'plugin list --json',
       install: `plugin install ${ID} --scope user`,
+      update: `plugin update ${ID} --scope user`,
+      refresh: ['plugin marketplace update it', `plugin update ${ID} --scope user`],
     },
     {
       id: 'codex' as const,
@@ -2109,9 +2142,11 @@ describe('managed plugin and marketplace ownership', () => {
       manifest: '.agents/plugins/marketplace.json',
       list: 'plugin list --marketplace it --json',
       install: `plugin add ${ID}`,
+      update: `plugin add ${ID}`,
+      refresh: [`plugin add ${ID}`],
     },
   ]
-  const mutations = (bin: string) => commands(bin).filter((command) => /\b(?:uninstall|remove|add|install|enable)\b/.test(command))
+  const mutations = (bin: string) => commands(bin).filter((command) => /\b(?:uninstall|remove|add|install|enable|update)\b/.test(command))
 
   const managed = SHARED.filter(({ id }) => ['claude-code', 'codex', 'openclaw'].includes(id))
 
@@ -2201,7 +2236,7 @@ describe('managed plugin and marketplace ownership', () => {
     },
   )
 
-  test.each(apps)('$bin retires obsolete packaged files before installing the refreshed source', async ({ id, bin, install, manifest }) => {
+  test.each(apps)('$bin retires obsolete packaged files before installing the refreshed source', async ({ id, bin, update: install, manifest }) => {
     const addon = ADDONS[id]!
     const obsolete = `${id === 'codex' ? 'plugins/it-bridge' : 'it-bridge'}/old-command/command.md`
     addon.files[obsolete] = 'The previous packaged command.'
@@ -2257,6 +2292,8 @@ describe('managed plugin and marketplace ownership', () => {
         await connect(id, () => {})
         delete addon.files[previous]
         addon.files[rel] = 'The replacement packaged file.'
+        // A build whose files have changed names another version in Claude Code's manifest
+        if (id === 'claude-code') manifestNow = bumpClaude(addon.files)
         const dir = path.join(process.env.IT_HOME!, 'addons', id)
         const target = path.join(dir, rel)
         const outside = path.join(tmp, 'personal-files')
@@ -2280,7 +2317,7 @@ describe('managed plugin and marketplace ownership', () => {
           expect(lstatSync(retired).isSymbolicLink()).toBe(true)
           expect(under(outside)).toEqual(['keep.txt'])
         } else expect(read(path.join(retired, 'old.md'))).toBe('The previous packaged command.')
-        const installed = bin === 'claude' ? path.join(folderOf(bin), 'plugins/cache/it/it-bridge/0.1.0/changing-command') : target
+        const installed = bin === 'claude' ? path.join(folderOf(bin), 'plugins/cache/it/it-bridge', claudeVersion(), 'changing-command') : target
         expect(read(installed)).toBe('The replacement packaged file.')
         unpack(id)
         expect(readdirSync(path.dirname(dir)).filter((name) => name.startsWith(`${id}.set-aside-by-it-`))).toEqual([saved])
@@ -2288,6 +2325,8 @@ describe('managed plugin and marketplace ownership', () => {
       } finally {
         delete addon.files[previous]
         delete addon.files[rel]
+        if (manifestNow !== undefined) addon.files['it-bridge/.claude-plugin/plugin.json'] = manifestNow
+        manifestNow = undefined
       }
     },
   )
@@ -2397,7 +2436,7 @@ describe('managed plugin and marketplace ownership', () => {
     expect(read(path.join(dir, manifest))).toBe(boundary === 'after the rename' && rel === manifest ? intended : before.manifest)
     expect(read(note)).toBe(boundary === 'after the rename' && target === note ? intended : before.note)
     expect(mutations(bin)).toEqual([])
-    expect(kept[bin]!.get(folderOf(bin))).toEqual({ from: dir, on: true })
+    expect(kept[bin]!.get(folderOf(bin))).toMatchObject({ from: dir, on: true })
     expect(noted(id).installs[0]!.version).toBe('installing')
     if (recovery === 'reconnect') expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
     expect(await disconnect(id, () => {})).toBe(true)
@@ -2616,12 +2655,8 @@ describe('managed plugin and marketplace ownership', () => {
   })
 
   test.each(apps.flatMap((app) => ['marketplace', 'plugin'].map((step) => ({ ...app, step }))))(
-    '$bin retains a failed $step installation for retry and disconnect',
+    '$bin retains a first installation whose $step step failed, for retry and disconnect',
     async ({ id, bin, step, install }) => {
-      await connect(id, () => {})
-      const record = noted(id)
-      record.installs[0]!.version = 'previous-version'
-      put(stampFile(id), JSON.stringify(record))
       failing = [`${bin} ${step === 'marketplace' ? `plugin marketplace add ${path.join(process.env.IT_HOME!, 'addons', id)}` : install}`]
       expect((await connect(id, () => {})).addon).toBe('error')
       expect(noted(id).installs[0]!.version).toBe('installing')
@@ -2631,6 +2666,76 @@ describe('managed plugin and marketplace ownership', () => {
       expect(existsSync(stampFile(id))).toBe(false)
     },
   )
+
+  test.each(apps)('$bin brings an add-on up to date in place, and never takes it out of the app first', async ({ id, bin, refresh }) => {
+    await connect(id, () => {})
+    const before = { ...kept[bin]!.get(folderOf(bin))! }
+    const record = noted(id)
+    record.installs[0]!.version = 'previous-version'
+    put(stampFile(id), JSON.stringify(record))
+    const addon = ADDONS[id]!
+    if (id === 'claude-code') manifestNow = bumpClaude(addon.files)
+    try {
+      ran = []
+      expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
+      expect(mutations(bin)).toEqual(refresh)
+      expect(kept[bin]!.get(folderOf(bin))).toMatchObject({ from: before.from, on: true })
+      expect(noted(id).installs[0]!.version).toBe(addon.version)
+      // Claude Code has the new build from its manifest's new version, and keeps the copy a running session loaded
+      if (id === 'claude-code') {
+        expect(kept[bin]!.get(folderOf(bin))!.version).toBe(claudeVersion())
+        expect(existsSync(path.join(folderOf(bin), 'plugins/cache/it/it-bridge', before.version!))).toBe(true)
+        expect(existsSync(path.join(folderOf(bin), 'plugins/cache/it/it-bridge', claudeVersion()))).toBe(true)
+      }
+    } finally {
+      if (manifestNow !== undefined) addon.files['it-bridge/.claude-plugin/plugin.json'] = manifestNow
+      manifestNow = undefined
+    }
+  })
+
+  test.each(apps.flatMap((app) => app.refresh.map((command) => ({ ...app, command }))))(
+    '$bin keeps the add-on it had, whole and listening, when `$command` fails while it is brought up to date, and tries again later',
+    async ({ id, bin, command }) => {
+      await connect(id, () => {})
+      const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
+      const before = { ...kept[bin]!.get(folderOf(bin))! }
+      const record = noted(id)
+      record.installs[0]!.version = 'previous-version'
+      put(stampFile(id), JSON.stringify(record))
+      failing = [`${bin} ${command}`]
+      ran = []
+      expect((await connect(id, () => {})).addon).toBe('error')
+      expect(mutations(bin).filter((words) => /uninstall|remove/.test(words))).toEqual([])
+      expect(kept[bin]!.get(folderOf(bin))).toEqual(before)
+      expect((await statusOf(id))!.addon).toMatch(/^(connected|needs_approval)$/)
+      expect(read(skill)).toBe(SKILL)
+      // Noted as not finished, so that the next look installs it again
+      expect(noted(id).installs[0]!.version).toBe('installing')
+      failing = []
+      expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
+      expect(noted(id).installs[0]!.version).toBe(ADDONS[id]!.version)
+    },
+  )
+
+  test('Claude Code that says it has updated the add-on and still has the build it had is taken not to have, and keeps it', async () => {
+    await connect('claude-code', () => {})
+    const record = noted('claude-code')
+    record.installs[0]!.version = 'previous-version'
+    put(stampFile('claude-code'), JSON.stringify(record))
+    const addon = ADDONS['claude-code']!
+    manifestNow = bumpClaude(addon.files)
+    // Its update says it is done and changes nothing, as one that will not copy the plugin anew would
+    replies.set(`claude plugin update ${ID} --scope user`, 'updated')
+    try {
+      const result = await connect('claude-code', () => {})
+      expect(result.addon).toBe('error')
+      expect(result.detail).toContain('keeps the one it had')
+      expect(noted('claude-code').installs[0]!.version).toBe('installing')
+    } finally {
+      addon.files['it-bridge/.claude-plugin/plugin.json'] = manifestNow
+      manifestNow = undefined
+    }
+  })
 })
 
 describe('the lock one program holds while it changes what is installed', () => {
