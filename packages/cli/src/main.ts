@@ -143,9 +143,9 @@ const out = (value: unknown): void => written(process.stdout, `${JSON.stringify(
 /** Says something to a person, a sentence or a paragraph to the line, on standard output. */
 const tell = (lines: (string | undefined)[]): void => written(process.stdout, `${lines.filter((line) => line !== undefined).join('\n')}\n`)
 
-/** What a person is told where Codex is connected and, as it is set, would keep `it` from reaching It. Null where it would not. */
 /** Whether It's add-on is in the app, whatever the app has loaded of it. */
 const inApp = (h: LoadedStatus) => h.addon === 'connected' || h.addon === 'outdated' || h.addon === 'incompatible'
+/** What a person is told where Codex is connected and, as it is set, would keep `it` from reaching It. Null where it would not. */
 function codexShut(found: LoadedStatus[]): string | null {
   if (!found.some((h) => h.id === 'codex' && (inApp(h) || h.addon === 'needs_approval'))) return null
   return codexLetsItOut() === false ? `Codex: ${CODEX_SHUT}` : null

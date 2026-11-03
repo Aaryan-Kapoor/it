@@ -6028,6 +6028,8 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
         expect([flags, setup.code]).toEqual([flags, 0])
         expect(printed(setup)).toEqual({
           harnesses: [{ id: 'pi', version: '0.82.0', addon: 'connected' }],
+          // A Pi that was already running loads the add-on once it is started again
+          addons: [{ id: 'pi', did: 'installed', restart: true }],
           service: { registered: false, state: 'not installed' },
           next: AFTER_SETUP,
         })
