@@ -4541,6 +4541,31 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(said.some((line) => line.includes('waits, since T3 Code did not take the last one'))).toBe(true)
   })
 
+  test('a click for a conversation held in a thread is never set aside, however many times T3 Code would not take it, and goes to the thread once T3 Code takes it', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    withT3Code()
+    stand.t3.threads.set('thread-1', 't3-thread-a')
+    stand.t3.refusing = 'T3 Code could not be reached'
+    await start()
+    offered(click(1))
+    // Each refusal keeps the conversation from T3 Code for ten minutes, and any other way would
+    // have given up on the click after its fourth try. This one is tried a sixth time
+    for (let n = 1; n <= 6; n++) {
+      for (let i = 0; i < 700 && stand.t3.refused.length < n; i++) await pass()
+      expect(stand.t3.refused).toHaveLength(n)
+    }
+    expect(stand.t3.refused.every((r) => r.thread === 't3-thread-a')).toBe(true)
+    expect(called('delivery:park')).toEqual([])
+    expect(stand.codex).toEqual([])
+    // T3 Code takes messages again, and the click is put to its thread
+    stand.t3.refusing = null
+    for (let i = 0; i < 700 && !stand.t3.sent.length; i++) await pass()
+    expect(stand.t3.sent).toHaveLength(1)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-a')
+    for (let i = 0; i < 5 && !called('delivery:handedOff').includes('click-1'); i++) await pass()
+    expect(called('delivery:handedOff')).toContain('click-1')
+  }, 120_000)
+
   test('a Claude Code conversation is not reopened while T3 Code is running and has yet to say which of its threads holds it, and is once T3 Code says that none does', async () => {
     withT3Code()
     stand.t3.slow = true

@@ -2310,14 +2310,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
         queueTries.set(tag(click), { n, at: Date.now(), reopening })
         stalled.set(line, click.id)
         stalledAt.set(click.id, Date.now())
-        record('agent.woken', { result: n >= QUEUE_WAITS.length ? 'failed' : 'declined', agent: agentOf(harness) })
+        // Its thread of T3 Code is the only way it may go: it is tried there for as long as it waits, and never given up on
+        const forThread = t3 !== undefined && t3Only(key)
+        record('agent.woken', { result: n >= QUEUE_WAITS.length && !forThread ? 'failed' : 'declined', agent: agentOf(harness) })
         if (reopening) notReopened(click.session!, refused)
         // T3 Code could not take it: the conversation is reopened as any other for a while, and that is tried at once
         if (t3) {
           t3Refused.set(key, Date.now())
           soon(10)
         }
-        if (n >= QUEUE_WAITS.length) {
+        if (n >= QUEUE_WAITS.length && forThread) {
+          seldom(`t3-tries:${click.id}`, `click ${click.id} was not taken by ${route} after ${n} tries (${refused}); it waits for T3 Code, and is tried again`)
+          await release(click.id).catch(() => {})
+        } else if (n >= QUEUE_WAITS.length) {
           stalled.delete(line)
           // Given up on from here. It is set aside so that it does not hide clicks that can be
           // delivered; it is still waiting, and the person and `it wait` still see it.
@@ -2390,12 +2395,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
       tried = undefined
     }
     // Its tries are used up and it is on offer again (the machine that had taken it let it
-    // go): it is set aside again, and does not hold up its conversation's later clicks
-    if (tried && tried.n >= QUEUE_WAITS.length) {
+    // go): it is set aside again, and does not hold up its conversation's later clicks. A
+    // click whose conversation's clicks go to its thread of T3 Code and nowhere else is never
+    // set aside: nothing would bring it back once T3 Code takes messages again. It waits for
+    // T3 Code however long that takes, and is tried again after the longest of the pauses.
+    if (tried && tried.n >= QUEUE_WAITS.length && !t3Only(key)) {
       toPark.set(click.id, { for: click.session, tag: tag(click) })
       return true
     }
-    if (queueing.size >= 50 || (tried && Date.now() - tried.at < QUEUE_WAITS[tried.n]!)) return false
+    if (queueing.size >= 50 || (tried && Date.now() - tried.at < QUEUE_WAITS[Math.min(tried.n, QUEUE_WAITS.length - 1)]!)) return false
     // In line by the conversation as it is now, whichever of its ids the click names: a
     // conversation that was cleared carries on under another id, and its pages still name the
     // old one. Two hand-overs of one conversation side by side read and let go of each other's
