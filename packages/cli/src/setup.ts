@@ -44,6 +44,22 @@ export interface HarnessStatus {
   detail?: string
   runtime?: AddonRuntime
 }
+/**
+ * An app as `it status` says it, which goes by the add-on the app has loaded where one has
+ * reported to the connector, and not only by what is installed. `outdated`: the app runs an
+ * earlier build of the add-on than the one installed, which still takes clicks, and a restart of
+ * the app loads the new one. `incompatible`: what the app has loaded cannot take clicks from this
+ * It, and they wait. An agent that reads `connected` counts on a message arriving by itself.
+ */
+export type LoadedStatus = Omit<HarnessStatus, 'addon'> & { addon: AddonState | 'outdated' | 'incompatible' }
+export const asLoaded = (h: HarnessStatus): LoadedStatus =>
+  h.addon !== 'connected' || !h.runtime
+    ? h
+    : h.runtime.state === 'incompatible'
+      ? { ...h, addon: 'incompatible' }
+      : h.runtime.outdated
+        ? { ...h, addon: 'outdated' }
+        : h
 
 interface Known {
   label: string

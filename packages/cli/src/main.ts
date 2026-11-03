@@ -105,6 +105,7 @@ import { tailnetAddresses, tailnetName } from './serve/tailnet'
 import * as service from './service'
 import {
   AFTER,
+  asLoaded,
   CODEX_RULE_FILE,
   CODEX_SHUT,
   codexLetsItOut,
@@ -114,6 +115,7 @@ import {
   type HarnessStatus,
   holdsAddons,
   KNOWN,
+  type LoadedStatus,
   reconcile,
   shim,
   stampFile,
@@ -137,8 +139,10 @@ const out = (value: unknown): void => written(process.stdout, `${JSON.stringify(
 const tell = (lines: (string | undefined)[]): void => written(process.stdout, `${lines.filter((line) => line !== undefined).join('\n')}\n`)
 
 /** What a person is told where Codex is connected and, as it is set, would keep `it` from reaching It. Null where it would not. */
-function codexShut(found: HarnessStatus[]): string | null {
-  if (!found.some((h) => h.id === 'codex' && (h.addon === 'connected' || h.addon === 'needs_approval'))) return null
+/** Whether It's add-on is in the app, whatever the app has loaded of it. */
+const inApp = (h: LoadedStatus) => h.addon === 'connected' || h.addon === 'outdated' || h.addon === 'incompatible'
+function codexShut(found: LoadedStatus[]): string | null {
+  if (!found.some((h) => h.id === 'codex' && (inApp(h) || h.addon === 'needs_approval'))) return null
   return codexLetsItOut() === false ? `Codex: ${CODEX_SHUT}` : null
 }
 /** What a person is told of the agent apps on this machine: each one that was found, and whether It is connected to it. */
@@ -191,11 +195,11 @@ function wakesSaid(woken: string[]): string | null {
   return `Auto-wake is on for ${listed}: when you use a page whose conversation is closed, It reopens the conversation and runs the agent on this machine with nobody watching. You can turn it off for each app on the site’s Machines page.`
 }
 
-function appsSaid(found: HarnessStatus[], advise = true, withCodex = true): string[] {
+function appsSaid(found: LoadedStatus[], advise = true, withCodex = true): string[] {
   if (!found.length) return ['No agent app was found on this machine.']
   const lines = found.map((h) => {
     const app = KNOWN[h.id].label
-    if (h.addon === 'connected') return h.runtime ? `${app}: ${h.runtime.detail}` : `${app}'s add-on is installed. Its loaded code has not been verified.`
+    if (inApp(h)) return h.runtime ? `${app}: ${h.runtime.detail}` : `${app}'s add-on is installed. Its loaded code has not been verified.`
     if (h.addon === 'needs_approval') return `${app} is connected, and one thing is left for you to do: ${h.detail}`
     return `${app} is not connected${h.detail && h.addon !== 'not_connected' ? `: ${h.detail}` : '.'}`
   })
@@ -2200,7 +2204,7 @@ async function status(a: Args) {
     ...(database ? { database } : {}),
     connector,
     background: service.status(),
-    harnesses: (await detectAll()).map((h) => ({ ...h, ...(runtimes?.[h.id] ? { runtime: runtimes[h.id] } : {}) })),
+    harnesses: (await detectAll()).map((h) => asLoaded({ ...h, ...(runtimes?.[h.id] ? { runtime: runtimes[h.id] } : {}) })),
     version: VERSION,
     protocol: PROTOCOL_VERSION,
     // A newer version that this machine has learned is out, where it looks for one

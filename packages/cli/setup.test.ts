@@ -37,6 +37,7 @@ import {
   AFTER,
   afterHermes,
   alone,
+  asLoaded,
   CODEX_RULE,
   CODEX_SHUT,
   codexGivesNetwork,
@@ -2079,6 +2080,18 @@ describe('two It folders connected to one app', () => {
       expect(existsSync(stampFile(id))).toBe(false)
     },
   )
+})
+
+test('an app is said as the add-on it has loaded: an earlier build as outdated, one that cannot take clicks as incompatible, and anything else as it is installed', () => {
+  const connected = { id: 'claude-code' as const, addon: 'connected' as const }
+  const detail = 'What the connector said of it.'
+  expect(asLoaded(connected)).toEqual(connected)
+  expect(asLoaded({ ...connected, runtime: { state: 'active', version: 'b', detail } }).addon).toBe('connected')
+  expect(asLoaded({ ...connected, runtime: { state: 'active', version: 'a', outdated: true, detail } }).addon).toBe('outdated')
+  expect(asLoaded({ ...connected, runtime: { state: 'incompatible', version: 'a', detail } }).addon).toBe('incompatible')
+  // What the app has loaded says nothing of an add-on that is not installed, or is waiting for the person's yes
+  expect(asLoaded({ ...connected, addon: 'needs_approval', runtime: { state: 'incompatible', detail } }).addon).toBe('needs_approval')
+  expect(asLoaded({ ...connected, addon: 'not_connected', runtime: { state: 'active', outdated: true, detail } }).addon).toBe('not_connected')
 })
 
 describe('managed plugin and marketplace ownership', () => {
