@@ -1587,6 +1587,23 @@ export const PROFILE_VARS = [
  * inside an agent's session, and what marks that session must not leak into a command meant
  * for another. Where the person keeps a harness's settings is theirs to say, and is kept.
  */
+/** What `it status` says where a proxy in its environment would keep Claude Code's add-on from asking anything. */
+export const PROXIED =
+  'Claude Code: this environment names a proxy (HTTP_PROXY, HTTPS_PROXY or ALL_PROXY), and NO_PROXY does not name 127.0.0.1. A Claude Code started with it gets no clicks by itself, since It’s add-on asks It nothing rather than ask through a proxy. Add 127.0.0.1 to NO_PROXY where Claude Code is started, and start it again.'
+/**
+ * Whether Claude Code, started with this environment, would send what It's add-on asks of a
+ * port on this machine through a proxy, by the rule the add-on itself goes by (`proxied` in
+ * `addons/claude-code/it-bridge/hooks/register.js`): a proxy is named in any of six variables, and
+ * neither list of addresses to reach directly names `127.0.0.1` or `*`, where both are given.
+ * The add-on then asks nothing, so as not to show a proxy which conversation is asked about.
+ */
+export function proxiedForClaude(env: NodeJS.ProcessEnv): boolean {
+  const named = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy'].some((name) => env[name])
+  const direct = [env.NO_PROXY, env.no_proxy].filter((list): list is string => Boolean(list))
+  const spared = direct.length > 0 && direct.every((list) => list.split(',').some((entry) => ['127.0.0.1', '*'].includes(entry.trim())))
+  return named && !spared
+}
+
 export function harnessEnv(): NodeJS.ProcessEnv {
   const keep = new Set<string>(PROFILE_VARS)
   const own = Object.fromEntries(Object.entries(process.env).filter(([k]) => keep.has(k) || !/^(CLAUDE|CODEX_|IT_SESSION$|IT_HARNESS$)/.test(k)))

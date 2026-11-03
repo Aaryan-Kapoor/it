@@ -74,8 +74,10 @@ import {
   noteWas,
   notKnown,
   notSetUp,
+  PROXIED,
   Problem,
   plainWord,
+  proxiedForClaude,
   readJson,
   sessionAsked,
   sessionNote,
@@ -2236,6 +2238,11 @@ async function status(a: Args) {
   const newerOut = typeof learned === 'string' && newer(learned, VERSION) ? learned : null
   const connector = blocked ? { running: null } : ((await connectorHealth()) ?? { running: false })
   const runtimes = connector.addons as Record<string, HarnessStatus['runtime']> | undefined
+  // Where the add-ons reach the connector at a port, as on Windows, a proxy that this
+  // environment names for this machine's own address keeps Claude Code's add-on from asking
+  // anything, in a Claude Code started with the same environment: it says nothing of that itself
+  const info = readJson<{ socket?: unknown; port?: unknown }>(inHome('connector.json'))
+  const behindProxy = !!info && !(typeof info.socket === 'string' && info.socket) && typeof info.port === 'number' && proxiedForClaude(process.env)
   const stands = {
     ...(blocked ? { blocked: true, hint } : {}),
     running: blocked ? null : running,
@@ -2246,7 +2253,9 @@ async function status(a: Args) {
     ...(database ? { database } : {}),
     connector,
     background: service.status(),
-    harnesses: (await detectAll()).map((h) => asLoaded({ ...h, ...(runtimes?.[h.id] ? { runtime: runtimes[h.id] } : {}) })),
+    harnesses: (await detectAll())
+      .map((h) => asLoaded({ ...h, ...(runtimes?.[h.id] ? { runtime: runtimes[h.id] } : {}) }))
+      .map((h) => (behindProxy && h.id === 'claude-code' && inApp(h) ? { ...h, proxied: true as const } : h)),
     version: VERSION,
     protocol: PROTOCOL_VERSION,
     // A newer version that this machine has learned is out, where it looks for one
@@ -2283,6 +2292,7 @@ async function status(a: Args) {
               ? `The network is on, for your tailnet only. Your devices on it open the site at ${first}.${others.length ? ` This machine’s other addresses there are ${others.join(' and ')}.` : ''}`
               : `The network is on. Other devices on the same network open the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`,
     ...appsSaid(stands.harnesses),
+    ...(stands.harnesses.some((h) => 'proxied' in h) ? [PROXIED] : []),
     ...serviceSaid(stands.background, stands.connector, running && enrolled),
     newerOut ? `It ${newerOut} is out, and this is ${VERSION}. \`it upgrade\` puts it in place.` : `This is It ${VERSION}.`,
   ])

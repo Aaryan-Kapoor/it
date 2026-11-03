@@ -769,6 +769,20 @@ describe('the Claude Code add-on', () => {
     expect(await questions({ HTTP_PROXY: PROXY, NO_PROXY: '127.0.0.1', no_proxy: 'internal.example' }, port)).toBe(0)
     // The socket is asked whatever the environment names: Claude Code sends nothing for a socket through a proxy
     expect(await questions({ HTTP_PROXY: PROXY, HTTPS_PROXY: PROXY, ALL_PROXY: PROXY }, socket)).toBeGreaterThan(0)
+    // And `it status`, which says so to the person, goes by the same rule as the add-on, in each of these cases
+    const { proxiedForClaude } = await import('../../packages/cli/src/lib')
+    for (const env of [
+      {},
+      { HTTP_PROXY: PROXY },
+      { all_proxy: PROXY },
+      { HTTPS_PROXY: PROXY, NO_PROXY: 'internal.example, 127.0.0.1' },
+      { HTTP_PROXY: PROXY, no_proxy: '127.0.0.1' },
+      { HTTP_PROXY: PROXY, NO_PROXY: '*' },
+      { HTTP_PROXY: PROXY, NO_PROXY: 'localhost' },
+      { HTTP_PROXY: PROXY, NO_PROXY: '127.0.0.1', no_proxy: 'internal.example' },
+      { NO_PROXY: 'localhost' },
+    ] as Record<string, string>[])
+      expect([env, proxiedForClaude(env)]).toEqual([env, (await questions(env, port)) === 0])
   })
 
   test('over a port the token is never sent, and an answer that is not sealed with it is not believed', async () => {
