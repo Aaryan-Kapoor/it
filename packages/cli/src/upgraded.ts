@@ -89,8 +89,11 @@ export async function afterUpgrade(
     return { started: ran.ok ? 'again' : 'failed', ...(why ? { why } : {}), ...(addons ? { addons } : {}) }
   }
   if (await how.running()) return { started: 'by hand', running: true, addonsLater: true }
+  // Read whether or not it ended well: it ends as a failure where an add-on could not be brought
+  // up to date, and says which, beside the others it did bring up. Where it said nothing of
+  // them, as a program that does not know the switch does not, It brings them up as it starts
   const ran = await run(program, ['setup', '--refresh'], how.env)
-  const addons = ran.ok ? outcomesIn(ran.said) : undefined
+  const addons = outcomesIn(ran.said)
   return { started: 'by hand', running: false, ...(addons ? { addons } : { addonsLater: true }) }
 }
 

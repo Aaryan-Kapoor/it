@@ -65,6 +65,14 @@ describe('once the new program is in place, it upgrade', () => {
     expect(addonsSaid(done, label)).toEqual(['Its add-ons in your agent apps are brought up to date when It starts as the new version.'])
   })
 
+  test('where the new program could bring up only some add-ons, and so ends as a failure, says which failed and which apps to restart', async () => {
+    const said = { addons: [{ id: 'codex', did: 'failed', detail: 'Codex would not add the plugin.' }, ...updated] }
+    const p = program(() => ({ ok: false, said }))
+    const done = await afterUpgrade('/the/new/it', { service: false, againWith: {}, env: {}, running: async () => false, run: p.run })
+    expect(done).toEqual({ started: 'by hand', running: false, addons: said.addons })
+    expect(addonsSaid(done, label)).toHaveLength(2)
+  })
+
   test('where the new program cannot bring up the add-ons, says that It does so when it starts', async () => {
     const p = program(() => ({ ok: false, failed: 'not a switch it knows' }))
     const done = await afterUpgrade('/the/new/it', { service: false, againWith: {}, env: {}, running: async () => false, run: p.run })
