@@ -4,7 +4,7 @@
 // five that a person runs to look after It (`it setup`, `it status`, `it site`, `it network`
 // and `it service status`) print a few plain sentences where standard output is a terminal, and
 // the same JSON as ever where it is not, or when `--json` is given.
-import { execFile, spawn, spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import {
   appendFileSync,
   chmodSync,
@@ -104,6 +104,7 @@ import { onTheInternet, reachable } from './serve/network'
 import { tailnetAddresses, tailnetName } from './serve/tailnet'
 import * as service from './service'
 import {
+  type AddonOutcome,
   AFTER,
   asLoaded,
   CODEX_RULE_FILE,
@@ -117,6 +118,7 @@ import {
   KNOWN,
   type LoadedStatus,
   reconcile,
+  refresh,
   shim,
   stampFile,
   supported,
@@ -127,6 +129,7 @@ import { zshDirectory } from './shell-profile'
 import { GUIDE, NAMES, END as TOUR_END, STEPS as TOUR_STEPS, tourPage } from './tour'
 import { finishInstallationRemoval, installationFile, removeInstallationFiles, stepOutOf, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
+import { addonsSaid, afterUpgrade, restartLine } from './upgraded'
 import * as usage from './usage'
 import { type Listed, printed, wait } from './wait'
 
@@ -194,6 +197,14 @@ function wakesSaid(woken: string[]): string | null {
   const listed = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]
   return `Auto-wake is on for ${listed}: when you use a page whose conversation is closed, It reopens the conversation and runs the agent on this machine with nobody watching. You can turn it off for each app on the site’s Machines page.`
 }
+
+/**
+ * What setup says of the apps that had It's add-on before it ran and whose add-on's code it has
+ * just brought to another build: one that is running goes on with the build it loaded until it is
+ * restarted. An app connected for the first time is told what to do by `AFTER`.
+ */
+const restartSaid = (outcomes: AddonOutcome[], before: Set<Harness>): string | null =>
+  restartLine(outcomes.filter((o) => o.did === 'installed' && o.restart && before.has(o.id)).map((o) => KNOWN[o.id].label))
 
 function appsSaid(found: LoadedStatus[], advise = true, withCodex = true): string[] {
   if (!found.length) return ['No agent app was found on this machine.']
@@ -1282,7 +1293,31 @@ function setUp(a: Args, was: boolean): void {
   } catch {}
 }
 
+/**
+ * `it setup --refresh`: brings the add-ons that this folder put into agent apps, and that are
+ * in them now, up to this version of It, and does nothing else. It starts nothing, asks It
+ * nothing, and connects or disconnects no app. `it upgrade` has the new program run it where no
+ * service is registered and no It is running, so that an app started before It loads the add-on
+ * of the version that runs next.
+ */
+async function refreshing(a: Args) {
+  const outcomes = await oneAtATime(() => withCurrentProgram(() => refresh(say)))
+  if (outcomes.some((o) => o.did === 'failed')) process.exitCode = 1
+  if (!forPerson(a)) return out({ addons: outcomes })
+  const brought = outcomes.filter((o) => o.did === 'installed').map((o) => KNOWN[o.id].label)
+  return tell([
+    !outcomes.length ? 'Every add-on this It folder put into an agent app is up to date.' : undefined,
+    brought.length ? `Brought up to date: ${brought.join(', ')}.` : undefined,
+    ...addonsSaid({ started: 'by hand', addons: outcomes }, (id) => KNOWN[id].label),
+  ])
+}
+
 async function setup(a: Args, joined = false) {
+  if (a.flags.refresh) {
+    if (a.flags.all || a.flags.none || a.flags.yes || text(a, 'only') !== undefined || text(a, 'name') !== undefined)
+      throw new Problem('`it setup --refresh` brings the add-ons up to date and does nothing else, so it takes no other switch.', 'invalid')
+    return refreshing(a)
+  }
   const only = text(a, 'only')
   if (only !== undefined && !a.flags.none) appsNamed(only)
   // Take the folder's setup lock first where one is needed, so concurrent setups keep their
@@ -1556,7 +1591,7 @@ async function settingUpLed(a: Args, begunAlready = false) {
     // Asked only where an app is chosen: with none, reopening comes on for none
     const wokenBefore = wanted.length ? await wokenNow() : null
     let woken = await chosen(wanted).catch(() => null)
-    await reconcile(wanted, quiet)
+    const outcomes = await reconcile(wanted, quiet)
     woken ??= await chosen(wanted)
     const after = await detectAll()
     await call('mutation', api.machines.inventory, { harnesses: after })
@@ -1574,6 +1609,9 @@ async function settingUpLed(a: Args, begunAlready = false) {
     // What decides whether Codex's first page appears at all is said by itself, and first
     const shut = codexShut(after)
     if (shut) left.push(shut)
+    // An app whose add-on was brought up to date goes on with the one it loaded until it is restarted
+    const restart = restartSaid(outcomes, connectedBefore)
+    if (restart) left.push(restart)
     // That reopening came on with this setup, said once: not again each time setup is run
     const waking = wakesSaid(cameOn(woken, wokenBefore, connectedBefore).filter((id) => on.some((h) => h.id === id)))
     if (waking) left.push(waking)
@@ -1862,7 +1900,7 @@ async function settingUp(a: Args, joined: boolean) {
     // Asked only where an app is chosen: with none, reopening comes on for none
     const wokenBefore = wanted.length ? await wokenNow() : null
     let woken = await chosen(wanted).catch(() => null)
-    await reconcile(wanted, say)
+    const outcomes = await reconcile(wanted, say)
     woken ??= await chosen(wanted)
     const after = await detectAll()
     // The site is told what was found, and no more than that. Whether this machine can hear a
@@ -1903,6 +1941,8 @@ async function settingUp(a: Args, joined: boolean) {
     // What decides whether Codex's first page appears at all is said by itself, and first.
     const shut = codexShut(after)
     if (shut) say(`\n${shut}`)
+    const restart = restartSaid(outcomes, before)
+    if (restart) say(`\n${restart}`)
     // That reopening came on with this setup, said once: not again each time setup is run
     const waking = wakesSaid(
       cameOn(woken, wokenBefore, before).filter((id) => after.some((h) => h.id === id && (h.addon === 'connected' || h.addon === 'needs_approval'))),
@@ -1936,6 +1976,8 @@ async function settingUp(a: Args, joined: boolean) {
     if (!forPerson(a))
       out({
         harnesses: after,
+        // What became of each add-on that was put in, or that could not be: `it upgrade` reads it
+        ...(outcomes.length ? { addons: outcomes } : {}),
         service: background,
         ...(trouble ? { problem: trouble } : {}),
         ...(unasked ? { hint: unasked } : {}),
@@ -2545,39 +2587,32 @@ async function main(argv: string[]): Promise<void> {
       // version has it and brings the add-ons in the agent apps up to it. It is given what the
       // definition that is there gives the service, so that a setting this terminal does not
       // name is in the one written next. Where nothing starts It by itself, whoever started it
-      // does so again.
-      let started: 'again' | 'by hand' | 'failed' = 'by hand'
-      let why: string | undefined
-      if (service.installedHere()) {
-        say('Starting It again as the new version…')
-        const ran = await new Promise<{ ok: boolean; said: string; failed: string }>((resolve) =>
-          execFile(
-            done.program,
-            ['setup'],
-            { timeout: 10 * 60_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true, env: service.againWith() },
-            (err, stdout, stderr) => resolve({ ok: !err, said: String(stdout), failed: String(stderr) }),
-          ),
-        )
-        started = ran.ok ? 'again' : 'failed'
-        if (!ran.ok) {
-          // Why, as setup said it: in what it printed, or in the problem it ended with
-          try {
-            why = (JSON.parse(ran.said) as { problem?: string }).problem
-          } catch {}
-          if (!why)
-            for (const line of ran.failed.split('\n').reverse())
-              try {
-                why = (JSON.parse(line) as { error?: { message?: string } }).error?.message
-                if (why) break
-              } catch {}
-        }
-      }
-      // The new program is in place either way, and that is said. That It is not running as it
-      // is said too, and by how this ends: whoever asked for the upgrade from a script goes by that
-      if (started === 'failed') process.exitCode = 1
+      // does so again, and the add-ons are brought up to date as `afterUpgrade` says.
+      const registered = service.installedHere()
+      if (registered) say('Starting It again as the new version…')
+      const after = await afterUpgrade(done.program, {
+        service: registered,
+        againWith: registered ? service.againWith() : process.env,
+        env: process.env,
+        running: async () => (await connectorHealth())?.ok === true,
+      })
+      const { started, why } = after
+      const failedAddons = (after.addons ?? []).filter((o) => o.did === 'failed')
+      // The new program is in place either way, and that is said. That It is not running as it,
+      // or that an add-on could not be brought up to date, is said too, and by how this ends:
+      // whoever asked for the upgrade from a script goes by that
+      if (started === 'failed' || failedAddons.length) process.exitCode = 1
       // Counted: from which version to which, and whether It runs as the new one
       usage.record('upgrade.done', { from: usage.three(done.from), to: usage.three(done.to), by: 'command', result: started === 'failed' ? 'failed' : 'ok' })
-      const result = { upgraded: true, from: done.from, to: done.to, started, ...(why ? { problem: why } : {}) }
+      const result = {
+        upgraded: true,
+        from: done.from,
+        to: done.to,
+        started,
+        ...(why ? { problem: why } : {}),
+        ...(after.addons ? { addons: after.addons } : {}),
+        ...(after.addonsLater ? { addonsLater: true } : {}),
+      }
       if (!forPerson(a)) return out(result)
       return tell([
         `It ${done.to} is installed in place of ${done.from}.`,
@@ -2585,7 +2620,10 @@ async function main(argv: string[]): Promise<void> {
           ? 'It was started again, and is running as the new version.'
           : started === 'failed'
             ? `It could not be started again${why ? `: ${why}` : ''}. Run \`it setup\` to see why.`
-            : 'It runs as the new version once it is started again: stop `it serve` where it is running, and start it.',
+            : after.running
+              ? 'It runs as the new version once it is started again: stop `it serve` where it is running, and start it.'
+              : 'It runs as the new version the next time it is started, with `it serve`.',
+        ...addonsSaid(after, (id) => KNOWN[id].label),
       ])
     }
     case 'runs': {

@@ -213,7 +213,9 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
           <>
             stop <code>it serve</code> where it is running, and start it.
           </>
-        )}
+        )}{' '}
+        As it starts it brings the add-ons in the agent apps there up to date. An app that is already running goes on with the add-on it loaded, which still
+        takes clicks, until it is restarted, and its line on this page then says so.
       </p>
     )
   const behind = !m.runsIt && newer(host, m.connectorVersion)

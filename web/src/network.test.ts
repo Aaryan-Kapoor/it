@@ -347,7 +347,9 @@ describe('what is said of an agent app on a machine', () => {
       { ...desk, connectorVersion: '0.1.1' },
       { ...laptop, latest: '0.1.1', upgrade: { at: 1, state: 'installed', version: '0.1.1' } },
     ])
-    expect(said()).toEqual(['It 0.1.1 is installed on the laptop. It runs once It is started again there: stop it serve where it is running, and start it.'])
+    expect(said()).toEqual([
+      'It 0.1.1 is installed on the laptop. It runs once It is started again there: stop it serve where it is running, and start it. As it starts it brings the add-ons in the agent apps there up to date. An app that is already running goes on with the add-on it loaded, which still takes clicks, until it is restarted, and its line on this page then says so.',
+    ])
   })
 
   test.each([null, '0.1.0', '0.9.5'])('a joined machine shows a newer host before its next release lookup, last result %s', async (latest) => {

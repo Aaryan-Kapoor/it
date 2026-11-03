@@ -17,6 +17,8 @@ import { conversationFolder, conversationProfile, noteConversation } from './src
 import * as wake from './src/wake'
 
 const stand = vi.hoisted(() => ({
+  /** What the add-ons were brought to each time the connector had them made to match what is wanted: the apps wanted then. */
+  reconciled: [] as string[][],
   /** What the connector watches the backend for, by the name of the function, and how to tell it something new. */
   watching: new Map<string, (value: any) => void>(),
   /** What it last asked to be told of, for each function it watches. */
@@ -132,7 +134,14 @@ vi.mock('node:child_process', async (original) => {
     },
   }
 })
-vi.mock('./src/setup', () => ({ detectAll: async () => stand.found, newerProgramSeen: () => false, reconcile: async () => {} }))
+vi.mock('./src/setup', () => ({
+  detectAll: async () => stand.found,
+  newerProgramSeen: () => false,
+  reconcile: async (chosen: readonly string[] | (() => readonly string[])) => {
+    stand.reconciled.push([...(typeof chosen === 'function' ? chosen() : chosen)])
+    return []
+  },
+}))
 vi.mock('./src/usage', () => ({
   agentOf: (harness: unknown) => String(harness ?? 'unknown'),
   begin: () => {},
@@ -296,6 +305,7 @@ afterEach(async () => {
   stand.watching.clear()
   stand.asking.clear()
   stand.calls.length = 0
+  stand.reconciled.length = 0
   said.length = 0
   stand.codex.length = 0
   stand.closed.clear()
@@ -347,6 +357,13 @@ function sentInTwoPieces(info: ConnectorInfo, pathname: string, body: string, cu
     setTimeout(() => req.end(bytes.subarray(cut)), 40)
   })
 }
+
+test('a connector brings the add-ons of the apps that are wanted up to its own version as soon as It says which those are, as it does when it starts as a newer It', async () => {
+  await start()
+  // Told what is wanted, once, as it is as soon as it is watching
+  await until(() => stand.reconciled.length > 0)
+  expect(stand.reconciled[0]).toEqual(['codex', 'pi'])
+})
 
 describe('the lock one connector holds for a folder', () => {
   const lock = () => path.join(home, 'connector.lock')

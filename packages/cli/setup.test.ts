@@ -49,6 +49,7 @@ import {
   holdsAddons,
   newerProgramSeen,
   reconcile,
+  refresh,
   shim,
   stampFile,
   unpack,
@@ -2123,6 +2124,72 @@ test('an app is said as the add-on it has loaded: an earlier build as outdated, 
   // What the app has loaded says nothing of an add-on that is not installed, or is waiting for the person's yes
   expect(asLoaded({ ...connected, addon: 'needs_approval', runtime: { state: 'incompatible', detail } }).addon).toBe('needs_approval')
   expect(asLoaded({ ...connected, addon: 'not_connected', runtime: { state: 'active', outdated: true, detail } }).addon).toBe('not_connected')
+})
+
+describe('what setup says became of each add-on, and bringing the add-ons up to date alone', () => {
+  test('an add-on brought to another build of its code says that its app is to be restarted, and one put in again at the same build does not', async () => {
+    await connect('pi', () => {})
+    const told: unknown[] = []
+    // Put in again at the same build, as where a file of it had gone: nothing the app runs is new
+    const record = noted('pi')
+    record.installs[0]!.version = 'previous-version'
+    put(stampFile('pi'), JSON.stringify(record))
+    await connect(
+      'pi',
+      () => {},
+      false,
+      (o) => told.push(o),
+    )
+    expect(told).toEqual([{ id: 'pi', did: 'installed' }])
+    expect(noted('pi').installs[0]).toMatchObject({ version: ADDONS.pi!.version, build: ADDONS.pi!.build })
+    // Installed before by an It whose build of the add-on was another, or that noted none
+    for (const build of ['another-build', undefined]) {
+      const before = noted('pi')
+      before.installs[0]!.version = 'previous-version'
+      if (build) (before.installs[0] as { build?: string }).build = build
+      else delete (before.installs[0] as { build?: string }).build
+      put(stampFile('pi'), JSON.stringify(before))
+      told.length = 0
+      await connect(
+        'pi',
+        () => {},
+        false,
+        (o) => told.push(o),
+      )
+      expect(told).toEqual([{ id: 'pi', did: 'installed', restart: true }])
+    }
+  })
+
+  test('reconcile answers with what became of each add-on it put in or could not, and with nothing of one it left as it was', async () => {
+    await connect('pi', () => {})
+    expect(await reconcile(['pi'], () => {})).toEqual([])
+    failing = ['codex plugin add it-bridge@it']
+    const outcomes = await reconcile(['pi', 'codex'], () => {})
+    expect(outcomes).toEqual([{ id: 'codex', did: 'failed', detail: expect.any(String) }])
+  })
+
+  test('refresh brings up to date only the add-ons this folder put into an app and that are in it now, and connects and disconnects nothing', async () => {
+    await connect('pi', () => {})
+    await connect('codex', () => {})
+    // Both were put in by an earlier It, whose build of the add-ons was another
+    for (const id of ['pi', 'codex'] as const) {
+      const record = noted(id)
+      Object.assign(record.installs[0]!, { version: 'previous-version', build: 'an-earlier-build' })
+      put(stampFile(id), JSON.stringify(record))
+    }
+    // Codex's add-on was taken out with Codex's own command since: it is not put back by this
+    kept.codex!.get(folderOf('codex'))!.on = undefined
+    ran = []
+    const outcomes = await refresh(() => {})
+    expect(outcomes).toEqual([{ id: 'pi', did: 'installed', restart: true }])
+    expect(noted('pi').installs[0]!.version).toBe(ADDONS.pi!.version)
+    expect(noted('codex').installs[0]!.version).toBe('previous-version')
+    expect(commands('codex').filter((words) => /\b(?:add|install|update|remove)\b/.test(words))).toEqual([])
+    // An app this folder never put an add-on into is not looked at
+    expect(commands('opencode')).toEqual([])
+    // And once all is up to date, there is nothing to do
+    expect(await refresh(() => {})).toEqual([])
+  })
 })
 
 describe('managed plugin and marketplace ownership', () => {
