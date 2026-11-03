@@ -239,6 +239,18 @@ describe('what is said of an agent app on a machine', () => {
     expect(notes()).toEqual(['Add-on loaded'])
   })
 
+  test('an app that runs an earlier build of its add-on is said to want a restart, with why, and Auto-wake is not said to wait for a repair', async () => {
+    const detail =
+      'The app is running an earlier build of It’s add-on than the one installed, and it still takes clicks. Restart the app to load the build It installed.'
+    const installed = [{ id: 'pi', addon: 'connected', runtime: { state: 'active', idle: true, outdated: true, detail } }]
+    watched['machines:list'] = [machine(Date.now(), installed, ['pi'], ['pi'])]
+    const { Machines } = await import('./machines')
+    await show(createElement(Machines))
+    expect(notes()).toEqual(['Restart to update the add-on'])
+    expect(host.textContent).toContain(detail)
+    expect(host.textContent).not.toContain('waiting for the add-on to be repaired')
+  })
+
   test('an installed add-on stays unverified until loaded code reports, and is offline while its machine is not heard from', async () => {
     const connected = [{ id: 'claude-code', version: '2.1.0', addon: 'connected' }]
     watched['machines:list'] = [machine(Date.now(), connected, ['claude-code'])]

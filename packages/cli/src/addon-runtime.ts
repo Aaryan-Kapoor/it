@@ -4,6 +4,11 @@ export interface AddonRuntime {
   state: 'active' | 'inactive' | 'unverified' | 'incompatible'
   version?: string
   idle?: boolean
+  /**
+   * The app runs an earlier build of the add-on than the one this It carries. It speaks the
+   * same delivery API and still takes clicks: restarting the app loads the build installed.
+   */
+  outdated?: boolean
   detail: string
 }
 
@@ -13,7 +18,13 @@ interface Loaded {
   idle: boolean
 }
 
-/** This is the local add-on contract, separate from the machine and page protocols. */
+/**
+ * This is the local add-on contract, separate from the machine and page protocols. An add-on of
+ * another build that speaks it is given clicks and listened for as any other: what decides
+ * whether the running code can work with this connector is this number and the delivery
+ * capabilities the add-on reports, and never the build. So this goes up whenever the connector
+ * comes to rely on something that an add-on of an earlier build does not do.
+ */
 export const ADDON_API = 1
 // Add-ons report every second. Thirty seconds allows for delayed polling, while letting a
 // closed app stop holding back Auto-wake even when it could not report that it was closing.
@@ -41,6 +52,11 @@ export class AddonRuntimes {
           .map((m) => names[m])
           .join(', ')
       : ''
+    // Only what the running code cannot do with this connector keeps clicks from it: another
+    // delivery API, or an app that lacks what the add-on needs to hand a click over. An add-on of
+    // an earlier build that speaks this API works as one of this build does, and is said to be
+    // earlier so that the person knows a restart of the app loads the build It installed.
+    const outdated = v.version !== ADDONS[harness]!.build
     const runtime: AddonRuntime =
       v.api !== ADDON_API
         ? {
@@ -48,23 +64,30 @@ export class AddonRuntimes {
             version: v.version,
             detail: 'The loaded add-on and connector use different delivery APIs. Update It and restart the agent app.',
           }
-        : v.version !== ADDONS[harness]!.version
-          ? { state: 'incompatible', version: v.version, detail: 'The app has a different add-on version loaded. Run `it setup` and restart the agent app.' }
-          : v.delivery !== true
-            ? {
-                state: 'incompatible',
-                version: v.version,
-                detail: `The agent app is missing a delivery API${missing ? ` to ${missing}` : ' the add-on needs'}. Update the app and It, then restart the app. Clicks stay in the inbox.`,
-              }
-            : {
-                state: 'active',
-                idle: v.idle === true,
-                version: v.version,
-                detail:
-                  v.idle === true
-                    ? 'The loaded add-on reports the required delivery APIs. Each conversation must still listen for its own clicks.'
-                    : 'This app does not always tell the add-on which saved conversation is open. Open the conversation and send a message in it to start listening. Auto-wake waits while this app is open.',
-              }
+        : v.delivery !== true
+          ? {
+              state: 'incompatible',
+              version: v.version,
+              detail: `The agent app is missing a delivery API${missing ? ` to ${missing}` : ' the add-on needs'}. Update the app and It, then restart the app. Clicks stay in the inbox.`,
+            }
+          : {
+              state: 'active',
+              idle: v.idle === true,
+              version: v.version,
+              ...(outdated ? { outdated: true } : {}),
+              detail: [
+                outdated
+                  ? 'The app is running an earlier build of It’s add-on than the one installed, and it still takes clicks. Restart the app to load the build It installed.'
+                  : v.idle === true
+                    ? 'The loaded add-on reports the required delivery APIs.'
+                    : '',
+                v.idle === true
+                  ? 'Each conversation must still listen for its own clicks.'
+                  : 'This app does not always tell the add-on which saved conversation is open. Open the conversation and send a message in it to start listening. Auto-wake waits while this app is open.',
+              ]
+                .filter(Boolean)
+                .join(' '),
+            }
     this.loaded.set(`${harness}:${instance}`, { at: now, runtime, idle: v.idle === true })
     for (const [key, entry] of this.loaded) if (now - entry.at >= RECENT_MS) this.loaded.delete(key)
     // Keep room for 100 simultaneous app instances, but bound memory and the work of reading
@@ -92,6 +115,8 @@ export class AddonRuntimes {
             detail: 'More app instances have reported than It can track. Auto-wake waits until their recent reports expire.',
           }
         : undefined) ??
+      // And one that is current cannot conceal another that runs an earlier build and wants the app restarted
+      entries.find((r) => r.outdated) ??
       entries[0] ?? {
         state: 'inactive',
         detail: 'Installed. No loaded add-on has reported its delivery APIs recently. The app may be closed or waiting for its first turn.',

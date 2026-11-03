@@ -1659,7 +1659,8 @@ const OWN_MARKS: [string, Harness][] = [
   ['PI_SESSION_ID', 'pi'],
   ['CLAUDE_CODE_SESSION_ID', 'claude-code'],
 ]
-const APP_NAMES: Record<string, string> = {
+/** Each agent app's name as a person knows it. */
+export const APP_NAMES: Record<string, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   openclaw: 'OpenClaw',

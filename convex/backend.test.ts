@@ -4113,6 +4113,32 @@ describe('displays and machines', () => {
     expect((await m.as.query(api.machines.me, {})).wanted).toEqual(['pi'])
   })
 
+  test('a connector that says an app runs an earlier build of its add-on is kept saying so, and nothing else it adds to a runtime is kept', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const runtime = {
+      state: 'active' as const,
+      version: 'earlier-build',
+      idle: true,
+      outdated: true,
+      detail: 'Restart the app to load the build It installed.',
+    }
+    await m.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: [{ id: 'claude-code', addon: 'connected', runtime }] })
+    expect((await m.as.query(api.machines.me, {})).harnesses).toEqual([{ id: 'claude-code', addon: 'connected', runtime }])
+    // And one that does not say it is kept without it
+    await m.as.mutation(api.machines.report, {
+      connectorVersion: '0.1.0',
+      harnesses: [{ id: 'claude-code', addon: 'connected', runtime: { ...runtime, outdated: false } }],
+    })
+    expect((await m.as.query(api.machines.me, {})).harnesses[0]!.runtime).toEqual({
+      state: 'active',
+      version: 'earlier-build',
+      idle: true,
+      detail: runtime.detail,
+    })
+  })
+
   test('reopening is on for an agent app from when it is connected on a machine, by the person or by setup there, and what the person switched off stays off whoever connects the app again', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

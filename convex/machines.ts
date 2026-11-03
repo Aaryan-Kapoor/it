@@ -382,7 +382,7 @@ const kept = (
     version?: string
     addon: string
     detail?: string
-    runtime?: { state: 'active' | 'inactive' | 'unverified' | 'incompatible'; version?: string; idle?: boolean; detail: string }
+    runtime?: { state: 'active' | 'inactive' | 'unverified' | 'incompatible'; version?: string; idle?: boolean; outdated?: boolean; detail: string }
   }[],
 ) =>
   harnesses
@@ -399,6 +399,7 @@ const kept = (
               state: h.runtime.state,
               version: h.runtime.version?.slice(0, 40),
               ...(h.runtime.idle === undefined ? {} : { idle: h.runtime.idle }),
+              ...(h.runtime.outdated ? { outdated: true } : {}),
               detail: h.runtime.detail.slice(0, 600),
             },
           }

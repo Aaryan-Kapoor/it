@@ -50,7 +50,7 @@ async function codex(): Promise<void> {
     session,
     profile: profileOf('codex'),
     instance: `codex-${session}`,
-    addon: { api: ADDON_API, version: ADDONS.codex!.version, delivery: true, idle: true },
+    addon: { api: ADDON_API, version: ADDONS.codex!.build, delivery: true, idle: true },
     ...(typeof ev.cwd === 'string' && path.isAbsolute(ev.cwd) ? { folder: ev.cwd } : {}),
   }
   if (event === 'SessionStart') {

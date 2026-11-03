@@ -693,12 +693,13 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     await start()
     const profile = { version: 1 as const, paths: { PI_CODING_AGENT_DIR: home } }
     noteConversation({ harness: 'pi', id: 'session-old' }, home, profile)
+    // An app that lacks what the add-on needs to hand a click over
     const report = {
       harness: 'pi',
       session: 'session-new',
       was: 'session-old',
       instance: 'loaded-one',
-      addon: { api: 1, version: 'old-build', delivery: true, idle: true },
+      addon: { api: 1, version: 'old-build', delivery: false, idle: true },
     }
     expect(await local('/session', { method: 'POST', body: report })).toMatchObject({ ok: false })
     expect(readJson<Record<string, string>>(path.join(home, 'aliases.json'))?.['pi:session-old']).toBe('pi:session-new')
@@ -708,18 +709,36 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(stand.calls.filter((c) => c.name === 'delivery:claim')).toEqual([])
   })
 
-  test('Stale loaded code receives no clicks and its status names the repair.', async () => {
+  test('an add-on of another delivery API receives no clicks and its status names the repair', async () => {
     standIn()
     await start()
-    const report = { harness: 'pi', session: 'session-one', instance: 'loaded-one', addon: { api: 1, version: 'old-build', delivery: true, idle: true } }
+    const report = { harness: 'pi', session: 'session-one', instance: 'loaded-one', addon: { api: 2, version: 'other-build', delivery: true, idle: true } }
     offered({ ...click(1), session: { harness: 'pi', id: 'session-one' } })
     expect(await local('/clicks', { method: 'POST', body: report })).toMatchObject({ ok: false, clicks: [], runtime: { state: 'incompatible' } })
     const health = await local<{ addons: Record<string, { detail: string }> }>('/health')
     expect(health?.addons.pi?.detail).toMatch(/restart the agent app/)
     expect(stand.calls.filter((c) => c.name === 'delivery:claim')).toEqual([])
-    report.addon.version = ADDONS.pi!.version
+    report.addon = { ...report.addon, api: 1, version: ADDONS.pi!.build }
     const heard = await local<{ clicks: unknown[] }>('/clicks', { method: 'POST', body: report })
     expect(heard?.clicks).toHaveLength(1)
+  })
+
+  test('an app still running an earlier build of the add-on that speaks the same delivery API is given its clicks and listened for, and is said once in the log to want a restart', async () => {
+    standIn()
+    await start()
+    const report = { harness: 'pi', session: 'session-one', instance: 'loaded-one', addon: { api: 1, version: 'earlier-build', delivery: true, idle: true } }
+    offered({ ...click(1), session: { harness: 'pi', id: 'session-one' } })
+    const first = await local<{ clicks: { id: string }[]; runtime?: unknown }>('/clicks', { method: 'POST', body: report })
+    expect(first?.clicks.map((c) => c.id)).toEqual(['click-1'])
+    const health = await local<{ sessions: string[]; addons: Record<string, { state: string; outdated?: boolean; detail: string }> }>('/health')
+    expect(health?.sessions).toEqual(['pi:session-one'])
+    expect(health?.addons.pi).toMatchObject({ state: 'active', outdated: true })
+    expect(health?.addons.pi?.detail).toMatch(/Restart the app to load the build It installed/)
+    for (let n = 0; n < 3; n++) await local('/clicks', { method: 'POST', body: report })
+    const lines = said.filter((line) => line.includes('earlier build'))
+    expect(lines).toEqual([
+      `Pi is running an earlier build of its add-on (earlier-build) than this It carries (${ADDONS.pi!.build}); it still takes clicks, and restarting Pi loads the build installed`,
+    ])
   })
 
   test('An open host without idle discovery leaves unknown conversations in the inbox.', async () => {
@@ -728,7 +747,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     stand.watching.get('machines:me')!({ wanted: ['opencode'], wakes: [{ harness: 'opencode', since: Date.now() - 60_000 }] })
     await local('/addon', {
       method: 'POST',
-      body: { harness: 'opencode', instance: 'open-app', addon: { api: 1, version: ADDONS.opencode!.version, delivery: true, idle: false } },
+      body: { harness: 'opencode', instance: 'open-app', addon: { api: 1, version: ADDONS.opencode!.build, delivery: true, idle: false } },
     })
     offered({ ...click(1), session: { harness: 'opencode', id: 'ses_idle' } })
     await pass(2)
@@ -3149,21 +3168,22 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     expect((await clicksFor('pi', 5))?.clicks.map((c) => c.id)).toEqual(['click-5'])
   })
 
-  test.each(['current', 'stale'])('a click already held follows a session move reported by a %s build', async (build) => {
+  test.each(['current', 'earlier', 'incapable'])('a click already held follows a session move reported by a %s build', async (build) => {
     await start()
     await session('pi', 6)
     offered(click('pi', 6))
     await until(() => called('delivery:claim').includes('click-6'))
     // Given, and waiting to go in with a command's result when the person clears the conversation
     expect((await clicksFor('pi', 6))?.clicks.map((c) => c.id)).toEqual(['click-6'])
-    const runtime = { instance: 'loaded-pi', addon: { api: 1, version: ADDONS.pi!.version, delivery: true, idle: true } }
+    const runtime = { instance: 'loaded-pi', addon: { api: 1, version: ADDONS.pi!.build, delivery: true, idle: true } }
     expect(
       await session('pi', 60, {
         was: 'conversation-6',
         ...runtime,
-        addon: { ...runtime.addon, version: build === 'stale' ? 'old-build' : runtime.addon.version },
+        // An earlier build that speaks this delivery API listens as the current one does. One whose app lacks what it needs does not
+        addon: { ...runtime.addon, version: build === 'current' ? runtime.addon.version : 'old-build', delivery: build !== 'incapable' },
       }),
-    ).toMatchObject({ ok: build === 'current' })
+    ).toMatchObject({ ok: build !== 'incapable' })
     // After the current build loads, the held click is immediately available under the new id.
     const answer = await local<{ clicks: { id: string }[] }>('/clicks', {
       method: 'POST',

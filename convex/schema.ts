@@ -5,6 +5,8 @@ export const addonRuntime = v.object({
   state: v.union(v.literal('active'), v.literal('inactive'), v.literal('unverified'), v.literal('incompatible')),
   version: v.optional(v.string()),
   idle: v.optional(v.boolean()),
+  /** The app runs an earlier build of the add-on than the one installed, which still takes clicks until the app is restarted. */
+  outdated: v.optional(v.boolean()),
   detail: v.string(),
 })
 export const session = v.object({ harness: v.string(), id: v.string() })
