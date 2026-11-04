@@ -51,7 +51,10 @@ describe('T3 Code’s own command, as T3 Code keeps it', () => {
   const home = 'C:\\Users\\me\\.t3'
   const runtime = `${home}\\runtime\\versions\\0.1.3-nightly.20261024.3643`
   const app = 'C:\\Program Files\\T3 Code\\T3 Code.exe'
-  const script = 'C:\\Program Files\\T3 Code\\resources\\app.asar\\apps\\server\\dist\\bin.mjs'
+  // The server's script is packed in the app's archive, which only the app itself reads into, so the
+  // archive is what is on the disk
+  const archive = 'C:\\Program Files\\T3 Code\\resources\\server.asar'
+  const script = `${archive}\\apps\\server\\dist\\bin.mjs`
   /** The command the desktop app writes for a person, on Windows, as its own code writes it. */
   const desktop = (program = app, entry = script, mark = "Written by T3 Code: runs the desktop app's bundled t3 CLI.") =>
     [
@@ -97,22 +100,46 @@ describe('T3 Code’s own command, as T3 Code keeps it', () => {
   })
 
   test('on Windows is otherwise the desktop app’s own program, given the server’s script to run as Node, read out of the command the app keeps and started without cmd.exe', () => {
-    const at = machine({ [`${home}\\bin\\t3.cmd`]: desktop(), [app]: '', [script]: '' })
+    const at = machine({ [`${home}\\bin\\t3.cmd`]: desktop(), [app]: '', [archive]: '' })
     expect(t3Command(home, '0.1.3', 'win32', '', at.exists, at.read)).toEqual({
       command: [app, script],
-      env: { ELECTRON_RUN_AS_NODE: '1', T3CODE_HOME: home },
+      // With what the command sets before it starts the program, as it sets it
+      env: { T3CODE_CLI_PATH: `${home}\\bin\\t3.cmd`, ELECTRON_RUN_AS_NODE: '1', T3CODE_DESKTOP_CLI_LAUNCHER: '1', T3CODE_HOME: home },
     })
+    // A script that is a file of its own is there as any file is
+    const loose = 'C:\\Program Files\\T3 Code\\resources\\server\\bin.mjs'
+    const unpacked = machine({ [`${home}\\bin\\t3.cmd`]: desktop(app, loose), [app]: '', [loose]: '' })
+    expect(t3Command(home, undefined, 'win32', '', unpacked.exists, unpacked.read)?.command).toEqual([app, loose])
     // A percent sign in a folder's name is written twice there, and read as one
     const odd = 'C:\\Apps\\100%\\T3 Code.exe'
-    const doubled = machine({ [`${home}\\bin\\t3.cmd`]: desktop('C:\\Apps\\100%%\\T3 Code.exe'), [odd]: '', [script]: '' })
+    const doubled = machine({ [`${home}\\bin\\t3.cmd`]: desktop('C:\\Apps\\100%%\\T3 Code.exe'), [odd]: '', [archive]: '' })
     expect(t3Command(home, undefined, 'win32', '', doubled.exists, doubled.read)?.command).toEqual([odd, script])
   })
 
+  test('on Windows takes from the desktop app’s command only the settings it makes in so many words before it starts the program', () => {
+    const text = desktop()
+      .replace('set "ELECTRON_RUN_AS_NODE=1"', 'set "ELECTRON_RUN_AS_NODE=0"\r\nset "T3CODE_SHARE=%LOCALAPPDATA%\\T3"\r\nset "T3CODE_RATE=100%%"')
+      .replace('exit /b %t3_exit%', 'set "T3CODE_AFTER=1"\r\nexit /b %t3_exit%')
+      .replace(`set "T3CODE_HOME=${home}"`, 'set "T3CODE_HOME=C:\\Elsewhere\\.t3"')
+    const at = machine({ [`${home}\\bin\\t3.cmd`]: text, [app]: '', [archive]: '' })
+    expect(t3Command(home, undefined, 'win32', '', at.exists, at.read)?.env).toEqual({
+      T3CODE_CLI_PATH: `${home}\\bin\\t3.cmd`,
+      T3CODE_RATE: '100%',
+      T3CODE_DESKTOP_CLI_LAUNCHER: '1',
+      // The program is always run as Node, in the folder It found T3 Code by, and a setting that
+      // names another variable, as cmd.exe would fill in, or one set only now and then, is not taken
+      ELECTRON_RUN_AS_NODE: '1',
+      T3CODE_HOME: home,
+    })
+  })
+
   test('on Windows is not a command in T3 Code’s folder that the app did not write, nor one whose program is gone', () => {
-    const foreign = machine({ [`${home}\\bin\\t3.cmd`]: desktop(app, script, 'Written by someone else.'), [app]: '', [script]: '' })
+    const foreign = machine({ [`${home}\\bin\\t3.cmd`]: desktop(app, script, 'Written by someone else.'), [app]: '', [archive]: '' })
     expect(t3Command(home, undefined, 'win32', '', foreign.exists, foreign.read)).toBeNull()
-    const gone = machine({ [`${home}\\bin\\t3.cmd`]: desktop(), [script]: '' })
+    const gone = machine({ [`${home}\\bin\\t3.cmd`]: desktop(), [archive]: '' })
     expect(t3Command(home, undefined, 'win32', '', gone.exists, gone.read)).toBeNull()
+    const unarchived = machine({ [`${home}\\bin\\t3.cmd`]: desktop(), [app]: '' })
+    expect(t3Command(home, undefined, 'win32', '', unarchived.exists, unarchived.read)).toBeNull()
     const relative = machine({ [`${home}\\bin\\t3.cmd`]: desktop('T3 Code.exe', 'bin.mjs'), 'T3 Code.exe': '', 'bin.mjs': '' })
     expect(t3Command(home, undefined, 'win32', '', relative.exists, relative.read)).toBeNull()
   })

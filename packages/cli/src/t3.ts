@@ -95,8 +95,9 @@ const DESKTOP_MARK = "Written by T3 Code: runs the desktop app's bundled t3 CLI.
  * - The command that T3 Code's desktop app keeps in `bin` in T3 Code's folder for a person to
  *   run, where it carries the app's own line. On Windows that is a script that cmd.exe would
  *   read, so what it starts is read out of it and started without it: the app's own program,
- *   given the server's script and told to run it as Node, as the script itself tells it. Elsewhere
- *   it is a program in its own right.
+ *   given the server's script, which is packed in the app's archive, with the settings the script
+ *   makes, and told to run it as Node, as the script itself tells it. Elsewhere it is a program in
+ *   its own right.
  * - Whatever the PATH gives: on Windows a program, or a package manager's script read the way
  *   It reads one to reopen a conversation (`windowsProgram`), and elsewhere the word `t3`.
  *
@@ -128,8 +129,25 @@ export function t3Command(
     // every percent sign doubled, as cmd.exe would otherwise read one as the start of a variable
     const run = /^"([^"\r\n]+\.exe)" "([^"\r\n]+)" %\*\r?$/im.exec(text)
     const [program, script] = run ? [run[1]!, run[2]!].map((word) => word.replaceAll('%%', '%')) : []
-    if (program && script && p.isAbsolute(program) && p.isAbsolute(script) && exists(program) && exists(script))
-      return { command: [program, script], env: { ELECTRON_RUN_AS_NODE: '1', T3CODE_HOME: home } }
+    // The script is packed in the app's archive, which only the app itself reads into, so the
+    // archive is what is on the disk
+    const archive = script ? /^(.*?\.asar)[\\/]/i.exec(script)?.[1] : undefined
+    if (
+      program &&
+      script &&
+      p.isAbsolute(program) &&
+      p.isAbsolute(script) &&
+      exists(program) &&
+      (exists(script) || (archive !== undefined && exists(archive)))
+    ) {
+      // What the command sets before it starts the program, each in so many words and every time:
+      // not a setting that names another variable, which cmd.exe would fill in, nor one it makes
+      // only if something is so
+      const env: Record<string, string> = {}
+      for (const [, name, value] of text.slice(0, run!.index).matchAll(/^set "([A-Za-z_][A-Za-z0-9_]*)=([^"\r\n]*)"\r?$/gim))
+        if (!value!.replaceAll('%%', '').includes('%')) env[name!] = value!.replaceAll('%%', '%')
+      return { command: [program, script], env: { ...env, ELECTRON_RUN_AS_NODE: '1', T3CODE_HOME: home } }
+    }
   }
   if (!windows) return { command: ['t3'] }
   const found = windowsProgram('t3', pathVar, exists, read)
