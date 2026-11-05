@@ -6395,6 +6395,72 @@ describe('cases at the edges', () => {
     expect((await inbox(server, [], ['codex'])).map((c) => c.id)).toEqual([actionId])
   })
 
+  test('the site is told which clicks were set aside, until their conversation is heard from again', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    const { actionId } = await alice.browser.mutation(api.actions.submit, {
+      artifactId: p.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-0001'),
+    })
+    const seen = async () => (await alice.browser.query(api.actions.forArtifact, { artifactId: p.artifactId })).find((x) => x.id === actionId)
+    expect(await seen()).toMatchObject({ parked: false })
+    expect(await laptop.as.mutation(api.delivery.park, { id: actionId, for: thread })).toBe(true)
+    expect(await seen()).toMatchObject({ delivery: 'pending', parked: true })
+    // The conversation is heard from again, and its machine asks for what was set aside for it
+    expect(await laptop.as.mutation(api.delivery.unpark, { for: thread })).toBe(1)
+    expect(await seen()).toMatchObject({ delivery: 'pending', parked: false })
+  })
+
+  test('a set-aside click is not said to be set aside once its page changes hands', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    const { actionId } = await alice.browser.mutation(api.actions.submit, {
+      artifactId: p.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-0001'),
+    })
+    const seen = async () => (await alice.browser.query(api.actions.forArtifact, { artifactId: p.artifactId })).find((x) => x.id === actionId)
+    expect(await laptop.as.mutation(api.delivery.park, { id: actionId, for: thread })).toBe(true)
+    expect(await seen()).toMatchObject({ parked: true })
+    // Another conversation takes the page over: the click is its to try, and is tried
+    await publish(laptop, 'plan', { session: { harness: 'codex', id: 'thread-9' }, take: true })
+    await settle(t)
+    expect(await seen()).toMatchObject({ delivery: 'pending', parked: false })
+  })
+
+  test('a click nobody took is said to expire exactly when the sweep of such clicks removes it', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    const submit = (id: string) =>
+      alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope(id) })
+    const { actionId } = await submit('click-0001')
+    const taken = await submit('click-0002')
+    await laptop.as.mutation(api.delivery.handedOff, { id: taken.actionId, route: 'manual' })
+    expect(await laptop.as.mutation(api.delivery.park, { id: actionId, for: thread })).toBe(true)
+    const recent = await alice.browser.query(api.actions.forArtifact, { artifactId: p.artifactId })
+    const aside = recent.find((x) => x.id === actionId)!
+    expect(aside.expiresAt).toBe(aside.at + 30 * 86_400_000)
+    // What was handed over is done with: there is nothing about it to expire on the page
+    expect(recent.find((x) => x.id === taken.actionId)?.expiresAt).toBeNull()
+    // Still there at the very moment it is said to expire, and gone at the next sweep after it
+    vi.setSystemTime(aside.expiresAt!)
+    await t.mutation(internal.retention.sweepActions, {})
+    expect(await t.run((ctx) => ctx.db.get(actionId))).not.toBeNull()
+    vi.setSystemTime(aside.expiresAt! + 1)
+    await t.mutation(internal.retention.sweepActions, {})
+    expect(await t.run((ctx) => ctx.db.get(actionId))).toBeNull()
+  })
+
   test('a machine that asks to be enrolled a second time with the same key is the same machine', async () => {
     const t = backend()
     await person(t, 'alice')

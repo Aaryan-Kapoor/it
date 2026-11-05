@@ -11,7 +11,15 @@ import type { Sent } from './outbox'
 const NOW = Date.UTC(2026, 9, 15, 12)
 const PAGE = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, agent: 'claude-code', machine: 'the laptop', machineSeenAt: NOW }
 /** What the backend last said of the page's clicks, newest first. */
-let recent: { at: number; delivery: string; outcome?: string | null; route?: string | null; handedAt?: number | null }[]
+let recent: {
+  at: number
+  delivery: string
+  outcome?: string | null
+  route?: string | null
+  handedAt?: number | null
+  parked?: boolean
+  expiresAt?: number | null
+}[]
 /** The person's machines as the backend gives them to the owner's browser, with the agent apps chosen on each. */
 let machines: { id: string; name?: string; wanted: string[]; harnesses?: { id: string; addon: string; version?: string }[] }[] | undefined
 const inventoryAsked = vi.fn()
@@ -201,6 +209,48 @@ describe('what the page’s bar says of the last thing the person did', () => {
     await shown()
     expect(said()).toBe('Couldn’t wake Pi: the folder its conversation was held in is not known on this machine, or is gone')
     Object.assign(PAGE, { wakeFailed: null })
+  })
+
+  test('a click its machine set aside is said to be that, with when it is deleted, and is said to be waiting again once it is no longer set aside', async () => {
+    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi' })
+    const MONTH = 30 * 86_400_000
+    // The day as the person's browser writes it: the middle of the day, so that no time zone moves it
+    const day = (at: number) => new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'long' })
+    recent = [{ at: NOW - 8000, delivery: 'pending', outcome: null, parked: true, expiresAt: NOW - 8000 + MONTH }]
+    await shown()
+    expect(day(NOW - 8000 + MONTH)).toContain('14')
+    expect(said()).toBe(
+      `Couldn’t hand it to Pi. It won’t try again until its conversation next runs, and deletes it on ${day(NOW - 8000 + MONTH)} if that hasn’t happened by then`,
+    )
+    expect(host.querySelector('.status')?.getAttribute('data-tone')).toBe('bad')
+    // The conversation was heard from again (or its page changed hands), and its machine has the click back to try
+    recent = [{ at: NOW - 8000, delivery: 'pending', outcome: null, parked: false, expiresAt: NOW - 8000 + MONTH }]
+    await drawnAgain()
+    expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
+    // A backend from before it said which clicks were set aside says nothing of it, and the bar is as it was
+    recent = [{ at: NOW - 8000, delivery: 'pending', outcome: null }]
+    await drawnAgain()
+    expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
+  })
+
+  test('clicks set aside after a conversation could not be reopened say why, how many there are, and the first day one of them is deleted', async () => {
+    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi', wakeFailed: { at: NOW - 1000, why: 'its command ended with an error' } })
+    const MONTH = 30 * 86_400_000
+    const day = (at: number) => new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'long' })
+    recent = [
+      { at: NOW - 8000, delivery: 'pending', outcome: null, parked: true, expiresAt: NOW - 8000 + MONTH },
+      { at: NOW - 3 * 86_400_000, delivery: 'pending', outcome: null, parked: true, expiresAt: NOW - 3 * 86_400_000 + MONTH },
+      { at: NOW - 4 * 86_400_000, delivery: 'handed_off', outcome: 'succeeded', parked: false, expiresAt: null },
+    ]
+    // Put back however the test ends, so that no other test finds a failed reopening it was never given
+    try {
+      await shown()
+      expect(said()).toBe(
+        `Couldn’t wake Pi (2): its command ended with an error. It won’t try again until its conversation next runs, and starts deleting them on ${day(NOW - 3 * 86_400_000 + MONTH)} if that hasn’t happened by then`,
+      )
+    } finally {
+      Object.assign(PAGE, { wakeFailed: null })
+    }
   })
 
   test('a waiting page gives the loaded add-on’s repair advice instead of diagnosing a closed conversation', async () => {

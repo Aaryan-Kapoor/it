@@ -1,4 +1,4 @@
-import { LIMITS, MESSAGE, PROTOCOL_VERSION, parseJson, QUOTA } from '@it/protocol'
+import { LIMITS, MESSAGE, PROTOCOL_VERSION, parseJson, QUOTA, RETENTION } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -334,6 +334,12 @@ export const forArtifact = query({
       attended: x.attended ?? null,
       // When it was handed over, or dropped by a stop: the site tells by it which stop dropped what
       handedAt: x.handedAt ?? null,
+      // Set aside by its machine after tries that came to nothing: no machine offers it to an
+      // agent again until its conversation is heard from, though it is still waiting all the same
+      parked: x.delivery !== 'handed_off' && x.parkedBy !== undefined,
+      // When it goes if no agent has taken it by then, as the hourly sweep of what nobody took
+      // counts it: from when It got it. What was handed over goes a week after, and is done with
+      expiresAt: x.delivery === 'handed_off' ? null : x.createdAt + RETENTION.pendingActionDays * 86_400_000,
       // What a click carried is for the agent; the site only needs to show where it got to
       ...(c.kind === 'machine' ? { payload: x.payload } : {}),
     }))
