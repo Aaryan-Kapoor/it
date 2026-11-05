@@ -849,7 +849,8 @@ export function status(): ServiceStatus {
 
 function systemStatus(): ServiceStatus {
   // A machine has one definition. Where it is another folder's, the service it speaks of runs
-  // that folder's It: of this one, nothing is registered, however that other stands
+  // that folder's It: of this one, nothing is registered, however that other stands. On Windows
+  // an account may have two tasks, and each is asked which folder it is started in
   if (process.platform !== 'win32' && definedFor() === 'another folder')
     return { registered: false, state: 'not installed', where: process.platform === 'darwin' ? plistPath() : unitPath() }
   if (process.platform === 'linux') {
@@ -860,15 +861,32 @@ function systemStatus(): ServiceStatus {
     const r = run('launchctl', ['print', `${launchdDomain()}/${LABEL}`], ASKED_MS)
     return { registered: existsSync(plistPath()), state: r.ok ? (/state = (\w+)/.exec(r.out)?.[1] ?? 'loaded') : 'not loaded', where: plistPath() }
   }
-  if (process.platform === 'win32') {
-    const r = powershellAsked(`${windowsTask()}
-if ($task) { $task.TaskName; $task.State }`)
-    const [name, state] = r.ok ? r.out.split(/\r?\n/) : []
-    return {
-      registered: Boolean(name),
-      state: name ? state || 'unknown' : 'not registered',
-      where: name ? `Scheduled Task "${name}"` : 'Scheduled Task for this Windows account',
-    }
-  }
+  if (process.platform === 'win32') return windowsStatus()
   return { registered: false, state: 'unsupported', where: home() }
+}
+
+/**
+ * How Windows has this folder's task. Of the account's own task and an owned legacy task, the
+ * one that is this folder's is the one started in this folder's `bin`, where its launcher is:
+ * the task runs the launcher it finds there, and nothing else. A task of the account's that is
+ * started in another folder runs that folder's It, and of this one nothing is registered, as a
+ * definition another folder wrote says on Linux and macOS. The folder is asked for as the bytes
+ * of its name in UTF-8, written in base64, as it is when the folders are read for installing.
+ */
+export function windowsStatus(ask: (script: string) => { ok: boolean; out: string } = powershellAsked): ServiceStatus {
+  const asked = ask(`${windowsTask()}
+foreach ($owned in @($task, $legacy)) {
+  if ($owned) { $owned.TaskName + ' ' + $owned.State + ' ' + [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$owned.Actions[0].WorkingDirectory)) }
+}`)
+  const where = 'Scheduled Task for this Windows account'
+  const tasks = (asked.ok ? asked.out.split(/\r?\n/) : []).map((line) => line.trim().split(' ')).filter(([name]) => name)
+  if (!tasks.length) return { registered: false, state: 'not registered', where }
+  const launchers = path.dirname(windowsLauncherFile())
+  const ours = tasks.find(([, , said]) => {
+    const folder = said && /^[A-Za-z0-9+/]+={0,2}$/.test(said) ? Buffer.from(said, 'base64').toString('utf8') : ''
+    return path.win32.isAbsolute(folder) && sameWindowsFolder(folder, launchers)
+  })
+  if (!ours) return { registered: false, state: 'not installed', where }
+  const [name, state] = ours
+  return { registered: true, state: state || 'unknown', where: `Scheduled Task "${name}"` }
 }

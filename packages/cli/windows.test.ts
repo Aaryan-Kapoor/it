@@ -14,6 +14,7 @@ import {
   windowsRegisteredFor,
   windowsRemoval,
   windowsScript,
+  windowsStatus,
   windowsTask,
 } from './src/service'
 import { deleteAtSignIn } from './src/uninstall-files'
@@ -70,6 +71,54 @@ test('task discovery reads every folder, deduplicates Windows spellings and refu
     if (before === undefined) delete process.env.IT_HOME
     else process.env.IT_HOME = before
   }
+})
+
+describe('how a second It folder of the same Windows account says its task stands', () => {
+  const encoded = (folder: string) => Buffer.from(folder).toString('base64')
+  const sid = 'it-S-1-5-21-1000'
+  /** Runs `check` with IT_HOME set to a folder of its own, and gives it that folder's `bin`. */
+  const inFolder = (check: (bin: string) => void) => {
+    const before = process.env.IT_HOME
+    try {
+      const folder = path.join(os.tmpdir(), 'it-second-folder')
+      process.env.IT_HOME = folder
+      check(path.join(folder, 'bin'))
+    } finally {
+      if (before === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before
+    }
+  }
+
+  test('the account’s task, started in another folder, is not said to be this folder’s', () =>
+    inFolder(() => {
+      const asked = windowsStatus(() => ({ ok: true, out: `${sid} Running ${encoded('C:\\Users\\Ada\\.it\\bin')}\r\n` }))
+      expect(asked).toEqual({ registered: false, state: 'not installed', where: 'Scheduled Task for this Windows account' })
+    }))
+
+  test('a task started in this folder is this folder’s, however the case of its letters and its slashes are written', () =>
+    inFolder((bin) => {
+      const written = `${bin.toUpperCase().replace(/[\\/]/g, (slash) => (slash === '/' ? '\\' : '/'))}/`
+      expect(written).not.toBe(bin)
+      expect(windowsStatus(() => ({ ok: true, out: `${sid} Running ${encoded(written)}\r\n` }))).toEqual({
+        registered: true,
+        state: 'Running',
+        where: `Scheduled Task "${sid}"`,
+      })
+    }))
+
+  test('an older task called `it` that is started in this folder is this folder’s, also where the account’s task is another folder’s', () =>
+    inFolder((bin) => {
+      const legacy = `it Ready ${encoded(bin)}`
+      const mine = { registered: true, state: 'Ready', where: 'Scheduled Task "it"' }
+      expect(windowsStatus(() => ({ ok: true, out: `${legacy}\r\n${legacy}\r\n` }))).toEqual(mine)
+      expect(windowsStatus(() => ({ ok: true, out: `${sid} Running ${encoded('C:\\elsewhere\\bin')}\r\n${legacy}\r\n` }))).toEqual(mine)
+    }))
+
+  test('no task, or no answer, is nothing registered', () => {
+    const none = { registered: false, state: 'not registered', where: 'Scheduled Task for this Windows account' }
+    expect(windowsStatus(() => ({ ok: true, out: '' }))).toEqual(none)
+    expect(windowsStatus(() => ({ ok: false, out: 'The task for this account is not an It launcher owned by this account.' }))).toEqual(none)
+  })
 })
 
 describe.skipIf(process.platform !== 'win32')('Windows scripts run by Windows PowerShell', () => {
