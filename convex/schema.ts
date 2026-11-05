@@ -389,7 +389,13 @@ export default defineSchema({
     createdAt: v.number(),
     /** Where the click is on its way to the agent. */
     delivery: v.union(v.literal('pending'), v.literal('leased'), v.literal('handed_off')),
-    /** Where it should go: the machine and conversation that own the page. Never changed by delivery. */
+    /**
+     * Where it should go: the machine and conversation that own the page. Delivery changes it in
+     * three ways only: a click its machine gave up on is set aside with no machine (see
+     * `parkedBy`) and given back when its conversation is heard from again, one whose page
+     * changed hands meanwhile goes to the page's owner now, and one whose machine was removed is
+     * left with no machine.
+     */
     machineId: v.optional(v.id('machines')),
     harness: v.optional(v.string()),
     sessionId: v.optional(v.string()),
