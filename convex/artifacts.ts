@@ -1,10 +1,10 @@
-import { CODEX_MIN_VERSION, LIMITS, newer, QUOTA, WAKES, wakesOn } from '@it/protocol'
+import { CODEX_MIN_VERSION, FAULT, LIMITS, newer, QUOTA, WAKES, wakesOn } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import { removeLater } from './content'
-import { artifactBySlug, ownArtifact, requireBrowser, requireCaller, requireMachine, requireMachineOrOwner, requireOwner } from './lib/authz'
+import { artifactBySlug, findDisplay, ownArtifact, requireBrowser, requireCaller, requireMachine, requireMachineOrOwner, requireOwner } from './lib/authz'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
 import { log } from './lib/log'
@@ -51,6 +51,184 @@ export const list = query({
       if (a.machineId && !names.has(a.machineId)) names.set(a.machineId, (await ctx.db.get(a.machineId))?.name ?? null)
     }
     return all.filter((a) => a.currentVersion !== undefined).map((a) => card(a, a.waiting ?? 0, a.machineId ? (names.get(a.machineId) ?? null) : null))
+  },
+})
+
+/** How many of a page's last clicks the homepage reads to say what became of the last one, and whether the page's script failed since it was published. */
+const HOME_RECENT = 6
+
+/**
+ * Every page with what the homepage needs to say which want the person: what its agent asked
+ * and is waiting to be answered, what was done on it and where that has got to, whether its
+ * script failed, whether its agent is at work, whether its machine and app are there to hear
+ * it, which project and conversation it belongs to, and which displays show it. Only what It
+ * already keeps, read a page at a time: a click's own data is the agent's, and is not given.
+ * `key` is the display asking, whose own notifications count beside those sent to every display.
+ */
+export const home = query({
+  args: { key: v.string() },
+  handler: async (ctx, { key }) => {
+    const c = await requireCaller(ctx)
+    const userId = c.user._id
+    const all = (
+      await ctx.db
+        .query('artifacts')
+        .withIndex('by_user_updated', (q) => q.eq('userId', userId))
+        .order('desc')
+        .take(QUOTA.artifacts)
+    ).filter((a) => a.currentVersion !== undefined)
+
+    const machines = new Map<string, Doc<'machines'> | null>()
+    const projects = new Map<string, Doc<'projects'> | null>()
+    for (const a of all) {
+      if (a.machineId && !machines.has(a.machineId)) machines.set(a.machineId, await ctx.db.get(a.machineId))
+      if (a.projectId && !projects.has(a.projectId)) projects.set(a.projectId, await ctx.db.get(a.projectId))
+    }
+
+    // What an agent asked about a page and nobody has answered: read as the tray reads it, for
+    // every display and for the one asking, and never what was addressed to another display
+    const display = c.kind === 'browser' ? await findDisplay(ctx, c, key) : null
+    const open = (displayId: Id<'displays'> | undefined) =>
+      ctx.db
+        .query('notifications')
+        .withIndex('by_user_target', (q) => q.eq('userId', userId).eq('displayId', displayId).eq('dismissedAt', undefined))
+        .order('desc')
+        .take(60)
+    const asks = new Map<string, { id: Id<'notifications'>; text: string; buttons: { label: string; action: string }[]; at: number; sticky: boolean }[]>()
+    for (const n of [...(await open(undefined)), ...(display ? await open(display._id) : [])]) {
+      if (!n.artifactId || n.answeredAt || !n.buttons?.length) continue
+      asks.set(n.artifactId, [...(asks.get(n.artifactId) ?? []), { id: n._id, text: n.text, buttons: n.buttons, at: n.createdAt, sticky: n.sticky }])
+    }
+
+    // Which displays show which page. Displays are named by the person, and only their own browser is told the names
+    const shownOn = new Map<string, string[]>()
+    if (c.kind === 'browser' && c.session.role === 'owner')
+      for (const d of await ctx.db
+        .query('displays')
+        .withIndex('by_user', (q) => q.eq('userId', userId))
+        .take(QUOTA.displays))
+        if (d.showing) shownOn.set(d.showing.artifactId, [...(shownOn.get(d.showing.artifactId) ?? []), d.name ?? d.generatedName])
+
+    const out = []
+    for (const a of all) {
+      const machine = a.machineId ? (machines.get(a.machineId) ?? null) : null
+      const project = a.projectId ? (projects.get(a.projectId) ?? null) : null
+      const recent = await ctx.db
+        .query('actions')
+        .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
+        .order('desc')
+        .take(HOME_RECENT)
+      const last = recent.find((x) => x.name !== FAULT)
+      const fault = recent.find((x) => x.name === FAULT && x.contentVersion === a.currentVersion)
+      // The oldest click still waiting, and whether a machine has it in hand: what says how long the person has waited, and on what
+      const oldest = a.waiting
+        ? (
+            await Promise.all(
+              (['pending', 'leased'] as const).map((delivery) =>
+                ctx.db
+                  .query('actions')
+                  .withIndex('by_artifact_delivery', (q) => q.eq('artifactId', a._id).eq('delivery', delivery))
+                  .first(),
+              ),
+            )
+          ).filter((x) => x !== null)
+        : []
+      const noted = await ctx.db
+        .query('revisions')
+        .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
+        .unique()
+      const online = machine !== null && !machine.revoked && machine.connectorVersion !== undefined && machine.offAt === undefined
+      out.push({
+        ...card(a, a.waiting ?? 0, machine?.name ?? null),
+        createdAt: a.createdAt,
+        project: project ? { key: project.key, name: project.name } : null,
+        machineId: a.machineId ?? null,
+        machineSeenAt: online ? machine.lastSeenAt : null,
+        machineGone: a.machineId !== undefined && (machine === null || machine.revoked),
+        machinePaused: machine !== null && !machine.revoked ? (machine.paused ?? null) : null,
+        connection: connection(machine, a),
+        run: running(machine, a),
+        wakeFailed: failed(machine, a),
+        stoppedAt: a.stoppedThrough ?? null,
+        said: a.said ?? null,
+        answeredAt: Math.max(a.updatedAt, noted?.agentAt ?? 0, a.said?.at ?? 0),
+        waitingSince: oldest.length ? Math.min(...oldest.map((x) => x.createdAt)) : null,
+        held: oldest.some((x) => x.delivery === 'leased'),
+        last: last ? { name: last.name, at: last.createdAt, delivery: last.delivery, route: last.route ?? null, outcome: last.outcome ?? null } : null,
+        faultAt: fault?.createdAt ?? null,
+        asks: (asks.get(a._id) ?? []).sort((x, y) => y.at - x.at),
+        shownOn: shownOn.get(a._id) ?? [],
+      })
+    }
+    return out
+  },
+})
+
+/** How many things that happened the activity feed reads of each kind, and how many it gives. */
+const FEED_EACH = 80
+const FEED_MOST = 160
+
+/**
+ * What happened across every page, newest first: a page made or changed, something its agent
+ * said or asked, something the person did on it and what became of that, and its script
+ * failing. For the homepage's feed. Names and words a person or an agent wrote are given as
+ * they are shown elsewhere on the site; what a click carried is not.
+ */
+export const activity = query({
+  args: {},
+  handler: async (ctx) => {
+    const { user } = await requireCaller(ctx)
+    const pages = await ctx.db
+      .query('artifacts')
+      .withIndex('by_user_updated', (q) => q.eq('userId', user._id))
+      .order('desc')
+      .take(QUOTA.artifacts)
+    const byId = new Map(pages.filter((a) => a.currentVersion !== undefined).map((a) => [a._id as string, a]))
+    type Event = { kind: string; at: number; artifactId: string; text?: string; version?: number; outcome?: string | null; delivery?: string }
+    const events: Event[] = []
+    for (const a of byId.values()) {
+      const versions = await ctx.db
+        .query('versions')
+        .withIndex('by_artifact_status', (q) => q.eq('artifactId', a._id).eq('status', 'retired'))
+        .order('desc')
+        .take(3)
+      const live =
+        a.currentVersion === undefined
+          ? null
+          : await ctx.db
+              .query('versions')
+              .withIndex('by_artifact_n', (q) => q.eq('artifactId', a._id).eq('n', a.currentVersion!))
+              .unique()
+      for (const x of [...(live ? [live] : []), ...versions])
+        events.push({ kind: x.n === 1 ? 'made' : 'changed', at: x.createdAt, artifactId: a._id, version: x.n })
+      if (a.said) events.push({ kind: 'said', at: a.said.at, artifactId: a._id, text: a.said.text })
+    }
+    for (const delivery of ['pending', 'leased', 'handed_off'] as const)
+      for (const x of await ctx.db
+        .query('actions')
+        .withIndex('by_user_delivery', (q) => q.eq('userId', user._id).eq('delivery', delivery))
+        .order('desc')
+        .take(FEED_EACH))
+        if (byId.has(x.artifactId))
+          events.push({
+            kind: x.name === FAULT ? 'fault' : 'did',
+            at: x.createdAt,
+            artifactId: x.artifactId,
+            text: x.name,
+            outcome: x.route === 'stopped' ? 'stopped' : (x.outcome ?? null),
+            delivery: x.delivery,
+          })
+    for (const n of await ctx.db
+      .query('notifications')
+      .withIndex('by_user', (q) => q.eq('userId', user._id))
+      .order('desc')
+      .take(FEED_EACH))
+      if (n.artifactId && byId.has(n.artifactId)) {
+        events.push({ kind: 'asked', at: n.createdAt, artifactId: n.artifactId, text: n.text })
+        if (n.answeredAt)
+          events.push({ kind: 'answered', at: n.answeredAt, artifactId: n.artifactId, text: n.buttons?.find((b) => b.action === n.answer)?.label ?? n.answer })
+      }
+    return events.sort((x, y) => y.at - x.at).slice(0, FEED_MOST)
   },
 })
 
