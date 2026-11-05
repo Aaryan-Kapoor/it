@@ -23,7 +23,7 @@ interface Harness {
   version?: string
   addon: string
   detail?: string
-  runtime?: { state: string; version?: string; idle?: boolean; detail: string }
+  runtime?: { state: string; version?: string; idle?: boolean; outdated?: boolean; detail: string }
 }
 interface Machine {
   id: string
@@ -66,6 +66,8 @@ function standing(h: Harness, wanted: boolean, online: boolean): { word: string;
   if (h.addon !== 'connected') return { word: 'Off' }
   if (!online) return { word: 'Installed, offline', tone: 'wait' }
   if (h.runtime?.state === 'incompatible') return { word: 'Add-on needs attention', tone: 'bad', detail: h.runtime.detail }
+  // Clicks still arrive. Said with what to do, since the person would not otherwise know that a restart brings the add-on up to date
+  if (h.runtime?.state === 'active' && h.runtime.outdated) return { word: 'Restart to update the add-on', tone: 'wait', detail: h.runtime.detail }
   if (h.runtime?.state === 'active' && h.runtime.idle === false) return { word: 'Open a conversation', tone: 'wait', detail: h.runtime.detail }
   if (h.runtime?.state === 'active') return { word: 'Add-on loaded', tone: 'ok', detail: h.runtime.detail }
   return {
@@ -211,7 +213,9 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
           <>
             stop <code>it serve</code> where it is running, and start it.
           </>
-        )}
+        )}{' '}
+        As it starts it brings the add-ons in the agent apps there up to date. An app that is already running goes on with the add-on it loaded, which still
+        takes clicks, until it is restarted, and its line on this page then says so.
       </p>
     )
   const behind = !m.runsIt && newer(host, m.connectorVersion)

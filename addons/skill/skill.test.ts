@@ -166,10 +166,12 @@ describe('the agent skill', () => {
     }
     // What `it status` says of an add-on and of the connector
     const setup = source('../../packages/cli/src/setup.ts')
-    for (const state of ['connected', 'needs_approval']) {
+    for (const state of ['connected', 'needs_approval', 'outdated', 'incompatible']) {
       expect(skill).toContain(`"${state}"`)
       expect(setup).toContain(`'${state}'`)
     }
+    expect(skill).toContain('`runtime.detail`')
+    expect(source('../../packages/cli/src/addon-runtime.ts')).toMatch(/\bdetail: string\b/)
     expect(skill).toContain('`"ok": true`')
     expect(source('../../packages/cli/src/connector.ts')).toMatch(/pathname === '\/health'[\s\S]{0,200}ok: true/)
   })

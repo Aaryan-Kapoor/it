@@ -44,6 +44,35 @@ export interface HarnessStatus {
   detail?: string
   runtime?: AddonRuntime
 }
+/**
+ * An app as `it status` says it, which goes by the add-on the app has loaded where one has
+ * reported to the connector, and not only by what is installed. `outdated`: the app runs an
+ * earlier build of the add-on than the one installed, which still takes clicks, and a restart of
+ * the app loads the new one. `incompatible`: what the app has loaded cannot take clicks from this
+ * It, and they wait. An agent that reads `connected` counts on a message arriving by itself.
+ */
+export type LoadedStatus = Omit<HarnessStatus, 'addon'> & { addon: AddonState | 'outdated' | 'incompatible' }
+/**
+ * What became of an app's add-on when it was brought to what is wanted: put in, to begin with or
+ * to bring it up to date, or not put in, with why. Not said of an app whose add-on was left as it
+ * was. `restart` is there where the add-on's own code is not the build the app had before: an app
+ * that is running goes on with the build it loaded, which still takes clicks, until it is
+ * restarted. An add-on that could not be put in leaves the app with the one it had.
+ */
+export interface AddonOutcome {
+  id: Harness
+  did: 'installed' | 'failed'
+  restart?: true
+  detail?: string
+}
+export const asLoaded = (h: HarnessStatus): LoadedStatus =>
+  h.addon !== 'connected' || !h.runtime
+    ? h
+    : h.runtime.state === 'incompatible'
+      ? { ...h, addon: 'incompatible' }
+      : h.runtime.outdated
+        ? { ...h, addon: 'outdated' }
+        : h
 
 interface Known {
   label: string
@@ -153,6 +182,8 @@ interface Installation extends Partial<Place> {
   at: number
   /** The version of It that installed it. By this, and not by a time, a newer It is told from an older one. */
   by?: string
+  /** The build of the add-on's own code that was installed, by which an install tells whether an app that is running has to be restarted to load the new one. */
+  build?: string
   /** For an add-on whose files this program copies in itself: every file it wrote and has not seen gone, and no other. */
   files?: Put[]
 }
@@ -180,6 +211,7 @@ function unreadInstallations(id: Harness): string | undefined {
         i &&
         typeof i.version === 'string' &&
         (i.by === undefined || typeof i.by === 'string') &&
+        (i.build === undefined || typeof i.build === 'string') &&
         Number.isFinite(i.at) &&
         (i.env === undefined ||
           (typeof i.env === 'object' && i.env !== null && !Array.isArray(i.env) && Object.values(i.env).every((v) => typeof v === 'string'))) &&
@@ -617,11 +649,13 @@ const unplaced = async (adapter: Pick<Adapter, 'present'>, at: Place, was: Insta
   was !== undefined && !placed(was) && (await adapter.present(at)) === false
 
 /** What Claude Code says of our plugin. Null when it could not be asked, and nothing when it has none. */
-async function claudeHas(at: Place): Promise<{ enabled?: boolean; installPath?: unknown } | undefined | null> {
+async function claudeHas(at: Place): Promise<{ enabled?: boolean; installPath?: unknown; version?: unknown; readFromFolder?: unknown } | undefined | null> {
   const r = await run('claude', ['plugin', 'list', '--json'], 60_000, envAt(['CLAUDE_CONFIG_DIR'], at))
   if (!r.ok) return null
   try {
-    return (JSON.parse(r.out) as { id: string; enabled?: boolean; installPath?: unknown }[]).find((p) => p.id === `${PLUGIN}@${MARKET}`)
+    return (JSON.parse(r.out) as { id: string; enabled?: boolean; installPath?: unknown; version?: unknown; readFromFolder?: unknown }[]).find(
+      (p) => p.id === `${PLUGIN}@${MARKET}`,
+    )
   } catch {
     return null
   }
@@ -720,6 +754,25 @@ async function marketplacePreflight(id: 'claude-code' | 'codex', at: Place, was:
   }
 }
 
+/**
+ * Whether It's marketplace is registered in the app, which the preflight has already found to
+ * be this folder's where it is. Null where the app's answer could not be had or read.
+ */
+async function marketplaceHere(bin: 'claude' | 'codex', env: NodeJS.ProcessEnv): Promise<boolean | null> {
+  const result = await run(bin, ['plugin', 'marketplace', 'list', '--json'], 60_000, env)
+  if (!result.ok) return null
+  try {
+    const parsed = JSON.parse(result.out)
+    const entries = bin === 'claude' ? parsed : parsed?.marketplaces
+    if (!Array.isArray(entries) || !entries.every((entry) => entry && typeof entry.name === 'string')) return null
+    return entries.some((entry) => entry.name === MARKET)
+  } catch {
+    return null
+  }
+}
+/** What an install says where the app could not say what it has: nothing has been changed. */
+const UNASKED = (label: string): Ran => ({ ok: false, out: '', err: `${label} could not say which plugins and marketplaces it has, so nothing was changed.` })
+
 /** Only a well-formed empty listing confirms that the marketplace registration has gone. */
 async function marketplaceGone(bin: 'claude' | 'codex', env: NodeJS.ProcessEnv): Promise<boolean> {
   const result = await run(bin, ['plugin', 'marketplace', 'list', '--json'], 60_000, env)
@@ -788,14 +841,31 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       return typeof ours?.installPath === 'string' && path.isAbsolute(ours.installPath) ? path.join(ours.installPath, HOME_NOTE) : null
     },
     async install(dir, at, was, wrote) {
-      // Looked at before anything is taken out, so that an install that cannot go ahead leaves what was there
+      // Looked at before anything is changed, so that an install that cannot go ahead leaves what was there
       if (unsafe([dir])) return UNSAFE
       const env = envAt(this.profile, at)
-      await run('claude', ['plugin', 'uninstall', `${PLUGIN}@${MARKET}`], 60_000, env)
-      await run('claude', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
-      const added = await run('claude', ['plugin', 'marketplace', 'add', dir], 60_000, env)
-      if (!added.ok) return added
-      const installed = await run('claude', ['plugin', 'install', `${PLUGIN}@${MARKET}`, '--scope', 'user'], 60_000, env)
+      // Nothing is taken out first, so that the app is never without the add-on while this
+      // runs, nor after it where a step fails: the add-on that was there stays, and still takes
+      // clicks. The marketplace is this folder, which unpacking has just brought up to date, and
+      // where it is registered already it is read again. The plugin is then updated in place:
+      // Claude Code copies it anew whenever the version in its manifest changes, which each
+      // build of it does, and keeps the copy a running session loaded.
+      const registered = await marketplaceHere('claude', env)
+      if (registered === null) return UNASKED('Claude Code')
+      const placed = registered
+        ? await run('claude', ['plugin', 'marketplace', 'update', MARKET], 60_000, env)
+        : await run('claude', ['plugin', 'marketplace', 'add', dir], 60_000, env)
+      if (!placed.ok) return placed
+      const had = await claudeHas(at)
+      if (had === null) return UNASKED('Claude Code')
+      const installed = await run('claude', ['plugin', had ? 'update' : 'install', `${PLUGIN}@${MARKET}`, '--scope', 'user'], 60_000, env)
+      if (!installed.ok) return installed
+      // And it is seen to be the plugin of this build, or one read from this very folder
+      const now = await claudeHas(at)
+      const wanted = readJson<{ version?: unknown }>(path.join(dir, 'it-bridge', '.claude-plugin', 'plugin.json'))?.version
+      const fromHere = typeof now?.readFromFolder === 'string' && real(now.readFromFolder) === real(path.join(dir, 'it-bridge'))
+      if (!now || (!fromHere && now.version !== wanted))
+        return { ok: false, out: '', err: 'Claude Code did not take the new build of the add-on, and keeps the one it had.' }
       return withSkill(installed, settingsAt(at, 'CLAUDE_CONFIG_DIR', '.claude'), dir, was, wrote)
     },
     async remove(at, was) {
@@ -828,13 +898,18 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       return from && path.isAbsolute(from) ? path.join(from, HOME_NOTE) : null
     },
     async install(dir, at, was, wrote) {
-      // Looked at before anything is taken out, so that an install that cannot go ahead leaves what was there
+      // Looked at before anything is changed, so that an install that cannot go ahead leaves what was there
       if (unsafe([dir])) return UNSAFE
       const env = envAt(this.profile, at)
-      await run('codex', ['plugin', 'remove', `${PLUGIN}@${MARKET}`], 60_000, env)
-      await run('codex', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
-      const added = await run('codex', ['plugin', 'marketplace', 'add', dir], 60_000, env)
-      if (!added.ok) return added
+      // Nothing is taken out first, as in Claude Code. Codex reads a local marketplace from its
+      // folder, which unpacking has just brought up to date, and its own command for adding a
+      // plugin copies it anew over the one it had, which keeps the approval of its hooks.
+      const registered = await marketplaceHere('codex', env)
+      if (registered === null) return UNASKED('Codex')
+      if (!registered) {
+        const added = await run('codex', ['plugin', 'marketplace', 'add', dir], 60_000, env)
+        if (!added.ok) return added
+      }
       const installed = await run('codex', ['plugin', 'add', `${PLUGIN}@${MARKET}`], 60_000, env)
       return withSkill(installed, settingsAt(at, 'CODEX_HOME', '.codex'), dir, was, wrote)
     },
@@ -1585,7 +1660,13 @@ export async function whatToDo(
  * `forLog` is how the connector calls this and `disconnect`: what is said is then written to its
  * log, and names no folder and no file.
  */
-export async function connect(id: Harness, say: (line: string) => void, forLog = false): Promise<HarnessStatus> {
+export async function connect(
+  id: Harness,
+  say: (line: string) => void,
+  forLog = false,
+  /** Told what became of the add-on, where something was tried: see `AddonOutcome`. */
+  told: (outcome: AddonOutcome) => void = () => {},
+): Promise<HarnessStatus> {
   const label = KNOWN[id].label
   const seen = await look(id)
   if (!seen) return { id, addon: 'error', detail: `${label} was not found on this machine.` }
@@ -1674,7 +1755,10 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
       detail: `It’s add-on is switched off inside ${label}. Switch it on there, or untick ${label} here and tick it again to have the add-on installed afresh.`,
     }
   const refused = await adapter.preflight?.(at, was)
-  if (refused) return { id, version: before.version, addon: 'error', detail: refused }
+  if (refused) {
+    told({ id, did: 'failed', detail: refused })
+    return { id, version: before.version, addon: 'error', detail: refused }
+  }
   say(`connecting ${label}`)
   // The person is told plainly when what is about to be replaced is not something this It
   // folder put there: an add-on from an It folder that keeps no note of it any more, or one
@@ -1688,7 +1772,10 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
   // Noted before anything is installed: if installing stops half way, what it left behind is
   // still known to be this program's, and is removed when the person disconnects
   const others = all.filter((i) => i !== was)
-  const noted = (version: string, files?: Put[]): Installation[] => [...others, { version, at: Date.now(), by: VERSION, env: at.env, dir: at.dir, files }]
+  const noted = (version: string, files?: Put[], build?: string): Installation[] => [
+    ...others,
+    { version, ...(build ? { build } : {}), at: Date.now(), by: VERSION, env: at.env, dir: at.dir, files },
+  ]
   keep(id, noted('installing', was?.files))
   const dir = unpack(id)
   // Each file is noted as it is written, from the moment before it is put into an empty place:
@@ -1712,9 +1799,14 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
     )
   if (!r.ok) {
     if (r.files) keep(id, noted('installing', r.files))
-    return { id, version: before.version, addon: 'error', detail: (r.err || r.out).split('\n').slice(-3).join(' ').slice(0, 200) }
+    const detail = (r.err || r.out).split('\n').slice(-3).join(' ').slice(0, 200)
+    told({ id, did: 'failed', detail })
+    return { id, version: before.version, addon: 'error', detail }
   }
-  keep(id, noted(ADDONS[id]!.version, r.files))
+  keep(id, noted(ADDONS[id]!.version, r.files, ADDONS[id]!.build))
+  // An app that had this very build of the add-on's code has nothing to load anew. One whose
+  // build is not known, as after an install that did not finish, is taken to have another
+  told({ id, did: 'installed', ...(was?.version !== 'installing' && was?.build === ADDONS[id]!.build ? {} : { restart: true }) })
   return (await statusOf(id)) ?? before
 }
 
@@ -1905,36 +1997,63 @@ let reconciling: Promise<void> = Promise.resolve()
  * `forLog` is how the connector calls it: what went wrong is then said as a fixed word, never
  * in the words of a harness's own installer or of an error, which can hold a path or a name.
  */
-export function reconcile(chosen: readonly string[] | (() => readonly string[]), say: (line: string) => void, forLog = false): Promise<void> {
+export function reconcile(chosen: readonly string[] | (() => readonly string[]), say: (line: string) => void, forLog = false): Promise<AddonOutcome[]> {
   if (forLog) return withoutFileWait(() => reconcileWithFiles(chosen, say, forLog))
   return reconcileWithFiles(chosen, say, forLog)
 }
 
-function reconcileWithFiles(chosen: readonly string[] | (() => readonly string[]), say: (line: string) => void, forLog: boolean): Promise<void> {
+/**
+ * Brings each add-on that this folder put into an agent app, and that is in the app now, up to
+ * this version of It, and does nothing else: no app is connected that was not, none is
+ * disconnected, and It is not asked what is wanted. What `it upgrade` has the new program do
+ * where nothing else would until It is next started.
+ */
+export function refresh(say: (line: string) => void, forLog = false): Promise<AddonOutcome[]> {
+  return inTurn(async (told) => {
+    for (const id of HARNESSES) {
+      if (!(id in ADAPTERS && id in ADDONS) || !supported(id) || !installations(id).length) continue
+      try {
+        const now = await statusOf(id)
+        if (now?.addon !== 'connected' && now?.addon !== 'needs_approval') continue
+        const s = await connect(id, say, forLog, told)
+        if (s.addon === 'error') say(forLog ? `${KNOWN[id].label}: its add-on could not be installed` : `${KNOWN[id].label}: ${s.detail}`)
+      } catch (err) {
+        told({ id, did: 'failed', detail: forLog ? coded(err) : (err as { message?: string }).message })
+        say(forLog ? `${KNOWN[id].label}: ${coded(err)}` : `${KNOWN[id].label}: ${(err as { message?: string }).message}`)
+      }
+    }
+  })
+}
+
+/** Runs a change to the add-ons when the one before it is over, with the folder's lock held, and answers with what became of each. */
+function inTurn(work: (told: (outcome: AddonOutcome) => void) => Promise<void>): Promise<AddonOutcome[]> {
+  const outcomes: AddonOutcome[] = []
   // One run's failure (the lock could not be had, say) is that run's alone: the next still runs
-  reconciling = reconciling
-    .catch(() => {})
-    .then(() =>
-      alone(async () => {
-        // Whoever follows a choice that can change gives a way to ask for it, and it is asked
-        // for here, once the add-ons are this run's alone to change: a run that waited its turn
-        // behind another then goes by the choice as it stands, and undoes nothing the other did
-        const wanted = typeof chosen === 'function' ? chosen() : chosen
-        const only = process.env.IT_HARNESSES?.split(',').map((x) => x.trim())
-        for (const id of HARNESSES) {
-          if (!(id in ADAPTERS && id in ADDONS) || (only && !only.includes(id))) continue
-          try {
-            // An add-on that is held back is never installed, and one that was installed before
-            // it was held back can still be taken out
-            if (wanted.includes(id) && supported(id)) {
-              const s = await connect(id, say, forLog)
-              if (s.addon === 'error') say(forLog ? `${KNOWN[id].label}: its add-on could not be installed` : `${KNOWN[id].label}: ${s.detail}`)
-            } else await disconnect(id, say, {}, forLog)
-          } catch (err) {
-            say(forLog ? `${KNOWN[id].label}: ${coded(err)}` : `${KNOWN[id].label}: ${(err as { message?: string }).message}`)
-          }
-        }
-      }),
-    )
-  return reconciling
+  const run = reconciling.catch(() => {}).then(() => alone(() => work((outcome) => void outcomes.push(outcome))))
+  reconciling = run
+  return run.then(() => outcomes)
+}
+
+function reconcileWithFiles(chosen: readonly string[] | (() => readonly string[]), say: (line: string) => void, forLog: boolean): Promise<AddonOutcome[]> {
+  return inTurn(async (told) => {
+    // Whoever follows a choice that can change gives a way to ask for it, and it is asked
+    // for here, once the add-ons are this run's alone to change: a run that waited its turn
+    // behind another then goes by the choice as it stands, and undoes nothing the other did
+    const wanted = typeof chosen === 'function' ? chosen() : chosen
+    const only = process.env.IT_HARNESSES?.split(',').map((x) => x.trim())
+    for (const id of HARNESSES) {
+      if (!(id in ADAPTERS && id in ADDONS) || (only && !only.includes(id))) continue
+      try {
+        // An add-on that is held back is never installed, and one that was installed before
+        // it was held back can still be taken out
+        if (wanted.includes(id) && supported(id)) {
+          const s = await connect(id, say, forLog, told)
+          if (s.addon === 'error') say(forLog ? `${KNOWN[id].label}: its add-on could not be installed` : `${KNOWN[id].label}: ${s.detail}`)
+        } else await disconnect(id, say, {}, forLog)
+      } catch (err) {
+        if (wanted.includes(id)) told({ id, did: 'failed', detail: forLog ? coded(err) : (err as { message?: string }).message })
+        say(forLog ? `${KNOWN[id].label}: ${coded(err)}` : `${KNOWN[id].label}: ${(err as { message?: string }).message}`)
+      }
+    }
+  })
 }

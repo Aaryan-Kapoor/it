@@ -41,7 +41,7 @@ A page is shown in a sandbox with no cookies and no storage that lasts, cannot f
 
 ## Whether what they do arrives by itself
 
-It does where It's add-on for your harness is connected and its connector is running: `it status` shows your harness in `harnesses` with `"addon": "connected"`, and `connector` with `"ok": true`. Both are needed, and neither is proof that a message will reach this conversation. If it will not arrive by itself, or you cannot tell, or you once ended a turn expecting a message and none came, wait for it: `it wait --id deploy-plan --timeout 100` blocks until the user acts on that page and prints the action. When the time is up it prints `{"timedOut": true}`: nothing was lost and nothing has happened yet, so run it again. `it help waiting` says the rest, `"needs_approval"`, `--follow` and Hermes among it.
+It does where It's add-on is in your harness and its connector runs: `it status` shows your harness in `harnesses` with `"addon": "connected"` or `"outdated"`, and `connector` with `"ok": true`. Both are needed, and neither is proof that a message will reach this conversation. If it will not arrive by itself, or you cannot tell, or you once ended a turn expecting a message and none came, wait for it: `it wait --id deploy-plan --timeout 100` blocks until the user acts on that page and prints the action. When the time is up it prints `{"timedOut": true}`: nothing was lost and nothing has happened yet, so run it again. `it help waiting` says the rest, `"needs_approval"`, `--follow` and Hermes among it.
 
 ## Reading what arrives
 

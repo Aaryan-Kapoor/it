@@ -21,6 +21,7 @@ export const BOOLEAN = new Set([
   'status',
   'wait',
   'supervised',
+  'refresh',
 ])
 /** The switches that take a value: every other name a command line gives is refused, so that a misspelt one is never taken for nothing and the word after it never lost. */
 export const VALUED = new Set([
@@ -69,7 +70,7 @@ export const OPTIONS: Record<string, readonly string[]> = {
   actions: ['id', 'all'],
   action: ['save', 'number'],
   ack: ['failed'],
-  setup: ['all', 'only', 'none', 'name', 'no-service', 'yes'],
+  setup: ['all', 'only', 'none', 'name', 'no-service', 'yes', 'refresh'],
   login: ['url', 'code', 'name', 'no-setup', 'all', 'only', 'none', 'no-service', 'yes'],
   logout: ['force'],
   uninstall: ['yes'],

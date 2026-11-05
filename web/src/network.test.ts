@@ -239,6 +239,18 @@ describe('what is said of an agent app on a machine', () => {
     expect(notes()).toEqual(['Add-on loaded'])
   })
 
+  test('an app that runs an earlier build of its add-on is said to want a restart, with why, and Auto-wake is not said to wait for a repair', async () => {
+    const detail =
+      'The app is running an earlier build of It’s add-on than the one installed, and it still takes clicks. Restart the app to load the build It installed.'
+    const installed = [{ id: 'pi', addon: 'connected', runtime: { state: 'active', idle: true, outdated: true, detail } }]
+    watched['machines:list'] = [machine(Date.now(), installed, ['pi'], ['pi'])]
+    const { Machines } = await import('./machines')
+    await show(createElement(Machines))
+    expect(notes()).toEqual(['Restart to update the add-on'])
+    expect(host.textContent).toContain(detail)
+    expect(host.textContent).not.toContain('waiting for the add-on to be repaired')
+  })
+
   test('an installed add-on stays unverified until loaded code reports, and is offline while its machine is not heard from', async () => {
     const connected = [{ id: 'claude-code', version: '2.1.0', addon: 'connected' }]
     watched['machines:list'] = [machine(Date.now(), connected, ['claude-code'])]
@@ -335,7 +347,9 @@ describe('what is said of an agent app on a machine', () => {
       { ...desk, connectorVersion: '0.1.1' },
       { ...laptop, latest: '0.1.1', upgrade: { at: 1, state: 'installed', version: '0.1.1' } },
     ])
-    expect(said()).toEqual(['It 0.1.1 is installed on the laptop. It runs once It is started again there: stop it serve where it is running, and start it.'])
+    expect(said()).toEqual([
+      'It 0.1.1 is installed on the laptop. It runs once It is started again there: stop it serve where it is running, and start it. As it starts it brings the add-ons in the agent apps there up to date. An app that is already running goes on with the add-on it loaded, which still takes clicks, until it is restarted, and its line on this page then says so.',
+    ])
   })
 
   test.each([null, '0.1.0', '0.9.5'])('a joined machine shows a newer host before its next release lookup, last result %s', async (latest) => {

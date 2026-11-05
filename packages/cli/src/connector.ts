@@ -15,7 +15,8 @@ import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, renam
 import http from 'node:http'
 import path from 'node:path'
 import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, MARK, newer, parseJson, QUEUES, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
-import { AddonRuntimes } from './addon-runtime'
+import { ADDON_API, AddonRuntimes } from './addon-runtime'
+import { ADDONS } from './addons.generated'
 import {
   DeliveryRecovery,
   eraseDeliveryRecovery,
@@ -27,6 +28,7 @@ import {
   RECEIPTS_MOST,
 } from './delivery-recovery'
 import {
+  APP_NAMES,
   api,
   ask,
   backend,
@@ -477,6 +479,28 @@ async function connecting(say: (line: string) => void): Promise<void> {
   let wantedNow: string[] | null = null
   let found: HarnessStatus[] = []
   const runtimes = new AddonRuntimes()
+  /**
+   * What has been said in the log of the add-on an app has loaded, by the app, why and the build:
+   * an app that runs a build that is not this It's own, or one that cannot take clicks from it,
+   * is said once for each, and not with every report it makes, which is every second.
+   */
+  const toldOfAddon = new Set<string>()
+  const heardAddon = (harness: string, instance: unknown, value: unknown) => {
+    const runtime = runtimes.hear(harness, instance, value)
+    if (!runtime || (runtime.state !== 'incompatible' && !runtime.outdated)) return runtime
+    const label = APP_NAMES[harness] ?? agentOf(harness)
+    const why = runtime.state !== 'incompatible' ? 'build' : (value as { api?: unknown }).api !== ADDON_API ? 'api' : 'delivery'
+    const told = `${harness}:${why}:${runtime.version}`
+    if (toldOfAddon.has(told)) return runtime
+    if (toldOfAddon.size > 200) toldOfAddon.clear()
+    toldOfAddon.add(told)
+    say(
+      why === 'build'
+        ? `${label} is running an earlier build of its add-on (${runtime.version}) than this It carries (${ADDONS[harness]!.build}); it still takes clicks, and restarting ${label} loads the build installed`
+        : `${label} has loaded an add-on (${runtime.version}) that cannot take clicks from this It (${why}); its clicks wait, and \`it status\` says what to do`,
+    )
+    return runtime
+  }
   // When an add-on's speaking last had the machine looked at again, and what does the looking, once the connector has begun to report
   let lookedAgainAt = 0
   let lookAgain: () => Promise<void> = async () => {}
@@ -2823,7 +2847,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       return [200, { ok: true, marks: due.map((m) => m.id), texts: due.flatMap((m) => m.texts) }]
     }
     if (req.method === 'POST' && url.pathname === '/addon') {
-      const runtime = runtimes.hear(harness, body.instance, body.addon)
+      const runtime = heardAddon(harness, body.instance, body.addon)
       return runtime ? [200, { ok: runtime.state === 'active', api: 1, runtime }] : [400, { error: 'invalid add-on report' }]
     }
     if (url.pathname === '/session' || url.pathname === '/clicks') {
@@ -2838,9 +2862,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
           )
         return [200, url.pathname === '/session' ? { ok: true } : { clicks: [] }]
       }
-      const runtime = body.addon === undefined ? undefined : runtimes.hear(harness, body.instance, body.addon)
+      const runtime = body.addon === undefined ? undefined : heardAddon(harness, body.instance, body.addon)
       const blocked = body.addon !== undefined && runtime?.state !== 'active'
-      // The session metadata still uses this API when only the loaded build is stale.
+      // What the add-on says of its conversation is still taken where only the app lacks a delivery capability.
       if (blocked && (!runtime || body.addon.api !== 1)) return [200, { ok: false, clicks: [], runtime }]
       const key = keyOf(harness, id)
       // An add-on that can see which folder its conversation is held in says so, and it is noted

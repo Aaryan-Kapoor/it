@@ -140,6 +140,21 @@ Messages you send above a page and answers you choose in notifications are saved
 
 If It says "Reload It before sending new requests", reload the site to use the service's current version. An older site left open during an update cannot safely send a new request without a replay deadline. It can still confirm a request whose receipt the service has kept. Check what your agent received before repeating an older saved request.
 
+## An agent app after It is updated
+
+`it status` names each agent app's add-on as the app has loaded it, and the Machines page does the same beside the app.
+
+- **"outdated", or "Restart to update the add-on".** The app is running an earlier build of It's add-on than the one installed, as an app that was already running when It was updated is. Clicks still arrive. Restart the app, or T3 Code where the app runs inside it, to load the new build.
+- **"incompatible", or "Add-on needs attention".** What the app has loaded cannot take clicks from this It: it speaks another delivery API than the connector, or the app lacks something the add-on needs. Clicks wait in the inbox, and the line beside the app says what to do. Where it says to update It and restart the app, run `it setup` and then restart the app. Where it says the app is missing a delivery API, update the app.
+
+Where `it upgrade` said that an add-on could not be brought up to date, the app keeps the add-on it had, and It tries again each time it starts and every half hour. `it setup` tries again at once, and says why where it cannot.
+
+## Claude Code on Windows that gets no clicks behind a proxy
+
+On Windows, It's add-on inside Claude Code asks the connector at a port on the machine, and Claude Code sends what is asked of a port through any proxy its environment names. So where Claude Code was started with `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` set, in capitals or in small letters, the add-on asks nothing at all, so that the proxy is not shown which conversation is asked about, and clicks wait in the inbox. Nothing says so inside Claude Code. `it status` says so where its own environment is such an environment, as it is when an agent runs it inside that Claude Code, and its JSON has `"proxied": true` beside Claude Code.
+
+Add `127.0.0.1` to `NO_PROXY`, and to `no_proxy` where that is set too, in the environment Claude Code is started with, and start Claude Code again. Naming `localhost` there is not enough. Claude's desktop app does this for its own sessions where it finds a proxy, and on Linux and macOS the add-on asks over a socket, which no proxy is given.
+
 ## Older backend functions
 
 If an update cannot load its backend functions, It keeps serving with the functions already loaded. The site shows this beside its pages and on Machines. Some pages or controls may fail because the site and functions differ. In an owner browser, the warning points to `it status` on the machine It runs on for the reason. After resolving the reported problem, restart It to retry loading the functions. `it service logs` shows what the service met. A paired screen shows the warning and asks you to open your owner browser.
