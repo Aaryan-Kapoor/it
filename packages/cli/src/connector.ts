@@ -3298,6 +3298,40 @@ async function connecting(say: (line: string) => void): Promise<void> {
   let nextInbox: { harness: string; id: string }[] | null = null
   let saidTooMany = false
   let unwatch: (() => void) | null = null
+  /** Whether the backend has answered what is watched now. */
+  let answered = false
+  /**
+   * The conversations held in threads of T3 Code that do not fit beside the ones that are here
+   * are asked for in turn, a few at a time: the last of them that was asked for before the ones
+   * asked for now, and since when those are asked for.
+   */
+  let threadsAfter = ''
+  let threadsMoved = 0
+  /**
+   * How long the conversations held in threads that are asked for together are asked for
+   * before the next ones are. Every turn watches anew, so turns are not taken with every pass.
+   */
+  const THREADS_TURN_MS = 5_000
+  /**
+   * The conversations held in threads of T3 Code, as noted, under every id each is known by,
+   * that are not among the ones that are here, and whose app is connected: a click for one of
+   * them is put to its thread wherever its app's add-on has gone quiet, which it does once T3
+   * Code lets the thread's agent app go. In a fixed order, so that they can be taken in turn.
+   */
+  const heldInThreads = (here: ReadonlySet<string>): string[] => {
+    // Every earlier id by the one each carries on under now, found once for all of them
+    const earlier = new Map<string, string[]>()
+    for (const from of aliases.keys()) {
+      const to = follow(from)
+      earlier.set(to, [...(earlier.get(to) ?? []), from])
+    }
+    const ids = new Set<string>()
+    for (const key of t3Threads.keys()) {
+      const now = follow(key)
+      for (const k of [key, now, ...(earlier.get(now) ?? []).slice(-5)]) if (!here.has(k) && connected(k.slice(0, k.indexOf(':')))) ids.add(k)
+    }
+    return [...ids].sort()
+  }
   function watch(advance = false): void {
     const now = Date.now()
     // The conversations that are here, the one heard from most recently first
@@ -3313,8 +3347,29 @@ async function connecting(say: (line: string) => void): Promise<void> {
       saidTooMany = true
       say(`more than ${LISTENING_MOST} conversations are open here; clicks for the ones heard from least recently wait until there is room`)
     }
-    const listening = named
-      .slice(0, LISTENING_MOST)
+    // And in what room is left, the conversations held in threads of T3 Code that are not here.
+    // Their clicks are asked for whether or not they may be reopened, since a click for one
+    // goes to its thread and nowhere else (`t3For`), which is no reopening. Asked for this way
+    // they are not taken for conversations that are listening: what is said of those is said
+    // of the ones whose add-on has asked (`sessions`). Where more are held than there is room
+    // for, they are taken in turn, and one with a click on offer that is waiting for its
+    // thread keeps its place until the click has gone, in up to half the room.
+    const room = LISTENING_MOST - Math.min(named.length, LISTENING_MOST)
+    const threads = room ? heldInThreads(new Set(named)) : []
+    const offeredFor = new Set(inbox.flatMap((c) => (c.session ? [keyOf(c.session.harness, c.session.id)] : [])))
+    const kept = threads.filter((k) => offeredFor.has(k)).slice(0, Math.floor(room / 2))
+    const turn = () => {
+      const rest = threads.filter((k) => !kept.includes(k))
+      return [...rest.filter((k) => k > threadsAfter), ...rest.filter((k) => k <= threadsAfter)].slice(0, room - kept.length)
+    }
+    let inTurn = turn()
+    // The next ones are taken once the backend has answered for these and they have had their time
+    if (threads.length > room && advance && answered && now - threadsMoved >= THREADS_TURN_MS && inTurn.length) {
+      threadsAfter = inTurn[inTurn.length - 1]!
+      threadsMoved = now
+      inTurn = turn()
+    }
+    const listening = [...named.slice(0, LISTENING_MOST), ...kept, ...inTurn]
       // In a fixed order, so that the same set is not taken for a different one
       .sort()
       .map((k) => ({ harness: k.slice(0, k.indexOf(':')), id: k.slice(k.indexOf(':') + 1) }))
@@ -3334,6 +3389,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (next === watching) return
     watching = next
     const generation = ++watchGeneration
+    answered = false
     unwatch?.()
     unwatch = client.onUpdate(
       api.delivery.inboxPage,
@@ -3343,6 +3399,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (watchGeneration !== generation) return
         const clicks = page.clicks
         nextInbox = page.after
+        answered = true
         const here = performance.now()
         for (const click of clicks) {
           // A new owner gets its own window, including when the observation table is full.
