@@ -68,6 +68,8 @@ const stand = vi.hoisted(() => ({
     /** What T3 Code says where it will not take a message, and what it refused. */
     refusing: null as string | null,
     refused: [] as { thread: string; text: string }[],
+    /** What each message put to a thread was named as, sent or refused: the same message sent again is named the same. */
+    whats: [] as (string | undefined)[],
     /** By each thread, the conversation it runs now and those it ran before, and every time it was asked which thread runs one. */
     runs: new Map<string, { now: { harness: string; id: string }; before: { harness: string; id: string }[] }>(),
     looked: [] as { harness: string; ids: string[]; known?: string }[],
@@ -98,7 +100,8 @@ vi.mock('./src/t3', async (original) => ({
     for (const [thread, run] of stand.t3.runs) if (run.now.harness === of.harness && of.ids.includes(run.now.id)) return { thread, before: run.before }
     return undefined
   },
-  t3Send: async (_t3: unknown, thread: string, text: string) => {
+  t3Send: async (_t3: unknown, thread: string, text: string, what?: string) => {
+    stand.t3.whats.push(what)
     if (stand.t3.refusing !== null) {
       stand.t3.refused.push({ thread, text })
       return stand.t3.refusing
@@ -327,6 +330,7 @@ afterEach(async () => {
   stand.t3.threads.clear()
   stand.t3.asked.length = 0
   stand.t3.sent.length = 0
+  stand.t3.whats.length = 0
   stand.t3.refused.length = 0
   stand.t3.runs.clear()
   stand.t3.looked.length = 0
@@ -4143,6 +4147,12 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     await until(() => stand.t3.sent.length === 2)
     expect(stand.t3.sent[1]!.text).toBe('[It] "A page" (page-12): approve, with details [action click-12]')
     expect(await behindMarks(12)).toEqual([])
+    // The short line is named the same each time it is sent, so T3 Code lets it land once, and not as the mark is
+    const [mark, ...lines] = stand.t3.whats
+    expect(mark).toBe('mark click-12')
+    expect(lines.length).toBe(3)
+    expect(new Set(lines).size).toBe(1)
+    expect(lines[0]).not.toBe(mark)
   })
 
   test('one whose conversation is in no thread goes into Codex’s queue, once T3 Code has said so, and T3 Code is not asked again for the next', async () => {

@@ -1098,7 +1098,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       void (
         fallback.via === 't3'
           ? server
-            ? t3Send(server, fallback.thread, fallback.text)
+            ? t3Send(server, fallback.thread, fallback.text, `line ${fallback.text}`)
             : Promise.resolve('T3 Code could not be reached')
           : codexPut(threadOf(follow(where() ?? key)), fallback.text)
       )
@@ -2206,7 +2206,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // What is put into a conversation that is open, or into a thread: the mark alone, where a
       // hook of It's hands the agent the rest, and otherwise one short line for each click
       const lines = () => (t3 ? [click, ...withIt].map((c) => briefClick(asClick(c))).join('\n') : briefClick(asClick(click), false))
-      const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text) : codexPut(threadOf(follow(key)), text))
+      // The same message to the same thread, sent again where T3 Code was not heard to answer, is the same command to it, and lands once
+      const put = (text: string) =>
+        t3
+          ? t3Send(t3.server, t3.thread, text, `${text === MARK ? 'mark' : 'line'} ${[click, ...withIt].map((c) => c.id).join(' ')}`)
+          : codexPut(threadOf(follow(key)), text)
       if (!reopening && turnRunning(follow(key), Date.now())) {
         await recovery.keepWaiters([click, ...withIt], follow(key))
       }
@@ -2338,7 +2342,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const forThread = t3 !== undefined && t3Only(key)
         record('agent.woken', { result: n >= QUEUE_WAITS.length && !forThread ? 'failed' : 'declined', agent: agentOf(harness) })
         if (reopening) notReopened(click.session!, refused)
-        // T3 Code could not take it: the conversation is reopened as any other for a while, and that is tried at once
+        // T3 Code could not take it, and is not asked again for a while (see `t3For`). A conversation that may go
+        // other ways goes as any other meanwhile, which is tried at once; one held in a thread waits for it
         if (t3) {
           t3Refused.set(key, Date.now())
           soon(10)
