@@ -17,7 +17,7 @@ import { type ActionEnvelope, fileName, fileType, LIMITS, MESSAGE, sizeSaid, UPL
 import type { ConvexReactClient } from 'convex/react'
 import { ConvexError } from 'convex/values'
 import { kept as kept_ } from './kept'
-import { api, displayKey, type Id, letGoOf, note, refusal, timesLetGo, whenLetGo } from './lib'
+import { api, backendNow, displayKey, type Id, letGoOf, note, refusal, timesLetGo, whenLetGo } from './lib'
 import { discardPending, hasPending, holdPending, watchPending } from './pending'
 import { sha256Of } from './sha256'
 
@@ -59,7 +59,16 @@ interface Entry {
   envelope: Sent
   /** The files it carries beside its data, whose bytes are kept apart under its name. */
   files?: Carried[]
+  /** When it was kept here, by this browser's clock, which is what says when it is too old to send. */
   at: number
+  /**
+   * When the person did it, by the backend's clock as this browser had learned it then. It is
+   * sent with the click, so that one that waited here while It could not be reached is taken as
+   * done when it was, and not when it arrived: a stop pressed in between goes for it, and it
+   * reopens a conversation only where it was done recently enough. Where the backend's clock
+   * was not known yet it is not kept, and the click is taken as done when it arrives.
+   */
+  madeAt?: number
   /** Its page has finished with it and left it here to be sent when it can be. */
   left?: boolean
   /**
@@ -201,12 +210,16 @@ async function send(convex: ConvexReactClient, e: Entry, key: string, waiting: (
   const mine = () => stillPairedFor(e.user, began)
   if (!mine()) throw new Error('This browser’s pairing has ended.')
   const expected = e.session ? { expectedSession: e.session } : {}
+  // When the person did it, sent every time it is sent: a click sent again is the same click,
+  // and It keeps what it was first told
+  const made = e.madeAt === undefined ? {} : { madeAt: e.madeAt }
   if (e.operation?.kind === 'answer')
     return convex.mutation(api.notifications.answer, {
       id: e.operation.id as Id<'notifications'>,
       action: e.operation.action,
       displayKey: e.operation.display,
       ...expected,
+      ...made,
     })
   // A legacy entry is never given a fresh deadline. The backend can confirm its old receipt,
   // but cannot safely treat an unknown old identity as a new click.
@@ -241,6 +254,7 @@ async function send(convex: ConvexReactClient, e: Entry, key: string, waiting: (
       envelope: e.envelope,
       attachment,
       ...replay,
+      ...made,
     })
   }
   return e.operation?.kind === 'message'
@@ -250,8 +264,9 @@ async function send(convex: ConvexReactClient, e: Entry, key: string, waiting: (
         clientActionId: e.envelope.clientActionId,
         text: e.operation.text,
         ...replay,
+        ...made,
       })
-    : convex.mutation(api.actions.submit, { artifactId: e.artifactId as Id<'artifacts'>, displayKey: displayKey(), envelope: e.envelope, ...replay })
+    : convex.mutation(api.actions.submit, { artifactId: e.artifactId as Id<'artifacts'>, displayKey: displayKey(), envelope: e.envelope, ...replay, ...made })
 }
 
 /**
@@ -669,7 +684,18 @@ async function sendNow(
   if (sending.has(key)) throw new Error('This request is already waiting for confirmation.')
   const prior = entries(user).find(([saved]) => saved === key)?.[1]
   // Reusing an identity also reuses its payload and deadline, including legacy entries.
-  const entry: Entry = prior ?? { user, artifactId, envelope, operation, format: 2, session, at: Date.now(), ...(what ? { files: what } : {}) }
+  const madeAt = backendNow()
+  const entry: Entry = prior ?? {
+    user,
+    artifactId,
+    envelope,
+    operation,
+    format: 2,
+    session,
+    at: Date.now(),
+    ...(madeAt === undefined ? {} : { madeAt }),
+    ...(what ? { files: what } : {}),
+  }
   entry.held = Date.now() + HOLD_MS
   // Too many already unsent means something is wrong, and one more would only push an older one
   // out. One page may hold only part of what the browser keeps, so it cannot crowd out the rest.
