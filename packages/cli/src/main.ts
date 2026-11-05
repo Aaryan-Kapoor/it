@@ -156,7 +156,7 @@ function codexShut(found: LoadedStatus[]): string | null {
  * `claude` command was found: the app's sessions would load the add-on, and the add-on is put in
  * with that command alone. Null where Claude Code was found, or was not looked for at all.
  */
-function claudeDesktopOnly(found: HarnessStatus[]): string | null {
+function claudeDesktopOnly(found: readonly { id: string }[]): string | null {
   if (found.some((h) => h.id === 'claude-code')) return null
   const only = process.env.IT_HARNESSES?.split(',').map((x) => x.trim())
   if (only && !only.includes('claude-code')) return null
