@@ -71,6 +71,68 @@ interface Entry {
 }
 
 const keyOf = (user: string, artifactId: string, id: string) => `${PREFIX}${user}.${artifactId}.${id}`
+// What was given up of a person's clicks and typed messages while no page of theirs was there to
+// say so: too old to send, or refused for good once their page had gone. The person is told, on
+// whichever tab of this browser they are at, until they say they have seen it. What is kept for
+// that is how many of each there were and the pairing they were made under, and nothing of what
+// they carried, under a name of the person's own beside their clicks: so it goes wherever their
+// clicks go when what is kept for them is let go of, and is said only under the pairing the
+// clicks were made under, never after the browser is signed out, nor once it is paired again.
+const GIVEN_UP = 'it.givenup.'
+interface GivenUp {
+  session: string | null
+  clicks: number
+  messages: number
+}
+function givenUpOf(user: string): GivenUp | null {
+  try {
+    const said = JSON.parse(localStorage.getItem(`${GIVEN_UP}${user}`) ?? 'null') as Partial<GivenUp> | null
+    if (said && (typeof said.session === 'string' || said.session === null) && Number.isSafeInteger(said.clicks) && Number.isSafeInteger(said.messages))
+      return said as GivenUp
+  } catch {}
+  return null
+}
+/**
+ * Counts a click or typed message that is being given up with nobody told, for the pairing it
+ * was made under. One from before an upgrade does not say which pairing that was: it is counted
+ * only while the browser is paired for its person now, as the pairing it would have been sent
+ * under. One the person was already told was refused is not counted again, and nor is one made
+ * under a pairing other than the one the browser is known to have now, which it is never said under.
+ */
+function givenUp(e: Entry): void {
+  if (e.refused || letGoOf(e.user)) return
+  const under = e.format === 2 ? (e.session ?? null) : theirs(e.user) ? session : undefined
+  if (under === undefined || (pairedFor !== null && (pairedFor !== e.user || session !== under))) return
+  const was = givenUpOf(e.user)
+  const so = was?.session === under ? was : { session: under, clicks: 0, messages: 0 }
+  try {
+    localStorage.setItem(
+      `${GIVEN_UP}${e.user}`,
+      JSON.stringify(e.operation?.kind === 'message' ? { ...so, messages: so.messages + 1 } : { ...so, clicks: so.clicks + 1 }),
+    )
+  } catch {}
+}
+/** Lets go of every count of what was given up but the one of the person and pairing named, which is the only one that may still be said. */
+function tidyGivenUp(keep?: { user: string; session: string | null }): void {
+  for (const key of Object.keys(localStorage)) {
+    if (!key.startsWith(GIVEN_UP)) continue
+    if (keep && key === `${GIVEN_UP}${keep.user}` && givenUpOf(keep.user)?.session === keep.session) continue
+    localStorage.removeItem(key)
+  }
+}
+/** How many of this person's clicks and typed messages were given up under the pairing this browser has now, with nobody told. Null when none was, and when the browser is not theirs. */
+export function givenUpFor(user: string): { clicks: number; messages: number } | null {
+  if (!theirs(user)) return null
+  const said = givenUpOf(user)
+  return said && said.session === session && said.clicks + said.messages > 0 ? { clicks: said.clicks, messages: said.messages } : null
+}
+/** The person has seen what was given up, in this tab or another. */
+export function seenGivenUp(user: string): void {
+  try {
+    localStorage.removeItem(`${GIVEN_UP}${user}`)
+  } catch {}
+  changed()
+}
 // A request whose answer was lost must keep its original deadline even when storage refused it.
 // These bounded records contain no payload and stay until a settled answer or the pairing ends.
 const memoryGrants = new Map<string, { session: string | null; until: number }>()
@@ -85,9 +147,9 @@ function changed(): void {
   for (const fn of watchers) fn()
 }
 watchPending(changed)
-/** Another tab of this browser has kept a click or let go of one, which the browser says to every other tab. */
+/** Another tab of this browser has kept a click or let go of one, or given one up, which the browser says to every other tab. */
 const elsewhere = (e: StorageEvent): void => {
-  if (e.key === null || e.key.startsWith(PREFIX)) changed()
+  if (e.key === null || e.key.startsWith(PREFIX) || e.key.startsWith(GIVEN_UP)) changed()
 }
 /** How many times what is kept here has changed, in this tab or, as far as the browser has said, in another. */
 export const outboxChanges = (): number => changes
@@ -169,18 +231,24 @@ function entries(user: string): [string, Entry][] {
  * Drops every click kept here that is too old to send, whoever it was kept for and whether or
  * not this browser is paired. Run when the site starts: a click is sent only as the person who
  * made it, so one kept for a person who is never paired here again would otherwise stay for good.
+ * Its person is told it was given up, if the browser turns out to be paired for them under the
+ * pairing it was made under.
  */
 export function dropOld(): void {
   const old: string[] = []
+  const told: Entry[] = []
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i)
     if (!key?.startsWith(PREFIX)) continue
     try {
-      const at = (JSON.parse(localStorage.getItem(key) ?? '') as Partial<Entry>).at
-      if (typeof at === 'number' && Date.now() - at <= MAX_AGE_MS) continue
+      const entry = JSON.parse(localStorage.getItem(key) ?? '') as Partial<Entry>
+      if (typeof entry.at === 'number' && Date.now() - entry.at <= MAX_AGE_MS) continue
+      if (typeof entry.user === 'string') told.push(entry as Entry)
     } catch {}
     old.push(key)
   }
+  // Said to the person, under the pairing each was made under, once the site knows that is the pairing it has
+  for (const entry of told) givenUp(entry)
   for (const key of old) forget(key)
   if (old.length) {
     changed()
@@ -463,11 +531,15 @@ export function outboxBelongsTo(user: string | null, under: string | null = null
       } catch {}
     }
     memoryGrants.clear()
+    // Nothing given up is said to a browser that is not paired, nor kept to be said later
+    tidyGivenUp()
   }
   const replaced = user !== pairedFor || under !== session
   if (replaced) {
     memoryGrants.clear()
     pairings++
+    // Nor what was given up under another pairing: only this one's is said from now on
+    if (user !== null) tidyGivenUp({ user, session: under })
     if (pairedFor !== null) {
       discardPending(pairedFor)
       for (const [key, entry] of entries(pairedFor)) {
@@ -533,6 +605,9 @@ export function dismissMessage(user: string, artifactId: string, id: string): vo
 export function abandonOutbox(user: string): void {
   if (pairedFor === user) outboxBelongsTo(null)
   for (const [key] of entries(user)) forget(key)
+  try {
+    localStorage.removeItem(`${GIVEN_UP}${user}`)
+  } catch {}
   discardPending(user)
   void tidyBytes({ person: user })
   changed()
@@ -598,8 +673,9 @@ whenLetGo((person, whole) => {
  * it was accepted, or told it failed, the click is gone from here: one the person saw fail is
  * never sent again later behind their back. If the page has gone by the time a refusal comes
  * back, nobody was told anything, so the click stays, and is sent when it can be, unless the
- * refusal is one that would be the same every time. And if the browser has been paired for
- * someone else meanwhile, it is neither sent as them nor thrown away: it waits for its own person.
+ * refusal is one that would be the same every time, and then the person is told on the site that
+ * it was given up. And if the browser has been paired for someone else meanwhile, it is neither
+ * sent as them nor thrown away: it waits for its own person.
  */
 export async function submit(
   convex: ConvexReactClient,
@@ -765,6 +841,8 @@ async function sendNow(
           keep = true
           throw err
         }
+        // Refused for good once the page that sent it had gone: nobody was told, so the person is told now
+        if (!stillThere() && settled(err) && !letGo()) givenUp(entry)
         // Told "not now": waited out a few times, since the person did click
         if (!notNow(err) || attempt >= 3 || waitFor(err) > 5000) throw err
         await sleep(waitFor(err))
@@ -857,6 +935,7 @@ export async function drain(convex: ConvexReactClient, user: string): Promise<vo
       const [key, entry] = next
       if (Date.now() - entry.at > MAX_AGE_MS) {
         note('a saved click was too old to send, and was dropped')
+        givenUp(entry)
         drop(key)
         continue
       }
@@ -996,7 +1075,10 @@ async function replay(convex: ConvexReactClient, user: string, key: string): Pro
       note('a saved request was refused for good', refusal(err).code)
       if (entry.operation?.kind === 'message' || (entry.format !== 2 && refusal(err).code === 'conflict'))
         put(key, JSON.stringify({ ...entry, refused: refusal(err).message, held: undefined }))
-      else drop(key)
+      else {
+        givenUp(entry)
+        drop(key)
+      }
       return 'done'
     }
     // Told to slow down: waited out, and the same click is tried again

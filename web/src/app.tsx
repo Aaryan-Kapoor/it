@@ -33,7 +33,20 @@ import {
 } from './lib'
 import { Machines } from './machines'
 import { Bell, Toasts } from './notifications'
-import { abandonOutbox, anyUnsaved, drain, outboxBelongsTo, pairedForSomeone, recoverLeftovers, stillPairedFor, thisPairing, watchOutbox } from './outbox'
+import {
+  abandonOutbox,
+  anyUnsaved,
+  drain,
+  givenUpFor,
+  outboxBelongsTo,
+  outboxChanges,
+  pairedForSomeone,
+  recoverLeftovers,
+  seenGivenUp,
+  stillPairedFor,
+  thisPairing,
+  watchOutbox,
+} from './outbox'
 import { Grid, PageView, wasShown } from './pages'
 import { hasPending, watchPending } from './pending'
 import { dropPushHere, mendPush, pushSupport, turnOffPush, turnOnPush } from './push'
@@ -399,6 +412,32 @@ function CodeForAnotherScreen() {
   )
 }
 
+/**
+ * Said when clicks or typed messages made in this browser were given up while no page of theirs
+ * was there to say so: they waited too long to be sent, or were refused for good once their page
+ * had gone. Said on every tab of the browser, under the pairing they were made under only, until
+ * the person says they have seen it. It says how many, and nothing of what they were.
+ */
+function GivenUp({ user }: { user: string }) {
+  useSyncExternalStore(watchOutbox, outboxChanges)
+  const given = givenUpFor(user)
+  if (!given) return null
+  const counted = (n: number, what: string) => (n === 1 ? `a ${what}` : `${n} ${what}s`)
+  const what = [given.clicks && counted(given.clicks, 'click'), given.messages && counted(given.messages, 'typed message')].filter(Boolean).join(' and ')
+  const one = given.clicks + given.messages === 1
+  return (
+    <p className="notice" role="status">
+      <span>
+        {what.charAt(0).toUpperCase() + what.slice(1)} from this browser could not be sent, and {one ? 'was' : 'were'} given up.{' '}
+        {one ? 'Do it again if it is still wanted.' : 'Do them again if they are still wanted.'}
+      </span>
+      <button type="button" onClick={() => seenGivenUp(user)}>
+        OK
+      </button>
+    </p>
+  )
+}
+
 /** Everything a paired browser shows. A screen is shown what a screen may use, and the owner the rest as well. */
 function Shell({ user, owner }: { user: string; owner: boolean }) {
   const convex = useConvex()
@@ -750,6 +789,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const notices = (
     <>
       <ServiceNotice />
+      <GivenUp user={user} />
       {code === 'owner' && <CodeForAnotherScreen />}
       {code === 'screen' && <ScreenOffered onDecline={codeSeen} />}
     </>
