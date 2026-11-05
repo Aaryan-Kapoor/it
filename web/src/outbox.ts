@@ -674,8 +674,11 @@ whenLetGo((person, whole) => {
  * never sent again later behind their back. If the page has gone by the time a refusal comes
  * back, nobody was told anything, so the click stays, and is sent when it can be, unless the
  * refusal is one that would be the same every time, and then the person is told on the site that
- * it was given up. And if the browser has been paired for someone else meanwhile, it is neither
- * sent as them nor thrown away: it waits for its own person.
+ * it was given up. And if the browser has been paired again meanwhile, for someone else or anew
+ * for the same person, it is never sent under the new pairing: it is thrown away with the rest of
+ * what was begun under the old one, and nobody is told, as what is said of a click is said only
+ * under the pairing it was made under. Only a click made under a pairing the backend gave no
+ * session waits for its own person to be back.
  */
 export async function submit(
   convex: ConvexReactClient,
