@@ -27,6 +27,11 @@ afterEach(() => {
 describe('the conversation folders It remembers', () => {
   test.each([9999, 10_000, 10_001])('recovers an empty legacy lock only after ten seconds, at %s milliseconds', async (age) => {
     vi.useFakeTimers()
+    // Only the lock's age is in question here, so the command has one real try at the lock and no
+    // more. Its three seconds of trying again would otherwise each go to the disk, which a slow
+    // Windows runner may not get through within the test's time.
+    let asked = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => (asked++ < 2 ? 0 : 3000))
     const lock = `${conversationsFile()}.lock`
     const record = { 'pi:earlier': { cwd: scratch, at: 1 } }
     writeFileSync(conversationsFile(), JSON.stringify(record))
