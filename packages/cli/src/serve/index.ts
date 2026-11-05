@@ -261,17 +261,21 @@ export function teller(
 
 /**
  * What It notes in its folder of the person's conversations on this machine, beside the
- * database: the folder each was held in, which of them an add-on has been heard from in and
- * which carried on under another id, the clicks handed to each, and which are owed the word
- * that a turn of theirs was cut off or stopped. The first is written by the command that
- * publishes or brings up a page, once It has accepted that, and by the connector as Codex's
- * hooks say where a conversation is held; the rest by the connector alone.
+ * database: the folder each was held in, which of them an add-on has been heard from in, which
+ * T3 Code holds in a thread of its own and which carried on under another id, the clicks handed
+ * to each, and which are owed the word that a turn of theirs was cut off or stopped. The first
+ * is written by the command that publishes or brings up a page, once It has accepted that, and
+ * by the connector as Codex's hooks say where a conversation is held; the rest by the connector
+ * alone.
  *
  * The note of the turns It has reopened that are running now (`runs.json`) is not among them.
  * It is what keeps a conversation from being reopened a second time while a process of its
  * last turn may still live, and it empties by itself as those turns end.
  */
-const NOTES = [conversationsFile, ...['heard.json', 'aliases.json', 'cut-off.json', 'stopped.json', 'journal.jsonl'].map((name) => () => inHome(name))]
+const NOTES = [
+  conversationsFile,
+  ...['heard.json', 'aliases.json', 't3-threads.json', 'cut-off.json', 'stopped.json', 'journal.jsonl'].map((name) => () => inHome(name)),
+]
 /** Removes those notes. Whether there was any of them to remove. */
 function removeNotes(): boolean {
   let any = false
