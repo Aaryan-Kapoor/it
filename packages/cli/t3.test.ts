@@ -259,10 +259,24 @@ describe('the thread a conversation is held in', () => {
   })
   test('is the one whose agent conversation has one of the ids It knows the conversation by', () => {
     const id = '0873de1e-dec0-4e35-840e-b2f9cf0e0378'
-    expect(holds(snapshot(id), [id])).toBe(true)
-    expect(holds(snapshot(id), ['11111111-2222-4333-8444-555555555555', id])).toBe(true)
-    expect(holds(snapshot(id), ['11111111-2222-4333-8444-555555555555'])).toBe(false)
-    expect(holds(snapshot(id), [])).toBe(false)
+    expect(holds(snapshot(id), 'thread-a', [id])).toBe(true)
+    expect(holds(snapshot(id), 'thread-a', ['11111111-2222-4333-8444-555555555555', id])).toBe(true)
+    expect(holds(snapshot(id), 'thread-a', ['11111111-2222-4333-8444-555555555555'])).toBe(false)
+    expect(holds(snapshot(id), 'thread-a', [])).toBe(false)
+  })
+  test('and not one whose snapshot lists that conversation as another thread’s, as a Codex thread lists those of the threads forked from it', () => {
+    const id = '01a1ac6b-5b8c-7b13-a6f2-6f0c3a2d9e11'
+    const of = (appThreadId: string) => ({
+      projection: {
+        providerThreads: [
+          { id: 'provider-thread:…', driver: 'codex', appThreadId, ownerNodeId: null, nativeThreadRef: { driver: 'codex', nativeId: id, strength: 'strong' } },
+        ],
+      },
+    })
+    const forked = `thread:provider:codex:native-thread:${id}`
+    // The parent's snapshot names the forked thread's conversation, and the forked thread's own snapshot names it too: it is the forked thread's
+    expect(holds(of(forked), 'parent-thread', [id])).toBe(false)
+    expect(holds(of(forked), forked, [id])).toBe(true)
   })
   test('and is not told from anything that is not what T3 Code says of a thread', () => {
     for (const not of [
@@ -275,7 +289,7 @@ describe('the thread a conversation is held in', () => {
       { projection: { providerThreads: [null, {}, { nativeThreadRef: null }] } },
       snapshot(7),
     ])
-      expect(holds(not, ['7', 'undefined', 'null'])).toBe(false)
+      expect(holds(not, 'thread-a', ['7', 'undefined', 'null'])).toBe(false)
   })
 })
 
