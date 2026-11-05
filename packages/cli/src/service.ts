@@ -302,7 +302,7 @@ export function windowsLauncher(cmd: string[], env: Record<string, string>): str
   lines.push(cmd.map(cmdWord).join(' '), 'if %errorlevel% equ 0 exit /b 0', 'ping -n 6 127.0.0.1 >nul 2>&1', 'goto again')
   return `${lines.join('\r\n')}\r\n`
 }
-const windowsLauncherFile = () => inHome('bin', 'it-service.cmd')
+export const windowsLauncherFile = () => inHome('bin', 'it-service.cmd')
 
 const ps = psQuote
 /** Selects only this account's task, or a legacy launcher owned by this account. */
@@ -860,15 +860,33 @@ function systemStatus(): ServiceStatus {
     const r = run('launchctl', ['print', `${launchdDomain()}/${LABEL}`], ASKED_MS)
     return { registered: existsSync(plistPath()), state: r.ok ? (/state = (\w+)/.exec(r.out)?.[1] ?? 'loaded') : 'not loaded', where: plistPath() }
   }
-  if (process.platform === 'win32') {
-    const r = powershellAsked(`${windowsTask()}
-if ($task) { $task.TaskName; $task.State }`)
-    const [name, state] = r.ok ? r.out.split(/\r?\n/) : []
-    return {
-      registered: Boolean(name),
-      state: name ? state || 'unknown' : 'not registered',
-      where: name ? `Scheduled Task "${name}"` : 'Scheduled Task for this Windows account',
-    }
-  }
+  if (process.platform === 'win32') return windowsStatus()
   return { registered: false, state: 'unsupported', where: home() }
+}
+
+/**
+ * What the scheduler has of this folder's service. The account's task may be another
+ * folder's: its action starts that folder's launcher, so of this one nothing is
+ * registered, however that other stands — the same account runs one task, and a second
+ * It folder must not claim it (#334). Only the task whose launcher starts in this
+ * folder's bin is this folder's.
+ */
+export function windowsStatus(
+  ask: (script: string) => { ok: boolean; out: string } = powershellAsked,
+  bin: string = path.dirname(windowsLauncherFile()),
+): ServiceStatus {
+  const here = ps(bin.replace(/\//g, '\\').replace(/\\+$/, ''))
+  const r = ask(`${windowsTask()}
+if ($task) {
+  $there = ([string]$task.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\')
+  if ($there -ieq ${here}) { $task.TaskName; $task.State } else { 'another folder' }
+}`)
+  const lines = r.ok ? r.out.split(/\r?\n/).filter((line) => line !== '') : []
+  if (lines[0] === 'another folder') return { registered: false, state: 'not installed', where: windowsLauncherFile() }
+  const [name, state] = lines
+  return {
+    registered: Boolean(name),
+    state: name ? state || 'unknown' : 'not registered',
+    where: name ? `Scheduled Task "${name}"` : 'Scheduled Task for this Windows account',
+  }
 }
