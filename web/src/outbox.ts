@@ -922,6 +922,42 @@ export async function drain(convex: ConvexReactClient, user: string): Promise<vo
 }
 
 /**
+ * Sends what another tab of this browser leaves behind, without waiting for this tab to
+ * reconnect or be loaded again. A tab that is closed while it is sending a click says nothing as
+ * it goes: the last this tab hears of the click is the browser saying it was kept, or that its
+ * hold on it was renewed. So whenever the browser says another tab kept a click of this person's
+ * that is still to be sent, under this pairing, the sending of what is left is begun here, which
+ * leaves the click alone for as long as that tab's lock or hold on it lasts, and takes it up once
+ * neither does. Nothing is begun while this tab is already sending what is left, which then looks
+ * once more, or has a time set to look again, which will find the click by then. A click let go
+ * of, or refused, begins nothing: so two tabs that hear of each other's sending never set each
+ * other off again and again. Gives back what stops it listening.
+ */
+export function recoverLeftovers(convex: ConvexReactClient, user: string): () => void {
+  let soon: ReturnType<typeof setTimeout> | undefined
+  const heard = (e: StorageEvent) => {
+    if (soon !== undefined || !e.key?.startsWith(`${PREFIX}${user}.`) || e.newValue === null || !stillPairedFor(user)) return
+    let entry: Entry
+    try {
+      entry = JSON.parse(e.newValue) as Entry
+    } catch {
+      return
+    }
+    if (entry.user !== user || entry.refused || (entry.format === 2 && entry.session !== session)) return
+    // Once, for however many the browser says at a time, as when a tab keeps several clicks at once
+    soon = setTimeout(() => {
+      soon = undefined
+      if (stillPairedFor(user) && (draining.has(user) || !retry.has(user))) void drain(convex, user)
+    }, 0)
+  }
+  window.addEventListener('storage', heard)
+  return () => {
+    clearTimeout(soon)
+    window.removeEventListener('storage', heard)
+  }
+}
+
+/**
  * Sends one kept click again, as the person it belongs to. Says what became of it: 'done' when
  * it is kept no more (accepted, refused for good, or already gone), a number of milliseconds
  * to wait when told to slow down, 'trouble' when it should be left for later, and 'stop' when

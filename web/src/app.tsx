@@ -33,7 +33,7 @@ import {
 } from './lib'
 import { Machines } from './machines'
 import { Bell, Toasts } from './notifications'
-import { abandonOutbox, anyUnsaved, drain, outboxBelongsTo, pairedForSomeone, stillPairedFor, thisPairing, watchOutbox } from './outbox'
+import { abandonOutbox, anyUnsaved, drain, outboxBelongsTo, pairedForSomeone, recoverLeftovers, stillPairedFor, thisPairing, watchOutbox } from './outbox'
 import { Grid, PageView, wasShown } from './pages'
 import { hasPending, watchPending } from './pending'
 import { dropPushHere, mendPush, pushSupport, turnOffPush, turnOnPush } from './push'
@@ -468,7 +468,8 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
 
   // Clicks that were waiting to be sent go when the connection comes back: when the browser
   // says it is online again, and when the connection to the backend itself is made again,
-  // which the browser does not always notice
+  // which the browser does not always notice. And a click another tab of this browser kept
+  // goes from here if that tab is closed before it has sent it
   useEffect(() => {
     const go = () => void drain(convex, user)
     window.addEventListener('online', go)
@@ -477,9 +478,11 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
       if (s.isWebSocketConnected && !connected) go()
       connected = s.isWebSocketConnected
     })
+    const deaf = recoverLeftovers(convex, user)
     return () => {
       window.removeEventListener('online', go)
       stop()
+      deaf()
     }
   }, [convex, user])
 
