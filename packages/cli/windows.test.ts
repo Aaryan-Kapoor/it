@@ -9,11 +9,13 @@ import { startOf } from './src/serve/backend'
 import {
   PS_QUIET,
   windowsLauncher,
+  windowsLauncherFile,
   windowsRecovery,
   windowsRegisteredFolders,
   windowsRegisteredFor,
   windowsRemoval,
   windowsScript,
+  windowsStatus,
   windowsTask,
 } from './src/service'
 import { deleteAtSignIn } from './src/uninstall-files'
@@ -289,6 +291,30 @@ Start-Sleep -Seconds 60
       await ended
       rmSync(folder, { recursive: true, force: true })
     }
+  })
+
+  test('status claims only the task whose launcher starts in this folder', () => {
+    const bin = 'C:\\it-status\\bin'
+    const fixture = (folder: string) => `
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$action = [pscustomobject]@{ Execute = 'conhost.exe'; Arguments = '--headless cmd.exe /d /c .\\it-service.cmd'; WorkingDirectory = ${psQuote(folder)} }
+$candidate = [pscustomobject]@{ TaskName = 'it-' + $sid; State = 'Ready'; Principal = [pscustomobject]@{ UserId = $sid }; Actions = @($action) }
+function Get-ScheduledTask { param($TaskPath, $ErrorAction); $candidate }
+`
+    const ask = (folder: string) => (script: string) => {
+      const ran = powershell(`${fixture(folder)}\n${script}`)
+      return { ok: ran.status === 0, out: ran.stdout }
+    }
+    const mine = windowsStatus(ask(bin), bin)
+    expect(mine.registered).toBe(true)
+    expect(mine.state).toBe('Ready')
+    expect(mine.where).toMatch(/^Scheduled Task "it-S-1-/)
+
+    const theirs = windowsStatus(ask('C:\\another\\bin'), bin)
+    expect(theirs).toEqual({ registered: false, state: 'not installed', where: windowsLauncherFile() })
+
+    const none = windowsStatus(() => ({ ok: true, out: '' }), bin)
+    expect(none).toEqual({ registered: false, state: 'not registered', where: 'Scheduled Task for this Windows account' })
   })
 
   test('task selection rejects foreign principals and launchers and discovers this account’s legacy installation', () => {
