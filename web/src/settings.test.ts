@@ -100,6 +100,32 @@ describe('what each kind of session is offered', () => {
     expect(calls).toEqual([{ fn: 'displays:forget', args: { displayId: 'display-2' } }])
   })
 
+  test('the owner opens and closes any display to agents, and one that is closed says so', async () => {
+    watched['displays:list'] = [DISPLAYS[0]!, { ...DISPLAYS[1]!, agents: false }]
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    const rows = [...host.querySelectorAll('ul.rows')[0]!.querySelectorAll('li')]
+    const switches = rows.map((li) => li.querySelector<HTMLInputElement>('label.switch input[role="switch"]')!)
+    expect(rows.map((li) => li.querySelector('label.switch')!.textContent)).toEqual(['Open to agents', 'Open to agents'])
+    expect(switches.map((one) => one.checked)).toEqual([true, false])
+    expect(rows.map((li) => li.querySelector('.row-name')!.textContent)).toEqual(['Chrome on LinuxThis display', 'Kitchen TVClosed to agents'])
+    await act(async () => switches[0]!.click())
+    await act(async () => switches[1]!.click())
+    expect(calls).toEqual([
+      { fn: 'displays:allowAgents', args: { displayId: 'display-1', allowed: false } },
+      { fn: 'displays:allowAgents', args: { displayId: 'display-2', allowed: true } },
+    ])
+  })
+
+  test('a screen opens and closes itself to agents, under its settings', async () => {
+    const { Settings } = await import('./settings')
+    await show(createElement(Settings, { user: 'user-1', owner: false, display: DISPLAYS[0]!, onSignOut: () => {} }))
+    const open = host.querySelector<HTMLInputElement>('label.switch input[role="switch"]')!
+    expect([open.closest('label')!.textContent, open.checked]).toEqual(['Open to agents', true])
+    await act(async () => open.click())
+    expect(calls).toEqual([{ fn: 'displays:allowAgents', args: { displayId: 'display-1', allowed: false } }])
+  })
+
   test('however the field for a display’s name is left, by Escape, by Cancel or by saving, the keyboard is back on Rename', async () => {
     const { Displays } = await import('./settings')
     await show(createElement(Displays, { thisDisplay: 'display-1' }))

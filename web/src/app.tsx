@@ -36,6 +36,7 @@ import { Bell, Toasts } from './notifications'
 import { abandonOutbox, anyUnsaved, drain, outboxBelongsTo, pairedForSomeone, stillPairedFor, thisPairing, watchOutbox } from './outbox'
 import { Grid, PageView, wasShown } from './pages'
 import { hasPending, watchPending } from './pending'
+import { presence } from './presence'
 import { dropPushHere, mendPush, pushSupport, turnOffPush, turnOnPush } from './push'
 import { ServiceNotice } from './service'
 import { codeSeen, current, signOut as endSession, pair, pairAsScreen, recheck, useSession } from './session'
@@ -431,38 +432,24 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
     return () => document.removeEventListener('keydown', key)
   }, [])
 
-  // Presence, so a notification knows whether this display is open. The answer carries the
-  // backend's clock, which is what "recent" is judged by everywhere on the site.
+  // Presence, so a notification knows whether this display is open, and an agent's page goes to
+  // the display the person is using. The answer carries the backend's clock, which is what
+  // "recent" is judged by everywhere on the site.
   useEffect(() => {
     let live = true
-    let asking = false
-    const beat = () => {
-      // One at a time: a tab that is hidden and shown again while the backend is slow to answer does not ask once more each time
-      if (asking || document.visibilityState !== 'visible') return
-      asking = true
+    const stop = presence((said) =>
       // Trouble the backend had for a moment is got past by asking once more, a second or two
       // on, and is then written nowhere. Left to the next beat, a minute later, the display
       // would be taken for closed and the backend's clock go unlearned for that minute
       askTwice(
         convex,
-        (calls) => calls.mutation(api.displays.heartbeat, { key }),
+        (calls) => calls.mutation(api.displays.heartbeat, { key, ...said }),
         () => live,
-      )
-        .then(
-          (r) => learnClock(r.now),
-          () => {},
-        )
-        .finally(() => {
-          asking = false
-        })
-    }
-    beat()
-    const t = setInterval(beat, 60_000)
-    document.addEventListener('visibilitychange', beat)
+      ).then((r) => learnClock(r.now)),
+    )
     return () => {
       live = false
-      clearInterval(t)
-      document.removeEventListener('visibilitychange', beat)
+      stop()
     }
   }, [convex, key])
 

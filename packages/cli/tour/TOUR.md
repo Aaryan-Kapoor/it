@@ -20,7 +20,7 @@ The tour is a menu of things It can be, each a page that is already made, and an
 it displays
 ```
 
-If the list is empty, or every display in it has `"paired": false`, the person has no screen paired. Tell them to run `it site`, which opens the site in a browser and pairs that browser, and wait for them. If more than one display is paired, use the one they are most likely looking at, and add `--on "<its name>"` to every `it tour show` below. What `it tour show` prints says which displays were asked to bring the page up, in `shownOn`: if that is empty, nobody is looking at the page, so say that in place of the page's line.
+If the list is empty, or every display in it has `"paired": false`, the person has no screen paired. Tell them to run `it site`, which opens the site in a browser and pairs that browser, and wait for them. Where more than one display is paired, `it tour show` brings each page up on the one they are using, which is the screen they pressed "Take the tour" on, so add `--on "<its name>"` to every `it tour show` below only if they ask for the tour on another screen. What `it tour show` prints says which display was asked to bring the page up, in `shownOn`: if that is empty, nobody is looking at the page, so say that in place of the page's line.
 
 Each page of the tour has a fixed id, `tour-` and its name, so every command below can be run as it is written. Keep the `id` and `version` printed by each `it tour show`: together they identify the showing now on the screen.
 
