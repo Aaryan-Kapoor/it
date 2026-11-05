@@ -420,6 +420,14 @@ export default defineSchema({
     .index('by_route', ['machineId', 'delivery', 'harness', 'sessionId', 'createdAt'])
     .index('by_harness', ['machineId', 'delivery', 'harness', 'createdAt'])
     .index('by_attended_route', ['machineId', 'delivery', 'harness', 'sessionId', 'attended', 'createdAt'])
+    // The same, by when each click was made: a harness's queue and a closed conversation are
+    // offered clicks by these, so that what was made before Auto-wake's cutoff, or before a
+    // stop, is outside what is read however late it arrived, and never takes a later one's place
+    .index('by_route_made', ['machineId', 'delivery', 'harness', 'sessionId', 'madeAt'])
+    .index('by_harness_made', ['machineId', 'delivery', 'harness', 'madeAt'])
+    .index('by_attended_route_made', ['machineId', 'delivery', 'harness', 'sessionId', 'attended', 'madeAt'])
+    // Waiting clicks from before It kept when a click was made, which are given one a batch at a time
+    .index('by_delivery_made', ['delivery', 'madeAt'])
     .index('by_artifact', ['artifactId', 'createdAt'])
     .index('by_artifact_delivery', ['artifactId', 'delivery', 'createdAt'])
     .index('by_user_delivery', ['userId', 'delivery', 'createdAt'])

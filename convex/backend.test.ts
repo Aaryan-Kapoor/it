@@ -5492,6 +5492,26 @@ describe('when a click was made', () => {
     expect(await offered()).toEqual([actionId])
   })
 
+  test('Auto-wake’s cutoff goes by when a click was made, and what was made before it never hides what was made since', async () => {
+    const { m, alice, click, row, offered, paged } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    const on = Date.now()
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    // Ten clicks made more than a day before Auto-wake was switched on, which arrive only now, more than one reopening's worth
+    const stale: string[] = []
+    for (let i = 0; i < 10; i++) stale.push((await click(`click-stale-${String(i).padStart(4, '0')}`, on - DAY - HOUR + i)).actionId)
+    // One made within the day before, which arrives as late, and one made now
+    const within = (await click('click-within-0001', on - HOUR)).actionId
+    const fresh = (await click('click-fresh-0001')).actionId
+    expect((await row(stale[0]!)).madeAt).toBe(on - DAY - HOUR)
+    expect(await offered()).toEqual([within, fresh])
+    expect(await paged()).toEqual([within, fresh])
+    // And an agent is told when each was made, which is what its connector's own check goes by
+    expect((await inbox(m, [], ['claude-code'])).map((c) => c.at)).toEqual([on - HOUR, Date.now()])
+    // The old ones still wait, for a conversation that is open
+    expect((await inbox(m)).map((c) => c.id)).toEqual(stale.slice(0, 2))
+  })
+
   test('a time to come is taken as now, and one from before the browser was paired, or from longer ago than a browser keeps a click, is held to those', async () => {
     const { click, row, paired } = await setup()
     const future = await row((await click('click-future-0001', Date.now() + DAY)).actionId)
@@ -5510,6 +5530,21 @@ describe('when a click was made', () => {
     const sent = await row((await click('click-unsaid-0001')).actionId)
     expect(sent.madeAt).toBe(sent.createdAt)
     expect((await inbox(m)).map((c) => c.at)).toEqual([sent.createdAt])
+  })
+
+  test('a waiting click kept before It kept when clicks were made is dated by when it arrived, and reopens its conversation from then on', async () => {
+    const { t, m, alice, p, click, row, offered } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    const sent = await row((await click('click-unsaid-0001')).actionId)
+    const { _id, _creationTime, madeAt, ...rest } = sent
+    const old = await t.run((ctx) => ctx.db.insert('actions', { ...rest, clientActionId: 'click-kept-before', createdAt: Date.now() - HOUR }))
+    await t.run((ctx) => ctx.db.patch(p.artifactId, { waiting: 2 }))
+    // A conversation that is open is given it as before, by when it arrived
+    expect((await inbox(m)).map((c) => c.id)).toEqual([old, sent._id])
+    // Within the minute it is dated, and is offered for reopening with the rest
+    await t.mutation(internal.delivery.dateOld, {})
+    expect((await row(old)).madeAt).toBe(Date.now() - HOUR)
+    expect(await offered()).toEqual([old, sent._id])
   })
 
   test('the same click sent again keeps when it was first made, and one a stop dropped stays dropped', async () => {
