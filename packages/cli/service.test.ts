@@ -430,6 +430,9 @@ describe('migrating Windows tasks', () => {
       if (script.includes('Register-ScheduledTask')) {
         changed.push(script)
         expect([...stopped].sort()).toEqual([...folders].sort())
+      } else if (script.includes("$owned.TaskName + ' '")) {
+        // Asked how it stands, the task that was registered is the account's, started in this folder
+        stdout = `it-test Ready ${Buffer.from(path.join(folders[2]!, 'bin')).toString('base64')}`
       } else if (script.includes('GetBytes(')) {
         stdout = folders
           .slice(0, 2)
