@@ -105,6 +105,45 @@ describe('the outbox', () => {
     expect(stored()).toEqual([])
   })
 
+  test('a click is sent with when it was done, by the backend’s clock as the browser knew it then, the same each time it is sent, and with nothing where that clock was not known', async () => {
+    const HOUR = 3_600_000
+    // A site just opened, which has not yet heard the backend's clock
+    vi.resetModules()
+    const lib = await import('./lib')
+    const site = await import('./outbox')
+    site.outboxBelongsTo('alice')
+    try {
+      const unknown = backend([{ actionId: 'a1' }])
+      await site.submit(unknown.client, 'alice', 'page1', envelope('click-made-0001'))
+      expect(unknown.calls[0]).not.toHaveProperty('madeAt')
+      // The backend's clock is an hour behind this browser's, and It cannot be reached
+      lib.learnClock(Date.now() - HOUR)
+      const lost = backend(['never'])
+      void site.submit(lost.client, 'alice', 'page1', envelope('click-made-0002'))
+      await new Promise((r) => setTimeout(r, 10))
+      const made = (lost.calls[0] as unknown as { madeAt: number }).madeAt
+      expect(Math.abs(made - (Date.now() - HOUR))).toBeLessThan(1000)
+      // The tab is closed, and the click is sent on a later visit, a while on, saying the same
+      const k = 'it.outbox.alice.page1.click-made-0002'
+      localStorage.setItem(k, JSON.stringify({ ...JSON.parse(localStorage.getItem(k) ?? '{}'), at: Date.now() - 60_000, held: Date.now() - 45_000 }))
+      vi.resetModules()
+      const later = await import('./outbox')
+      later.outboxBelongsTo('alice')
+      const back = backend([{ actionId: 'a2' }])
+      await later.drain(back.client, 'alice')
+      later.outboxBelongsTo(null)
+      expect(back.calls[0]).toMatchObject({ envelope: { clientActionId: 'click-made-0002' }, madeAt: made })
+      // A message typed above a page, and a notification's button, say when they were done too
+      const said = backend([{ actionId: 'a3' }, { actionId: 'a4' }])
+      await site.message(said.client, 'alice', 'page1', 'typed-made-0001', 'Go ahead')
+      await site.answerNotification(said.client, 'note-1', 'yes')
+      for (const call of said.calls) expect(Math.abs((call as unknown as { madeAt: number }).madeAt - (Date.now() - HOUR))).toBeLessThan(1000)
+      expect(said.calls.length).toBe(2)
+    } finally {
+      site.outboxBelongsTo(null)
+    }
+  })
+
   test('two pages that choose the same id for a click do not overwrite each other’s', async () => {
     const lost = backend(['never', 'never'])
     void submit(lost.client, 'alice', 'page1', envelope('submit-0001'))

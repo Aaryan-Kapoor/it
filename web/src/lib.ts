@@ -337,10 +337,14 @@ export async function presentPendingSignOut(): Promise<void> {
 // backend's clock: this browser's own may be minutes out. The difference is learned from each
 // heartbeat's answer.
 let skew = 0
+let learned = false
 export const learnClock = (serverNow: number) => {
   skew = Date.now() - serverNow
+  learned = true
 }
 export const serverNow = () => Date.now() - skew
+/** The backend's clock, where this browser has learned it since the site was opened, and otherwise nothing: its own may be minutes out. */
+export const backendNow = (): number | undefined => (learned ? serverNow() : undefined)
 
 // ---------- the address bar ----------
 
