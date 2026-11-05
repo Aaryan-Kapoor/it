@@ -11,6 +11,37 @@ import { rateLimit } from './lib/limits'
 import { log } from './lib/log'
 import { bump, tally } from './lib/tally'
 
+const DAY = 86_400_000
+/**
+ * How long before it arrives a browser may say a click was made. A browser keeps a click it
+ * could not send for seven days by its own clock (web/src/outbox.ts), and a day more allows for
+ * that clock being out.
+ */
+const MADE_BACK_MS = 8 * DAY
+/**
+ * How soon after it was made a click may arrive and be taken as made when it arrived. The
+ * browser tells the time by the backend's clock as it last learned it, which can be out by as
+ * long as that answer took to come back. A click made just after Stop, and sent at once, must
+ * never be taken for one made just before it: only a click that waited longer than this, as one
+ * saved while It could not be reached did, is taken as made when the browser says.
+ */
+const PROMPT_MS = 10_000
+
+/**
+ * When a click a browser sent was made. The browser says when, by the backend's clock as it
+ * last learned it, and that is believed only within bounds: never later than now, which no
+ * clock can make a click newer than, never before the browser was paired, which is the
+ * earliest it could have been made there, and never longer ago than a browser keeps a click.
+ * Said by nobody, as by a site from before browsers said it, it is now.
+ */
+export function madeAt(c: Browser, said: number | undefined, now = Date.now()): number {
+  if (said === undefined || !Number.isFinite(said)) return now
+  const made = Math.min(now, Math.max(said, c.session.createdAt, now - MADE_BACK_MS))
+  return now - made < PROMPT_MS ? now : made
+}
+/** When a click was made, as far as It knows: one kept before It kept that was made when it arrived. */
+export const madeOf = (x: Doc<'actions'>): number => x.madeAt ?? x.createdAt
+
 /** Stores a click. Shared by the page's own actions and by a notification's buttons. */
 export async function record(
   ctx: MutationCtx,
@@ -30,6 +61,8 @@ export async function record(
     typed?: boolean
     /** The files it carries beside its data, taken for this very click before it was sent (files.ts). */
     attachment?: Id<'attachments'>
+    /** When it was made, where that was before now (see `madeAt`). */
+    madeAt?: number
   },
 ): Promise<{ actionId: Id<'actions'>; duplicate: boolean }> {
   if (!/^[A-Za-z0-9_.:-]{8,128}$/.test(input.clientActionId)) fail('invalid', 'That is not an action id.')
@@ -89,6 +122,7 @@ export async function record(
               .withIndex('by_artifact_n', (q) => q.eq('artifactId', artifact._id).eq('n', input.contentVersion))
               .first()
           )?.title ?? '')
+  const now = Date.now()
   const actionId = await ctx.db.insert('actions', {
     userId: artifact.userId,
     artifactId: artifact._id,
@@ -100,7 +134,8 @@ export async function record(
     baseStateRevision: input.baseStateRevision,
     title,
     attended: input.attended,
-    createdAt: Date.now(),
+    createdAt: now,
+    madeAt: Math.min(input.madeAt ?? now, now),
     delivery: 'pending',
     ...to,
     ...(attachment ? { attachment: attachment._id, files: attachment.files } : {}),
@@ -108,6 +143,12 @@ export async function record(
   if (attachment) await ctx.db.patch(attachment._id, { actionId })
   await ctx.db.patch(artifact._id, { waiting: (artifact.waiting ?? 0) + 1 })
   await bump(ctx, artifact.userId, { waiting: 1 })
+  // Made before the person stopped the conversation it is for, and only arriving now, as a click
+  // saved while It could not be reached does: it goes with the stop, as it would have had it
+  // arrived in time. Kept waiting, it would stand among what was done after the stop, which is
+  // read from the moment of the stop on.
+  const made = (await ctx.db.get(actionId))!
+  if (await stoppedSince(ctx, made)) await dropStopped(ctx, made)
   return { actionId, duplicate: false }
 }
 
@@ -121,7 +162,8 @@ export async function noLongerWaiting(ctx: MutationCtx, x: Doc<'actions'>): Prom
 }
 
 /**
- * Whether the person stopped the conversation a click is for after the click was made. Such a
+ * Whether the person stopped the conversation a click is for after the click was made (by
+ * `madeOf`, so that a click that waited in a browser is judged by when the person made it). Such a
  * click is delivered by no way at all from that moment, though the step that marks it so may
  * not have come to it yet: a stop drops what was waiting in steps, and what a step has not
  * reached must not be taken, or moved out of its reach, in between.
@@ -132,14 +174,15 @@ export async function noLongerWaiting(ctx: MutationCtx, x: Doc<'actions'>): Prom
  * and one made before the stop is stopped whichever of the two it is found under.
  */
 export async function stoppedSince(ctx: QueryCtx, x: Doc<'actions'>): Promise<boolean> {
+  const made = madeOf(x)
   const noted = async (machineId: Id<'machines'> | undefined, harness: string | undefined, sessionId: string | undefined) => {
     if (!machineId || !harness || !sessionId) return false
     const machine = await ctx.db.get(machineId)
-    return (machine?.stops ?? []).some((s) => s.harness === harness && s.sessionId === sessionId && s.at >= x.createdAt)
+    return (machine?.stops ?? []).some((s) => s.harness === harness && s.sessionId === sessionId && s.at >= made)
   }
   // The page itself keeps when it was last stopped from, which stands whoever it belongs to by now
   const page = await ctx.db.get(x.artifactId)
-  if ((page?.stoppedThrough ?? 0) >= x.createdAt) return true
+  if ((page?.stoppedThrough ?? 0) >= made) return true
   if (await noted(x.machineId ?? x.parkedBy, x.harness, x.sessionId)) return true
   return noted(page?.machineId, page?.session?.harness, page?.session?.id)
 }
@@ -198,7 +241,6 @@ export const readdress = internalMutation({
   },
 })
 
-const DAY = 86_400_000
 /** Each browser may replay a saved request until a deadline issued by the backend. */
 export const replayGrant = mutation({
   args: {},
@@ -240,6 +282,8 @@ export const submit = mutation({
     displayKey: v.string(),
     replayUntil: v.optional(v.number()),
     expectedSession: v.optional(v.string()),
+    /** When the person made it, by the backend's clock as the browser knew it (see `madeAt`). */
+    madeAt: v.optional(v.number()),
     /** The files the action carries beside its data, taken for it beforehand (files.ts). */
     attachment: v.optional(v.id('attachments')),
     envelope: v.object({
@@ -253,7 +297,7 @@ export const submit = mutation({
       attended: v.optional(v.boolean()),
     }),
   },
-  handler: async (ctx, { artifactId, displayKey, envelope, replayUntil, expectedSession, attachment }) => {
+  handler: async (ctx, { artifactId, displayKey, envelope, replayUntil, expectedSession, attachment, madeAt: said }) => {
     const c = await requireBrowser(ctx, expectedSession)
     if (envelope.v !== PROTOCOL_VERSION) fail('invalid', 'This page speaks a version of the protocol the site does not.')
     const artifact = await ownArtifact(ctx, c.user._id, artifactId)
@@ -266,6 +310,7 @@ export const submit = mutation({
       ...envelope,
       ...(display ? { displayId: display._id } : {}),
       ...(attachment ? { attachment } : {}),
+      madeAt: madeAt(c, said),
     })
     // Counted: that something was sent from a page, and from what kind of screen. Never its name or what it carried
     if (!duplicate) await counted(ctx, 'answer.sent', { screen: display?.screen ?? 'computer', from: 'page' })
@@ -287,8 +332,10 @@ export const message = mutation({
     text: v.string(),
     replayUntil: v.optional(v.number()),
     expectedSession: v.optional(v.string()),
+    /** When the person sent it, by the backend's clock as the browser knew it (see `madeAt`). */
+    madeAt: v.optional(v.number()),
   },
-  handler: async (ctx, { artifactId, displayKey, clientActionId, text, replayUntil, expectedSession }) => {
+  handler: async (ctx, { artifactId, displayKey, clientActionId, text, replayUntil, expectedSession, madeAt: said }) => {
     const c = await requireBrowser(ctx, expectedSession)
     const artifact = await ownArtifact(ctx, c.user._id, artifactId)
     const typed = text.trim()
@@ -306,6 +353,7 @@ export const message = mutation({
       // Typed on the site itself, where no page's script can type
       attended: true,
       typed: true,
+      madeAt: madeAt(c, said),
     })
     // Counted: that something was typed to an agent above a page, and from what kind of screen. Never the words
     if (!duplicate) await counted(ctx, 'answer.sent', { screen: display?.screen ?? 'computer', from: 'message' })

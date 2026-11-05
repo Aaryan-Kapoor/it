@@ -11,7 +11,7 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, mutation, type QueryCtx, query } from './_generated/server'
-import { destination, dropStopped, noLongerWaiting, stoppedSince } from './actions'
+import { destination, dropStopped, madeOf, noLongerWaiting, stoppedSince } from './actions'
 import { artifactBySlug, requireMachine } from './lib/authz'
 import { fail } from './lib/errors'
 import { log } from './lib/log'
@@ -42,7 +42,8 @@ async function asClicks(ctx: QueryCtx, rows: Doc<'actions'>[]) {
       name: x.name,
       /** JSON text. */
       payload: x.payload,
-      at: x.createdAt,
+      // When the person made it, which for a click that waited in a browser is before It received it
+      at: madeOf(x),
       attended: x.attended ?? null,
       session: x.harness && x.sessionId ? { harness: x.harness, id: x.sessionId } : null,
       version: x.contentVersion,

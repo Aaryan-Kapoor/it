@@ -386,7 +386,15 @@ export default defineSchema({
     title: v.string(),
     /** Whether the person was at the page when it was sent. The site says; the page cannot. */
     attended: v.optional(v.boolean()),
+    /** When It received it, by its own clock. What is kept and for how long, and whether a repeat is the same click, go by this. */
     createdAt: v.number(),
+    /**
+     * When the person made it, as near as can be told, and never later than `createdAt`: a click
+     * saved in a browser while It could not be reached arrives later than it was made. Its age,
+     * whether a stop came after it, and whether it may reopen a conversation go by this. Clicks
+     * from before It kept this have none, and go by `createdAt`.
+     */
+    madeAt: v.optional(v.number()),
     /** Where the click is on its way to the agent. */
     delivery: v.union(v.literal('pending'), v.literal('leased'), v.literal('handed_off')),
     /** Where it should go: the machine and conversation that own the page. Never changed by delivery. */
