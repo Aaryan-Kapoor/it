@@ -418,11 +418,9 @@ export default defineSchema({
   })
     .index('by_artifact_client', ['artifactId', 'clientActionId'])
     .index('by_route', ['machineId', 'delivery', 'harness', 'sessionId', 'createdAt'])
-    .index('by_harness', ['machineId', 'delivery', 'harness', 'createdAt'])
-    .index('by_attended_route', ['machineId', 'delivery', 'harness', 'sessionId', 'attended', 'createdAt'])
-    // The same, by when each click was made: a harness's queue and a closed conversation are
-    // offered clicks by these, so that what was made before Auto-wake's cutoff, or before a
-    // stop, is outside what is read however late it arrived, and never takes a later one's place
+    // By when each click was made: a harness's queue and a closed conversation are offered
+    // clicks by these, so that what was made before Auto-wake's cutoff, or before a stop, is
+    // outside what is read however late it arrived, and never takes a later click's place
     .index('by_route_made', ['machineId', 'delivery', 'harness', 'sessionId', 'madeAt'])
     .index('by_harness_made', ['machineId', 'delivery', 'harness', 'madeAt'])
     .index('by_attended_route_made', ['machineId', 'delivery', 'harness', 'sessionId', 'attended', 'madeAt'])
