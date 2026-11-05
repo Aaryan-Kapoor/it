@@ -14,6 +14,7 @@ import { ageBand, begin, countBand, counting, failureOf, record, recordNoted, si
 import { asAdmin, type Backend, endOf, removeCopies, startBackend } from './backend'
 import { backendFolder, noteNetwork, readConfig, type ServiceConfig } from './config'
 import { makeContent, startDoor } from './door'
+import { KEEP_MS, keepItsFolder } from './kept'
 import { onTheInternet, reachable } from './network'
 import { recoverStartup } from './startup'
 import { tailnetAddresses, tailnetName } from './tailnet'
@@ -43,6 +44,12 @@ export async function serve(say: (line: string) => void = (line) => void process
     say('asked to stop')
     hear('SIGTERM')
   }, 500)
+  // On Windows, It's folder is kept to the person from the moment the service starts and for as
+  // long as it runs, whatever another program opens it to meanwhile
+  const said = new Set<string>()
+  const keep = () => void keepItsFolder(say, said).catch(() => {})
+  keep()
+  const keeping = setInterval(keep, KEEP_MS)
   let failed = false
   // Counting begins with the service where no command has begun it, so that a service that
   // cannot start is counted as one that could not
@@ -70,6 +77,7 @@ export async function serve(say: (line: string) => void = (line) => void process
     }
   } finally {
     clearInterval(asking)
+    clearInterval(keeping)
     process.off('SIGINT', hear)
     process.off('SIGTERM', hear)
   }

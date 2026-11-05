@@ -131,8 +131,9 @@ vi.mock('node:child_process', async (original) => {
   return {
     ...real,
     execFile: (bin: string, args: string[], options: { env?: NodeJS.ProcessEnv }, done: (err: unknown) => void) => {
-      // Windows PowerShell, through which a reopened run's job is asked after and ended on Windows, is run as it is
-      if (/(^|[\\/])powershell\.exe$/i.test(bin)) return (real.execFile as (...a: unknown[]) => unknown)(bin, args, options, done)
+      // Windows PowerShell, through which a reopened run's job is asked after and ended on Windows, is run as it is, and
+      // so are the system's own programs that keep a record It writes to the person there
+      if (/(^|[\\/])(powershell|icacls|whoami)\.exe$/i.test(bin)) return (real.execFile as (...a: unknown[]) => unknown)(bin, args, options, done)
       stand.codex.push({ args, env: options.env, end: (err) => done(err ?? null) })
     },
   }
