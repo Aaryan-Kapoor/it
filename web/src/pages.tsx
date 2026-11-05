@@ -4,7 +4,7 @@ import { ALIVE, LIMITS, NOUN, WAKE_BACK_MS } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { Component, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { copy, IconBack, IconLink, IconPin, IconSay, IconSend, IconStop, IconX, Mark } from './brand'
-import { agentName, ago, api, type Id, navigate, refusal, useNow } from './lib'
+import { agentName, ago, api, dayOf, type Id, navigate, refusal, useNow } from './lib'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
 import { dismissMessage, message, onItsWayUntil, outboxChanges, pendingMessage, refusedClick, thisSession, unsaved, unsent, watchOutbox } from './outbox'
@@ -1016,6 +1016,26 @@ function ActionStatus({
     return (
       <span className="status" data-tone="wait">
         {prefix + reason}
+      </span>
+    )
+  }
+  // Set aside by its machine after tries that came to nothing. Nothing tries it again until its
+  // conversation is heard from, and it is deleted a month after it was done if that never
+  // happens, so both are said: left as "Waiting", it looked as if It were still at it.
+  // (Backends from before they said which were set aside say none were)
+  if (last.parked) {
+    const aside = stillWaiting.filter((a) => a.parked)
+    const them = aside.length > 1 ? 'them' : 'it'
+    const count = aside.length > 1 ? ` (${aside.length})` : ''
+    // The first of them to go is the one said, as the day it goes on, in the person's own way of writing dates
+    const goes = Math.min(...aside.map((a) => a.expiresAt ?? Number.POSITIVE_INFINITY))
+    const tried =
+      wakeFailed && wakeFailed.at >= last.at
+        ? `Couldn’t wake ${agent ?? 'your agent'}${count}: ${wakeFailed.why}`
+        : `Couldn’t hand ${them} to ${agent ?? 'your agent'}${count}`
+    return (
+      <span className="status" data-tone="bad">
+        {`${tried}. It won’t try again until its conversation next runs${Number.isFinite(goes) ? `, and ${aside.length > 1 ? 'starts deleting them' : 'deletes it'} on ${dayOf(goes)} if that hasn’t happened by then` : ''}`}
       </span>
     )
   }

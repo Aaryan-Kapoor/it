@@ -402,6 +402,8 @@ export function ago(at: number, now = serverNow()): string {
   if (s < 86400 * 30) return `${Math.round(s / 86400)} d ago`
   return new Date(at).toLocaleDateString()
 }
+/** A day to come, written as the person's own browser writes one. What it is used for is never more than a month off, so the year is left out. */
+export const dayOf = (at: number): string => new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'long' })
 /** Re-renders now and then, so "3 min ago" stays true. */
 export function useNow(everyMs = 30_000): number {
   const [now, setNow] = useState(serverNow)
