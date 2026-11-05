@@ -1,9 +1,9 @@
 // The site's outbox: a click is kept in this browser only while nobody knows what became of it.
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
-import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { forgetAll, keepFor, letGoElsewhere } from './lib'
-import { drain, dropOld, outboxBelongsTo, type Sent, submit, unsaved, unsent } from './outbox'
+import { drain, dropOld, givenUpFor, outboxBelongsTo, recoverLeftovers, type Sent, seenGivenUp, submit, unsaved, unsent, watchOutbox } from './outbox'
 
 const envelope = (id: string, over: Partial<Sent> = {}): Sent => ({ v: 1, clientActionId: id, name: 'approve', payload: '{"n":1}', contentVersion: 1, ...over })
 const refuse = (code: string, extra: Record<string, unknown> = {}) => new ConvexError({ code, message: code, ...extra })
@@ -854,5 +854,222 @@ describe('a click that is on its way when everything this browser keeps is let g
     void submit(lost.client, 'bob', 'page1', envelope('click-again-02'))
     await Promise.resolve()
     expect(stored()).toEqual(['it.outbox.bob.page1.click-again-02'])
+  })
+})
+
+describe('a click another tab of this browser leaves behind', () => {
+  const at = (id: string) => `it.outbox.alice.page1.${id}`
+  /** Another tab keeps a click of Alice's, or renews its hold on it, and the browser says so to this one. */
+  function elsewhere(id: string, over: Record<string, unknown> = {}) {
+    const value = JSON.stringify({
+      user: 'alice',
+      artifactId: 'page1',
+      envelope: envelope(id),
+      format: 2,
+      session: 'session-1',
+      replayUntil: Date.now() + 86400_000,
+      at: Date.now(),
+      held: Date.now() + 15_000,
+      ...over,
+    })
+    localStorage.setItem(at(id), value)
+    window.dispatchEvent(new StorageEvent('storage', { key: at(id), newValue: value }))
+  }
+  const sent = (b: ReturnType<typeof backend>) => b.calls.map((c) => c.envelope.clientActionId)
+  let deaf = () => {}
+  beforeEach(() => {
+    vi.useFakeTimers()
+    outboxBelongsTo('alice', 'session-1')
+  })
+  afterEach(() => {
+    deaf()
+    outboxBelongsTo(null)
+    vi.useRealTimers()
+  })
+
+  test('is sent from a tab that had nothing left to send, once the tab that kept it has closed', async () => {
+    const b = backend([{ actionId: 'a1' }])
+    deaf = recoverLeftovers(b.client, 'alice')
+    // This tab sent what it had, and has nothing to look at again
+    await drain(b.client, 'alice')
+    expect(b.calls).toEqual([])
+    // Another tab keeps a click, and is closed before it has sent it: it says nothing more
+    elsewhere('click-left-01')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(b.calls).toEqual([])
+    // Its hold runs out, and the click goes from here
+    await vi.advanceTimersByTimeAsync(11_000)
+    expect(sent(b)).toEqual(['click-left-01'])
+    expect(stored()).toEqual([])
+  })
+
+  test('is left to that tab for as long as it keeps up its hold on it', async () => {
+    const b = backend([{ actionId: 'a1' }])
+    deaf = recoverLeftovers(b.client, 'alice')
+    const made = Date.now()
+    elsewhere('click-held-01', { at: made })
+    // A slow backend: the other tab is still sending it a minute later, and renews its hold every few seconds
+    for (let i = 0; i < 12; i++) {
+      await vi.advanceTimersByTimeAsync(5_000)
+      elsewhere('click-held-01', { at: made })
+    }
+    expect(b.calls).toEqual([])
+    // That tab is closed now
+    await vi.advanceTimersByTimeAsync(16_000)
+    expect(sent(b)).toEqual(['click-held-01'])
+  })
+
+  test('begins nothing for what is let go of, refused, someone else’s or another pairing’s, and leaves nothing running once sent', async () => {
+    const b = backend([{ actionId: 'a1' }, { actionId: 'a2' }])
+    deaf = recoverLeftovers(b.client, 'alice')
+    // Said many times at once, as a tab says when it keeps several clicks: one sending, for all of them
+    for (let i = 0; i < 20; i++) elsewhere('click-burst-01', { at: Date.now() - 60_000, held: undefined, left: true })
+    await vi.advanceTimersByTimeAsync(100)
+    expect(sent(b)).toEqual(['click-burst-01'])
+    // This tab's own sending removed the click. The other tabs that hear of that, and of what they
+    // remove or keep as refused in turn, set nothing going here again
+    window.dispatchEvent(new StorageEvent('storage', { key: at('click-burst-01'), newValue: null }))
+    elsewhere('message-refused', { refused: 'No.', held: undefined, left: true, at: Date.now() - 60_000 })
+    // A click from before the browser was paired again, and one of Bob's
+    elsewhere('click-old-pairing', { session: 'session-0', held: undefined, left: true, at: Date.now() - 60_000 })
+    const bobs = JSON.stringify({ user: 'bob', artifactId: 'page1', envelope: envelope('click-bobs-01'), format: 2, session: 'session-1', at: 0 })
+    localStorage.setItem('it.outbox.bob.page1.click-bobs-01', bobs)
+    window.dispatchEvent(new StorageEvent('storage', { key: 'it.outbox.bob.page1.click-bobs-01', newValue: bobs }))
+    window.dispatchEvent(new StorageEvent('storage', { key: null, newValue: null }))
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(sent(b)).toEqual(['click-burst-01'])
+    // Nothing is waiting to look again, here or for anyone
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('a click or typed message given up with nobody there to be told', () => {
+  const TYPED_TEXT = 'what-the-person-typed'
+  /** A click or typed message kept for later under a pairing, as a page leaves it. */
+  const left = (user: string, session: string, id: string, over: Record<string, unknown> = {}) =>
+    localStorage.setItem(
+      `it.outbox.${user}.page1.${id}`,
+      JSON.stringify({
+        user,
+        artifactId: 'page1',
+        envelope: envelope(id, { payload: JSON.stringify({ typed: TYPED_TEXT }) }),
+        format: 2,
+        session,
+        replayUntil: Date.now() + 86400_000,
+        at: Date.now() - 60_000,
+        left: true,
+        ...over,
+      }),
+    )
+  const typed = { operation: { kind: 'message', text: TYPED_TEXT } }
+  const TOO_OLD = Date.now() - 8 * 86_400_000
+  const counts = () => Object.keys(localStorage).filter((k) => k.startsWith('it.givenup.'))
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    outboxBelongsTo(null)
+  })
+
+  test('too old to send when the site starts, it is said to its person under the pairing it was made under, with nothing of what it carried', () => {
+    // The site starts, and does not know yet whether the browser is paired
+    outboxBelongsTo(null)
+    left('alice', 'session-1', 'click-old-0001', { at: TOO_OLD })
+    left('alice', 'session-1', 'typed-old-0001', { at: TOO_OLD, ...typed })
+    // One the person was already shown as refused is not said again
+    left('alice', 'session-1', 'typed-old-0002', { at: TOO_OLD, ...typed, refused: 'No.' })
+    left('alice', 'session-1', 'click-new-0001')
+    left('bob', 'session-7', 'click-old-0002', { at: TOO_OLD })
+    dropOld()
+    expect(stored()).toEqual(['it.outbox.alice.page1.click-new-0001'])
+    // Nothing of what any of them carried, nor which they were, is kept for saying so
+    for (const k of counts()) expect(localStorage.getItem(k)).not.toMatch(/what-the-person-typed|click-old|typed-old/)
+    // The browser is Alice's, under the pairing those were made under
+    outboxBelongsTo('alice', 'session-1')
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 1 })
+    expect(givenUpFor('bob')).toBeNull()
+    // Bob's is never said here, and is not kept to be
+    expect(counts()).toEqual(['it.givenup.alice'])
+    // Seen: it is said no more
+    seenGivenUp('alice')
+    expect(givenUpFor('alice')).toBeNull()
+    expect(counts()).toEqual([])
+  })
+
+  test('refused for good once its page had gone, it is said, and a typed message stays shown as refused instead', async () => {
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-gone-0001')
+    left('alice', 'session-1', 'typed-gone-0001', typed)
+    const b = backend([refuse('invalid'), refuse('invalid')])
+    await drain(b.client, 'alice')
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    expect(stored()).toEqual(['it.outbox.alice.page1.typed-gone-0001'])
+    // And one refused for good just after its page went, before it was ever left for later
+    const late = backend([refuse('not_found')])
+    await expect(submit(late.client, 'alice', 'page1', envelope('click-gone-0002'), () => false)).rejects.toBeInstanceOf(ConvexError)
+    expect(givenUpFor('alice')).toEqual({ clicks: 2, messages: 0 })
+    // A page still there is told itself, and nothing more is said
+    const told = backend([refuse('not_found')])
+    await expect(submit(told.client, 'alice', 'page1', envelope('click-told-0001'))).rejects.toBeInstanceOf(ConvexError)
+    expect(givenUpFor('alice')).toEqual({ clicks: 2, messages: 0 })
+  })
+
+  test('is said under no other pairing, nor once the browser is signed out, and brings back nothing', async () => {
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-old-0003', { at: TOO_OLD })
+    dropOld()
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    // The browser is paired again for Alice: that was another pairing's, and goes
+    outboxBelongsTo('alice', 'session-2')
+    expect(givenUpFor('alice')).toBeNull()
+    expect(counts()).toEqual([])
+    // A tab still under the old pairing gives up another and counts it: still not said under this one
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-old-0004', { at: TOO_OLD })
+    dropOld()
+    outboxBelongsTo('alice', 'session-2')
+    expect(givenUpFor('alice')).toBeNull()
+    // Nor to someone else the browser is paired for, nor to nobody
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-old-0005', { at: TOO_OLD })
+    dropOld()
+    outboxBelongsTo('bob', 'session-1')
+    expect([givenUpFor('alice'), givenUpFor('bob')]).toEqual([null, null])
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-old-0006', { at: TOO_OLD })
+    dropOld()
+    outboxBelongsTo(null)
+    expect(counts()).toEqual([])
+    // And paired again under that same pairing, nothing given up comes back, to be said or to be sent
+    outboxBelongsTo('alice', 'session-1')
+    expect(givenUpFor('alice')).toBeNull()
+    expect(stored()).toEqual([])
+    const b = backend([])
+    await drain(b.client, 'alice')
+    expect(b.calls).toEqual([])
+  })
+
+  test('another tab’s saying it was seen is heard here, and sends nothing', async () => {
+    vi.useFakeTimers()
+    try {
+      outboxBelongsTo('alice', 'session-1')
+      const b = backend([])
+      const deaf = recoverLeftovers(b.client, 'alice')
+      const heard = vi.fn()
+      const unwatch = watchOutbox(heard)
+      localStorage.setItem('it.givenup.alice', JSON.stringify({ session: 'session-1', clicks: 1, messages: 0 }))
+      window.dispatchEvent(new StorageEvent('storage', { key: 'it.givenup.alice', newValue: localStorage.getItem('it.givenup.alice') }))
+      localStorage.removeItem('it.givenup.alice')
+      window.dispatchEvent(new StorageEvent('storage', { key: 'it.givenup.alice', newValue: null }))
+      expect(heard).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(600_000)
+      expect(b.calls).toEqual([])
+      expect(vi.getTimerCount()).toBe(0)
+      unwatch()
+      deaf()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
