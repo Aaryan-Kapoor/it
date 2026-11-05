@@ -8,7 +8,22 @@ import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
-import { conversationsOf, holds, likeliest, type T3Search, t3Command, t3Held, t3Refusal, t3Running, t3Search, t3Server, t3ThreadOf } from './src/t3'
+import {
+  conversationsOf,
+  holds,
+  likeliest,
+  sendEnded,
+  sendIds,
+  type T3Search,
+  t3Command,
+  t3Held,
+  t3Refusal,
+  t3Running,
+  t3Search,
+  t3Server,
+  t3ThreadOf,
+  timesRefused,
+} from './src/t3'
 
 const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-t3-'))
 afterAll(() => rmSync(scratch, { recursive: true, force: true }))
@@ -290,6 +305,38 @@ describe('the thread a conversation is held in', () => {
       snapshot(7),
     ])
       expect(holds(not, 'thread-a', ['7', 'undefined', 'null'])).toBe(false)
+  })
+})
+
+describe('the ids a message is put to a thread under', () => {
+  test('are the same each time the same message is sent to the same thread, so T3 Code lets it land once', () => {
+    const first = sendIds('thread-a', 'line click-1 click-2', 0)
+    expect(sendIds('thread-a', 'line click-1 click-2', 0)).toEqual(first)
+    expect(first.commandId).not.toBe(first.messageId)
+    for (const id of Object.values(first)) expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    // Another message, another thread, or a sending after T3 Code refused, is another command
+    for (const other of [
+      sendIds('thread-a', 'line click-1', 0),
+      sendIds('thread-a', 'mark click-1 click-2', 0),
+      sendIds('thread-b', 'line click-1 click-2', 0),
+      sendIds('thread-a', 'line click-1 click-2', 1),
+    ])
+      expect(other.commandId).not.toBe(first.commandId)
+  })
+  test('change once T3 Code has refused the message, and not where its answer was never heard', () => {
+    const what = `line click-${Math.random()}`
+    expect(timesRefused(what)).toBe(0)
+    // T3 Code took longer than It waits, or the connection closed: it may have the message, so the same ids go again
+    sendEnded(what, 'unanswered')
+    expect(timesRefused(what)).toBe(0)
+    // Refused, T3 Code would refuse those ids again, so new ones go
+    sendEnded(what, 'refused')
+    sendEnded(what, 'unanswered')
+    sendEnded(what, 'refused')
+    expect(timesRefused(what)).toBe(2)
+    // Taken, nothing is owed for it
+    sendEnded(what, 'taken')
+    expect(timesRefused(what)).toBe(0)
   })
 })
 

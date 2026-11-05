@@ -27,7 +27,7 @@
 //   on as it, and their pages go to it;
 // - and that a message be put to that thread, which is what a person typing into it does.
 import { execFile } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, readlinkSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -565,24 +565,68 @@ export async function t3ThreadOf(
   return { status: 'incomplete', progressed }
 }
 
+/** How many times T3 Code has refused each message It is putting to a thread, by what the message is (see `t3Send`). */
+const refusedSends = new Map<string, number>()
+/** As many messages as are remembered as refused, the oldest forgotten first. */
+const REFUSED_SENDS_MOST = 1000
+/** How many times T3 Code has refused this message, as far as this program has heard. */
+export const timesRefused = (what: string): number => refusedSends.get(what) ?? 0
+/**
+ * Notes how a message's sending ended: taken, nothing more is owed for it; refused by T3 Code,
+ * the next sending is a new command; unanswered, the next sending is the same command again.
+ */
+export function sendEnded(what: string, ended: 'taken' | 'refused' | 'unanswered'): void {
+  if (ended === 'unanswered') return
+  const times = timesRefused(what)
+  refusedSends.delete(what)
+  if (ended === 'taken') return
+  refusedSends.set(what, times + 1)
+  for (const old of refusedSends.keys()) {
+    if (refusedSends.size <= REFUSED_SENDS_MOST) break
+    refusedSends.delete(old)
+  }
+}
+
+/**
+ * The ids a message is put to a thread under. T3 Code takes a command once by its id, and answers
+ * the same command sent again as it answered it the first time. So a message whose answer was
+ * never heard, as where T3 Code took longer than It waits or the connection closed first, is sent
+ * again under the same ids, and lands in the thread once however often it is sent. One that T3
+ * Code refused is sent again under new ones, since T3 Code would only refuse those ids again.
+ */
+export function sendIds(thread: string, what: string, refused: number): { commandId: string; messageId: string } {
+  const id = (kind: string) => {
+    const hex = createHash('sha256')
+      .update(JSON.stringify(['it', kind, thread, what, refused]))
+      .digest('hex')
+    // Shaped as a UUID, as the ids T3 Code makes itself are
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${((Number.parseInt(hex[16]!, 16) & 3) | 8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+  }
+  return { commandId: id('command'), messageId: id('message') }
+}
+
 /**
  * Puts a message to a thread, as a person typing into it does: T3 Code starts a turn there, or
  * keeps the message for when the turn that is running is over. Null once T3 Code has taken it,
- * and otherwise why it did not, in words that hold nothing of the message.
+ * and otherwise why it did not, in words that hold nothing of the message. `what` names the
+ * message, by the clicks it carries and its form, so that the same message sent again after no
+ * answer is the same command to T3 Code (see `sendIds`); without it, each send is a new one.
  */
-export async function t3Send(t3: T3, thread: string, text: string): Promise<string | null> {
+export async function t3Send(t3: T3, thread: string, text: string, what?: string): Promise<string | null> {
   const got = await ask<{ ticket?: unknown }>(t3, 'POST', '/api/auth/websocket-ticket')
   if (!got || typeof got.ticket !== 'string') return 'T3 Code did not let It in'
   const at = new URL(`${t3.origin.replace(/^http/, 'ws')}/ws`)
   at.searchParams.set('wsTicket', got.ticket)
   at.searchParams.set('orchestrationProtocol', PROTOCOL)
+  const ids = what === undefined ? { commandId: randomUUID(), messageId: randomUUID() } : sendIds(thread, what, timesRefused(what))
   return new Promise((resolve) => {
     let socket: WebSocket
     let done = false
-    const end = (why: string | null) => {
+    const end = (why: string | null, refusedByT3 = false) => {
       if (done) return
       done = true
       clearTimeout(timer)
+      if (what !== undefined) sendEnded(what, why === null ? 'taken' : refusedByT3 ? 'refused' : 'unanswered')
       try {
         socket.close()
       } catch {}
@@ -605,9 +649,9 @@ export async function t3Send(t3: T3, thread: string, text: string): Promise<stri
             type: 'message.dispatch',
             createdBy: 'agent',
             creationSource: 'mcp',
-            commandId: randomUUID(),
+            commandId: ids.commandId,
             threadId: thread,
-            messageId: randomUUID(),
+            messageId: ids.messageId,
             text,
             attachments: [],
             deliveryIntent: 'auto',
@@ -627,8 +671,10 @@ export async function t3Send(t3: T3, thread: string, text: string): Promise<stri
       }
       for (const frame of frames as { _tag?: string; requestId?: string; exit?: { _tag?: string } }[]) {
         if (frame?._tag === 'Ping') socket.send(JSON.stringify({ _tag: 'Pong' }))
+        // A server that failed at the message may or may not have taken it, so it is sent again under the same ids
         else if (frame?._tag === 'Defect') end('T3 Code failed at the message')
-        else if (frame?._tag === 'Exit' && frame.requestId === '1') end(frame.exit?._tag === 'Success' ? null : 'T3 Code refused the message')
+        else if (frame?._tag === 'Exit' && frame.requestId === '1')
+          end(frame.exit?._tag === 'Success' ? null : 'T3 Code refused the message', frame.exit?._tag !== 'Success')
       }
     }
   })
