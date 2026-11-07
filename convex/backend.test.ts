@@ -101,6 +101,7 @@ beforeEach(() => {
         content.garbleNext--
         return new Response('{"removed": 10, "mo', { status: 200 })
       }
+      if (op === 'read') return new Response(JSON.stringify({ html: 'x'.repeat(100), bytes: 100, sha256: sha }))
       if (op === 'verify') return new Response(JSON.stringify({ ok: content.verifyOk, missing: content.verifyOk ? [] : ['index.html'] }))
       if (op === 'delete' && content.stuckNext > 0) {
         content.stuckNext--
@@ -7357,5 +7358,238 @@ describe('publication transactions', () => {
     await m.as.mutation(api.publish.abandon, { artifactId: late.artifactId, version: late.version })
     await m.as.mutation(api.publish.abandon, { artifactId: late.artifactId, version: late.version })
     expect(await totals(t)).toMatchObject({ stagingCount: 0, stagingBytes: 0 })
+  })
+})
+
+describe('Restored exact display controls and browser reports', () => {
+  test('A display id selects exactly one record after a rename and refuses another account.', async () => {
+    const t = backend()
+    const a = await person(t, 'alice')
+    const b = await person(t, 'bob')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'one')
+    await a.browser.mutation(api.displays.rename, { displayId: a.display.id, name: 'Changed' })
+    const shown = await m.as.mutation(api.displays.show, { slug: 'one', displayId: a.display.id })
+    expect(shown).toMatchObject({ displays: ['Changed'], displayIds: [a.display.id] })
+    expect(await code(m.as.mutation(api.displays.show, { slug: 'one', displayId: b.display.id }))).toBe('not_found')
+    expect(await code(m.as.mutation(api.displays.show, { slug: 'one', displayId: a.display.id, display: 'Changed' }))).toBe('invalid')
+  })
+  test('Requests do not imply loaded content and reports identify fresh visible tabs separately.', async () => {
+    const t = backend()
+    const a = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'one')
+    await publish(m, 'two')
+    await m.as.mutation(api.displays.show, { slug: 'two', displayId: a.display.id })
+    let listed = (await m.as.query(api.displays.list, {}))[0]!
+    expect(listed.requestedPage?.pageId).toBe('two')
+    expect(listed.observed).toEqual([])
+    const mount = await a.browser.mutation(api.mounts.create, { artifactId: p.artifactId, displayKey: displayKey('alice') })
+    await a.browser.action(api.mounts.ticket, { mountId: mount.mountId })
+    const report = { key: displayKey('alice'), tab: 'a-tab-with-16-characters', sequence: 1, mountId: mount.mountId, phase: 'shown' as const, visible: true }
+    await a.browser.mutation(api.displays.report, report)
+    listed = (await m.as.query(api.displays.list, {}))[0]!
+    expect(listed.observed[0]).toMatchObject({ pageId: 'one', version: 1, browserConfirmed: true, fresh: true })
+    expect(listed.requestedPage?.pageId).toBe('two')
+    expect(listed.physicalRenderingVerified).toBe(false)
+    await a.browser.mutation(api.displays.report, { ...report, sequence: 2, visible: false })
+    expect((await a.browser.mutation(api.displays.report, report)).accepted).toBe(false)
+    expect((await m.as.query(api.displays.list, {}))[0]!.observed[0]!.browserConfirmed).toBe(false)
+    await a.browser.mutation(api.displays.report, { ...report, sequence: 3, tab: 'another-tab-with-16' })
+    expect((await m.as.query(api.displays.list, {}))[0]!.observed).toHaveLength(2)
+    vi.setSystemTime(Date.now() + 120001)
+    listed = (await m.as.query(api.displays.list, {}))[0]!
+    expect(listed.observed.every((r) => !r.fresh && !r.browserConfirmed)).toBe(true)
+    expect(listed.connection).toBe('unknown')
+  })
+  test('Reports cannot claim another browser, an unissued mount, or readiness without a mount.', async () => {
+    const t = backend()
+    const a = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const b = await paired(t, 'alice', 'screen', 'another-display-key-001')
+    const p = await publish(m, 'one')
+    const mount = await a.browser.mutation(api.mounts.create, { artifactId: p.artifactId, displayKey: displayKey('alice') })
+    const report = { key: displayKey('alice'), tab: 'a-tab-with-16-characters', sequence: 1, phase: 'shown' as const, visible: true }
+    expect(await code(a.browser.mutation(api.displays.report, report))).toBe('invalid')
+    expect(await code(a.browser.mutation(api.displays.report, { ...report, mountId: mount.mountId }))).toBe('not_found')
+    await a.browser.action(api.mounts.ticket, { mountId: mount.mountId })
+    expect(await code(b.browser.mutation(api.displays.report, { ...report, mountId: mount.mountId }))).toBe('not_found')
+    expect(await code(a.browser.mutation(api.displays.report, { ...report, key: 'another-display-key-001', mountId: mount.mountId }))).toBe('not_found')
+    await a.browser.mutation(api.displays.report, { ...report, mountId: mount.mountId })
+    await a.browser.mutation(api.displays.report, { ...report, sequence: 2, phase: 'none' })
+    expect((await m.as.query(api.displays.list, {}))[0]!.observed[0]).toMatchObject({ pageId: null, browserConfirmed: false, phase: 'none' })
+  })
+  test('Reports from a signed-out display cannot remain confirmed.', async () => {
+    const t = backend()
+    const a = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'one')
+    const mount = await a.browser.mutation(api.mounts.create, { artifactId: p.artifactId, displayKey: displayKey('alice') })
+    await a.browser.action(api.mounts.ticket, { mountId: mount.mountId })
+    const report = { key: displayKey('alice'), tab: 'a-tab-with-16-characters', sequence: 1, phase: 'shown' as const, visible: true, mountId: mount.mountId }
+    await a.browser.mutation(api.displays.report, report)
+    await t.run(async (ctx) => {
+      const d = await ctx.db.get(a.display.id)
+      await ctx.db.patch(a.display.id, { epoch: d!.epoch + 1 })
+    })
+    expect((await m.as.query(api.displays.list, {}))[0]!.observed).toEqual([])
+    expect(await code(a.browser.mutation(api.displays.report, { ...report, sequence: 2 }))).toBe('not_found')
+  })
+})
+
+describe('Bounded account source read', () => {
+  test('Source reads are account scoped, bounded and contain no grants.', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    await person(t, 'bob')
+    const m = await machineOf(t, 'alice')
+    const other = await machineOf(t, 'bob')
+    await publish(m, 'source-page', { session: SESSION })
+    expect(await m.as.action(api.artifacts.source, { slug: 'source-page' })).toEqual({
+      id: 'source-page',
+      version: 1,
+      html: 'x'.repeat(100),
+      bytes: 100,
+      sha256: sha,
+    })
+    expect(await code(m.as.action(api.artifacts.source, { slug: 'source-page', maxBytes: 99 }))).toBe('limit')
+    expect(await code(m.as.action(api.artifacts.source, { slug: 'source-page', maxBytes: 65537 }))).toBe('invalid')
+    expect(await code(other.as.action(api.artifacts.source, { slug: 'source-page' }))).toBe('not_found')
+  })
+})
+
+describe('Source read consistency', () => {
+  test('A concurrent publication during the content fetch is refused, not returned as the current source.', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'read-race')
+    const fetcher = vi.mocked(fetch).getMockImplementation()!
+    let changed = false
+    vi.mocked(fetch).mockImplementation(async (...args) => {
+      if (String(args[0]).endsWith('/control/read') && !changed) {
+        changed = true
+        await publish(m, 'read-race')
+      }
+      return fetcher(...args)
+    })
+    expect(await code(m.as.action(api.artifacts.source, { slug: 'read-race' }))).toBe('conflict')
+  })
+  test('Content metadata mismatch is refused and a screen cannot use the enrolled-machine source API.', async () => {
+    const t = backend()
+    const p = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'read-integrity')
+    const fetcher = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (...args) =>
+      String(args[0]).endsWith('/control/read') ? new Response(JSON.stringify({ html: 'wrong', bytes: 5, sha256: sha })) : fetcher(...args),
+    )
+    expect(await code(m.as.action(api.artifacts.source, { slug: 'read-integrity' }))).toBe('conflict')
+    expect(await code(p.browser.action(api.artifacts.source, { slug: 'read-integrity' }))).toBe('forbidden')
+  })
+})
+
+describe('Conditional owner-preserving publication', () => {
+  test('Preserving ownership also preserves a revoked original machine and rejects stale updates atomically.', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const old = await machineOf(t, 'alice', 'old')
+    const newer = await machineOf(t, 'alice', 'new')
+    await publish(old, 'one', { session: SESSION })
+    await t.run((ctx) => ctx.db.patch(old.id, { revoked: true }))
+    const begun = await newer.as.action(api.publish.begin, {
+      slug: 'one',
+      title: 'Updated',
+      files: page,
+      session: { harness: 'dot', id: 'parent' },
+      preserveOwner: true,
+      expectedVersion: 1,
+    })
+    await newer.as.action(api.publish.finish, { artifactId: begun.artifactId, version: begun.version })
+    const raw = await t.run((ctx) => ctx.db.get(begun.artifactId))
+    expect(raw?.machineId).toBe(old.id)
+    expect(raw?.session).toEqual(SESSION)
+    expect(await code(newer.as.action(api.publish.begin, { slug: 'one', title: 'Stale', files: page, preserveOwner: true, expectedVersion: 1 }))).toBe(
+      'conflict',
+    )
+    const first = await newer.as.action(api.publish.begin, { slug: 'one', title: 'First', files: page, preserveOwner: true, expectedVersion: 2 })
+    const second = await newer.as.action(api.publish.begin, { slug: 'one', title: 'Second', files: page, preserveOwner: true, expectedVersion: 2 })
+    await newer.as.action(api.publish.finish, { artifactId: second.artifactId, version: second.version })
+    expect(await code(newer.as.action(api.publish.finish, { artifactId: first.artifactId, version: first.version }))).toBe('conflict')
+    expect((await newer.as.query(api.artifacts.get, { slug: 'one' })).title).toBe('Second')
+  })
+})
+
+describe('Conditional content-only invariants', () => {
+  test('An account update preserves owner, agent label, state and pending action route without changing displays.', async () => {
+    const t = backend()
+    const personA = await person(t, 'alice')
+    const owner = await machineOf(t, 'alice', 'owner')
+    const updater = await machineOf(t, 'alice', 'updater')
+    const p = await publish(owner, 'content-only', { session: SESSION, agent: 'Original agent', state: '{"kept":1}' })
+    const action = await personA.browser.mutation(api.actions.submit, {
+      artifactId: p.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-before-update'),
+    })
+    const before = await t.run(async (ctx) => ({
+      page: await ctx.db.get(p.artifactId),
+      action: await ctx.db.get(action.actionId),
+      displays: await ctx.db.query('displays').collect(),
+    }))
+    const begun = await updater.as.action(api.publish.begin, {
+      slug: 'content-only',
+      title: 'New content',
+      files: page,
+      session: { harness: 'dot', id: 'updater' },
+      preserveOwner: true,
+      expectedVersion: 1,
+    })
+    await updater.as.action(api.publish.finish, { artifactId: begun.artifactId, version: begun.version })
+    const after = await t.run(async (ctx) => ({
+      page: await ctx.db.get(p.artifactId),
+      action: await ctx.db.get(action.actionId),
+      displays: await ctx.db.query('displays').collect(),
+    }))
+    for (const key of ['machineId', 'session', 'agent'] as const) expect(after.page?.[key]).toEqual(before.page?.[key])
+    expect(after.action).toEqual(before.action)
+    expect(after.displays).toEqual(before.displays)
+    expect(await stateOf(owner.as, 'content-only')).toEqual({ kept: 1 })
+    expect(after.page?.title).toBe('New content')
+    expect(after.page?.currentVersion).toBe(2)
+  })
+  test('The first completed conditional write wins even when it has the lower reserved version; retrying its receipt is idempotent.', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'conditional-race')
+    const args = { slug: 'conditional-race', title: 'First', files: page, preserveOwner: true, expectedVersion: 1 }
+    const a = await m.as.action(api.publish.begin, args)
+    const b = await m.as.action(api.publish.begin, { ...args, title: 'Second' })
+    const first = await m.as.action(api.publish.finish, { artifactId: a.artifactId, version: a.version })
+    expect(await code(m.as.action(api.publish.finish, { artifactId: b.artifactId, version: b.version }))).toBe('conflict')
+    expect(await m.as.action(api.publish.finish, { artifactId: a.artifactId, version: a.version })).toEqual(first)
+    const final = await m.as.query(api.artifacts.get, { slug: 'conditional-race' })
+    expect(final.version).toBe(2)
+    expect(final.title).toBe('First')
+    await m.as.mutation(api.publish.abandon, { artifactId: b.artifactId, version: b.version })
+  })
+  test('Preserve mode rejects takeover, omitted or invalid versions, and page creation.', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'guarded')
+    const args = { slug: 'guarded', title: 'Update', files: page, preserveOwner: true, expectedVersion: 1 }
+    for (const bad of [
+      { take: true, session: SESSION },
+      { own: true, session: SESSION },
+      { expectedVersion: undefined },
+      { expectedVersion: 0 },
+      { expectedVersion: 1.5 },
+      { agentExplicit: true, agent: 'Changed' },
+    ])
+      expect(await code(m.as.action(api.publish.begin, { ...args, ...bad } as never))).toBe('invalid')
+    expect(await code(m.as.action(api.publish.begin, { ...args, slug: 'missing-page' }))).toBe('conflict')
+    expect((await m.as.query(api.artifacts.get, { slug: 'guarded' })).version).toBe(1)
   })
 })

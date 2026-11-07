@@ -137,6 +137,7 @@ import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from
 import { addonsSaid, afterUpgrade, restartLine } from './upgraded'
 import * as usage from './usage'
 import { type Listed, printed, wait } from './wait'
+import { watchActions } from './watch-actions'
 
 // Everything is written through `written`, which follows each write until it has left the
 // process, and nothing here ends the process before all of it has: see `end` and `left`.
@@ -339,6 +340,7 @@ const noDisplay = () =>
 /** What It answers when asked to show a page: the displays it is now shown on, and each one it was asked onto and is not shown on, with why. */
 interface Shown {
   displays: string[]
+  displayIds?: string[]
   notShown?: { display: string; reason: string }[]
 }
 async function show(slug: string, a: Args) {
@@ -352,7 +354,7 @@ async function show(slug: string, a: Args) {
  * the one reason there is, `not_paired`. The `hint` says so in words, and where no display was
  * there to be asked at all, how one is paired.
  */
-function shownAs(shown: Shown): { shownOn: string[]; notShownOn?: { display: string; reason: string }[]; hint?: string } {
+function shownAs(shown: Shown): { shownOn: string[]; shownDisplayIds?: string[]; notShownOn?: { display: string; reason: string }[]; hint?: string } {
   const notShownOn = shown.notShown ?? []
   const ended = notShownOn.filter((d) => d.reason === 'not_paired').map((d) => named(d.display))
   const one = ended.length === 1
@@ -362,7 +364,12 @@ function shownAs(shown: Shown): { shownOn: string[]; notShownOn?: { display: str
     : shown.displays.length || notShownOn.length
       ? undefined
       : noDisplay()
-  return { shownOn: shown.displays, ...(notShownOn.length ? { notShownOn } : {}), ...(hint ? { hint } : {}) }
+  return {
+    shownOn: shown.displays,
+    ...(shown.displayIds ? { shownDisplayIds: shown.displayIds } : {}),
+    ...(notShownOn.length ? { notShownOn } : {}),
+    ...(hint ? { hint } : {}),
+  }
 }
 
 const LOGIN = 'login --url <address> --code <invite> [--name <name>] [--no-setup]'
@@ -389,6 +396,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   update: [1, 'update <id> (--file f | --dir d | --html "<…>" | pipe)'],
   list: [0, 'list'],
   read: [1, 'read <id>'],
+  'read-source': [1, 'read-source <id> [--max-bytes <n>]'],
   delete: [1, 'delete <id> [--status]'],
   rollback: [2, 'rollback <id> <version>'],
   patch: [2, "patch <id> '<json>' [--replace] [--if-revision <n>]"],
@@ -682,6 +690,11 @@ async function tour(a: Args) {
 }
 
 async function update(a: Args) {
+  const expectedVersion = text(a, 'if-version') === undefined ? undefined : Number(text(a, 'if-version'))
+  if (expectedVersion !== undefined && (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1))
+    throw new Problem('An expected version is a positive whole number.', 'invalid')
+  if (a.flags['preserve-owner'] && (expectedVersion === undefined || ['take', 'open', 'on', 'agent', 'media'].some((key) => a.flags[key] !== undefined)))
+    throw new Problem('--preserve-owner requires --if-version and changes only content and title.', 'invalid')
   // Written as `it create` is, with the id in `--id` and a title in front of it, it is taken as that:
   // an agent that has just made a page with the one often asks for the other in the same shape
   const named = text(a, 'id')
@@ -694,6 +707,8 @@ async function update(a: Args) {
     files: await source(a),
     agent: text(a, 'agent'),
     take: a.flags.take === true,
+    preserveOwner: a.flags['preserve-owner'] === true,
+    ...(expectedVersion === undefined ? {} : { expectedVersion }),
     shown: a.flags.open === true,
   })
   await published(done, a)
@@ -2453,12 +2468,15 @@ const HELP = `it ${VERSION}: put a live ${NOUN.one} on any display you own, and 
 Pages
   it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)  [--state '{…}'] [--open] [--on "<display>"]
   it update <id> (--file f | --dir d | --html "<…>" | pipe) [--title "<title>"] [--open] [--on "<display>"]
+                                 Update also accepts --preserve-owner --if-version <n> for a
+                                 content/title-only change with an atomic version guard.
                                  Both take [--agent <name>], a label for who made it,
                                  which its owning conversation can change explicitly, and
                                  [--take], which gives the ${NOUN.one} to this conversation.
                                  Without --take, create makes nothing under an id that is
                                  another conversation's ${NOUN.one}, and says whose it is.
   it list | it read <id> | it rollback <id> <version>
+  it read-source <id> [--max-bytes <n>]   Read only published entry HTML, at most 65536 bytes.
   it delete <id> [--status]      Delete a page, or check its last deletion.
 
 State
@@ -2472,13 +2490,14 @@ State
                                  With no text, what was said before is taken away.
 
 Displays
-  it open <id> [--on "<display>"]
+  it open <id> [--on "<display>" | --on-id <display-id>]
   it notify "<text>" [--id <id>] [--on "<display>"] [--sticky] [--button "Label=action"]…
   it displays
 
 What the person did
   it wait [--id <id>] [--follow] [--timeout <seconds>]
   it actions [--id <id>] [--all]
+  it actions --id <id> --follow  Observe actions without claiming or acknowledging them.
                                  List the actions still waiting. An agent is listed those on
                                  its own conversation's ${NOUN.many} and on ${NOUN.many} that no
                                  conversation has. --all lists every one, and so does a command
@@ -2925,6 +2944,12 @@ async function main(argv: string[]): Promise<void> {
         ),
       ])
     }
+    case 'read-source': {
+      const slug = need(a._[0], 'which page', 'read-source <id> [--max-bytes <n>]')
+      return out(
+        await call('action', api.artifacts.source, { slug, ...(text(a, 'max-bytes') === undefined ? {} : { maxBytes: Number(text(a, 'max-bytes')) }) }),
+      )
+    }
     case 'read': {
       const slug = need(a._[0], `which ${NOUN.one}`, 'read <id>')
       const [found, state, actions] = await Promise.all([
@@ -2994,6 +3019,8 @@ async function main(argv: string[]): Promise<void> {
     }
 
     case 'open': {
+      if (text(a, 'on') !== undefined && text(a, 'on-id') !== undefined) throw new Problem('Choose a display by name or id, not both.', 'invalid')
+      if (text(a, 'on-id') !== undefined && !text(a, 'on-id')) throw new Problem('A display id cannot be empty.', 'invalid')
       const slug = need(a._[0], `which ${NOUN.one}`, 'open <id> [--on "<display>"]')
       // A conversation that brings a page up for its person is the one they are talking to: the
       // page is its page from now on, also where another conversation made it. Someone who says
@@ -3007,6 +3034,7 @@ async function main(argv: string[]): Promise<void> {
         call<Shown & { took?: boolean }>('mutation', api.displays.show, {
           slug,
           ...(text(a, 'on') ? { display: text(a, 'on') } : {}),
+          ...(text(a, 'on-id') ? { displayId: text(a, 'on-id') } : {}),
           ...(mine ? { session: mine, agent: mine.harness } : {}),
         }),
       )
@@ -3065,6 +3093,10 @@ async function main(argv: string[]): Promise<void> {
       return wait(a, counted)
     case 'actions': {
       const slug = text(a, 'id')
+      if (a.flags.follow) {
+        if (!slug || a.flags.all) throw new Problem('A read-only action stream needs exactly one --id.', 'invalid')
+        return watchActions(slug)
+      }
       if (slug && a.flags.all) throw new Problem(`--id lists what waits on one ${NOUN.one}, and --all what waits on every one: give one of them.`, 'invalid')
       if (slug) return out((await call<Listed[]>('query', api.delivery.waiting, { slug })).map(printed))
       // An agent is listed what waits on its own conversation's pages, under every id the

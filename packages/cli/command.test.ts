@@ -4201,7 +4201,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
     const ran = await run(machine(), ['help'])
     // The real parser accepts the options the command's own usage lines advertise.
     for (const line of ran.out.split('\n')) {
-      const cmd = /^ {2}it ([a-z]+)\b/.exec(line)?.[1]
+      const cmd = /^ {2}it ([a-z]+(?:-[a-z]+)*)\b/.exec(line)?.[1]
       if (!cmd) continue
       const flags = [...line.matchAll(/--([a-z]+(?:-[a-z]+)*)/g)].flatMap((m) => (BOOLEAN.has(m[1]!) ? [m[0]] : [m[0], 'value']))
       const accepted = await run(machine(false), [cmd, ...flags, '--help'])
@@ -6316,4 +6316,76 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and whether an agent 
       await b.close()
     }
   })
+})
+
+test('exact display ID is sent without a name or ownership takeover', async () => {
+  const m = machine()
+  const b = await backend(m, ({ path }) => (path === 'displays:show' ? { displays: ['Zeph16'], displayIds: ['display-exact'], took: false } : null))
+  try {
+    const result = printed(await run(m, ['open', 'board', '--on-id', 'display-exact'], b.env))
+    expect(result).toMatchObject({ shownDisplayIds: ['display-exact'] })
+    expect(b.asked.filter((x) => x.path === 'displays:show').map((x) => x.args)).toEqual([{ slug: 'board', displayId: 'display-exact' }])
+    expect(b.asked.filter((x) => x.path === 'artifacts:take')).toEqual([])
+  } finally {
+    await b.close()
+  }
+})
+
+describe('Bounded source command', () => {
+  test('The source command passes a bounded size and never requests a mount ticket.', async () => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn }) => (fn === 'artifacts:source' ? { id: 'plan', version: 2, html: '<p>x</p>', bytes: 8, sha256: 'fixture' } : null))
+    try {
+      const result = await run(m, ['read-source', 'plan', '--max-bytes', '100'], b.env)
+      expect(result.code).toBe(0)
+      expect(JSON.parse(result.out).html).toBe('<p>x</p>')
+      expect(b.asked).toEqual([{ path: 'artifacts:source', args: { slug: 'plan', maxBytes: 100 } }])
+    } finally {
+      await b.close()
+    }
+  })
+})
+
+test('An account update sends version and ownership preconditions without taking or opening the page.', async () => {
+  const m = machine()
+  const b = await backend(m, ({ path: fn }) =>
+    fn === 'artifacts:get'
+      ? { title: 'Plan' }
+      : fn === 'publish:begin'
+        ? { artifactId: 'artifact-1', slug: 'plan', version: 8, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+        : fn === 'publish:finish'
+          ? { slug: 'plan', version: 8, url: 'https://site.example/p/plan' }
+          : null,
+  )
+  try {
+    const ran = await run(m, ['update', 'plan', '--html', '<p>new</p>', '--preserve-owner', '--if-version', '7'], b.env)
+    expect(ran.code).toBe(0)
+    const begun = b.asked.find((x) => x.path === 'publish:begin')!.args
+    expect(begun).toMatchObject({ preserveOwner: true, expectedVersion: 7 })
+    expect(begun).not.toHaveProperty('take')
+    expect(b.asked.some((x) => ['artifacts:take', 'displays:show'].includes(x.path))).toBe(false)
+  } finally {
+    await b.close()
+  }
+})
+
+test('Preserve-owner preconditions reject incompatible CLI options before contacting the backend', async () => {
+  const m = machine()
+  const b = await backend(m, () => null)
+  try {
+    for (const flags of [
+      [],
+      ['--if-version', '0'],
+      ['--if-version', '1.5'],
+      ['--if-version', '1', '--take'],
+      ['--if-version', '1', '--open'],
+      ['--if-version', '1', '--agent', 'x'],
+      ['--if-version', '1', '--media', 'camera'],
+    ]) {
+      expect((await run(m, ['update', 'plan', '--html', '<p>x</p>', '--preserve-owner', ...flags], b.env)).code).not.toBe(0)
+    }
+    expect(b.asked).toEqual([])
+  } finally {
+    await b.close()
+  }
 })

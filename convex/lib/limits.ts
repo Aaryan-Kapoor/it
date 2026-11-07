@@ -45,6 +45,7 @@ const RULES = {
   notify: { perMinute: 30, burst: 15 },
   show: { perMinute: 60, burst: 30 },
   registerDisplay: { perMinute: 10, burst: 10 },
+  reportDisplay: { perMinute: 120, burst: 60 },
   // Asking for the network to be turned on or off, from the site
   network: { perMinute: 10, burst: 10 },
   enroll: { perMinute: 5, burst: 5 },
