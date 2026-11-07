@@ -369,22 +369,23 @@ export function likeliest(
 }
 
 /**
- * Whether what T3 Code says of a thread names one of these ids as the id its agent app gave the
- * conversation, as a conversation of that thread's own. A thread's snapshot can also list the
+ * The thread that holds the conversation, where what T3 Code says of a thread names one of these
+ * ids as the id its agent app gave it: the conversation's own thread, which is the thread asked
+ * about unless the snapshot says it is another's. A thread's snapshot can also list the
  * conversations of other threads, as a Codex thread lists those of the threads forked from it,
- * each of which T3 Code lists as a thread of its own: one of those is that thread's, and is
- * found there. A server that does not say which thread a conversation is of is taken at its word.
+ * each of which is a thread of its own and holds its own conversation, even where T3 Code no
+ * longer lists it among the threads it has open. A server that does not say which thread a
+ * conversation is of is taken at its word. Nothing where the snapshot names none of the ids.
  */
-export function holds(snapshot: unknown, thread: string, ids: readonly string[]): boolean {
+export function holderIn(snapshot: unknown, thread: string, ids: readonly string[]): string | undefined {
   const threads = (snapshot as { projection?: { providerThreads?: unknown } } | null)?.projection?.providerThreads
-  return (
-    Array.isArray(threads) &&
-    threads.some((p) => {
-      const of = p as { appThreadId?: unknown; nativeThreadRef?: { nativeId?: unknown } } | null
-      const id = of?.nativeThreadRef?.nativeId
-      return typeof id === 'string' && ids.includes(id) && !(typeof of?.appThreadId === 'string' && of.appThreadId !== thread)
-    })
-  )
+  if (!Array.isArray(threads)) return undefined
+  for (const p of threads) {
+    const of = p as { appThreadId?: unknown; nativeThreadRef?: { nativeId?: unknown } } | null
+    const id = of?.nativeThreadRef?.nativeId
+    if (typeof id === 'string' && ids.includes(id)) return typeof of?.appThreadId === 'string' && of.appThreadId ? of.appThreadId : thread
+  }
+  return undefined
 }
 
 /** A conversation as It names it: the agent app, and the id the app gave it. */
@@ -547,8 +548,10 @@ export async function t3ThreadOf(
     if (!Array.isArray(snapshot?.projection?.providerThreads)) {
       search.unread.set(id, (search.unread.get(id) ?? 0) + 1)
       search.pending.push(id)
-    } else if (holds(snapshot, id, of.ids)) return { status: 'found', thread: id }
-    else {
+    } else {
+      // Found in a thread's snapshot, it is the thread the snapshot says holds it, which may be another one
+      const holder = holderIn(snapshot, id, of.ids)
+      if (holder) return { status: 'found', thread: holder }
       progressed = true
       search.unread.delete(id)
       search.cleared.set(id, search.listed.get(id))
