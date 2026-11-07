@@ -236,6 +236,9 @@ export function lastWords(text: string): string | null {
  * handed to `said`, for the person whose app it is and for nothing that is kept. Stopped by
  * the signal, it is ended and says so.
  */
+/** What a run that It starts is not given of its own environment: see `carryOn`. */
+const UNCARRIED = new Set(['OLDPWD', 'T3CODE_THREAD_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_PID', 'CLAUDE_CODE_SESSION_ID'])
+
 export function carryOn(
   how: Carrying,
   cwd: string,
@@ -279,7 +282,10 @@ export function carryOn(
     // On Windows what the run starts is kept in a job of the system's, named by the run: see `keeper`
     const job = windows ? (marks.run ?? randomUUID()) : ''
     const env: NodeJS.ProcessEnv = {
-      ...Object.fromEntries(Object.entries(opts.env ?? harnessEnv()).filter(([k]) => k !== 'OLDPWD')),
+      // Nor what an app that holds conversations sets for its own: a service that was started from
+      // inside T3 Code, or from inside a Claude Code that an app runs, would otherwise hand that
+      // app's marks to the run, and a page made in it would be taken for one of that app's
+      ...Object.fromEntries(Object.entries(opts.env ?? harnessEnv()).filter(([k]) => !UNCARRIED.has(k.toUpperCase()))),
       // The folder is said in the environment as well. This program's own PWD is wherever it
       // was started, and an app that believes PWD over the folder it is in (OpenCode does)
       // would hold the conversation in one folder and wait for it in another, and never end.
