@@ -78,19 +78,31 @@ const keyOf = (user: string, artifactId: string, id: string) => `${PREFIX}${user
 // they carried, under a name of the person's own beside their clicks: so it goes wherever their
 // clicks go when what is kept for them is let go of, and is said only under the pairing the
 // clicks were made under, never after the browser is signed out, nor once it is paired again.
+// Until the site knows which pairing it has, as when it starts, what is given up may have been
+// made under several, so each pairing's count is kept apart from the others, and only the one of
+// the pairing the browser turns out to have is kept once it is known.
 const GIVEN_UP = 'it.givenup.'
 interface GivenUp {
   session: string | null
   clicks: number
   messages: number
 }
-function givenUpOf(user: string): GivenUp | null {
+const isGivenUp = (said: Partial<GivenUp> | null): said is GivenUp =>
+  !!said && (typeof said.session === 'string' || said.session === null) && Number.isSafeInteger(said.clicks) && Number.isSafeInteger(said.messages)
+/** Each pairing's count of what was given up of this person's. One kept before there could be more than one is read as the only one. */
+function givenUpOf(user: string): GivenUp[] {
   try {
-    const said = JSON.parse(localStorage.getItem(`${GIVEN_UP}${user}`) ?? 'null') as Partial<GivenUp> | null
-    if (said && (typeof said.session === 'string' || said.session === null) && Number.isSafeInteger(said.clicks) && Number.isSafeInteger(said.messages))
-      return said as GivenUp
+    const said = JSON.parse(localStorage.getItem(`${GIVEN_UP}${user}`) ?? 'null') as Partial<GivenUp> | Partial<GivenUp>[] | null
+    return (Array.isArray(said) ? said : [said]).filter(isGivenUp)
   } catch {}
-  return null
+  return []
+}
+/** Keeps this person's counts of what was given up, and nothing under their name once there is none. */
+function keepGivenUp(user: string, counts: GivenUp[]): void {
+  try {
+    if (counts.length) localStorage.setItem(`${GIVEN_UP}${user}`, JSON.stringify(counts))
+    else localStorage.removeItem(`${GIVEN_UP}${user}`)
+  } catch {}
 }
 /**
  * Counts a click or typed message that is being given up with nobody told, for the pairing it
@@ -103,28 +115,29 @@ function givenUp(e: Entry): void {
   if (e.refused || letGoOf(e.user)) return
   const under = e.format === 2 ? (e.session ?? null) : theirs(e.user) ? session : undefined
   if (under === undefined || (pairedFor !== null && (pairedFor !== e.user || session !== under))) return
-  const was = givenUpOf(e.user)
-  const so = was?.session === under ? was : { session: under, clicks: 0, messages: 0 }
-  try {
-    localStorage.setItem(
-      `${GIVEN_UP}${e.user}`,
-      JSON.stringify(e.operation?.kind === 'message' ? { ...so, messages: so.messages + 1 } : { ...so, clicks: so.clicks + 1 }),
-    )
-  } catch {}
+  // Added to the count of the pairing it was made under, leaving every other pairing's as it was
+  const counts = givenUpOf(e.user)
+  const so = counts.find((c) => c.session === under) ?? { session: under, clicks: 0, messages: 0 }
+  const now = e.operation?.kind === 'message' ? { ...so, messages: so.messages + 1 } : { ...so, clicks: so.clicks + 1 }
+  keepGivenUp(e.user, [...counts.filter((c) => c.session !== under), now])
 }
 /** Lets go of every count of what was given up but the one of the person and pairing named, which is the only one that may still be said. */
 function tidyGivenUp(keep?: { user: string; session: string | null }): void {
   for (const key of Object.keys(localStorage)) {
     if (!key.startsWith(GIVEN_UP)) continue
-    if (keep && key === `${GIVEN_UP}${keep.user}` && givenUpOf(keep.user)?.session === keep.session) continue
-    localStorage.removeItem(key)
+    if (keep && key === `${GIVEN_UP}${keep.user}`)
+      keepGivenUp(
+        keep.user,
+        givenUpOf(keep.user).filter((c) => c.session === keep.session),
+      )
+    else localStorage.removeItem(key)
   }
 }
 /** How many of this person's clicks and typed messages were given up under the pairing this browser has now, with nobody told. Null when none was, and when the browser is not theirs. */
 export function givenUpFor(user: string): { clicks: number; messages: number } | null {
   if (!theirs(user)) return null
-  const said = givenUpOf(user)
-  return said && said.session === session && said.clicks + said.messages > 0 ? { clicks: said.clicks, messages: said.messages } : null
+  const said = givenUpOf(user).find((c) => c.session === session)
+  return said && said.clicks + said.messages > 0 ? { clicks: said.clicks, messages: said.messages } : null
 }
 /** The person has seen what was given up, in this tab or another. */
 export function seenGivenUp(user: string): void {

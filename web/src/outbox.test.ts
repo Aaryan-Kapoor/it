@@ -1031,6 +1031,23 @@ describe('a click or typed message given up with nobody there to be told', () =>
     expect(counts()).toEqual([])
   })
 
+  test('too old to send under two pairings when the site starts, it is said under the one the browser turns out to have, and under no other', () => {
+    outboxBelongsTo(null)
+    // Given up in this order, the later under the earlier pairing
+    left('alice', 'session-1', 'click-old-0011', { at: TOO_OLD })
+    dropOld()
+    left('alice', 'session-0', 'click-old-0012', { at: TOO_OLD })
+    left('alice', 'session-0', 'typed-old-0011', { at: TOO_OLD, ...typed })
+    dropOld()
+    outboxBelongsTo('alice', 'session-1')
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    // The other pairing's is let go of, and is never said
+    for (const k of counts()) expect(localStorage.getItem(k)).not.toMatch(/session-0/)
+    outboxBelongsTo('alice', 'session-0')
+    expect(givenUpFor('alice')).toBeNull()
+    expect(counts()).toEqual([])
+  })
+
   test('refused for good once its page had gone, it is said, and a typed message stays shown as refused instead', async () => {
     outboxBelongsTo('alice', 'session-1')
     left('alice', 'session-1', 'click-gone-0001')
