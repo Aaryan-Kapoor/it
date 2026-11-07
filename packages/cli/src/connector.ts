@@ -150,10 +150,10 @@ const journalFile = () => inHome('journal.jsonl')
 const aliasFile = () => inHome('aliases.json')
 /**
  * The ids a conversation is known by, as keys: the one it carries on under now, and the latest
- * few it had before it was cleared, under which the pages it made then are still recorded.
- * `aliases` leads each earlier id to the one that came after it.
+ * few it had before it was cleared, under which the pages it made then are still recorded, or
+ * as many of those as `most` says. `aliases` leads each earlier id to the one that came after it.
  */
-export function knownAs(aliases: ReadonlyMap<string, string>, key: string): string[] {
+export function knownAs(aliases: ReadonlyMap<string, string>, key: string, most = 5): string[] {
   const follow = (k: string) => {
     for (let hops = 0; hops < 10 && aliases.has(k); hops++) k = aliases.get(k)!
     return k
@@ -164,7 +164,7 @@ export function knownAs(aliases: ReadonlyMap<string, string>, key: string): stri
     ...[...aliases]
       .filter(([, to]) => follow(to) === now)
       .map(([from]) => from)
-      .slice(-5),
+      .slice(-most),
   ]
 }
 /** The conversations a conversation on this machine is known by, as the connector has written them down: itself, where nothing is written. */
@@ -693,9 +693,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (t3ThreadsUnread && !existsSync(t3ThreadsFile())) t3ThreadsUnread = false
     return t3ThreadsUnread
   }
-  /** The thread a conversation is held in, as noted, under any id the conversation had. */
+  /**
+   * The thread a conversation is held in, as noted, under any id the conversation had: every
+   * earlier id that is kept, and not only the latest few, since a note written under an id the
+   * conversation had long ago still says where its clicks go. Its clicks are asked for under
+   * the same ids (`heldInThreads`).
+   */
   const notedThread = (key: string): string | undefined => {
-    for (const k of knownAs(aliases, key)) {
+    for (const k of knownAs(aliases, key, Number.POSITIVE_INFINITY)) {
       const thread = t3Threads.get(k)
       if (thread) return thread
     }
@@ -3317,18 +3322,24 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * that are not among the ones that are here, and whose app is connected: a click for one of
    * them is put to its thread wherever its app's add-on has gone quiet, which it does once T3
    * Code lets the thread's agent app go. In a fixed order, so that they can be taken in turn.
+   *
+   * Every id is every earlier id that is kept, of which there are at most 500, as a click is
+   * routed by them (`notedThread`): a page made under an id the conversation had long ago is
+   * asked for as well, and a note under such an id holds the conversation's clicks to its thread.
    */
   const heldInThreads = (here: ReadonlySet<string>): string[] => {
-    // Every earlier id by the one each carries on under now, found once for all of them
+    // Every earlier id by the one each carries on under now, found once for all of them, as `knownAs` finds them for one
     const earlier = new Map<string, string[]>()
-    for (const from of aliases.keys()) {
-      const to = follow(from)
-      earlier.set(to, [...(earlier.get(to) ?? []), from])
+    for (const [from, to] of aliases) {
+      const now = follow(to)
+      const before = earlier.get(now)
+      if (before) before.push(from)
+      else earlier.set(now, [from])
     }
     const ids = new Set<string>()
     for (const key of t3Threads.keys()) {
       const now = follow(key)
-      for (const k of [key, now, ...(earlier.get(now) ?? []).slice(-5)]) if (!here.has(k) && connected(k.slice(0, k.indexOf(':')))) ids.add(k)
+      for (const k of [key, now, ...(earlier.get(now) ?? [])]) if (!here.has(k) && connected(k.slice(0, k.indexOf(':')))) ids.add(k)
     }
     return [...ids].sort()
   }

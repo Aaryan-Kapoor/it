@@ -4770,6 +4770,43 @@ describe.skipIf(process.platform === 'win32')('a conversation held in a thread o
     noOtherWay()
   })
 
+  test('a Codex conversation noted under the oldest of more ids than the latest few is held to its thread, and its click waits for T3 Code rather than go into Codex’s queue', async () => {
+    withT3Code()
+    stand.t3.running = false
+    // Noted under the id it had first, and cleared six times since: every earlier id leads to the one it has now
+    const before = Array.from({ length: 6 }, (_, n) => `codex:old-${n}`)
+    await start('socket', BOTH, noted({ 'codex:old-0': 't3-thread-c' }, Object.fromEntries(before.map((k) => [k, 'codex:thread-now']))))
+    expect(listened()).toContain('codex:old-0')
+    // Codex has the conversation open, so Codex's queue would take the click, and Auto-wake is off
+    backend(click(1, { harness: 'codex', id: 'old-0' }))
+    await pause(2500)
+    expect(stand.t3.sent).toEqual([])
+    expect(called('delivery:claim')).toEqual([])
+    expect(said.some((line) => line.includes('waits, since T3 Code is not running here'))).toBe(true)
+    noOtherWay()
+    stand.t3.running = true
+    await until(() => stand.t3.sent.length === 1, 12_000)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+    noOtherWay()
+  }, 30_000)
+
+  test.each([
+    ['the id it has now', 'claude-code:now'],
+    ['the oldest id it had', 'claude-code:before-0'],
+  ])(
+    'one noted under %s with seven earlier ids is asked for under all of them, and a click on a page made under the oldest goes to its thread',
+    async (_, key) => {
+      withT3Code()
+      const before = Array.from({ length: 7 }, (_, n) => `claude-code:before-${n}`)
+      await start('socket', BOTH, noted({ [key]: 't3-thread-c' }, Object.fromEntries(before.map((k) => [k, 'claude-code:now']))))
+      expect(listened()).toEqual([...before, 'claude-code:now'])
+      backend(click(1, { harness: 'claude-code', id: 'before-0' }))
+      await until(() => stand.t3.sent.length === 1)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      noOtherWay()
+    },
+  )
+
   test('more of them than there is room for are asked for in turn, all of them in time, without watching anew with every pass, and one whose click waits for its thread keeps its place', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
     withT3Code()
