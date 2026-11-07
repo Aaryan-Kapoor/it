@@ -9,7 +9,11 @@ export const PROTOCOL_VERSION = 1
  * does not take without saying why: a command that is refused such a call asks there, and where
  * the form is not named it asks in the way that backend takes.
  */
-export const TAKES = { conversationsWaiting: 'delivery.allWaiting.for' } as const
+export const TAKES = {
+  conversationsWaiting: 'delivery.allWaiting.for',
+  /** The inbox asked for the conversations held in threads of T3 Code, each with since when, and nothing made before that read for them. */
+  inboxHeld: 'delivery.inboxPage.held',
+} as const
 
 /** The word the interface uses for a thing shown on a display. It is said in one place so that it can be changed in one. */
 export const NOUN = { one: 'page', many: 'pages', One: 'Page', Many: 'Pages' } as const

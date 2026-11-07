@@ -3985,7 +3985,7 @@ describe('displays and machines', () => {
     const t = backend()
     expect(await t.run(async (ctx) => [(await ctx.db.query('users').collect()).length, (await ctx.db.query('machines').collect()).length])).toEqual([0, 0])
     // And it names the later forms of a call it takes, which a machine a version ahead of it asks about when it is refused one
-    expect(await (await t.fetch('/cli/config')).json()).toEqual({ protocol: 1, issuer: SITE, takes: ['delivery.allWaiting.for'] })
+    expect(await (await t.fetch('/cli/config')).json()).toEqual({ protocol: 1, issuer: SITE, takes: ['delivery.allWaiting.for', 'delivery.inboxPage.held'] })
     const key = await aKeyPair()
     const made = await t.mutation(internal.bridge.enroll, { subject: 'owner', name: 'this machine', publicKey: key.publicKey })
     if ('error' in made) throw new Error(made.error)
@@ -5467,6 +5467,44 @@ describe('cases at the edges', () => {
     }
     expect(found.get(wanted!)).toBe(2)
     expect(after).toEqual([{ harness: 'codex', id: '' }])
+  })
+
+  test('a conversation held in a thread is offered only what came after the connector began to ask for it that way, however much older waits in front, and the older stays for it wait', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const now = Date.now()
+    const since = now - 60_000
+    const p = await publish(m, 'plan', { session: SESSION })
+    // Weeks old, on this machine and on none, which would take both places each kind has
+    const old = [
+      ...(await insertClicks(t, p.artifactId, 3, {}, now - 21 * 86_400_000)),
+      ...(await insertClicks(t, p.artifactId, 3, { machineId: undefined }, now - 21 * 86_400_000 + 10)),
+    ]
+    const [mine] = await insertClicks(t, p.artifactId, 1, {}, now - 1000)
+    const [loose] = await insertClicks(t, p.artifactId, 1, { machineId: undefined }, now - 500)
+    const offered = async (args: Record<string, unknown>) =>
+      (await m.as.query(api.delivery.inboxPage, { listening: [], after: [], ...args } as never)).clicks.map((c) => c.id)
+    expect(await offered({ held: [{ ...SESSION, since }] })).toEqual([mine, loose])
+    // Asked for in no way, nothing is offered, and asked for as here and listening, the oldest are, as always
+    expect(await offered({})).toEqual([])
+    expect(await offered({ listening: [SESSION] })).toEqual(old.slice(0, 2))
+    expect(await offered({ listening: [SESSION], held: [{ ...SESSION, since }] })).toEqual(old.slice(0, 2))
+    // The older ones are still waiting, for `it wait` and the site
+    expect((await m.as.query(api.delivery.waitingFor, { session: SESSION })).map((c) => c.id)).toEqual(expect.arrayContaining([...old, mine, loose]))
+  })
+
+  test('the conversations held in threads are read within the forty a machine listens for, after the ones that are here', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const listening = Array.from({ length: 39 }, (_, n) => ({ harness: 'codex', id: `here-${n}` }))
+    const held = ['a', 'b'].map((id) => ({ harness: 'claude-code', id: `held-${id}`, since: Date.now() - 60_000 }))
+    const p = await publish(m, 'plan', { session: SESSION })
+    const clicks: string[] = []
+    for (const s of [...listening, ...held]) clicks.push(...(await insertClicks(t, p.artifactId, 1, { harness: s.harness, sessionId: s.id })))
+    const { clicks: offered } = await m.as.query(api.delivery.inboxPage, { listening, held, after: [] })
+    expect(offered.map((c) => c.id).sort()).toEqual(clicks.slice(0, 40).sort())
   })
 
   test('an attended click behind eight timer clicks has a place in the first reopening batch', async () => {
