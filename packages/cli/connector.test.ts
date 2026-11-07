@@ -3677,6 +3677,31 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     ])
   })
 
+  test('a message T3 Code took but did not answer, some of whose clicks can no longer go with it, is sent again under its own name with the rest, and the others then go under names of their own', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    withT3Code()
+    stand.t3.threads.set('thread-1', 't3-thread-a')
+    await start()
+    // Three clicks go in one message, which T3 Code takes, and its answer never arrives
+    stand.t3.losing = true
+    offered(click(1), click(2, 1), click(3, 1))
+    for (let i = 0; i < 5 && stand.t3.lost.size < 1; i++) await pass()
+    expect(stand.t3.whats).toEqual(['line click-1 click-2 click-3'])
+    // The second is no longer there to go with the others when the message is sent again
+    stand.t3.losing = false
+    offered(click(1), click(3, 1))
+    await pass(601)
+    await until(() => called('delivery:handedOff').includes('click-1') && called('delivery:handedOff').includes('click-3'))
+    // It went under the name it had, which T3 Code took for the message it had, and nothing more stands in the thread
+    expect(stand.t3.whats).toEqual(['line click-1 click-2 click-3', 'line click-1 click-2 click-3'])
+    expect(stand.t3.sent).toHaveLength(1)
+    // The one that could not go then goes under a name of its own, since T3 Code may not have had it
+    offered(click(2, 1))
+    await pass(2)
+    await until(() => called('delivery:handedOff').includes('click-2'))
+    expect(stand.t3.whats.at(-1)).toBe('line click-2')
+  })
+
   test('one whose conversation is held in a thread is put to the thread, though some Codex has the conversation open, and Codex’s queue is not used', async () => {
     withT3Code()
     stand.t3.threads.set('thread-1', 't3-thread-a')
