@@ -725,10 +725,14 @@ export const CLOCK_TRIP_MS = 2000
  */
 export class BackendClock {
   private anchor?: { server: number; mono: number; wall: number; within: number }
-  constructor(
-    private readonly mono: () => number,
-    private readonly wall: () => number,
-  ) {}
+  // Said as fields and set in the constructor, not as parameter properties, because this package
+  // is loaded by Node's own TypeScript support when the site is built, which only strips types
+  private readonly mono: () => number
+  private readonly wall: () => number
+  constructor(mono: () => number, wall: () => number) {
+    this.mono = mono
+    this.wall = wall
+  }
 
   /**
    * Learns from a heartbeat's answer that said `server`, asked at `sent` and taken in at `back`
