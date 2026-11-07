@@ -4789,6 +4789,21 @@ describe.skipIf(process.platform === 'win32')('a conversation held in a thread o
     noOtherWay()
   })
 
+  test('one whose thread T3 Code no longer takes messages for keeps being asked for, and its click waits for the thread rather than go into Codex’s queue or be set aside', async () => {
+    withT3Code()
+    // The thread was archived or deleted in T3 Code, which then refuses what is put to it
+    stand.t3.refusing = 'T3 Code has no such thread'
+    await start('socket', BOTH, noted({ 'codex:thread-1': 't3-thread-gone' }))
+    backend(click(1, { harness: 'codex', id: 'thread-1' }))
+    await until(() => stand.t3.refused.length === 1)
+    await pause(2500)
+    expect(stand.t3.refused.map((r) => r.thread)).toEqual(['t3-thread-gone'])
+    expect(listened()).toEqual(['codex:thread-1'])
+    expect(said.some((line) => line.includes('waits, since T3 Code did not take the last one'))).toBe(true)
+    for (const name of ['delivery:handedOff', 'delivery:park']) expect(called(name)).toEqual([])
+    noOtherWay()
+  })
+
   test('a Codex conversation noted under the oldest of more ids than the latest few is held to its thread, and its click waits for T3 Code rather than go into Codex’s queue', async () => {
     withT3Code()
     stand.t3.running = false
