@@ -7488,3 +7488,109 @@ describe('Source read consistency', () => {
     expect(await code(p.browser.action(api.artifacts.source, { slug: 'read-integrity' }))).toBe('forbidden')
   })
 })
+
+describe('Conditional owner-preserving publication', () => {
+  test('Preserving ownership also preserves a revoked original machine and rejects stale updates atomically.', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const old = await machineOf(t, 'alice', 'old')
+    const newer = await machineOf(t, 'alice', 'new')
+    await publish(old, 'one', { session: SESSION })
+    await t.run((ctx) => ctx.db.patch(old.id, { revoked: true }))
+    const begun = await newer.as.action(api.publish.begin, {
+      slug: 'one',
+      title: 'Updated',
+      files: page,
+      session: { harness: 'dot', id: 'parent' },
+      preserveOwner: true,
+      expectedVersion: 1,
+    })
+    await newer.as.action(api.publish.finish, { artifactId: begun.artifactId, version: begun.version })
+    const raw = await t.run((ctx) => ctx.db.get(begun.artifactId))
+    expect(raw?.machineId).toBe(old.id)
+    expect(raw?.session).toEqual(SESSION)
+    expect(await code(newer.as.action(api.publish.begin, { slug: 'one', title: 'Stale', files: page, preserveOwner: true, expectedVersion: 1 }))).toBe(
+      'conflict',
+    )
+    const first = await newer.as.action(api.publish.begin, { slug: 'one', title: 'First', files: page, preserveOwner: true, expectedVersion: 2 })
+    const second = await newer.as.action(api.publish.begin, { slug: 'one', title: 'Second', files: page, preserveOwner: true, expectedVersion: 2 })
+    await newer.as.action(api.publish.finish, { artifactId: second.artifactId, version: second.version })
+    expect(await code(newer.as.action(api.publish.finish, { artifactId: first.artifactId, version: first.version }))).toBe('conflict')
+    expect((await newer.as.query(api.artifacts.get, { slug: 'one' })).title).toBe('Second')
+  })
+})
+
+describe('Conditional content-only invariants', () => {
+  test('An account update preserves owner, agent label, state and pending action route without changing displays.', async () => {
+    const t = backend()
+    const personA = await person(t, 'alice')
+    const owner = await machineOf(t, 'alice', 'owner')
+    const updater = await machineOf(t, 'alice', 'updater')
+    const p = await publish(owner, 'content-only', { session: SESSION, agent: 'Original agent', state: '{"kept":1}' })
+    const action = await personA.browser.mutation(api.actions.submit, {
+      artifactId: p.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-before-update'),
+    })
+    const before = await t.run(async (ctx) => ({
+      page: await ctx.db.get(p.artifactId),
+      action: await ctx.db.get(action.actionId),
+      displays: await ctx.db.query('displays').collect(),
+    }))
+    const begun = await updater.as.action(api.publish.begin, {
+      slug: 'content-only',
+      title: 'New content',
+      files: page,
+      session: { harness: 'dot', id: 'updater' },
+      preserveOwner: true,
+      expectedVersion: 1,
+    })
+    await updater.as.action(api.publish.finish, { artifactId: begun.artifactId, version: begun.version })
+    const after = await t.run(async (ctx) => ({
+      page: await ctx.db.get(p.artifactId),
+      action: await ctx.db.get(action.actionId),
+      displays: await ctx.db.query('displays').collect(),
+    }))
+    for (const key of ['machineId', 'session', 'agent'] as const) expect(after.page?.[key]).toEqual(before.page?.[key])
+    expect(after.action).toEqual(before.action)
+    expect(after.displays).toEqual(before.displays)
+    expect(await stateOf(owner.as, 'content-only')).toEqual({ kept: 1 })
+    expect(after.page?.title).toBe('New content')
+    expect(after.page?.currentVersion).toBe(2)
+  })
+  test('The first completed conditional write wins even when it has the lower reserved version; retrying its receipt is idempotent.', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'conditional-race')
+    const args = { slug: 'conditional-race', title: 'First', files: page, preserveOwner: true, expectedVersion: 1 }
+    const a = await m.as.action(api.publish.begin, args)
+    const b = await m.as.action(api.publish.begin, { ...args, title: 'Second' })
+    const first = await m.as.action(api.publish.finish, { artifactId: a.artifactId, version: a.version })
+    expect(await code(m.as.action(api.publish.finish, { artifactId: b.artifactId, version: b.version }))).toBe('conflict')
+    expect(await m.as.action(api.publish.finish, { artifactId: a.artifactId, version: a.version })).toEqual(first)
+    const final = await m.as.query(api.artifacts.get, { slug: 'conditional-race' })
+    expect(final.version).toBe(2)
+    expect(final.title).toBe('First')
+    await m.as.mutation(api.publish.abandon, { artifactId: b.artifactId, version: b.version })
+  })
+  test('Preserve mode rejects takeover, omitted or invalid versions, media changes and page creation.', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'guarded')
+    const args = { slug: 'guarded', title: 'Update', files: page, preserveOwner: true, expectedVersion: 1 }
+    for (const bad of [
+      { take: true, session: SESSION },
+      { own: true, session: SESSION },
+      { expectedVersion: undefined },
+      { expectedVersion: 0 },
+      { expectedVersion: 1.5 },
+      { media: ['camera'] },
+      { agentExplicit: true, agent: 'Changed' },
+    ])
+      expect(await code(m.as.action(api.publish.begin, { ...args, ...bad } as never))).toBe('invalid')
+    expect(await code(m.as.action(api.publish.begin, { ...args, slug: 'missing-page' }))).toBe('conflict')
+    expect((await m.as.query(api.artifacts.get, { slug: 'guarded' })).version).toBe(1)
+  })
+})

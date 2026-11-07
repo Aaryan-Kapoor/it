@@ -16,6 +16,7 @@ export const BOOLEAN = new Set([
   'help',
   'yes',
   'take',
+  'preserve-owner',
   'force',
   'check',
   'status',
@@ -37,6 +38,7 @@ export const VALUED = new Set([
   'button',
   'timeout',
   'if-revision',
+  'if-version',
   'max-bytes',
   'only',
   'name',
@@ -56,7 +58,7 @@ export interface Args {
 /** The options each command can honour. JSON and help apply to every public command. */
 export const OPTIONS: Record<string, readonly string[]> = {
   create: ['id', 'file', 'dir', 'html', 'state', 'agent', 'open', 'on', 'take'],
-  update: ['id', 'file', 'dir', 'html', 'title', 'agent', 'open', 'on', 'take'],
+  update: ['id', 'file', 'dir', 'html', 'title', 'agent', 'open', 'on', 'take', 'preserve-owner', 'if-version'],
   list: [],
   read: [],
   'read-source': ['max-bytes'],

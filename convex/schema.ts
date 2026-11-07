@@ -315,6 +315,9 @@ export default defineSchema({
         session: v.optional(session),
         agent: v.optional(v.string()),
         take: v.boolean(),
+        /** Explicit content-only publication and the version required at atomic commit. */
+        preserveOwner: v.optional(v.boolean()),
+        expectedVersion: v.optional(v.number()),
         agentExplicit: v.optional(v.boolean()),
         expectedOwner: v.optional(expectedOwner),
         /** Published as a page of that conversation's own making: not shown where the id is by then another conversation's page. */

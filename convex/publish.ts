@@ -27,6 +27,8 @@ const beginArgs = {
   operation: v.optional(v.string()),
   agentExplicit: v.optional(v.boolean()),
   expectedOwner: v.optional(expectedOwner),
+  preserveOwner: v.optional(v.boolean()),
+  expectedVersion: v.optional(v.number()),
   slug: v.optional(v.string()),
   title: v.string(),
   files: v.array(fileEntry),
@@ -186,6 +188,20 @@ export const _begin = internalMutation({
     if (args.expectedOwner && (!args.take || !args.session)) fail('invalid', 'An expected owner requires a takeover from a conversation.')
     if (args.take && !args.session) fail('invalid', 'Taking a page over only works from inside an agent conversation.')
 
+    if (
+      args.preserveOwner &&
+      (args.take ||
+        args.own ||
+        args.expectedVersion === undefined ||
+        args.tour !== undefined ||
+        args.state !== undefined ||
+        args.media !== undefined ||
+        args.agentExplicit)
+    )
+      fail('invalid', 'Preserving ownership requires an expected version and changes only content and title.')
+    if (args.expectedVersion !== undefined && (!Number.isSafeInteger(args.expectedVersion) || args.expectedVersion < 1))
+      fail('invalid', 'An expected version is a positive whole number.')
+
     if (args.tour !== undefined && (!TOUR_NAMES.includes(args.tour) || args.slug !== `${TOUR.prefix}${args.tour}` || args.state === undefined))
       fail('invalid', 'A tour publication needs a known tour page id and its starting state.')
 
@@ -223,9 +239,13 @@ export const _begin = internalMutation({
       take: args.take === true,
       agentExplicit: args.agentExplicit,
       expectedOwner: args.expectedOwner,
+      ...(args.preserveOwner ? { preserveOwner: true } : {}),
+      ...(args.expectedVersion === undefined ? {} : { expectedVersion: args.expectedVersion }),
       ...(own ? { own: true } : {}),
     }
     let artifact = args.slug ? await artifactBySlug(ctx, user._id, args.slug) : null
+    if (args.expectedVersion !== undefined && artifact?.currentVersion !== args.expectedVersion)
+      fail('conflict', 'The page is no longer at the expected version.')
     if (artifact && args.tour !== undefined && !isTourPage(artifact, args.tour)) {
       const adopted = await adoptTourPage(ctx, artifact, args.tour, title, args.state!)
       if (!adopted) fail('conflict', TOUR_CONFLICT)
@@ -532,6 +552,7 @@ export const _finish = internalMutation({
     const result = await recorded(ctx, user._id, artifactId, version)
     if (result) return result
     const { a, ver } = await staged(ctx, user._id, artifactId, version)
+    if (ver.by?.expectedVersion !== undefined && a.currentVersion !== ver.by.expectedVersion) fail('conflict', 'The page changed before the publish finished.')
     if (Date.now() >= ver.createdAt + PUBLICATION.budgetMs) fail('conflict', 'That publication has expired.')
     const remember = async (done: {
       slug: string
@@ -642,6 +663,7 @@ export const _finish = internalMutation({
     const owner = a.machineId ? await ctx.db.get(a.machineId) : null
     const moves =
       ver.by !== undefined &&
+      ver.by.preserveOwner !== true &&
       (!owner || owner.revoked || ver.by.take || ver.by.own || a.currentVersion === undefined) &&
       (ver.by.machineId !== a.machineId || JSON.stringify(ver.by.session) !== JSON.stringify(a.session))
     await ctx.db.patch(a._id, {
@@ -651,7 +673,8 @@ export const _finish = internalMutation({
       bytes,
       updatedAt: Date.now(),
       title: ver.title ?? a.title,
-      ...(ver.by?.agentExplicit &&
+      ...(!ver.by?.preserveOwner &&
+      ver.by?.agentExplicit &&
       ver.by.agent !== undefined &&
       ver.by.machineId === a.machineId &&
       ver.by.session?.harness === a.session?.harness &&
