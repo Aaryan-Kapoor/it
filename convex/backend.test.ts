@@ -5513,8 +5513,14 @@ describe('when a click was made', () => {
     await pass(30_000)
     expect(await beat(100, 20_000)).toBe(false)
     expect(Math.abs(told().at - Date.now())).toBeLessThanOrEqual(told().within)
+    // A click made a second before Stop by that clock is certainly before it, and goes with it
+    const before = told()
+    await pass(1000)
     await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
     await pass(1000)
+    const dropped = await click('click-before-late-beat', before.at, before.within)
+    expect(await offered()).toEqual([])
+    expect((await m.as.query(api.delivery.get, { id: dropped.actionId })).delivery).toBe('handed_off')
     const late = await click('click-after-late-beat', told().at, told().within)
     expect(await offered()).toEqual([late.actionId])
     // The browser's own clock is set back an hour, which leaves the time it tells alone, and only says it can be that far out
@@ -5529,6 +5535,35 @@ describe('when a click was made', () => {
     await pass(1000)
     const behind = await click('click-two-behind-01', Date.now() - 2000, 2000)
     expect(await offered()).toEqual([late.actionId, set.actionId, behind.actionId])
+  })
+
+  test('a click is dropped by a Stop only where it was certainly made before it, and one that may have been made after is delivered', async () => {
+    const { alice, m, p, click, row } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    // Made a second before Stop, and arriving a second after it: it goes with the stop
+    const made = Date.now()
+    await vi.advanceTimersByTimeAsync(1000)
+    await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+    const stop = Date.now()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(await row((await click('click-second-before', made)).actionId)).toMatchObject({ madeAt: made, route: 'stopped' })
+    // Just before, at and just after the Stop, said exactly and said within half a second: what
+    // may have been made after it is delivered, and what was made at its very moment goes with
+    // it, as a click that arrives at the moment of a Stop does
+    const cases: [string, number, number, boolean][] = [
+      ['click-exact-below-1', stop - 1, 0, true],
+      ['click-exact-at-0001', stop, 0, true],
+      ['click-exact-above-1', stop + 1, 0, false],
+      ['click-within-below', stop - 501, 500, true],
+      ['click-within-at-001', stop - 500, 500, true],
+      ['click-within-above', stop - 499, 500, false],
+      ['click-within-spans', stop - 100, 500, false],
+    ]
+    for (const [id, at, within, stopped] of cases) {
+      const r = await row((await click(id, at, within)).actionId)
+      expect([id, r.route === 'stopped', r.delivery]).toEqual([id, stopped, stopped ? 'handed_off' : 'pending'])
+    }
   })
 
   test('Auto-wake’s cutoff goes by when a click was made, and what was made before it never hides what was made since', async () => {
@@ -5552,16 +5587,28 @@ describe('when a click was made', () => {
   })
 
   test('a time to come is taken as now, and one from before the browser was paired, or from longer ago than a browser keeps a click, is held to those', async () => {
-    const { click, row, paired } = await setup()
+    const { alice, p, click, row, paired } = await setup()
     const future = await row((await click('click-future-0001', Date.now() + DAY)).actionId)
     expect(future.madeAt).toBe(future.createdAt)
     expect(future.madeAt).toBe(Date.now())
     expect((await row((await click('click-before-pairing', paired - HOUR)).actionId)).madeAt).toBe(paired)
     await vi.advanceTimersByTimeAsync(10 * DAY)
     expect((await row((await click('click-long-ago-0001', 0)).actionId)).madeAt).toBe(Date.now() - 8 * DAY)
-    // A few seconds before it arrived is now, and a minute before is a minute before
-    expect((await row((await click('click-prompt-0001', Date.now() - 3000)).actionId)).madeAt).toBe(Date.now())
+    // A few seconds before it arrived is a few seconds before, and a minute before is a minute before
+    expect((await row((await click('click-prompt-0001', Date.now() - 3000)).actionId)).madeAt).toBe(Date.now() - 3000)
     expect((await row((await click('click-minute-0001', Date.now() - MINUTE)).actionId)).madeAt).toBe(Date.now() - MINUTE)
+    // What is kept is the latest it can have been made, which is never after it arrived
+    expect((await row((await click('click-within-0001', Date.now() - MINUTE, 1500)).actionId)).madeAt).toBe(Date.now() - MINUTE + 1500)
+    expect((await row((await click('click-within-0002', Date.now() - 1000, 1500)).actionId)).madeAt).toBe(Date.now())
+    // A time said without how far out it can be, or said to be out by less than nothing, is taken as now
+    const unsure = await alice.browser.mutation(api.actions.submit, {
+      artifactId: p.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-unsure-0001'),
+      madeAt: Date.now() - MINUTE,
+    })
+    expect((await row(unsure.actionId)).madeAt).toBe(Date.now())
+    expect((await row((await click('click-unsure-0002', Date.now() - MINUTE, -1)).actionId)).madeAt).toBe(Date.now())
   })
 
   test('a click from a site that does not say when it was made is taken as made when it arrived', async () => {

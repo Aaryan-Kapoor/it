@@ -19,20 +19,12 @@ const DAY = 86_400_000
  */
 const MADE_BACK_MS = 8 * DAY
 /**
- * How soon after it was made a click may arrive and be taken as made when it arrived. The
- * browser tells the time by the backend's clock as it last learned it, which can be out by as
- * long as that answer took to come back. A click made just after Stop, and sent at once, must
- * never be taken for one made just before it: only a click that waited longer than this, as one
- * saved while It could not be reached did, is taken as made when the browser says.
- */
-const PROMPT_MS = 10_000
-
-/**
  * The latest a click a browser sent can have been made, which is what It judges it by. The
  * browser says when it was made, by the backend's clock as it had learned it, and how many
  * milliseconds that can be out either way (`within`), and It takes the latest moment that leaves
  * open: a click is dropped by a Stop, or left out of Auto-wake's reopening, only where it was
- * certainly made before. That moment is believed only within bounds: never later than now, which
+ * certainly made before. Where it may have been made after, it is delivered, as any click is that
+ * arrives after a Stop. That moment is believed only within bounds: never later than now, which
  * no clock can make a click newer than, never before the browser was paired, which is the
  * earliest it could have been made there, and never longer ago than a browser keeps a click.
  * Said by nobody, as by a site from before browsers said it, or said without how far out it can
@@ -40,8 +32,7 @@ const PROMPT_MS = 10_000
  */
 export function madeAt(c: Browser, said: number | undefined, within: number | undefined, now = Date.now()): number {
   if (said === undefined || within === undefined || !Number.isFinite(said) || !Number.isFinite(within) || within < 0) return now
-  const made = Math.min(now, Math.max(said + within, c.session.createdAt, now - MADE_BACK_MS))
-  return now - made < PROMPT_MS ? now : made
+  return Math.min(now, Math.max(said + within, c.session.createdAt, now - MADE_BACK_MS))
 }
 /** When a click was made, as far as It knows: one kept before It kept that was made when it arrived. */
 export const madeOf = (x: Doc<'actions'>): number => x.madeAt ?? x.createdAt
