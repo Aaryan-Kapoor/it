@@ -4825,7 +4825,8 @@ describe.skipIf(process.platform === 'win32')('a conversation held in a thread o
         last = now
         expect(listened().length).toBeLessThanOrEqual(40)
         for (const k of listened()) everAsked.add(k)
-        expect(everAsked).toContain('codex:thread-here')
+        // The one that is here is in every subscription, and not only in one of them
+        expect(listened()).toContain('codex:thread-here')
         backend()
       }
       await pass()
