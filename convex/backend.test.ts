@@ -2,7 +2,7 @@
 // The backend's own tests: who may do what, and that what is stored is what was meant.
 // They run against an in-memory copy of the backend; the service that runs it, with its content
 // service, is stood in for by a stub that records what the backend asked of it.
-import { ALIVE, describeClick, LEASE_MS, LIMITS, PUBLICATION, QUOTA, STORAGE, STORE_KEY } from '@it/protocol'
+import { ALIVE, BackendClock, describeClick, LEASE_MS, LIMITS, PUBLICATION, QUOTA, STORAGE, STORE_KEY } from '@it/protocol'
 import { type FunctionReturnType, getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
@@ -2560,7 +2560,7 @@ describe('clicks and their delivery', () => {
       const { _id, _creationTime, ...base } = (await ctx.db.get(first))!
       await ctx.db.patch(base.artifactId, { stoppedThrough: Date.now() })
       for (let i = 1; i < 64; i++) await ctx.db.insert('actions', { ...base, clientActionId: `stopped-${i}` })
-      return ctx.db.insert('actions', { ...base, clientActionId: 'after-stop', createdAt: Date.now() + 1 })
+      return ctx.db.insert('actions', { ...base, clientActionId: 'after-stop', createdAt: Date.now() + 1, madeAt: Date.now() + 1 })
     })
     expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [], done: false })
     expect(await t.run((ctx) => ctx.db.get(first))).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
@@ -3059,6 +3059,7 @@ describe('clicks and their delivery', () => {
               ...(attendedLookups ? { attended: i === count - 1 ? undefined : i === count - 2 } : {}),
               contentVersion: 1,
               createdAt: at + i,
+              madeAt: at + i,
               delivery: 'pending',
               ...(addressed ? { machineId: machine._id } : {}),
               harness: of.harness,
@@ -3984,8 +3985,13 @@ describe('displays and machines', () => {
   test('the first machine is enrolled by the service, on a backend that holds nothing, and that makes the one person', async () => {
     const t = backend()
     expect(await t.run(async (ctx) => [(await ctx.db.query('users').collect()).length, (await ctx.db.query('machines').collect()).length])).toEqual([0, 0])
-    // And it names the later forms of a call it takes, which a machine a version ahead of it asks about when it is refused one
-    expect(await (await t.fetch('/cli/config')).json()).toEqual({ protocol: 1, issuer: SITE, takes: ['delivery.allWaiting.for'] })
+    // And it names the later forms of a call it takes, which a machine a version ahead of it asks about when it is refused one, and its time
+    expect(await (await t.fetch('/cli/config')).json()).toEqual({
+      protocol: 1,
+      issuer: SITE,
+      takes: ['delivery.allWaiting.for', 'actions.madeAt', 'delivery.inboxPage.held'],
+      now: expect.any(Number),
+    })
     const key = await aKeyPair()
     const made = await t.mutation(internal.bridge.enroll, { subject: 'owner', name: 'this machine', publicKey: key.publicKey })
     if ('error' in made) throw new Error(made.error)
@@ -5419,6 +5425,356 @@ describe('leaving', () => {
   })
 })
 
+describe('when a click was made', () => {
+  const MINUTE = 60_000
+  const HOUR = 60 * MINUTE
+  const DAY = 24 * HOUR
+  async function setup() {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await t.run((ctx) => ctx.db.patch(m.id, { wanted: ['claude-code'], harnesses: [{ id: 'claude-code', addon: 'connected' }] }))
+    const p = await publish(m, 'plan', { session: SESSION })
+    const paired = (await t.run((ctx) => ctx.db.query('sessions').collect()))[0]!.createdAt
+    // The browser has been paired for a while
+    await vi.advanceTimersByTimeAsync(2 * DAY)
+    // A click the browser sends, saying when it was made, and how far out that can be, where it says so
+    const click = (id: string, madeAt?: number, madeWithin = 0) =>
+      alice.browser.mutation(api.actions.submit, {
+        artifactId: p.artifactId,
+        displayKey: displayKey('alice'),
+        envelope: envelope(id),
+        ...(madeAt === undefined ? {} : { madeAt, madeWithin }),
+      })
+    const row = async (id: string) => (await t.run((ctx) => ctx.db.get(id as Id<'actions'>)))!
+    const offered = async () => (await inbox(m, [], ['claude-code'])).map((c) => c.id)
+    const paged = async () => (await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['claude-code'], after: [] })).clicks.map((c) => c.id)
+    return { t, alice, m, p, paired, click, row, offered, paged }
+  }
+
+  test('a click made before Stop and sent after it goes with the stop, however many there are, and one made after Stop is delivered', async () => {
+    const { t, alice, m, p, click, row, offered, paged } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    // Ten clicks and a message are made while It cannot be reached, and saved in the browser
+    const before = Date.now()
+    await vi.advanceTimersByTimeAsync(5 * MINUTE)
+    expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
+    await vi.advanceTimersByTimeAsync(5 * MINUTE)
+    // The browser reaches It again, and sends what it saved
+    const late: string[] = []
+    for (let i = 0; i < 10; i++) late.push((await click(`click-saved-${String(i).padStart(4, '0')}`, before + i)).actionId)
+    const typed = await alice.browser.mutation(api.actions.message, {
+      artifactId: p.artifactId,
+      displayKey: displayKey('alice'),
+      clientActionId: 'typed-saved-0001',
+      text: 'And this too',
+      madeAt: before + 20,
+      madeWithin: 0,
+    })
+    late.push(typed.actionId!)
+    for (const id of late) expect(await row(id)).toMatchObject({ madeAt: expect.any(Number), delivery: 'handed_off', route: 'stopped', outcome: 'failed' })
+    expect((await row(late[0]!)).madeAt).toBe(before)
+    // Nothing of them waits, on the page or for the person
+    expect((await alice.browser.query(api.artifacts.list, {})).find((x) => x.slug === 'plan')!.pending).toBe(0)
+    expect(await totals(t)).toMatchObject({ waiting: 0 })
+    // One made after Stop and saved, and one sent at once, are delivered, by every way a click is offered
+    const after = (await click('click-saved-after', Date.now() - 2 * MINUTE)).actionId
+    const now = (await click('click-now-0001')).actionId
+    expect(await offered()).toEqual([after, now])
+    expect(await paged()).toEqual([after, now])
+    expect((await inbox(m)).map((c) => c.id)).toEqual([after, now])
+    expect(await m.as.mutation(api.delivery.claim, { ids: [after, now] as never, for: SESSION })).toEqual([after, now])
+  })
+
+  test('a click made just after Stop is never taken for one made before it, whatever the browser’s idea of the time', async () => {
+    const { alice, m, p, click, offered } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    // The browser's own clock, an hour ahead of the backend's, and its clock that only goes forward, as the site tells the backend's time by them
+    let mono = 1000
+    let wall = Date.now() + HOUR
+    const pass = async (ms: number) => {
+      mono += ms
+      wall += ms
+      await vi.advanceTimersByTimeAsync(ms)
+    }
+    const browser = new BackendClock(
+      () => mono,
+      () => wall,
+    )
+    // A heartbeat, whose answer is on its way back for `back` and is taken in `late` after that
+    const beat = async (back = 100, late = 0) => {
+      const sent = browser.read()
+      await pass(100)
+      const { now } = await alice.browser.mutation(api.displays.heartbeat, { key: displayKey('alice') })
+      await pass(back + late)
+      return browser.learn(now, sent, browser.read())
+    }
+    const told = () => browser.now()!
+    expect(await beat()).toBe(true)
+    expect(told()).toEqual({ at: Date.now(), within: 100 })
+    // A later heartbeat's answer is taken in twenty seconds late, as a tab held back from running takes it: it says the time as it was then, and is not learned from
+    await pass(30_000)
+    expect(await beat(100, 20_000)).toBe(false)
+    expect(Math.abs(told().at - Date.now())).toBeLessThanOrEqual(told().within)
+    // A click made a second before Stop by that clock is certainly before it, and goes with it
+    const before = told()
+    await pass(1000)
+    await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+    await pass(1000)
+    const dropped = await click('click-before-late-beat', before.at, before.within)
+    expect(await offered()).toEqual([])
+    expect((await m.as.query(api.delivery.get, { id: dropped.actionId })).delivery).toBe('handed_off')
+    const late = await click('click-after-late-beat', told().at, told().within)
+    expect(await offered()).toEqual([late.actionId])
+    // The browser's own clock is set back an hour, which leaves the time it tells alone, and only says it can be that far out
+    wall -= HOUR
+    expect(Math.abs(told().at - Date.now())).toBeLessThanOrEqual(1000)
+    expect(told().within).toBeGreaterThanOrEqual(HOUR)
+    await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+    await pass(1000)
+    const set = await click('click-after-set-back', told().at, told().within)
+    // A time two seconds behind, said to be within two seconds, is a click that may have been made after Stop
+    await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+    await pass(1000)
+    const behind = await click('click-two-behind-01', Date.now() - 2000, 2000)
+    expect(await offered()).toEqual([late.actionId, set.actionId, behind.actionId])
+  })
+
+  test('a heartbeat the machine slept through is never taken for a short one, so a click made just after Stop is delivered', async () => {
+    const { alice, m, p, click, offered } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    // The browser's clocks, of which the one that only goes forward stands still while the machine sleeps, as it does in some browsers
+    let mono = 1000
+    let wall = Date.now()
+    const pass = async (ms: number) => {
+      mono += ms
+      wall += ms
+      await vi.advanceTimersByTimeAsync(ms)
+    }
+    const sleep = async (ms: number) => {
+      wall += ms
+      await vi.advanceTimersByTimeAsync(ms)
+    }
+    const browser = new BackendClock(
+      () => mono,
+      () => wall,
+    )
+    // A heartbeat whose answer is said fifty milliseconds after it is asked and comes back fifty after that, with whatever is done before it is said, before it comes back and before it is learned from
+    const beat = async (before = async () => {}, during = async () => {}, after = async () => {}) => {
+      const sent = browser.read()
+      await before()
+      await pass(50)
+      const { now } = await alice.browser.mutation(api.displays.heartbeat, { key: displayKey('alice') })
+      await during()
+      await pass(50)
+      const back = browser.read()
+      await after()
+      return browser.learn(now, sent, back)
+    }
+    // A click sent as the site sends it: with when it was made where the browser knows the backend's clock, and without it otherwise
+    const send = (id: string) => {
+      const made = browser.now()
+      return click(id, made?.at, made?.within)
+    }
+    const stopped = async () => {
+      await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+      await pass(100)
+    }
+    // With nothing learned before, a heartbeat slept through, before the backend said its time or after, is not learned from
+    expect(await beat(() => sleep(20_000))).toBe(false)
+    expect(await beat(undefined, () => sleep(20_000))).toBe(false)
+    expect(browser.now()).toBeUndefined()
+    // So a click made a tenth of a second after Stop is judged by when it arrives, and delivered
+    await stopped()
+    const first = (await send('click-slept-unknown')).actionId
+    expect(await offered()).toEqual([first])
+    // A heartbeat that was not slept through is learned from
+    expect(await beat()).toBe(true)
+    expect(browser.now()).toEqual({ at: Date.now(), within: 50 })
+    // A later one slept through after the backend said its time is not taken over it, and what was known is said to be as far out as the sleep
+    expect(await beat(undefined, () => sleep(20_000))).toBe(false)
+    expect(Math.abs(browser.now()!.at - Date.now())).toBeLessThanOrEqual(browser.now()!.within)
+    expect(browser.now()!.within).toBeGreaterThanOrEqual(20_000)
+    await stopped()
+    const second = (await send('click-slept-known')).actionId
+    expect(await offered()).toEqual([first, second])
+    // A heartbeat not slept through is learned from in its place
+    expect(await beat()).toBe(true)
+    expect(browser.now()).toEqual({ at: Date.now(), within: 50 })
+    // One that came back before the machine slept, and is learned from only after it woke, is learned from as it was when it came back, and said to be as far out as the sleep since
+    expect(await beat(undefined, undefined, () => sleep(20_000))).toBe(true)
+    expect(Math.abs(browser.now()!.at - Date.now())).toBeLessThanOrEqual(browser.now()!.within)
+    expect(browser.now()!.within).toBeGreaterThanOrEqual(20_000)
+    await stopped()
+    const third = await send('click-slept-learning')
+    expect(await offered()).toEqual([first, second, third.actionId])
+  })
+
+  test('a click is dropped by a Stop only where it was certainly made before it, and one that may have been made after is delivered', async () => {
+    const { alice, m, p, click, row } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    // Made a second before Stop, and arriving a second after it: it goes with the stop
+    const made = Date.now()
+    await vi.advanceTimersByTimeAsync(1000)
+    await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+    const stop = Date.now()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(await row((await click('click-second-before', made)).actionId)).toMatchObject({ madeAt: made, route: 'stopped' })
+    // Just before, at and just after the Stop, said exactly and said within half a second: what
+    // may have been made after it is delivered, and what was made at its very moment goes with
+    // it, as a click that arrives at the moment of a Stop does
+    const cases: [string, number, number, boolean][] = [
+      ['click-exact-below-1', stop - 1, 0, true],
+      ['click-exact-at-0001', stop, 0, true],
+      ['click-exact-above-1', stop + 1, 0, false],
+      ['click-within-below', stop - 501, 500, true],
+      ['click-within-at-001', stop - 500, 500, true],
+      ['click-within-above', stop - 499, 500, false],
+      ['click-within-spans', stop - 100, 500, false],
+    ]
+    for (const [id, at, within, stopped] of cases) {
+      const r = await row((await click(id, at, within)).actionId)
+      expect([id, r.route === 'stopped', r.delivery]).toEqual([id, stopped, stopped ? 'handed_off' : 'pending'])
+    }
+  })
+
+  test('Auto-wake’s cutoff goes by when a click was made, and what was made before it never hides what was made since', async () => {
+    const { m, alice, click, row, offered, paged } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    const on = Date.now()
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    // Ten clicks made more than a day before Auto-wake was switched on, which arrive only now, more than one reopening's worth
+    const stale: string[] = []
+    for (let i = 0; i < 10; i++) stale.push((await click(`click-stale-${String(i).padStart(4, '0')}`, on - DAY - HOUR + i)).actionId)
+    // One made within the day before, which arrives as late, and one made now
+    const within = (await click('click-within-0001', on - HOUR)).actionId
+    const fresh = (await click('click-fresh-0001')).actionId
+    expect((await row(stale[0]!)).madeAt).toBe(on - DAY - HOUR)
+    expect(await offered()).toEqual([within, fresh])
+    expect(await paged()).toEqual([within, fresh])
+    // And an agent is told when each was made, which is what its connector's own check goes by
+    expect((await inbox(m, [], ['claude-code'])).map((c) => c.at)).toEqual([on - HOUR, Date.now()])
+    // The old ones still wait, for a conversation that is open
+    expect((await inbox(m)).map((c) => c.id)).toEqual(stale.slice(0, 2))
+  })
+
+  test('a time to come is taken as now, and one from before the browser was paired, or from longer ago than a browser keeps a click, is held to those', async () => {
+    const { alice, p, click, row, paired } = await setup()
+    const future = await row((await click('click-future-0001', Date.now() + DAY)).actionId)
+    expect(future.madeAt).toBe(future.createdAt)
+    expect(future.madeAt).toBe(Date.now())
+    expect((await row((await click('click-before-pairing', paired - HOUR)).actionId)).madeAt).toBe(paired)
+    await vi.advanceTimersByTimeAsync(10 * DAY)
+    expect((await row((await click('click-long-ago-0001', 0)).actionId)).madeAt).toBe(Date.now() - 8 * DAY)
+    // A few seconds before it arrived is a few seconds before, and a minute before is a minute before
+    expect((await row((await click('click-prompt-0001', Date.now() - 3000)).actionId)).madeAt).toBe(Date.now() - 3000)
+    expect((await row((await click('click-minute-0001', Date.now() - MINUTE)).actionId)).madeAt).toBe(Date.now() - MINUTE)
+    // What is kept is the latest it can have been made, which is never after it arrived
+    expect((await row((await click('click-within-0001', Date.now() - MINUTE, 1500)).actionId)).madeAt).toBe(Date.now() - MINUTE + 1500)
+    expect((await row((await click('click-within-0002', Date.now() - 1000, 1500)).actionId)).madeAt).toBe(Date.now())
+    // A time said without how far out it can be, or said to be out by less than nothing, is taken as now
+    const unsure = await alice.browser.mutation(api.actions.submit, {
+      artifactId: p.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-unsure-0001'),
+      madeAt: Date.now() - MINUTE,
+    })
+    expect((await row(unsure.actionId)).madeAt).toBe(Date.now())
+    expect((await row((await click('click-unsure-0002', Date.now() - MINUTE, -1)).actionId)).madeAt).toBe(Date.now())
+  })
+
+  test('a click from a site that does not say when it was made is taken as made when it arrived', async () => {
+    const { m, click, row } = await setup()
+    const sent = await row((await click('click-unsaid-0001')).actionId)
+    expect(sent.madeAt).toBe(sent.createdAt)
+    expect((await inbox(m)).map((c) => c.at)).toEqual([sent.createdAt])
+  })
+
+  test('a waiting click kept before It kept when clicks were made is dated by when it arrived, and reopens its conversation from then on', async () => {
+    const { t, m, alice, p, click, row, offered } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    const sent = await row((await click('click-unsaid-0001')).actionId)
+    const { _id, _creationTime, madeAt, ...rest } = sent
+    const old = await t.run((ctx) => ctx.db.insert('actions', { ...rest, clientActionId: 'click-kept-before', createdAt: Date.now() - HOUR }))
+    await t.run((ctx) => ctx.db.patch(p.artifactId, { waiting: 2 }))
+    // A conversation that is open is given it as before, by when it arrived
+    expect((await inbox(m)).map((c) => c.id)).toEqual([old, sent._id])
+    // Within the minute it is dated, and is offered for reopening with the rest
+    await t.mutation(internal.delivery.dateOld, {})
+    expect((await row(old)).madeAt).toBe(Date.now() - HOUR)
+    expect(await offered()).toEqual([old, sent._id])
+  })
+
+  test('the same click sent again keeps when it was first made, and one a stop dropped stays dropped', async () => {
+    const { alice, m, p, click, row } = await setup()
+    const made = Date.now() - HOUR
+    const first = await click('click-twice-0001', made)
+    expect((await click('click-twice-0001', Date.now() - 30 * MINUTE)).actionId).toBe(first.actionId)
+    expect((await click('click-twice-0001')).actionId).toBe(first.actionId)
+    expect((await row(first.actionId)).madeAt).toBe(made)
+    // Made before a stop and sent after it, and then sent again: one click, stopped
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    const before = Date.now()
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    const dropped = await click('click-stopped-0001', before)
+    expect(await click('click-stopped-0001', before)).toEqual(dropped)
+    expect(await click('click-stopped-0001')).toEqual(dropped)
+    expect(await row(dropped.actionId)).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
+  })
+
+  test('a notification’s button pressed before Stop and sent after it goes with the stop', async () => {
+    const { t, m, p, row } = await setup()
+    const screen = await paired(t, 'alice', 'owner', displayKey('kitchen'))
+    await screen.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    const note = await m.as.mutation(api.notifications.send, { text: 'Deploy?', slug: 'plan', buttons: [{ label: 'Yes', action: 'yes' }] })
+    const pressed = Date.now()
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    await screen.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    const { actionId } = await screen.browser.mutation(api.notifications.answer, {
+      id: note.id,
+      action: 'yes',
+      displayKey: displayKey('kitchen'),
+      madeAt: pressed,
+      madeWithin: 0,
+    })
+    expect(await row(actionId!)).toMatchObject({ madeAt: pressed, route: 'stopped' })
+  })
+
+  test('a conversation held in a thread is not offered a click made before the connector began to ask for it that way and sent after, and is offered one made after', async () => {
+    const { t, m, click } = await setup()
+    // Two clicks are made while It cannot be reached, and saved in the browser
+    const madeBefore = Date.now()
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    // The connector begins to ask for the conversation as one held in a thread, from this moment by It's clock
+    const since = Date.now()
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    const madeAfter = Date.now()
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    // The browser reaches It again, and sends what it saved, and then two clicks made since
+    const before = [(await click('click-held-before-1', madeBefore)).actionId, (await click('click-held-before-2', madeBefore + 1)).actionId]
+    const after = [(await click('click-held-after-01', madeAfter)).actionId, (await click('click-held-after-02', madeAfter + 1)).actionId]
+    // One of each kind is addressed to no machine, which any of the person's machines may take
+    await t.run(async (ctx) => {
+      for (const id of [before[1]!, after[1]!]) await ctx.db.patch(id as Id<'actions'>, { machineId: undefined })
+    })
+    const held = async () =>
+      (await m.as.query(api.delivery.inboxPage, { listening: [], after: [], held: [{ ...SESSION, since }] })).clicks.map((c) => c.id).sort()
+    // All four arrived after the moment, and only the two made after it are offered
+    expect(await held()).toEqual([...after].sort())
+    // The ones made before are still waiting, for `it wait` and the site
+    expect((await m.as.query(api.delivery.waitingFor, { session: SESSION })).map((c) => c.id)).toEqual(expect.arrayContaining([...before, ...after]))
+  })
+})
+
 describe('cases at the edges', () => {
   const insertClicks = (t: T, artifactId: string, n: number, over: Record<string, unknown> = {}, at = Date.now()) =>
     t.run(async (ctx) => {
@@ -5435,6 +5791,7 @@ describe('cases at the edges', () => {
             payload: '{}',
             contentVersion: 1,
             createdAt: at + i,
+            madeAt: at + i,
             delivery: 'pending',
             machineId: a.machineId,
             harness: a.session?.harness,
@@ -5467,6 +5824,44 @@ describe('cases at the edges', () => {
     }
     expect(found.get(wanted!)).toBe(2)
     expect(after).toEqual([{ harness: 'codex', id: '' }])
+  })
+
+  test('a conversation held in a thread is offered only what came after the connector began to ask for it that way, however much older waits in front, and the older stays for it wait', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const now = Date.now()
+    const since = now - 60_000
+    const p = await publish(m, 'plan', { session: SESSION })
+    // Weeks old, on this machine and on none, which would take both places each kind has
+    const old = [
+      ...(await insertClicks(t, p.artifactId, 3, {}, now - 21 * 86_400_000)),
+      ...(await insertClicks(t, p.artifactId, 3, { machineId: undefined }, now - 21 * 86_400_000 + 10)),
+    ]
+    const [mine] = await insertClicks(t, p.artifactId, 1, {}, now - 1000)
+    const [loose] = await insertClicks(t, p.artifactId, 1, { machineId: undefined }, now - 500)
+    const offered = async (args: Record<string, unknown>) =>
+      (await m.as.query(api.delivery.inboxPage, { listening: [], after: [], ...args } as never)).clicks.map((c) => c.id)
+    expect(await offered({ held: [{ ...SESSION, since }] })).toEqual([mine, loose])
+    // Asked for in no way, nothing is offered, and asked for as here and listening, the oldest are, as always
+    expect(await offered({})).toEqual([])
+    expect(await offered({ listening: [SESSION] })).toEqual(old.slice(0, 2))
+    expect(await offered({ listening: [SESSION], held: [{ ...SESSION, since }] })).toEqual(old.slice(0, 2))
+    // The older ones are still waiting, for `it wait` and the site
+    expect((await m.as.query(api.delivery.waitingFor, { session: SESSION })).map((c) => c.id)).toEqual(expect.arrayContaining([...old, mine, loose]))
+  })
+
+  test('the conversations held in threads are read within the forty a machine listens for, after the ones that are here', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const listening = Array.from({ length: 39 }, (_, n) => ({ harness: 'codex', id: `here-${n}` }))
+    const held = ['a', 'b'].map((id) => ({ harness: 'claude-code', id: `held-${id}`, since: Date.now() - 60_000 }))
+    const p = await publish(m, 'plan', { session: SESSION })
+    const clicks: string[] = []
+    for (const s of [...listening, ...held]) clicks.push(...(await insertClicks(t, p.artifactId, 1, { harness: s.harness, sessionId: s.id })))
+    const { clicks: offered } = await m.as.query(api.delivery.inboxPage, { listening, held, after: [] })
+    expect(offered.map((c) => c.id).sort()).toEqual(clicks.slice(0, 40).sort())
   })
 
   test('an attended click behind eight timer clicks has a place in the first reopening batch', async () => {
@@ -6393,6 +6788,241 @@ describe('cases at the edges', () => {
     await publish(server, 'plan', { session: { harness: 'codex', id: 'thread-s' }, take: true })
     await settle(t)
     expect((await inbox(server, [], ['codex'])).map((c) => c.id)).toEqual([actionId])
+  })
+
+  test('the site is told which clicks were set aside, until their conversation is heard from again', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    const { actionId } = await alice.browser.mutation(api.actions.submit, {
+      artifactId: p.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-0001'),
+    })
+    const seen = async () => (await alice.browser.query(api.actions.forArtifact, { artifactId: p.artifactId })).find((x) => x.id === actionId)
+    expect(await seen()).toMatchObject({ parked: false })
+    expect(await laptop.as.mutation(api.delivery.park, { id: actionId, for: thread })).toBe(true)
+    expect(await seen()).toMatchObject({ delivery: 'pending', parked: true })
+    // An agent waiting on the page takes it meanwhile: it is being delivered, and is not said to be
+    // set aside, though it stays marked so, in case that delivery comes to nothing
+    await t.run((ctx) => ctx.db.patch(actionId, { delivery: 'leased' }))
+    expect(await seen()).toMatchObject({ delivery: 'leased', parked: false })
+    expect((await t.run((ctx) => ctx.db.get(actionId)))?.parkedBy).toBe(laptop.id)
+    await t.run((ctx) => ctx.db.patch(actionId, { delivery: 'pending' }))
+    expect(await seen()).toMatchObject({ delivery: 'pending', parked: true })
+    // The conversation is heard from again, and its machine asks for what was set aside for it
+    expect(await laptop.as.mutation(api.delivery.unpark, { for: thread })).toBe(1)
+    expect(await seen()).toMatchObject({ delivery: 'pending', parked: false })
+  })
+
+  test('a set-aside click is not said to be set aside once its page changes hands', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    const { actionId } = await alice.browser.mutation(api.actions.submit, {
+      artifactId: p.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-0001'),
+    })
+    const seen = async () => (await alice.browser.query(api.actions.forArtifact, { artifactId: p.artifactId })).find((x) => x.id === actionId)
+    expect(await laptop.as.mutation(api.delivery.park, { id: actionId, for: thread })).toBe(true)
+    expect(await seen()).toMatchObject({ parked: true })
+    // Another conversation takes the page over: the click is its to try, and is tried
+    await publish(laptop, 'plan', { session: { harness: 'codex', id: 'thread-9' }, take: true })
+    await settle(t)
+    expect(await seen()).toMatchObject({ delivery: 'pending', parked: false })
+  })
+
+  test('a click nobody took is said to expire exactly when the sweep of such clicks removes it', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    const submit = (id: string) =>
+      alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope(id) })
+    const { actionId } = await submit('click-0001')
+    const taken = await submit('click-0002')
+    await laptop.as.mutation(api.delivery.handedOff, { id: taken.actionId, route: 'manual' })
+    expect(await laptop.as.mutation(api.delivery.park, { id: actionId, for: thread })).toBe(true)
+    const recent = await alice.browser.query(api.actions.forArtifact, { artifactId: p.artifactId })
+    const aside = recent.find((x) => x.id === actionId)!
+    expect(aside.expiresAt).toBe(aside.at + 30 * 86_400_000)
+    // What was handed over is done with: there is nothing about it to expire on the page
+    expect(recent.find((x) => x.id === taken.actionId)?.expiresAt).toBeNull()
+    // Still there at the very moment it is said to expire, and gone at the next sweep after it
+    vi.setSystemTime(aside.expiresAt!)
+    await t.mutation(internal.retention.sweepActions, {})
+    expect(await t.run((ctx) => ctx.db.get(actionId))).not.toBeNull()
+    vi.setSystemTime(aside.expiresAt! + 1)
+    await t.mutation(internal.retention.sweepActions, {})
+    expect(await t.run((ctx) => ctx.db.get(actionId))).toBeNull()
+  })
+
+  test('what its machine set aside on a page is tried again when the owner asks, and its machine is told when that was asked', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    const submit = (id: string) =>
+      alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope(id) })
+    const { actionId } = await submit('click-0001')
+    const other = await submit('click-0002')
+    expect(await laptop.as.mutation(api.delivery.park, { id: actionId, for: thread, all: true })).toBe(true)
+    await settle(t)
+    await laptop.as.mutation(api.machines.wakeFailed, { for: thread, why: 'its command ended with an error' })
+    const seen = async () => await alice.browser.query(api.actions.forArtifact, { artifactId: p.artifactId })
+    expect((await seen()).map((x) => x.parked)).toEqual([true, true])
+    // Set aside, it is offered to no machine, even with its conversation listening
+    expect(await inbox(laptop, [thread])).toEqual([])
+    vi.setSystemTime(Date.now() + 60_000)
+    const asked = Date.now()
+    expect(await alice.browser.mutation(api.actions.retry, { artifactId: p.artifactId })).toEqual({ retried: 2 })
+    expect((await seen()).map((x) => x.parked)).toEqual([false, false])
+    // Its machine's again, as it was before it was set aside, and marked with when the person asked
+    for (const id of [actionId, other.actionId]) {
+      const x = await t.run((ctx) => ctx.db.get(id))
+      expect(x).toMatchObject({ delivery: 'pending', machineId: laptop.id, harness: 'codex', sessionId: 'thread-1', retriedAt: asked })
+      expect(x?.parkedBy).toBeUndefined()
+    }
+    const offered = await inbox(laptop, [thread])
+    expect(offered.map((c) => [c.id, c.retriedAt])).toEqual([
+      [actionId, asked],
+      [other.actionId, asked],
+    ])
+    // Why the conversation could not be reopened was about the tries that are over: the bar no longer says it while they are tried again
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'plan' })).wakeFailed).toBeNull()
+  })
+
+  test('what was set aside is tried again when the owner asks before the rest of its conversation has been set aside', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    const submit = (id: string) =>
+      alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope(id) })
+    const { actionId } = await submit('click-0001')
+    const other = await submit('click-0002')
+    // The conversation takes nothing: the click is set aside, and the rest is to follow by itself
+    expect(await laptop.as.mutation(api.delivery.park, { id: actionId, for: thread, all: true })).toBe(true)
+    // The owner presses Retry before the rest has been reached
+    vi.setSystemTime(Date.now() + 1)
+    expect(await alice.browser.mutation(api.actions.retry, { artifactId: p.artifactId })).toEqual({ retried: 1 })
+    await settle(t)
+    // Retried after the machine gave up, the click keeps its fresh tries. What the person did
+    // not ask about is set aside as the machine decided
+    expect((await inbox(laptop, [thread])).map((c) => c.id)).toEqual([actionId])
+    expect((await t.run((ctx) => ctx.db.get(other.actionId)))?.parkedBy).toBe(laptop.id)
+  })
+
+  test('clicks tried again since their conversation was given up on are passed over, and what comes after them is still set aside', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(m, 'plan', { session: thread })
+    const [first] = await insertClicks(t, p.artifactId, 1, {}, Date.now() - 1000)
+    // More than a batch of clicks the person had tried again a moment from now, then a few more
+    const retried = await insertClicks(t, p.artifactId, 120, { retriedAt: Date.now() + 1 }, Date.now() - 900)
+    const after = await insertClicks(t, p.artifactId, 10, {}, Date.now() - 500)
+    expect(await m.as.mutation(api.delivery.park, { id: first as never, for: thread, all: true })).toBe(true)
+    vi.setSystemTime(Date.now() + 1)
+    await settle(t)
+    const rows = await t.run((ctx) => ctx.db.query('actions').collect())
+    const parked = new Set(rows.filter((x) => x.parkedBy === m.id).map((x) => x._id as string))
+    expect(retried.filter((id) => parked.has(id))).toEqual([])
+    expect(after.every((id) => parked.has(id))).toBe(true)
+  })
+
+  test('the bar stops saying the conversation could not be reopened when only a later batch brings back what was set aside, and not when a try since says it again', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    // A whole first batch of clicks waiting as they are, and the one that was set aside after them
+    await insertClicks(t, p.artifactId, 100, {}, Date.now() - 1000)
+    const [aside] = await insertClicks(t, p.artifactId, 1, { machineId: undefined, parkedBy: laptop.id }, Date.now() - 500)
+    await laptop.as.mutation(api.machines.wakeFailed, { for: thread, why: 'its command ended with an error' })
+    const failed = async () => (await alice.browser.query(api.artifacts.get, { slug: 'plan' })).wakeFailed
+    expect(await failed()).not.toBeNull()
+    vi.setSystemTime(Date.now() + 60_000)
+    const asked = Date.now()
+    expect(await alice.browser.mutation(api.actions.retry, { artifactId: p.artifactId })).toEqual({ retried: 0 })
+    // A fresh try comes to nothing before the later batch is reached: that is said, and stays said
+    vi.setSystemTime(asked + 1000)
+    await laptop.as.mutation(api.machines.wakeFailed, { for: thread, why: 'its command ended with an error again' })
+    await settle(t)
+    expect((await t.run((ctx) => ctx.db.get(aside as never))) as any).toMatchObject({ machineId: laptop.id, retriedAt: asked })
+    expect(await failed()).toMatchObject({ why: 'its command ended with an error again' })
+    // Without that try, the batch that brought the click back takes away what was said before the person asked
+    await t.run((ctx) => ctx.db.patch(aside as never, { machineId: undefined, parkedBy: laptop.id } as never))
+    await t.run((ctx) =>
+      ctx.db.patch(
+        laptop.id as never,
+        { fails: [{ harness: 'codex', sessionId: 'thread-1', at: asked + 2000, why: 'its command ended with an error' }] } as never,
+      ),
+    )
+    vi.setSystemTime(asked + 60_000)
+    expect(await alice.browser.mutation(api.actions.retry, { artifactId: p.artifactId })).toEqual({ retried: 0 })
+    await settle(t)
+    expect(await failed()).toBeNull()
+  })
+
+  test('only the owner’s browser can have what was set aside tried again, and nobody else’s asking changes anything', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const bob = await person(t, 'bob')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    const { actionId } = await alice.browser.mutation(api.actions.submit, {
+      artifactId: p.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-0001'),
+    })
+    expect(await laptop.as.mutation(api.delivery.park, { id: actionId, for: thread })).toBe(true)
+    const screen = await browserOf(t, 'alice', 'screen')
+    const before = await t.run((ctx) => ctx.db.get(actionId))
+    expect(await code(screen.browser.mutation(api.actions.retry, { artifactId: p.artifactId }))).toBe('forbidden')
+    expect(await code(laptop.as.mutation(api.actions.retry, { artifactId: p.artifactId }))).toBe('forbidden')
+    expect(await code(t.mutation(api.actions.retry, { artifactId: p.artifactId }))).not.toBe('ok')
+    // Another person's page is no page to them
+    expect(await code(bob.browser.mutation(api.actions.retry, { artifactId: p.artifactId }))).toBe('not_found')
+    // Asked under a pairing of the owner's that has since been replaced, as a saved request can be
+    expect(await code(alice.browser.mutation(api.actions.retry, { artifactId: p.artifactId, expectedSession: screen.session }))).toBe('conflict')
+    expect(await t.run((ctx) => ctx.db.get(actionId))).toEqual(before)
+  })
+
+  test('asking to try again what is not set aside changes nothing about it', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    const submit = (id: string) =>
+      alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope(id) })
+    const waiting = await submit('click-0001')
+    const taken = await submit('click-0002')
+    const handed = await submit('click-0003')
+    // Set aside, and taken meanwhile by an agent waiting on the page: it is being delivered
+    expect(await laptop.as.mutation(api.delivery.park, { id: taken.actionId, for: thread })).toBe(true)
+    await t.run((ctx) => ctx.db.patch(taken.actionId, { delivery: 'leased', leaseMachineId: laptop.id, leaseExpiresAt: Date.now() + 30_000 }))
+    // And one its conversation took and was handed
+    await laptop.as.mutation(api.delivery.handedOff, { id: handed.actionId, route: 'manual' })
+    const rows = () => t.run(async (ctx) => Promise.all([waiting, taken, handed].map((x) => ctx.db.get(x.actionId))))
+    const before = await rows()
+    expect(await alice.browser.mutation(api.actions.retry, { artifactId: p.artifactId })).toEqual({ retried: 0 })
+    expect(await rows()).toEqual(before)
+    // Asked again, as a person who pressed twice does: still nothing
+    expect(await alice.browser.mutation(api.actions.retry, { artifactId: p.artifactId })).toEqual({ retried: 0 })
+    expect(await rows()).toEqual(before)
   })
 
   test('a machine that asks to be enrolled a second time with the same key is the same machine', async () => {

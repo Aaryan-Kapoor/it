@@ -11,7 +11,7 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, mutation, type QueryCtx, query } from './_generated/server'
-import { destination, dropStopped, noLongerWaiting, stoppedSince } from './actions'
+import { destination, dropStopped, madeOf, noLongerWaiting, stoppedSince } from './actions'
 import { artifactBySlug, requireMachine } from './lib/authz'
 import { fail } from './lib/errors'
 import { log } from './lib/log'
@@ -42,7 +42,8 @@ async function asClicks(ctx: QueryCtx, rows: Doc<'actions'>[]) {
       name: x.name,
       /** JSON text. */
       payload: x.payload,
-      at: x.createdAt,
+      // When the person made it, which for a click that waited in a browser is before It received it
+      at: madeOf(x),
       attended: x.attended ?? null,
       session: x.harness && x.sessionId ? { harness: x.harness, id: x.sessionId } : null,
       version: x.contentVersion,
@@ -52,6 +53,9 @@ async function asClicks(ctx: QueryCtx, rows: Doc<'actions'>[]) {
       ...(stateNow !== undefined && stateNow !== x.baseStateRevision ? { nowStateRevision: stateNow } : {}),
       // The files it carried beside its data, as It received them: read one with `it action <id> --save`
       ...(x.files?.length ? { files: x.files.map((f) => ({ name: f.name, type: f.type, bytes: f.size })) } : {}),
+      // When the person last asked for it to be tried again, where they have: a machine that had
+      // given up on it before then tries it afresh. It is for the connector, never the agent
+      ...(x.retriedAt !== undefined ? { retriedAt: x.retriedAt } : {}),
     })
   }
   return out
@@ -79,7 +83,12 @@ async function listeningRows(
   ctx: QueryCtx,
   user: Doc<'users'>,
   machine: Doc<'machines'>,
-  listening: { harness: string; id: string }[],
+  /**
+   * And for each, where it has one, the moment only what was made after is read, by when the
+   * person made it (`madeAt`) and not when It received it, so that a click saved in a browser
+   * before that moment and sent after it is left out with the rest of what came before.
+   */
+  listening: { harness: string; id: string; since?: number }[],
   read: (rows: Doc<'actions'>[]) => Doc<'actions'>[],
 ) {
   const rows: Doc<'actions'>[] = []
@@ -88,14 +97,23 @@ async function listeningRows(
   // conversation: a click whose page belonged to a machine that is gone (the person signed
   // this computer in again, say) has no machine, and still belongs to the conversation that
   // is here and listening.
+  //
+  // A conversation named with a moment is read from that moment on, by when each click was
+  // made, in the index itself: what was made before it is outside what is read, so no number of
+  // older clicks can take the places of one that came after. A click kept before It kept when
+  // clicks were made has no such time until `dateOld` gives it the time it arrived, which it
+  // does within a minute, and is outside what is read until then.
   for (const s of listening.slice(0, LISTENING_MOST)) {
     // This machine's own, and those with no machine, are each read by themselves: read
     // together with everything else waiting for the conversation, a few clicks that are
     // another machine's, or were set aside, could stand in front of one this machine may take.
+    const since = s.since
     const route = (machineId: Id<'machines'>) =>
-      ctx.db
-        .query('actions')
-        .withIndex('by_route', (q) => q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id))
+      since === undefined
+        ? ctx.db
+            .query('actions')
+            .withIndex('by_route', (q) => q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id))
+        : madeAfter(ctx, machineId, s.harness, s.id, since)
     // These come first and are at most four for each of forty conversations, which is within what may be read whatever they carry
     const own = read(await route(machine._id).take(2))
     // Those with no machine are read as exactly the ones this machine may take: this
@@ -104,24 +122,55 @@ async function listeningRows(
     // Nothing is read and then left out, so no number of clicks that may not be taken,
     // another person's or set aside, can stand in front of one that may; and the oldest of
     // them are the ones offered.
-    const loose = read(
-      await ctx.db
-        .query('actions')
-        .withIndex('by_user_route', (q) =>
-          q
-            .eq('userId', user._id)
-            .eq('delivery', 'pending')
-            .eq('harness', s.harness)
-            .eq('sessionId', s.id)
-            .eq('machineId', undefined)
-            .eq('parkedBy', undefined),
-        )
-        .take(2),
-    )
-    rows.push(...[...own, ...loose].sort((a, b) => a.createdAt - b.createdAt).slice(0, 2))
+    const loose = read(await looseFor(ctx, user._id, s.harness, s.id, since).take(2))
+    // Oldest first by what each was read by
+    const at = since === undefined ? (x: Doc<'actions'>) => x.createdAt : madeOf
+    rows.push(...[...own, ...loose].sort((a, b) => at(a) - at(b)).slice(0, 2))
   }
   return rows
 }
+
+/**
+ * What waits for one conversation with no machine and not set aside, which any of the person's
+ * machines may take, oldest first: by when it arrived, or, after `since`, by when it was made.
+ */
+const looseFor = (ctx: QueryCtx, userId: Id<'users'>, harness: string, sessionId: string, since: number | undefined) =>
+  since === undefined
+    ? ctx.db
+        .query('actions')
+        .withIndex('by_user_route', (q) =>
+          q
+            .eq('userId', userId)
+            .eq('delivery', 'pending')
+            .eq('harness', harness)
+            .eq('sessionId', sessionId)
+            .eq('machineId', undefined)
+            .eq('parkedBy', undefined),
+        )
+    : ctx.db
+        .query('actions')
+        .withIndex('by_user_route_made', (q) =>
+          q
+            .eq('userId', userId)
+            .eq('delivery', 'pending')
+            .eq('harness', harness)
+            .eq('sessionId', sessionId)
+            .eq('machineId', undefined)
+            .eq('parkedBy', undefined)
+            .gt('madeAt', since),
+        )
+
+/**
+ * What waits for one conversation on a machine, oldest first by when it was made, and made after
+ * `since`: the moment of a stop, or Auto-wake's cutoff. A click made before then is outside what
+ * this reads, also where it arrived after, so no number of them can take the place of one made
+ * since. With nothing to be after, as for a harness's own queue, it is everything waiting.
+ */
+const madeAfter = (ctx: QueryCtx, machineId: Id<'machines'>, harness: string, sessionId: string, since: number) =>
+  ctx.db.query('actions').withIndex('by_route_made', (q) => {
+    const all = q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId)
+    return since > 0 ? all.gt('madeAt', since) : all
+  })
 
 /**
  * The array inbox for connectors without paging. Listening conversations have reserved
@@ -181,29 +230,21 @@ export const inbox = query({
       const may = (n: number, reserved = 0) => Math.max(0, Math.min(n, Math.floor((left - until) / CLICK_MOST) - reserved))
       // Discovery leaves room for the other ways of finding a conversation and for reading
       // its oldest click. Newest rows alone cannot be delivered without skipping earlier ones.
+      // Read by when each click was made, so that one made before the cutoff is not read
+      // however late it arrived. With no cutoff, as for a harness's own queue, everything is.
+      const madeSince = () =>
+        ctx.db.query('actions').withIndex('by_harness_made', (q) => {
+          const all = q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness)
+          return from > 0 ? all.gte('madeAt', from) : all
+        })
       const first = Math.min(40, Math.floor(may(80) / 2))
-      const oldest = first
-        ? read(
-            await ctx.db
-              .query('actions')
-              .withIndex('by_harness', (q) => q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).gte('createdAt', from))
-              .take(first),
-          )
-        : []
+      const oldest = first ? read(await madeSince().take(first)) : []
       // Fewer than were asked for are all there are in this queue: nothing of it need be read a second time
       const all = first > 0 && oldest.length < first
       for (const x of oldest) if (x.sessionId && !found.includes(x.sessionId) && found.length < 10) found.push(x.sessionId)
       // And the ones pressed most recently: a conversation somebody is using now
       const last = Math.min(20, Math.floor(may(40, found.length) / 2))
-      const newest = last
-        ? read(
-            await ctx.db
-              .query('actions')
-              .withIndex('by_harness', (q) => q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).gte('createdAt', from))
-              .order('desc')
-              .take(last),
-          )
-        : []
+      const newest = last ? read(await madeSince().order('desc').take(last)) : []
       for (const x of newest) if (x.sessionId && !found.includes(x.sessionId) && found.length < 16) found.push(x.sessionId)
       let after = ''
       for (let named = 0; named < 12 && may(1, found.length + 1); named++) {
@@ -223,7 +264,7 @@ export const inbox = query({
         // What was read of the queue's oldest holds this conversation's own oldest, in their
         // order. Where that is all the queue has, or as many as are wanted, it is what reading
         // the conversation would give, and the conversation is not read.
-        const known = oldest.filter((x) => x.sessionId === sessionId && x.createdAt > since)
+        const known = oldest.filter((x) => x.sessionId === sessionId && madeOf(x) > since)
         if (all || known.length >= want) {
           rows.push(...known.slice(0, want))
           continue
@@ -238,16 +279,7 @@ export const inbox = query({
           rows.push(...known)
           continue
         }
-        rows.push(
-          ...read(
-            await ctx.db
-              .query('actions')
-              .withIndex('by_route', (q) =>
-                q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId).gt('createdAt', since),
-              )
-              .take(now),
-          ),
-        )
+        rows.push(...read(await madeAfter(ctx, machine._id, harness, sessionId, since).take(now)))
       }
     }
     const seen = new Set<string>()
@@ -269,8 +301,19 @@ export const inboxPage = query({
     listening: v.array(session),
     queues: v.optional(v.array(v.string())),
     after: v.array(session),
+    /**
+     * The conversations held in threads of T3 Code that the connector asks for whether or not
+     * they are here and whether or not they may be reopened, each with since when it has asked
+     * for them that way, by this backend's clock, which it tells at its door. Only what was
+     * made after that is read for them, by `madeAt`, which is on the same clock: a click that had
+     * waited for such a conversation from before, or was made before and arrived after, is left
+     * where it is, for `it wait` and the site, and does not start a turn by itself. A connector
+     * asks with this only where the backend names `TAKES.inboxHeld` at its door, since an older
+     * one refuses it.
+     */
+    held: v.optional(v.array(v.object({ harness: v.string(), id: v.string(), since: v.number() }))),
   },
-  handler: async (ctx, { listening, queues, after }) => {
+  handler: async (ctx, { listening, queues, after, held }) => {
     const { user, machine } = await requireMachine(ctx)
     let left = READ_MOST
     const bytes = new TextEncoder()
@@ -278,7 +321,10 @@ export const inboxPage = query({
       for (const x of rows) left -= carried(bytes, x)
       return rows
     }
-    const rows = await listeningRows(ctx, user, machine, listening, read)
+    // After the ones that are here, which are read whole, and within the same forty
+    const here = new Set(listening.map((s) => `${s.harness}:${s.id}`))
+    const named = [...listening, ...(held ?? []).filter((s) => !here.has(`${s.harness}:${s.id}`))]
+    const rows = await listeningRows(ctx, user, machine, named, read)
     const next: { harness: string; id: string }[] = []
     const asked = [...new Set(queues ?? [])].filter((h) => ([...QUEUES, ...WAKES] as readonly string[]).includes(h)).slice(0, 8)
     for (const [nth, harness] of asked.entries()) {
@@ -324,32 +370,20 @@ export const inboxPage = query({
         // Leave four reads and two response places for each later conversation, and two
         // reads for this conversation's attended lookup. Extra places carry its oldest work.
         const want = Math.min(each, places - 2 * rest, may() - 4 * rest - 2)
-        const batch = read(
-          await ctx.db
-            .query('actions')
-            .withIndex('by_route', (q) =>
-              q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId).gt('createdAt', since),
-            )
-            .take(want),
-        )
+        const batch = read(await madeAfter(ctx, machine._id, harness, sessionId, since).take(want))
         if (batch.length && batch.every((c) => c.attended === false)) {
           const attended: Doc<'actions'>[] = []
           for (const present of [true, undefined]) {
             const first = await ctx.db
               .query('actions')
-              .withIndex('by_attended_route', (q) =>
-                q
-                  .eq('machineId', machine._id)
-                  .eq('delivery', 'pending')
-                  .eq('harness', harness)
-                  .eq('sessionId', sessionId)
-                  .eq('attended', present)
-                  .gt('createdAt', since),
-              )
+              .withIndex('by_attended_route_made', (q) => {
+                const all = q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId).eq('attended', present)
+                return since > 0 ? all.gt('madeAt', since) : all
+              })
               .first()
             if (first) attended.push(...read([first]))
           }
-          attended.sort((a, b) => a.createdAt - b.createdAt || a._creationTime - b._creationTime)
+          attended.sort((a, b) => madeOf(a) - madeOf(b) || a._creationTime - b._creationTime)
           if (attended[0]) {
             // The oldest attended click may pass older timer clicks. All selected clicks
             // retain their order, and the omitted timers stay pending for the next batch.
@@ -747,8 +781,10 @@ export const park = mutation({
       leaseMachineId: undefined,
       leaseExpiresAt: undefined,
     })
+    // The rest are set aside by what was decided now: one the person asks to have tried again
+    // after this, before the rest is reached, is tried again and not set aside by it
     if (all && !moved && x.harness && x.sessionId)
-      await ctx.scheduler.runAfter(0, internal.delivery.parkRest, { machineId: machine._id, harness: x.harness, sessionId: x.sessionId })
+      await ctx.scheduler.runAfter(0, internal.delivery.parkRest, { machineId: machine._id, harness: x.harness, sessionId: x.sessionId, decidedAt: Date.now() })
     return true
   },
 })
@@ -803,17 +839,52 @@ export const unparkRest = internalMutation({
 
 /** Sets aside everything else waiting for a conversation that takes nothing, a batch at a time, however much there is. */
 export const parkRest = internalMutation({
-  args: { machineId: v.id('machines'), harness: v.string(), sessionId: v.string() },
-  handler: async (ctx, { machineId, harness, sessionId }) => {
-    const rest = await ctx.db
-      .query('actions')
-      .withIndex('by_route', (q) => q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId))
-      .take(50)
+  args: {
+    machineId: v.id('machines'),
+    harness: v.string(),
+    sessionId: v.string(),
+    /** When the machine found that the conversation takes nothing. Absent from what was scheduled before this was carried. */
+    decidedAt: v.optional(v.number()),
+    /**
+     * Where the last batch stopped, by when its last click was made and when its record was:
+     * what is passed over below stays in the list, and the next batch starts after it.
+     */
+    after: v.optional(v.object({ made: v.number(), at: v.number() })),
+  },
+  handler: async (ctx, { machineId, harness, sessionId, decidedAt, after }) => {
+    // Those made at the same moment as the last one read, after it, and then those made later
+    const rest = after
+      ? await ctx.db
+          .query('actions')
+          .withIndex('by_route', (q) =>
+            q
+              .eq('machineId', machineId)
+              .eq('delivery', 'pending')
+              .eq('harness', harness)
+              .eq('sessionId', sessionId)
+              .eq('createdAt', after.made)
+              .gt('_creationTime', after.at),
+          )
+          .take(50)
+      : []
+    if (rest.length < 50)
+      rest.push(
+        ...(await ctx.db
+          .query('actions')
+          .withIndex('by_route', (q) => {
+            const route = q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId)
+            return after ? route.gt('createdAt', after.made) : route
+          })
+          .take(50 - rest.length)),
+      )
     for (const other of rest) {
       if (await stoppedSince(ctx, other)) {
         await dropStopped(ctx, other)
         continue
       }
+      // The person asked to have it tried again since the machine gave up on the conversation:
+      // it is to have its tries, and what was decided before that is not the last word on it
+      if (decidedAt !== undefined && other.retriedAt !== undefined && other.retriedAt >= decidedAt) continue
       // Only what is still for that conversation on that machine: a page that has changed
       // hands since has had its clicks addressed afresh, and they are gone from this list
       const to = await destination(ctx, other.artifactId)
@@ -821,8 +892,15 @@ export const parkRest = internalMutation({
         await ctx.db.patch(other._id, { machineId: undefined, parkedBy: machineId })
       else await ctx.db.patch(other._id, { ...to, parkedBy: undefined })
     }
-    // Each batch takes what it read out of the list it reads from, so the next starts afresh
-    if (rest.length === 50) await ctx.scheduler.runAfter(0, internal.delivery.parkRest, { machineId, harness, sessionId })
+    const last = rest.at(-1)
+    if (last && rest.length === 50)
+      await ctx.scheduler.runAfter(0, internal.delivery.parkRest, {
+        machineId,
+        harness,
+        sessionId,
+        decidedAt,
+        after: { made: last.createdAt, at: last._creationTime },
+      })
     return null
   },
 })
@@ -886,5 +964,30 @@ export const reap = internalMutation({
     // Each one is a click some connector took and did not hand over: it died, or lost its connection
     if (stale.length) log('lease.expired', { count: stale.length }, 'warn')
     return stale.length
+  },
+})
+
+/**
+ * Gives a waiting click that was kept before It kept when clicks were made the time it arrived
+ * as that time, which is the time it went by until then, a batch at a time. A harness's queue
+ * and a closed conversation are offered clicks by when they were made, and a click with no such
+ * time would be outside what is read for them. Run every minute: once every waiting click has
+ * one, it reads nothing.
+ */
+export const dateOld = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    let full = false
+    for (const delivery of ['pending', 'leased'] as const) {
+      const old = await ctx.db
+        .query('actions')
+        .withIndex('by_delivery_made', (q) => q.eq('delivery', delivery).eq('madeAt', undefined))
+        .take(50)
+      for (const x of old) await ctx.db.patch(x._id, { madeAt: x.createdAt })
+      if (old.length === 50) full = true
+    }
+    // Each batch takes what it dated out of the list it reads from, so the next starts afresh
+    if (full) await ctx.scheduler.runAfter(0, internal.delivery.dateOld, {})
+    return null
   },
 })

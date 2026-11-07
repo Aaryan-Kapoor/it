@@ -1,5 +1,6 @@
 // Small things the whole site shares: the backend's functions, this browser's display key,
 // where a page is shown, the address bar, and how a refusal from the backend reads.
+import { BackendClock, type ClockReading } from '@it/protocol'
 import { ConvexError } from 'convex/values'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { hasPending, watchPending } from './pending'
@@ -337,10 +338,47 @@ export async function presentPendingSignOut(): Promise<void> {
 // backend's clock: this browser's own may be minutes out. The difference is learned from each
 // heartbeat's answer.
 let skew = 0
-export const learnClock = (serverNow: number) => {
-  skew = Date.now() - serverNow
+// The same clock, told closely enough to say when a click was made, and how closely: from
+// heartbeats whose round trip was timed, and carried forward by a clock that only goes forward
+const clock = new BackendClock(
+  () => performance.now(),
+  () => Date.now(),
+)
+/** Both of this browser's clocks now, as a heartbeat is asked and as its answer comes back, which is what `learnClock` takes. */
+export const readClocks = (): ClockReading => clock.read()
+/**
+ * Learns the backend's clock from a heartbeat's answer. `trip` is when the heartbeat was asked
+ * and when its answer came back, by both clocks (`readClocks`): the answer is then taken as said
+ * halfway between the two. Without it, the answer is taken as said now, which is close enough
+ * for what is shown as recent and is never used to say when a click was made.
+ */
+export const learnClock = (serverNow: number, trip?: { sent: ClockReading; back: ClockReading }) => {
+  if (!trip) {
+    skew = Date.now() - serverNow
+    return
+  }
+  skew = trip.back.wall - (serverNow + (trip.back.mono - trip.sent.mono) / 2)
+  clock.learn(serverNow, trip.sent, trip.back)
 }
 export const serverNow = () => Date.now() - skew
+/**
+ * The backend's time now, and how many milliseconds it can be out either way, where this browser
+ * has learned it closely enough since the site was opened. Otherwise nothing: its own clock may be
+ * minutes out, and a heartbeat that took long says little.
+ */
+export const backendNow = (): { at: number; within: number } | undefined => clock.now()
+
+// The later forms of a call the backend takes (`TAKES`), as it last named them in answer to
+// this display's registering or heartbeat. A backend whose functions are older than this site,
+// as when loading new ones failed, names fewer or none, and refuses a call in a form it does not
+// take: the site sends such a form only where the backend has named it since the site was opened.
+let takes: readonly string[] = []
+/** Learns what the backend takes from an answer that names it. One that names nothing, as an older backend's does, takes nothing. */
+export const learnTakes = (said: unknown) => {
+  takes = Array.isArray(said) ? said.filter((t): t is string => typeof t === 'string') : []
+}
+/** Whether the backend has named that form of a call as one it takes. */
+export const backendTakes = (form: string): boolean => takes.includes(form)
 
 // ---------- the address bar ----------
 
@@ -402,6 +440,8 @@ export function ago(at: number, now = serverNow()): string {
   if (s < 86400 * 30) return `${Math.round(s / 86400)} d ago`
   return new Date(at).toLocaleDateString()
 }
+/** A day to come, written as the person's own browser writes one. What it is used for is never more than a month off, so the year is left out. */
+export const dayOf = (at: number): string => new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'long' })
 /** Re-renders now and then, so "3 min ago" stays true. */
 export function useNow(everyMs = 30_000): number {
   const [now, setNow] = useState(serverNow)

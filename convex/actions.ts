@@ -1,15 +1,41 @@
-import { LIMITS, MESSAGE, PROTOCOL_VERSION, parseJson, QUOTA } from '@it/protocol'
+import { LIMITS, MESSAGE, PROTOCOL_VERSION, parseJson, QUOTA, RETENTION } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import { ref, resolveArtifact } from './artifacts'
-import { type Browser, findDisplay, ownArtifact, requireBrowser, requireCaller } from './lib/authz'
+import { type Browser, findDisplay, ownArtifact, requireBrowser, requireCaller, requireOwner } from './lib/authz'
 import { counted } from './lib/counted'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
 import { log } from './lib/log'
 import { bump, tally } from './lib/tally'
+
+const DAY = 86_400_000
+/**
+ * How long before it arrives a browser may say a click was made. A browser keeps a click it
+ * could not send for seven days by its own clock (web/src/outbox.ts), and a day more allows for
+ * that clock being out.
+ */
+const MADE_BACK_MS = 8 * DAY
+/**
+ * The latest a click a browser sent can have been made, which is what It judges it by. The
+ * browser says when it was made, by the backend's clock as it had learned it, and how many
+ * milliseconds that can be out either way (`within`), and It takes the latest moment that leaves
+ * open: a click is dropped by a Stop, or left out of Auto-wake's reopening, only where it was
+ * certainly made before. Where it may have been made after, it is delivered, as any click is that
+ * arrives after a Stop. That moment is believed only within bounds: never later than now, which
+ * no clock can make a click newer than, never before the browser was paired, which is the
+ * earliest it could have been made there, and never longer ago than a browser keeps a click.
+ * Said by nobody, as by a site from before browsers said it, or said without how far out it can
+ * be, it is now.
+ */
+export function madeAt(c: Browser, said: number | undefined, within: number | undefined, now = Date.now()): number {
+  if (said === undefined || within === undefined || !Number.isFinite(said) || !Number.isFinite(within) || within < 0) return now
+  return Math.min(now, Math.max(said + within, c.session.createdAt, now - MADE_BACK_MS))
+}
+/** When a click was made, as far as It knows: one kept before It kept that was made when it arrived. */
+export const madeOf = (x: Doc<'actions'>): number => x.madeAt ?? x.createdAt
 
 /** Stores a click. Shared by the page's own actions and by a notification's buttons. */
 export async function record(
@@ -30,6 +56,8 @@ export async function record(
     typed?: boolean
     /** The files it carries beside its data, taken for this very click before it was sent (files.ts). */
     attachment?: Id<'attachments'>
+    /** When it was made, where that was before now (see `madeAt`). */
+    madeAt?: number
   },
 ): Promise<{ actionId: Id<'actions'>; duplicate: boolean }> {
   if (!/^[A-Za-z0-9_.:-]{8,128}$/.test(input.clientActionId)) fail('invalid', 'That is not an action id.')
@@ -89,6 +117,7 @@ export async function record(
               .withIndex('by_artifact_n', (q) => q.eq('artifactId', artifact._id).eq('n', input.contentVersion))
               .first()
           )?.title ?? '')
+  const now = Date.now()
   const actionId = await ctx.db.insert('actions', {
     userId: artifact.userId,
     artifactId: artifact._id,
@@ -100,7 +129,8 @@ export async function record(
     baseStateRevision: input.baseStateRevision,
     title,
     attended: input.attended,
-    createdAt: Date.now(),
+    createdAt: now,
+    madeAt: Math.min(input.madeAt ?? now, now),
     delivery: 'pending',
     ...to,
     ...(attachment ? { attachment: attachment._id, files: attachment.files } : {}),
@@ -108,6 +138,12 @@ export async function record(
   if (attachment) await ctx.db.patch(attachment._id, { actionId })
   await ctx.db.patch(artifact._id, { waiting: (artifact.waiting ?? 0) + 1 })
   await bump(ctx, artifact.userId, { waiting: 1 })
+  // Made before the person stopped the conversation it is for, and only arriving now, as a click
+  // saved while It could not be reached does: it goes with the stop, as it would have had it
+  // arrived in time. Kept waiting, it would stand among what was done after the stop, which is
+  // read from the moment of the stop on.
+  const made = (await ctx.db.get(actionId))!
+  if (await stoppedSince(ctx, made)) await dropStopped(ctx, made)
   return { actionId, duplicate: false }
 }
 
@@ -121,7 +157,8 @@ export async function noLongerWaiting(ctx: MutationCtx, x: Doc<'actions'>): Prom
 }
 
 /**
- * Whether the person stopped the conversation a click is for after the click was made. Such a
+ * Whether the person stopped the conversation a click is for after the click was made (by
+ * `madeOf`, so that a click that waited in a browser is judged by when the person made it). Such a
  * click is delivered by no way at all from that moment, though the step that marks it so may
  * not have come to it yet: a stop drops what was waiting in steps, and what a step has not
  * reached must not be taken, or moved out of its reach, in between.
@@ -132,14 +169,15 @@ export async function noLongerWaiting(ctx: MutationCtx, x: Doc<'actions'>): Prom
  * and one made before the stop is stopped whichever of the two it is found under.
  */
 export async function stoppedSince(ctx: QueryCtx, x: Doc<'actions'>): Promise<boolean> {
+  const made = madeOf(x)
   const noted = async (machineId: Id<'machines'> | undefined, harness: string | undefined, sessionId: string | undefined) => {
     if (!machineId || !harness || !sessionId) return false
     const machine = await ctx.db.get(machineId)
-    return (machine?.stops ?? []).some((s) => s.harness === harness && s.sessionId === sessionId && s.at >= x.createdAt)
+    return (machine?.stops ?? []).some((s) => s.harness === harness && s.sessionId === sessionId && s.at >= made)
   }
   // The page itself keeps when it was last stopped from, which stands whoever it belongs to by now
   const page = await ctx.db.get(x.artifactId)
-  if ((page?.stoppedThrough ?? 0) >= x.createdAt) return true
+  if ((page?.stoppedThrough ?? 0) >= made) return true
   if (await noted(x.machineId ?? x.parkedBy, x.harness, x.sessionId)) return true
   return noted(page?.machineId, page?.session?.harness, page?.session?.id)
 }
@@ -198,7 +236,72 @@ export const readdress = internalMutation({
   },
 })
 
-const DAY = 86_400_000
+/**
+ * The person asks, from a page, for what its machine set aside there to be tried again. A click
+ * is set aside after four tries that came to nothing, and is otherwise tried again only when its
+ * conversation is heard from: the person may have put right what stood in the way (installed the
+ * app, brought back the folder, signed in again) and not want to wait for that. Each click is
+ * addressed again to whoever owns the page now, as when its conversation comes back, and is
+ * marked with when this was asked, by which a machine that had given up on it forgets that it
+ * did. Only the owner's browser may ask, as only it may turn Auto-wake on: what is tried again
+ * may reopen a conversation, with nobody at that machine to watch it.
+ *
+ * What is not set aside is left exactly as it is: a click that its conversation, or an agent
+ * waiting on the page, has taken since the page last said so is not touched. Answers with how
+ * many it brought back, of the first few: any more follow by themselves, a batch at a time.
+ */
+export const retry = mutation({
+  args: { artifactId: v.id('artifacts'), expectedSession: v.optional(v.string()) },
+  handler: async (ctx, { artifactId, expectedSession }): Promise<{ retried: number }> => {
+    const { user } = await requireOwner(ctx, expectedSession)
+    const a = await ownArtifact(ctx, user._id, artifactId)
+    const retried = await bringBack(ctx, a._id, Date.now(), null)
+    if (retried) log('actions.retried', { artifactId: a._id, count: retried })
+    return { retried }
+  },
+})
+
+/** The rest of what was set aside on a page that the person asked to have tried again, a batch at a time. */
+export const retryRest = internalMutation({
+  args: { artifactId: v.id('artifacts'), at: v.number(), cursor: v.string() },
+  handler: async (ctx, { artifactId, at, cursor }) => {
+    if (await ctx.db.get(artifactId)) await bringBack(ctx, artifactId, at, cursor)
+    return null
+  },
+})
+
+/** Gives one batch of what waits on a page and was set aside back to whoever owns the page, marked with when that was asked. */
+async function bringBack(ctx: MutationCtx, artifactId: Id<'artifacts'>, at: number, cursor: string | null): Promise<number> {
+  const to = await destination(ctx, artifactId)
+  const batch = await ctx.db
+    .query('actions')
+    .withIndex('by_artifact_delivery', (q) => q.eq('artifactId', artifactId).eq('delivery', 'pending'))
+    .paginate({ cursor, numItems: 100 })
+  let n = 0
+  for (const x of batch.page) {
+    if (x.parkedBy === undefined) continue
+    // Stopped with its conversation since: marked so, and tried by no one
+    if (await stoppedSince(ctx, x)) {
+      await dropStopped(ctx, x)
+      continue
+    }
+    await ctx.db.patch(x._id, { ...to, parkedBy: undefined, retriedAt: at })
+    n++
+  }
+  // Why the page's conversation could not be reopened is the machine's word on the tries that
+  // are over. Left, the bar would go on saying so while the click is being tried again, whichever
+  // batch brought it back. Only what was said before the person asked goes: a try since that
+  // came to nothing has said it again
+  if (n && to.machineId) {
+    const machine = await ctx.db.get(to.machineId)
+    const fails = machine?.fails ?? []
+    const left = fails.filter((f) => f.harness !== to.harness || f.sessionId !== to.sessionId || f.at > at)
+    if (machine && left.length !== fails.length) await ctx.db.patch(machine._id, { fails: left })
+  }
+  if (!batch.isDone) await ctx.scheduler.runAfter(0, internal.actions.retryRest, { artifactId, at, cursor: batch.continueCursor })
+  return n
+}
+
 /** Each browser may replay a saved request until a deadline issued by the backend. */
 export const replayGrant = mutation({
   args: {},
@@ -240,6 +343,9 @@ export const submit = mutation({
     displayKey: v.string(),
     replayUntil: v.optional(v.number()),
     expectedSession: v.optional(v.string()),
+    /** When the person made it, by the backend's clock as the browser knew it, and how far out that can be (see `madeAt`). */
+    madeAt: v.optional(v.number()),
+    madeWithin: v.optional(v.number()),
     /** The files the action carries beside its data, taken for it beforehand (files.ts). */
     attachment: v.optional(v.id('attachments')),
     envelope: v.object({
@@ -253,7 +359,7 @@ export const submit = mutation({
       attended: v.optional(v.boolean()),
     }),
   },
-  handler: async (ctx, { artifactId, displayKey, envelope, replayUntil, expectedSession, attachment }) => {
+  handler: async (ctx, { artifactId, displayKey, envelope, replayUntil, expectedSession, attachment, madeAt: said, madeWithin }) => {
     const c = await requireBrowser(ctx, expectedSession)
     if (envelope.v !== PROTOCOL_VERSION) fail('invalid', 'This page speaks a version of the protocol the site does not.')
     const artifact = await ownArtifact(ctx, c.user._id, artifactId)
@@ -266,6 +372,7 @@ export const submit = mutation({
       ...envelope,
       ...(display ? { displayId: display._id } : {}),
       ...(attachment ? { attachment } : {}),
+      madeAt: madeAt(c, said, madeWithin),
     })
     // Counted: that something was sent from a page, and from what kind of screen. Never its name or what it carried
     if (!duplicate) await counted(ctx, 'answer.sent', { screen: display?.screen ?? 'computer', from: 'page' })
@@ -287,8 +394,11 @@ export const message = mutation({
     text: v.string(),
     replayUntil: v.optional(v.number()),
     expectedSession: v.optional(v.string()),
+    /** When the person sent it, by the backend's clock as the browser knew it, and how far out that can be (see `madeAt`). */
+    madeAt: v.optional(v.number()),
+    madeWithin: v.optional(v.number()),
   },
-  handler: async (ctx, { artifactId, displayKey, clientActionId, text, replayUntil, expectedSession }) => {
+  handler: async (ctx, { artifactId, displayKey, clientActionId, text, replayUntil, expectedSession, madeAt: said, madeWithin }) => {
     const c = await requireBrowser(ctx, expectedSession)
     const artifact = await ownArtifact(ctx, c.user._id, artifactId)
     const typed = text.trim()
@@ -306,6 +416,7 @@ export const message = mutation({
       // Typed on the site itself, where no page's script can type
       attended: true,
       typed: true,
+      madeAt: madeAt(c, said, madeWithin),
     })
     // Counted: that something was typed to an agent above a page, and from what kind of screen. Never the words
     if (!duplicate) await counted(ctx, 'answer.sent', { screen: display?.screen ?? 'computer', from: 'message' })
@@ -328,12 +439,24 @@ export const forArtifact = query({
       id: x._id,
       name: x.name,
       at: x.createdAt,
+      // When the person made it, which for a click that waited in a browser is before It got it.
+      // What Auto-wake would reopen a conversation for is judged by this (see `madeOf`)
+      madeAt: madeOf(x),
       delivery: x.delivery,
       route: x.route ?? null,
       outcome: x.outcome ?? null,
       attended: x.attended ?? null,
       // When it was handed over, or dropped by a stop: the site tells by it which stop dropped what
       handedAt: x.handedAt ?? null,
+      // Set aside by its machine after tries that came to nothing: no machine offers it to an
+      // agent again until its conversation is heard from, though it is still waiting all the same.
+      // One that an agent waiting on the page has taken meanwhile is being delivered, and is not
+      // said to be set aside, though it is still marked as such, to be set aside again if that
+      // delivery comes to nothing
+      parked: x.delivery === 'pending' && x.parkedBy !== undefined,
+      // When it goes if no agent has taken it by then, as the hourly sweep of what nobody took
+      // counts it: from when It got it. What was handed over goes a week after, and is done with
+      expiresAt: x.delivery === 'handed_off' ? null : x.createdAt + RETENTION.pendingActionDays * 86_400_000,
       // What a click carried is for the agent; the site only needs to show where it got to
       ...(c.kind === 'machine' ? { payload: x.payload } : {}),
     }))

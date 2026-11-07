@@ -4,7 +4,7 @@ import { ALIVE, LIMITS, NOUN, WAKE_BACK_MS } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { Component, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { copy, IconBack, IconLink, IconPin, IconSay, IconSend, IconStop, IconX, Mark } from './brand'
-import { agentName, ago, api, type Id, navigate, refusal, useNow } from './lib'
+import { agentName, ago, api, dayOf, type Id, navigate, refusal, useNow } from './lib'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
 import { dismissMessage, message, onItsWayUntil, outboxChanges, pendingMessage, refusedClick, thisSession, unsaved, unsent, watchOutbox } from './outbox'
@@ -160,10 +160,7 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
                     className="card-action card-action--danger"
                     title="Delete"
                     aria-label="Delete"
-                    onClick={() =>
-                      confirm(`Delete “${p.title}”? It will leave every display. Its files may still answer until deletion is confirmed.`) &&
-                      act(remove({ artifactId: p.id as Id<'artifacts'> }))
-                    }
+                    onClick={() => confirm(`Delete “${p.title}”? It will leave every display.`) && act(remove({ artifactId: p.id as Id<'artifacts'> }))}
                   >
                     <IconX />
                   </button>
@@ -206,71 +203,41 @@ export class DeletionStatus extends Component<{ empty?: boolean }, { error: unkn
     if (!this.state.error) return <DeletionReceipts empty={this.props.empty} />
     // Structured refusals still belong to the site's existing error and pairing flows.
     if (refusal(this.state.error).code !== 'error') throw this.state.error
-    const notice = (
-      <section className="deletion-status" aria-label="Page deletions">
-        <p className="deletion-line" role="status">
-          Deletion status is unavailable. Completion cannot be confirmed.
-        </p>
-        <button type="button" className="grid-empty-reset" onClick={() => this.setState({ error: null })}>
-          Try again
-        </button>
-      </section>
-    )
-    // A backend can retain earlier functions while the site is newer. A missing receipt
-    // query must not replace the page grid with an error or claim that cleanup finished.
-    return this.props.empty ? (
-      <main className="grid-view">
-        {notice}
-        <p className="grid-empty">No pages to show. Ask your agent to make a page.</p>
-      </main>
-    ) : (
-      notice
-    )
+    // A backend can retain earlier functions while the site is newer. Without the receipt
+    // query there is nothing to tell of a failing deletion, and the grid goes on as it is.
+    return this.props.empty ? <Empty owner={true} /> : null
   }
 }
 
+/**
+ * How many tries in a row a deletion fails before the person is told of it. The tries are
+ * five, ten and twenty seconds apart, so a deletion named here has gone on failing for most
+ * of a minute. One that fails once and goes through at the next try is nothing to be told of.
+ */
+const FAILING_AFTER = 3
+
+/**
+ * A deletion that goes through says nothing: the page has already left every list. Only one
+ * that keeps failing is named, since until it goes through its files may still answer to
+ * whoever has the address.
+ */
 function DeletionReceipts({ empty = false }: { empty?: boolean }) {
   const deletions = useQuery(api.deletions.list)
-  const [showCompleted, setShowCompleted] = useState(false)
   if (empty && deletions === undefined) return <main className="grid-view" role="status" />
-  if (!deletions?.length) return empty ? <Empty owner={true} /> : null
-  const pending = deletions.filter((d) => d.state !== 'completed')
-  const completed = deletions.filter((d) => d.state === 'completed')
+  const failing = (deletions ?? []).filter((d) => d.state === 'retrying' && d.attempts >= FAILING_AFTER)
+  if (!failing.length) return empty ? <Empty owner={true} /> : null
   const status = (
     <section className="deletion-status" aria-label="Page deletions">
       <div aria-live="polite">
-        {pending.length === 100 && <p className="deletion-line">Showing the oldest 100 unfinished deletions.</p>}
-        {pending.map((d) => (
+        {failing.map((d) => (
           <p className="deletion-line" key={d.job}>
-            <strong>{d.title}</strong> {d.state === 'retrying' ? 'could not be fully deleted yet. It will retry.' : 'is being deleted.'}{' '}
-            <span className="muted">Its files may still answer until deletion is confirmed.</span>
+            <strong>{d.title}</strong> could not be deleted yet. It keeps trying, and until it goes through, anyone with its link may still open its files.
           </p>
         ))}
       </div>
-      {completed.length > 0 && (
-        <>
-          <button type="button" className="grid-empty-reset" aria-expanded={showCompleted} onClick={() => setShowCompleted((show) => !show)}>
-            {showCompleted ? 'Hide completed deletions' : `Completed deletions (${completed.length})`}
-          </button>
-          {showCompleted &&
-            completed.map((d) => (
-              <p className="deletion-line" key={d.job}>
-                {d.title}: deletion confirmed.
-              </p>
-            ))}
-        </>
-      )}
     </section>
   )
-  if (empty && pending.length === 0) return <Empty owner={true} notice={status} />
-  return empty ? (
-    <main className="grid-view">
-      {status}
-      <p className="grid-empty">No pages to show. Ask your agent to make a page.</p>
-    </main>
-  ) : (
-    status
-  )
+  return empty ? <Empty owner={true} notice={status} /> : status
 }
 
 /**
@@ -396,6 +363,11 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
               // Whether a closed conversation is reopened is said to every browser alike. Only the owner may switch it on
               wakes={page.wake}
               mayWake={owner}
+              // What was set aside is tried again at the owner's word alone, as only the owner may
+              // turn Auto-wake on: it may reopen a conversation. And only where It runs this
+              // program's own functions, which are the ones known to take that word: older ones,
+              // kept while this program's would not load, may not
+              mayRetry={owner && service?.functions === 'current'}
               connection={(page as { connection?: PageConnection | null }).connection}
               harness={page.session?.harness ?? page.agent}
               agent={agentName(page.agent)}
@@ -787,6 +759,7 @@ function ActionStatus({
   pending,
   wakes,
   mayWake,
+  mayRetry,
   connection,
   harness,
   agent,
@@ -809,6 +782,8 @@ function ActionStatus({
   wakes: { machineId: string; harness: string; on: boolean } | null
   /** Whether this browser may switch that on: one paired as the person's own. */
   mayWake: boolean
+  /** Whether this browser may have what was set aside on the page tried again: the person's own, with an It that takes that. */
+  mayRetry: boolean
   connection?: PageConnection | null
   /** The owning app is known even where its conversations cannot be reopened. */
   harness: string | null
@@ -822,7 +797,17 @@ function ActionStatus({
 }) {
   const convex = useConvex()
   const setWake = useMutation(api.machines.wake)
+  const retry = useMutation(api.actions.retry)
   const recent = useQuery(api.actions.forArtifact, { artifactId })
+  // Asking for what was set aside to be tried again is It's to keep once It has answered, and is
+  // said to be on its way until then, as a stop is, once it has been for a moment
+  const [retrying, setRetrying] = useState(false)
+  const [retryLate, setRetryLate] = useState(false)
+  useEffect(() => {
+    if (!retrying) return setRetryLate(false)
+    const timer = setTimeout(() => setRetryLate(true), SENDING_SAID_MS)
+    return () => clearTimeout(timer)
+  }, [retrying])
   // Looked at every second: what is said of a click that nobody has taken changes within a few
   // seconds of it, and a person who is not told by then has usually pressed again
   const now = useNow(1_000)
@@ -978,7 +963,7 @@ function ActionStatus({
   const busy = last.delivery === 'leased'
   // A conversation is reopened only for what was done in the last day. For anything older the
   // switch would change nothing, so it is not offered, and the bar says what would bring it
-  const tooOld = now - last.at > WAKE_BACK_MS
+  const tooOld = now - (last.madeAt ?? last.at) > WAKE_BACK_MS
   const addonBlocked = addonRuntime?.state === 'incompatible' || addonRuntime?.idle === false
   if (slow && !busy && addonBlocked)
     return (
@@ -1019,12 +1004,74 @@ function ActionStatus({
       </span>
     )
   }
-  // Tried, and it could not be reopened: said as that, with why where it is asked for
+  // What was set aside can be tried again from the bar, beside what says that it was set aside or
+  // that the conversation could not be reopened, and nowhere else. Turning Auto-wake on would
+  // bring back nothing set aside, which no machine is offered, so Wake is not offered beside it:
+  // once it is back, the bar says what it says of anything waiting, Wake included, where that
+  // is what would get it there. (While a run It reopened is working, the bar is about that run,
+  // with Stop: a run of the conversation gives back what was set aside for it by itself)
+  const askRetry = () => {
+    if (!confirm(retryAsked(agent ?? 'your agent', machine ?? 'its machine'))) return
+    setRetrying(true)
+    const release = holdPending(user)
+    retry({ artifactId, expectedSession: thisSession() })
+      .then(
+        () => setRetrying(false),
+        (err) => {
+          setRetrying(false)
+          say(refusal(err).message, 'error')
+        },
+      )
+      .finally(release)
+  }
+  const retryOffered = mayRetry && stillWaiting.some((a) => a.parked) && (
+    <>
+      {retrying && retryLate && (
+        <span className="status" data-tone="wait">
+          Sending the retry. Keep this tab open until it is sent
+        </span>
+      )}
+      {/* Not a second time while one is on its way */}
+      {!retrying && (
+        <button type="button" className="link" title="Try it again now, without waiting for its conversation to run" onClick={askRetry}>
+          Retry
+        </button>
+      )}
+    </>
+  )
+  // Set aside by its machine after tries that came to nothing. Nothing tries it again until its
+  // conversation is heard from, and it is deleted a month after it was done if that never
+  // happens, so both are said: left as "Waiting", it looked as if It were still at it.
+  // (Backends from before they said which were set aside say none were)
+  if (last.parked) {
+    const aside = stillWaiting.filter((a) => a.parked)
+    const them = aside.length > 1 ? 'them' : 'it'
+    const count = aside.length > 1 ? ` (${aside.length})` : ''
+    // The first of them to go is the one said, as the day it goes on, in the person's own way of writing dates
+    const goes = Math.min(...aside.map((a) => a.expiresAt ?? Number.POSITIVE_INFINITY))
+    const tried =
+      wakeFailed && wakeFailed.at >= last.at
+        ? `Couldn’t wake ${agent ?? 'your agent'}${count}: ${wakeFailed.why}`
+        : `Couldn’t hand ${them} to ${agent ?? 'your agent'}${count}`
+    return (
+      <>
+        <span className="status" data-tone="bad">
+          {`${tried}. It won’t try again until its conversation next runs${Number.isFinite(goes) ? `, and ${aside.length > 1 ? 'starts deleting them' : 'deletes it'} on ${dayOf(goes)} if that hasn’t happened by then` : ''}`}
+        </span>
+        {retryOffered}
+      </>
+    )
+  }
+  // Tried, and it could not be reopened: said as that, with why where it is asked for. Where an
+  // earlier click of the page's was set aside after such tries, it can be tried again from here
   if (wakeFailed && wakeFailed.at >= last.at)
     return (
-      <span className="status" data-tone="bad">
-        {`Couldn’t wake ${agent ?? 'your agent'}${waiting > 1 ? ` (${waiting})` : ''}: ${wakeFailed.why}`}
-      </span>
+      <>
+        <span className="status" data-tone="bad">
+          {`Couldn’t wake ${agent ?? 'your agent'}${waiting > 1 ? ` (${waiting})` : ''}: ${wakeFailed.why}`}
+        </span>
+        {retryOffered}
+      </>
     )
   return (
     <>
@@ -1033,7 +1080,7 @@ function ActionStatus({
         {slow && busy
           ? `Sent. ${agent ?? 'Your agent'} is busy, and gets it when it is free${waiting > 1 ? ` (${waiting})` : ''}`
           : slow && tooOld
-            ? `Sent more than a day ago${waiting > 1 ? ` (${waiting})` : ''}. ${agent ?? 'Your agent'} gets it when its conversation is next open`
+            ? `Done more than a day ago${waiting > 1 ? ` (${waiting})` : ''}. ${agent ?? 'Your agent'} gets it when its conversation is next open`
             : slow && !wakes?.on
               ? `Sent. ${agent ?? 'Your agent'} is not listening${waiting > 1 ? ` (${waiting})` : ''}. Open its conversation and check the add-on under Machines`
               : `Sent. Waiting for your agent${waiting > 1 ? ` (${waiting})` : ''}`}
@@ -1059,6 +1106,9 @@ function ActionStatus({
 const WAKE_OFFER_MS = 3_000
 /** How long It has not been reachable before the page says so: longer than a connection takes to come back by itself. */
 const DOWN_MS = 5_000
+/** What the person is asked before what was set aside on a page is tried again, which may reopen its conversation with nobody there. */
+export const retryAsked = (agent: string, machine: string): string =>
+  `Try again to hand this to ${agent}? ${machine} tries it as it would anything just done here, which reopens its conversation, with nobody watching, where Auto-wake is on.`
 /** What the person is asked before closed conversations of an agent app may be reopened on a machine, where they switch it on from a page. */
 export const wakeAsked = (agent: string, machine: string): string =>
   `Turn on Auto-wake for ${agent} on ${machine}? It then runs ${agent} there, with nobody watching, when you use a page whose conversation is closed. You can turn it off under Machines.`

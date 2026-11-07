@@ -652,6 +652,24 @@ describe('telling the backend that this display is open', () => {
     expect(errors).toEqual([])
   }, 10_000)
 
+  test('what the backend takes is learned from its answers, and its clock closely enough to say when a click was made, and a backend that names nothing takes nothing', async () => {
+    cookie = CODES.ownercode00000000001!
+    answers['displays:register'] = () => ({ ...DISPLAY, takes: ['actions.madeAt'] })
+    answers['displays:heartbeat'] = () => ({ now: Date.now() - 3_600_000, takes: ['actions.madeAt'] })
+    await start()
+    await settle()
+    const { backendNow, backendTakes } = await import('./lib')
+    expect(backendTakes('actions.madeAt')).toBe(true)
+    expect(Math.abs(Date.now() - 3_600_000 - backendNow()!.at)).toBeLessThan(1000)
+    expect(backendNow()!.within).toBeLessThan(1000)
+    // The functions It runs are older by the next heartbeat, as when loading new ones failed
+    answers['displays:heartbeat'] = () => ({ now: Date.now() - 3_600_000 })
+    await act(async () => void document.dispatchEvent(new Event('visibilitychange')))
+    await settle()
+    expect(beats()).toBe(2)
+    expect(backendTakes('actions.madeAt')).toBe(false)
+  })
+
   test('while one telling is not yet answered no other is made, however often the tab is hidden and shown again', async () => {
     cookie = CODES.ownercode00000000001!
     answers['displays:heartbeat'] = () => new Promise(() => {})
@@ -1018,5 +1036,53 @@ describe('signing out', () => {
     )
     expect(button('Try again')).toBeDefined()
     expect(button('Stay paired')).toBeDefined()
+  })
+})
+
+describe('what was done here and given up with nobody there to be told', () => {
+  /** A click kept for later under a pairing, from a page that has gone, a week and more ago. */
+  const tooOld = (session: string, id: string) =>
+    localStorage.setItem(
+      `it.outbox.user-1.page-1.${id}`,
+      JSON.stringify({
+        user: 'user-1',
+        artifactId: 'page-1',
+        format: 2,
+        session,
+        at: Date.now() - 8 * 86_400_000,
+        left: true,
+        envelope: { v: 1, clientActionId: id, name: 'answer', payload: '{"typed":"what-the-person-typed"}', contentVersion: 1 },
+      }),
+    )
+  const SAID = 'A click from this browser could not be sent, and was given up. Do it again if it is still wanted.'
+
+  test('is said on the site under the pairing it was done under, with nothing of what it was, until the person has seen it', async () => {
+    cookie = CODES.ownercode00000000001!
+    tooOld('session-1', 'click-0001')
+    // One done before the browser was paired again is another pairing's, and not said
+    tooOld('session-0', 'click-0002')
+    await start()
+    await settle()
+    expect(host.textContent).toContain(SAID)
+    expect(host.textContent).not.toContain('what-the-person-typed')
+    expect(Object.keys(localStorage).filter((k) => k.startsWith('it.outbox.'))).toEqual([])
+    await press('OK')
+    expect(host.textContent).not.toContain('could not be sent')
+    expect(Object.keys(localStorage).filter((k) => k.startsWith('it.givenup.'))).toEqual([])
+    expect(errors).toEqual([])
+  })
+
+  test('is not said, nor kept to be said, once the browser is signed out', async () => {
+    cookie = CODES.ownercode00000000001!
+    tooOld('session-1', 'click-0003')
+    await start()
+    await settle()
+    expect(host.textContent).toContain(SAID)
+    await press('More')
+    await press('Sign out')
+    await settle()
+    expect(host.textContent).toContain('Connect this browser')
+    expect(host.textContent).not.toContain('could not be sent')
+    expect(Object.keys(localStorage).filter((k) => k.startsWith('it.givenup.'))).toEqual([])
   })
 })

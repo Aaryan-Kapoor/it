@@ -14,7 +14,22 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, MARK, newer, parseJson, QUEUES, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
+import {
+  ALIVE,
+  briefClick,
+  type Click,
+  describeClick,
+  LEASE_MS,
+  LISTENING_MOST,
+  MARK,
+  newer,
+  parseJson,
+  QUEUES,
+  TAKES,
+  WAKE_MOST,
+  WAKES,
+  wakesOn,
+} from '@it/protocol'
 import { ADDON_API, AddonRuntimes } from './addon-runtime'
 import { ADDONS } from './addons.generated'
 import {
@@ -32,6 +47,7 @@ import {
   api,
   ask,
   backend,
+  backendDoor,
   call,
   direct,
   elsewhere,
@@ -54,7 +70,7 @@ import { conversationFolder, conversationProfile, noteConversation } from './pub
 import { alone } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
-import { type T3, T3_HELD_MOST, type T3Search, t3Held, t3Refusal, t3Running, t3Search, t3Send, t3Server, t3ThreadOf } from './t3'
+import { type T3, T3_HELD_MOST, type T3Search, t3Held, t3Refusal, t3Running, t3Search, t3Send, t3Server, t3ThreadOf, wentUnanswered } from './t3'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, begin, record, startSender, thisMachine, thisProgram, three, timeBand } from './usage'
 import {
@@ -133,6 +149,8 @@ const CLAUDE_QUIET_MS = 20_000
  * is nothing more to wait for.
  */
 const SETTLE_MS = 300
+/** How far ahead of It's clock this machine's may be and still be let in: a proof made further ahead is refused at `/bridge/token`. */
+const CLOCK_SLACK_MS = 60_000
 const SERVE_MOST = 8 // how many clicks one answer to an add-on carries
 const SERVE_BYTES = 200_000 // and how large that answer may be: an add-on reads no more than a quarter of a megabyte
 const WAITER_BYTES = 700_000 // and how large the clicks in one answer to a waiter may be together: `it wait` reads no more than a megabyte
@@ -150,10 +168,10 @@ const journalFile = () => inHome('journal.jsonl')
 const aliasFile = () => inHome('aliases.json')
 /**
  * The ids a conversation is known by, as keys: the one it carries on under now, and the latest
- * few it had before it was cleared, under which the pages it made then are still recorded.
- * `aliases` leads each earlier id to the one that came after it.
+ * few it had before it was cleared, under which the pages it made then are still recorded, or
+ * as many of those as `most` says. `aliases` leads each earlier id to the one that came after it.
  */
-export function knownAs(aliases: ReadonlyMap<string, string>, key: string): string[] {
+export function knownAs(aliases: ReadonlyMap<string, string>, key: string, most = 5): string[] {
   const follow = (k: string) => {
     for (let hops = 0; hops < 10 && aliases.has(k); hops++) k = aliases.get(k)!
     return k
@@ -164,7 +182,7 @@ export function knownAs(aliases: ReadonlyMap<string, string>, key: string): stri
     ...[...aliases]
       .filter(([, to]) => follow(to) === now)
       .map(([from]) => from)
-      .slice(-5),
+      .slice(-most),
   ]
 }
 /** The conversations a conversation on this machine is known by, as the connector has written them down: itself, where nothing is written. */
@@ -179,6 +197,8 @@ export function conversationIds(s: { harness: string; id: string }): { harness: 
 const heardFile = () => inHome('heard.json')
 /** The conversations T3 Code has said it holds in a thread, each with the thread: a click for one goes to that thread and nowhere else. */
 const t3ThreadsFile = () => inHome('t3-threads.json')
+/** Since when the clicks of each of those conversations have been asked for whether or not its add-on is there: only what was done after is asked for that way. */
+const t3AskedFile = () => inHome('t3-asked.json')
 /** Where a connector that is stopping writes down which conversations it cut off in the middle of a turn. */
 const cutOffFile = () => inHome('cut-off.json')
 /** The conversations this connector has reopened and that are running now, each with the process that is it: read by the connector that starts next, if this one dies. */
@@ -563,10 +583,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * made, which harness it was for, and whether it joined a running turn or started one.
    */
   const counting = new Map<string, { at: number; harness: string | undefined; path: 'heard' | 'woke' }>()
-  /** Given up on by this machine, and It has not yet been told to set it aside. Told again until it has. */
-  const toPark = new Map<string, { for: { harness: string; id: string } | null; tag: string }>()
-  /** Set aside, and It has confirmed it. Should one come back on offer, it is left alone. */
-  const parked = new Set<string>()
+  /**
+   * Given up on by this machine, and It has not yet been told to set it aside. Told again until
+   * it has. Each is kept with the last time the person asked for it to be tried again, as It
+   * said when it was given up on: see `retried`.
+   */
+  const toPark = new Map<string, { for: { harness: string; id: string } | null; tag: string; retry: number }>()
+  /** Set aside, and It has confirmed it. Should one come back on offer, it is left alone, unless the person has asked since for it to be tried again. */
+  const parked = new Map<string, number>()
   /** Being put in a harness's queue right now; how often that has been tried, and when last. */
   const queueing = new Set<string>()
   /**
@@ -624,7 +648,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     return true
   }
-  const queueTries = new Map<string, { n: number; at: number; reopening: boolean }>()
+  /** How often a click has been tried and has come to nothing, when last, which way, and the last time the person had asked for it to be tried again then. */
+  const queueTries = new Map<string, { n: number; at: number; reopening: boolean; retry: number }>()
   /**
    * What is known of the thread in T3 Code that a conversation is held in: the thread, that T3
    * Code has none of it (asked again after a while, since a conversation may be brought into
@@ -642,6 +667,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const t3Pending = new Map<string, { harness: string; id: string }>()
   const t3Retries = new Map<string, { at: number; delay: number }>()
   const t3Refused = new Map<string, number>()
+  /**
+   * A message put to a thread that T3 Code did not answer, by each click it carried: those clicks,
+   * and the name it was sent under. T3 Code may have it, so it is sent again under that name, with
+   * those clicks and no others, and T3 Code takes it for the same message; a click that came
+   * meanwhile goes in a message of its own. Where some of its clicks can no longer go with it, the
+   * rest still go under that name, and once T3 Code has taken it, the ones that could not go are
+   * sent under names of their own: T3 Code may not have had them, and never loses one that way.
+   */
+  const t3Unanswered = new Map<string, { ids: string[]; name: string }>()
   let t3Seen: { at: number; server: T3 | undefined } | undefined
   /** How long before another search, after one that read every thread found none that holds the conversation. */
   const T3_AGAIN_MS = 6 * 3_600_000
@@ -693,13 +727,74 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (t3ThreadsUnread && !existsSync(t3ThreadsFile())) t3ThreadsUnread = false
     return t3ThreadsUnread
   }
-  /** The thread a conversation is held in, as noted, under any id the conversation had. */
+  /**
+   * The thread a conversation is held in, as noted, under any id the conversation had: every
+   * earlier id that is kept, and not only the latest few, since a note written under an id the
+   * conversation had long ago still says where its clicks go. Its clicks are asked for under
+   * the same ids (`heldInThreads`).
+   */
   const notedThread = (key: string): string | undefined => {
-    for (const k of knownAs(aliases, key)) {
+    for (const k of knownAs(aliases, key, Number.POSITIVE_INFINITY)) {
       const thread = t3Threads.get(k)
       if (thread) return thread
     }
     return undefined
+  }
+  /**
+   * How far It's clock is ahead of this machine's, as it last said at its door (`askHeld`), where
+   * it has said: It reads a conversation's clicks from a moment by its own clock, the one it
+   * receives each click by, and a moment by this machine's would leave out what came just after
+   * it on a machine whose clock is fast.
+   */
+  let itAhead: number | undefined
+  /**
+   * The time by It's clock, as near as this machine can tell, and never later than It's own: It
+   * said its time before its answer came, and where it has not said, this machine's clock may be
+   * as much as `CLOCK_SLACK_MS` ahead of it.
+   */
+  const itsNow = () => Date.now() + (itAhead ?? -CLOCK_SLACK_MS)
+  /**
+   * Since when the clicks of each id of a conversation held in a thread of T3 Code have been
+   * asked for whatever its add-on and Auto-wake say (`heldInThreads`), by It's clock (`itsNow`),
+   * so that a click It received after that is never taken for one from before on a machine whose
+   * clock is off: from when this connector, or one before it, first counted the id among those it
+   * asks for that way, once It took that. It asks for that way only what was done after, and a
+   * click that waited for the conversation from before, as one that had waited weeks when It was
+   * brought up to date, stays where it is, for `it wait` and the site: it does not start a turn
+   * in the thread by itself. Counted while the
+   * conversation is here too, so that a click it was offered while it listened is still asked
+   * for once its add-on has gone quiet. Kept across a restart, and kept to the ids that are
+   * noted: one that is noted again is counted afresh. A note that cannot be read or written
+   * only makes these later, which leaves more where it is and starts nothing.
+   */
+  const t3Asked = new Map<string, number>()
+  {
+    const read = readJson<Record<string, unknown>>(t3AskedFile())
+    if (read && typeof read === 'object' && !Array.isArray(read))
+      for (const [key, at] of Object.entries(read))
+        if (/^(claude-code|codex):./.test(key) && typeof at === 'number' && Number.isFinite(at) && at > 0) t3Asked.set(key, at)
+  }
+  /** Counts these ids from now where they are not counted yet, forgets the ones no conversation that is noted has any more, and writes that down where it changed. */
+  const countAsked = (ids: Iterable<string>, noted: ReadonlySet<string>) => {
+    const now = itsNow()
+    let changed = false
+    for (const k of ids)
+      if (!t3Asked.has(k)) {
+        t3Asked.set(k, now)
+        changed = true
+      }
+    for (const k of t3Asked.keys())
+      if (!noted.has(k)) {
+        t3Asked.delete(k)
+        changed = true
+      }
+    if (!changed || over || recovery.erased || t3ThreadsHeld()) return
+    try {
+      writePrivate(t3AskedFile(), Object.fromEntries(t3Asked))
+    } catch (err) {
+      // Kept in memory meanwhile, and written down with the next change
+      seldom('t3-asked', `the note of since when the clicks of conversations held in threads of T3 Code are asked for could not be written (${why(err)})`)
+    }
   }
   /** Notes that T3 Code holds a conversation in this thread, and writes the note down. */
   const noteThread = (key: string, thread: string) => {
@@ -1098,7 +1193,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       void (
         fallback.via === 't3'
           ? server
-            ? t3Send(server, fallback.thread, fallback.text)
+            ? t3Send(server, fallback.thread, fallback.text, `line ${fallback.text}`)
             : Promise.resolve('T3 Code could not be reached')
           : codexPut(threadOf(follow(where() ?? key)), fallback.text)
       )
@@ -1343,9 +1438,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
         }
         if (toPark.get(id) !== pending) continue
         toPark.delete(id)
-        parked.add(which)
+        parked.set(which, pending.retry)
         journal('parked', id)
-        if (parked.size > 2000) parked.delete(parked.values().next().value!)
+        if (parked.size > 2000) parked.delete(parked.keys().next().value!)
       }
     } finally {
       parking = false
@@ -1364,7 +1459,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   function revive(harness: string, id: string): void {
     const here = follow(keyOf(harness, id))
     const its = (tagged: string) => follow(tagged.slice(tagged.indexOf('|') + 1)) === here
-    for (const t of [...parked]) if (its(t)) parked.delete(t)
+    for (const t of [...parked.keys()]) if (its(t)) parked.delete(t)
     for (const t of [...queueTries.keys()]) if (its(t)) queueTries.delete(t)
     for (const [line, clickId] of [...stalled]) {
       if (follow(keyOf(harness, line)) !== here) continue
@@ -1382,6 +1477,31 @@ async function connecting(say: (line: string) => void): Promise<void> {
             )
         })
         .catch(() => {})
+  }
+  /**
+   * The person asked, from the click's page, for what was set aside there to be tried again,
+   * after the last time this machine gave up on this click, or failed to deliver it: It says when
+   * with the click. What this machine remembers of that is forgotten, and the click is tried
+   * again as one that has just come, with all its tries, the same pauses between them, and the
+   * same rules for when a conversation may be reopened. Each try is noted with the asking it came
+   * after, so that the same asking is acted on once, also by a connector that started since: one
+   * that remembers nothing has nothing to forget, and notes its own tries from then on.
+   */
+  function retried(click: Offered): void {
+    const asked = click.retriedAt
+    if (typeof asked !== 'number') return
+    const which = tag(click)
+    const aside = parked.get(which)
+    const tried = queueTries.get(which)
+    const pending = toPark.get(click.id)
+    const before = (retry: number | undefined) => retry !== undefined && retry < asked
+    if (!before(aside) && !before(tried?.retry) && !(pending?.tag === which && before(pending.retry))) return
+    parked.delete(which)
+    queueTries.delete(which)
+    if (pending?.tag === which) toPark.delete(click.id)
+    for (const [line, id] of [...stalled]) if (id === click.id) stalled.delete(line)
+    stalledAt.delete(click.id)
+    say(`click ${click.id} is tried again, as the person asked`)
   }
   /** The conversations this machine has reopened and that are running now, each with the way to stop it. */
   /**
@@ -2061,6 +2181,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
               !parked.has(tag(c)) &&
               !rode.has(c.id) &&
               (t3 !== undefined || wakes(harness, c.at)) &&
+              (t3 === undefined || (t3Unanswered.get(click.id)?.ids.includes(c.id) ?? !t3Unanswered.has(c.id))) &&
               !awaited(c, Date.now()),
           )
           .sort((a, b) => a.at - b.at)
@@ -2206,7 +2327,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // What is put into a conversation that is open, or into a thread: the mark alone, where a
       // hook of It's hands the agent the rest, and otherwise one short line for each click
       const lines = () => (t3 ? [click, ...withIt].map((c) => briefClick(asClick(c))).join('\n') : briefClick(asClick(click), false))
-      const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text) : codexPut(threadOf(follow(key)), text))
+      // The same message to the same thread, sent again where T3 Code was not heard to answer, is the same command to it, and lands once
+      const carried = () => [click, ...withIt].map((c) => c.id)
+      const named = (asMark: boolean) => (t3 && t3Unanswered.get(click.id)?.name) || `${asMark ? 'mark' : 'line'} ${carried().join(' ')}`
+      const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text, named(text === MARK)) : codexPut(threadOf(follow(key)), text))
       if (!reopening && turnRunning(follow(key), Date.now())) {
         await recovery.keepWaiters([click, ...withIt], follow(key))
       }
@@ -2258,6 +2382,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
             // on this machine alone. In Codex's queue it does not: that one is put on a
             // command line.
             await put(mark ? MARK : lines())
+      // A message T3 Code did not answer is sent again as it was, under the name it went under (see `t3Unanswered`)
+      if (t3 && !reopening && refused !== NOT_STARTED) {
+        const ids = carried()
+        const before = t3Unanswered.get(click.id)
+        const name = named(Boolean(mark))
+        if (refused !== null && wentUnanswered(name)) {
+          if (!before) for (const id of ids) t3Unanswered.set(id, { ids, name })
+        } else for (const id of new Set([...ids, ...(before?.ids ?? [])])) t3Unanswered.delete(id)
+        for (const old of t3Unanswered.keys()) {
+          if (t3Unanswered.size <= 1000) break
+          t3Unanswered.delete(old)
+        }
+      }
       // A mark that was not taken stands for nothing. One that was is waited on: a hook asks
       if (mark && refused !== null) await mark.takeAway()
       else mark?.wait()
@@ -2331,14 +2468,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
         await confirmAll()
       } else {
         const n = (queueTries.get(tag(click))?.n ?? 0) + 1
-        queueTries.set(tag(click), { n, at: Date.now(), reopening })
+        queueTries.set(tag(click), { n, at: Date.now(), reopening, retry: click.retriedAt ?? 0 })
         stalled.set(line, click.id)
         stalledAt.set(click.id, Date.now())
         // Its thread of T3 Code is the only way it may go: it is tried there for as long as it waits, and never given up on
         const forThread = t3 !== undefined && t3Only(key)
         record('agent.woken', { result: n >= QUEUE_WAITS.length && !forThread ? 'failed' : 'declined', agent: agentOf(harness) })
         if (reopening) notReopened(click.session!, refused)
-        // T3 Code could not take it: the conversation is reopened as any other for a while, and that is tried at once
+        // T3 Code could not take it, and is not asked again for a while (see `t3For`). A conversation that may go
+        // other ways goes as any other meanwhile, which is tried at once; one held in a thread waits for it
         if (t3) {
           t3Refused.set(key, Date.now())
           soon(10)
@@ -2351,7 +2489,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // Given up on from here. It is set aside so that it does not hide clicks that can be
           // delivered; it is still waiting, and the person and `it wait` still see it.
           say(`click ${click.id} was not taken by ${route} after ${n} tries (${refused}); it stays waiting`)
-          toPark.set(click.id, { for: click.session, tag: tag(click) })
+          toPark.set(click.id, { for: click.session, tag: tag(click), retry: click.retriedAt ?? 0 })
           await parkAll()
         } else {
           say(`click ${click.id} was not taken by ${route} (${refused}); try ${n} of ${QUEUE_WAITS.length}`)
@@ -2424,7 +2562,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // set aside: nothing would bring it back once T3 Code takes messages again. It waits for
     // T3 Code however long that takes, and is tried again after the longest of the pauses.
     if (tried && tried.n >= QUEUE_WAITS.length && !t3Only(key)) {
-      toPark.set(click.id, { for: click.session, tag: tag(click) })
+      toPark.set(click.id, { for: click.session, tag: tag(click), retry: tried.retry })
       return true
     }
     if (queueing.size >= 50 || (tried && Date.now() - tried.at < QUEUE_WAITS[Math.min(tried.n, QUEUE_WAITS.length - 1)]!)) return false
@@ -2627,7 +2765,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // delivered, set aside, or so long gone from what is offered that something else has it.
       // Being absent for a moment proves nothing: it is absent while its lease is given back.
       for (const [line, id] of stalled) {
-        const done = toConfirm.has(id) || toPark.has(id) || [...parked].some((p) => p.startsWith(`${id}|`))
+        const done = toConfirm.has(id) || toPark.has(id) || [...parked.keys()].some((p) => p.startsWith(`${id}|`))
         const longGone = !queueing.has(id) && !inbox.some((c) => c.id === id) && now - (stalledAt.get(id) ?? 0) > LEASE_MS + 90_000
         if (done || longGone) {
           stalled.delete(line)
@@ -2649,6 +2787,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
       }
       const offeredHere = new Map([...inbox, ...recoveredClicks.values()].map((c) => [c.id, c]))
       for (const id of t3Waits.keys()) if (!offeredHere.has(id)) t3Waits.delete(id)
+      // Before anything is decided about any of them: a click the person asked to have tried
+      // again may be one that a click behind it would otherwise wait for, or go with
+      for (const click of offeredHere.values()) retried(click)
       for (const click of [...offeredHere.values()].sort((a, b) => a.at - b.at)) {
         if (taken(click)) {
           recoveredClicks.delete(click.id)
@@ -3013,7 +3154,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           } catch {
             return [200, { cleared: 0, unkept: true }]
           }
-          for (const tagged of [...parked, ...queueTries.keys()]) back.add(tagged.slice(tagged.indexOf('|') + 1))
+          for (const tagged of [...parked.keys(), ...queueTries.keys()]) back.add(tagged.slice(tagged.indexOf('|') + 1))
           for (const { for: tried } of toPark.values()) if (tried) back.add(keyOf(tried.harness, tried.id))
           unread = false
           unreadWhereItWas = false
@@ -3298,6 +3439,81 @@ async function connecting(say: (line: string) => void): Promise<void> {
   let nextInbox: { harness: string; id: string }[] | null = null
   let saidTooMany = false
   let unwatch: (() => void) | null = null
+  /** Whether the backend has answered what is watched now. */
+  let answered = false
+  /**
+   * Whether It takes the conversations held in threads asked for with since when
+   * (`TAKES.inboxHeld`), as it says at its door. An older It refuses that whole asking, and
+   * nothing would be offered for any conversation, so until It has said that it takes it,
+   * none of those conversations is asked for: their clicks wait as they did, and none made
+   * before is offered. Asked as the connector starts, every minute, and again where what is
+   * watched fails while they are asked for. Where the door cannot be asked it stays as it was,
+   * and it is not known until It has answered once. It says its time there too (`itAhead`).
+   */
+  let heldTaken: boolean | undefined
+  const askHeld = async () => {
+    const door = await backendDoor()
+    if (door === undefined || closing || over) return
+    // Taken as the answer came, after It said its time, so that what is worked out from it is never later than It's own
+    if (door.now !== undefined) itAhead = door.now - Date.now()
+    const takes = door.takes.includes(TAKES.inboxHeld)
+    if (takes === heldTaken) return
+    heldTaken = takes
+    watch()
+  }
+  /**
+   * The conversations held in threads of T3 Code that do not fit beside the ones that are here
+   * are asked for in turn, a few at a time: the last of them that was asked for before the ones
+   * asked for now, and since when those are asked for.
+   */
+  let threadsAfter = ''
+  let threadsMoved = 0
+  /**
+   * How long the conversations held in threads that are asked for together are asked for
+   * before the next ones are. Every turn watches anew, so turns are not taken with every pass.
+   */
+  const THREADS_TURN_MS = 5_000
+  /**
+   * The conversations held in threads of T3 Code, as noted, under every id each is known by,
+   * that are not among the ones that are here, and whose app is connected: a click for one of
+   * them is put to its thread wherever its app's add-on has gone quiet, which it does once T3
+   * Code lets the thread's agent app go. In a fixed order, so that they can be taken in turn.
+   *
+   * Every id is every earlier id that is kept, of which there are at most 500, as a click is
+   * routed by them (`notedThread`): a page made under an id the conversation had long ago is
+   * asked for as well, and a note under such an id holds the conversation's clicks to its thread.
+   */
+  const heldInThreads = (here: ReadonlySet<string>): string[] => {
+    // Every earlier id by the one each carries on under now, found once for all of them, as `knownAs` finds them for one
+    const earlier = new Map<string, string[]>()
+    for (const [from, to] of aliases) {
+      const now = follow(to)
+      const before = earlier.get(now)
+      if (before) before.push(from)
+      else earlier.set(now, [from])
+    }
+    const noted = new Set<string>()
+    const ids = new Set<string>()
+    for (const key of t3Threads.keys()) {
+      const now = follow(key)
+      for (const k of [key, now, ...(earlier.get(now) ?? [])]) {
+        noted.add(k)
+        if (connected(k.slice(0, k.indexOf(':')))) ids.add(k)
+      }
+    }
+    // Counted whether or not they are here, so that what one is offered while here is still
+    // asked for once it is not, and before It has said whether it takes them, so that what one
+    // is offered while It cannot be asked is still asked for once It has said it does. Where It
+    // has said it does not, they are forgotten, and counted afresh from when it says it does: a
+    // click that waited for one all that time does not start a turn the day It is brought up to
+    // date.
+    if (heldTaken === false) {
+      countAsked([], new Set())
+      return []
+    }
+    countAsked(ids, noted)
+    return [...ids].filter((k) => !here.has(k)).sort()
+  }
   function watch(advance = false): void {
     const now = Date.now()
     // The conversations that are here, the one heard from most recently first
@@ -3313,14 +3529,44 @@ async function connecting(say: (line: string) => void): Promise<void> {
       saidTooMany = true
       say(`more than ${LISTENING_MOST} conversations are open here; clicks for the ones heard from least recently wait until there is room`)
     }
-    const listening = named
-      .slice(0, LISTENING_MOST)
-      // In a fixed order, so that the same set is not taken for a different one
-      .sort()
-      .map((k) => ({ harness: k.slice(0, k.indexOf(':')), id: k.slice(k.indexOf(':') + 1) }))
+    // And in what room is left, the conversations held in threads of T3 Code that are not here.
+    // Their clicks are asked for whether or not they may be reopened, since a click for one
+    // goes to its thread and nowhere else (`t3For`), which is no reopening. Asked for this way
+    // they are not taken for conversations that are listening: what is said of those is said
+    // of the ones whose add-on has asked (`sessions`). Where more are held than there is room
+    // for, they are taken in turn, and one with a click on offer that is waiting for its
+    // thread keeps its place until the click has gone, in up to half the room. They are asked
+    // for apart from the ones that are here, each with since when (`t3Asked`), and only of an
+    // It that takes that (`heldTaken`): It reads for them only what came after.
+    const room = LISTENING_MOST - Math.min(named.length, LISTENING_MOST)
+    // Counted whatever It has said, and asked for only once it has said it takes them
+    const noted = t3ThreadsHeld() ? [] : heldInThreads(new Set(named))
+    const threads = heldTaken ? noted : []
+    const offeredFor = new Set(inbox.flatMap((c) => (c.session ? [keyOf(c.session.harness, c.session.id)] : [])))
+    const kept = threads.filter((k) => offeredFor.has(k)).slice(0, Math.floor(room / 2))
+    const turn = () => {
+      const rest = threads.filter((k) => !kept.includes(k))
+      return [...rest.filter((k) => k > threadsAfter), ...rest.filter((k) => k <= threadsAfter)].slice(0, room - kept.length)
+    }
+    let inTurn = turn()
+    // The next ones are taken once the backend has answered for these and they have had their time
+    if (threads.length > room && advance && answered && now - threadsMoved >= THREADS_TURN_MS && inTurn.length) {
+      threadsAfter = inTurn[inTurn.length - 1]!
+      threadsMoved = now
+      inTurn = turn()
+    }
+    const session = (k: string) => ({ harness: k.slice(0, k.indexOf(':')), id: k.slice(k.indexOf(':') + 1) })
+    // In a fixed order, so that the same set is not taken for a different one
+    const listening = named.slice(0, LISTENING_MOST).sort().map(session)
+    // Each with since when it has been asked for this way, which It reads only what came after
+    const held = [...kept, ...inTurn].sort().map((k) => ({ ...session(k), since: t3Asked.get(k)! }))
     // A click is asked for an app's own queue only while that app is connected, and for a
     // conversation that is closed only where it may be reopened
-    const scope = { listening, queues: [...new Set<string>([...QUEUES, ...WAKES.filter((h) => wakesNow.has(h))])].filter(connected) }
+    const scope = {
+      listening,
+      ...(held.length ? { held } : {}),
+      queues: [...new Set<string>([...QUEUES, ...WAKES.filter((h) => wakesNow.has(h))])].filter(connected),
+    }
     const scopeKey = JSON.stringify(scope)
     // A changed listener set advances an answered page too. Frequent add-on updates cannot
     // restart discovery at the first names, and an unanswered subscription advances nothing.
@@ -3334,6 +3580,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (next === watching) return
     watching = next
     const generation = ++watchGeneration
+    answered = false
     unwatch?.()
     unwatch = client.onUpdate(
       api.delivery.inboxPage,
@@ -3343,6 +3590,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (watchGeneration !== generation) return
         const clicks = page.clicks
         nextInbox = page.after
+        answered = true
         const here = performance.now()
         for (const click of clicks) {
           // A new owner gets its own window, including when the observation table is full.
@@ -3359,10 +3607,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
         for (const click of clicks) recoveredClicks.delete(click.id)
         void route()
       },
-      (err) => say(`inbox: ${why(err)}`),
+      (err) => {
+        say(`inbox: ${why(err)}`)
+        // It may have been put back to a version that does not take them: asked again, and they are left out where it says so
+        if (held.length && watchGeneration === generation) void askHeld()
+      },
     )
   }
   watch()
+  void askHeld()
 
   // A newer copy of this program has installed an add-on since this one started: the program
   // was brought up to date and this connector went on running. It stops, with a failure so
@@ -3637,7 +3890,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const alive = setInterval(() => void report(), ALIVE.everyMs)
   // Whether this machine still fits the It it joined is asked for as long as this runs: that
   // It may be updated under it, and so may this one. See `fitsNow`.
-  const fits = setInterval(() => void fitsNow(), FITS_EVERY_MS)
+  const fits = setInterval(() => {
+    void fitsNow()
+    void askHeld()
+  }, FITS_EVERY_MS)
   // Whether a newer It is out: asked a little after starting, and every half hour from then on
   const firstLook = setTimeout(() => void lookForNewer(), 20_000)
   const looks = setInterval(() => void lookForNewer(), LOOKS_EVERY_MS)

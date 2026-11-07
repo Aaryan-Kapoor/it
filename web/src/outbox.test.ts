@@ -1,9 +1,9 @@
 // The site's outbox: a click is kept in this browser only while nobody knows what became of it.
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
-import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { forgetAll, keepFor, letGoElsewhere } from './lib'
-import { drain, dropOld, outboxBelongsTo, type Sent, submit, unsaved, unsent } from './outbox'
+import { drain, dropOld, givenUpFor, outboxBelongsTo, recoverLeftovers, type Sent, seenGivenUp, submit, unsaved, unsent, watchOutbox } from './outbox'
 
 const envelope = (id: string, over: Partial<Sent> = {}): Sent => ({ v: 1, clientActionId: id, name: 'approve', payload: '{"n":1}', contentVersion: 1, ...over })
 const refuse = (code: string, extra: Record<string, unknown> = {}) => new ConvexError({ code, message: code, ...extra })
@@ -22,6 +22,11 @@ function backend(answers: (unknown | Error | 'never')[]) {
 let connected = true
 const keep = (user: string, id: string, at = Date.now() - 60_000, artifactId = 'page1') =>
   localStorage.setItem(`it.outbox.${user}.${artifactId}.${id}`, JSON.stringify({ user, artifactId, envelope: envelope(id), at }))
+// A heartbeat's round trip that ended now, `ms` long by the clock that only goes forward and `wall` long by the browser's own
+const trip = (ms: number, wall = ms) => ({
+  sent: { mono: performance.now() - ms, wall: Date.now() - wall },
+  back: { mono: performance.now(), wall: Date.now() },
+})
 const stored = () => Object.keys(localStorage).filter((k) => k.startsWith('it.outbox.'))
 
 beforeEach(() => {
@@ -103,6 +108,113 @@ describe('the outbox', () => {
     await drain(alice.client, 'alice')
     expect(alice.calls[0]).toMatchObject({ envelope: { clientActionId: 'click-0006' } })
     expect(stored()).toEqual([])
+  })
+
+  test('a click is sent with when it was done, by the backend’s clock as the browser knew it then, the same each time it is sent, and with nothing where that clock was not known', async () => {
+    const HOUR = 3_600_000
+    // A site just opened, which has not yet heard the backend's clock
+    vi.resetModules()
+    const lib = await import('./lib')
+    const site = await import('./outbox')
+    site.outboxBelongsTo('alice')
+    try {
+      const unknown = backend([{ actionId: 'a1' }])
+      await site.submit(unknown.client, 'alice', 'page1', envelope('click-made-0001'))
+      expect(unknown.calls[0]).not.toHaveProperty('madeAt')
+      // A heartbeat's answer was taken in twenty seconds after it was asked, as one is in a tab held back from running: it is not learned from
+      lib.learnClock(Date.now() - HOUR, trip(20_000))
+      const slow = backend([{ actionId: 'a0' }])
+      await site.submit(slow.client, 'alice', 'page1', envelope('click-made-0003'))
+      expect(slow.calls[0]).not.toHaveProperty('madeAt')
+      // Nor is one the machine slept through, which the clock that only goes forward took for a tenth of a second, as it stands still while asleep in some browsers
+      lib.learnClock(Date.now() - HOUR, trip(100, 20_000))
+      const slept = backend([{ actionId: 'a5' }])
+      await site.submit(slept.client, 'alice', 'page1', envelope('click-made-0004'))
+      expect(slept.calls[0]).not.toHaveProperty('madeAt')
+      // The backend's clock is an hour behind this browser's, as a heartbeat that took a tenth of a second says, and It cannot be reached
+      lib.learnClock(Date.now() - HOUR, trip(100))
+      lib.learnTakes(['actions.madeAt'])
+      const lost = backend(['never'])
+      void site.submit(lost.client, 'alice', 'page1', envelope('click-made-0002'))
+      await new Promise((r) => setTimeout(r, 10))
+      const { madeAt: made, madeWithin } = lost.calls[0] as unknown as { madeAt: number; madeWithin: number }
+      expect(Math.abs(made - (Date.now() - HOUR))).toBeLessThan(1000)
+      expect(madeWithin).toBeGreaterThanOrEqual(50)
+      expect(madeWithin).toBeLessThan(1000)
+      // The tab is closed, and the click is sent on a later visit, a while on, saying the same
+      const k = 'it.outbox.alice.page1.click-made-0002'
+      localStorage.setItem(k, JSON.stringify({ ...JSON.parse(localStorage.getItem(k) ?? '{}'), at: Date.now() - 60_000, held: Date.now() - 45_000 }))
+      vi.resetModules()
+      ;(await import('./lib')).learnTakes(['actions.madeAt'])
+      const later = await import('./outbox')
+      later.outboxBelongsTo('alice')
+      const back = backend([{ actionId: 'a2' }])
+      await later.drain(back.client, 'alice')
+      later.outboxBelongsTo(null)
+      expect(back.calls[0]).toMatchObject({ envelope: { clientActionId: 'click-made-0002' }, madeAt: made, madeWithin })
+      // A message typed above a page, and a notification's button, say when they were done too
+      const said = backend([{ actionId: 'a3' }, { actionId: 'a4' }])
+      await site.message(said.client, 'alice', 'page1', 'typed-made-0001', 'Go ahead')
+      await site.answerNotification(said.client, 'note-1', 'yes')
+      for (const call of said.calls) {
+        expect(Math.abs((call as unknown as { madeAt: number }).madeAt - (Date.now() - HOUR))).toBeLessThan(1000)
+        expect(call).toHaveProperty('madeWithin')
+      }
+      expect(said.calls.length).toBe(2)
+    } finally {
+      site.outboxBelongsTo(null)
+    }
+  })
+
+  test('a backend that has not said it takes when a click was made is not sent it, and takes the click, which keeps that time here for a backend that does', async () => {
+    vi.resetModules()
+    const lib = await import('./lib')
+    const site = await import('./outbox')
+    site.outboxBelongsTo('alice')
+    try {
+      lib.learnClock(Date.now(), trip(100))
+      // An older backend, which refuses a call with an argument it does not know
+      const older = (answers: unknown[]) => {
+        const b = backend(answers)
+        const mutation = b.client as unknown as { mutation: ReturnType<typeof vi.fn> }
+        const inner = mutation.mutation.getMockImplementation()!
+        mutation.mutation.mockImplementation((fn: unknown, args: Record<string, unknown>) =>
+          'madeAt' in args || 'madeWithin' in args
+            ? Promise.reject(new Error('ArgumentValidationError: Object contains extra field `madeAt`'))
+            : inner(fn, args),
+        )
+        return b
+      }
+      lib.learnTakes(undefined)
+      const now = older([{ actionId: 'a1' }, { actionId: 'a2' }, { actionId: 'a3' }])
+      expect(await site.submit(now.client, 'alice', 'page1', envelope('click-older-0001'))).toEqual({ actionId: 'a1' })
+      expect(await site.message(now.client, 'alice', 'page1', 'typed-older-0001', 'Go ahead')).toEqual({ actionId: 'a2' })
+      expect(await site.answerNotification(now.client, 'note-1', 'yes')).toEqual({ actionId: 'a3' })
+      expect(now.calls).toHaveLength(3)
+      for (const call of now.calls) {
+        expect(call).not.toHaveProperty('madeAt')
+        expect(call).not.toHaveProperty('madeWithin')
+      }
+      // One saved while It cannot be reached keeps when it was made here all the same
+      const lost = older(['never'])
+      void site.submit(lost.client, 'alice', 'page1', envelope('click-older-0002'))
+      await new Promise((r) => setTimeout(r, 10))
+      const k = 'it.outbox.alice.page1.click-older-0002'
+      const kept = JSON.parse(localStorage.getItem(k)!)
+      expect(kept).toMatchObject({ madeAt: expect.any(Number), madeWithin: expect.any(Number) })
+      // And sends it to a backend that has said it takes it, on a later visit
+      localStorage.setItem(k, JSON.stringify({ ...kept, at: Date.now() - 60_000, held: Date.now() - 45_000 }))
+      vi.resetModules()
+      ;(await import('./lib')).learnTakes(['actions.madeAt'])
+      const later = await import('./outbox')
+      later.outboxBelongsTo('alice')
+      const back = backend([{ actionId: 'a4' }])
+      await later.drain(back.client, 'alice')
+      later.outboxBelongsTo(null)
+      expect(back.calls[0]).toMatchObject({ envelope: { clientActionId: 'click-older-0002' }, madeAt: kept.madeAt, madeWithin: kept.madeWithin })
+    } finally {
+      site.outboxBelongsTo(null)
+    }
   })
 
   test('two pages that choose the same id for a click do not overwrite each other’s', async () => {
@@ -854,5 +966,367 @@ describe('a click that is on its way when everything this browser keeps is let g
     void submit(lost.client, 'bob', 'page1', envelope('click-again-02'))
     await Promise.resolve()
     expect(stored()).toEqual(['it.outbox.bob.page1.click-again-02'])
+  })
+})
+
+describe('a click another tab of this browser leaves behind', () => {
+  const at = (id: string) => `it.outbox.alice.page1.${id}`
+  /** Another tab keeps a click of Alice's, or renews its hold on it, and the browser says so to this one. */
+  function elsewhere(id: string, over: Record<string, unknown> = {}) {
+    const value = JSON.stringify({
+      user: 'alice',
+      artifactId: 'page1',
+      envelope: envelope(id),
+      format: 2,
+      session: 'session-1',
+      replayUntil: Date.now() + 86400_000,
+      at: Date.now(),
+      held: Date.now() + 15_000,
+      ...over,
+    })
+    localStorage.setItem(at(id), value)
+    window.dispatchEvent(new StorageEvent('storage', { key: at(id), newValue: value }))
+  }
+  /** The ids of what was sent from here, a typed message's as well as a click's. */
+  const sent = (b: ReturnType<typeof backend>) => b.calls.map((c) => c.envelope?.clientActionId ?? (c as unknown as { clientActionId: string }).clientActionId)
+  let deaf = () => {}
+  beforeEach(() => {
+    vi.useFakeTimers()
+    outboxBelongsTo('alice', 'session-1')
+  })
+  afterEach(() => {
+    deaf()
+    outboxBelongsTo(null)
+    vi.useRealTimers()
+  })
+
+  test('is sent from a tab that had nothing left to send, once the tab that kept it has closed', async () => {
+    const b = backend([{ actionId: 'a1' }])
+    deaf = recoverLeftovers(b.client, 'alice')
+    // This tab sent what it had, and has nothing to look at again
+    await drain(b.client, 'alice')
+    expect(b.calls).toEqual([])
+    // Another tab keeps a click, and is closed before it has sent it: it says nothing more
+    elsewhere('click-left-01')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(b.calls).toEqual([])
+    // Its hold runs out, and the click goes from here
+    await vi.advanceTimersByTimeAsync(11_000)
+    expect(sent(b)).toEqual(['click-left-01'])
+    expect(stored()).toEqual([])
+  })
+
+  test('is left to that tab for as long as it keeps up its hold on it', async () => {
+    const b = backend([{ actionId: 'a1' }])
+    deaf = recoverLeftovers(b.client, 'alice')
+    const made = Date.now()
+    elsewhere('click-held-01', { at: made })
+    // A slow backend: the other tab is still sending it a minute later, and renews its hold every few seconds
+    for (let i = 0; i < 12; i++) {
+      await vi.advanceTimersByTimeAsync(5_000)
+      elsewhere('click-held-01', { at: made })
+    }
+    expect(b.calls).toEqual([])
+    // That tab is closed now
+    await vi.advanceTimersByTimeAsync(16_000)
+    expect(sent(b)).toEqual(['click-held-01'])
+  })
+
+  test('is sent once its hold runs out, from a tab whose only time to look again is when a refused message of its own expires', async () => {
+    const b = backend([refuse('invalid'), { actionId: 'a1' }])
+    deaf = recoverLeftovers(b.client, 'alice')
+    // This tab keeps a typed message that was refused, and looks again only when it expires, in a week
+    localStorage.setItem(
+      at('message-kept-01'),
+      JSON.stringify({
+        user: 'alice',
+        artifactId: 'page1',
+        envelope: envelope('message-kept-01'),
+        operation: { kind: 'message', text: 'hello' },
+        format: 2,
+        session: 'session-1',
+        replayUntil: Date.now() + 86400_000,
+        at: Date.now() - 60_000,
+        left: true,
+      }),
+    )
+    await drain(b.client, 'alice')
+    expect(sent(b)).toEqual(['message-kept-01'])
+    expect(stored()).toEqual([at('message-kept-01')])
+    // Another tab keeps a click, and is closed before it has sent it
+    elsewhere('click-left-02')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(sent(b)).toEqual(['message-kept-01'])
+    // Its hold runs out, and the click goes from here, once
+    await vi.advanceTimersByTimeAsync(11_000)
+    expect(sent(b)).toEqual(['message-kept-01', 'click-left-02'])
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(sent(b)).toEqual(['message-kept-01', 'click-left-02'])
+    expect(stored()).toEqual([at('message-kept-01')])
+  })
+
+  test('begins nothing for what is let go of, refused, someone else’s or another pairing’s, and leaves nothing running once sent', async () => {
+    const b = backend([{ actionId: 'a1' }, { actionId: 'a2' }])
+    deaf = recoverLeftovers(b.client, 'alice')
+    // Said many times at once, as a tab says when it keeps several clicks: one sending, for all of them
+    for (let i = 0; i < 20; i++) elsewhere('click-burst-01', { at: Date.now() - 60_000, held: undefined, left: true })
+    await vi.advanceTimersByTimeAsync(100)
+    expect(sent(b)).toEqual(['click-burst-01'])
+    // This tab's own sending removed the click. The other tabs that hear of that, and of what they
+    // remove or keep as refused in turn, set nothing going here again
+    window.dispatchEvent(new StorageEvent('storage', { key: at('click-burst-01'), newValue: null }))
+    elsewhere('message-refused', { refused: 'No.', held: undefined, left: true, at: Date.now() - 60_000 })
+    // A click from before the browser was paired again, and one of Bob's
+    elsewhere('click-old-pairing', { session: 'session-0', held: undefined, left: true, at: Date.now() - 60_000 })
+    const bobs = JSON.stringify({ user: 'bob', artifactId: 'page1', envelope: envelope('click-bobs-01'), format: 2, session: 'session-1', at: 0 })
+    localStorage.setItem('it.outbox.bob.page1.click-bobs-01', bobs)
+    window.dispatchEvent(new StorageEvent('storage', { key: 'it.outbox.bob.page1.click-bobs-01', newValue: bobs }))
+    window.dispatchEvent(new StorageEvent('storage', { key: null, newValue: null }))
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(sent(b)).toEqual(['click-burst-01'])
+    // Nothing is waiting to look again, here or for anyone
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('a click or typed message given up with nobody there to be told', () => {
+  const TYPED_TEXT = 'what-the-person-typed'
+  /** A click or typed message kept for later under a pairing, as a page leaves it. */
+  const left = (user: string, session: string, id: string, over: Record<string, unknown> = {}) =>
+    localStorage.setItem(
+      `it.outbox.${user}.page1.${id}`,
+      JSON.stringify({
+        user,
+        artifactId: 'page1',
+        envelope: envelope(id, { payload: JSON.stringify({ typed: TYPED_TEXT }) }),
+        format: 2,
+        session,
+        replayUntil: Date.now() + 86400_000,
+        at: Date.now() - 60_000,
+        left: true,
+        ...over,
+      }),
+    )
+  const typed = { operation: { kind: 'message', text: TYPED_TEXT } }
+  const TOO_OLD = Date.now() - 8 * 86_400_000
+  const counts = () => Object.keys(localStorage).filter((k) => k.startsWith('it.givenup.'))
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    outboxBelongsTo(null)
+  })
+
+  test('too old to send when the site starts, it is said to its person under the pairing it was made under, with nothing of what it carried', () => {
+    // The site starts, and does not know yet whether the browser is paired
+    outboxBelongsTo(null)
+    left('alice', 'session-1', 'click-old-0001', { at: TOO_OLD })
+    left('alice', 'session-1', 'typed-old-0001', { at: TOO_OLD, ...typed })
+    // One the person was already shown as refused is not said again
+    left('alice', 'session-1', 'typed-old-0002', { at: TOO_OLD, ...typed, refused: 'No.' })
+    left('alice', 'session-1', 'click-new-0001')
+    left('bob', 'session-7', 'click-old-0002', { at: TOO_OLD })
+    dropOld()
+    expect(stored()).toEqual(['it.outbox.alice.page1.click-new-0001'])
+    // Nothing of what any of them carried, nor which they were, is kept for saying so
+    for (const k of counts()) expect(localStorage.getItem(k)).not.toMatch(/what-the-person-typed|click-old|typed-old/)
+    // The browser is Alice's, under the pairing those were made under
+    outboxBelongsTo('alice', 'session-1')
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 1 })
+    expect(givenUpFor('bob')).toBeNull()
+    // Bob's is never said here, and is not kept to be
+    expect(counts()).toEqual(['it.givenup.alice'])
+    // Seen: it is said no more
+    seenGivenUp('alice')
+    expect(givenUpFor('alice')).toBeNull()
+    expect(counts()).toEqual([])
+  })
+
+  test('too old to send under two pairings when the site starts, it is said under the one the browser turns out to have, and under no other', () => {
+    outboxBelongsTo(null)
+    // Given up in this order, the later under the earlier pairing
+    left('alice', 'session-1', 'click-old-0011', { at: TOO_OLD })
+    dropOld()
+    left('alice', 'session-0', 'click-old-0012', { at: TOO_OLD })
+    left('alice', 'session-0', 'typed-old-0011', { at: TOO_OLD, ...typed })
+    dropOld()
+    outboxBelongsTo('alice', 'session-1')
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    // The other pairing's is let go of, and is never said
+    for (const k of counts()) expect(localStorage.getItem(k)).not.toMatch(/session-0/)
+    outboxBelongsTo('alice', 'session-0')
+    expect(givenUpFor('alice')).toBeNull()
+    expect(counts()).toEqual([])
+  })
+
+  test('refused for good once its page had gone, it is said, and a typed message stays shown as refused instead', async () => {
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-gone-0001')
+    left('alice', 'session-1', 'typed-gone-0001', typed)
+    const b = backend([refuse('invalid'), refuse('invalid')])
+    await drain(b.client, 'alice')
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    expect(stored()).toEqual(['it.outbox.alice.page1.typed-gone-0001'])
+    // And one refused for good just after its page went, before it was ever left for later
+    const late = backend([refuse('not_found')])
+    await expect(submit(late.client, 'alice', 'page1', envelope('click-gone-0002'), () => false)).rejects.toBeInstanceOf(ConvexError)
+    expect(givenUpFor('alice')).toEqual({ clicks: 2, messages: 0 })
+    // A page still there is told itself, and nothing more is said
+    const told = backend([refuse('not_found')])
+    await expect(submit(told.client, 'alice', 'page1', envelope('click-told-0001'))).rejects.toBeInstanceOf(ConvexError)
+    expect(givenUpFor('alice')).toEqual({ clicks: 2, messages: 0 })
+  })
+
+  test('is said under no other pairing, nor once the browser is signed out, and brings back nothing', async () => {
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-old-0003', { at: TOO_OLD })
+    dropOld()
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    // The browser is paired again for Alice: that was another pairing's, and goes
+    outboxBelongsTo('alice', 'session-2')
+    expect(givenUpFor('alice')).toBeNull()
+    expect(counts()).toEqual([])
+    // A tab still under the old pairing gives up another and counts it: still not said under this one
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-old-0004', { at: TOO_OLD })
+    dropOld()
+    outboxBelongsTo('alice', 'session-2')
+    expect(givenUpFor('alice')).toBeNull()
+    // Nor to someone else the browser is paired for, nor to nobody
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-old-0005', { at: TOO_OLD })
+    dropOld()
+    outboxBelongsTo('bob', 'session-1')
+    expect([givenUpFor('alice'), givenUpFor('bob')]).toEqual([null, null])
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-old-0006', { at: TOO_OLD })
+    dropOld()
+    outboxBelongsTo(null)
+    expect(counts()).toEqual([])
+    // And paired again under that same pairing, nothing given up comes back, to be said or to be sent
+    outboxBelongsTo('alice', 'session-1')
+    expect(givenUpFor('alice')).toBeNull()
+    expect(stored()).toEqual([])
+    const b = backend([])
+    await drain(b.client, 'alice')
+    expect(b.calls).toEqual([])
+  })
+
+  test('another tab’s saying it was seen is heard here, and sends nothing', async () => {
+    vi.useFakeTimers()
+    try {
+      outboxBelongsTo('alice', 'session-1')
+      const b = backend([])
+      const deaf = recoverLeftovers(b.client, 'alice')
+      const heard = vi.fn()
+      const unwatch = watchOutbox(heard)
+      localStorage.setItem('it.givenup.alice', JSON.stringify({ session: 'session-1', clicks: 1, messages: 0 }))
+      window.dispatchEvent(new StorageEvent('storage', { key: 'it.givenup.alice', newValue: localStorage.getItem('it.givenup.alice') }))
+      localStorage.removeItem('it.givenup.alice')
+      window.dispatchEvent(new StorageEvent('storage', { key: 'it.givenup.alice', newValue: null }))
+      expect(heard).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(600_000)
+      expect(b.calls).toEqual([])
+      expect(vi.getTimerCount()).toBe(0)
+      unwatch()
+      deaf()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  /** Storage with no room for anything more until something kept in it is let go of. */
+  const fullUntilGone = (key: string) => {
+    const setItem = Storage.prototype.setItem
+    return vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (this.getItem(key) !== null) throw new Error('QuotaExceededError')
+      setItem.call(this, k, v)
+    })
+  }
+  /** Storage with no room for anything more at all. */
+  const full = () =>
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+
+  test('too old to send with storage full, it is let go of first and the room it took is used to say so', async () => {
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-full-0001', { at: TOO_OLD })
+    fullUntilGone('it.outbox.alice.page1.click-full-0001')
+    const heard = vi.fn(() => givenUpFor('alice'))
+    const unwatch = watchOutbox(heard)
+    dropOld()
+    expect(stored()).toEqual([])
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    expect(counts()).toEqual(['it.givenup.alice'])
+    // Whatever shows it is told only once the count is there to show
+    expect(heard).toHaveReturnedWith({ clicks: 1, messages: 0 })
+    unwatch()
+    // And the same when it is found too old while the outbox is being sent
+    left('alice', 'session-1', 'click-full-0002', { at: TOO_OLD })
+    vi.restoreAllMocks()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fullUntilGone('it.outbox.alice.page1.click-full-0002')
+    const b = backend([])
+    await drain(b.client, 'alice')
+    expect(b.calls).toEqual([])
+    expect(stored()).toEqual([])
+    expect(givenUpFor('alice')).toEqual({ clicks: 2, messages: 0 })
+  })
+
+  test('too old to send with storage that takes nothing, it is still said in this page, and kept once storage has room', () => {
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-full-0003', { at: TOO_OLD })
+    let refusing = full()
+    dropOld()
+    expect(stored()).toEqual([])
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    expect(counts()).toEqual([])
+    // Said under this pairing only, as one kept would be
+    outboxBelongsTo('alice', 'session-2')
+    expect(givenUpFor('alice')).toBeNull()
+    outboxBelongsTo('alice', 'session-1')
+    refusing.mockRestore()
+    left('alice', 'session-1', 'click-full-0004', { at: TOO_OLD })
+    refusing = full()
+    dropOld()
+    expect(stored()).toEqual([])
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    // Storage has room again: the next change writes it, with nothing of what it carried
+    refusing.mockRestore()
+    left('alice', 'session-1', 'click-old-0099', { at: TOO_OLD })
+    dropOld()
+    expect(givenUpFor('alice')).toEqual({ clicks: 2, messages: 0 })
+    expect(JSON.parse(localStorage.getItem('it.givenup.alice') ?? 'null')).toEqual([{ session: 'session-1', clicks: 2, messages: 0 }])
+    seenGivenUp('alice')
+    expect(givenUpFor('alice')).toBeNull()
+  })
+
+  test('refused for good once its page had gone with storage full, it is said, and is gone', async () => {
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-gone-0011')
+    fullUntilGone('it.outbox.alice.page1.click-gone-0011')
+    const b = backend([refuse('invalid')])
+    await drain(b.client, 'alice')
+    expect(stored()).toEqual([])
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    expect(counts()).toEqual(['it.givenup.alice'])
+    // With storage that takes nothing at all, it is still said in this page
+    vi.restoreAllMocks()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    seenGivenUp('alice')
+    left('alice', 'session-1', 'click-gone-0012')
+    full()
+    const again = backend([refuse('invalid')])
+    await drain(again.client, 'alice')
+    expect(stored()).toEqual([])
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    expect(counts()).toEqual([])
+    // Seen in another tab: what this page held of it goes too
+    const unwatch = watchOutbox(() => {})
+    window.dispatchEvent(new StorageEvent('storage', { key: 'it.givenup.alice', newValue: null }))
+    unwatch()
+    expect(givenUpFor('alice')).toBeNull()
   })
 })
