@@ -89,19 +89,37 @@ interface GivenUp {
 }
 const isGivenUp = (said: Partial<GivenUp> | null): said is GivenUp =>
   !!said && (typeof said.session === 'string' || said.session === null) && Number.isSafeInteger(said.clicks) && Number.isSafeInteger(said.messages)
+// A count the browser would not keep, as when its storage is full, is held in this page instead
+// for as long as the page is open, so that the person is still told, and it is written again at
+// each change until the browser takes it. Like the one kept, it is how many there were and the
+// pairing they were made under, and nothing of what they carried.
+const givenUpHeld = new Map<string, GivenUp[]>()
 /** Each pairing's count of what was given up of this person's. One kept before there could be more than one is read as the only one. */
 function givenUpOf(user: string): GivenUp[] {
+  const held = givenUpHeld.get(user)
+  if (held) return held
   try {
     const said = JSON.parse(localStorage.getItem(`${GIVEN_UP}${user}`) ?? 'null') as Partial<GivenUp> | Partial<GivenUp>[] | null
     return (Array.isArray(said) ? said : [said]).filter(isGivenUp)
   } catch {}
   return []
 }
-/** Keeps this person's counts of what was given up, and nothing under their name once there is none. */
+/** Keeps this person's counts of what was given up, and nothing under their name once there is none. Counts the browser will not keep are held in this page until it does. */
 function keepGivenUp(user: string, counts: GivenUp[]): void {
   try {
     if (counts.length) localStorage.setItem(`${GIVEN_UP}${user}`, JSON.stringify(counts))
     else localStorage.removeItem(`${GIVEN_UP}${user}`)
+    givenUpHeld.delete(user)
+  } catch {
+    if (counts.length) givenUpHeld.set(user, counts)
+    else givenUpHeld.delete(user)
+  }
+}
+/** Lets go of every count of this person's, kept or held. */
+function forgetGivenUp(user: string): void {
+  givenUpHeld.delete(user)
+  try {
+    localStorage.removeItem(`${GIVEN_UP}${user}`)
   } catch {}
 }
 /**
@@ -123,15 +141,15 @@ function givenUp(e: Entry): void {
 }
 /** Lets go of every count of what was given up but the one of the person and pairing named, which is the only one that may still be said. */
 function tidyGivenUp(keep?: { user: string; session: string | null }): void {
+  for (const user of givenUpHeld.keys()) if (user !== keep?.user) givenUpHeld.delete(user)
   for (const key of Object.keys(localStorage)) {
-    if (!key.startsWith(GIVEN_UP)) continue
-    if (keep && key === `${GIVEN_UP}${keep.user}`)
-      keepGivenUp(
-        keep.user,
-        givenUpOf(keep.user).filter((c) => c.session === keep.session),
-      )
-    else localStorage.removeItem(key)
+    if (key.startsWith(GIVEN_UP) && !(keep && key === `${GIVEN_UP}${keep.user}`)) localStorage.removeItem(key)
   }
+  if (keep)
+    keepGivenUp(
+      keep.user,
+      givenUpOf(keep.user).filter((c) => c.session === keep.session),
+    )
 }
 /** How many of this person's clicks and typed messages were given up under the pairing this browser has now, with nobody told. Null when none was, and when the browser is not theirs. */
 export function givenUpFor(user: string): { clicks: number; messages: number } | null {
@@ -141,9 +159,7 @@ export function givenUpFor(user: string): { clicks: number; messages: number } |
 }
 /** The person has seen what was given up, in this tab or another. */
 export function seenGivenUp(user: string): void {
-  try {
-    localStorage.removeItem(`${GIVEN_UP}${user}`)
-  } catch {}
+  forgetGivenUp(user)
   changed()
 }
 // A request whose answer was lost must keep its original deadline even when storage refused it.
@@ -156,12 +172,16 @@ const memoryGrants = new Map<string, { session: string | null; until: number }>(
 let changes = 0
 const watchers = new Set<() => void>()
 function changed(): void {
+  // A count held in this page because the browser would not keep it is offered to it again
+  for (const [user, counts] of givenUpHeld) keepGivenUp(user, counts)
   changes++
   for (const fn of watchers) fn()
 }
 watchPending(changed)
 /** Another tab of this browser has kept a click or let go of one, or given one up, which the browser says to every other tab. */
 const elsewhere = (e: StorageEvent): void => {
+  // Seen, or let go of, in another tab: what this page held of it goes too
+  if (e.key?.startsWith(GIVEN_UP) && e.newValue === null) givenUpHeld.delete(e.key.slice(GIVEN_UP.length))
   if (e.key === null || e.key.startsWith(PREFIX) || e.key.startsWith(GIVEN_UP)) changed()
 }
 /** How many times what is kept here has changed, in this tab or, as far as the browser has said, in another. */
@@ -260,9 +280,10 @@ export function dropOld(): void {
     } catch {}
     old.push(key)
   }
-  // Said to the person, under the pairing each was made under, once the site knows that is the pairing it has
-  for (const entry of told) givenUp(entry)
+  // Let go of first, so that the room they took is there for counting them, then said to the
+  // person, under the pairing each was made under, once the site knows that is the pairing it has
   for (const key of old) forget(key)
+  for (const entry of told) givenUp(entry)
   if (old.length) {
     changed()
     note('saved clicks were too old to send, and were dropped', old.length)
@@ -622,9 +643,7 @@ export function dismissMessage(user: string, artifactId: string, id: string): vo
 export function abandonOutbox(user: string): void {
   if (pairedFor === user) outboxBelongsTo(null)
   for (const [key] of entries(user)) forget(key)
-  try {
-    localStorage.removeItem(`${GIVEN_UP}${user}`)
-  } catch {}
+  forgetGivenUp(user)
   discardPending(user)
   void tidyBytes({ person: user })
   changed()
@@ -958,8 +977,10 @@ export async function drain(convex: ConvexReactClient, user: string): Promise<vo
       const [key, entry] = next
       if (Date.now() - entry.at > MAX_AGE_MS) {
         note('a saved click was too old to send, and was dropped')
+        // Let go of before it is counted, so that the room it took is there for the count
+        forget(key)
         givenUp(entry)
-        drop(key)
+        changed()
         continue
       }
       // Saved a moment ago: the page that sent it may still be sending it, or still working
@@ -1101,8 +1122,9 @@ async function replay(convex: ConvexReactClient, user: string, key: string): Pro
       if (entry.operation?.kind === 'message' || (entry.format !== 2 && refusal(err).code === 'conflict'))
         put(key, JSON.stringify({ ...entry, refused: refusal(err).message, held: undefined }))
       else {
+        forget(key)
         givenUp(entry)
-        drop(key)
+        changed()
       }
       return 'done'
     }

@@ -1123,4 +1123,98 @@ describe('a click or typed message given up with nobody there to be told', () =>
       vi.useRealTimers()
     }
   })
+
+  /** Storage with no room for anything more until something kept in it is let go of. */
+  const fullUntilGone = (key: string) => {
+    const setItem = Storage.prototype.setItem
+    return vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (this.getItem(key) !== null) throw new Error('QuotaExceededError')
+      setItem.call(this, k, v)
+    })
+  }
+  /** Storage with no room for anything more at all. */
+  const full = () =>
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+
+  test('too old to send with storage full, it is let go of first and the room it took is used to say so', async () => {
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-full-0001', { at: TOO_OLD })
+    fullUntilGone('it.outbox.alice.page1.click-full-0001')
+    const heard = vi.fn(() => givenUpFor('alice'))
+    const unwatch = watchOutbox(heard)
+    dropOld()
+    expect(stored()).toEqual([])
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    expect(counts()).toEqual(['it.givenup.alice'])
+    // Whatever shows it is told only once the count is there to show
+    expect(heard).toHaveReturnedWith({ clicks: 1, messages: 0 })
+    unwatch()
+    // And the same when it is found too old while the outbox is being sent
+    left('alice', 'session-1', 'click-full-0002', { at: TOO_OLD })
+    vi.restoreAllMocks()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fullUntilGone('it.outbox.alice.page1.click-full-0002')
+    const b = backend([])
+    await drain(b.client, 'alice')
+    expect(b.calls).toEqual([])
+    expect(stored()).toEqual([])
+    expect(givenUpFor('alice')).toEqual({ clicks: 2, messages: 0 })
+  })
+
+  test('too old to send with storage that takes nothing, it is still said in this page, and kept once storage has room', () => {
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-full-0003', { at: TOO_OLD })
+    let refusing = full()
+    dropOld()
+    expect(stored()).toEqual([])
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    expect(counts()).toEqual([])
+    // Said under this pairing only, as one kept would be
+    outboxBelongsTo('alice', 'session-2')
+    expect(givenUpFor('alice')).toBeNull()
+    outboxBelongsTo('alice', 'session-1')
+    refusing.mockRestore()
+    left('alice', 'session-1', 'click-full-0004', { at: TOO_OLD })
+    refusing = full()
+    dropOld()
+    expect(stored()).toEqual([])
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    // Storage has room again: the next change writes it, with nothing of what it carried
+    refusing.mockRestore()
+    left('alice', 'session-1', 'click-old-0099', { at: TOO_OLD })
+    dropOld()
+    expect(givenUpFor('alice')).toEqual({ clicks: 2, messages: 0 })
+    expect(JSON.parse(localStorage.getItem('it.givenup.alice') ?? 'null')).toEqual([{ session: 'session-1', clicks: 2, messages: 0 }])
+    seenGivenUp('alice')
+    expect(givenUpFor('alice')).toBeNull()
+  })
+
+  test('refused for good once its page had gone with storage full, it is said, and is gone', async () => {
+    outboxBelongsTo('alice', 'session-1')
+    left('alice', 'session-1', 'click-gone-0011')
+    fullUntilGone('it.outbox.alice.page1.click-gone-0011')
+    const b = backend([refuse('invalid')])
+    await drain(b.client, 'alice')
+    expect(stored()).toEqual([])
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    expect(counts()).toEqual(['it.givenup.alice'])
+    // With storage that takes nothing at all, it is still said in this page
+    vi.restoreAllMocks()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    seenGivenUp('alice')
+    left('alice', 'session-1', 'click-gone-0012')
+    full()
+    const again = backend([refuse('invalid')])
+    await drain(again.client, 'alice')
+    expect(stored()).toEqual([])
+    expect(givenUpFor('alice')).toEqual({ clicks: 1, messages: 0 })
+    expect(counts()).toEqual([])
+    // Seen in another tab: what this page held of it goes too
+    const unwatch = watchOutbox(() => {})
+    window.dispatchEvent(new StorageEvent('storage', { key: 'it.givenup.alice', newValue: null }))
+    unwatch()
+    expect(givenUpFor('alice')).toBeNull()
+  })
 })
