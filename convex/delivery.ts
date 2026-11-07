@@ -83,7 +83,11 @@ async function listeningRows(
   ctx: QueryCtx,
   user: Doc<'users'>,
   machine: Doc<'machines'>,
-  /** And for each, where it has one, the moment only what was received after is read. */
+  /**
+   * And for each, where it has one, the moment only what was made after is read, by when the
+   * person made it (`madeAt`) and not when It received it, so that a click saved in a browser
+   * before that moment and sent after it is left out with the rest of what came before.
+   */
   listening: { harness: string; id: string; since?: number }[],
   read: (rows: Doc<'actions'>[]) => Doc<'actions'>[],
 ) {
@@ -94,18 +98,22 @@ async function listeningRows(
   // this computer in again, say) has no machine, and still belongs to the conversation that
   // is here and listening.
   //
-  // A conversation named with a moment is read from that moment on, in the index itself: what
-  // came before it is outside what is read, so no number of older clicks can take the places
-  // of one that came after.
+  // A conversation named with a moment is read from that moment on, by when each click was
+  // made, in the index itself: what was made before it is outside what is read, so no number of
+  // older clicks can take the places of one that came after. A click kept before It kept when
+  // clicks were made has no such time until `dateOld` gives it the time it arrived, which it
+  // does within a minute, and is outside what is read until then.
   for (const s of listening.slice(0, LISTENING_MOST)) {
     // This machine's own, and those with no machine, are each read by themselves: read
     // together with everything else waiting for the conversation, a few clicks that are
     // another machine's, or were set aside, could stand in front of one this machine may take.
+    const since = s.since
     const route = (machineId: Id<'machines'>) =>
-      ctx.db.query('actions').withIndex('by_route', (q) => {
-        const all = q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id)
-        return s.since === undefined ? all : all.gt('createdAt', s.since)
-      })
+      since === undefined
+        ? ctx.db
+            .query('actions')
+            .withIndex('by_route', (q) => q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id))
+        : madeAfter(ctx, machineId, s.harness, s.id, since)
     // These come first and are at most four for each of forty conversations, which is within what may be read whatever they carry
     const own = read(await route(machine._id).take(2))
     // Those with no machine are read as exactly the ones this machine may take: this
@@ -114,25 +122,43 @@ async function listeningRows(
     // Nothing is read and then left out, so no number of clicks that may not be taken,
     // another person's or set aside, can stand in front of one that may; and the oldest of
     // them are the ones offered.
-    const loose = read(
-      await ctx.db
-        .query('actions')
-        .withIndex('by_user_route', (q) => {
-          const all = q
-            .eq('userId', user._id)
-            .eq('delivery', 'pending')
-            .eq('harness', s.harness)
-            .eq('sessionId', s.id)
-            .eq('machineId', undefined)
-            .eq('parkedBy', undefined)
-          return s.since === undefined ? all : all.gt('createdAt', s.since)
-        })
-        .take(2),
-    )
-    rows.push(...[...own, ...loose].sort((a, b) => a.createdAt - b.createdAt).slice(0, 2))
+    const loose = read(await looseFor(ctx, user._id, s.harness, s.id, since).take(2))
+    // Oldest first by what each was read by
+    const at = since === undefined ? (x: Doc<'actions'>) => x.createdAt : madeOf
+    rows.push(...[...own, ...loose].sort((a, b) => at(a) - at(b)).slice(0, 2))
   }
   return rows
 }
+
+/**
+ * What waits for one conversation with no machine and not set aside, which any of the person's
+ * machines may take, oldest first: by when it arrived, or, after `since`, by when it was made.
+ */
+const looseFor = (ctx: QueryCtx, userId: Id<'users'>, harness: string, sessionId: string, since: number | undefined) =>
+  since === undefined
+    ? ctx.db
+        .query('actions')
+        .withIndex('by_user_route', (q) =>
+          q
+            .eq('userId', userId)
+            .eq('delivery', 'pending')
+            .eq('harness', harness)
+            .eq('sessionId', sessionId)
+            .eq('machineId', undefined)
+            .eq('parkedBy', undefined),
+        )
+    : ctx.db
+        .query('actions')
+        .withIndex('by_user_route_made', (q) =>
+          q
+            .eq('userId', userId)
+            .eq('delivery', 'pending')
+            .eq('harness', harness)
+            .eq('sessionId', sessionId)
+            .eq('machineId', undefined)
+            .eq('parkedBy', undefined)
+            .gt('madeAt', since),
+        )
 
 /**
  * What waits for one conversation on a machine, oldest first by when it was made, and made after
@@ -279,10 +305,11 @@ export const inboxPage = query({
      * The conversations held in threads of T3 Code that the connector asks for whether or not
      * they are here and whether or not they may be reopened, each with since when it has asked
      * for them that way, by this backend's clock, which it tells at its door. Only what was
-     * received after that is read for them: a click that had waited for such a conversation from
-     * before is left where it is, for `it wait` and the site, and does not start a turn by
-     * itself. A connector asks with this only where the backend names `TAKES.inboxHeld` at its
-     * door, since an older one refuses it.
+     * made after that is read for them, by `madeAt`, which is on the same clock: a click that had
+     * waited for such a conversation from before, or was made before and arrived after, is left
+     * where it is, for `it wait` and the site, and does not start a turn by itself. A connector
+     * asks with this only where the backend names `TAKES.inboxHeld` at its door, since an older
+     * one refuses it.
      */
     held: v.optional(v.array(v.object({ harness: v.string(), id: v.string(), since: v.number() }))),
   },

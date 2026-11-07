@@ -444,6 +444,9 @@ export default defineSchema({
     // One person's clicks for one conversation by whose they are to deliver, oldest first: with
     // no machine and not set aside, they are the ones any of the person's machines may take
     .index('by_user_route', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'createdAt'])
+    // The same by when each was made: a conversation held in a thread of T3 Code is asked for
+    // only what was made after a moment, and what was made before it is outside what is read
+    .index('by_user_route_made', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'madeAt'])
     .index('by_delivery_created', ['delivery', 'createdAt'])
     .index('by_delivery_handed', ['delivery', 'handedAt'])
     .index('by_delivery_lease', ['delivery', 'leaseExpiresAt'])

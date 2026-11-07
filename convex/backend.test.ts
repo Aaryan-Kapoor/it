@@ -5748,6 +5748,31 @@ describe('when a click was made', () => {
     })
     expect(await row(actionId!)).toMatchObject({ madeAt: pressed, route: 'stopped' })
   })
+
+  test('a conversation held in a thread is not offered a click made before the connector began to ask for it that way and sent after, and is offered one made after', async () => {
+    const { t, m, click } = await setup()
+    // Two clicks are made while It cannot be reached, and saved in the browser
+    const madeBefore = Date.now()
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    // The connector begins to ask for the conversation as one held in a thread, from this moment by It's clock
+    const since = Date.now()
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    const madeAfter = Date.now()
+    await vi.advanceTimersByTimeAsync(MINUTE)
+    // The browser reaches It again, and sends what it saved, and then two clicks made since
+    const before = [(await click('click-held-before-1', madeBefore)).actionId, (await click('click-held-before-2', madeBefore + 1)).actionId]
+    const after = [(await click('click-held-after-01', madeAfter)).actionId, (await click('click-held-after-02', madeAfter + 1)).actionId]
+    // One of each kind is addressed to no machine, which any of the person's machines may take
+    await t.run(async (ctx) => {
+      for (const id of [before[1]!, after[1]!]) await ctx.db.patch(id as Id<'actions'>, { machineId: undefined })
+    })
+    const held = async () =>
+      (await m.as.query(api.delivery.inboxPage, { listening: [], after: [], held: [{ ...SESSION, since }] })).clicks.map((c) => c.id).sort()
+    // All four arrived after the moment, and only the two made after it are offered
+    expect(await held()).toEqual([...after].sort())
+    // The ones made before are still waiting, for `it wait` and the site
+    expect((await m.as.query(api.delivery.waitingFor, { session: SESSION })).map((c) => c.id)).toEqual(expect.arrayContaining([...before, ...after]))
+  })
 })
 
 describe('cases at the edges', () => {
