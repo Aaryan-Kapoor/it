@@ -218,17 +218,7 @@ export const retry = mutation({
     const { user } = await requireOwner(ctx, expectedSession)
     const a = await ownArtifact(ctx, user._id, artifactId)
     const retried = await bringBack(ctx, a._id, Date.now(), null)
-    // Why the page's conversation could not be reopened is the machine's word on the tries that
-    // are over. Left, the bar would go on saying so while the click is being tried again; a try
-    // that comes to nothing says it again
-    if (retried) {
-      const to = await destination(ctx, a._id)
-      const machine = to.machineId ? await ctx.db.get(to.machineId) : null
-      const fails = machine?.fails ?? []
-      const left = fails.filter((f) => f.harness !== to.harness || f.sessionId !== to.sessionId)
-      if (machine && left.length !== fails.length) await ctx.db.patch(machine._id, { fails: left })
-      log('actions.retried', { artifactId: a._id, count: retried })
-    }
+    if (retried) log('actions.retried', { artifactId: a._id, count: retried })
     return { retried }
   },
 })
@@ -259,6 +249,16 @@ async function bringBack(ctx: MutationCtx, artifactId: Id<'artifacts'>, at: numb
     }
     await ctx.db.patch(x._id, { ...to, parkedBy: undefined, retriedAt: at })
     n++
+  }
+  // Why the page's conversation could not be reopened is the machine's word on the tries that
+  // are over. Left, the bar would go on saying so while the click is being tried again, whichever
+  // batch brought it back. Only what was said before the person asked goes: a try since that
+  // came to nothing has said it again
+  if (n && to.machineId) {
+    const machine = await ctx.db.get(to.machineId)
+    const fails = machine?.fails ?? []
+    const left = fails.filter((f) => f.harness !== to.harness || f.sessionId !== to.sessionId || f.at > at)
+    if (machine && left.length !== fails.length) await ctx.db.patch(machine._id, { fails: left })
   }
   if (!batch.isDone) await ctx.scheduler.runAfter(0, internal.actions.retryRest, { artifactId, at, cursor: batch.continueCursor })
   return n

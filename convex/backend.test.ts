@@ -6545,6 +6545,41 @@ describe('cases at the edges', () => {
     expect(after.every((id) => parked.has(id))).toBe(true)
   })
 
+  test('the bar stops saying the conversation could not be reopened when only a later batch brings back what was set aside, and not when a try since says it again', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    // A whole first batch of clicks waiting as they are, and the one that was set aside after them
+    await insertClicks(t, p.artifactId, 100, {}, Date.now() - 1000)
+    const [aside] = await insertClicks(t, p.artifactId, 1, { machineId: undefined, parkedBy: laptop.id }, Date.now() - 500)
+    await laptop.as.mutation(api.machines.wakeFailed, { for: thread, why: 'its command ended with an error' })
+    const failed = async () => (await alice.browser.query(api.artifacts.get, { slug: 'plan' })).wakeFailed
+    expect(await failed()).not.toBeNull()
+    vi.setSystemTime(Date.now() + 60_000)
+    const asked = Date.now()
+    expect(await alice.browser.mutation(api.actions.retry, { artifactId: p.artifactId })).toEqual({ retried: 0 })
+    // A fresh try comes to nothing before the later batch is reached: that is said, and stays said
+    vi.setSystemTime(asked + 1000)
+    await laptop.as.mutation(api.machines.wakeFailed, { for: thread, why: 'its command ended with an error again' })
+    await settle(t)
+    expect((await t.run((ctx) => ctx.db.get(aside as never))) as any).toMatchObject({ machineId: laptop.id, retriedAt: asked })
+    expect(await failed()).toMatchObject({ why: 'its command ended with an error again' })
+    // Without that try, the batch that brought the click back takes away what was said before the person asked
+    await t.run((ctx) => ctx.db.patch(aside as never, { machineId: undefined, parkedBy: laptop.id } as never))
+    await t.run((ctx) =>
+      ctx.db.patch(
+        laptop.id as never,
+        { fails: [{ harness: 'codex', sessionId: 'thread-1', at: asked + 2000, why: 'its command ended with an error' }] } as never,
+      ),
+    )
+    vi.setSystemTime(asked + 60_000)
+    expect(await alice.browser.mutation(api.actions.retry, { artifactId: p.artifactId })).toEqual({ retried: 0 })
+    await settle(t)
+    expect(await failed()).toBeNull()
+  })
+
   test('only the owner’s browser can have what was set aside tried again, and nobody else’s asking changes anything', async () => {
     const t = backend()
     const alice = await person(t, 'alice')
