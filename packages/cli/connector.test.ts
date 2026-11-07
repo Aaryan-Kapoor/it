@@ -2,7 +2,7 @@
 // Codex's own command and for usage reporting. What add-ons and `it wait` ask of it is asked for
 // real, over its socket and over its port.
 import { spawn } from 'node:child_process'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import fs, { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import { syncBuiltinESMExports } from 'node:module'
@@ -56,12 +56,7 @@ const stand = vi.hoisted(() => ({
     running: false,
     threads: new Map<string, string>(),
     slow: false,
-    asked: [] as {
-      ids: string[]
-      answer: (thread: string | null | undefined | Error | { status: 'limited' }, progressed?: boolean) => void
-      /** The search it was asked as part of, with how many thread ids the test says it holds. */
-      search: { held?: number }
-    }[],
+    asked: [] as { ids: string[]; answer: (thread: string | null | undefined | Error | { status: 'limited' }, progressed?: boolean) => void }[],
     sent: [] as { thread: string; text: string }[],
     /** What T3 Code says where it will not take a message, and what it refused. */
     refusing: null as string | null,
@@ -73,15 +68,12 @@ const stand = vi.hoisted(() => ({
 }))
 // T3 Code is asked over its own server and its own command (t3.test.ts tries what is read from
 // them). Here it is a stand-in, so that the way a click goes can be tried with T3 Code running.
-vi.mock('./src/t3', async (original) => ({
-  T3_HELD_MOST: (await original<typeof import('./src/t3')>()).T3_HELD_MOST,
+vi.mock('./src/t3', () => ({
   t3Server: () => (stand.t3.running ? { origin: 'http://127.0.0.1:1', home: '/no-t3-code', program: 't3' } : undefined),
-  t3Search: () => ({}),
-  t3Held: (search: { held?: number }) => search.held ?? 0,
-  t3ThreadOf: (_t3: unknown, of: { ids: readonly string[] }, search: { held?: number }) =>
+  t3ThreadOf: (_t3: unknown, of: { ids: readonly string[] }) =>
     new Promise<{ thread: string | null | undefined | Error | { status: 'limited' }; progressed: boolean }>((resolve) => {
       const answer = (thread: string | null | undefined | Error | { status: 'limited' }, progressed = true) => resolve({ thread, progressed })
-      stand.t3.asked.push({ ids: [...of.ids], answer, search })
+      stand.t3.asked.push({ ids: [...of.ids], answer })
       if (!stand.t3.slow) answer(of.ids.map((id) => stand.t3.threads.get(id)).find((thread) => thread !== undefined) ?? null)
     }).then(({ thread, progressed }) => {
       if (thread instanceof Error) throw thread
@@ -121,17 +113,12 @@ vi.mock('./src/wake', async (original) => ({
     return holder
   },
 }))
-vi.mock('node:child_process', async (original) => {
-  const real = await original<typeof import('node:child_process')>()
-  return {
-    ...real,
-    execFile: (bin: string, args: string[], options: { env?: NodeJS.ProcessEnv }, done: (err: unknown) => void) => {
-      // Windows PowerShell, through which a reopened run's job is asked after and ended on Windows, is run as it is
-      if (/(^|[\\/])powershell\.exe$/i.test(bin)) return (real.execFile as (...a: unknown[]) => unknown)(bin, args, options, done)
-      stand.codex.push({ args, env: options.env, end: (err) => done(err ?? null) })
-    },
-  }
-})
+vi.mock('node:child_process', async (original) => ({
+  ...(await original<typeof import('node:child_process')>()),
+  execFile: (_bin: string, args: string[], options: { env?: NodeJS.ProcessEnv }, done: (err: unknown) => void) => {
+    stand.codex.push({ args, env: options.env, end: (err) => done(err ?? null) })
+  },
+}))
 vi.mock('./src/setup', () => ({ detectAll: async () => stand.found, newerProgramSeen: () => false, reconcile: async () => {} }))
 vi.mock('./src/usage', () => ({
   agentOf: (harness: unknown) => String(harness ?? 'unknown'),
@@ -4121,13 +4108,13 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(stand.t3.asked.length).toBe(1)
   })
 
-  test('a search that read every thread and found none uses the fallback route, and another begins only after six hours', async () => {
+  test('a search at its read limit uses the fallback route and starts afresh only after six hours', async () => {
     withT3Code()
     stand.t3.slow = true
     await start()
     offered(click(3))
     await until(() => stand.t3.asked.length === 1)
-    stand.t3.asked[0]!.answer(null)
+    stand.t3.asked[0]!.answer({ status: 'limited' })
     await until(() => stand.codex.length === 1)
     stand.codex[0]!.end()
     await until(() => called('delivery:handedOff').includes('click-3'))
@@ -4145,125 +4132,6 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
       await until(() => stand.t3.sent.length === 1)
       expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
       expect(stand.codex).toHaveLength(2)
-    } finally {
-      wall.mockRestore()
-    }
-  })
-
-  test('a search that used its reads while its click waits is followed at once by the next, and the click waits no longer than its own five seconds', async () => {
-    withT3Code()
-    stand.t3.slow = true
-    await start()
-    offered(click(3))
-    await until(() => stand.t3.asked.length === 1)
-    stand.t3.asked[0]!.answer({ status: 'limited' })
-    await until(() => stand.t3.asked.length === 2)
-    expect(stand.codex).toEqual([])
-    // Past its five seconds the click goes the way it would without T3 Code, though the search goes on
-    const wall = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6_000)
-    try {
-      await until(() => stand.codex.length === 1)
-      expect(stand.t3.asked).toHaveLength(2)
-      stand.t3.asked[1]!.answer({ status: 'limited' })
-      stand.codex[0]!.end()
-      await until(() => called('delivery:handedOff').includes('click-3'))
-      offered()
-      // With no click to ask for the thread, no other search begins
-      await pause(1500)
-      expect(stand.t3.asked).toHaveLength(2)
-      expect(stand.t3.sent).toEqual([])
-    } finally {
-      wall.mockRestore()
-    }
-  })
-
-  test('a search that used its reads after its click went another way is taken up by the next click, which waits for it, and goes to the thread it finds', async () => {
-    withT3Code()
-    stand.t3.slow = true
-    await start()
-    offered(click(3))
-    await until(() => stand.t3.asked.length === 1)
-    const wall = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6_000)
-    try {
-      await until(() => stand.codex.length === 1)
-      stand.t3.asked[0]!.answer({ status: 'limited' })
-      stand.codex[0]!.end()
-      await until(() => called('delivery:handedOff').includes('click-3'))
-      offered({ ...click(3), id: 'next-click' })
-      await until(() => stand.t3.asked.length === 2)
-      expect(stand.t3.asked[1]!.ids).toEqual(['thread-3'])
-      // It is given a wait of its own, and nothing else is tried in that time
-      await pause(1500)
-      expect(stand.codex).toHaveLength(1)
-      stand.t3.asked[1]!.answer('t3-thread-c')
-      await until(() => stand.t3.sent.length === 1)
-      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
-      expect(stand.codex).toHaveLength(1)
-    } finally {
-      wall.mockRestore()
-    }
-  })
-
-  test('the searches of every conversation hold no more thread ids together than they may: the one that went on longest ago is dropped, and begins again from nothing without being taken for one with no thread', async () => {
-    const { T3_HELD_MOST } = await import('./src/t3')
-    // Two such searches fit together, and a third does not
-    const each = Math.floor(T3_HELD_MOST / 2) - 1
-    withT3Code()
-    stand.t3.slow = true
-    await start()
-    const asks = (n: number) => stand.t3.asked.filter((asked) => asked.ids.includes(`thread-${n}`))
-    offered(click(3), click(4), click(5))
-    await until(() => [3, 4, 5].every((n) => asks(n).length === 1))
-    const first = asks(3)[0]!.search
-    // Each goes on, holding as many thread ids as a search part way through a large workspace
-    for (const n of [3, 4, 5]) {
-      asks(n)[0]!.search.held = each
-      asks(n)[0]!.answer(undefined)
-      await until(() => asks(n).length >= 2)
-    }
-    // The third went past the bound, and the search that went on longest ago was dropped:
-    // its conversation is asked for again, in a search that begins from nothing
-    await until(() => asks(3).length === 3)
-    expect(asks(3)[1]!.search).toBe(first)
-    expect(asks(3)[2]!.search).not.toBe(first)
-    expect(asks(3)[2]!.search.held).toBeUndefined()
-    // The others go on with what they hold
-    expect(asks(4)[1]!.search).toBe(asks(4)[0]!.search)
-    expect(asks(5)[1]!.search).toBe(asks(5)[0]!.search)
-    // What the dropped search says in the end counts for nothing, and the new one finds the thread
-    asks(3)[1]!.answer('t3-thread-stale')
-    asks(3)[2]!.answer('t3-thread-c')
-    await until(() => stand.t3.sent.length === 1)
-    expect(stand.t3.sent.map((s) => s.thread)).toEqual(['t3-thread-c'])
-    expect(stand.codex).toEqual([])
-  })
-
-  test('a search that used its reads just after its click’s wait ran out, before the click went another way, gives the click no second wait', async () => {
-    standIn(true)
-    withT3Code()
-    stand.t3.slow = true
-    await start()
-    let now = Date.now()
-    const wall = vi.spyOn(Date, 'now').mockImplementation(() => now)
-    try {
-      offered(click(3))
-      await until(() => stand.t3.asked.length === 1)
-      await settled()
-      expect(stand.codex).toEqual([])
-      // The wait runs out with no pass in between, and only then does the search say it used its reads
-      now += 5_001
-      stand.t3.asked[0]!.answer({ status: 'limited' })
-      await settled()
-      expect(stand.codex).toEqual([])
-      // The very next pass sends the click the way it would go without T3 Code, while the clock
-      // stands a moment past its wait. The conversation's next search begins with that pass, and
-      // the click does not wait for it
-      await vi.advanceTimersByTimeAsync(1000)
-      await settled()
-      await until(() => stand.codex.length === 1, 2000)
-      expect(stand.codex[0]!.args).toContain('--thread=thread-3')
-      expect(stand.t3.asked).toHaveLength(2)
-      expect(stand.t3.sent).toEqual([])
     } finally {
       wall.mockRestore()
     }
@@ -4684,31 +4552,6 @@ describe.skipIf(process.platform === 'win32')('a thread of T3 Code that is switc
     expect([stand.t3.sent[0]!.thread, stand.t3.asked]).toEqual(['t3-next-door', []])
   })
 
-  test('a search for a conversation’s thread that is under way when the thread is found to run the conversation ends there, and the click goes to that thread', async () => {
-    stand.t3.running = true
-    stand.t3.slow = true
-    await start('socket', BOTH)
-    handing(0)
-    // A click for a Codex conversation that has not been heard from begins a search for its thread
-    stand.watching.get('delivery:inboxPage')!([click(codex)])
-    await until(() => stand.t3.asked.length === 1)
-    // Its hook is heard from before the search says anything, and T3 Code says which thread runs it
-    stand.t3.runs.set('t3-thread', { now: codex, before: [] })
-    await codexTurn(false)
-    await until(() => stand.t3.looked.length === 1)
-    // The click goes to that thread without waiting for the search
-    await until(() => stand.t3.sent.length === 1)
-    expect(stand.t3.sent[0]!.thread).toBe('t3-thread')
-    // What the search says in the end counts for nothing, and no other search begins
-    stand.t3.asked[0]!.answer({ status: 'limited' })
-    await settled()
-    stand.watching.get('delivery:inboxPage')!([{ ...click(codex), id: 'click-2' }])
-    await until(() => stand.t3.sent.length === 2)
-    expect(stand.t3.sent[1]!.thread).toBe('t3-thread')
-    expect(stand.t3.asked).toHaveLength(1)
-    expect(stand.codex).toEqual([])
-  })
-
   test('where T3 Code is not running nothing is asked of it and nothing changes hands, and a click on a page that went goes where the page went', async () => {
     await start('socket', BOTH)
     handing(1)
@@ -4755,187 +4598,4 @@ describe('the way a click goes when no add-on is there to take it', () => {
   test('and otherwise it goes no way: it waits, in view', () => {
     expect(way({ inT3: false, codexOpen: false, reopens: false }).way).toBeUndefined()
   })
-})
-
-describe.skipIf(process.platform !== 'win32')('a closed conversation reopened on Windows, in a job of its own', () => {
-  const click = (n: number, harness = 'codex', id = 'thread-1') => ({
-    id: `click-${n}`,
-    artifact: `page-${n}`,
-    title: 'A page',
-    name: 'approve',
-    payload: '{"plan":"B"}',
-    at: Date.now() - 10_000 + n,
-    attended: true,
-    session: { harness, id },
-  })
-  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inboxPage')!(clicks)
-  const me = (harness: string, runs: unknown[] = []) =>
-    stand.watching.get('machines:me')!({ wanted: [harness], wakes: [{ harness, since: Date.now() - 60_000 }], runs })
-  const alive = (pid: number) => {
-    try {
-      process.kill(pid, 0)
-      return true
-    } catch {
-      return false
-    }
-  }
-  /**
-   * A stand-in for an agent app's script, which Node runs: it keeps what it is given, and then
-   * ends at once or works on. Working on, it starts a program of its own apart from it, as a
-   * command an agent leaves running is, which only the run's job is there to end.
-   */
-  const agent = (folder: string, mode: 'done' | 'wait') => `const fs = require('fs')
-const path = require('path')
-const folder = ${JSON.stringify(folder)}
-const n = fs.readdirSync(folder).filter((name) => name.startsWith('given-')).length
-let input = ''
-process.stdin.setEncoding('utf8')
-process.stdin.on('data', (piece) => { input += piece })
-process.stdin.on('end', () => {
-  let left = null
-  if (${JSON.stringify(mode)} === 'wait') {
-    left = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true, windowsHide: true })
-    left.unref()
-  }
-  fs.writeFileSync(path.join(folder, 'pids-' + n + '.json'), JSON.stringify({ own: process.pid, left: left && left.pid }))
-  fs.writeFileSync(path.join(folder, 'given-' + n + '.part'), input)
-  fs.renameSync(path.join(folder, 'given-' + n + '.part'), path.join(folder, 'given-' + n))
-  if (left) setInterval(() => {}, 1000)
-  else process.exit(0)
-})
-`
-  /** What npm writes on Windows for a package's command that is a script for Node. */
-  const npmScript = (target: string) =>
-    `@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\${target}" %*\r\n`
-  /** Folders of this test's own, removed after it once Windows lets go of them, and the programs it left, ended first. */
-  const folders: string[] = []
-  const pids: number[] = []
-  afterEach(async () => {
-    for (const pid of pids.splice(0))
-      try {
-        process.kill(pid)
-      } catch {}
-    for (const folder of folders.splice(0))
-      await until(() => {
-        try {
-          rmSync(folder, { recursive: true, force: true })
-          return true
-        } catch {
-          return false
-        }
-      }, 15_000)
-  })
-  /**
-   * An app as npm installs it on Windows, in a folder that is the whole of the PATH beside Node's:
-   * a command script, and the script it starts, which is the stand-in. Nothing else on the
-   * machine is found by that name, a real Codex among them.
-   */
-  function installed(app: 'codex' | 'pi', mode: 'done' | 'wait') {
-    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-win-bin-'))
-    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-win-held-'))
-    folders.push(bin, folder)
-    const target = app === 'codex' ? path.join('node_modules', '@openai', 'codex', 'bin', 'codex.js') : path.join('node_modules', 'pi', 'dist', 'cli.js')
-    mkdirSync(path.dirname(path.join(bin, target)), { recursive: true })
-    writeFileSync(path.join(bin, target), agent(folder, mode))
-    writeFileSync(path.join(bin, `${app}.cmd`), npmScript(target))
-    process.env.PATH = `${bin}${path.delimiter}${path.dirname(process.execPath)}`
-    return { bin, folder, given: (n: number) => path.join(folder, `given-${n}`), pids: (n: number) => path.join(folder, `pids-${n}.json`) }
-  }
-  const begun = () => stand.calls.filter((c) => c.name === 'machines:runBegan').map((c) => c.args.run as string)
-  const ended = () => stand.calls.filter((c) => c.name === 'machines:runEnded').map((c) => c.args.run as string)
-
-  test('is started through the keeper, noted by the job that is named by its run, given the click, and let go of when it ends', async () => {
-    const at = installed('codex', 'done')
-    await start('port', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, at.folder))
-    stand.closed.add('thread-1')
-    me('codex')
-    offered(click(1))
-    await until(() => existsSync(at.given(0)), 90_000)
-    expect(readFileSync(at.given(0), 'utf8')).toContain('[action click-1]')
-    const name = begun()[0]!
-    expect(name).toMatch(/^[0-9a-f-]{36}$/)
-    // Noted before it was given anything, by its job, and never by when its process began
-    expect(stand.savedRuns.some((runs) => (runs['codex:thread-1'] as { since?: string; run?: string } | undefined)?.since === 'job')).toBe(true)
-    expect(stand.savedRuns.map((runs) => (runs['codex:thread-1'] as { run?: string } | undefined)?.run).filter(Boolean)).toContain(name)
-    await until(() => ended().includes(name), 90_000)
-    await until(() => !existsSync(path.join(home, 'runs.json')))
-    expect(said.some((line) => line.includes('could not be checked on or ended'))).toBe(false)
-  }, 180_000)
-
-  test('that the person stops is ended with what it started, at once, and is held for nothing after', async () => {
-    const at = installed('codex', 'wait')
-    await start('port', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, at.folder))
-    stand.closed.add('thread-1')
-    me('codex')
-    offered(click(1))
-    await until(() => existsSync(at.pids(0)), 90_000)
-    const { own, left } = JSON.parse(readFileSync(at.pids(0), 'utf8')) as { own: number; left: number }
-    pids.push(own, left)
-    expect([alive(own), alive(left)]).toEqual([true, true])
-    const name = begun()[0]!
-    me('codex', [{ harness: 'codex', sessionId: 'thread-1', stop: true, run: name }])
-    await until(() => ended().includes(name), 90_000)
-    expect([alive(own), alive(left)]).toEqual([false, false])
-    await until(() => said.some((line) => line.includes('was stopped by the person')))
-    await until(() => !existsSync(path.join(home, 'runs.json')))
-    expect(said.some((line) => line.includes('could not be checked on or ended'))).toBe(false)
-  }, 180_000)
-
-  test('that a connector which died left noted is found by its job when the next one starts, ended with what it started if it is there, and told that its turn was cut off', async () => {
-    const at = installed('codex', 'wait')
-    // What the connector before left: a keeper whose job is still there, since the program that
-    // started it is, and a run whose job is long gone
-    const run = randomUUID()
-    const codex = [process.execPath, path.join(at.bin, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')]
-    const started = wake.keeper(codex, run, { ...process.env, PWD: at.folder })
-    if (typeof started === 'string') throw new Error(started)
-    const serviceJs = path.join(at.folder, 'service.js')
-    writeFileSync(
-      serviceJs,
-      "const { spawn } = require('child_process')\nconst how = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'))\nconst k = spawn(how.file, how.args, { cwd: how.cwd, env: { ...how.env, IT_JOB_PARENT: String(process.pid) }, stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true })\nk.stdin.end('what it was reopened for')\nsetInterval(() => {}, 1000)\n",
-    )
-    const howFile = path.join(at.folder, 'how.json')
-    writeFileSync(howFile, JSON.stringify({ ...started, cwd: at.folder }))
-    const before = spawn(process.execPath, [serviceJs, howFile], { stdio: 'ignore', windowsHide: true })
-    pids.push(before.pid!)
-    await until(() => existsSync(at.pids(0)), 90_000)
-    const { own, left } = JSON.parse(readFileSync(at.pids(0), 'utf8')) as { own: number; left: number }
-    pids.push(own, left)
-    await start('port', {}, (home) => {
-      noteConversation({ harness: 'codex', id: 'thread-1' }, at.folder)
-      writeFileSync(
-        path.join(home, 'runs.json'),
-        JSON.stringify({
-          'codex:thread-1': { pid: before.pid, since: 'job', told: SINCE_TOLD, run, unsure: true },
-          'codex:thread-2': { pid: 2_000_000_000, since: 'job', told: SINCE_TOLD, run: randomUUID(), unsure: true },
-        }),
-      )
-    })
-    // By the time it is up, the run that was there is ended with what it started, and neither is held
-    expect([alive(own), alive(left)]).toEqual([false, false])
-    expect(existsSync(path.join(home, 'runs.json'))).toBe(false)
-    expect(said.some((line) => /^a codex conversation \([0-9a-f]{8}\) was still running from before this started/.test(line))).toBe(true)
-    expect(said.some((line) => line.includes('could not be checked on or ended'))).toBe(false)
-    // Reopened for something, it is told that its turn was cut off
-    stand.closed.add('thread-1')
-    me('codex')
-    offered(click(1))
-    await until(() => existsSync(at.given(1)), 90_000)
-    const given = readFileSync(at.given(1), 'utf8')
-    expect(given).toContain('was cut off before it ended')
-    pids.push(...Object.values(JSON.parse(readFileSync(at.pids(1), 'utf8')) as Record<string, number>).filter(Boolean))
-  }, 180_000)
-
-  test('of an app that npm installed as a command script is started through the script’s own program, and never the script', async () => {
-    const id = randomUUID()
-    const at = installed('pi', 'done')
-    await start('port', { wanted: ['pi'], found: [{ id: 'pi', version: '1.0.0', addon: 'connected' }] }, () =>
-      noteConversation({ harness: 'pi', id }, at.folder),
-    )
-    me('pi')
-    offered(click(1, 'pi', id))
-    await until(() => existsSync(at.given(0)), 90_000)
-    expect(readFileSync(at.given(0), 'utf8')).toContain('[action click-1]')
-    await until(() => ended().length > 0, 90_000)
-  }, 180_000)
 })

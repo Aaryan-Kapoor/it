@@ -21,7 +21,6 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { gunzipSync } from 'node:zlib'
 import { build as esbuild } from 'esbuild'
 import { build as vite } from 'vite'
 import { fence, keptFor, runtimeNotice } from './notices-runtime.mjs'
@@ -113,7 +112,7 @@ async function runtime() {
  */
 function functions() {
   const file = path.join(root, 'packages/cli/src/functions.generated.ts')
-  const text = /^export const FUNCTIONS_GZIP: string = (.*)$/m.exec(existsSync(file) ? readFileSync(file, 'utf8') : '')?.[1]
+  const text = /^export const FUNCTIONS: string = (.*)$/m.exec(existsSync(file) ? readFileSync(file, 'utf8') : '')?.[1]
   if (!text) throw new Error('the backend functions have not been built: run `npm run generate` first')
   const modules = []
   const find = (value) => {
@@ -123,7 +122,7 @@ function functions() {
       else Object.values(value).forEach(find)
     }
   }
-  find(JSON.parse(gunzipSync(Buffer.from(JSON.parse(text), 'base64')).toString('utf8')))
+  find(JSON.parse(JSON.parse(text)))
   if (!modules.length) throw new Error('the file of backend functions holds no module')
   const files = new Set()
   for (const module of modules) {

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { signature, unsign } from '../../scripts/unsign.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-export const TARGETS = ['linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64', 'windows-x64']
+export const TARGETS = ['linux-x64']   // local build for this machine only
 // The programs carry a copy of Bun inside them, and the third-party notices say which Bun: the
 // version CI pins, in the one build of it that the notices' own record names by what that Bun
 // reports of itself. So the programs are built with that build and no other, by hand as on CI,

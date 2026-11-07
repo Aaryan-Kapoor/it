@@ -14,7 +14,6 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { gunzipSync, gzipSync } from 'node:zlib'
 import { AUDIENCE, contentPort, SANDBOX, UPLOAD } from '@it/protocol'
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
@@ -61,7 +60,6 @@ interface Answer {
   headers: Record<string, string>
   cookies: string[]
   body: string
-  bytes: Buffer
 }
 /** An answer as it was sent, or null while it has not all arrived. `ended` says the connection closed, which ends an answer that does not say how long it is. */
 function read(all: Buffer, bodiless: boolean, ended: boolean): Answer | null {
@@ -78,7 +76,7 @@ function read(all: Buffer, bodiless: boolean, ended: boolean): Answer | null {
     else headers[name] = line.slice(colon + 1).trim()
   }
   let rest = all.subarray(cut + 4)
-  const answer = (body: Buffer): Answer => ({ status, headers, cookies, body: body.toString('utf8'), bytes: body })
+  const answer = (body: Buffer): Answer => ({ status, headers, cookies, body: body.toString('utf8') })
   if (bodiless || status === 204 || status === 304) return answer(Buffer.alloc(0))
   if (/chunked/i.test(headers['transfer-encoding'] ?? '')) {
     const pieces: Buffer[] = []
@@ -376,11 +374,9 @@ const contentStandIn: Content = {
 }
 
 const file = (type: string, text: string) => ({ type, bytes: Buffer.from(text).toString('base64') })
-const compressedScript = 'console.log("a compressed file of the site");\n'.repeat(100)
 const siteStandIn: Site = {
   'index.html': file('text/html; charset=utf-8', '<!doctype html><title>It</title>'),
   'assets/app-1a2b3c4d.js': file('text/javascript; charset=utf-8', 'console.log("the site")'),
-  'assets/compressed.js': { type: 'text/javascript; charset=utf-8', bytes: gzipSync(compressedScript).toString('base64'), encoding: 'gzip' },
   'sw.js': file('text/javascript; charset=utf-8', '// the service worker'),
   'icon.svg': file('image/svg+xml', '<svg xmlns="http://www.w3.org/2000/svg"/>'),
   'LICENSE.md': file('text/plain; charset=utf-8', 'The terms.'),
@@ -2888,148 +2884,6 @@ describe('Pages', () => {
 describe('The site', () => {
   const page: [string, string] = ['Accept', 'text/html,application/xhtml+xml,*/*;q=0.8']
 
-  test('The packed site keeps compressible text only as gzip and leaves small files and pictures intact', () => {
-    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-site-'))
-    try {
-      const built = path.join(folder, 'dist')
-      mkdirSync(built)
-      const script = 'console.log("é");\n'.repeat(1000)
-      const picture = randomBytes(512)
-      writeFileSync(path.join(built, 'index.html'), '<title>It</title>')
-      writeFileSync(path.join(built, 'app.js'), script)
-      writeFileSync(path.join(built, 'icon.png'), picture)
-      const to = path.join(folder, 'site.generated.ts')
-      execFileSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), 'site.mjs'), `--from=${built}`, `--to=${to}`], { stdio: 'pipe' })
-      const written = readFileSync(to, 'utf8')
-      const table = JSON.parse(written.slice(written.indexOf(' = ') + 3))
-      const packed = table['app.js']
-      expect(packed.encoding).toBe('gzip')
-      expect(Object.keys(packed).sort()).toEqual(['bytes', 'encoding', 'type'])
-      const compressed = Buffer.from(packed.bytes, 'base64')
-      expect(compressed.byteLength).toBeLessThan(Buffer.byteLength(script) / 10)
-      expect(gunzipSync(compressed).toString()).toBe(script)
-      expect(table['index.html'].encoding).toBeUndefined()
-      expect(Buffer.from(table['index.html'].bytes, 'base64').toString()).toBe('<title>It</title>')
-      expect(table['icon.png'].encoding).toBeUndefined()
-      expect(Buffer.from(table['icon.png'].bytes, 'base64').equals(picture)).toBe(true)
-    } finally {
-      rmSync(folder, { recursive: true, force: true })
-    }
-  })
-
-  test('A packed gzip file answers with gzip when accepted and with the original bytes otherwise', async () => {
-    const original = Buffer.from('console.log("é");\n'.repeat(1000))
-    const compressed = gzipSync(original)
-    const site: Site = { 'app.js': { type: 'text/javascript; charset=utf-8', bytes: compressed.toString('base64'), encoding: 'gzip' } }
-    const ask = (encoding?: string) => answerSite(site, 'GET', '/app.js', new Headers(encoding === undefined ? {} : { 'accept-encoding': encoding }))
-    const gzip = ask('gzip')
-    expect(gzip.headers.get('content-encoding')).toBe('gzip')
-    expect(gzip.headers.get('content-length')).toBe(String(compressed.byteLength))
-    expect(gzip.headers.get('vary')).toBe('Accept-Encoding')
-    expect(Buffer.from(await gzip.arrayBuffer()).equals(compressed)).toBe(true)
-    const identity = ask()
-    expect(identity.headers.get('content-encoding')).toBeNull()
-    expect(identity.headers.get('content-length')).toBe(String(original.byteLength))
-    expect(identity.headers.get('vary')).toBe('Accept-Encoding')
-    expect(Buffer.from(await identity.arrayBuffer()).equals(original)).toBe(true)
-    expect(identity.headers.get('etag')).not.toBe(gzip.headers.get('etag'))
-    expect(await ask('identity').text()).toBe(original.toString())
-  })
-
-  test('The site respects encoding preferences and refuses when none of its representations is acceptable', async () => {
-    const original = 'console.log("the site");\n'.repeat(100)
-    const site: Site = {
-      'app.js': { type: 'text/javascript', bytes: gzipSync(original).toString('base64'), encoding: 'gzip' },
-      'small.js': file('text/javascript', '1'),
-    }
-    for (const [encoding, chosen] of [
-      ['', 'identity'],
-      ['br, gzip, deflate', 'gzip'],
-      ['GZip ; Q=1', 'gzip'],
-      ['*', 'gzip'],
-      ['gzip;q=0', 'identity'],
-      ['gzip;q=0, *;q=1', 'identity'],
-      ['gzip;q=0.3, identity;q=0.8', 'identity'],
-      ['gzip;q=0.8, identity;q=0.3', 'gzip'],
-      ['*;q=0, gzip;q=1', 'gzip'],
-      ['*;q=0, identity;q=1', 'identity'],
-      ['br', 'identity'],
-      ['xgzip', 'identity'],
-      ['gzip;q=wrong', 'identity'],
-      ['gzip;q=2', 'identity'],
-      ['gzip;q=0, identity;q=0', 'none'],
-      ['br, identity;q=0', 'none'],
-      ['*;q=0', 'none'],
-    ]) {
-      const answer = answerSite(site, 'GET', '/app.js', new Headers({ 'accept-encoding': encoding! }))
-      expect([encoding, answer.status]).toEqual([encoding, chosen === 'none' ? 406 : 200])
-      expect([encoding, answer.headers.get('content-encoding')]).toEqual([encoding, chosen === 'gzip' ? 'gzip' : null])
-      expect(answer.headers.get('vary')).toBe('Accept-Encoding')
-      const bytes = Buffer.from(await answer.arrayBuffer())
-      expect(chosen === 'gzip' ? gunzipSync(bytes).toString() : bytes.toString()).toBe(chosen === 'none' ? '' : original)
-    }
-    const noIdentity = new Headers({ 'accept-encoding': 'gzip, identity;q=0' })
-    expect(answerSite(site, 'GET', '/small.js', noIdentity).status).toBe(406)
-    expect(await answerSite(site, 'GET', '/small.js', new Headers({ 'accept-encoding': 'gzip' })).text()).toBe('1')
-  })
-
-  test('The door sends each representation intact with its own length and tag, including HEAD and cache validation', async () => {
-    const pathname = '/assets/compressed.js'
-    const accepts: [string, string] = ['Accept-Encoding', 'gzip, deflate, br, zstd']
-    const gzip = await ask(door.base, { path: pathname, headers: [accepts] })
-    expect(gzip.status).toBe(200)
-    expect(gzip.headers).toMatchObject({
-      'content-encoding': 'gzip',
-      'content-type': 'text/javascript; charset=utf-8',
-      'content-length': String(gzip.bytes.byteLength),
-      'cache-control': 'public, max-age=31536000, immutable',
-      vary: 'Accept-Encoding',
-      'x-frame-options': 'DENY',
-      'x-content-type-options': 'nosniff',
-    })
-    expect(gunzipSync(gzip.bytes).toString()).toBe(compressedScript)
-    const identity = await ask(door.base, { path: pathname, headers: [['Accept-Encoding', 'gzip;q=0']] })
-    expect(identity.body).toBe(compressedScript)
-    expect(identity.headers['content-encoding']).toBeUndefined()
-    expect(identity.headers['content-length']).toBe(String(Buffer.byteLength(compressedScript)))
-    expect(identity.headers['content-security-policy']).toBe(gzip.headers['content-security-policy'])
-    expect(identity.headers.etag).not.toBe(gzip.headers.etag)
-    for (const [accept, get] of [
-      [accepts, gzip],
-      [['Accept-Encoding', 'identity'], identity],
-    ] as const) {
-      const head = await ask(door.base, { path: pathname, method: 'HEAD', headers: [[...accept]] })
-      expect(head.body).toBe('')
-      for (const name of ['content-encoding', 'content-length', 'etag', 'vary', 'content-security-policy'])
-        expect([accept[1], name, head.headers[name]]).toEqual([accept[1], name, get.headers[name]])
-      const cached = await ask(door.base, { path: pathname, headers: [[...accept], ['If-None-Match', get.headers.etag!]] })
-      expect([cached.status, cached.body, cached.headers.etag, cached.headers.vary]).toEqual([304, '', get.headers.etag, 'Accept-Encoding'])
-      expect(cached.headers['content-encoding']).toBe(get.headers['content-encoding'])
-    }
-    const other = await ask(door.base, { path: pathname, headers: [accepts, ['If-None-Match', identity.headers.etag!]] })
-    expect(other.status).toBe(200)
-    expect(other.bytes.equals(gzip.bytes)).toBe(true)
-  })
-
-  test('Encoding preferences do not turn missing assets, refused methods or a missing site into encoded pages', async () => {
-    const headers = new Headers({ 'accept-encoding': 'gzip, identity;q=0', accept: 'text/html', host: 'localhost' })
-    for (const [method, pathname, status] of [
-      ['GET', '/assets/missing.js', 404],
-      ['GET', '/%', 404],
-      ['POST', '/', 405],
-    ] as const) {
-      const answer = answerSite(siteStandIn, method, pathname, headers)
-      expect(answer.status).toBe(status)
-      expect(answer.headers.get('content-encoding')).toBeNull()
-      expect(answer.headers.get('content-security-policy')).toContain("default-src 'self'")
-      expect(await answer.text()).toBe('')
-    }
-    const missing = answerSite({}, 'GET', '/', headers)
-    expect(missing.status).toBe(503)
-    expect(missing.headers.get('content-encoding')).toBeNull()
-    expect(await missing.text()).toContain('built without its site')
-  })
-
   test('A file of the site is served as what it is, and an address that is one of the site’s pages is answered with index.html', async () => {
     const script = await ask(door.base, { path: '/assets/app-1a2b3c4d.js' })
     expect([script.status, script.headers['content-type'], script.body]).toEqual([200, 'text/javascript; charset=utf-8', 'console.log("the site")'])
@@ -3093,7 +2947,7 @@ describe('The site', () => {
         'content-security-policy': expect.stringMatching(/; frame-ancestors 'none'$/),
         'x-content-type-options': 'nosniff',
         'referrer-policy': 'no-referrer',
-        'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+        'permissions-policy': 'camera=(self), microphone=(self), geolocation=(), payment=()',
         'cross-origin-opener-policy': 'same-origin',
       })
       // The site is reached plainly, so no browser is told to insist on anything else
@@ -3183,13 +3037,7 @@ describe('The site', () => {
       console.log('  skip  the test of the site as it is built: it has not been built here, which `npm run generate` does')
       return
     }
-    // Ask the serving path for decoded text, whatever format each file was packed in.
-    const source = async (pathname: string) => {
-      const answer = answerSite(BUILT, 'GET', pathname, new Headers({ 'accept-encoding': 'identity' }))
-      expect([pathname, answer.status, answer.headers.get('content-encoding')]).toEqual([pathname, 200, null])
-      return answer.text()
-    }
-    const page = await source('/')
+    const page = Buffer.from(built.bytes, 'base64').toString('utf8')
     const scripts = [...page.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)]
     expect(scripts.length).toBeGreaterThan(0)
     for (const [, attributes, inside] of scripts) expect([/\bsrc="\/[^/"][^"]*"/.test(attributes!), inside!.trim()]).toEqual([true, ''])
@@ -3197,8 +3045,8 @@ describe('The site', () => {
     // Whatever it names, it names by a path of the site's own
     for (const [, address] of page.matchAll(/\b(?:src|href)="([^"]*)"/g)) expect([address, /^\/[^/]/.test(address!)]).toEqual([address, true])
     // And nothing in its scripts is made into script from text
-    for (const name of Object.keys(BUILT))
-      if (name.endsWith('.js')) expect([name, /\beval\(|new Function\(/.test(await source(`/${name}`))]).toEqual([name, false])
+    for (const [name, file] of Object.entries(BUILT))
+      if (name.endsWith('.js')) expect([name, /\beval\(|new Function\(/.test(Buffer.from(file.bytes, 'base64').toString('utf8'))]).toEqual([name, false])
   })
 
   test('That a window the site opens can do nothing to it is said where a browser takes it: by this machine’s own name, and not at an address on the network, where a browser would write it down as a fault', async () => {
@@ -3529,6 +3377,95 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
         // Each stage has its own deadline, so a wait that stands still fails by its name
         1_500_000,
       )
+})
+
+describe('Over https, through Tailscale on this machine', () => {
+  const NAME = 'studio.tail1234.ts.net'
+  /** The door with the settings `it https on` writes: It answers at the machine's name on the tailnet over https too. Off the network, as it can be. */
+  const secure = (): ServiceConfig => ({ ...config(door.base), https: NAME })
+  /** What Tailscale's server hands the door: from this machine, at the name and the https port the browser asked for (two above the door's), saying it came over https. */
+  const viaTailscale = (port = door.base, more: Record<string, string> = {}): Record<string, string> => ({
+    host: `${NAME}:${port + 2}`,
+    'x-forwarded-proto': 'https',
+    'x-forwarded-for': '100.101.42.17',
+    'tailscale-user-login': 'person@example.com',
+    'tailscale-user-name': 'A Person',
+    ...more,
+  })
+  const answer = (
+    kept: ServiceConfig,
+    headers: Record<string, string>,
+    o: { port?: number; address?: string; method?: string; target?: string; body?: string } = {},
+  ) =>
+    makeDoor(kept, backend, () => {}, parts()).answer({
+      method: o.method ?? 'GET',
+      target: o.target ?? '/',
+      headers: new Headers(headers),
+      body: o.body === undefined ? null : new Response(o.body).body,
+      port: o.port ?? door.base,
+      address: o.address ?? '127.0.0.1',
+    } satisfies Arrival)
+  /** A policy's words, by what each is for. */
+  const policyOf = (said: string | null) => Object.fromEntries((said ?? '').split(/;\s*/).map((part) => [part.split(' ')[0], part.split(' ').slice(1)]))
+
+  test('The site is answered at the tailnet name over https, framing its pages and opening its live connection over https too, and only as Tailscale hands it on', async () => {
+    const site = await answer(secure(), viaTailscale())
+    expect(site.status).toBe(200)
+    const said = policyOf(site.headers.get('content-security-policy'))
+    expect([said['frame-src'], said['connect-src']]).toEqual([[`https://${NAME}:${door.base + 3}`], ["'self'", `wss://${NAME}:${door.base + 2}`]])
+    // Over https a window the site opens can do nothing to it, which a browser takes only from a secure site
+    expect(site.headers.get('cross-origin-opener-policy')).toBe('same-origin')
+    // Not where the settings say nothing of https, nor at another name, nor without Tailscale's word that it came over https
+    expect((await answer(config(door.base), viaTailscale())).status).toBe(421)
+    expect((await answer(secure(), viaTailscale(door.base, { host: `other.tail1234.ts.net:${door.base + 2}` }))).status).toBe(421)
+    // Nor at the door's own port, which Tailscale does not take https at
+    expect((await answer(secure(), viaTailscale(door.base, { host: `${NAME}:${door.base}` }))).status).toBe(421)
+    expect((await answer(secure(), viaTailscale(door.base, { 'x-forwarded-proto': 'http' }))).status).toBe(421)
+    // Nor from another device: only Tailscale on this machine hands requests on, and a device on the network that says the same is not it
+    expect((await answer(secure(), viaTailscale(), { address: '192.168.1.50' })).status).toBe(421)
+    expect((await answer(secure(), viaTailscale(), { address: '100.101.42.17' })).status).toBe(421)
+    // The site as it always was, for this machine itself
+    const plain = policyOf((await answer(secure(), { host: `localhost:${door.base}` })).headers.get('content-security-policy'))
+    expect(plain['frame-src']).toEqual([`http://localhost:${contentPort(door.base)}`])
+  })
+
+  test('A page shown over https may be framed only by the site at its https address', async () => {
+    const page = await answer(secure(), viaTailscale(contentPort(door.base)), { port: contentPort(door.base), target: '/s/x/index.html' })
+    expect(page.headers.get('content-security-policy')).toContain(`frame-ancestors https://${NAME}:${door.base + 2}`)
+  })
+
+  test('The site’s own calls are taken from its https origin and from no other, and the backend is told they came over https and not who Tailscale says asked', async () => {
+    site.asked.length = 0
+    const redeem = (origin: string) =>
+      answer(secure(), viaTailscale(door.base, { origin, 'x-it-site': '1', 'content-type': 'application/json' }), {
+        method: 'POST',
+        target: '/session/redeem',
+        body: '{"code":"right"}',
+      })
+    expect((await redeem(`https://${NAME}:${door.base + 2}`)).status).toBe(200)
+    const seen = site.asked.at(-1)!.headers
+    expect(seen['x-forwarded-proto']).toBe('https')
+    for (const name of ['tailscale-user-login', 'tailscale-user-name', 'x-forwarded-for']) expect([name, seen[name]]).toEqual([name, undefined])
+    // The same name over plain http is another origin, and is refused as any other site is
+    expect((await redeem(`http://${NAME}:${door.base + 2}`)).status).toBe(403)
+  })
+
+  test('Codes refused over https are counted by the address on the tailnet that Tailscale says asked, and not as this machine', async () => {
+    const door1 = makeDoor(secure(), backend, () => {}, parts())
+    const tryCode = (from: string) =>
+      door1.answer({
+        method: 'POST',
+        target: '/session/redeem',
+        headers: new Headers(viaTailscale(door.base, { 'x-forwarded-for': from, origin: `https://${NAME}:${door.base + 2}`, 'x-it-site': '1' })),
+        body: new Response('{"code":"wrong"}').body,
+        port: door.base,
+        address: '127.0.0.1',
+      })
+    for (let i = 0; i < 10; i++) expect((await tryCode('100.101.42.17')).status).toBe(401)
+    expect((await tryCode('100.101.42.17')).status).toBe(429)
+    // Another device on the tailnet, which Tailscale also hands on from this machine, is not held up by it
+    expect((await tryCode('100.64.0.9')).status).toBe(401)
+  })
 })
 
 describe('Kept to the tailnet', () => {

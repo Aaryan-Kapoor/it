@@ -91,5 +91,8 @@ export function profileEnvironment(harness: string, value: unknown, base: NodeJS
   }
   // Inline configuration belongs to the service, never to the recorded conversation.
   if (harness === 'opencode') delete env.OPENCODE_CONFIG_CONTENT
+  // Claude Code set to its own default folder by name reads another global config (~/.claude/.claude.json),
+  // where the project is unknown and its settings are not applied: the default is left unset, as the person runs it
+  if (harness === 'claude-code' && env.CLAUDE_CONFIG_DIR && path.resolve(env.CLAUDE_CONFIG_DIR) === path.join(base.HOME || os.homedir(), '.claude')) delete env.CLAUDE_CONFIG_DIR
   return env
 }

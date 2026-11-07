@@ -22,6 +22,8 @@ export const button = v.object({ label: v.string(), action: v.string() })
 const invitedBy = { byMachine: v.optional(v.id('machines')), bySession: v.optional(v.id('sessions')) }
 
 export const expectedOwner = v.object({ machineId: v.id('machines'), session })
+/** What a page may ask to use of the screen it is shown on (protocol's MEDIA_KINDS). */
+export const mediaKind = v.union(v.literal('mic'), v.literal('camera'))
 export const publicationResult = v.object({
   slug: v.string(),
   version: v.number(),
@@ -132,6 +134,8 @@ export default defineSchema({
     epoch: v.number(),
     /** What an agent asked this display to show, and when. */
     showing: v.optional(v.object({ artifactId: v.id('artifacts'), at: v.number() })),
+    /** Local build only: tab reports written by the owner's local build 0.1.23 (19 October), which master never had. Tolerated so that his data loads. */
+    reports: v.optional(v.any()),
     push: v.optional(v.object({ endpoint: v.string(), p256dh: v.string(), auth: v.string() })),
     /** The session of the browser that registered it: forgetting the display ends that session, and that session ending signs the display out. */
     sessionId: v.id('sessions'),
@@ -166,10 +170,6 @@ export default defineSchema({
     connectorVersion: v.optional(v.string()),
     /** The system it runs on, as its connector names it: `linux`, `darwin`, `win32`. */
     system: v.optional(v.string()),
-    /** That it reopens closed conversations on its system, as a machine on Windows says of itself: an It from before one did there says nothing (see `wakesOn`). */
-    reopens: v.optional(v.boolean()),
-    /** When it first said so. What was switched on for it before then never reopened anything, and is let go of (see `machines.ts`). */
-    reopensFrom: v.optional(v.number()),
     // Why its connector hands nothing to an agent for now, where that is so: it does not fit this It, or has not yet been able to ask
     paused: v.optional(v.string()),
     /** The newest version of It this machine has learned is out, where it looks for one. */
@@ -291,6 +291,12 @@ export default defineSchema({
     publicationId: v.optional(v.id('publications')),
     /** The title this version was published with. It becomes the page's title when the version goes live. */
     title: v.optional(v.string()),
+    /**
+     * What this version asked to use of the screen it is shown on, the microphone or the camera.
+     * None where it says nothing. A page shown at this version is recorded for only as it says,
+     * and only once the person at that screen has allowed it.
+     */
+    media: v.optional(v.array(mediaKind)),
     /** Who published it, and whether they said they were taking the page over. Acted on when the version goes live. */
     by: v.optional(
       v.object({
@@ -298,6 +304,9 @@ export default defineSchema({
         session: v.optional(session),
         agent: v.optional(v.string()),
         take: v.boolean(),
+        /** Local build only: written by the owner's local build 0.1.23 (19 October), which master never had. Tolerated so that his data loads. */
+        preserveOwner: v.optional(v.boolean()),
+        expectedVersion: v.optional(v.number()),
         agentExplicit: v.optional(v.boolean()),
         expectedOwner: v.optional(expectedOwner),
         /** Published as a page of that conversation's own making: not shown where the id is by then another conversation's page. */
@@ -578,6 +587,12 @@ export default defineSchema({
      * be reached there, and the links are there again once it can.
      */
     link: v.optional(v.union(v.literal('tailnet'), v.literal('network'))),
+    /**
+     * The machine's name on its tailnet, where It answers there over https too, through
+     * Tailscale's own server on that machine (\`it https on\`): another device opens It at that
+     * name with https, whether or not the network is on, and the tailnet's links are there.
+     */
+    https: v.optional(v.string()),
     /**
      * What the owner asked of the network on the site, until the service has said what became
      * of it. When it was asked is also the name the asking goes by. `taken` once the service

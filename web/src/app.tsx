@@ -32,6 +32,7 @@ import {
   wasErasedHere,
 } from './lib'
 import { Machines } from './machines'
+import { forgetGrants } from './media'
 import { Bell, Toasts } from './notifications'
 import { abandonOutbox, anyUnsaved, drain, outboxBelongsTo, pairedForSomeone, stillPairedFor, thisPairing, watchOutbox } from './outbox'
 import { Grid, PageView, wasShown } from './pages'
@@ -674,6 +675,8 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
     if (!mine()) return
     // Asked about again the next time this browser is paired, not before
     localStorage.removeItem('it.pushAsked')
+    // What this screen allowed pages to record ends with its pairing, and what records stops
+    forgetGrants(user)
     if (!ended) sessionStorage.setItem('it.signout.note', '1')
     // The one step that matters most. If it cannot be done, the person is told so plainly:
     // someone who walks away believing they signed out, and did not, is worse off than before.

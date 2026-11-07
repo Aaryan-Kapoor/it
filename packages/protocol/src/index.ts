@@ -46,9 +46,16 @@ export const onThisMachine = (address: string): boolean => address === '::1' || 
  * site, pairing, the live connection and uploads. Every page is shown from the port after
  * it. The backend's two ports are for this machine only.
  */
-export const PORTS = { base: 4700, content: 1, backendApi: 40, backendSite: 41 } as const
+export const PORTS = { base: 4700, content: 1, https: 2, backendApi: 40, backendSite: 41 } as const
 /** The port pages are shown from. */
 export const contentPort = (base: number): number => base + PORTS.content
+/**
+ * Where Tailscale takes https for one of the door's two ports, with \`it https on\`: two above it,
+ * so that the site is at 4702 and the pages at 4703, one above it as over plain http. It is a
+ * port of its own and not the door's, since Tailscale listens on the machine's address on the
+ * tailnet, and the door may listen on every address the machine has.
+ */
+export const httpsPort = (port: number): number => port + PORTS.https
 
 /**
  * A host's name as a policy can say it. A policy names a host only in letters, digits, dots and
@@ -260,17 +267,13 @@ export const CODEX_MIN_VERSION = '0.160.0'
 export const WAKES: readonly Harness[] = ['claude-code', 'codex', 'pi', 'opencode', 'hermes']
 /**
  * Whether It reopens a closed conversation on a machine of this system, as the machine names
- * its system (`process.platform`), and as the machine says of itself (`reopens`). On Linux and
- * macOS the system is enough. On Windows a machine reopens conversations only where it says it
- * does, since an It from before it did there runs on Windows too: there a reopened conversation
- * is kept in a job of the system's, by which it is found again and ended, which is what makes
- * running an agent with nobody watching safe to offer, and an older It has no such job. A
- * machine that has not said what it runs on is not taken to be one of the systems this holds
- * on: it says so in its first report, a moment after its connector starts, and an It from
- * before any machine said is to be updated first.
+ * its system (`process.platform`). Not on Windows yet: a conversation reopened there cannot be
+ * found again and ended after the service has died, which is what makes running an agent with
+ * nobody watching safe to offer. A machine that has not said what it runs on is not taken to
+ * be one of the systems this holds on: it says so in its first report, a moment after its
+ * connector starts, and an It from before any machine said is to be updated first.
  */
-export const wakesOn = (system: string | null | undefined, reopens?: boolean | null): boolean =>
-  system === 'linux' || system === 'darwin' || (system === 'win32' && reopens === true)
+export const wakesOn = (system: string | null | undefined): boolean => system === 'linux' || system === 'darwin'
 /**
  * How long an upgrade that a person asked for on the site is taken to be at work. One that has
  * said nothing more by then was cut short (its machine went off, or the program that was to
@@ -280,7 +283,7 @@ export const UPGRADE_MS = 15 * 60_000
 /** What a person is told where they would switch reopening on for a machine It does not reopen conversations on. */
 export const noWakeHere = (system: string | null | undefined): string =>
   system === 'win32'
-    ? 'This Windows machine runs an It that does not reopen closed conversations there. Update It on it to have them reopened. Until then, what is done on a page waits until its conversation is open again.'
+    ? 'It does not reopen closed conversations on a Windows machine yet. What is done on a page waits until its conversation is open again.'
     : 'This machine has not said which system it runs, so It reopens no closed conversation on it. It says so when its connector starts: update It on that machine if it does not.'
 /**
  * The agent apps with a queue of their own, which takes a click whether or not its conversation
@@ -452,6 +455,48 @@ export const SHRINK = {
   /** A picture already this small, in bytes and in pixels, is sent as it is. */
   smallBytes: 1024 * 1024,
   types: ['image/jpeg', 'image/png', 'image/webp', 'image/bmp', 'image/avif', 'image/heic', 'image/heif'],
+} as const
+
+/**
+ * What a page may ask to use of the screen it is shown on: the microphone, the camera, or both.
+ * A page asks for them when it is published (`it create --media mic,camera`), and is given
+ * neither where it did not. Even then, the site records for it only once the person at that
+ * screen has said yes to that page, and It's own bar says that it is recording all the while.
+ *
+ * A page itself is never given the device. A sandboxed document has no origin of its own, and no
+ * browser gives the microphone or the camera to one, so the site, whose origin the browser asks
+ * the person about, records, and hands the page what it recorded as a file.
+ */
+export const MEDIA_KINDS = ['mic', 'camera'] as const
+export type MediaKind = (typeof MEDIA_KINDS)[number]
+/** Whether something is one of the kinds, as the backend and the command check what they are given. */
+export const isMediaKind = (kind: unknown): kind is MediaKind => (MEDIA_KINDS as readonly unknown[]).includes(kind)
+/**
+ * The kinds a command line asks for: `mic`, `camera`, `mic,camera`, or `none`, which asks for
+ * neither. Null for anything else. Each kind once, in the order It names them.
+ */
+export function mediaAsked(said: string): MediaKind[] | null {
+  const words = said
+    .toLowerCase()
+    .split(',')
+    .map((w) => w.trim())
+  if (words.length === 1 && words[0] === 'none') return []
+  if (!words.every(isMediaKind)) return null
+  return MEDIA_KINDS.filter((kind) => words.includes(kind))
+}
+/** The kinds a recording asks for, by what it asks the browser for: sound is the microphone's, and pictures the camera's. */
+export const mediaFor = (asked: { audio: boolean; video: boolean }): MediaKind[] => [
+  ...(asked.audio ? ['mic' as const] : []),
+  ...(asked.video ? ['camera' as const] : []),
+]
+/** The bounds the site holds a recording to, whatever the page asks for. */
+export const RECORDING = {
+  /** Bits a second of sound, the least and the most a page may ask for, and what it is given when it asks for none. */
+  audioBits: { least: 16_000, most: 512_000, given: 128_000 },
+  /** Bits a second of pictures, likewise. */
+  videoBits: { least: 100_000, most: 8_000_000, given: 1_500_000 },
+  /** How long one recording may run, in milliseconds. It is stopped then, and given to the page. */
+  longestMs: 60 * 60_000,
 } as const
 
 /** A file's name as It keeps it: the last part of a path, with nothing in it that is not to be printed, and not too long. */
@@ -720,6 +765,16 @@ export type PageToSite =
   | { type: 'it:lapsed' }
   /** The page's own script failed with this. The site says so above the page: left unsaid, a button that does nothing looks like an agent that does not answer. */
   | { type: 'it:fault'; message: string }
+  /**
+   * Begin recording, for a page that asked for the microphone or the camera when it was
+   * published. What the browser is to be asked for is the page's to say, and the site takes no
+   * more of it than plain sizes and switches. Answered once recording has begun, with its id.
+   */
+  | { type: 'it:record'; requestId: string; audio: unknown; video: unknown; audioBitsPerSecond?: unknown; videoBitsPerSecond?: unknown; mimeType?: unknown }
+  /** End a recording. With `keep` the page is answered with what was recorded, as a file, and without it that is thrown away. */
+  | { type: 'it:record-stop'; requestId: string; recording: string; keep: boolean }
+  /** A photo, which the person takes in It's own view of the camera. Answered with the photo as a file. */
+  | { type: 'it:photo'; requestId: string; facing?: unknown }
 
 export type SiteToPage =
   /** The page's whole state. */
@@ -727,9 +782,32 @@ export type SiteToPage =
   /** What changed of the page's state since what was last sent: the agent's part, whole, where it changed, and each value the page keeps that changed, with `null` for one taken away. */
   | { type: 'it:changed'; revision: number; state?: unknown; kept: [string, unknown][] }
   /** Accepted. Of values the page keeps, `revision` is the state's revision that has them. */
-  | { type: 'it:result'; requestId: string; ok: true; actionId?: string; revision?: number }
+  | {
+      type: 'it:result'
+      requestId: string
+      ok: true
+      actionId?: string
+      revision?: number
+      /** A recording that has begun: its id, and the kind of file it will be. */
+      recording?: { id: string; mimeType: string }
+      /** What was recorded, or the photo that was taken. */
+      file?: Blob
+    }
   /** Refused, with why. `retryAfterMs` where it was refused for coming too fast, and is taken when it is sent again that much later. */
   | { type: 'it:result'; requestId: string; ok: false; error: string; retryAfterMs?: number }
+  /**
+   * A recording was paused, went on, or ended without the page asking: paused while the screen
+   * does not show It, and ended when the person stopped it in It's bar or took back what they
+   * had allowed, when the page is no longer shown, when the device went away, or when it ran as
+   * long as one may. Where it ended and what was recorded is the page's to have, it comes with it.
+   */
+  | {
+      type: 'it:recording'
+      recording: string
+      state: 'recording' | 'paused' | 'ended'
+      why?: 'person' | 'taken_back' | 'not_shown' | 'device' | 'too_long'
+      file?: Blob
+    }
 
 /** The key in a page's state that belongs to the page itself (It.store). */
 export const STORE_KEY = '_page'

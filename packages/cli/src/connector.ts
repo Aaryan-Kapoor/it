@@ -52,7 +52,7 @@ import { conversationFolder, conversationProfile, noteConversation } from './pub
 import { alone } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
-import { type T3, T3_HELD_MOST, type T3Search, t3Held, t3Running, t3Search, t3Send, t3Server, t3ThreadOf } from './t3'
+import { type T3, type T3Search, t3Running, t3Send, t3Server, t3ThreadOf } from './t3'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, begin, record, startSender, thisMachine, thisProgram, three, timeBand } from './usage'
 import {
@@ -65,16 +65,15 @@ import {
   codexHolder,
   endTree,
   fromAnotherStart,
+  identity,
   listsProcesses,
   mayWake,
   NO_PS,
-  PROGRAM,
   SINCE_TOLD,
   STOPPED,
   WAS_CUT_OFF,
   WAS_STOPPED,
   WOKEN,
-  windowsProgram,
 } from './wake'
 
 /** A click as an add-on receives it: its data as a value, the one wording agents read, and the few words a person is shown where an app has another place for the rest. */
@@ -114,7 +113,7 @@ const WAIT_MS = 5_000 // an `it wait` that said so this recently is still waitin
 const WAIT_AGAIN_MS = 120_000 // how long after an `it wait` ended its conversation, where it is one never heard from, is taken to be coming to wait again
 const QUEUE_WAITS = [0, 10_000, 60_000, 600_000] // how long before each try at a harness's own queue; after the last, the click is left waiting
 const QUEUE_AT_ONCE = 3 // how many of a harness's queue commands run at the same time
-const RUNS_AT_ONCE = 3 // and how many conversations are reopened and running at the same time
+const RUNS_AT_ONCE = 12 // local bench build: twelve people's apps share this machine (master has 3)
 // How often one conversation is reopened: so many at once, then one more for each while that
 // passes. What a page sent with nobody at it is held to much less, so that a page that sends by
 // itself cannot keep an agent running. And all of a machine's conversations together.
@@ -242,29 +241,6 @@ function claimedAndLeft(): string[] {
 }
 
 /**
- * What a machine tells It of itself in a report, fullest first, each to be made in turn where It
- * refuses the one before, as an It older than this program does. On Windows the fullest says as
- * well that the machine reopens closed conversations there (see `wakesOn`). Where It refused the
- * fuller report lately (`plain`), it is given the plainest alone, and where it refused the word
- * from Windows lately (`unsaid`), it is given the rest.
- */
-export function reports<T extends object, U extends object>(platform: string, full: T, plainest: U, lately: { plain: boolean; unsaid: boolean }): (T | U)[] {
-  if (lately.plain) return [plainest]
-  return platform === 'win32' && !lately.unsaid ? [{ ...full, reopens: true }, full, plainest] : [full, plainest]
-}
-/** Whether It refused a call for what it said, as an It that is older than this program refuses a field it does not know, and not because the call did not reach it or was not answered. */
-export const refusedFor = (err: unknown): boolean => ['error', 'invalid'].includes((err as { code?: string })?.code ?? '')
-/**
- * What setup tells It it chose, in the same way: the fullest says what system the machine runs,
- * and on Windows that it reopens closed conversations there, and the plainest says the choice alone.
- */
-export const choices = (platform: string, harnesses: string[]) => [
-  ...(platform === 'win32' ? [{ harnesses, system: platform, reopens: true }] : []),
-  { harnesses, system: platform },
-  { harnesses },
-]
-
-/**
  * The words that start Codex with no shell in between. Elsewhere that is just `codex`. On
  * Windows, Codex installed through npm is a .cmd file, which only a shell can start, and a
  * shell would read a page's title as part of the command. So the program behind the .cmd file
@@ -273,11 +249,7 @@ export const choices = (platform: string, harnesses: string[]) => [
  */
 export function codexCommand(platform: string, pathVar: string, exists: (file: string) => boolean): string[] | null {
   if (platform !== 'win32') return ['codex']
-  // Only folders named in full, as `windowsProgram` looks in: a folder named from wherever this program happens to be is no place to start Codex from
-  const dirs = pathVar
-    .split(';')
-    .map((d) => d.trim().replace(/^"(.*)"$/, '$1'))
-    .filter((d) => path.win32.isAbsolute(d))
+  const dirs = pathVar.split(';').filter(Boolean)
   const find = (name: string) => dirs.map((d) => path.win32.join(d, name)).find(exists)
   const exe = find('codex.exe')
   if (exe) return [exe]
@@ -495,7 +467,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // It says. Until It has said, none is.
   let wakesNow = new Map<string, number>()
   // And never on a system It does not reopen conversations on, whatever It says is switched on
-  const wakes = (harness: string, at: number) => wakesOn(process.platform, true) && mayWake(wakesNow, harness, at)
+  const wakes = (harness: string, at: number) => wakesOn(process.platform) && mayWake(wakesNow, harness, at)
 
   const sessions = new Map<string, { seen: number; busy: boolean; busyAt: number }>()
   // A conversation that was cleared carries on under a new id; its pages follow it
@@ -601,61 +573,38 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const queueTries = new Map<string, { n: number; at: number; reopening: boolean }>()
   /**
    * What is known of the thread in T3 Code that a conversation is held in: the thread, that T3
-   * Code has none of it (asked again after a while, since a conversation may be brought into
-   * T3 Code later), or that it is being asked for at this moment. A conversation T3 Code could
-   * not take a message for is not offered to it again for a while: `t3Refused`.
+   * Code has none of it or the search reached its read limit (asked again after a while,
+   * since a conversation may be brought into T3 Code later), or that it is being asked for
+   * at this moment. A conversation T3 Code could not take a message for is not offered to it
+   * again for a while: `t3Refused`.
    */
   const t3Known = new Map<string, { thread: string | null; at: number } | 'asking'>()
-  /**
-   * When each click first asked which thread holds its conversation, by the clock that only goes
-   * forward. A click waits for T3 Code from then, however many passes and searches follow one
-   * another meanwhile, and it is forgotten once the click is no longer offered here.
-   */
-  const t3Waits = new Map<string, number>()
+  /** When each conversation that is being asked for was first asked for, by the clock that only goes forward. */
+  const t3Asked = new Map<string, number>()
   const t3Searches = new Map<string, T3Search>()
   const t3Pending = new Map<string, { harness: string; id: string }>()
   const t3Retries = new Map<string, { at: number; delay: number }>()
   const t3Refused = new Map<string, number>()
   let t3Seen: { at: number; server: T3 | undefined } | undefined
-  /** How long before another search, after one that read every thread found none that holds the conversation. */
+  /** How long before another search after none matched or its read limit was reached. */
   const T3_AGAIN_MS = 6 * 3_600_000
   /** How long a conversation is kept from T3 Code after it could not take a message for it. */
   const T3_REFUSED_MS = 10 * 60_000
   /**
-   * How long a click waits, from when it first asks, for T3 Code to say which thread holds its
-   * conversation, before it goes the way it would without T3 Code. T3 Code says so in a fifth of
-   * a second to two seconds where it is well. Neither later batches nor later searches restart
-   * a click's wait, and what T3 Code says in the end is kept for the clicks that come after.
+   * How long T3 Code is given to say which thread holds a conversation, before a click for it
+   * goes the way it would without T3 Code. It says so in a fifth of a second to two seconds
+   * where it is well. Later batches keep their progress but do not restart this wait.
+   * What it says in the end is kept for the clicks that come after.
    */
   const T3_ASKED_MS = 5_000
   /**
-   * Keeps the thread ids that the searches of every conversation hold together to
-   * `T3_HELD_MOST`, by dropping first the searches that went on longest ago. The search that
-   * has just gone on is not dropped, since it needs what it holds to go on. A search that is
-   * dropped decides nothing: the next time its conversation is asked for, a search begins again
-   * from nothing. A click waits no longer for that, since its wait is its own.
-   */
-  function t3Bound(going: string): void {
-    let held = 0
-    for (const search of t3Searches.values()) held += t3Held(search)
-    for (const [key, search] of t3Searches) {
-      if (held <= T3_HELD_MOST) return
-      if (key === going) continue
-      held -= t3Held(search)
-      t3Searches.delete(key)
-      if (t3Known.get(key) === 'asking') t3Known.delete(key)
-      t3Pending.delete(key)
-      t3Retries.delete(key)
-    }
-  }
-  /**
    * The thread of T3 Code that a conversation is held in, with the server to send to:
-   * `asking` while that is being found out for the click that asks, and nothing where it is in
-   * none, where T3 Code is not running here, where it has just failed to take something for it,
-   * and where the click has waited as long as it is given. Then the click goes the way it would
-   * without T3 Code. Asked with no click, it only lets a search that is under way go on.
+   * `asking` while that is being found out, and nothing where it is in none, where T3 Code
+   * is not running here, where it has just failed to take something for it, and where it has
+   * been asked for longer than it is given to say. Then the click goes the way it would
+   * without T3 Code.
    */
-  function t3For(key: string, session: { harness: string; id: string }, click?: string): { server: T3; thread: string } | 'asking' | undefined {
+  function t3For(key: string, session: { harness: string; id: string }): { server: T3; thread: string } | 'asking' | undefined {
     const now = Date.now()
     const refused = t3Refused.get(key)
     if (refused !== undefined) {
@@ -667,28 +616,21 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const server = t3Seen.server
     if (!server) return undefined
     const known = t3Known.get(key)
-    if (known !== undefined && known !== 'asking') {
-      if (known.thread) return { server, thread: known.thread }
-      if (now - known.at < T3_AGAIN_MS) return undefined
-    }
-    let until = 0
-    if (click !== undefined) {
-      if (!t3Waits.has(click)) t3Waits.set(click, steady())
-      until = t3Waits.get(click)! + T3_ASKED_MS
-    }
-    const waiting = steady() < until
-    if (known === 'asking') return waiting ? 'asking' : undefined
-    // A click waits for a search that is to go on only where it goes on before the click's wait is over
-    const retry = t3Retries.get(key)
-    if (retry && steady() < retry.at) return waiting && retry.at < until ? 'asking' : undefined
+    if (known === 'asking') return steady() - (t3Asked.get(key) ?? 0) < T3_ASKED_MS ? 'asking' : undefined
+    if (known?.thread) return { server, thread: known.thread }
+    if (known && now - known.at < T3_AGAIN_MS) return undefined
+    const waiting = () => steady() - (t3Asked.get(key) ?? steady()) < T3_ASKED_MS
+    if (steady() < (t3Retries.get(key)?.at ?? 0)) return waiting() ? 'asking' : undefined
     if (t3Known.size + t3Searches.size > 2000) {
       t3Known.clear()
+      t3Asked.clear()
       t3Searches.clear()
       t3Pending.clear()
       t3Retries.clear()
     }
     t3Known.set(key, 'asking')
-    const search = t3Searches.get(key) ?? t3Search()
+    if (!t3Asked.has(key)) t3Asked.set(key, steady())
+    const search = t3Searches.get(key) ?? { pending: [], read: 0, attempted: new Set() }
     t3Searches.set(key, search)
     t3Pending.set(key, session)
     // By the id its pages name and by the one it has now: T3 Code keeps the one it resumes from
@@ -700,21 +642,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
         let again = 10
         if (result.status === 'incomplete') {
           // More candidates, unread answers and expired budgets are not evidence of absence.
-          // A click's wait is its own, and later batches do not restart it.
+          // Keep the first deadline while continuing through later batches on subsequent passes.
           t3Known.delete(key)
           // New batches keep moving. Repeated failures wait longer, up to a minute, until
           // another candidate is reached or read successfully. A later failure starts afresh.
           const delay = result.progressed ? 0 : Math.min((t3Retries.get(key)?.delay || 150) * 2, 60_000)
           t3Retries.set(key, { at: steady() + (delay || 300), delay })
           again = (delay || 300) + 10
-        } else if (result.status === 'limited') {
-          // What the search has read is kept, and it goes on no further by itself. The next
-          // search begins when a click asks for the thread: at once, where a click that is still
-          // within its wait asks on the pass after this one, and otherwise with the next click
-          t3Known.delete(key)
-          t3Pending.delete(key)
-          t3Retries.delete(key)
         } else {
+          t3Asked.delete(key)
           t3Searches.delete(key)
           t3Pending.delete(key)
           t3Retries.delete(key)
@@ -722,15 +658,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
           t3Known.set(key, { thread, at: Date.now() })
           if (thread) say(`${a(session.harness)} conversation (${short(session.id)}) is held in a thread of T3 Code`)
         }
-        if (result.status === 'incomplete' || result.status === 'limited') {
-          // The search that went on last is the last to be dropped
-          t3Searches.delete(key)
-          t3Searches.set(key, search)
-          t3Bound(key)
-        }
         soon(again)
       })
-    return waiting ? 'asking' : undefined
+    return waiting() ? 'asking' : undefined
   }
   /**
    * A person can switch a thread of T3 Code to another agent app, and the thread then runs
@@ -814,16 +744,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       .catch(() => undefined)
       .then(async (found) => {
         if (!found) return next(misses < 3 ? FOLLOW_SOON_MS : FOLLOW_SELDOM_MS, misses + 1)
-        // A click for it goes to that thread wherever its add-on is not there to take it. A search
-        // for its thread is over, whether one is under way or only what one read is kept, and
-        // what it would say in the end counts for nothing. A thread already known stays known
+        // A click for it goes to that thread wherever its add-on is not there to take it. Not
+        // where a search for it has begun meanwhile, which says so itself when it ends
         const knownNow = t3Known.get(key)
-        if (knownNow === undefined || knownNow === 'asking' || !knownNow.thread) {
-          t3Known.set(key, { thread: found.thread, at: Date.now() })
-          t3Searches.delete(key)
-          t3Pending.delete(key)
-          t3Retries.delete(key)
-        }
+        if (knownNow !== 'asking' && !knownNow?.thread) t3Known.set(key, { thread: found.thread, at: Date.now() })
         // It is the thread's own conversation now, and carries on as nothing else
         carriedOn.delete(key)
         let again = FOLLOW_AGAIN_MS
@@ -1627,10 +1551,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (typeof env === 'string') return env
     const how = carrying(now.harness, now.id, text, {
       codex: codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync),
-      // On Windows an app is started by where its program is, which its name alone does not say there
-      ...(process.platform === 'win32' && now.harness !== 'codex'
-        ? { start: windowsProgram(PROGRAM[now.harness] ?? now.harness, env.PATH ?? env.Path ?? '', existsSync, (f) => readFileSync(f, 'utf8')) }
-        : {}),
       itHome: home(),
       // The mode the person last had the conversation in, and where `it` is installed
       mode: now.harness === 'claude-code' ? (claudeModeOf(now.id, cwd, env.CLAUDE_CONFIG_DIR) ?? claudeModeOf(session.id, cwd, env.CLAUDE_CONFIG_DIR)) : null,
@@ -1715,7 +1635,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
           keepIn: inHome('logs'),
           said: (words) => saidLast.set(key, words),
           // Written down before it is given anything to do, or it is not to run: see `carryOn`
-          began: (pid, since) => {
+          began: (pid) => {
+            const since = identity([pid]).get(pid)
             if (since === undefined) throw new Error('which process it is could not be told')
             const boot = bootId()
             // This conservative copy predates every signal and every possible disk failure.
@@ -2506,9 +2427,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         }
         return Math.max(now - click.at, here - firstSeen.get(click.id)!)
       }
-      const offeredHere = new Map([...inbox, ...recoveredClicks.values()].map((c) => [c.id, c]))
-      for (const id of t3Waits.keys()) if (!offeredHere.has(id)) t3Waits.delete(id)
-      for (const click of [...offeredHere.values()].sort((a, b) => a.at - b.at)) {
+      for (const click of [...new Map([...inbox, ...recoveredClicks.values()].map((c) => [c.id, c])).values()].sort((a, b) => a.at - b.at)) {
         if (taken(click)) {
           recoveredClicks.delete(click.id)
           continue
@@ -2528,7 +2447,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const session = click.session
         let thread: ReturnType<typeof t3For>
         const heldInT3 = (): boolean => {
-          thread = connected(session.harness) && !reopenedNow.has(key) ? t3For(key, session, click.id) : undefined
+          thread = connected(session.harness) && !reopenedNow.has(key) ? t3For(key, session) : undefined
           return thread !== undefined
         }
         const s = sessions.get(key)
@@ -3120,7 +3039,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         agent: agentOf(h.id),
         addon: h.addon,
         version: /^\d{1,4}\.\d{1,4}\.\d{1,4}/.exec(h.version ?? '')?.[0] ?? 'unknown',
-        wake: wakesOn(process.platform, true) && wakesNow.has(h.id),
+        wake: wakesOn(process.platform) && wakesNow.has(h.id),
       })
   }
 
@@ -3236,8 +3155,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // so that a refusal which was something else (a moment without a connection) does not
   // leave the machine saying less for as long as it runs
   let plainUntil = 0
-  /** And until when a machine on Windows leaves out of its report that it reopens conversations there, for the same reason. */
-  let unsaidUntil = 0
   const lookForNewer = async () => {
     if (!looksForNewer()) latestKnown = ''
     else {
@@ -3335,38 +3252,35 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const told = { connectorVersion: VERSION, harnesses: found.map((h) => ({ ...h, runtime: runtimes.status(h.id) })) }
     const legacy = { connectorVersion: VERSION, harnesses: found }
     // And with the system it runs on, which an It of the same age takes too
-    const full = {
-      ...told,
-      system: process.platform,
-      // Whether it hands nothing over for now, so that the site says so beside the machine and on its pages
-      paused: unfitting ? (unfitting === NOT_ASKED ? 'unchecked' : 'unfit') : '',
-      ...(latestKnown !== undefined ? { latest: latestKnown } : {}),
-    }
-    // And on Windows that it reopens closed conversations there, which an It from before one did
-    // takes nothing of: each report that It refuses is made again with less, down to the plainest
-    const tries = reports(process.platform, full, legacy, { plain: Date.now() < plainUntil, unsaid: Date.now() < unsaidUntil })
-    await (async () => {
-      for (const [n, args] of tries.entries())
-        try {
-          await call('mutation', api.machines.report, args)
+    const fuller = Date.now() >= plainUntil
+    await call(
+      'mutation',
+      api.machines.report,
+      fuller
+        ? {
+            ...told,
+            system: process.platform,
+            // Whether it hands nothing over for now, so that the site says so beside the machine and on its pages
+            paused: unfitting ? (unfitting === NOT_ASKED ? 'unchecked' : 'unfit') : '',
+            ...(latestKnown !== undefined ? { latest: latestKnown } : {}),
+          }
+        : legacy,
+    )
+      .catch(async (err) => {
+        if (fuller && (err as { code?: string }).code !== 'unauthenticated') {
+          plainUntil = Date.now() + 10 * 60_000
+          await call('mutation', api.machines.report, legacy)
           return
-        } catch (err) {
-          if ((err as { code?: string }).code === 'unauthenticated' || n === tries.length - 1) throw err
-          // The word from Windows is left out only where It refused the report for what it said. A
-          // report that did not reach It, or was not answered, says nothing of that, and made again
-          // without the word just after an update, it would have It take the word away
-          if ('reopens' in args) {
-            if (!refusedFor(err)) throw err
-            unsaidUntil = Date.now() + 10 * 60_000
-          } else plainUntil = Date.now() + 10 * 60_000
         }
-    })().catch((err) => {
-      // The bridge would give this machine no token, even a fresh one: it has been revoked.
-      // Found out here within half a minute, where the live connection would take until its own
-      // token ran out.
-      if ((err as { code?: string }).code === 'unauthenticated') notOursNow()
-      else say(`report: ${why(err)}`)
-    })
+        throw err
+      })
+      .catch((err) => {
+        // The bridge would give this machine no token, even a fresh one: it has been revoked.
+        // Found out here within half a minute, where the live connection would take until its own
+        // token ran out.
+        if ((err as { code?: string }).code === 'unauthenticated') notOursNow()
+        else say(`report: ${why(err)}`)
+      })
   }
   lookAgain = () => report(true)
   client.onUpdate(
@@ -3465,14 +3379,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // Said to It at once, so that the site says it beside the machine and on its pages: in
       // full, whatever plainer report this machine had fallen back on for a while
       plainUntil = 0
-      unsaidUntil = 0
       void report()
     } else if (!wrong && unfitting) {
       const waited = unfitting !== NOT_ASKED
       unfitting = null
       if (waited) say('this machine and the It it joined fit again: what is done on a page is handed over again')
       plainUntil = 0
-      unsaidUntil = 0
       void report()
       void route()
     }
