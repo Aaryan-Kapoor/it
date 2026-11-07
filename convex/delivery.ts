@@ -52,6 +52,9 @@ async function asClicks(ctx: QueryCtx, rows: Doc<'actions'>[]) {
       ...(stateNow !== undefined && stateNow !== x.baseStateRevision ? { nowStateRevision: stateNow } : {}),
       // The files it carried beside its data, as It received them: read one with `it action <id> --save`
       ...(x.files?.length ? { files: x.files.map((f) => ({ name: f.name, type: f.type, bytes: f.size })) } : {}),
+      // When the person last asked for it to be tried again, where they have: a machine that had
+      // given up on it before then tries it afresh. It is for the connector, never the agent
+      ...(x.retriedAt !== undefined ? { retriedAt: x.retriedAt } : {}),
     })
   }
   return out

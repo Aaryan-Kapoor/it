@@ -397,6 +397,8 @@ export default defineSchema({
     leaseMachineId: v.optional(v.id('machines')),
     /** The machine that gave up delivering it by itself. Until its page changes hands it is left out of what connectors are offered, and still waits for `it wait` and the site. */
     parkedBy: v.optional(v.id('machines')),
+    /** When the person last asked, from the page, for it to be tried again after it was set aside. A machine that gave up on it before then forgets that it did. */
+    retriedAt: v.optional(v.number()),
     leaseExpiresAt: v.optional(v.number()),
     route: v.optional(v.string()),
     /** The machine that said it was handed over, where a machine did: a machine that was at work on it and did not hand it over itself has lost it to that one. */

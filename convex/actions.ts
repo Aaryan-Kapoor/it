@@ -4,7 +4,7 @@ import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import { ref, resolveArtifact } from './artifacts'
-import { type Browser, findDisplay, ownArtifact, requireBrowser, requireCaller } from './lib/authz'
+import { type Browser, findDisplay, ownArtifact, requireBrowser, requireCaller, requireOwner } from './lib/authz'
 import { counted } from './lib/counted'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
@@ -197,6 +197,72 @@ export const readdress = internalMutation({
     return null
   },
 })
+
+/**
+ * The person asks, from a page, for what its machine set aside there to be tried again. A click
+ * is set aside after four tries that came to nothing, and is otherwise tried again only when its
+ * conversation is heard from: the person may have put right what stood in the way (installed the
+ * app, brought back the folder, signed in again) and not want to wait for that. Each click is
+ * addressed again to whoever owns the page now, as when its conversation comes back, and is
+ * marked with when this was asked, by which a machine that had given up on it forgets that it
+ * did. Only the owner's browser may ask, as only it may turn Auto-wake on: what is tried again
+ * may reopen a conversation, with nobody at that machine to watch it.
+ *
+ * What is not set aside is left exactly as it is: a click that its conversation, or an agent
+ * waiting on the page, has taken since the page last said so is not touched. Answers with how
+ * many it brought back, of the first few: any more follow by themselves, a batch at a time.
+ */
+export const retry = mutation({
+  args: { artifactId: v.id('artifacts'), expectedSession: v.optional(v.string()) },
+  handler: async (ctx, { artifactId, expectedSession }): Promise<{ retried: number }> => {
+    const { user } = await requireOwner(ctx, expectedSession)
+    const a = await ownArtifact(ctx, user._id, artifactId)
+    const retried = await bringBack(ctx, a._id, Date.now(), null)
+    // Why the page's conversation could not be reopened is the machine's word on the tries that
+    // are over. Left, the bar would go on saying so while the click is being tried again; a try
+    // that comes to nothing says it again
+    if (retried) {
+      const to = await destination(ctx, a._id)
+      const machine = to.machineId ? await ctx.db.get(to.machineId) : null
+      const fails = machine?.fails ?? []
+      const left = fails.filter((f) => f.harness !== to.harness || f.sessionId !== to.sessionId)
+      if (machine && left.length !== fails.length) await ctx.db.patch(machine._id, { fails: left })
+      log('actions.retried', { artifactId: a._id, count: retried })
+    }
+    return { retried }
+  },
+})
+
+/** The rest of what was set aside on a page that the person asked to have tried again, a batch at a time. */
+export const retryRest = internalMutation({
+  args: { artifactId: v.id('artifacts'), at: v.number(), cursor: v.string() },
+  handler: async (ctx, { artifactId, at, cursor }) => {
+    if (await ctx.db.get(artifactId)) await bringBack(ctx, artifactId, at, cursor)
+    return null
+  },
+})
+
+/** Gives one batch of what waits on a page and was set aside back to whoever owns the page, marked with when that was asked. */
+async function bringBack(ctx: MutationCtx, artifactId: Id<'artifacts'>, at: number, cursor: string | null): Promise<number> {
+  const to = await destination(ctx, artifactId)
+  const batch = await ctx.db
+    .query('actions')
+    .withIndex('by_artifact_delivery', (q) => q.eq('artifactId', artifactId).eq('delivery', 'pending'))
+    .paginate({ cursor, numItems: 100 })
+  let n = 0
+  for (const x of batch.page) {
+    if (x.parkedBy === undefined) continue
+    // Stopped with its conversation since: marked so, and tried by no one
+    if (await stoppedSince(ctx, x)) {
+      await dropStopped(ctx, x)
+      continue
+    }
+    await ctx.db.patch(x._id, { ...to, parkedBy: undefined, retriedAt: at })
+    n++
+  }
+  if (!batch.isDone) await ctx.scheduler.runAfter(0, internal.actions.retryRest, { artifactId, at, cursor: batch.continueCursor })
+  return n
+}
 
 const DAY = 86_400_000
 /** Each browser may replay a saved request until a deadline issued by the backend. */

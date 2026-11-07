@@ -6468,6 +6468,92 @@ describe('cases at the edges', () => {
     expect(await t.run((ctx) => ctx.db.get(actionId))).toBeNull()
   })
 
+  test('what its machine set aside on a page is tried again when the owner asks, and its machine is told when that was asked', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    const submit = (id: string) =>
+      alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope(id) })
+    const { actionId } = await submit('click-0001')
+    const other = await submit('click-0002')
+    expect(await laptop.as.mutation(api.delivery.park, { id: actionId, for: thread, all: true })).toBe(true)
+    await settle(t)
+    await laptop.as.mutation(api.machines.wakeFailed, { for: thread, why: 'its command ended with an error' })
+    const seen = async () => await alice.browser.query(api.actions.forArtifact, { artifactId: p.artifactId })
+    expect((await seen()).map((x) => x.parked)).toEqual([true, true])
+    // Set aside, it is offered to no machine, even with its conversation listening
+    expect(await inbox(laptop, [thread])).toEqual([])
+    vi.setSystemTime(Date.now() + 60_000)
+    const asked = Date.now()
+    expect(await alice.browser.mutation(api.actions.retry, { artifactId: p.artifactId })).toEqual({ retried: 2 })
+    expect((await seen()).map((x) => x.parked)).toEqual([false, false])
+    // Its machine's again, as it was before it was set aside, and marked with when the person asked
+    for (const id of [actionId, other.actionId]) {
+      const x = await t.run((ctx) => ctx.db.get(id))
+      expect(x).toMatchObject({ delivery: 'pending', machineId: laptop.id, harness: 'codex', sessionId: 'thread-1', retriedAt: asked })
+      expect(x?.parkedBy).toBeUndefined()
+    }
+    const offered = await inbox(laptop, [thread])
+    expect(offered.map((c) => [c.id, c.retriedAt])).toEqual([
+      [actionId, asked],
+      [other.actionId, asked],
+    ])
+    // Why the conversation could not be reopened was about the tries that are over: the bar no longer says it while they are tried again
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'plan' })).wakeFailed).toBeNull()
+  })
+
+  test('only the owner’s browser can have what was set aside tried again, and nobody else’s asking changes anything', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const bob = await person(t, 'bob')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    const { actionId } = await alice.browser.mutation(api.actions.submit, {
+      artifactId: p.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-0001'),
+    })
+    expect(await laptop.as.mutation(api.delivery.park, { id: actionId, for: thread })).toBe(true)
+    const screen = await browserOf(t, 'alice', 'screen')
+    const before = await t.run((ctx) => ctx.db.get(actionId))
+    expect(await code(screen.browser.mutation(api.actions.retry, { artifactId: p.artifactId }))).toBe('forbidden')
+    expect(await code(laptop.as.mutation(api.actions.retry, { artifactId: p.artifactId }))).toBe('forbidden')
+    expect(await code(t.mutation(api.actions.retry, { artifactId: p.artifactId }))).not.toBe('ok')
+    // Another person's page is no page to them
+    expect(await code(bob.browser.mutation(api.actions.retry, { artifactId: p.artifactId }))).toBe('not_found')
+    // Asked under a pairing of the owner's that has since been replaced, as a saved request can be
+    expect(await code(alice.browser.mutation(api.actions.retry, { artifactId: p.artifactId, expectedSession: screen.session }))).toBe('conflict')
+    expect(await t.run((ctx) => ctx.db.get(actionId))).toEqual(before)
+  })
+
+  test('asking to try again what is not set aside changes nothing about it', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    const submit = (id: string) =>
+      alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope(id) })
+    const waiting = await submit('click-0001')
+    const taken = await submit('click-0002')
+    const handed = await submit('click-0003')
+    // Set aside, and taken meanwhile by an agent waiting on the page: it is being delivered
+    expect(await laptop.as.mutation(api.delivery.park, { id: taken.actionId, for: thread })).toBe(true)
+    await t.run((ctx) => ctx.db.patch(taken.actionId, { delivery: 'leased', leaseMachineId: laptop.id, leaseExpiresAt: Date.now() + 30_000 }))
+    // And one its conversation took and was handed
+    await laptop.as.mutation(api.delivery.handedOff, { id: handed.actionId, route: 'manual' })
+    const rows = () => t.run(async (ctx) => Promise.all([waiting, taken, handed].map((x) => ctx.db.get(x.actionId))))
+    const before = await rows()
+    expect(await alice.browser.mutation(api.actions.retry, { artifactId: p.artifactId })).toEqual({ retried: 0 })
+    expect(await rows()).toEqual(before)
+    // Asked again, as a person who pressed twice does: still nothing
+    expect(await alice.browser.mutation(api.actions.retry, { artifactId: p.artifactId })).toEqual({ retried: 0 })
+    expect(await rows()).toEqual(before)
+  })
+
   test('a machine that asks to be enrolled a second time with the same key is the same machine', async () => {
     const t = backend()
     await person(t, 'alice')
