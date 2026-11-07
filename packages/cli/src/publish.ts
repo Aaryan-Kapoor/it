@@ -6,6 +6,7 @@ import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, open
 import { type FileHandle, open } from 'node:fs/promises'
 import path from 'node:path'
 import { type FileEntry, isSafePath, LIMITS, NOUN, PUBLICATION, sizeSaid, UPLOAD, uploadBudgetMs } from '@it/protocol'
+import { type Held, type Holder, heldNow, heldOf, holderOf, together } from './hosts'
 import { claimLock } from './legacy-lock'
 import { api, call, direct, doorRefusal, inHome, machine, Problem, readJson, sessionAsked, sessionNote, throughDoor, writePrivate } from './lib'
 import { type Profile, profileOf } from './profiles'
@@ -254,14 +255,26 @@ export async function noteConversation(
   session: { harness: string; id: string },
   cwd = process.cwd(),
   profile: Profile | null | undefined = profileOf(session.harness),
+  /**
+   * Where the conversation is held and the program that holds it, as the command that made a
+   * page found them (see `heldNow`). A hook's report says neither, and leaves what was noted.
+   */
+  now: { held?: Held; holder?: Holder } = {},
 ): Promise<void> {
   try {
     const key = `${session.harness}:${session.id}`
-    type Note = { cwd: string; at: number; profile?: Profile }
+    type Note = { cwd: string; at: number; profile?: Profile; held?: Held; holder?: Holder }
     const read = () => readJson<Record<string, Note>>(conversationsFile()) ?? {}
+    // An app that has held the conversation goes on holding it: a page made later in a terminal
+    // does not let it go (see `heldBy`). Of two threads of T3 Code, the one found now
+    const heldThen = (noted: Note | undefined) => together(now.held, heldOf(noted?.held))
     // A note an hour or more from the clock, either way, is written again with the time now
     const unchanged = (noted: Note | undefined) =>
-      noted?.cwd === cwd && JSON.stringify(noted.profile) === JSON.stringify(profile ?? noted.profile) && Math.abs(Date.now() - noted.at) < NOTED_FOR_MS
+      noted?.cwd === cwd &&
+      JSON.stringify(noted.profile) === JSON.stringify(profile ?? noted.profile) &&
+      JSON.stringify(noted.held) === JSON.stringify(heldThen(noted)) &&
+      (now.holder === undefined || JSON.stringify(noted.holder) === JSON.stringify(now.holder)) &&
+      Math.abs(Date.now() - noted.at) < NOTED_FOR_MS
     // Hooks report the folder on every event. An unchanged note needs no lock or disk flush.
     if (unchanged(read()[key])) return
     // Preserve the command's three-second chance to keep its note under contention, but
@@ -275,7 +288,9 @@ export async function noteConversation(
           const kept = read()
           if (unchanged(kept[key])) return
           const selected = profile ?? kept[key]?.profile
-          kept[key] = { cwd, at: Date.now(), ...(selected ? { profile: selected } : {}) }
+          const held = heldThen(kept[key])
+          const holder = now.holder ?? holderOf(kept[key]?.holder)
+          kept[key] = { cwd, at: Date.now(), ...(selected ? { profile: selected } : {}), ...(held ? { held } : {}), ...(holder ? { holder } : {}) }
           const newest = Object.entries(kept)
             .filter(([, noted]) => typeof noted?.cwd === 'string' && typeof noted.at === 'number')
             .sort((a, b) => b[1].at - a[1].at)
@@ -297,6 +312,37 @@ export async function noteConversation(
 /** The recorded profile stays local, alongside the working folder. */
 export function conversationProfile(session: { harness: string; id: string }): unknown {
   return readJson<Record<string, { profile?: unknown }>>(conversationsFile())?.[`${session.harness}:${session.id}`]?.profile
+}
+
+/**
+ * The notes of every conversation, as they were read last. Read again only where the file has
+ * changed since: the connector asks after them for each click it looks at, every second.
+ */
+let notesRead: { file: string; mtimeMs: number; size: number; notes: Record<string, { at?: unknown; held?: unknown; holder?: unknown }> } | undefined
+function notes(): Record<string, { at?: unknown; held?: unknown; holder?: unknown }> {
+  const file = conversationsFile()
+  try {
+    const now = statSync(file)
+    if (notesRead?.file === file && notesRead.mtimeMs === now.mtimeMs && notesRead.size === now.size) return notesRead.notes
+    const read = readJson<Record<string, { at?: unknown; held?: unknown; holder?: unknown }>>(file) ?? {}
+    notesRead = { file, mtimeMs: now.mtimeMs, size: now.size, notes: read && typeof read === 'object' ? read : {} }
+    return notesRead.notes
+  } catch {
+    notesRead = undefined
+    return {}
+  }
+}
+
+/** Where a conversation was noted to be held, as the commands that made its pages found it, if they did. */
+export function conversationHeld(session: { harness: string; id: string }): Held | undefined {
+  return heldOf(notes()[`${session.harness}:${session.id}`]?.held)
+}
+
+/** The program that was noted to hold a conversation when it last made a page, and when that was. */
+export function conversationHolder(session: { harness: string; id: string }): { holder: Holder; at: number } | undefined {
+  const noted = notes()[`${session.harness}:${session.id}`]
+  const holder = holderOf(noted?.holder)
+  return holder && typeof noted?.at === 'number' ? { holder, at: noted.at } : undefined
 }
 
 /** The folder a conversation was last known to be working in, if it is still there. */
@@ -637,7 +683,7 @@ export async function publish(input: {
       // It refuses, after everything was erased say, leaves no note of a conversation behind.
       // None is needed sooner: a page becomes this conversation's, and its clicks come here,
       // only as it is finished.
-      if (session) await noteConversation(session)
+      if (session) await noteConversation(session, process.cwd(), profileOf(session.harness), heldNow(session))
       // Counted: which agent app, new or not, how large and of how many files in a few bands, and
       // four things that are each so or not: whether it was given a state to start with, whether it
       // sends anything back, whether it carries a picture, and whether it was brought up at once.

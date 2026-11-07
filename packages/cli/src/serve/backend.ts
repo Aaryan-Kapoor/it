@@ -563,6 +563,17 @@ async function fateOf(file: string, seen: Seen, opts: { watching?: () => void; s
 }
 
 /**
+ * A process of this machine as a lock names it: its number, when it was started, and where the
+ * number means something. `holderRuns` says of it later whether that very process still runs.
+ * Nothing where no process has the number now. Where the system will not say when it was
+ * started, it is believed for as long as a process has its number.
+ */
+export function processOf(pid: number): Pick<Lock, 'pid' | 'started' | 'where'> | undefined {
+  const started = startOf(pid)
+  return started === null ? undefined : { pid, started: started ?? '', where: where() }
+}
+
+/**
  * Whether the process a lock names is running on this machine at this moment: the very one, by
  * its number and when it was started, for whoever only has to know and takes no lock. On Linux
  * a lock from before the machine was last started names nothing that runs now. On the other
