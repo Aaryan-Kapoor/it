@@ -3184,6 +3184,14 @@ describe('clicks and their delivery', () => {
     await m.as.mutation(api.machines.runEnded, { for: SESSION, ok: true })
     expect(await failedOn()).toBeNull()
     expect(await code(alice.browser.mutation(api.machines.wakeFailed, { for: SESSION, why: 'x' }))).toBe('forbidden')
+    // What its clicks wait for that reopening cannot give is said on its page, the latest of it, and only by its machine
+    const waitingOn = async () => (await alice.browser.query(api.artifacts.get, { slug: 'plan' })).waitingFor
+    expect(await waitingOn()).toBeNull()
+    await m.as.mutation(api.machines.waits, { for: SESSION, why: 'unclear' })
+    await m.as.mutation(api.machines.waits, { for: SESSION, why: 'claude-desktop' })
+    expect(await waitingOn()).toMatchObject({ why: 'claude-desktop' })
+    expect(await code(m.as.mutation(api.machines.waits, { for: SESSION, why: 'anything' as never }))).not.toBe('ok')
+    expect(await code(alice.browser.mutation(api.machines.waits, { for: SESSION, why: 'unclear' }))).toBe('forbidden')
     // Another person can stop nothing of it, and a machine cannot stop for a person
     const bob = await person(t, 'bob')
     await m.as.mutation(api.machines.runBegan, { for: SESSION })

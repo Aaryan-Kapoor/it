@@ -275,6 +275,26 @@ export const wakeFailed = mutation({
   },
 })
 
+/** What a machine may say a conversation's clicks wait for: see `holds` in the schema. */
+export const WAITS_FOR = ['t3-code', 'claude-desktop', 'host', 'unclear'] as const
+
+/**
+ * The machine says that a conversation's clicks wait for something that reopening it cannot
+ * give: the app that holds it, or knowing that it is closed. The page then says so, and does not
+ * offer to wake it, which would change nothing.
+ */
+export const waits = mutation({
+  args: { for: session, why: v.union(...WAITS_FOR.map((w) => v.literal(w))) },
+  handler: async (ctx, { for: s, why }) => {
+    const { machine } = await requireMachine(ctx)
+    const others = (machine.holds ?? []).filter((h) => h.harness !== s.harness || h.sessionId !== s.id)
+    await ctx.db.patch(machine._id, {
+      holds: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), at: Date.now(), why }].slice(-RUNS_MOST),
+    })
+    return null
+  },
+})
+
 /**
  * Which harnesses are to be connected, chosen on the machine itself by `it setup`, which also
  * says what system the machine runs, and on Windows that it reopens closed conversations there:

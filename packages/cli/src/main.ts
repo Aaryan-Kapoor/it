@@ -44,6 +44,7 @@ import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
 import * as flow from './flow'
 import { hook } from './hooks'
+import { heldNow } from './hosts'
 import { checkInstallationFolder, checkInstallationRecord, legacyInstallation, markedInstallation, markInstallation } from './installation'
 import { withInstallerLock } from './installer-lock'
 import {
@@ -3012,7 +3013,7 @@ async function main(argv: string[]): Promise<void> {
       )
       // Noted only once It has answered, since it is as the page is shown that it becomes this
       // conversation's: a page It refuses to show leaves no note of the conversation
-      if (mine) await noteConversation(mine)
+      if (mine) await noteConversation(mine, undefined, undefined, heldNow(mine))
       const took = result.took === true
       const shown = shownAs(result)
       const taken = `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.`

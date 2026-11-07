@@ -573,6 +573,24 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     }
     expect(JSON.parse(readFileSync(log, 'utf8'))).toEqual([folder, null, folder])
   })
+
+  test('the app is not given the marks of an app that holds conversations, which the service may have from where it was started', async () => {
+    // A page made in the run would otherwise be taken for one of T3 Code's, or of the Claude Code that started the service
+    const log = path.join(scratch, 'marks.json')
+    const marks = ['T3CODE_THREAD_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_PID', 'CLAUDE_CODE_SESSION_ID']
+    const how = {
+      argv: [
+        process.execPath,
+        '-e',
+        `require('fs').writeFileSync(${JSON.stringify(log)}, JSON.stringify(${JSON.stringify(marks)}.map((k) => process.env[k] ?? null)))`,
+      ],
+      input: '',
+      app: 'Claude Code',
+    }
+    const env = { ...process.env, T3CODE_THREAD_ID: 'thread-a', CLAUDE_CODE_ENTRYPOINT: 't3-code', CLAUDE_PID: '1234', CLAUDE_CODE_SESSION_ID: 'another' }
+    expect(await carryOn(how, scratch, { harness: 'claude-code', session: 'x' }, { env })).toBeNull()
+    expect(JSON.parse(readFileSync(log, 'utf8'))).toEqual([null, null, null, null])
+  })
 })
 
 describe('what a conversation is told when it is reopened after a turn of it was cut off', () => {

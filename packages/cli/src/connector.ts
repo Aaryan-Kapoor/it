@@ -27,6 +27,7 @@ import {
   type Offered,
   RECEIPTS_MOST,
 } from './delivery-recovery'
+import { type Held as HeldBy, heldBy, holderGone, together } from './hosts'
 import {
   APP_NAMES,
   api,
@@ -50,7 +51,7 @@ import {
 } from './lib'
 import { incompatible } from './login'
 import { profileEnvironment, readProfile } from './profiles'
-import { conversationFolder, conversationProfile, noteConversation } from './publish'
+import { conversationFolder, conversationHeld, conversationHolder, conversationProfile, noteConversation } from './publish'
 import { alone } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
@@ -62,6 +63,7 @@ import {
   bootId,
   carrying,
   carryOn,
+  claudeEntrypoints,
   claudeModeOf,
   claudeWroteAt,
   codexHolder,
@@ -699,6 +701,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
       const thread = t3Threads.get(k)
       if (thread) return thread
     }
+    // Or as the command that made one of its pages noted it, which T3 Code told the thread it
+    // runs in: a conversation whose thread was told so needs no search for it
+    for (const k of knownAs(aliases, key)) {
+      const held = conversationHeld({ harness: k.slice(0, k.indexOf(':')), id: threadOf(k) })
+      if (held?.by === 't3-code' && held.thread) return held.thread
+    }
     return undefined
   }
   /** Notes that T3 Code holds a conversation in this thread, and writes the note down. */
@@ -718,9 +726,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   /**
    * Whether a conversation's clicks go to a thread of T3 Code and nowhere else: one T3 Code has
-   * said it holds, or any Claude Code or Codex conversation while the note of those cannot be read.
+   * said it holds, one that was in T3 Code when it made a page or that Claude Code wrote down as
+   * run by T3 Code, or any Claude Code or Codex conversation while the note of those cannot be read.
    */
-  const t3Only = (key: string) => (key.startsWith('claude-code:') || key.startsWith('codex:')) && (notedThread(key) !== undefined || t3ThreadsHeld())
+  const t3Only = (key: string) =>
+    (key.startsWith('claude-code:') || key.startsWith('codex:')) && (notedThread(key) !== undefined || t3ThreadsHeld() || whereHeld(key)?.by === 't3-code')
   /**
    * Whether T3 Code is running here and has yet to say that none of its threads holds a Claude
    * Code or Codex conversation. Until it has, the conversation is not reopened outside T3 Code:
@@ -1954,6 +1964,75 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const ours = ranUntil.get(follow(keyOf(session.harness, session.id)))
     return ours === undefined || wrote > ours + 3000
   }
+  /**
+   * Where a Claude Code or Codex conversation is held, by everything It has of it, under any id it
+   * has had: what the commands that made its pages found, and for Claude Code every app that
+   * Claude Code wrote down as having run it. Nothing where It has neither, as for a Codex
+   * conversation whose pages were made before It noted this.
+   */
+  const whereHeld = (key: string): HeldBy | undefined => {
+    const harness = key.slice(0, key.indexOf(':'))
+    if (harness !== 'claude-code' && harness !== 'codex') return undefined
+    const all: (HeldBy | undefined)[] = []
+    for (const k of knownAs(aliases, key)) {
+      const session = { harness, id: threadOf(k) }
+      all.push(conversationHeld(session))
+      if (harness !== 'claude-code') continue
+      const env = profileEnvironment(harness, conversationProfile(session), harnessEnv())
+      const seen = typeof env === 'string' ? null : claudeEntrypoints(session.id, conversationFolder(session) ?? '', env.CLAUDE_CONFIG_DIR)
+      if (seen) all.push(heldBy(seen))
+    }
+    return together(...all)
+  }
+  /** Of each program noted to have held a conversation, whether it was last found gone, and when it was looked at: asking can cost a program of the system's own. */
+  const holderLooks = new Map<string, { at: number; gone: boolean }>()
+  /**
+   * Whether It knows that a Claude Code conversation is closed. Only such a one is reopened: one
+   * that is quiet may be open in a window where It's add-on is not running, and reopened there
+   * it would run beside itself, where that window does not show it. It knows so where the last
+   * thing that wrote the conversation was a run of It's own that has ended, and where the Claude
+   * Code program that held it when it last made a page has gone. Where It has neither, as for a
+   * conversation whose pages were made before It noted that program, it does not know, and the
+   * click waits until the conversation is open. Other apps are as they were: Codex's own record
+   * says whether a Codex has the conversation open.
+   */
+  const knownClosed = (key: string, session: { harness: string; id: string }): boolean => {
+    if (session.harness !== 'claude-code') return true
+    const ours = ranUntil.get(key)
+    if (ours !== undefined) {
+      const cwd = conversationFolder(session)
+      const env = profileEnvironment(session.harness, conversationProfile(session), harnessEnv())
+      const wrote = cwd && typeof env !== 'string' ? claudeWroteAt(session.id, cwd, env.CLAUDE_CONFIG_DIR) : null
+      if (wrote !== null && wrote <= ours + 3000) return true
+    }
+    // Of the ids it has had, the program noted with the page it made last
+    let last: { holder: { pid: number; started: string; where: string }; at: number } | undefined
+    for (const k of knownAs(aliases, key)) {
+      const noted = conversationHolder({ harness: session.harness, id: threadOf(k) })
+      if (noted && (!last || noted.at > last.at)) last = noted
+    }
+    if (!last) return false
+    const which = `${last.holder.pid} ${last.holder.started} ${last.holder.where}`
+    const looked = holderLooks.get(which)
+    // A program that has gone stays gone. One that ran is looked at again after a while
+    if (looked && (looked.gone || Date.now() - looked.at < 15_000)) return looked.gone
+    const gone = holderGone(last.holder)
+    if (holderLooks.size > 500) holderLooks.delete(holderLooks.keys().next().value!)
+    holderLooks.set(which, { at: Date.now(), gone })
+    return gone
+  }
+  /** What each click was last said to wait for, so that each is said once. */
+  const toldWaiting = new Map<string, string>()
+  /**
+   * Tells It what a click waits for that reopening its conversation cannot give, for its page to
+   * say: the app that holds the conversation, or It's knowing that the conversation is closed.
+   */
+  const tellWaiting = (click: Offered, why: 't3-code' | 'claude-desktop' | 'host' | 'unclear') => {
+    if (!click.session || toldWaiting.get(click.id) === why) return
+    if (toldWaiting.size > 2000) toldWaiting.delete(toldWaiting.keys().next().value!)
+    toldWaiting.set(click.id, why)
+    void call('mutation', api.machines.waits, { for: click.session, why }).catch(() => {})
+  }
   /** The id Codex knows a conversation by now: the one it carries on under, if it was cleared. */
   const threadOf = (key: string) => key.slice(key.indexOf(':') + 1)
   /** Who has a Codex conversation open, in the profile it was held in: see `codexHolder`. */
@@ -2688,24 +2767,38 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const seen = hookSeen.get(click.id)
         const fresh = seen?.tag === tag(click) && performance.now() - seen.at < FRESH_MS
         const forAddOn = listening || (inTurn && fresh && !queuedBefore)
+        // A conversation that Claude's desktop app holds, or another app It does not know by name,
+        // goes to that app's own add-on and nowhere else, as one T3 Code holds goes to its thread:
+        // reopened, its turn would run where the app does not show it. It waits until the app
+        // has the conversation open, and the page says so
+        const heldIn = forAddOn ? undefined : whereHeld(key)
+        const heldAway = heldIn?.by === 'claude-desktop' || heldIn?.by === 'host' ? heldIn : undefined
         // Which of the other ways it goes, asked only where the first does not take it
         const way = forAddOn
           ? undefined
           : wayOf({
-              inT3: heldInT3,
-              codexOpen: () => codex && connected('codex') && !reopenedNow.has(key) && codexOpen(key) === true,
+              inT3: () => !heldAway && heldInT3(),
+              codexOpen: () => !heldAway && codex && connected('codex') && !reopenedNow.has(key) && codexOpen(key) === true,
               // Only once nothing holds a Codex conversation: Codex lets one program at a time
               // write it, and refuses another. A run of It's own that is ending holds it until it
               // has gone, which is a moment, and the click is reopened for then.
               // Nor while T3 Code, running here, has yet to say that none of its threads holds it:
-              // reopened outside T3 Code, a conversation a thread holds would run beside the thread
+              // reopened outside T3 Code, a conversation a thread holds would run beside the thread.
+              // And only once It knows that the conversation is closed (see `knownClosed`)
               reopens: () =>
+                !heldAway &&
                 wakes(session.harness, click.at) &&
                 connected(session.harness) &&
                 (!codex || (!reopenedNow.has(key) && codexHold(key) === false)) &&
                 !runtimes.blocksWake(session.harness) &&
-                !t3Undecided(key),
+                !t3Undecided(key) &&
+                knownClosed(key, session),
             })
+        // Nothing takes it: where that is for something reopening could not give, the page says what
+        if (!forAddOn && way === undefined && connected(session.harness)) {
+          if (heldAway) tellWaiting(click, heldAway.by === 'claude-desktop' ? 'claude-desktop' : 'host')
+          else if (!t3Undecided(key) && (codex ? codexHold(key) === null : !knownClosed(key, session))) tellWaiting(click, 'unclear')
+        }
         if (forAddOn) {
           // Route 1: the add-on will ask for it, or the running turn's next hook will
           const asked = steady()
@@ -2741,6 +2834,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             soon(300)
           } else if (thread === 'held') {
             waitingBehind.add(key)
+            tellWaiting(click, 't3-code')
           } else if (left > 0) {
             waitingBehind.add(key)
             soon(left + 10)

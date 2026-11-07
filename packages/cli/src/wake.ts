@@ -236,6 +236,9 @@ export function lastWords(text: string): string | null {
  * handed to `said`, for the person whose app it is and for nothing that is kept. Stopped by
  * the signal, it is ended and says so.
  */
+/** What a run that It starts is not given of its own environment: see `carryOn`. */
+const UNCARRIED = new Set(['OLDPWD', 'T3CODE_THREAD_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_PID', 'CLAUDE_CODE_SESSION_ID'])
+
 export function carryOn(
   how: Carrying,
   cwd: string,
@@ -279,7 +282,10 @@ export function carryOn(
     // On Windows what the run starts is kept in a job of the system's, named by the run: see `keeper`
     const job = windows ? (marks.run ?? randomUUID()) : ''
     const env: NodeJS.ProcessEnv = {
-      ...Object.fromEntries(Object.entries(opts.env ?? harnessEnv()).filter(([k]) => k !== 'OLDPWD')),
+      // Nor what an app that holds conversations sets for its own: a service that was started from
+      // inside T3 Code, or from inside a Claude Code that an app runs, would otherwise hand that
+      // app's marks to the run, and a page made in it would be taken for one of that app's
+      ...Object.fromEntries(Object.entries(opts.env ?? harnessEnv()).filter(([k]) => !UNCARRIED.has(k.toUpperCase()))),
       // The folder is said in the environment as well. This program's own PWD is wherever it
       // was started, and an app that believes PWD over the folder it is in (OpenCode does)
       // would hold the conversation in one folder and wait for it in another, and never end.
@@ -1456,6 +1462,81 @@ export function claudeModeOf(session: string, cwd: string, configDir = process.e
     return null
   } finally {
     closeSync(fd)
+  }
+}
+
+/** What has been read of each conversation's file for its entrypoints, by the file: how far, the line it was in the middle of, and the entrypoints in the order of their last line. */
+const entrypointsRead = new Map<string, { size: number; dev: number; ino: number; rest: string; seen: string[] }>()
+/** The longest line that is read whole for its entrypoint: a longer one is the output of a tool, and the lines beside it say the same. */
+const ENTRYPOINT_LINE_MOST = 4 * 1024 * 1024
+
+/**
+ * The entrypoints Claude Code wrote on the lines of a conversation's file, in the order in which
+ * each was last written, or null where there is no such file. Claude Code writes on each line
+ * what ran it: `cli` for a terminal, `sdk-cli` for running without a window, and an app's own
+ * name where an app ran it (see `heldBy`). What has been read is kept, and only what Claude Code
+ * has written since is read the next time.
+ */
+export function claudeEntrypoints(
+  session: string,
+  cwd: string,
+  configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'),
+): string[] | null {
+  const file = claudeRecord(session, cwd, configDir)
+  if (!file) return null
+  let fd: number
+  try {
+    fd = openSync(file, 'r')
+  } catch {
+    return null
+  }
+  try {
+    const now = fstatSync(fd)
+    let read = entrypointsRead.get(file)
+    // Another file in its place, or one that was cut shorter, is read again from its start
+    if (!read || read.dev !== now.dev || read.ino !== now.ino || now.size < read.size) read = { size: 0, dev: now.dev, ino: now.ino, rest: '', seen: [] }
+    const PIECE = 1024 * 1024
+    while (read.size < now.size) {
+      const piece = Buffer.alloc(Math.min(PIECE, now.size - read.size))
+      const got = readSync(fd, piece, 0, piece.length, read.size)
+      if (got <= 0) break
+      read.size += got
+      const lines = (read.rest + piece.subarray(0, got).toString('utf8')).split('\n')
+      read.rest = lines.pop()!
+      // A line too long to hold is let go of, and what follows its end is read
+      if (read.rest.length > ENTRYPOINT_LINE_MOST) read.rest = ''
+      for (const line of lines) {
+        const said = entrypointOf(line)
+        if (said === undefined) continue
+        const at = read.seen.indexOf(said)
+        if (at !== -1) read.seen.splice(at, 1)
+        read.seen.push(said)
+      }
+    }
+    if (entrypointsRead.size > 200 && !entrypointsRead.has(file)) entrypointsRead.delete(entrypointsRead.keys().next().value!)
+    entrypointsRead.set(file, read)
+    return [...read.seen]
+  } catch {
+    return null
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/**
+ * The entrypoint a line of a conversation's file names. Where the line says one and the same
+ * everywhere it says one, that is it. Where it says two (a tool's output may hold such words),
+ * the line is read as what it is, and its own is the one at its top.
+ */
+function entrypointOf(line: string): string | undefined {
+  if (!line.includes('"entrypoint"') || line.length > ENTRYPOINT_LINE_MOST) return undefined
+  const said = new Set([...line.matchAll(/"entrypoint":"([A-Za-z0-9._-]{1,64})"/g)].map((m) => m[1]!))
+  if (said.size === 1) return said.values().next().value
+  try {
+    const row = JSON.parse(line) as { entrypoint?: unknown }
+    return typeof row.entrypoint === 'string' ? row.entrypoint : undefined
+  } catch {
+    return undefined
   }
 }
 
