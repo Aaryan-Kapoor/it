@@ -7574,7 +7574,7 @@ describe('Conditional content-only invariants', () => {
     expect(final.title).toBe('First')
     await m.as.mutation(api.publish.abandon, { artifactId: b.artifactId, version: b.version })
   })
-  test('Preserve mode rejects takeover, omitted or invalid versions, media changes and page creation.', async () => {
+  test('Preserve mode rejects takeover, omitted or invalid versions, and page creation.', async () => {
     const t = backend()
     await person(t, 'alice')
     const m = await machineOf(t, 'alice')
@@ -7586,7 +7586,6 @@ describe('Conditional content-only invariants', () => {
       { expectedVersion: undefined },
       { expectedVersion: 0 },
       { expectedVersion: 1.5 },
-      { media: ['camera'] },
       { agentExplicit: true, agent: 'Changed' },
     ])
       expect(await code(m.as.action(api.publish.begin, { ...args, ...bad } as never))).toBe('invalid')

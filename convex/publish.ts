@@ -190,13 +190,7 @@ export const _begin = internalMutation({
 
     if (
       args.preserveOwner &&
-      (args.take ||
-        args.own ||
-        args.expectedVersion === undefined ||
-        args.tour !== undefined ||
-        args.state !== undefined ||
-        args.media !== undefined ||
-        args.agentExplicit)
+      (args.take || args.own || args.expectedVersion === undefined || args.tour !== undefined || args.state !== undefined || args.agentExplicit)
     )
       fail('invalid', 'Preserving ownership requires an expected version and changes only content and title.')
     if (args.expectedVersion !== undefined && (!Number.isSafeInteger(args.expectedVersion) || args.expectedVersion < 1))

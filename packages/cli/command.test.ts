@@ -4201,7 +4201,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
     const ran = await run(machine(), ['help'])
     // The real parser accepts the options the command's own usage lines advertise.
     for (const line of ran.out.split('\n')) {
-      const cmd = /^ {2}it ([a-z]+)\b/.exec(line)?.[1]
+      const cmd = /^ {2}it ([a-z]+(?:-[a-z]+)*)\b/.exec(line)?.[1]
       if (!cmd) continue
       const flags = [...line.matchAll(/--([a-z]+(?:-[a-z]+)*)/g)].flatMap((m) => (BOOLEAN.has(m[1]!) ? [m[0]] : [m[0], 'value']))
       const accepted = await run(machine(false), [cmd, ...flags, '--help'])
