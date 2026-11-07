@@ -178,13 +178,16 @@ export default defineSchema({
     latest: v.optional(v.string()),
     /**
      * An upgrade of this machine that the person asked for on the site, and how far it has got:
-     * asked for, at work, failed with why, or installed and waiting for It to be started again
-     * by hand where nothing starts it by itself. Gone once the machine reports a newer version.
+     * asked for, at work, failed with why, put in place and starting again as it (on Windows,
+     * where the service ends and its launcher starts the new program), or installed and waiting
+     * for It to be started again by hand where nothing starts it by itself. Gone once the
+     * machine reports a newer version. The site says that one still asked for, at work or
+     * starting again once an upgrade has had as long as one takes did not finish.
      */
     upgrade: v.optional(
       v.object({
         at: v.number(),
-        state: v.union(v.literal('asked'), v.literal('working'), v.literal('failed'), v.literal('installed')),
+        state: v.union(v.literal('asked'), v.literal('working'), v.literal('restarting'), v.literal('failed'), v.literal('installed')),
         why: v.optional(v.string()),
         version: v.optional(v.string()),
       }),

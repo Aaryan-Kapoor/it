@@ -177,8 +177,8 @@ export const upgrade = mutation({
       if (runsIt && newer(runsIt.connectorVersion, m.latest))
         fail('conflict', 'That release is older than the machine It runs on. Run `it upgrade --check` on this machine to check for a matching release.')
     }
-    // Asked for again while it is at work, it is the same asking
-    if (m.upgrade?.state === 'working' && Date.now() - m.upgrade.at < UPGRADE_MS) return null
+    // Asked for again while it is at work, or starting again as the new program, it is the same asking
+    if ((m.upgrade?.state === 'working' || m.upgrade?.state === 'restarting') && Date.now() - m.upgrade.at < UPGRADE_MS) return null
     await ctx.db.patch(m._id, { upgrade: { at: Date.now(), state: 'asked', version: m.latest } })
     log('machine.upgrade_asked', { userId: user._id, machineId: m._id })
     return null
@@ -188,7 +188,7 @@ export const upgrade = mutation({
 /** The machine says how far the upgrade it was asked for has got. Only one that was asked for is spoken of. */
 export const upgrading = mutation({
   args: {
-    state: v.union(v.literal('working'), v.literal('failed'), v.literal('installed'), v.literal('none')),
+    state: v.union(v.literal('working'), v.literal('restarting'), v.literal('failed'), v.literal('installed'), v.literal('none')),
     why: v.optional(v.string()),
     version: v.optional(v.string()),
   },

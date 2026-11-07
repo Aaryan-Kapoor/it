@@ -329,6 +329,13 @@ describe('what is said of an agent app on a machine', () => {
     // One that has said nothing more for longer than an upgrade takes was cut short: said so, and offered again
     await showing([{ ...desk, latest: '0.1.1', upgrade: { at: Date.now() - 16 * 60_000, state: 'working' } }])
     expect(said()).toEqual(['The update to It 0.1.1 did not finish. This machine still runs 0.1.0. Try again'])
+    // On Windows the new program is in place and the service starts again as it, which has a word of its own; one not heard from since is said to be that
+    await showing([{ ...desk, latest: '0.1.1', upgrade: { at: Date.now(), state: 'restarting', version: '0.1.1' } }])
+    expect(said()).toEqual(['Starting again as It 0.1.1…'])
+    await showing([{ ...desk, latest: '0.1.1', upgrade: { at: Date.now() - 16 * 60_000, state: 'restarting', version: '0.1.1' } }])
+    expect(said()).toEqual([
+      'It 0.1.1 is in place, and has not been heard from since it was started. Run it service logs on that machine to read why. Try again',
+    ])
     await showing([{ ...desk, latest: '0.1.1', upgrade: { at: 1, state: 'failed', why: 'The newest release of It could not be fetched (it-linux-x64).' } }])
     expect(said()).toEqual(['The update to It 0.1.1 did not finish: The newest release of It could not be fetched (it-linux-x64). Try again'])
     await showing([
@@ -350,6 +357,13 @@ describe('what is said of an agent app on a machine', () => {
     expect(said()).toEqual([
       'It 0.1.1 is installed on the laptop. It runs once It is started again there: stop it serve where it is running, and start it. As it starts it brings the add-ons in the agent apps there up to date. An app that is already running goes on with the add-on it loaded, which still takes clicks, until it is restarted, and its line on this page then says so.',
     ])
+    // On Windows too: a service the system starts there comes back by itself, so a machine that says this was started by hand, and is never sent to `it setup`
+    await showing([
+      { ...desk, connectorVersion: '0.1.1' },
+      { ...laptop, system: 'win32', latest: '0.1.1', upgrade: { at: 1, state: 'installed', version: '0.1.1' } },
+    ])
+    expect(said()[0]).toContain('stop it serve where it is running, and start it.')
+    expect(said()[0]).not.toContain('it setup')
   })
 
   test.each([null, '0.1.0', '0.9.5'])('a joined machine shows a newer host before its next release lookup, last result %s', async (latest) => {
