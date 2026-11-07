@@ -279,10 +279,11 @@ export const inboxPage = query({
     /**
      * The conversations held in threads of T3 Code that the connector asks for whether or not
      * they are here and whether or not they may be reopened, each with since when it has asked
-     * for them that way, by its clock. Only what was received after that is read for them: a
-     * click that had waited for such a conversation from before is left where it is, for `it
-     * wait` and the site, and does not start a turn by itself. A connector asks with this only
-     * where the backend names `TAKES.inboxHeld` at its door, since an older one refuses it.
+     * for them that way, by this backend's clock, which it tells at its door. Only what was
+     * received after that is read for them: a click that had waited for such a conversation from
+     * before is left where it is, for `it wait` and the site, and does not start a turn by
+     * itself. A connector asks with this only where the backend names `TAKES.inboxHeld` at its
+     * door, since an older one refuses it.
      */
     held: v.optional(v.array(v.object({ harness: v.string(), id: v.string(), since: v.number() }))),
   },

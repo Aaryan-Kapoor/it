@@ -47,7 +47,7 @@ import {
   api,
   ask,
   backend,
-  backendTakes,
+  backendDoor,
   call,
   direct,
   elsewhere,
@@ -149,6 +149,8 @@ const CLAUDE_QUIET_MS = 20_000
  * is nothing more to wait for.
  */
 const SETTLE_MS = 300
+/** How far ahead of It's clock this machine's may be and still be let in: a proof made further ahead is refused at `/bridge/token`. */
+const CLOCK_SLACK_MS = 60_000
 const SERVE_MOST = 8 // how many clicks one answer to an add-on carries
 const SERVE_BYTES = 200_000 // and how large that answer may be: an add-on reads no more than a quarter of a megabyte
 const WAITER_BYTES = 700_000 // and how large the clicks in one answer to a waiter may be together: `it wait` reads no more than a megabyte
@@ -725,13 +727,27 @@ async function connecting(say: (line: string) => void): Promise<void> {
     return undefined
   }
   /**
+   * How far It's clock is ahead of this machine's, as it last said at its door (`askHeld`), where
+   * it has said: It reads a conversation's clicks from a moment by its own clock, the one it
+   * receives each click by, and a moment by this machine's would leave out what came just after
+   * it on a machine whose clock is fast.
+   */
+  let itAhead: number | undefined
+  /**
+   * The time by It's clock, as near as this machine can tell, and never later than It's own: It
+   * said its time before its answer came, and where it has not said, this machine's clock may be
+   * as much as `CLOCK_SLACK_MS` ahead of it.
+   */
+  const itsNow = () => Date.now() + (itAhead ?? -CLOCK_SLACK_MS)
+  /**
    * Since when the clicks of each id of a conversation held in a thread of T3 Code have been
-   * asked for whatever its add-on and Auto-wake say (`heldInThreads`), by this machine's clock,
-   * which It holds to within a minute of its own: from when this connector, or one before it,
-   * first counted the id among those it asks for that way, once It took that. It asks for
-   * that way only what was done after, and a click that waited for the conversation from before,
-   * as one that had waited weeks when It was brought up to date, stays where it is, for `it
-   * wait` and the site: it does not start a turn in the thread by itself. Counted while the
+   * asked for whatever its add-on and Auto-wake say (`heldInThreads`), by It's clock (`itsNow`),
+   * so that a click It received after that is never taken for one from before on a machine whose
+   * clock is off: from when this connector, or one before it, first counted the id among those it
+   * asks for that way, once It took that. It asks for that way only what was done after, and a
+   * click that waited for the conversation from before, as one that had waited weeks when It was
+   * brought up to date, stays where it is, for `it wait` and the site: it does not start a turn
+   * in the thread by itself. Counted while the
    * conversation is here too, so that a click it was offered while it listened is still asked
    * for once its add-on has gone quiet. Kept across a restart, and kept to the ids that are
    * noted: one that is noted again is counted afresh. A note that cannot be read or written
@@ -746,7 +762,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   /** Counts these ids from now where they are not counted yet, forgets the ones no conversation that is noted has any more, and writes that down where it changed. */
   const countAsked = (ids: Iterable<string>, noted: ReadonlySet<string>) => {
-    const now = Date.now()
+    const now = itsNow()
     let changed = false
     for (const k of ids)
       if (!t3Asked.has(k)) {
@@ -3372,11 +3388,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * none of those conversations is asked for: their clicks wait as they did, and none made
    * before is offered. Asked as the connector starts, every minute, and again where what is
    * watched fails while they are asked for. Where the door cannot be asked it stays as it was.
+   * It says its time there too (`itAhead`).
    */
   let heldTaken = false
   const askHeld = async () => {
-    const takes = await backendTakes(TAKES.inboxHeld)
-    if (takes === undefined || takes === heldTaken || closing || over) return
+    const door = await backendDoor()
+    if (door === undefined || closing || over) return
+    // Taken as the answer came, after It said its time, so that what is worked out from it is never later than It's own
+    if (door.now !== undefined) itAhead = door.now - Date.now()
+    const takes = door.takes.includes(TAKES.inboxHeld)
+    if (takes === heldTaken) return
     heldTaken = takes
     watch()
   }

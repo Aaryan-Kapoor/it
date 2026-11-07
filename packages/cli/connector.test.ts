@@ -9,7 +9,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { MARK, PROTOCOL_VERSION, WAKE_BACK_MS } from '@it/protocol'
+import { MARK, PROTOCOL_VERSION, TAKES, WAKE_BACK_MS } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS } from './src/addons.generated'
@@ -50,6 +50,8 @@ const stand = vi.hoisted(() => ({
   profiles: true,
   /** What It says at its door of whether it takes every later form of a call this program knows: undefined where the door cannot be asked. */
   takes: true as boolean | undefined,
+  /** How far this machine's clock is ahead of It's, which says its time at its door. */
+  fast: 0,
   /**
    * T3 Code as a test has it, which is not running unless the test says so: the thread each
    * conversation is held in, by the conversation's id; every time it was asked which thread
@@ -173,7 +175,7 @@ vi.mock('./src/lib', async (original) => {
       void saving.finally(() => stand.saving.delete(saving)).catch(() => {})
       return saving
     },
-    backendTakes: async () => stand.takes,
+    backendDoor: async () => (stand.takes === undefined ? undefined : { takes: stand.takes ? Object.values(TAKES) : [], now: Date.now() - stand.fast }),
     live: () => ({
       onUpdate: (fn: any, args: unknown, heard: (value: any) => void) => {
         stand.watching.set(getFunctionName(fn), (value) => {
@@ -324,6 +326,7 @@ afterEach(async () => {
   stand.unknown.clear()
   stand.profiles = true
   stand.takes = true
+  stand.fast = 0
   stand.answer = null
   // A lookup a test left unanswered is answered, so that nothing of it outlasts the test
   for (const asked of stand.t3.asked) asked.answer(null)
@@ -4859,6 +4862,23 @@ describe.skipIf(process.platform === 'win32')('a conversation held in a thread o
     expect(stand.t3.sent).toHaveLength(1)
     // The old one is neither claimed, handed over nor set aside: it waits where it is, for `it wait` and the site
     for (const name of ['delivery:claim', 'delivery:handedOff', 'delivery:park', 'delivery:release']) expect(called(name)).not.toContain('click-1')
+    noOtherWay()
+  })
+
+  test('on a machine whose clock is ahead of It’s, since when is counted by It’s clock, so that a click It received just after is not taken for one from before', async () => {
+    withT3Code()
+    // This machine's clock is 45 seconds fast
+    stand.fast = 45_000
+    const began = Date.now() - stand.fast
+    await start('socket', BOTH, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    const since = asked().held![0]!.since
+    expect(since).toBeGreaterThanOrEqual(began)
+    expect(since).toBeLessThanOrEqual(Date.now() - stand.fast)
+    // Received by It a second after the connector began to ask for the conversation this way
+    await pause(1000)
+    backend({ ...click(1), at: Date.now() - stand.fast })
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent[0]!.text).toContain('[action click-1]')
     noOtherWay()
   })
 
