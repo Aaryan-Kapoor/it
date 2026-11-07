@@ -6,7 +6,7 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import { type MutationCtx, mutation, query } from './_generated/server'
-import { record } from './actions'
+import { madeAt, record } from './actions'
 import { artifactBySlug, type Browser, displayByKey, findDisplay, requireBrowser, requireMachine } from './lib/authz'
 import { counted } from './lib/counted'
 import { fail } from './lib/errors'
@@ -153,8 +153,16 @@ export const dismiss = mutation({
 
 /** Pressing a notification's button records an ordinary click on its page: one inbox, one set of rules. */
 export const answer = mutation({
-  args: { id: v.id('notifications'), action: v.string(), displayKey: v.string(), expectedSession: v.optional(v.string()) },
-  handler: async (ctx, { id, action, displayKey, expectedSession }) => {
+  args: {
+    id: v.id('notifications'),
+    action: v.string(),
+    displayKey: v.string(),
+    expectedSession: v.optional(v.string()),
+    /** When the person pressed it, by the backend's clock as the browser knew it, and how far out that can be (see `madeAt` in actions.ts). */
+    madeAt: v.optional(v.number()),
+    madeWithin: v.optional(v.number()),
+  },
+  handler: async (ctx, { id, action, displayKey, expectedSession, madeAt: said, madeWithin }) => {
     const c = await requireBrowser(ctx, expectedSession)
     const { user } = c
     const n = await ctx.db.get(id)
@@ -182,6 +190,7 @@ export const answer = mutation({
       contentVersion: n.contentVersion,
       baseStateRevision: n.stateRevision,
       ...(n.title === undefined ? {} : { title: n.title }),
+      madeAt: madeAt(c, said, madeWithin),
     })
     await ctx.db.patch(id, { answeredAt: Date.now(), answer: action, seenAt: n.seenAt ?? Date.now() })
     // Counted: that a notification was answered, from what kind of screen, and whether it had been pushed to a closed one

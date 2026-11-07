@@ -386,7 +386,18 @@ export default defineSchema({
     title: v.string(),
     /** Whether the person was at the page when it was sent. The site says; the page cannot. */
     attended: v.optional(v.boolean()),
+    /** When It received it, by its own clock. What is kept and for how long, and whether a repeat is the same click, go by this. */
     createdAt: v.number(),
+    /**
+     * The latest the person can have made it, as near as can be told, and never later than
+     * `createdAt`: a click saved in a browser while It could not be reached arrives later than it
+     * was made. The browser's word for when is only as good as its idea of the backend's clock,
+     * and this is the latest moment that idea leaves open, so that what goes by it judges a click
+     * older only where it certainly is. Its age, whether a stop came after it, and whether it may
+     * reopen a conversation go by this. Clicks from before It kept this have none, and go by
+     * `createdAt`.
+     */
+    madeAt: v.optional(v.number()),
     /** Where the click is on its way to the agent. */
     delivery: v.union(v.literal('pending'), v.literal('leased'), v.literal('handed_off')),
     /**
@@ -418,8 +429,14 @@ export default defineSchema({
   })
     .index('by_artifact_client', ['artifactId', 'clientActionId'])
     .index('by_route', ['machineId', 'delivery', 'harness', 'sessionId', 'createdAt'])
-    .index('by_harness', ['machineId', 'delivery', 'harness', 'createdAt'])
-    .index('by_attended_route', ['machineId', 'delivery', 'harness', 'sessionId', 'attended', 'createdAt'])
+    // By when each click was made: a harness's queue and a closed conversation are offered
+    // clicks by these, so that what was made before Auto-wake's cutoff, or before a stop, is
+    // outside what is read however late it arrived, and never takes a later click's place
+    .index('by_route_made', ['machineId', 'delivery', 'harness', 'sessionId', 'madeAt'])
+    .index('by_harness_made', ['machineId', 'delivery', 'harness', 'madeAt'])
+    .index('by_attended_route_made', ['machineId', 'delivery', 'harness', 'sessionId', 'attended', 'madeAt'])
+    // Waiting clicks from before It kept when a click was made, which are given one a batch at a time
+    .index('by_delivery_made', ['delivery', 'madeAt'])
     .index('by_artifact', ['artifactId', 'createdAt'])
     .index('by_artifact_delivery', ['artifactId', 'delivery', 'createdAt'])
     .index('by_user_delivery', ['userId', 'delivery', 'createdAt'])

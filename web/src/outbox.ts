@@ -13,11 +13,11 @@
 // whole: only then is the click itself sent, naming them. Each of those steps may be done
 // again, after a dropped connection, a closed tab or from another tab, and carries on from
 // where it stopped, so the click is still sent once.
-import { type ActionEnvelope, fileName, fileType, LIMITS, MESSAGE, sizeSaid, UPLOAD } from '@it/protocol'
+import { type ActionEnvelope, fileName, fileType, LIMITS, MESSAGE, sizeSaid, TAKES, UPLOAD } from '@it/protocol'
 import type { ConvexReactClient } from 'convex/react'
 import { ConvexError } from 'convex/values'
 import { kept as kept_ } from './kept'
-import { api, displayKey, type Id, letGoOf, note, refusal, timesLetGo, whenLetGo } from './lib'
+import { api, backendNow, backendTakes, displayKey, type Id, letGoOf, note, refusal, timesLetGo, whenLetGo } from './lib'
 import { discardPending, hasPending, holdPending, watchPending } from './pending'
 import { sha256Of } from './sha256'
 
@@ -59,7 +59,18 @@ interface Entry {
   envelope: Sent
   /** The files it carries beside its data, whose bytes are kept apart under its name. */
   files?: Carried[]
+  /** When it was kept here, by this browser's clock, which is what says when it is too old to send. */
   at: number
+  /**
+   * When the person did it, by the backend's clock as this browser had learned it then. It is
+   * sent with the click, so that one that waited here while It could not be reached is taken as
+   * done when it was, and not when it arrived: a stop pressed in between goes for it, and it
+   * reopens a conversation only where it was done recently enough. Where the backend's clock
+   * was not known yet it is not kept, and the click is taken as done when it arrives.
+   */
+  madeAt?: number
+  /** How many milliseconds `madeAt` can be out either way, as the browser's idea of the backend's clock could be then. */
+  madeWithin?: number
   /** Its page has finished with it and left it here to be sent when it can be. */
   left?: boolean
   /**
@@ -69,6 +80,9 @@ interface Entry {
    */
   held?: number
 }
+
+/** When the person did something, by the backend's clock as this browser told it then, and how far out that can be. Nothing where it could not tell. */
+type Made = ReturnType<typeof backendNow>
 
 const keyOf = (user: string, artifactId: string, id: string) => `${PREFIX}${user}.${artifactId}.${id}`
 // What was given up of a person's clicks and typed messages while no page of theirs was there to
@@ -303,12 +317,17 @@ async function send(convex: ConvexReactClient, e: Entry, key: string, waiting: (
   const mine = () => stillPairedFor(e.user, began)
   if (!mine()) throw new Error('This browser’s pairing has ended.')
   const expected = e.session ? { expectedSession: e.session } : {}
+  // When the person did it, sent every time it is sent: a click sent again is the same click,
+  // and It keeps what it was first told. Only to a backend that has said it takes it, which an
+  // older one refuses the whole call for; kept here all the same, for when it does
+  const made = e.madeAt === undefined || e.madeWithin === undefined || !backendTakes(TAKES.madeAt) ? {} : { madeAt: e.madeAt, madeWithin: e.madeWithin }
   if (e.operation?.kind === 'answer')
     return convex.mutation(api.notifications.answer, {
       id: e.operation.id as Id<'notifications'>,
       action: e.operation.action,
       displayKey: e.operation.display,
       ...expected,
+      ...made,
     })
   // A legacy entry is never given a fresh deadline. The backend can confirm its old receipt,
   // but cannot safely treat an unknown old identity as a new click.
@@ -343,6 +362,7 @@ async function send(convex: ConvexReactClient, e: Entry, key: string, waiting: (
       envelope: e.envelope,
       attachment,
       ...replay,
+      ...made,
     })
   }
   return e.operation?.kind === 'message'
@@ -352,8 +372,9 @@ async function send(convex: ConvexReactClient, e: Entry, key: string, waiting: (
         clientActionId: e.envelope.clientActionId,
         text: e.operation.text,
         ...replay,
+        ...made,
       })
-    : convex.mutation(api.actions.submit, { artifactId: e.artifactId as Id<'artifacts'>, displayKey: displayKey(), envelope: e.envelope, ...replay })
+    : convex.mutation(api.actions.submit, { artifactId: e.artifactId as Id<'artifacts'>, displayKey: displayKey(), envelope: e.envelope, ...replay, ...made })
 }
 
 /**
@@ -649,6 +670,7 @@ export function abandonOutbox(user: string): void {
   changed()
 }
 export function message(convex: ConvexReactClient, user: string, artifactId: string, clientActionId: string, text: string) {
+  const made = backendNow()
   if (!text.trim() || text.length > LIMITS.messageText) return Promise.reject(new Error(`A message is 1 to ${LIMITS.messageText} characters.`))
   return sendOperation(
     convex,
@@ -656,9 +678,11 @@ export function message(convex: ConvexReactClient, user: string, artifactId: str
     artifactId,
     { v: 1, clientActionId, name: MESSAGE, payload: JSON.stringify({ text }), contentVersion: 0 },
     { kind: 'message', text },
+    made,
   )
 }
 export function answerNotification(convex: ConvexReactClient, id: string, action: string) {
+  const made = backendNow()
   if (!pairedFor) return Promise.reject(new Error('This browser’s pairing has ended.'))
   return sendOperation(
     convex,
@@ -666,15 +690,16 @@ export function answerNotification(convex: ConvexReactClient, id: string, action
     `notification-${id}`,
     { v: 1, clientActionId: `notification:${id}`, name: action, payload: '{}', contentVersion: 0 },
     { kind: 'answer', id, action, display: displayKey() },
+    made,
   )
 }
-async function sendOperation(convex: ConvexReactClient, user: string, artifactId: string, envelope: Sent, operation: Operation) {
+async function sendOperation(convex: ConvexReactClient, user: string, artifactId: string, envelope: Sent, operation: Operation, made: Made) {
   const key = keyOf(user, artifactId, envelope.clientActionId)
   const pairing = thisPairing()
   const release = holdPending(user)
   const work = () => {
     if (!stillPairedFor(user, pairing)) throw new Error('This browser’s pairing has ended.')
-    return sendNow(convex, user, artifactId, envelope, key, () => true, undefined, operation)
+    return sendNow(convex, user, artifactId, envelope, key, made, () => true, undefined, operation)
   }
   try {
     return await (locks()?.request(key, {}, work) ?? work())
@@ -731,6 +756,9 @@ export async function submit(
   /** The files the page sent with it, in the order its data numbers them. */
   files: Blob[] = [],
 ): Promise<{ actionId: string }> {
+  // When the person did it, taken before anything that takes time: reading its files, or
+  // waiting for another tab, may take long enough for a Stop to be pressed meanwhile
+  const made = backendNow()
   if (new TextEncoder().encode(envelope.payload).length > LIMITS.actionPayloadBytes)
     throw new Error(`An action carries at most ${LIMITS.actionPayloadBytes / 1024} KB.`)
   // The same rules the site's frame keeps, kept here too: this is what decides what is stored
@@ -749,7 +777,7 @@ export async function submit(
   const release = holdPending(user)
   const work = () => {
     if (!stillPairedFor(user, pairing)) throw new Error('This browser’s pairing has ended.')
-    return sendNow(convex, user, artifactId, envelope, key, stillThere, judge, undefined, files)
+    return sendNow(convex, user, artifactId, envelope, key, made, stillThere, judge, undefined, files)
   }
   // Waiting for another tab's lock remains pending work under the original pairing.
   try {
@@ -765,6 +793,8 @@ async function sendNow(
   artifactId: string,
   envelope: Sent,
   key: string,
+  /** When the person did it, taken as they did. A click kept already keeps when it was first done. */
+  made: Made,
   stillThere: () => boolean,
   judge?: () => Promise<boolean>,
   operation?: Operation,
@@ -783,8 +813,18 @@ async function sendNow(
   const letGo = () => timesLetGo(user) !== began || entry.session !== session
   if (sending.has(key)) throw new Error('This request is already waiting for confirmation.')
   const prior = entries(user).find(([saved]) => saved === key)?.[1]
-  // Reusing an identity also reuses its payload and deadline, including legacy entries.
-  const entry: Entry = prior ?? { user, artifactId, envelope, operation, format: 2, session, at: Date.now(), ...(what ? { files: what } : {}) }
+  // Reusing an identity also reuses its payload, deadline and when it was done, including legacy entries.
+  const entry: Entry = prior ?? {
+    user,
+    artifactId,
+    envelope,
+    operation,
+    format: 2,
+    session,
+    at: Date.now(),
+    ...(made === undefined ? {} : { madeAt: made.at, madeWithin: made.within }),
+    ...(what ? { files: what } : {}),
+  }
   entry.held = Date.now() + HOLD_MS
   // Too many already unsent means something is wrong, and one more would only push an older one
   // out. One page may hold only part of what the browser keeps, so it cannot crowd out the rest.

@@ -17,10 +17,12 @@ import {
   isLeaving,
   keepSignOutToken,
   learnClock,
+  learnTakes,
   navigate,
   noteRegistered,
   pairedSinceRegistering,
   presentPendingSignOut,
+  readClocks,
   refusal,
   reloadWhenThere,
   signOutConfirmed,
@@ -313,7 +315,8 @@ function Paired() {
     let live = true
     if (isLeaving() || !session) return
     void tries
-    const register = () => convex.mutation(api.displays.register, { key: displayKey(), userAgent: navigator.userAgent })
+    // Its answer names what the backend takes, which is known then before anything kept here is sent
+    const register = () => convex.mutation(api.displays.register, { key: displayKey(), userAgent: navigator.userAgent }).then((r) => learnTakes(r.takes))
     ;(async () => {
       try {
         await register()
@@ -482,13 +485,23 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
       // Trouble the backend had for a moment is got past by asking once more, a second or two
       // on, and is then written nowhere. Left to the next beat, a minute later, the display
       // would be taken for closed and the backend's clock go unlearned for that minute
+      // Each asking is timed by itself, by a clock that only goes forward and by the browser's
+      // own, so that how far out the backend's clock as learned from it can be is known, and an
+      // answer that came back late, or was taken in late, or was slept through, is not taken for
+      // one that says the time now
       askTwice(
         convex,
-        (calls) => calls.mutation(api.displays.heartbeat, { key }),
+        (calls) => {
+          const sent = readClocks()
+          return calls.mutation(api.displays.heartbeat, { key }).then((r) => ({ ...r, trip: { sent, back: readClocks() } }))
+        },
         () => live,
       )
         .then(
-          (r) => learnClock(r.now),
+          (r) => {
+            learnClock(r.now, r.trip)
+            learnTakes(r.takes)
+          },
           () => {},
         )
         .finally(() => {

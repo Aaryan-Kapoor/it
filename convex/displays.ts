@@ -1,4 +1,4 @@
-import { AUDIENCE, LIMITS, parseJson, QUOTA } from '@it/protocol'
+import { AUDIENCE, LIMITS, parseJson, QUOTA, TAKES } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -53,6 +53,8 @@ function generatedName(ua: string): string {
               : 'this device'
   return `${browser} on ${system}`
 }
+/** The later forms of a call this backend takes, which the site sends only where they are named here. */
+const takes = Object.values(TAKES)
 const view = (d: Doc<'displays'>) => ({
   id: d._id,
   name: d.name ?? d.generatedName,
@@ -87,7 +89,7 @@ export const register = mutation({
         // just as the browser asking to end every other session does.
         for (const id of previous.slice(0, -PREVIOUS_PAIRINGS)) await endSession(ctx, id, 'forgotten', session._id)
       }
-      return view(existing)
+      return { ...view(existing), takes }
     }
     // A display the person told It to forget does not come back under the key it had. The key
     // is refused, and the browser starts again as a new display once it has been paired again.
@@ -154,7 +156,7 @@ export const register = mutation({
       screen: screenOf(userAgent),
     })
     log('display.registered', { userId: user._id, displayId: id, sessionId: session._id, role: session.role })
-    return view((await ctx.db.get(id))!)
+    return { ...view((await ctx.db.get(id))!), takes }
   },
 })
 
@@ -266,7 +268,8 @@ export const rename = mutation({
 
 /**
  * Presence. Written at most once a minute, however often it is called. Answers with the
- * backend's clock, so a display whose own clock is wrong can still tell what is recent.
+ * backend's clock, so a display whose own clock is wrong can still tell what is recent, and with
+ * the later forms of a call this backend takes.
  */
 export const heartbeat = mutation({
   args: { key: v.string() },
@@ -274,7 +277,7 @@ export const heartbeat = mutation({
     const d = await displayByKey(ctx, await requireBrowser(ctx), key)
     const now = Date.now()
     if (now - d.lastSeenAt > 55_000) await ctx.db.patch(d._id, { lastSeenAt: now })
-    return { now }
+    return { now, takes }
   },
 })
 

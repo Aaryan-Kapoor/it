@@ -9,7 +9,17 @@ export const PROTOCOL_VERSION = 1
  * does not take without saying why: a command that is refused such a call asks there, and where
  * the form is not named it asks in the way that backend takes.
  */
-export const TAKES = { conversationsWaiting: 'delivery.allWaiting.for' } as const
+export const TAKES = {
+  conversationsWaiting: 'delivery.allWaiting.for',
+  /**
+   * When a click was made (`madeAt`, with how far out it can be, `madeWithin`), on a page's
+   * click, a typed message and a notification's answer. The backend names it to the site too,
+   * in the answers to a display's registering and heartbeat: a site newer than the functions
+   * It runs, as when loading new ones failed, sends it only where it is named, since a backend
+   * that does not take it refuses the whole call.
+   */
+  madeAt: 'actions.madeAt',
+} as const
 
 /** The word the interface uses for a thing shown on a display. It is said in one place so that it can be changed in one. */
 export const NOUN = { one: 'page', many: 'pages', One: 'Page', Many: 'Pages' } as const
@@ -689,6 +699,84 @@ export function behindMark(texts: readonly string[]): string {
 }
 export function describeClicks(clicks: readonly Click[], max = CLICK_TEXT_BYTES): string {
   return clicks.map((c) => describeClick(c, max)).join('\n')
+}
+
+// ---------- the backend's clock, as a browser tells it ----------
+
+/**
+ * The longest a heartbeat may take, from being asked to its answer being taken in, for a
+ * browser to learn the backend's clock from it. The backend read its clock somewhere in that
+ * time, so half of it is how far out the browser's idea of the clock can be. An answer that took
+ * longer, as one does that waited while its tab was held back from running, is not learned from.
+ * Where the browser's two clocks do not agree on how long it took, how far they disagree counts
+ * against this twice over, as it is added to how far out the clock can be on either side.
+ */
+export const CLOCK_TRIP_MS = 2000
+
+/** A moment by both of a browser's clocks, the one that only goes forward (`mono`) and its own (`wall`), read together. */
+export type ClockReading = { mono: number; wall: number }
+
+/**
+ * The backend's clock as a browser tells it, with how far out that can be. It is learned from
+ * a heartbeat's answer, which says the backend's time, and from how long that heartbeat took by
+ * a clock that only goes forward (`mono`, the browser's `performance.now()`): the backend's time
+ * is taken as at the middle of the round trip, within half of it. The browser's own clock times
+ * the trip too, since the monotonic one stands still while the machine sleeps in some browsers,
+ * and a heartbeat slept through would otherwise look as short as one that was not, and be taken
+ * as closer than it is. From then on it is carried
+ * forward by that same clock, so that the browser's own clock (`wall`, its `Date.now()`) being
+ * set back or on does not move it. Where the two clocks have gone apart since, as they do when
+ * one of them is changed or when the monotonic one stood still while the machine slept, nobody
+ * can say which is right, and how far they went apart is added to how far out the time can be.
+ * So is a tenth of a millisecond for each second since, for the clocks' own drift. A time said
+ * with how far out it can be is only ever made more uncertain, never more certain than it is.
+ */
+export class BackendClock {
+  private anchor?: { server: number; mono: number; wall: number; within: number }
+  // Said as fields and set in the constructor, not as parameter properties, because this package
+  // is loaded by Node's own TypeScript support when the site is built, which only strips types
+  private readonly mono: () => number
+  private readonly wall: () => number
+  constructor(mono: () => number, wall: () => number) {
+    this.mono = mono
+    this.wall = wall
+  }
+
+  /** Both clocks now, as a heartbeat is asked and as its answer comes back. */
+  read(): ClockReading {
+    return { mono: this.mono(), wall: this.wall() }
+  }
+
+  /**
+   * Learns from a heartbeat's answer that said `server`, asked at `sent` and taken in at `back`.
+   * How far the two clocks disagree on how long it took, as they do when the machine slept
+   * meanwhile or the browser's own clock was changed, is added to how far out the time can be,
+   * so that a heartbeat slept through is too uncertain to be learned from. An answer that took
+   * too long is not learned from, and nor is one less certain than what is known already. The
+   * time is carried on from when the answer came back, by both clocks as they were read then,
+   * so that the machine sleeping before it is learned shows as the clocks going apart. Says
+   * whether it learned.
+   */
+  learn(server: number, sent: ClockReading, back: ClockReading): boolean {
+    const trip = back.mono - sent.mono
+    const apart = Math.abs(back.wall - sent.wall - trip)
+    if (!Number.isFinite(server) || !Number.isFinite(trip) || !Number.isFinite(apart) || trip < 0 || trip + 2 * apart > CLOCK_TRIP_MS) return false
+    const within = trip / 2 + apart
+    const known = this.now()
+    if (known && known.within < within) return false
+    this.anchor = { server: server + trip / 2, mono: back.mono, wall: back.wall, within }
+    return true
+  }
+
+  /** The backend's time now, in whole milliseconds, and how far out it can be either way. Nothing where it has not been learned. */
+  now(): { at: number; within: number } | undefined {
+    const a = this.anchor
+    if (!a) return undefined
+    const passed = this.mono() - a.mono
+    const told = a.server + passed
+    const at = Math.floor(told)
+    return { at, within: Math.ceil(told - at + a.within + Math.abs(this.wall() - a.wall - passed) + Math.abs(passed) / 10_000) }
+  }
 }
 
 // ---------- between the page's runtime and the site ----------
