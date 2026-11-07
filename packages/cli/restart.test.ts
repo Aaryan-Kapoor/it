@@ -8,13 +8,15 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { afterUpgrade } from './src/connector'
+import { Problem } from './src/lib'
 import { launcherAsWritten, launcherStartsAgain, RESTART_CODE, restartWay, windowsLauncher } from './src/service'
 
-const stand = vi.hoisted(() => ({ connectorEnds: 0 }))
+const stand = vi.hoisted(() => ({ connectorEnds: 0, refused: undefined as Error | undefined }))
 // The connector the service runs, as a stand-in that stops at once with the code a test gives it
 vi.mock('./src/connector', async (original) => ({
   ...(await original<typeof import('./src/connector')>()),
   runConnector: async () => {
+    if (stand.refused) throw stand.refused
     process.exitCode = stand.connectorEnds
   },
 }))
@@ -215,3 +217,77 @@ process.exit(n === 1 ? ${RESTART_CODE} : 0)
   }, 90_000)
 })
 
+// #353: a second service for the same folder, started by a launcher of its own, found the
+// connector held and waited beside the first for as long as it ran
+describe('a service that is the connector alone and finds another connector holding the folder', () => {
+  const before = process.env.IT_HOME
+  let folder = ''
+  afterEach(() => {
+    stand.refused = undefined
+    process.exitCode = undefined
+    if (before === undefined) delete process.env.IT_HOME
+    else process.env.IT_HOME = before
+    if (folder) rmSync(folder, { recursive: true, force: true })
+  })
+  const held = async () => {
+    folder = mkdtempSync(path.join(os.tmpdir(), 'it-restart-held-'))
+    process.env.IT_HOME = folder
+    writeFileSync(path.join(folder, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'the laptop', token: 'x' }))
+    stand.refused = new Problem('A connector is already running for this folder.', 'already_running')
+    return (await import('./src/serve')).connector
+  }
+
+  test('under the Windows launcher, stops and ends well, so that the launcher’s loop ends instead of starting it again', async () => {
+    const connector = await held()
+    const lines: string[] = []
+    expect(
+      await connector(
+        (line) => void lines.push(line),
+        new AbortController().signal,
+        () => 'SIGTERM',
+        true,
+      ),
+    ).toBe(false)
+    expect(lines).toEqual([
+      'connector: could not start: already_running',
+      'another It already runs the connector for this folder, so this service stops, and its launcher with it',
+    ])
+    expect(process.exitCode).toBeUndefined()
+  })
+
+  test('anywhere else, waits for it as before, until it is asked to stop', async () => {
+    const connector = await held()
+    const lines: string[] = []
+    const asked = new AbortController()
+    const ending = connector(
+      (line) => void lines.push(line),
+      asked.signal,
+      () => 'SIGTERM',
+      false,
+    )
+    await new Promise((r) => setTimeout(r, 200))
+    expect(lines).toEqual(['connector: could not start: already_running'])
+    asked.abort()
+    expect(await ending).toBe(false)
+  })
+
+  test('another failure to start is waited out under the launcher too: only a connector that is already running ends the service', async () => {
+    const connector = await held()
+    stand.refused = new Problem('It could not be reached.', 'offline')
+    const asked = new AbortController()
+    const ending = connector(
+      () => {},
+      asked.signal,
+      () => 'SIGTERM',
+      true,
+    )
+    let over = false
+    void ending.then(() => {
+      over = true
+    })
+    await new Promise((r) => setTimeout(r, 200))
+    expect(over).toBe(false)
+    asked.abort()
+    expect(await ending).toBe(false)
+  })
+})

@@ -67,7 +67,8 @@ export async function serve(say: (line: string) => void = (line) => void process
         if (!config) {
           machine()
           ready()
-          return connector(say, asked.signal, told)
+          // On Windows, where the launcher would otherwise keep a second service waiting beside the one that runs (#353)
+          return connector(say, asked.signal, told, process.platform === 'win32' && supervised())
         }
         return here(config, say, asked, told, ready)
       },
@@ -645,8 +646,16 @@ async function keptDoor(
  * connector starts when it has been. A machine that It has stopped knowing has no use for a
  * connector until it is enrolled anew, and the site goes on being served meanwhile. Whether
  * the connector ended as a failure, which it does to make way for a newer It.
+ *
+ * `endIfHeld` is for a service that is the connector alone and was started by the Windows
+ * launcher. Where another connector already holds this folder, it stops, and ends well so that
+ * its launcher's loop ends too. Waiting instead, it said so every half minute for as long as
+ * it ran, and took the connector with whatever program it was started as once the other
+ * stopped, which after an update from the site is the program the update moved aside. A
+ * service that also serves the site goes on serving it, and on Linux and macOS, where nothing
+ * would start a service that ended well again, it goes on waiting as before.
  */
-async function connector(say: (line: string) => void, asked: AbortSignal, heard: () => NodeJS.Signals): Promise<boolean> {
+export async function connector(say: (line: string) => void, asked: AbortSignal, heard: () => NodeJS.Signals, endIfHeld = false): Promise<boolean> {
   const pause = (ms: number) =>
     new Promise<void>((resolve) => {
       const done = () => {
@@ -690,6 +699,10 @@ async function connector(say: (line: string) => void, asked: AbortSignal, heard:
       }
     } catch (err) {
       say(`connector: could not start: ${why(err)}`)
+      if (endIfHeld && err instanceof Problem && err.code === 'already_running') {
+        say('another It already runs the connector for this folder, so this service stops, and its launcher with it')
+        return false
+      }
       await pause(30_000)
       continue
     } finally {
