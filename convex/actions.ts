@@ -335,8 +335,11 @@ export const forArtifact = query({
       // When it was handed over, or dropped by a stop: the site tells by it which stop dropped what
       handedAt: x.handedAt ?? null,
       // Set aside by its machine after tries that came to nothing: no machine offers it to an
-      // agent again until its conversation is heard from, though it is still waiting all the same
-      parked: x.delivery !== 'handed_off' && x.parkedBy !== undefined,
+      // agent again until its conversation is heard from, though it is still waiting all the same.
+      // One that an agent waiting on the page has taken meanwhile is being delivered, and is not
+      // said to be set aside, though it is still marked as such, to be set aside again if that
+      // delivery comes to nothing
+      parked: x.delivery === 'pending' && x.parkedBy !== undefined,
       // When it goes if no agent has taken it by then, as the hourly sweep of what nobody took
       // counts it: from when It got it. What was handed over goes a week after, and is done with
       expiresAt: x.delivery === 'handed_off' ? null : x.createdAt + RETENTION.pendingActionDays * 86_400_000,

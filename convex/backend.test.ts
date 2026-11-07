@@ -6410,6 +6410,13 @@ describe('cases at the edges', () => {
     expect(await seen()).toMatchObject({ parked: false })
     expect(await laptop.as.mutation(api.delivery.park, { id: actionId, for: thread })).toBe(true)
     expect(await seen()).toMatchObject({ delivery: 'pending', parked: true })
+    // An agent waiting on the page takes it meanwhile: it is being delivered, and is not said to be
+    // set aside, though it stays marked so, in case that delivery comes to nothing
+    await t.run((ctx) => ctx.db.patch(actionId, { delivery: 'leased' }))
+    expect(await seen()).toMatchObject({ delivery: 'leased', parked: false })
+    expect((await t.run((ctx) => ctx.db.get(actionId)))?.parkedBy).toBe(laptop.id)
+    await t.run((ctx) => ctx.db.patch(actionId, { delivery: 'pending' }))
+    expect(await seen()).toMatchObject({ delivery: 'pending', parked: true })
     // The conversation is heard from again, and its machine asks for what was set aside for it
     expect(await laptop.as.mutation(api.delivery.unpark, { for: thread })).toBe(1)
     expect(await seen()).toMatchObject({ delivery: 'pending', parked: false })
