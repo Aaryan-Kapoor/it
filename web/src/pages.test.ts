@@ -19,6 +19,7 @@ let recent: {
   handedAt?: number | null
   parked?: boolean
   expiresAt?: number | null
+  madeAt?: number
 }[]
 /** The person's machines as the backend gives them to the owner's browser, with the agent apps chosen on each. */
 let machines: { id: string; name?: string; wanted: string[]; harnesses?: { id: string; addon: string; version?: string }[] }[] | undefined
@@ -577,7 +578,14 @@ describe('what the page’s bar says of the last thing the person did', () => {
     recent = [{ at: NOW - 2 * 24 * 60 * 60_000, delivery: 'pending', outcome: null }]
     await shown()
     expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
-    expect(said()).toBe('Sent more than a day ago. Claude Code gets it when its conversation is next open')
+    expect(said()).toBe('Done more than a day ago. Claude Code gets it when its conversation is next open')
+    await act(async () => root.unmount())
+    host.remove()
+    // A click that waited in a browser for two days and has only just reached It is judged by when it was done, as Auto-wake judges it
+    recent = [{ at: NOW - 60_000, madeAt: NOW - 2 * 24 * 60 * 60_000, delivery: 'pending', outcome: null }]
+    await shown()
+    expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
+    expect(said()).toBe('Done more than a day ago. Claude Code gets it when its conversation is next open')
     Object.assign(PAGE, { wake: null, pending: 0 })
   })
 

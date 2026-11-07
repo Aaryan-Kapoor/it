@@ -963,7 +963,7 @@ function ActionStatus({
   const busy = last.delivery === 'leased'
   // A conversation is reopened only for what was done in the last day. For anything older the
   // switch would change nothing, so it is not offered, and the bar says what would bring it
-  const tooOld = now - last.at > WAKE_BACK_MS
+  const tooOld = now - (last.madeAt ?? last.at) > WAKE_BACK_MS
   const addonBlocked = addonRuntime?.state === 'incompatible' || addonRuntime?.idle === false
   if (slow && !busy && addonBlocked)
     return (
@@ -1080,7 +1080,7 @@ function ActionStatus({
         {slow && busy
           ? `Sent. ${agent ?? 'Your agent'} is busy, and gets it when it is free${waiting > 1 ? ` (${waiting})` : ''}`
           : slow && tooOld
-            ? `Sent more than a day ago${waiting > 1 ? ` (${waiting})` : ''}. ${agent ?? 'Your agent'} gets it when its conversation is next open`
+            ? `Done more than a day ago${waiting > 1 ? ` (${waiting})` : ''}. ${agent ?? 'Your agent'} gets it when its conversation is next open`
             : slow && !wakes?.on
               ? `Sent. ${agent ?? 'Your agent'} is not listening${waiting > 1 ? ` (${waiting})` : ''}. Open its conversation and check the add-on under Machines`
               : `Sent. Waiting for your agent${waiting > 1 ? ` (${waiting})` : ''}`}

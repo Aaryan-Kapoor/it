@@ -439,6 +439,9 @@ export const forArtifact = query({
       id: x._id,
       name: x.name,
       at: x.createdAt,
+      // When the person made it, which for a click that waited in a browser is before It got it.
+      // What Auto-wake would reopen a conversation for is judged by this (see `madeOf`)
+      madeAt: madeOf(x),
       delivery: x.delivery,
       route: x.route ?? null,
       outcome: x.outcome ?? null,
