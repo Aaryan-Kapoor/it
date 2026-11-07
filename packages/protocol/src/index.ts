@@ -691,6 +691,62 @@ export function describeClicks(clicks: readonly Click[], max = CLICK_TEXT_BYTES)
   return clicks.map((c) => describeClick(c, max)).join('\n')
 }
 
+// ---------- the backend's clock, as a browser tells it ----------
+
+/**
+ * The longest a heartbeat may take, from being asked to its answer being taken in, for a
+ * browser to learn the backend's clock from it. The backend read its clock somewhere in that
+ * time, so half of it is how far out the browser's idea of the clock can be. An answer that took
+ * longer, as one does that waited while its tab was held back from running, is not learned from.
+ */
+export const CLOCK_TRIP_MS = 2000
+
+/**
+ * The backend's clock as a browser tells it, with how far out that can be. It is learned from
+ * a heartbeat's answer, which says the backend's time, and from how long that heartbeat took by
+ * a clock that only goes forward (`mono`, the browser's `performance.now()`): the backend's time
+ * is taken as at the middle of the round trip, within half of it. From then on it is carried
+ * forward by that same clock, so that the browser's own clock (`wall`, its `Date.now()`) being
+ * set back or on does not move it. Where the two clocks have gone apart since, as they do when
+ * one of them is changed or when the monotonic one stood still while the machine slept, nobody
+ * can say which is right, and how far they went apart is added to how far out the time can be.
+ * So is a tenth of a millisecond for each second since, for the clocks' own drift. A time said
+ * with how far out it can be is only ever made more uncertain, never more certain than it is.
+ */
+export class BackendClock {
+  private anchor?: { server: number; mono: number; wall: number; within: number }
+  constructor(
+    private readonly mono: () => number,
+    private readonly wall: () => number,
+  ) {}
+
+  /**
+   * Learns from a heartbeat's answer that said `server`, asked at `sent` and taken in at `back`
+   * by the monotonic clock. An answer that took too long is not learned from, and nor is one
+   * less certain than what is known already. Says whether it learned.
+   */
+  learn(server: number, sent: number, back: number): boolean {
+    const trip = back - sent
+    if (!Number.isFinite(server) || !Number.isFinite(trip) || trip < 0 || trip > CLOCK_TRIP_MS) return false
+    const within = trip / 2
+    const known = this.now()
+    if (known && known.within < within) return false
+    const mono = this.mono()
+    this.anchor = { server: server + (mono - (sent + back) / 2), mono, wall: this.wall(), within }
+    return true
+  }
+
+  /** The backend's time now, in whole milliseconds, and how far out it can be either way. Nothing where it has not been learned. */
+  now(): { at: number; within: number } | undefined {
+    const a = this.anchor
+    if (!a) return undefined
+    const passed = this.mono() - a.mono
+    const told = a.server + passed
+    const at = Math.floor(told)
+    return { at, within: Math.ceil(told - at + a.within + Math.abs(this.wall() - a.wall - passed) + Math.abs(passed) / 10_000) }
+  }
+}
+
 // ---------- between the page's runtime and the site ----------
 
 /**

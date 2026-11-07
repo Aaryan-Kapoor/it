@@ -443,13 +443,19 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
       // Trouble the backend had for a moment is got past by asking once more, a second or two
       // on, and is then written nowhere. Left to the next beat, a minute later, the display
       // would be taken for closed and the backend's clock go unlearned for that minute
+      // Each asking is timed by itself, by a clock that only goes forward, so that how far out
+      // the backend's clock as learned from it can be is known, and an answer that came back
+      // late, or was taken in late, is not taken for one that says the time now
       askTwice(
         convex,
-        (calls) => calls.mutation(api.displays.heartbeat, { key }),
+        (calls) => {
+          const sent = performance.now()
+          return calls.mutation(api.displays.heartbeat, { key }).then((r) => ({ now: r.now, trip: { sent, back: performance.now() } }))
+        },
         () => live,
       )
         .then(
-          (r) => learnClock(r.now),
+          (r) => learnClock(r.now, r.trip),
           () => {},
         )
         .finally(() => {

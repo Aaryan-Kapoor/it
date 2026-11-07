@@ -1,5 +1,6 @@
 // Small things the whole site shares: the backend's functions, this browser's display key,
 // where a page is shown, the address bar, and how a refusal from the backend reads.
+import { BackendClock } from '@it/protocol'
 import { ConvexError } from 'convex/values'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { hasPending, watchPending } from './pending'
@@ -337,14 +338,33 @@ export async function presentPendingSignOut(): Promise<void> {
 // backend's clock: this browser's own may be minutes out. The difference is learned from each
 // heartbeat's answer.
 let skew = 0
-let learned = false
-export const learnClock = (serverNow: number) => {
-  skew = Date.now() - serverNow
-  learned = true
+// The same clock, told closely enough to say when a click was made, and how closely: from
+// heartbeats whose round trip was timed, and carried forward by a clock that only goes forward
+const clock = new BackendClock(
+  () => performance.now(),
+  () => Date.now(),
+)
+/**
+ * Learns the backend's clock from a heartbeat's answer. `trip` is when the heartbeat was asked
+ * and when its answer was taken in, by `performance.now()`: the answer is then taken as said
+ * halfway between the two. Without it, the answer is taken as said now, which is close enough
+ * for what is shown as recent and is never used to say when a click was made.
+ */
+export const learnClock = (serverNow: number, trip?: { sent: number; back: number }) => {
+  if (!trip) {
+    skew = Date.now() - serverNow
+    return
+  }
+  skew = Date.now() - (serverNow + (performance.now() - (trip.sent + trip.back) / 2))
+  clock.learn(serverNow, trip.sent, trip.back)
 }
 export const serverNow = () => Date.now() - skew
-/** The backend's clock, where this browser has learned it since the site was opened, and otherwise nothing: its own may be minutes out. */
-export const backendNow = (): number | undefined => (learned ? serverNow() : undefined)
+/**
+ * The backend's time now, and how many milliseconds it can be out either way, where this browser
+ * has learned it closely enough since the site was opened. Otherwise nothing: its own clock may be
+ * minutes out, and a heartbeat that took long says little.
+ */
+export const backendNow = (): { at: number; within: number } | undefined => clock.now()
 
 // ---------- the address bar ----------
 

@@ -69,6 +69,8 @@ interface Entry {
    * was not known yet it is not kept, and the click is taken as done when it arrives.
    */
   madeAt?: number
+  /** How many milliseconds `madeAt` can be out either way, as the browser's idea of the backend's clock could be then. */
+  madeWithin?: number
   /** Its page has finished with it and left it here to be sent when it can be. */
   left?: boolean
   /**
@@ -212,7 +214,7 @@ async function send(convex: ConvexReactClient, e: Entry, key: string, waiting: (
   const expected = e.session ? { expectedSession: e.session } : {}
   // When the person did it, sent every time it is sent: a click sent again is the same click,
   // and It keeps what it was first told
-  const made = e.madeAt === undefined ? {} : { madeAt: e.madeAt }
+  const made = e.madeAt === undefined || e.madeWithin === undefined ? {} : { madeAt: e.madeAt, madeWithin: e.madeWithin }
   if (e.operation?.kind === 'answer')
     return convex.mutation(api.notifications.answer, {
       id: e.operation.id as Id<'notifications'>,
@@ -684,7 +686,7 @@ async function sendNow(
   if (sending.has(key)) throw new Error('This request is already waiting for confirmation.')
   const prior = entries(user).find(([saved]) => saved === key)?.[1]
   // Reusing an identity also reuses its payload and deadline, including legacy entries.
-  const madeAt = backendNow()
+  const made = backendNow()
   const entry: Entry = prior ?? {
     user,
     artifactId,
@@ -693,7 +695,7 @@ async function sendNow(
     format: 2,
     session,
     at: Date.now(),
-    ...(madeAt === undefined ? {} : { madeAt }),
+    ...(made === undefined ? {} : { madeAt: made.at, madeWithin: made.within }),
     ...(what ? { files: what } : {}),
   }
   entry.held = Date.now() + HOLD_MS

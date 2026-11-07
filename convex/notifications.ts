@@ -158,10 +158,11 @@ export const answer = mutation({
     action: v.string(),
     displayKey: v.string(),
     expectedSession: v.optional(v.string()),
-    /** When the person pressed it, by the backend's clock as the browser knew it (see `madeAt` in actions.ts). */
+    /** When the person pressed it, by the backend's clock as the browser knew it, and how far out that can be (see `madeAt` in actions.ts). */
     madeAt: v.optional(v.number()),
+    madeWithin: v.optional(v.number()),
   },
-  handler: async (ctx, { id, action, displayKey, expectedSession, madeAt: said }) => {
+  handler: async (ctx, { id, action, displayKey, expectedSession, madeAt: said, madeWithin }) => {
     const c = await requireBrowser(ctx, expectedSession)
     const { user } = c
     const n = await ctx.db.get(id)
@@ -189,7 +190,7 @@ export const answer = mutation({
       contentVersion: n.contentVersion,
       baseStateRevision: n.stateRevision,
       ...(n.title === undefined ? {} : { title: n.title }),
-      madeAt: madeAt(c, said),
+      madeAt: madeAt(c, said, madeWithin),
     })
     await ctx.db.patch(id, { answeredAt: Date.now(), answer: action, seenAt: n.seenAt ?? Date.now() })
     // Counted: that a notification was answered, from what kind of screen, and whether it had been pushed to a closed one

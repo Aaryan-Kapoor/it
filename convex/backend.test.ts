@@ -2,7 +2,7 @@
 // The backend's own tests: who may do what, and that what is stored is what was meant.
 // They run against an in-memory copy of the backend; the service that runs it, with its content
 // service, is stood in for by a stub that records what the backend asked of it.
-import { ALIVE, describeClick, LEASE_MS, LIMITS, PUBLICATION, QUOTA, STORAGE, STORE_KEY } from '@it/protocol'
+import { ALIVE, BackendClock, describeClick, LEASE_MS, LIMITS, PUBLICATION, QUOTA, STORAGE, STORE_KEY } from '@it/protocol'
 import { type FunctionReturnType, getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
@@ -5433,13 +5433,13 @@ describe('when a click was made', () => {
     const paired = (await t.run((ctx) => ctx.db.query('sessions').collect()))[0]!.createdAt
     // The browser has been paired for a while
     await vi.advanceTimersByTimeAsync(2 * DAY)
-    // A click the browser sends, saying when it was made where it says so
-    const click = (id: string, madeAt?: number) =>
+    // A click the browser sends, saying when it was made, and how far out that can be, where it says so
+    const click = (id: string, madeAt?: number, madeWithin = 0) =>
       alice.browser.mutation(api.actions.submit, {
         artifactId: p.artifactId,
         displayKey: displayKey('alice'),
         envelope: envelope(id),
-        ...(madeAt === undefined ? {} : { madeAt }),
+        ...(madeAt === undefined ? {} : { madeAt, madeWithin }),
       })
     const row = async (id: string) => (await t.run((ctx) => ctx.db.get(id as Id<'actions'>)))!
     const offered = async () => (await inbox(m, [], ['claude-code'])).map((c) => c.id)
@@ -5465,6 +5465,7 @@ describe('when a click was made', () => {
       clientActionId: 'typed-saved-0001',
       text: 'And this too',
       madeAt: before + 20,
+      madeWithin: 0,
     })
     late.push(typed.actionId!)
     for (const id of late) expect(await row(id)).toMatchObject({ madeAt: expect.any(Number), delivery: 'handed_off', route: 'stopped', outcome: 'failed' })
@@ -5485,11 +5486,49 @@ describe('when a click was made', () => {
     const { alice, m, p, click, offered } = await setup()
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
     await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    // The browser's own clock, an hour ahead of the backend's, and its clock that only goes forward, as the site tells the backend's time by them
+    let mono = 1000
+    let wall = Date.now() + HOUR
+    const pass = async (ms: number) => {
+      mono += ms
+      wall += ms
+      await vi.advanceTimersByTimeAsync(ms)
+    }
+    const browser = new BackendClock(
+      () => mono,
+      () => wall,
+    )
+    // A heartbeat, whose answer is on its way back for `back` and is taken in `late` after that
+    const beat = async (back = 100, late = 0) => {
+      const sent = mono
+      await pass(100)
+      const { now } = await alice.browser.mutation(api.displays.heartbeat, { key: displayKey('alice') })
+      await pass(back + late)
+      return browser.learn(now, sent, mono)
+    }
+    const told = () => browser.now()!
+    expect(await beat()).toBe(true)
+    expect(told()).toEqual({ at: Date.now(), within: 100 })
+    // A later heartbeat's answer is taken in twenty seconds late, as a tab held back from running takes it: it says the time as it was then, and is not learned from
+    await pass(30_000)
+    expect(await beat(100, 20_000)).toBe(false)
+    expect(Math.abs(told().at - Date.now())).toBeLessThanOrEqual(told().within)
     await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
-    await vi.advanceTimersByTimeAsync(1000)
-    // The browser's idea of the backend's clock is two seconds behind: the click arrives at once, and is taken as made when it arrived
-    const { actionId } = await click('click-after-stop', Date.now() - 2000)
-    expect(await offered()).toEqual([actionId])
+    await pass(1000)
+    const late = await click('click-after-late-beat', told().at, told().within)
+    expect(await offered()).toEqual([late.actionId])
+    // The browser's own clock is set back an hour, which leaves the time it tells alone, and only says it can be that far out
+    wall -= HOUR
+    expect(Math.abs(told().at - Date.now())).toBeLessThanOrEqual(1000)
+    expect(told().within).toBeGreaterThanOrEqual(HOUR)
+    await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+    await pass(1000)
+    const set = await click('click-after-set-back', told().at, told().within)
+    // A time two seconds behind, said to be within two seconds, is a click that may have been made after Stop
+    await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+    await pass(1000)
+    const behind = await click('click-two-behind-01', Date.now() - 2000, 2000)
+    expect(await offered()).toEqual([late.actionId, set.actionId, behind.actionId])
   })
 
   test('Auto-wake’s cutoff goes by when a click was made, and what was made before it never hides what was made since', async () => {
@@ -5582,6 +5621,7 @@ describe('when a click was made', () => {
       action: 'yes',
       displayKey: displayKey('kitchen'),
       madeAt: pressed,
+      madeWithin: 0,
     })
     expect(await row(actionId!)).toMatchObject({ madeAt: pressed, route: 'stopped' })
   })

@@ -28,15 +28,19 @@ const MADE_BACK_MS = 8 * DAY
 const PROMPT_MS = 10_000
 
 /**
- * When a click a browser sent was made. The browser says when, by the backend's clock as it
- * last learned it, and that is believed only within bounds: never later than now, which no
- * clock can make a click newer than, never before the browser was paired, which is the
+ * The latest a click a browser sent can have been made, which is what It judges it by. The
+ * browser says when it was made, by the backend's clock as it had learned it, and how many
+ * milliseconds that can be out either way (`within`), and It takes the latest moment that leaves
+ * open: a click is dropped by a Stop, or left out of Auto-wake's reopening, only where it was
+ * certainly made before. That moment is believed only within bounds: never later than now, which
+ * no clock can make a click newer than, never before the browser was paired, which is the
  * earliest it could have been made there, and never longer ago than a browser keeps a click.
- * Said by nobody, as by a site from before browsers said it, it is now.
+ * Said by nobody, as by a site from before browsers said it, or said without how far out it can
+ * be, it is now.
  */
-export function madeAt(c: Browser, said: number | undefined, now = Date.now()): number {
-  if (said === undefined || !Number.isFinite(said)) return now
-  const made = Math.min(now, Math.max(said, c.session.createdAt, now - MADE_BACK_MS))
+export function madeAt(c: Browser, said: number | undefined, within: number | undefined, now = Date.now()): number {
+  if (said === undefined || within === undefined || !Number.isFinite(said) || !Number.isFinite(within) || within < 0) return now
+  const made = Math.min(now, Math.max(said + within, c.session.createdAt, now - MADE_BACK_MS))
   return now - made < PROMPT_MS ? now : made
 }
 /** When a click was made, as far as It knows: one kept before It kept that was made when it arrived. */
@@ -282,8 +286,9 @@ export const submit = mutation({
     displayKey: v.string(),
     replayUntil: v.optional(v.number()),
     expectedSession: v.optional(v.string()),
-    /** When the person made it, by the backend's clock as the browser knew it (see `madeAt`). */
+    /** When the person made it, by the backend's clock as the browser knew it, and how far out that can be (see `madeAt`). */
     madeAt: v.optional(v.number()),
+    madeWithin: v.optional(v.number()),
     /** The files the action carries beside its data, taken for it beforehand (files.ts). */
     attachment: v.optional(v.id('attachments')),
     envelope: v.object({
@@ -297,7 +302,7 @@ export const submit = mutation({
       attended: v.optional(v.boolean()),
     }),
   },
-  handler: async (ctx, { artifactId, displayKey, envelope, replayUntil, expectedSession, attachment, madeAt: said }) => {
+  handler: async (ctx, { artifactId, displayKey, envelope, replayUntil, expectedSession, attachment, madeAt: said, madeWithin }) => {
     const c = await requireBrowser(ctx, expectedSession)
     if (envelope.v !== PROTOCOL_VERSION) fail('invalid', 'This page speaks a version of the protocol the site does not.')
     const artifact = await ownArtifact(ctx, c.user._id, artifactId)
@@ -310,7 +315,7 @@ export const submit = mutation({
       ...envelope,
       ...(display ? { displayId: display._id } : {}),
       ...(attachment ? { attachment } : {}),
-      madeAt: madeAt(c, said),
+      madeAt: madeAt(c, said, madeWithin),
     })
     // Counted: that something was sent from a page, and from what kind of screen. Never its name or what it carried
     if (!duplicate) await counted(ctx, 'answer.sent', { screen: display?.screen ?? 'computer', from: 'page' })
@@ -332,10 +337,11 @@ export const message = mutation({
     text: v.string(),
     replayUntil: v.optional(v.number()),
     expectedSession: v.optional(v.string()),
-    /** When the person sent it, by the backend's clock as the browser knew it (see `madeAt`). */
+    /** When the person sent it, by the backend's clock as the browser knew it, and how far out that can be (see `madeAt`). */
     madeAt: v.optional(v.number()),
+    madeWithin: v.optional(v.number()),
   },
-  handler: async (ctx, { artifactId, displayKey, clientActionId, text, replayUntil, expectedSession, madeAt: said }) => {
+  handler: async (ctx, { artifactId, displayKey, clientActionId, text, replayUntil, expectedSession, madeAt: said, madeWithin }) => {
     const c = await requireBrowser(ctx, expectedSession)
     const artifact = await ownArtifact(ctx, c.user._id, artifactId)
     const typed = text.trim()
@@ -353,7 +359,7 @@ export const message = mutation({
       // Typed on the site itself, where no page's script can type
       attended: true,
       typed: true,
-      madeAt: madeAt(c, said),
+      madeAt: madeAt(c, said, madeWithin),
     })
     // Counted: that something was typed to an agent above a page, and from what kind of screen. Never the words
     if (!duplicate) await counted(ctx, 'answer.sent', { screen: display?.screen ?? 'computer', from: 'message' })

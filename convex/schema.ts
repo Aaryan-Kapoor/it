@@ -389,10 +389,13 @@ export default defineSchema({
     /** When It received it, by its own clock. What is kept and for how long, and whether a repeat is the same click, go by this. */
     createdAt: v.number(),
     /**
-     * When the person made it, as near as can be told, and never later than `createdAt`: a click
-     * saved in a browser while It could not be reached arrives later than it was made. Its age,
-     * whether a stop came after it, and whether it may reopen a conversation go by this. Clicks
-     * from before It kept this have none, and go by `createdAt`.
+     * The latest the person can have made it, as near as can be told, and never later than
+     * `createdAt`: a click saved in a browser while It could not be reached arrives later than it
+     * was made. The browser's word for when is only as good as its idea of the backend's clock,
+     * and this is the latest moment that idea leaves open, so that what goes by it judges a click
+     * older only where it certainly is. Its age, whether a stop came after it, and whether it may
+     * reopen a conversation go by this. Clicks from before It kept this have none, and go by
+     * `createdAt`.
      */
     madeAt: v.optional(v.number()),
     /** Where the click is on its way to the agent. */
