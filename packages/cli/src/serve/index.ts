@@ -9,7 +9,7 @@ import { runConnector } from '../connector'
 import { eraseDeliveryRecovery } from '../delivery-recovery'
 import { elsewhere, inHome, type Machine, machine, machineFile, notSetUp, Problem, readJson, why, writePrivate } from '../lib'
 import { conversationsFile } from '../publish'
-import { startsByItself, stopFile, supervised } from '../service'
+import { launcherLooked, RESTART_CODE, startsByItself, stopFile, supervised } from '../service'
 import { ageBand, begin, countBand, counting, failureOf, record, recordNoted, sinceBegun } from '../usage'
 import { asAdmin, type Backend, endOf, removeCopies, startBackend } from './backend'
 import { backendFolder, noteNetwork, readConfig, type ServiceConfig } from './config'
@@ -50,6 +50,7 @@ export async function serve(say: (line: string) => void = (line) => void process
   const keep = () => void keepItsFolder(say, said).catch(() => {})
   keep()
   const keeping = setInterval(keep, KEEP_MS)
+  launcherLooked(say)
   let failed = false
   // Counting begins with the service where no command has begun it, so that a service that
   // cannot start is counted as one that could not
@@ -81,8 +82,11 @@ export async function serve(say: (line: string) => void = (line) => void process
     process.off('SIGINT', hear)
     process.off('SIGTERM', hear)
   }
-  say('service stopped')
-  if (failed) process.exitCode = 1
+  // Stopped to be started again as the program an upgrade has just put in its place, it ends
+  // with the code that says so to its launcher, and with no other failure's
+  const restart = process.exitCode === RESTART_CODE
+  say(restart ? 'service stopped, to be started again as the newer It' : 'service stopped')
+  if (failed) process.exitCode = restart ? RESTART_CODE : 1
 }
 
 /** The ports the door listens on: the site's, and the pages'. */
@@ -688,7 +692,8 @@ async function connector(say: (line: string) => void, asked: AbortSignal, heard:
       running = false
       clearInterval(again)
     }
-    if (process.exitCode === 1) return true
+    // Stopped to make way for a newer It, or to be started again as one, which its launcher does
+    if (process.exitCode === 1 || process.exitCode === RESTART_CODE) return true
     ended = id
   }
   return false

@@ -278,6 +278,72 @@ export function reports<T extends object, U extends object>(platform: string, fu
 }
 /** Whether It refused a call for what it said, as an It that is older than this program refuses a field it does not know, and not because the call did not reach it or was not answered. */
 export const refusedFor = (err: unknown): boolean => ['error', 'invalid'].includes((err as { code?: string })?.code ?? '')
+
+/** What a machine says of an upgrade asked for on the site, as `machines.upgrading` takes it. */
+type UpgradeSaid = { state: 'working' | 'restarting' | 'failed' | 'installed'; why?: string; version?: string }
+/** How long the site is given to hear that this machine is starting again, before it starts again unheard. */
+const RESTART_TOLD_MS = 10_000
+
+/**
+ * What follows an upgrade asked for on the site, once the new program is in place: It comes
+ * back as that program in the way `restartWay` gives.
+ *
+ * On Linux and macOS the new program's own setup is started, which writes the service's
+ * definition as its version has it and starts the service again, ending this connector on its
+ * way. Where this connector is still here to see that setup end badly, or not start at all,
+ * the person is told: left unsaid, the site went on saying it was updating.
+ *
+ * On Windows the site is told that the machine is starting again, and the service is stopped
+ * with RESTART_CODE: the backend, the door and this connector, as when it is asked to stop. Its
+ * launcher starts the new program five seconds later in the same task, and nothing is started
+ * outside it. The launcher itself is left as it is (see `restartWay`). The new program reports
+ * its version as it starts, which ends the upgrade on the site. One that never does is said on
+ * the site to have not been heard from once an upgrade has had as long as one takes.
+ *
+ * Where a person started It by hand, the program is in place and they are told to start It again.
+ */
+export async function afterUpgrade(
+  done: { to: string; program: string },
+  way: 'setup' | 'launcher' | 'by hand',
+  {
+    say,
+    tell,
+    stop,
+    run = spawn,
+  }: {
+    say: (line: string) => void
+    tell: (said: UpgradeSaid) => Promise<unknown>
+    stop: (code: number) => void
+    run?: typeof spawn
+  },
+): Promise<void> {
+  if (way === 'setup') {
+    say(`upgrade: starting again as ${done.to}`)
+    const setup = run(done.program, ['setup'], { detached: true, stdio: 'ignore', env: process.env, windowsHide: true })
+    const failed = (how: string) => {
+      say(`upgrade: ${done.to} is in place, and It could not be started again as it (${how})`)
+      void tell({ state: 'failed', why: `It ${done.to} is in place on that machine, and It could not be started again as it. Run \`it setup\` there.` }).catch(
+        () => {},
+      )
+    }
+    setup.once('error', () => failed('its setup could not be run'))
+    setup.once('exit', (code, signal) => {
+      if (code !== 0) failed(`its setup ended with ${signal ?? code ?? 'an error'}`)
+    })
+    setup.unref()
+    return
+  }
+  if (way === 'launcher') {
+    say(`upgrade: starting again as ${done.to}`)
+    // An It from before this state was named refuses it, and is told that the machine is still at work on it
+    const told = tell({ state: 'restarting', version: done.to }).catch(() => tell({ state: 'working', version: done.to }))
+    await Promise.race([told.catch(() => {}), new Promise((r) => setTimeout(r, RESTART_TOLD_MS).unref())])
+    stop(service.RESTART_CODE)
+    return
+  }
+  say(`upgrade: ${done.to} is in place, and runs once It is started again`)
+  await tell({ state: 'installed', version: done.to }).catch(() => {})
+}
 /**
  * What setup tells It it chose, in the same way: the fullest says what system the machine runs,
  * and on Windows that it reopens closed conversations there, and the plainest says the choice alone.
@@ -3650,9 +3716,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     await report().catch(() => {})
   }
   // An upgrade the person asked for on the site: the newest program is fetched, checked and put
-  // in place of this one, as `it upgrade` does it. Where the system starts It by itself, the new
-  // program then writes the service's definition as its version has it and starts the service
-  // again, which ends this one. Where a person started It by hand, they are told to do so again.
+  // in place of this one, as `it upgrade` does it, and It is then started again as it where the
+  // system starts It by itself. See `afterUpgrade`.
   let upgradingNow = false
   const upgradeAsked = async (version: string | undefined) => {
     if (upgradingNow) return
@@ -3670,31 +3735,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (!done) return void (await call('mutation', api.machines.upgrading, { state: 'none' }).catch(() => {}))
       // Counted: from which version to which, asked for on the site
       record('upgrade.done', { from: three(done.from), to: three(done.to), by: 'site', result: 'ok' })
-      // Not on Windows: there this connector runs inside the very task that starting again
-      // stops, and what it starts may be ended with that task before it has started anything.
-      // The new program is in place, and the person is told what starts It as it.
-      if (service.restartsAfterUpgrade()) {
-        say(`upgrade: starting again as ${done.to}`)
-        // It is started again by the new program's own setup, which ends this connector on its
-        // way. Where this connector is still here to see that setup end badly, or not start at
-        // all, the person is told: left unsaid, the site went on saying it was updating.
-        const setup = spawn(done.program, ['setup'], { detached: true, stdio: 'ignore', env: process.env, windowsHide: true })
-        const failed = (how: string) => {
-          say(`upgrade: ${done.to} is in place, and It could not be started again as it (${how})`)
-          void call('mutation', api.machines.upgrading, {
-            state: 'failed',
-            why: `It ${done.to} is in place on that machine, and It could not be started again as it. Run \`it setup\` there.`,
-          }).catch(() => {})
-        }
-        setup.once('error', () => failed('its setup could not be run'))
-        setup.once('exit', (code, signal) => {
-          if (code !== 0) failed(`its setup ended with ${signal ?? code ?? 'an error'}`)
-        })
-        setup.unref()
-      } else {
-        say(`upgrade: ${done.to} is in place, and runs once It is started again`)
-        await call('mutation', api.machines.upgrading, { state: 'installed', version: done.to }).catch(() => {})
-      }
+      await afterUpgrade(done, service.restartWay(), {
+        say,
+        tell: (args) => call('mutation', api.machines.upgrading, args),
+        stop: (code) => stopping?.(code),
+      })
     } catch (err) {
       say(`upgrade: ${why(err)}`)
       // With what to do about it, where the problem says: on the site that is all the person is told

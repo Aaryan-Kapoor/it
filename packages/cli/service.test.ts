@@ -18,7 +18,7 @@ import {
   kept,
   launchdPlist,
   PS_QUIET,
-  restartsAfterUpgrade,
+  restartWay,
   runningFor,
   stopFile,
   supervised,
@@ -96,11 +96,11 @@ describe('what a registered service was given, read back from its definition', (
         const argv = process.argv
         try {
           process.argv = [process.execPath, 'it.mjs', 'serve']
-          expect(restartsAfterUpgrade()).toBe(false)
+          expect(restartWay()).toBe('by hand')
           process.argv.push('--supervised')
-          expect(restartsAfterUpgrade()).toBe(true)
+          expect(restartWay()).toBe('setup')
           rmSync(registered)
-          expect(restartsAfterUpgrade()).toBe(false)
+          expect(restartWay()).toBe('by hand')
           writeFileSync(registered, systemdUnit(command(), saved))
         } finally {
           process.argv = argv
