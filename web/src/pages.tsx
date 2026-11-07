@@ -401,6 +401,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
               agent={agentName(page.agent)}
               stoppedAt={page.stoppedAt}
               wakeFailed={page.wakeFailed}
+              waitingFor={(page as { waitingFor?: { at: number; why: string } | null }).waitingFor ?? null}
               answeredAt={page.answeredAt ?? null}
             />
           )}
@@ -792,6 +793,7 @@ function ActionStatus({
   agent,
   stoppedAt,
   wakeFailed,
+  waitingFor,
   answeredAt,
 }: {
   artifactId: Id<'artifacts'>
@@ -817,6 +819,11 @@ function ActionStatus({
   stoppedAt: number | null
   /** Why the page's conversation could not be reopened, the last time that was tried and did not work. */
   wakeFailed: { at: number; why: string } | null
+  /**
+   * What its machine said the page's clicks wait for that reopening the conversation cannot give,
+   * and when: the app that holds the conversation, or knowing that the conversation is closed.
+   */
+  waitingFor: { at: number; why: string } | null
   /** When the page's agent last changed the page, by publishing it or writing its state. */
   answeredAt: number | null
 }) {
@@ -986,7 +993,11 @@ function ActionStatus({
         Sent. {addonRuntime?.detail}
       </span>
     )
-  const offer = mayWake && wakes && readiness?.state === 'connected' && !wakes.on && slow && !busy && !tooOld
+  // Its machine has said, of this click or a later one, that it waits for the app that holds the
+  // conversation, or for knowing that the conversation is closed. Waking it would change
+  // nothing there, so it is not offered, and the bar says what the click waits for instead
+  const waitsFor = waitingFor && waitingFor.at >= last.at && !(wakeFailed && wakeFailed.at > waitingFor.at) ? waitingFor.why : null
+  const offer = mayWake && wakes && readiness?.state === 'connected' && !wakes.on && slow && !busy && !tooOld && waitsFor === null
   // Its app is not connected on that machine. The machine hands nothing to such an app and
   // reopens no conversation of it, whatever Auto-wake is set to, so opening the conversation
   // brings nothing and neither would waking it: said as that, with where it is put right
@@ -1016,6 +1027,20 @@ function ActionStatus({
     return (
       <span className="status" data-tone="wait">
         {prefix + reason}
+      </span>
+    )
+  }
+  if (waitsFor !== null && slow && !busy) {
+    const count = waiting > 1 ? ` (${waiting})` : ''
+    return (
+      <span className="status" data-tone="wait">
+        {waitsFor === 't3-code'
+          ? `Sent${count}. Waiting for T3 Code, which holds its conversation in a thread: it goes to the thread once T3 Code is running and takes it`
+          : waitsFor === 'claude-desktop'
+            ? `Sent${count}. Waiting for Claude’s desktop app, which holds its conversation: it goes there once the app has the conversation open`
+            : waitsFor === 'host'
+              ? `Sent${count}. Waiting for the app that holds its conversation: it goes there once the conversation is open in that app`
+              : `Sent${count}. It can’t tell whether ${agent ?? 'your agent'}’s conversation is closed, so it waits until the conversation is open`}
       </span>
     )
   }

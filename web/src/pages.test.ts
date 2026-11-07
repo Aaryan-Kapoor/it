@@ -409,6 +409,32 @@ describe('what the page’s bar says of the last thing the person did', () => {
     Object.assign(PAGE, { pending: 0 })
   })
 
+  test('a click that waits for the app that holds its conversation, or for It to know that the conversation is closed, is said to, and waking it is not offered', async () => {
+    Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'claude-code', on: false }, pending: 1, agent: 'claude-code' })
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    const wakeOffered = () => [...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')
+    const cases: [string, string][] = [
+      ['t3-code', 'Sent. Waiting for T3 Code, which holds its conversation in a thread: it goes to the thread once T3 Code is running and takes it'],
+      ['claude-desktop', 'Sent. Waiting for Claude’s desktop app, which holds its conversation: it goes there once the app has the conversation open'],
+      ['host', 'Sent. Waiting for the app that holds its conversation: it goes there once the conversation is open in that app'],
+      ['unclear', 'Sent. It can’t tell whether Claude Code’s conversation is closed, so it waits until the conversation is open'],
+    ]
+    for (const [why, words] of cases) {
+      Object.assign(PAGE, { waitingFor: { at: NOW - 30_000, why } })
+      await shown()
+      expect(said()).toBe(words)
+      expect(wakeOffered()).toBe(false)
+      await act(async () => root.unmount())
+      host.remove()
+    }
+    // What was said of an earlier click says nothing of a later one, which is offered as before
+    Object.assign(PAGE, { waitingFor: { at: NOW - 90_000, why: 'claude-desktop' } })
+    await shown()
+    expect(said()).toBe('Sent. Claude Code is not listening. Open its conversation and check the add-on under Machines')
+    expect(wakeOffered()).toBe(true)
+    Object.assign(PAGE, { wake: null, pending: 0, waitingFor: null })
+  })
+
   test('to wake the agent is offered only for something done in the last day, which is what a conversation is reopened for', async () => {
     Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'claude-code', on: false }, pending: 1 })
     recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
