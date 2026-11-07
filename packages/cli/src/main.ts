@@ -100,7 +100,6 @@ import {
 import { joinedBefore, login, runsItsOwn } from './login'
 import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
 import { failure, foldRepeats, forPerson } from './output'
-import { profileOf } from './profiles'
 import { gather, noteConversation, publish } from './publish'
 import { alone, asAdmin, nothingLeft, standing, startBackend } from './serve/backend'
 import { noteNetwork, readConfig } from './serve/config'
@@ -3014,7 +3013,7 @@ async function main(argv: string[]): Promise<void> {
       )
       // Noted only once It has answered, since it is as the page is shown that it becomes this
       // conversation's: a page It refuses to show leaves no note of the conversation
-      if (mine) await noteConversation(mine, process.cwd(), profileOf(mine.harness), heldNow(mine))
+      if (mine) await noteConversation(mine, undefined, undefined, heldNow(mine))
       const took = result.took === true
       const shown = shownAs(result)
       const taken = `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.`

@@ -683,7 +683,7 @@ export async function publish(input: {
       // It refuses, after everything was erased say, leaves no note of a conversation behind.
       // None is needed sooner: a page becomes this conversation's, and its clicks come here,
       // only as it is finished.
-      if (session) await noteConversation(session, process.cwd(), profileOf(session.harness), heldNow(session))
+      if (session) await noteConversation(session, undefined, undefined, heldNow(session))
       // Counted: which agent app, new or not, how large and of how many files in a few bands, and
       // four things that are each so or not: whether it was given a state to start with, whether it
       // sends anything back, whether it carries a picture, and whether it was brought up at once.
