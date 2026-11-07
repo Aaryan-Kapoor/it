@@ -92,7 +92,7 @@ describe('a click with files', () => {
     vi.spyOn(performance, 'now').mockImplementation(() => mono)
     vi.spyOn(Date, 'now').mockImplementation(() => wall)
     try {
-      learnClock(wall, { sent: mono - 100, back: mono })
+      learnClock(wall, { sent: { mono: mono - 100, wall: wall - 100 }, back: { mono, wall } })
       learnTakes(['actions.madeAt'])
       const clicked = backendNow()!
       // A file that is read only when this test says, as a large one is read slowly

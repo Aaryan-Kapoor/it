@@ -22,6 +22,7 @@ import {
   noteRegistered,
   pairedSinceRegistering,
   presentPendingSignOut,
+  readClocks,
   refusal,
   reloadWhenThere,
   signOutConfirmed,
@@ -445,14 +446,15 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
       // Trouble the backend had for a moment is got past by asking once more, a second or two
       // on, and is then written nowhere. Left to the next beat, a minute later, the display
       // would be taken for closed and the backend's clock go unlearned for that minute
-      // Each asking is timed by itself, by a clock that only goes forward, so that how far out
-      // the backend's clock as learned from it can be is known, and an answer that came back
-      // late, or was taken in late, is not taken for one that says the time now
+      // Each asking is timed by itself, by a clock that only goes forward and by the browser's
+      // own, so that how far out the backend's clock as learned from it can be is known, and an
+      // answer that came back late, or was taken in late, or was slept through, is not taken for
+      // one that says the time now
       askTwice(
         convex,
         (calls) => {
-          const sent = performance.now()
-          return calls.mutation(api.displays.heartbeat, { key }).then((r) => ({ ...r, trip: { sent, back: performance.now() } }))
+          const sent = readClocks()
+          return calls.mutation(api.displays.heartbeat, { key }).then((r) => ({ ...r, trip: { sent, back: readClocks() } }))
         },
         () => live,
       )

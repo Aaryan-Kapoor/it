@@ -708,14 +708,22 @@ export function describeClicks(clicks: readonly Click[], max = CLICK_TEXT_BYTES)
  * browser to learn the backend's clock from it. The backend read its clock somewhere in that
  * time, so half of it is how far out the browser's idea of the clock can be. An answer that took
  * longer, as one does that waited while its tab was held back from running, is not learned from.
+ * Where the browser's two clocks do not agree on how long it took, how far they disagree counts
+ * against this twice over, as it is added to how far out the clock can be on either side.
  */
 export const CLOCK_TRIP_MS = 2000
+
+/** A moment by both of a browser's clocks, the one that only goes forward (`mono`) and its own (`wall`), read together. */
+export type ClockReading = { mono: number; wall: number }
 
 /**
  * The backend's clock as a browser tells it, with how far out that can be. It is learned from
  * a heartbeat's answer, which says the backend's time, and from how long that heartbeat took by
  * a clock that only goes forward (`mono`, the browser's `performance.now()`): the backend's time
- * is taken as at the middle of the round trip, within half of it. From then on it is carried
+ * is taken as at the middle of the round trip, within half of it. The browser's own clock times
+ * the trip too, since the monotonic one stands still while the machine sleeps in some browsers,
+ * and a heartbeat slept through would otherwise look as short as one that was not, and be taken
+ * as closer than it is. From then on it is carried
  * forward by that same clock, so that the browser's own clock (`wall`, its `Date.now()`) being
  * set back or on does not move it. Where the two clocks have gone apart since, as they do when
  * one of them is changed or when the monotonic one stood still while the machine slept, nobody
@@ -734,19 +742,29 @@ export class BackendClock {
     this.wall = wall
   }
 
+  /** Both clocks now, as a heartbeat is asked and as its answer comes back. */
+  read(): ClockReading {
+    return { mono: this.mono(), wall: this.wall() }
+  }
+
   /**
-   * Learns from a heartbeat's answer that said `server`, asked at `sent` and taken in at `back`
-   * by the monotonic clock. An answer that took too long is not learned from, and nor is one
-   * less certain than what is known already. Says whether it learned.
+   * Learns from a heartbeat's answer that said `server`, asked at `sent` and taken in at `back`.
+   * How far the two clocks disagree on how long it took, as they do when the machine slept
+   * meanwhile or the browser's own clock was changed, is added to how far out the time can be,
+   * so that a heartbeat slept through is too uncertain to be learned from. An answer that took
+   * too long is not learned from, and nor is one less certain than what is known already. The
+   * time is carried on from when the answer came back, by both clocks as they were read then,
+   * so that the machine sleeping before it is learned shows as the clocks going apart. Says
+   * whether it learned.
    */
-  learn(server: number, sent: number, back: number): boolean {
-    const trip = back - sent
-    if (!Number.isFinite(server) || !Number.isFinite(trip) || trip < 0 || trip > CLOCK_TRIP_MS) return false
-    const within = trip / 2
+  learn(server: number, sent: ClockReading, back: ClockReading): boolean {
+    const trip = back.mono - sent.mono
+    const apart = Math.abs(back.wall - sent.wall - trip)
+    if (!Number.isFinite(server) || !Number.isFinite(trip) || !Number.isFinite(apart) || trip < 0 || trip + 2 * apart > CLOCK_TRIP_MS) return false
+    const within = trip / 2 + apart
     const known = this.now()
     if (known && known.within < within) return false
-    const mono = this.mono()
-    this.anchor = { server: server + (mono - (sent + back) / 2), mono, wall: this.wall(), within }
+    this.anchor = { server: server + trip / 2, mono: back.mono, wall: back.wall, within }
     return true
   }
 

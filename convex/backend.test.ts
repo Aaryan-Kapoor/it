@@ -5500,11 +5500,11 @@ describe('when a click was made', () => {
     )
     // A heartbeat, whose answer is on its way back for `back` and is taken in `late` after that
     const beat = async (back = 100, late = 0) => {
-      const sent = mono
+      const sent = browser.read()
       await pass(100)
       const { now } = await alice.browser.mutation(api.displays.heartbeat, { key: displayKey('alice') })
       await pass(back + late)
-      return browser.learn(now, sent, mono)
+      return browser.learn(now, sent, browser.read())
     }
     const told = () => browser.now()!
     expect(await beat()).toBe(true)
@@ -5535,6 +5535,77 @@ describe('when a click was made', () => {
     await pass(1000)
     const behind = await click('click-two-behind-01', Date.now() - 2000, 2000)
     expect(await offered()).toEqual([late.actionId, set.actionId, behind.actionId])
+  })
+
+  test('a heartbeat the machine slept through is never taken for a short one, so a click made just after Stop is delivered', async () => {
+    const { alice, m, p, click, offered } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    // The browser's clocks, of which the one that only goes forward stands still while the machine sleeps, as it does in some browsers
+    let mono = 1000
+    let wall = Date.now()
+    const pass = async (ms: number) => {
+      mono += ms
+      wall += ms
+      await vi.advanceTimersByTimeAsync(ms)
+    }
+    const sleep = async (ms: number) => {
+      wall += ms
+      await vi.advanceTimersByTimeAsync(ms)
+    }
+    const browser = new BackendClock(
+      () => mono,
+      () => wall,
+    )
+    // A heartbeat whose answer is said fifty milliseconds after it is asked and comes back fifty after that, with whatever is done before it is said, before it comes back and before it is learned from
+    const beat = async (before = async () => {}, during = async () => {}, after = async () => {}) => {
+      const sent = browser.read()
+      await before()
+      await pass(50)
+      const { now } = await alice.browser.mutation(api.displays.heartbeat, { key: displayKey('alice') })
+      await during()
+      await pass(50)
+      const back = browser.read()
+      await after()
+      return browser.learn(now, sent, back)
+    }
+    // A click sent as the site sends it: with when it was made where the browser knows the backend's clock, and without it otherwise
+    const send = (id: string) => {
+      const made = browser.now()
+      return click(id, made?.at, made?.within)
+    }
+    const stopped = async () => {
+      await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+      await pass(100)
+    }
+    // With nothing learned before, a heartbeat slept through, before the backend said its time or after, is not learned from
+    expect(await beat(() => sleep(20_000))).toBe(false)
+    expect(await beat(undefined, () => sleep(20_000))).toBe(false)
+    expect(browser.now()).toBeUndefined()
+    // So a click made a tenth of a second after Stop is judged by when it arrives, and delivered
+    await stopped()
+    const first = (await send('click-slept-unknown')).actionId
+    expect(await offered()).toEqual([first])
+    // A heartbeat that was not slept through is learned from
+    expect(await beat()).toBe(true)
+    expect(browser.now()).toEqual({ at: Date.now(), within: 50 })
+    // A later one slept through after the backend said its time is not taken over it, and what was known is said to be as far out as the sleep
+    expect(await beat(undefined, () => sleep(20_000))).toBe(false)
+    expect(Math.abs(browser.now()!.at - Date.now())).toBeLessThanOrEqual(browser.now()!.within)
+    expect(browser.now()!.within).toBeGreaterThanOrEqual(20_000)
+    await stopped()
+    const second = (await send('click-slept-known')).actionId
+    expect(await offered()).toEqual([first, second])
+    // A heartbeat not slept through is learned from in its place
+    expect(await beat()).toBe(true)
+    expect(browser.now()).toEqual({ at: Date.now(), within: 50 })
+    // One that came back before the machine slept, and is learned from only after it woke, is learned from as it was when it came back, and said to be as far out as the sleep since
+    expect(await beat(undefined, undefined, () => sleep(20_000))).toBe(true)
+    expect(Math.abs(browser.now()!.at - Date.now())).toBeLessThanOrEqual(browser.now()!.within)
+    expect(browser.now()!.within).toBeGreaterThanOrEqual(20_000)
+    await stopped()
+    const third = await send('click-slept-learning')
+    expect(await offered()).toEqual([first, second, third.actionId])
   })
 
   test('a click is dropped by a Stop only where it was certainly made before it, and one that may have been made after is delivered', async () => {

@@ -1,6 +1,6 @@
 // Small things the whole site shares: the backend's functions, this browser's display key,
 // where a page is shown, the address bar, and how a refusal from the backend reads.
-import { BackendClock } from '@it/protocol'
+import { BackendClock, type ClockReading } from '@it/protocol'
 import { ConvexError } from 'convex/values'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { hasPending, watchPending } from './pending'
@@ -344,18 +344,20 @@ const clock = new BackendClock(
   () => performance.now(),
   () => Date.now(),
 )
+/** Both of this browser's clocks now, as a heartbeat is asked and as its answer comes back, which is what `learnClock` takes. */
+export const readClocks = (): ClockReading => clock.read()
 /**
  * Learns the backend's clock from a heartbeat's answer. `trip` is when the heartbeat was asked
- * and when its answer was taken in, by `performance.now()`: the answer is then taken as said
+ * and when its answer came back, by both clocks (`readClocks`): the answer is then taken as said
  * halfway between the two. Without it, the answer is taken as said now, which is close enough
  * for what is shown as recent and is never used to say when a click was made.
  */
-export const learnClock = (serverNow: number, trip?: { sent: number; back: number }) => {
+export const learnClock = (serverNow: number, trip?: { sent: ClockReading; back: ClockReading }) => {
   if (!trip) {
     skew = Date.now() - serverNow
     return
   }
-  skew = Date.now() - (serverNow + (performance.now() - (trip.sent + trip.back) / 2))
+  skew = trip.back.wall - (serverNow + (trip.back.mono - trip.sent.mono) / 2)
   clock.learn(serverNow, trip.sent, trip.back)
 }
 export const serverNow = () => Date.now() - skew
