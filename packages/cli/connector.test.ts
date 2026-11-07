@@ -68,6 +68,11 @@ const stand = vi.hoisted(() => ({
     /** What T3 Code says where it will not take a message, and what it refused. */
     refusing: null as string | null,
     refused: [] as { thread: string; text: string }[],
+    /** What each message put to a thread was named as, sent or refused: the same message sent again is named the same. */
+    whats: [] as (string | undefined)[],
+    /** Whether T3 Code takes what it is given and its answer is lost on the way, and what it took that way. */
+    losing: false,
+    lost: new Set<string>(),
     /** By each thread, the conversation it runs now and those it ran before, and every time it was asked which thread runs one. */
     runs: new Map<string, { now: { harness: string; id: string }; before: { harness: string; id: string }[] }>(),
     looked: [] as { harness: string; ids: string[]; known?: string }[],
@@ -98,14 +103,22 @@ vi.mock('./src/t3', async (original) => ({
     for (const [thread, run] of stand.t3.runs) if (run.now.harness === of.harness && of.ids.includes(run.now.id)) return { thread, before: run.before }
     return undefined
   },
-  t3Send: async (_t3: unknown, thread: string, text: string) => {
+  t3Send: async (_t3: unknown, thread: string, text: string, what?: string) => {
+    stand.t3.whats.push(what)
+    // T3 Code took this message before, and its answer was lost: it answers as it did, and adds nothing
+    if (what !== undefined && stand.t3.lost.delete(what)) return null
     if (stand.t3.refusing !== null) {
       stand.t3.refused.push({ thread, text })
       return stand.t3.refusing
     }
     stand.t3.sent.push({ thread, text })
+    if (stand.t3.losing && what !== undefined) {
+      stand.t3.lost.add(what)
+      return 'T3 Code did not answer in time'
+    }
     return null
   },
+  wentUnanswered: (what: string) => stand.t3.lost.has(what),
 }))
 // Who has a Codex conversation open is read from Codex's own folder and from the system
 // (wake.test.ts tries that against real files and programs). Here the test says which are
@@ -327,6 +340,9 @@ afterEach(async () => {
   stand.t3.threads.clear()
   stand.t3.asked.length = 0
   stand.t3.sent.length = 0
+  stand.t3.whats.length = 0
+  stand.t3.losing = false
+  stand.t3.lost.clear()
   stand.t3.refused.length = 0
   stand.t3.runs.clear()
   stand.t3.looked.length = 0
@@ -3638,6 +3654,54 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(stand.t3.sent).toHaveLength(4)
   })
 
+  test('a message T3 Code took but did not answer is sent again with the clicks it carried and no others, so it lands once, and a click that came meanwhile goes on its own', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    withT3Code()
+    stand.t3.threads.set('thread-1', 't3-thread-a')
+    await start()
+    // T3 Code takes the first click, and its answer never arrives
+    stand.t3.losing = true
+    offered(click(1))
+    for (let i = 0; i < 5 && stand.t3.lost.size < 1; i++) await pass()
+    expect(stand.t3.sent).toEqual([{ thread: 't3-thread-a', text: '[It] "A page" (page-1): approve, with details [action click-1]' }])
+    // Another click for the same conversation comes while the first waits to be sent again
+    stand.t3.losing = false
+    offered(click(1), { ...click(2), session: click(1).session })
+    await pass(601)
+    await until(() => called('delivery:handedOff').includes('click-1') && called('delivery:handedOff').includes('click-2'))
+    // The first went again as it was, which T3 Code took for the message it had, and the second went by itself
+    expect(stand.t3.whats).toEqual(['line click-1', 'line click-1', 'line click-2'])
+    expect(stand.t3.sent.map((s) => s.text)).toEqual([
+      '[It] "A page" (page-1): approve, with details [action click-1]',
+      '[It] "A page" (page-2): approve, with details [action click-2]',
+    ])
+  })
+
+  test('a message T3 Code took but did not answer, some of whose clicks can no longer go with it, is sent again under its own name with the rest, and the others then go under names of their own', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    withT3Code()
+    stand.t3.threads.set('thread-1', 't3-thread-a')
+    await start()
+    // Three clicks go in one message, which T3 Code takes, and its answer never arrives
+    stand.t3.losing = true
+    offered(click(1), click(2, 1), click(3, 1))
+    for (let i = 0; i < 5 && stand.t3.lost.size < 1; i++) await pass()
+    expect(stand.t3.whats).toEqual(['line click-1 click-2 click-3'])
+    // The second is no longer there to go with the others when the message is sent again
+    stand.t3.losing = false
+    offered(click(1), click(3, 1))
+    await pass(601)
+    await until(() => called('delivery:handedOff').includes('click-1') && called('delivery:handedOff').includes('click-3'))
+    // It went under the name it had, which T3 Code took for the message it had, and nothing more stands in the thread
+    expect(stand.t3.whats).toEqual(['line click-1 click-2 click-3', 'line click-1 click-2 click-3'])
+    expect(stand.t3.sent).toHaveLength(1)
+    // The one that could not go then goes under a name of its own, since T3 Code may not have had it
+    offered(click(2, 1))
+    await pass(2)
+    await until(() => called('delivery:handedOff').includes('click-2'))
+    expect(stand.t3.whats.at(-1)).toBe('line click-2')
+  })
+
   test('one whose conversation is held in a thread is put to the thread, though some Codex has the conversation open, and Codex’s queue is not used', async () => {
     withT3Code()
     stand.t3.threads.set('thread-1', 't3-thread-a')
@@ -4143,6 +4207,12 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     await until(() => stand.t3.sent.length === 2)
     expect(stand.t3.sent[1]!.text).toBe('[It] "A page" (page-12): approve, with details [action click-12]')
     expect(await behindMarks(12)).toEqual([])
+    // The short line is named the same each time it is sent, so T3 Code lets it land once, and not as the mark is
+    const [mark, ...lines] = stand.t3.whats
+    expect(mark).toBe('mark click-12')
+    expect(lines.length).toBe(3)
+    expect(new Set(lines).size).toBe(1)
+    expect(lines[0]).not.toBe(mark)
   })
 
   test('one whose conversation is in no thread goes into Codex’s queue, once T3 Code has said so, and T3 Code is not asked again for the next', async () => {

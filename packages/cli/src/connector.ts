@@ -54,7 +54,7 @@ import { conversationFolder, conversationProfile, noteConversation } from './pub
 import { alone } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
-import { type T3, T3_HELD_MOST, type T3Search, t3Held, t3Refusal, t3Running, t3Search, t3Send, t3Server, t3ThreadOf } from './t3'
+import { type T3, T3_HELD_MOST, type T3Search, t3Held, t3Refusal, t3Running, t3Search, t3Send, t3Server, t3ThreadOf, wentUnanswered } from './t3'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, begin, record, startSender, thisMachine, thisProgram, three, timeBand } from './usage'
 import {
@@ -642,6 +642,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const t3Pending = new Map<string, { harness: string; id: string }>()
   const t3Retries = new Map<string, { at: number; delay: number }>()
   const t3Refused = new Map<string, number>()
+  /**
+   * A message put to a thread that T3 Code did not answer, by each click it carried: those clicks,
+   * and the name it was sent under. T3 Code may have it, so it is sent again under that name, with
+   * those clicks and no others, and T3 Code takes it for the same message; a click that came
+   * meanwhile goes in a message of its own. Where some of its clicks can no longer go with it, the
+   * rest still go under that name, and once T3 Code has taken it, the ones that could not go are
+   * sent under names of their own: T3 Code may not have had them, and never loses one that way.
+   */
+  const t3Unanswered = new Map<string, { ids: string[]; name: string }>()
   let t3Seen: { at: number; server: T3 | undefined } | undefined
   /** How long before another search, after one that read every thread found none that holds the conversation. */
   const T3_AGAIN_MS = 6 * 3_600_000
@@ -1098,7 +1107,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       void (
         fallback.via === 't3'
           ? server
-            ? t3Send(server, fallback.thread, fallback.text)
+            ? t3Send(server, fallback.thread, fallback.text, `line ${fallback.text}`)
             : Promise.resolve('T3 Code could not be reached')
           : codexPut(threadOf(follow(where() ?? key)), fallback.text)
       )
@@ -2061,6 +2070,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
               !parked.has(tag(c)) &&
               !rode.has(c.id) &&
               (t3 !== undefined || wakes(harness, c.at)) &&
+              (t3 === undefined || (t3Unanswered.get(click.id)?.ids.includes(c.id) ?? !t3Unanswered.has(c.id))) &&
               !awaited(c, Date.now()),
           )
           .sort((a, b) => a.at - b.at)
@@ -2206,7 +2216,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // What is put into a conversation that is open, or into a thread: the mark alone, where a
       // hook of It's hands the agent the rest, and otherwise one short line for each click
       const lines = () => (t3 ? [click, ...withIt].map((c) => briefClick(asClick(c))).join('\n') : briefClick(asClick(click), false))
-      const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text) : codexPut(threadOf(follow(key)), text))
+      // The same message to the same thread, sent again where T3 Code was not heard to answer, is the same command to it, and lands once
+      const carried = () => [click, ...withIt].map((c) => c.id)
+      const named = (asMark: boolean) => (t3 && t3Unanswered.get(click.id)?.name) || `${asMark ? 'mark' : 'line'} ${carried().join(' ')}`
+      const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text, named(text === MARK)) : codexPut(threadOf(follow(key)), text))
       if (!reopening && turnRunning(follow(key), Date.now())) {
         await recovery.keepWaiters([click, ...withIt], follow(key))
       }
@@ -2258,6 +2271,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
             // on this machine alone. In Codex's queue it does not: that one is put on a
             // command line.
             await put(mark ? MARK : lines())
+      // A message T3 Code did not answer is sent again as it was, under the name it went under (see `t3Unanswered`)
+      if (t3 && !reopening && refused !== NOT_STARTED) {
+        const ids = carried()
+        const before = t3Unanswered.get(click.id)
+        const name = named(Boolean(mark))
+        if (refused !== null && wentUnanswered(name)) {
+          if (!before) for (const id of ids) t3Unanswered.set(id, { ids, name })
+        } else for (const id of new Set([...ids, ...(before?.ids ?? [])])) t3Unanswered.delete(id)
+        for (const old of t3Unanswered.keys()) {
+          if (t3Unanswered.size <= 1000) break
+          t3Unanswered.delete(old)
+        }
+      }
       // A mark that was not taken stands for nothing. One that was is waited on: a hook asks
       if (mark && refused !== null) await mark.takeAway()
       else mark?.wait()
@@ -2338,7 +2364,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const forThread = t3 !== undefined && t3Only(key)
         record('agent.woken', { result: n >= QUEUE_WAITS.length && !forThread ? 'failed' : 'declined', agent: agentOf(harness) })
         if (reopening) notReopened(click.session!, refused)
-        // T3 Code could not take it: the conversation is reopened as any other for a while, and that is tried at once
+        // T3 Code could not take it, and is not asked again for a while (see `t3For`). A conversation that may go
+        // other ways goes as any other meanwhile, which is tried at once; one held in a thread waits for it
         if (t3) {
           t3Refused.set(key, Date.now())
           soon(10)

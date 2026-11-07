@@ -71,6 +71,7 @@ import {
   keptOut,
   left,
   machine,
+  machineFile,
   NOT_RUNNING,
   noteLeft,
   noteWas,
@@ -99,6 +100,7 @@ import {
 import { joinedBefore, login, runsItsOwn } from './login'
 import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
 import { failure, foldRepeats, forPerson } from './output'
+import { keepToOwner } from './owner'
 import { gather, noteConversation, publish } from './publish'
 import { alone, asAdmin, nothingLeft, standing, startBackend } from './serve/backend'
 import { noteNetwork, readConfig } from './serve/config'
@@ -1872,11 +1874,13 @@ async function settingUp(a: Args, joined: boolean) {
   const begun = elsewhere() ? undefined : await begin({ say, background: inBackground, name: text(a, 'name') })
   try {
     machine()
-    // The key just made is in It's folder. In a person's own profile that is theirs alone. A
-    // folder they named instead is as private as they made it, on Windows, where a file has
-    // its folder's permissions and this program cannot give it others.
-    if (begun?.enrolled && process.platform === 'win32' && process.env.IT_HOME)
-      say(`This machine's key is kept in ${home()}. Windows lets whoever can open that folder read it, so make sure nobody but you can.`)
+    // The key just made is kept to the person as it is written. Only where Windows would not
+    // let that be done, on a disk that keeps no permissions or where its own program could not
+    // be run, is it as private as the folder it is in, which is then the person's to see to.
+    if (begun?.enrolled && !keepToOwner(machineFile()))
+      say(
+        `This machine's key is kept in ${home()}, and Windows would not let It keep it to you alone there. Whoever can open that folder can read it, so make sure nobody but you can.`,
+      )
     const found = beforeSetup ?? (await setupApps(a, false))
     const usable = found.filter((h) => supported(h.id) && h.addon !== 'too_old')
     for (const h of found)
@@ -2790,11 +2794,11 @@ async function main(argv: string[]): Promise<void> {
       ).catch(said)
       say(`\nThis machine has joined as "${done.name}".`)
       if (done.waitsFor !== undefined) say(joinedBefore(done.waitsFor))
-      // The key just made is in It's folder. In a person's own profile that is theirs alone. A
-      // folder they named instead is as private as they made it, on Windows, where a file has
-      // its folder's permissions and this program cannot give it others.
-      if (process.platform === 'win32' && process.env.IT_HOME)
-        say(`This machine's key is kept in ${home()}. Windows lets whoever can open that folder read it, so make sure nobody but you can.`)
+      // The key just made is kept to the person as it is written, unless Windows would not let it be (see above)
+      if (!keepToOwner(machineFile()))
+        say(
+          `This machine's key is kept in ${home()}, and Windows would not let It keep it to you alone there. Whoever can open that folder can read it, so make sure nobody but you can.`,
+        )
       if (a.flags['no-setup']) return out({ machine: done.machine, name: done.name })
       return setup(a, true)
     }

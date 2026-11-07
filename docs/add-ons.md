@@ -46,7 +46,7 @@ None of these routes is tried for an agent app you have not connected. A click o
 
 An add-on that cannot deliver a click leaves it in the inbox, and the site does not say why in every such case.
 
-Delivery is at least once, and every click carries a stable id so that an agent can tell a repeat. In one case a click may be seen twice, with the same id: where It was stopped by a crash after Codex's queue took the click and before that was written down. Where what became of a click is not known, the site says so.
+Delivery is at least once, and every click carries a stable id so that an agent can tell a repeat. In one case a click may be seen twice, with the same id: where It was stopped by a crash after Codex's queue took the click and before that was written down. A click put to a T3 Code thread whose answer It did not hear, as where T3 Code took longer than It waits or the connection closed first, is put to it again as the same message, which T3 Code lets into the thread once. Where what became of a click is not known, the site says so.
 
 ## What to expect in each agent app
 
