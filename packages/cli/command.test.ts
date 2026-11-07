@@ -6360,3 +6360,47 @@ describe('Bounded source command', () => {
     }
   })
 })
+
+test('An account update sends version and ownership preconditions without taking or opening the page.', async () => {
+  const m = machine()
+  const b = await backend(m, ({ path: fn }) =>
+    fn === 'artifacts:get'
+      ? { title: 'Plan' }
+      : fn === 'publish:begin'
+        ? { artifactId: 'artifact-1', slug: 'plan', version: 8, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+        : fn === 'publish:finish'
+          ? { slug: 'plan', version: 8, url: 'https://site.example/p/plan' }
+          : null,
+  )
+  try {
+    const ran = await run(m, ['update', 'plan', '--html', '<p>new</p>', '--preserve-owner', '--if-version', '7'], b.env)
+    expect(ran.code).toBe(0)
+    const begun = b.asked.find((x) => x.path === 'publish:begin')!.args
+    expect(begun).toMatchObject({ preserveOwner: true, expectedVersion: 7 })
+    expect(begun).not.toHaveProperty('take')
+    expect(b.asked.some((x) => ['artifacts:take', 'displays:show'].includes(x.path))).toBe(false)
+  } finally {
+    await b.close()
+  }
+})
+
+test('Preserve-owner preconditions reject incompatible CLI options before contacting the backend', async () => {
+  const m = machine()
+  const b = await backend(m, () => null)
+  try {
+    for (const flags of [
+      [],
+      ['--if-version', '0'],
+      ['--if-version', '1.5'],
+      ['--if-version', '1', '--take'],
+      ['--if-version', '1', '--open'],
+      ['--if-version', '1', '--agent', 'x'],
+      ['--if-version', '1', '--media', 'camera'],
+    ]) {
+      expect((await run(m, ['update', 'plan', '--html', '<p>x</p>', '--preserve-owner', ...flags], b.env)).code).not.toBe(0)
+    }
+    expect(b.asked).toEqual([])
+  } finally {
+    await b.close()
+  }
+})

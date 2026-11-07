@@ -672,6 +672,11 @@ async function tour(a: Args) {
 }
 
 async function update(a: Args) {
+  const expectedVersion = text(a, 'if-version') === undefined ? undefined : Number(text(a, 'if-version'))
+  if (expectedVersion !== undefined && (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1))
+    throw new Problem('An expected version is a positive whole number.', 'invalid')
+  if (a.flags['preserve-owner'] && (expectedVersion === undefined || ['take', 'open', 'on', 'agent', 'media'].some((key) => a.flags[key] !== undefined)))
+    throw new Problem('--preserve-owner requires --if-version and changes only content and title.', 'invalid')
   // Written as `it create` is, with the id in `--id` and a title in front of it, it is taken as that:
   // an agent that has just made a page with the one often asks for the other in the same shape
   const named = text(a, 'id')
@@ -685,6 +690,8 @@ async function update(a: Args) {
     files: await source(a),
     agent: text(a, 'agent'),
     take: a.flags.take === true,
+    preserveOwner: a.flags['preserve-owner'] === true,
+    ...(expectedVersion === undefined ? {} : { expectedVersion }),
     shown: a.flags.open === true,
     ...(media ? { media } : {}),
   })
@@ -2539,6 +2546,8 @@ const HELP = `it ${VERSION}: put a live ${NOUN.one} on any display you own, and 
 Pages
   it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)  [--state '{…}'] [--open] [--on "<display>"] [--media <kinds>]
   it update <id> (--file f | --dir d | --html "<…>" | pipe) [--title "<title>"] [--open] [--on "<display>"] [--media <kinds>]
+                                 Update also accepts --preserve-owner --if-version <n> for a
+                                 content/title-only change with an atomic version guard.
                                  Both take [--agent <name>], a label for who made it,
                                  which its owning conversation can change explicitly, and
                                  [--take], which gives the ${NOUN.one} to this conversation.

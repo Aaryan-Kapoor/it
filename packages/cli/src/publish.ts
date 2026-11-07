@@ -474,6 +474,8 @@ export async function publish(input: {
   state?: string
   /** This conversation takes the page over: clicks on it come here from now on. */
   take?: boolean
+  preserveOwner?: boolean
+  expectedVersion?: number
   expectedOwner?: { machineId: string; session: { harness: string; id: string } }
   /** This conversation is making a page of its own: where the id is another conversation's page, nothing is published. */
   own?: boolean
@@ -502,6 +504,8 @@ export async function publish(input: {
     ...(input.tour === undefined ? {} : { tour: input.tour }),
     ...(input.state === undefined ? {} : { state: input.state }),
     ...(input.take ? { take: true } : {}),
+    ...(input.preserveOwner ? { preserveOwner: true } : {}),
+    ...(input.expectedVersion === undefined ? {} : { expectedVersion: input.expectedVersion }),
     ...(input.media === undefined ? {} : { media: input.media }),
     // Only a conversation makes a page its own: from a plain terminal there is none to keep one for
     ...(input.own && !input.take && session ? { own: true } : {}),

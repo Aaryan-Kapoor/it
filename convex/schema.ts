@@ -317,7 +317,7 @@ export default defineSchema({
         session: v.optional(session),
         agent: v.optional(v.string()),
         take: v.boolean(),
-        /** Local build only: written by the owner's local build 0.1.23 (19 October), which master never had. Tolerated so that his data loads. */
+        /** Explicit content-only publication and the version required at atomic commit. */
         preserveOwner: v.optional(v.boolean()),
         expectedVersion: v.optional(v.number()),
         agentExplicit: v.optional(v.boolean()),
