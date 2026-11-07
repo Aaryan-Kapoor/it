@@ -9,7 +9,17 @@ export const PROTOCOL_VERSION = 1
  * does not take without saying why: a command that is refused such a call asks there, and where
  * the form is not named it asks in the way that backend takes.
  */
-export const TAKES = { conversationsWaiting: 'delivery.allWaiting.for' } as const
+export const TAKES = {
+  conversationsWaiting: 'delivery.allWaiting.for',
+  /**
+   * When a click was made (`madeAt`, with how far out it can be, `madeWithin`), on a page's
+   * click, a typed message and a notification's answer. The backend names it to the site too,
+   * in the answers to a display's registering and heartbeat: a site newer than the functions
+   * It runs, as when loading new ones failed, sends it only where it is named, since a backend
+   * that does not take it refuses the whole call.
+   */
+  madeAt: 'actions.madeAt',
+} as const
 
 /** The word the interface uses for a thing shown on a display. It is said in one place so that it can be changed in one. */
 export const NOUN = { one: 'page', many: 'pages', One: 'Page', Many: 'Pages' } as const

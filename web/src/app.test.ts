@@ -652,6 +652,24 @@ describe('telling the backend that this display is open', () => {
     expect(errors).toEqual([])
   }, 10_000)
 
+  test('what the backend takes is learned from its answers, and its clock closely enough to say when a click was made, and a backend that names nothing takes nothing', async () => {
+    cookie = CODES.ownercode00000000001!
+    answers['displays:register'] = () => ({ ...DISPLAY, takes: ['actions.madeAt'] })
+    answers['displays:heartbeat'] = () => ({ now: Date.now() - 3_600_000, takes: ['actions.madeAt'] })
+    await start()
+    await settle()
+    const { backendNow, backendTakes } = await import('./lib')
+    expect(backendTakes('actions.madeAt')).toBe(true)
+    expect(Math.abs(Date.now() - 3_600_000 - backendNow()!.at)).toBeLessThan(1000)
+    expect(backendNow()!.within).toBeLessThan(1000)
+    // The functions It runs are older by the next heartbeat, as when loading new ones failed
+    answers['displays:heartbeat'] = () => ({ now: Date.now() - 3_600_000 })
+    await act(async () => void document.dispatchEvent(new Event('visibilitychange')))
+    await settle()
+    expect(beats()).toBe(2)
+    expect(backendTakes('actions.madeAt')).toBe(false)
+  })
+
   test('while one telling is not yet answered no other is made, however often the tab is hidden and shown again', async () => {
     cookie = CODES.ownercode00000000001!
     answers['displays:heartbeat'] = () => new Promise(() => {})

@@ -3986,7 +3986,7 @@ describe('displays and machines', () => {
     const t = backend()
     expect(await t.run(async (ctx) => [(await ctx.db.query('users').collect()).length, (await ctx.db.query('machines').collect()).length])).toEqual([0, 0])
     // And it names the later forms of a call it takes, which a machine a version ahead of it asks about when it is refused one
-    expect(await (await t.fetch('/cli/config')).json()).toEqual({ protocol: 1, issuer: SITE, takes: ['delivery.allWaiting.for'] })
+    expect(await (await t.fetch('/cli/config')).json()).toEqual({ protocol: 1, issuer: SITE, takes: ['delivery.allWaiting.for', 'actions.madeAt'] })
     const key = await aKeyPair()
     const made = await t.mutation(internal.bridge.enroll, { subject: 'owner', name: 'this machine', publicKey: key.publicKey })
     if ('error' in made) throw new Error(made.error)

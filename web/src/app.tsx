@@ -17,6 +17,7 @@ import {
   isLeaving,
   keepSignOutToken,
   learnClock,
+  learnTakes,
   navigate,
   noteRegistered,
   pairedSinceRegistering,
@@ -300,7 +301,8 @@ function Paired() {
     let live = true
     if (isLeaving() || !session) return
     void tries
-    const register = () => convex.mutation(api.displays.register, { key: displayKey(), userAgent: navigator.userAgent })
+    // Its answer names what the backend takes, which is known then before anything kept here is sent
+    const register = () => convex.mutation(api.displays.register, { key: displayKey(), userAgent: navigator.userAgent }).then((r) => learnTakes(r.takes))
     ;(async () => {
       try {
         await register()
@@ -450,12 +452,15 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
         convex,
         (calls) => {
           const sent = performance.now()
-          return calls.mutation(api.displays.heartbeat, { key }).then((r) => ({ now: r.now, trip: { sent, back: performance.now() } }))
+          return calls.mutation(api.displays.heartbeat, { key }).then((r) => ({ ...r, trip: { sent, back: performance.now() } }))
         },
         () => live,
       )
         .then(
-          (r) => learnClock(r.now, r.trip),
+          (r) => {
+            learnClock(r.now, r.trip)
+            learnTakes(r.takes)
+          },
           () => {},
         )
         .finally(() => {

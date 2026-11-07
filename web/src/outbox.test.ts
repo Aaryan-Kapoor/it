@@ -123,6 +123,7 @@ describe('the outbox', () => {
       expect(slow.calls[0]).not.toHaveProperty('madeAt')
       // The backend's clock is an hour behind this browser's, as a heartbeat that took a tenth of a second says, and It cannot be reached
       lib.learnClock(Date.now() - HOUR, { sent: performance.now() - 100, back: performance.now() })
+      lib.learnTakes(['actions.madeAt'])
       const lost = backend(['never'])
       void site.submit(lost.client, 'alice', 'page1', envelope('click-made-0002'))
       await new Promise((r) => setTimeout(r, 10))
@@ -134,6 +135,7 @@ describe('the outbox', () => {
       const k = 'it.outbox.alice.page1.click-made-0002'
       localStorage.setItem(k, JSON.stringify({ ...JSON.parse(localStorage.getItem(k) ?? '{}'), at: Date.now() - 60_000, held: Date.now() - 45_000 }))
       vi.resetModules()
+      ;(await import('./lib')).learnTakes(['actions.madeAt'])
       const later = await import('./outbox')
       later.outboxBelongsTo('alice')
       const back = backend([{ actionId: 'a2' }])
@@ -149,6 +151,57 @@ describe('the outbox', () => {
         expect(call).toHaveProperty('madeWithin')
       }
       expect(said.calls.length).toBe(2)
+    } finally {
+      site.outboxBelongsTo(null)
+    }
+  })
+
+  test('a backend that has not said it takes when a click was made is not sent it, and takes the click, which keeps that time here for a backend that does', async () => {
+    vi.resetModules()
+    const lib = await import('./lib')
+    const site = await import('./outbox')
+    site.outboxBelongsTo('alice')
+    try {
+      lib.learnClock(Date.now(), { sent: performance.now() - 100, back: performance.now() })
+      // An older backend, which refuses a call with an argument it does not know
+      const older = (answers: unknown[]) => {
+        const b = backend(answers)
+        const mutation = b.client as unknown as { mutation: ReturnType<typeof vi.fn> }
+        const inner = mutation.mutation.getMockImplementation()!
+        mutation.mutation.mockImplementation((fn: unknown, args: Record<string, unknown>) =>
+          'madeAt' in args || 'madeWithin' in args
+            ? Promise.reject(new Error('ArgumentValidationError: Object contains extra field `madeAt`'))
+            : inner(fn, args),
+        )
+        return b
+      }
+      lib.learnTakes(undefined)
+      const now = older([{ actionId: 'a1' }, { actionId: 'a2' }, { actionId: 'a3' }])
+      expect(await site.submit(now.client, 'alice', 'page1', envelope('click-older-0001'))).toEqual({ actionId: 'a1' })
+      expect(await site.message(now.client, 'alice', 'page1', 'typed-older-0001', 'Go ahead')).toEqual({ actionId: 'a2' })
+      expect(await site.answerNotification(now.client, 'note-1', 'yes')).toEqual({ actionId: 'a3' })
+      expect(now.calls).toHaveLength(3)
+      for (const call of now.calls) {
+        expect(call).not.toHaveProperty('madeAt')
+        expect(call).not.toHaveProperty('madeWithin')
+      }
+      // One saved while It cannot be reached keeps when it was made here all the same
+      const lost = older(['never'])
+      void site.submit(lost.client, 'alice', 'page1', envelope('click-older-0002'))
+      await new Promise((r) => setTimeout(r, 10))
+      const k = 'it.outbox.alice.page1.click-older-0002'
+      const kept = JSON.parse(localStorage.getItem(k)!)
+      expect(kept).toMatchObject({ madeAt: expect.any(Number), madeWithin: expect.any(Number) })
+      // And sends it to a backend that has said it takes it, on a later visit
+      localStorage.setItem(k, JSON.stringify({ ...kept, at: Date.now() - 60_000, held: Date.now() - 45_000 }))
+      vi.resetModules()
+      ;(await import('./lib')).learnTakes(['actions.madeAt'])
+      const later = await import('./outbox')
+      later.outboxBelongsTo('alice')
+      const back = backend([{ actionId: 'a4' }])
+      await later.drain(back.client, 'alice')
+      later.outboxBelongsTo(null)
+      expect(back.calls[0]).toMatchObject({ envelope: { clientActionId: 'click-older-0002' }, madeAt: kept.madeAt, madeWithin: kept.madeWithin })
     } finally {
       site.outboxBelongsTo(null)
     }

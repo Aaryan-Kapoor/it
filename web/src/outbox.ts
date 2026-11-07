@@ -13,11 +13,11 @@
 // whole: only then is the click itself sent, naming them. Each of those steps may be done
 // again, after a dropped connection, a closed tab or from another tab, and carries on from
 // where it stopped, so the click is still sent once.
-import { type ActionEnvelope, fileName, fileType, LIMITS, MESSAGE, sizeSaid, UPLOAD } from '@it/protocol'
+import { type ActionEnvelope, fileName, fileType, LIMITS, MESSAGE, sizeSaid, TAKES, UPLOAD } from '@it/protocol'
 import type { ConvexReactClient } from 'convex/react'
 import { ConvexError } from 'convex/values'
 import { kept as kept_ } from './kept'
-import { api, backendNow, displayKey, type Id, letGoOf, note, refusal, timesLetGo, whenLetGo } from './lib'
+import { api, backendNow, backendTakes, displayKey, type Id, letGoOf, note, refusal, timesLetGo, whenLetGo } from './lib'
 import { discardPending, hasPending, holdPending, watchPending } from './pending'
 import { sha256Of } from './sha256'
 
@@ -216,8 +216,9 @@ async function send(convex: ConvexReactClient, e: Entry, key: string, waiting: (
   if (!mine()) throw new Error('This browser’s pairing has ended.')
   const expected = e.session ? { expectedSession: e.session } : {}
   // When the person did it, sent every time it is sent: a click sent again is the same click,
-  // and It keeps what it was first told
-  const made = e.madeAt === undefined || e.madeWithin === undefined ? {} : { madeAt: e.madeAt, madeWithin: e.madeWithin }
+  // and It keeps what it was first told. Only to a backend that has said it takes it, which an
+  // older one refuses the whole call for; kept here all the same, for when it does
+  const made = e.madeAt === undefined || e.madeWithin === undefined || !backendTakes(TAKES.madeAt) ? {} : { madeAt: e.madeAt, madeWithin: e.madeWithin }
   if (e.operation?.kind === 'answer')
     return convex.mutation(api.notifications.answer, {
       id: e.operation.id as Id<'notifications'>,

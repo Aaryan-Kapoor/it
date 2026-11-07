@@ -366,6 +366,18 @@ export const serverNow = () => Date.now() - skew
  */
 export const backendNow = (): { at: number; within: number } | undefined => clock.now()
 
+// The later forms of a call the backend takes (`TAKES`), as it last named them in answer to
+// this display's registering or heartbeat. A backend whose functions are older than this site,
+// as when loading new ones failed, names fewer or none, and refuses a call in a form it does not
+// take: the site sends such a form only where the backend has named it since the site was opened.
+let takes: readonly string[] = []
+/** Learns what the backend takes from an answer that names it. One that names nothing, as an older backend's does, takes nothing. */
+export const learnTakes = (said: unknown) => {
+  takes = Array.isArray(said) ? said.filter((t): t is string => typeof t === 'string') : []
+}
+/** Whether the backend has named that form of a call as one it takes. */
+export const backendTakes = (form: string): boolean => takes.includes(form)
+
 // ---------- the address bar ----------
 
 const listeners = new Set<() => void>()

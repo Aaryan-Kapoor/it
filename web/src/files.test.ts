@@ -6,7 +6,7 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { inMemory, keepBytesIn } from './kept'
-import { backendNow, forgetAll, keepFor, learnClock } from './lib'
+import { backendNow, forgetAll, keepFor, learnClock, learnTakes } from './lib'
 import { drain, outboxBelongsTo, type Sent, submit, tidyBytes, unsaved, unsent } from './outbox'
 
 const envelope = (id: string, payload = '{"photo":{"file":1}}'): Sent => ({ v: 1, clientActionId: id, name: 'receipt', payload, contentVersion: 1 })
@@ -93,6 +93,7 @@ describe('a click with files', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => wall)
     try {
       learnClock(wall, { sent: mono - 100, back: mono })
+      learnTakes(['actions.madeAt'])
       const clicked = backendNow()!
       // A file that is read only when this test says, as a large one is read slowly
       let read!: () => void
