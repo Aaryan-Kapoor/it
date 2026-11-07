@@ -695,41 +695,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (t3ThreadsUnread && !existsSync(t3ThreadsFile())) t3ThreadsUnread = false
     return t3ThreadsUnread
   }
-  /**
-   * The thread a conversation is held in, as noted, under any id the conversation had: by T3 Code
-   * once it has said so, or otherwise by the command that made one of its pages, which T3 Code
-   * told the thread it runs in. A conversation whose thread was told so needs no search for it.
-   */
+  /** The thread a conversation is held in, as noted, under any id the conversation had. */
   const notedThread = (key: string): string | undefined => {
     for (const k of knownAs(aliases, key)) {
       const thread = t3Threads.get(k)
       if (thread) return thread
     }
+    // Or as the command that made one of its pages noted it, which T3 Code told the thread it
+    // runs in: a conversation whose thread was told so needs no search for it
     for (const k of knownAs(aliases, key)) {
       const held = conversationHeld({ harness: k.slice(0, k.indexOf(':')), id: threadOf(k) })
       if (held?.by === 't3-code' && held.thread) return held.thread
     }
     return undefined
-  }
-  /**
-   * Where a Claude Code or Codex conversation is held, by everything It has of it, under any id it
-   * has had: what the commands that made its pages found, and for Claude Code every app that
-   * Claude Code wrote down as having run it. Nothing where It has neither, as for a Codex
-   * conversation whose pages were made before It noted this.
-   */
-  const whereHeld = (key: string): HeldBy | undefined => {
-    const harness = key.slice(0, key.indexOf(':'))
-    if (harness !== 'claude-code' && harness !== 'codex') return undefined
-    const all: (HeldBy | undefined)[] = []
-    for (const k of knownAs(aliases, key)) {
-      const session = { harness, id: threadOf(k) }
-      all.push(conversationHeld(session))
-      if (harness !== 'claude-code') continue
-      const env = profileEnvironment(harness, conversationProfile(session), harnessEnv())
-      const seen = typeof env === 'string' ? null : claudeEntrypoints(session.id, conversationFolder(session) ?? '', env.CLAUDE_CONFIG_DIR)
-      if (seen) all.push(heldBy(seen))
-    }
-    return together(...all)
   }
   /** Notes that T3 Code holds a conversation in this thread, and writes the note down. */
   const noteThread = (key: string, thread: string) => {
@@ -1985,6 +1963,26 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // What this machine's own reopening of it wrote is not somebody at work in it
     const ours = ranUntil.get(follow(keyOf(session.harness, session.id)))
     return ours === undefined || wrote > ours + 3000
+  }
+  /**
+   * Where a Claude Code or Codex conversation is held, by everything It has of it, under any id it
+   * has had: what the commands that made its pages found, and for Claude Code every app that
+   * Claude Code wrote down as having run it. Nothing where It has neither, as for a Codex
+   * conversation whose pages were made before It noted this.
+   */
+  const whereHeld = (key: string): HeldBy | undefined => {
+    const harness = key.slice(0, key.indexOf(':'))
+    if (harness !== 'claude-code' && harness !== 'codex') return undefined
+    const all: (HeldBy | undefined)[] = []
+    for (const k of knownAs(aliases, key)) {
+      const session = { harness, id: threadOf(k) }
+      all.push(conversationHeld(session))
+      if (harness !== 'claude-code') continue
+      const env = profileEnvironment(harness, conversationProfile(session), harnessEnv())
+      const seen = typeof env === 'string' ? null : claudeEntrypoints(session.id, conversationFolder(session) ?? '', env.CLAUDE_CONFIG_DIR)
+      if (seen) all.push(heldBy(seen))
+    }
+    return together(...all)
   }
   /** Of each program noted to have held a conversation, whether it was last found gone, and when it was looked at: asking can cost a program of the system's own. */
   const holderLooks = new Map<string, { at: number; gone: boolean }>()
