@@ -81,6 +81,9 @@ interface Entry {
   held?: number
 }
 
+/** When the person did something, by the backend's clock as this browser told it then, and how far out that can be. Nothing where it could not tell. */
+type Made = ReturnType<typeof backendNow>
+
 const keyOf = (user: string, artifactId: string, id: string) => `${PREFIX}${user}.${artifactId}.${id}`
 // A request whose answer was lost must keep its original deadline even when storage refused it.
 // These bounded records contain no payload and stay until a settled answer or the pairing ends.
@@ -555,6 +558,7 @@ export function abandonOutbox(user: string): void {
   changed()
 }
 export function message(convex: ConvexReactClient, user: string, artifactId: string, clientActionId: string, text: string) {
+  const made = backendNow()
   if (!text.trim() || text.length > LIMITS.messageText) return Promise.reject(new Error(`A message is 1 to ${LIMITS.messageText} characters.`))
   return sendOperation(
     convex,
@@ -562,9 +566,11 @@ export function message(convex: ConvexReactClient, user: string, artifactId: str
     artifactId,
     { v: 1, clientActionId, name: MESSAGE, payload: JSON.stringify({ text }), contentVersion: 0 },
     { kind: 'message', text },
+    made,
   )
 }
 export function answerNotification(convex: ConvexReactClient, id: string, action: string) {
+  const made = backendNow()
   if (!pairedFor) return Promise.reject(new Error('This browser’s pairing has ended.'))
   return sendOperation(
     convex,
@@ -572,15 +578,16 @@ export function answerNotification(convex: ConvexReactClient, id: string, action
     `notification-${id}`,
     { v: 1, clientActionId: `notification:${id}`, name: action, payload: '{}', contentVersion: 0 },
     { kind: 'answer', id, action, display: displayKey() },
+    made,
   )
 }
-async function sendOperation(convex: ConvexReactClient, user: string, artifactId: string, envelope: Sent, operation: Operation) {
+async function sendOperation(convex: ConvexReactClient, user: string, artifactId: string, envelope: Sent, operation: Operation, made: Made) {
   const key = keyOf(user, artifactId, envelope.clientActionId)
   const pairing = thisPairing()
   const release = holdPending(user)
   const work = () => {
     if (!stillPairedFor(user, pairing)) throw new Error('This browser’s pairing has ended.')
-    return sendNow(convex, user, artifactId, envelope, key, () => true, undefined, operation)
+    return sendNow(convex, user, artifactId, envelope, key, made, () => true, undefined, operation)
   }
   try {
     return await (locks()?.request(key, {}, work) ?? work())
@@ -633,6 +640,9 @@ export async function submit(
   /** The files the page sent with it, in the order its data numbers them. */
   files: Blob[] = [],
 ): Promise<{ actionId: string }> {
+  // When the person did it, taken before anything that takes time: reading its files, or
+  // waiting for another tab, may take long enough for a Stop to be pressed meanwhile
+  const made = backendNow()
   if (new TextEncoder().encode(envelope.payload).length > LIMITS.actionPayloadBytes)
     throw new Error(`An action carries at most ${LIMITS.actionPayloadBytes / 1024} KB.`)
   // The same rules the site's frame keeps, kept here too: this is what decides what is stored
@@ -651,7 +661,7 @@ export async function submit(
   const release = holdPending(user)
   const work = () => {
     if (!stillPairedFor(user, pairing)) throw new Error('This browser’s pairing has ended.')
-    return sendNow(convex, user, artifactId, envelope, key, stillThere, judge, undefined, files)
+    return sendNow(convex, user, artifactId, envelope, key, made, stillThere, judge, undefined, files)
   }
   // Waiting for another tab's lock remains pending work under the original pairing.
   try {
@@ -667,6 +677,8 @@ async function sendNow(
   artifactId: string,
   envelope: Sent,
   key: string,
+  /** When the person did it, taken as they did. A click kept already keeps when it was first done. */
+  made: Made,
   stillThere: () => boolean,
   judge?: () => Promise<boolean>,
   operation?: Operation,
@@ -685,8 +697,7 @@ async function sendNow(
   const letGo = () => timesLetGo(user) !== began || entry.session !== session
   if (sending.has(key)) throw new Error('This request is already waiting for confirmation.')
   const prior = entries(user).find(([saved]) => saved === key)?.[1]
-  // Reusing an identity also reuses its payload and deadline, including legacy entries.
-  const made = backendNow()
+  // Reusing an identity also reuses its payload, deadline and when it was done, including legacy entries.
   const entry: Entry = prior ?? {
     user,
     artifactId,

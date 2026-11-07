@@ -6,7 +6,7 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { inMemory, keepBytesIn } from './kept'
-import { forgetAll, keepFor } from './lib'
+import { backendNow, forgetAll, keepFor, learnClock } from './lib'
 import { drain, outboxBelongsTo, type Sent, submit, tidyBytes, unsaved, unsent } from './outbox'
 
 const envelope = (id: string, payload = '{"photo":{"file":1}}'): Sent => ({ v: 1, clientActionId: id, name: 'receipt', payload, contentVersion: 1 })
@@ -84,6 +84,44 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('a click with files', () => {
+  test('is dated when the person made it, however long its files take to be read', async () => {
+    const b = it()
+    // The browser's clocks, as this test moves them
+    let mono = 1_000_000
+    let wall = Date.now()
+    vi.spyOn(performance, 'now').mockImplementation(() => mono)
+    vi.spyOn(Date, 'now').mockImplementation(() => wall)
+    try {
+      learnClock(wall, { sent: mono - 100, back: mono })
+      const clicked = backendNow()!
+      // A file that is read only when this test says, as a large one is read slowly
+      let read!: () => void
+      const reading = new Promise<void>((r) => {
+        read = r
+      })
+      const file = photo()
+      const slice = file.slice.bind(file)
+      file.slice = (...part: Parameters<Blob['slice']>) => {
+        const piece = slice(...part)
+        const arrayBuffer = async () => {
+          await reading
+          return piece.arrayBuffer()
+        }
+        return { arrayBuffer } as Blob
+      }
+      const sent = submit(b.client, 'alice', 'page1', envelope('click-files-made'), () => true, undefined, [file])
+      // Twenty seconds go by while it is read, in which a Stop may be pressed on another screen
+      await new Promise((r) => setTimeout(r, 10))
+      mono += 20_000
+      wall += 20_000
+      read()
+      expect(await sent).toEqual({ actionId: 'a1' })
+      expect(b.state.submitted[0]).toMatchObject({ madeAt: clicked.at, madeWithin: clicked.within })
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
+
   test('has them taken by It, uploaded, and found whole before the click is sent, naming them; and leaves nothing behind', async () => {
     const b = it()
     const file = photo()
