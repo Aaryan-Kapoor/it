@@ -875,7 +875,8 @@ describe('a click another tab of this browser leaves behind', () => {
     localStorage.setItem(at(id), value)
     window.dispatchEvent(new StorageEvent('storage', { key: at(id), newValue: value }))
   }
-  const sent = (b: ReturnType<typeof backend>) => b.calls.map((c) => c.envelope.clientActionId)
+  /** The ids of what was sent from here, a typed message's as well as a click's. */
+  const sent = (b: ReturnType<typeof backend>) => b.calls.map((c) => c.envelope?.clientActionId ?? (c as unknown as { clientActionId: string }).clientActionId)
   let deaf = () => {}
   beforeEach(() => {
     vi.useFakeTimers()
@@ -917,6 +918,39 @@ describe('a click another tab of this browser leaves behind', () => {
     // That tab is closed now
     await vi.advanceTimersByTimeAsync(16_000)
     expect(sent(b)).toEqual(['click-held-01'])
+  })
+
+  test('is sent once its hold runs out, from a tab whose only time to look again is when a refused message of its own expires', async () => {
+    const b = backend([refuse('invalid'), { actionId: 'a1' }])
+    deaf = recoverLeftovers(b.client, 'alice')
+    // This tab keeps a typed message that was refused, and looks again only when it expires, in a week
+    localStorage.setItem(
+      at('message-kept-01'),
+      JSON.stringify({
+        user: 'alice',
+        artifactId: 'page1',
+        envelope: envelope('message-kept-01'),
+        operation: { kind: 'message', text: 'hello' },
+        format: 2,
+        session: 'session-1',
+        replayUntil: Date.now() + 86400_000,
+        at: Date.now() - 60_000,
+        left: true,
+      }),
+    )
+    await drain(b.client, 'alice')
+    expect(sent(b)).toEqual(['message-kept-01'])
+    expect(stored()).toEqual([at('message-kept-01')])
+    // Another tab keeps a click, and is closed before it has sent it
+    elsewhere('click-left-02')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(sent(b)).toEqual(['message-kept-01'])
+    // Its hold runs out, and the click goes from here, once
+    await vi.advanceTimersByTimeAsync(11_000)
+    expect(sent(b)).toEqual(['message-kept-01', 'click-left-02'])
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(sent(b)).toEqual(['message-kept-01', 'click-left-02'])
+    expect(stored()).toEqual([at('message-kept-01')])
   })
 
   test('begins nothing for what is let go of, refused, someone else’s or another pairing’s, and leaves nothing running once sent', async () => {

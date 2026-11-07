@@ -491,8 +491,12 @@ const settled = (err: unknown) => ['invalid', 'not_found', 'conflict'].includes(
 // them by: a click is one request at a time, so that what its page is told is what became of it.
 const sending = new Set<string>()
 
-/** For each person, when what could not be sent is to be tried again. */
-const retry = new Map<string, { timer: ReturnType<typeof setTimeout>; wait: number }>()
+/**
+ * For each person, when what could not be sent is to be tried again. One that is set only for
+ * when a refused message expires (`expires`) has nothing to send, and is no reason to leave a
+ * click another tab left behind until then.
+ */
+const retry = new Map<string, { timer: ReturnType<typeof setTimeout>; wait: number; expires?: true }>()
 
 // Whose clicks may be sent right now: the person this browser is paired for. Sending stops the
 // moment that is someone else, or nobody: a click is only ever sent as the person who made it.
@@ -904,6 +908,9 @@ export async function drain(convex: ConvexReactClient, user: string): Promise<vo
   const mine = () => stillPairedFor(user, pairing)
   const pending = retry.get(user)
   if (pending) clearTimeout(pending.timer)
+  // How long the last wait for trouble was, which the next one doubles. A wait for a refused
+  // message to expire was not a wait for trouble, and says nothing of how long to wait now.
+  const waited = pending && !pending.expires ? pending.wait : undefined
   let troubled = false
   /** How long until the first of the clicks that were passed by may be looked at again. Nothing, when none was. */
   let fresh = 0
@@ -995,12 +1002,12 @@ export async function drain(convex: ConvexReactClient, user: string): Promise<vo
       // Refused messages expire without being sent again, even if this tab stays open.
       const expires = Math.min(...remaining.map(([, e]) => e.at + MAX_AGE_MS + 1))
       const wait = Math.max(1, Math.min(MAX_AGE_MS, expires - Date.now()))
-      retry.set(user, { wait, timer: setTimeout(() => void drain(convex, user), wait) })
+      retry.set(user, { wait, timer: setTimeout(() => void drain(convex, user), wait), expires: true })
     }
     return
   }
-  const wait = troubled || !fresh ? Math.min((pending?.wait ?? 2500) * 2, 300_000) : fresh + 100
-  retry.set(user, { wait: troubled || !fresh ? wait : (pending?.wait ?? 2500), timer: setTimeout(() => void drain(convex, user), wait) })
+  const wait = troubled || !fresh ? Math.min((waited ?? 2500) * 2, 300_000) : fresh + 100
+  retry.set(user, { wait: troubled || !fresh ? wait : (waited ?? 2500), timer: setTimeout(() => void drain(convex, user), wait) })
 }
 
 /**
@@ -1011,7 +1018,9 @@ export async function drain(convex: ConvexReactClient, user: string): Promise<vo
  * that is still to be sent, under this pairing, the sending of what is left is begun here, which
  * leaves the click alone for as long as that tab's lock or hold on it lasts, and takes it up once
  * neither does. Nothing is begun while this tab is already sending what is left, which then looks
- * once more, or has a time set to look again, which will find the click by then. A click let go
+ * once more, or has a time set to look again, which will find the click by then. A time set only
+ * for a refused message to expire is not one of those: it may be a week away, so the sending is
+ * begun at once, and sets its own time to look again for as long as the click is held. A click let go
  * of, or refused, begins nothing: so two tabs that hear of each other's sending never set each
  * other off again and again. Gives back what stops it listening.
  */
@@ -1029,7 +1038,7 @@ export function recoverLeftovers(convex: ConvexReactClient, user: string): () =>
     // Once, for however many the browser says at a time, as when a tab keeps several clicks at once
     soon = setTimeout(() => {
       soon = undefined
-      if (stillPairedFor(user) && (draining.has(user) || !retry.has(user))) void drain(convex, user)
+      if (stillPairedFor(user) && (draining.has(user) || !retry.has(user) || retry.get(user)?.expires)) void drain(convex, user)
     }, 0)
   }
   window.addEventListener('storage', heard)
