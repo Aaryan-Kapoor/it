@@ -134,8 +134,21 @@ export default defineSchema({
     epoch: v.number(),
     /** What an agent asked this display to show, and when. */
     showing: v.optional(v.object({ artifactId: v.id('artifacts'), at: v.number() })),
-    /** Local build only: tab reports written by the owner's local build 0.1.23 (19 October), which master never had. Tolerated so that his data loads. */
-    reports: v.optional(v.any()),
+    /** Bounded host-browser reports. These describe loaded tabs, not physical pixels or attention. */
+    reports: v.optional(
+      v.array(
+        v.object({
+          tab: v.string(),
+          sequence: v.number(),
+          at: v.number(),
+          epoch: v.number(),
+          phase: v.union(v.literal('none'), v.literal('loading'), v.literal('shown'), v.literal('failed')),
+          visible: v.boolean(),
+          artifactId: v.optional(v.id('artifacts')),
+          version: v.optional(v.number()),
+        }),
+      ),
+    ),
     push: v.optional(v.object({ endpoint: v.string(), p256dh: v.string(), auth: v.string() })),
     /** The session of the browser that registered it: forgetting the display ends that session, and that session ending signs the display out. */
     sessionId: v.id('sessions'),

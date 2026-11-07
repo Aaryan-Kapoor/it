@@ -1020,3 +1020,118 @@ describe('signing out', () => {
     expect(button('Stay paired')).toBeDefined()
   })
 })
+
+// Paired shell, real page mount and reporter together, with secure-only APIs absent.
+describe('the paired shell and a page over plain http', () => {
+  for (const browser of ['chromium', 'firefox'] as const) {
+    test(`opens a page and reports its handshake without secure-only APIs in ${browser}`, async () => {
+      const descriptors = ['subtle', 'randomUUID'].map((name) => [name, Object.getOwnPropertyDescriptor(crypto, name)] as const)
+      const unavailable = ['locks', 'serviceWorker', 'clipboard', 'storage', 'credentials']
+      const nav = unavailable.map((name) => [name, Object.getOwnPropertyDescriptor(navigator, name)] as const)
+      vi.stubGlobal('isSecureContext', false)
+      vi.stubGlobal('caches', undefined)
+      vi.stubGlobal('Notification', {
+        permission: 'denied',
+        requestPermission: vi.fn(async () => 'denied'),
+      })
+      vi.stubGlobal('PushManager', browser === 'chromium' ? class {} : undefined)
+      for (const [name] of descriptors)
+        Object.defineProperty(crypto, name, {
+          configurable: true,
+          value: undefined,
+        })
+      for (const name of unavailable)
+        Object.defineProperty(navigator, name, {
+          configurable: true,
+          value: undefined,
+        })
+      try {
+        expect(isSecureContext).toBe(false)
+        expect(crypto.randomUUID).toBeUndefined()
+        expect(typeof crypto.getRandomValues).toBe('function')
+        cookie = CODES.screencode0000000002!
+        watched['artifacts:get'] = {
+          id: 'page-fixture',
+          slug: 'plain-http-fixture',
+          title: 'Fixture page',
+          version: 7,
+          updatedAt: Date.now(),
+          run: null,
+        }
+        watched['actions:forArtifact'] = []
+        watched['state:live'] = { state: '{"n":1}', revision: 3, whole: true, kept: [] }
+        answers['mounts:create'] = () => ({
+          mountId: 'mount-fixture',
+          version: 7,
+        })
+        answers['mounts:ticket'] = () => ({ ticket: 'fixture-ticket' })
+        answers['actions:submit'] = () => ({ actionId: 'fixture-action' })
+        await start('/p/plain-http-fixture')
+        await settle()
+        expect(host.textContent).not.toContain('Something went wrong')
+        expect(host.querySelector('.page-title')?.textContent).toBe('Fixture page')
+        expect(names()).toContain('displays:register')
+        const frame = host.querySelector('iframe')!
+        expect(frame).not.toBeNull()
+        expect(frame.src).toBe('http://localhost:3001/open/fixture-ticket')
+        expect(frame.dataset.shown).toBe('false')
+        const received: any[] = []
+        let channel: MessagePort | undefined
+        frame.contentWindow!.postMessage = ((_data: unknown, _origin: string, ports: MessagePort[]) => {
+          channel = ports[0]
+          channel!.onmessage = (event) => received.push(event.data)
+        }) as never
+        await act(async () => {
+          window.dispatchEvent(
+            new MessageEvent('message', {
+              source: frame.contentWindow,
+              origin: 'null',
+              data: { type: 'it:hello', doc: 'fixture-document' },
+            }),
+          )
+          await tick(60)
+        })
+        expect(frame.dataset.shown).toBe('true')
+        expect(received).toContainEqual({
+          type: 'it:state',
+          state: { n: 1 },
+          revision: 3,
+        })
+        const reports = asked.filter((a) => a.what === 'displays:report').map((a) => a.args)
+        expect(reports.some((r) => r.phase === 'shown' && r.mountId === 'mount-fixture')).toBe(true)
+        expect(reports.every((r) => /^[0-9a-f]{32}$/.test(r.tab))).toBe(true)
+        expect(new Set(reports.map((r) => r.tab)).size).toBe(1)
+        await act(async () => {
+          channel!.postMessage({
+            type: 'it:action',
+            requestId: 'fixture-request',
+            envelope: {
+              clientActionId: 'fixture-click',
+              name: 'approve',
+              payload: { n: 1 },
+              contentVersion: 7,
+            },
+          })
+          await tick(60)
+        })
+        expect(asked.filter((a) => a.what === 'actions:submit')).toHaveLength(1)
+        await press('Back to your pages')
+        expect(host.querySelector('iframe')).toBeNull()
+        expect(asked.filter((a) => a.what === 'displays:report').at(-1)?.args.phase).toBe('none')
+        expect(errors).toEqual([])
+        expect(names()).not.toContain('/session/redeem')
+        expect(names()).not.toContain('displays:show')
+        channel?.close()
+      } finally {
+        for (const [name, descriptor] of descriptors) {
+          if (descriptor) Object.defineProperty(crypto, name, descriptor)
+          else Reflect.deleteProperty(crypto, name)
+        }
+        for (const [name, descriptor] of nav) {
+          if (descriptor) Object.defineProperty(navigator, name, descriptor)
+          else Reflect.deleteProperty(navigator, name)
+        }
+      }
+    })
+  }
+})

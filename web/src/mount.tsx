@@ -30,6 +30,7 @@ import {
 import { useConvex } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { askTwice } from './backend'
+import { reportPage } from './display-report'
 import { api, displayKey, type Id, note, refusal } from './lib'
 import { useLiveState } from './live'
 import { allow, allowed as allowedHere, askPerson, type Begun, begin, cannotRecord, kindsOf, kindsSaid, shoot, specOf } from './media'
@@ -117,6 +118,10 @@ export function Mount({
   const faulted = useRef<number | null>(null)
   const liveState = useLiveState(artifactId)
   const again = useCallback(() => setAttempt((n) => n + 1), [])
+  useEffect(() => {
+    reportPage(phase.is, mount?.mountId)
+  }, [phase, mount])
+  useEffect(() => () => reportPage('none'), [])
 
   // 1 and 2. a fresh mount for every showing, and its one ticket
   useEffect(() => {

@@ -27,6 +27,7 @@ import { endSession, signOutDisplay } from './sessions'
 
 const KEY = /^[A-Za-z0-9_-]{16,128}$/
 /** A display that has not been seen for this long has closed the site, and opens it anew when it comes back. */
+const REPORT_MS = 120_000
 const AWAY_MS = 600_000
 /**
  * Eight earlier pairings per display keep removal counts to at most 200 historical roots
@@ -245,8 +246,85 @@ export const list = query({
       .withIndex('by_user', (q) => q.eq('userId', user._id))
       .take(QUOTA.displays)
     const out = []
-    for (const d of all) out.push({ ...view(d), paired: await stillPaired(ctx, d) })
+    for (const d of all) {
+      const paired = await stillPaired(ctx, d)
+      const requested = d.showing ? await ctx.db.get(d.showing.artifactId) : null
+      const observed = []
+      for (const report of d.reports ?? []) {
+        if (report.epoch !== d.epoch) continue
+        const page = report.artifactId ? await ctx.db.get(report.artifactId) : null
+        const age = Date.now() - report.at
+        const fresh = paired && age >= 0 && age < REPORT_MS
+        observed.push({
+          tabId: report.tab,
+          reportedAt: report.at,
+          fresh,
+          phase: report.phase,
+          visible: report.visible,
+          pageId: page?.userId === user._id ? page.slug : null,
+          version: report.version ?? null,
+          browserConfirmed: fresh && report.phase === 'shown' && report.visible && page?.userId === user._id,
+        })
+      }
+      out.push({
+        ...view(d),
+        paired,
+        requestedPage: requested?.userId === user._id ? { pageId: requested.slug, requestedAt: d.showing!.at } : null,
+        observed,
+        observationTTL: REPORT_MS,
+        connection: !paired ? 'unpaired' : observed.some((r) => r.fresh) ? 'recent_browser_report' : 'unknown',
+        physicalRenderingVerified: false,
+      })
+    }
     return out
+  },
+})
+
+/** The authenticated host browser reports its own tab, never another display or a payload supplied by a page. */
+export const report = mutation({
+  args: {
+    key: v.string(),
+    tab: v.string(),
+    sequence: v.number(),
+    mountId: v.optional(v.string()),
+    phase: v.union(v.literal('none'), v.literal('loading'), v.literal('shown'), v.literal('failed')),
+    visible: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const c = await requireBrowser(ctx)
+    const d = await displayByKey(ctx, c, args.key)
+    if (d.sessionId !== c.session._id) fail('not_found', 'This display is not registered to this browser.')
+    if (!/^[a-zA-Z0-9_-]{16,64}$/.test(args.tab) || !Number.isSafeInteger(args.sequence) || args.sequence < 1) fail('invalid', 'That is not a tab report.')
+    const now = Date.now()
+    let reports = (d.reports ?? []).filter((r) => r.epoch === d.epoch)
+    const previous = reports.find((r) => r.tab === args.tab)
+    if (previous && args.sequence <= previous.sequence) return { accepted: false, now }
+    if (!previous && reports.length >= 16) reports = reports.filter((r) => now - r.at < REPORT_MS)
+    if (!previous && reports.length >= 16) fail('limit', 'At most sixteen recently reporting tabs belong to a display.')
+    await rateLimit(ctx, 'reportDisplay', d._id)
+    let artifactId: Id<'artifacts'> | undefined
+    let version: number | undefined
+    if (args.mountId) {
+      const mount = await ctx.db
+        .query('mounts')
+        .withIndex('by_mount', (q) => q.eq('mountId', args.mountId!))
+        .unique()
+      if (!mount || mount.userId !== c.user._id || mount.displayId !== d._id || mount.epoch !== d.epoch || !mount.ticketGiven)
+        fail('not_found', 'No such showing on this display.')
+      const page = await ctx.db.get(mount.artifactId)
+      if (!page || page.userId !== c.user._id) fail('not_found', 'No such page.')
+      artifactId = mount.artifactId
+      version = mount.version
+    } else if (args.phase === 'shown') fail('invalid', 'A loaded page needs its showing.')
+    if (args.phase === 'none' && args.mountId) fail('invalid', 'A tab with no page cannot name a showing.')
+    await ctx.db.patch(d._id, {
+      lastSeenAt: args.visible ? now : d.lastSeenAt,
+      reports: [
+        ...reports.filter((r) => r.tab !== args.tab),
+        { tab: args.tab, sequence: args.sequence, at: now, epoch: d.epoch, phase: args.phase, visible: args.visible, artifactId, version },
+      ],
+    })
+    return { accepted: true, now }
   },
 })
 
@@ -383,8 +461,15 @@ export const forget = mutation({
  * which shows nothing until that browser is paired again.
  */
 export const show = mutation({
-  args: { slug: v.string(), display: v.optional(v.string()), session: v.optional(session), agent: v.optional(v.string()) },
-  handler: async (ctx, { slug, display, session: mine, agent }) => {
+  args: {
+    slug: v.string(),
+    display: v.optional(v.string()),
+    displayId: v.optional(v.id('displays')),
+    session: v.optional(session),
+    agent: v.optional(v.string()),
+  },
+  handler: async (ctx, { slug, display, displayId, session: mine, agent }) => {
+    if (display !== undefined && displayId !== undefined) fail('invalid', 'Choose a display by name or id, not both.')
     const { user, machine } = await requireMachine(ctx)
     await rateLimit(ctx, 'show', user._id)
     const artifact = (await artifactBySlug(ctx, user._id, slug)) ?? fail('not_found', 'No such page.')
@@ -393,7 +478,11 @@ export const show = mutation({
       .withIndex('by_user', (q) => q.eq('userId', user._id))
       .take(QUOTA.displays)
     const wanted = display?.trim().toLowerCase()
-    const targets = wanted ? all.filter((d) => (d.name ?? d.generatedName).toLowerCase() === wanted) : all
+    const targets = displayId
+      ? [await ownDisplay(ctx, user._id, displayId)]
+      : wanted
+        ? all.filter((d) => (d.name ?? d.generatedName).toLowerCase() === wanted)
+        : all
     // Said without the name that was asked for and without the names there are: a refusal is
     // kept in the backend's own record of what failed, and a display's name is the person's.
     // The machine that asked knows what it asked, and reads the names with `it displays`.
@@ -413,6 +502,6 @@ export const show = mutation({
     // A page changes owner only if at least one requested display can show it. All display
     // changes and ownership changes commit together, including the rate-limit checks.
     const took = mine && shown.length ? (await takePage(ctx, artifact, machine, mine, agent)).took : false
-    return { displays: shown, notShown, took }
+    return { displays: shown, notShown, took, ...(displayId ? { displayIds: shown.length ? [displayId] : [] } : {}) }
   },
 })

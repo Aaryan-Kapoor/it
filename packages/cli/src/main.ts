@@ -132,6 +132,7 @@ import { finishInstallationRemoval, installationFile, removeInstallationFiles, s
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
 import * as usage from './usage'
 import { type Listed, printed, wait } from './wait'
+import { watchActions } from './watch-actions'
 
 // Everything is written through `written`, which follows each write until it has left the
 // process, and nothing here ends the process before all of it has: see `end` and `left`.
@@ -302,6 +303,7 @@ const noDisplay = () =>
 /** What It answers when asked to show a page: the displays it is now shown on, and each one it was asked onto and is not shown on, with why. */
 interface Shown {
   displays: string[]
+  displayIds?: string[]
   notShown?: { display: string; reason: string }[]
 }
 async function show(slug: string, a: Args) {
@@ -315,7 +317,7 @@ async function show(slug: string, a: Args) {
  * the one reason there is, `not_paired`. The `hint` says so in words, and where no display was
  * there to be asked at all, how one is paired.
  */
-function shownAs(shown: Shown): { shownOn: string[]; notShownOn?: { display: string; reason: string }[]; hint?: string } {
+function shownAs(shown: Shown): { shownOn: string[]; shownDisplayIds?: string[]; notShownOn?: { display: string; reason: string }[]; hint?: string } {
   const notShownOn = shown.notShown ?? []
   const ended = notShownOn.filter((d) => d.reason === 'not_paired').map((d) => named(d.display))
   const one = ended.length === 1
@@ -325,7 +327,12 @@ function shownAs(shown: Shown): { shownOn: string[]; notShownOn?: { display: str
     : shown.displays.length || notShownOn.length
       ? undefined
       : noDisplay()
-  return { shownOn: shown.displays, ...(notShownOn.length ? { notShownOn } : {}), ...(hint ? { hint } : {}) }
+  return {
+    shownOn: shown.displays,
+    ...(shown.displayIds ? { shownDisplayIds: shown.displayIds } : {}),
+    ...(notShownOn.length ? { notShownOn } : {}),
+    ...(hint ? { hint } : {}),
+  }
 }
 
 const LOGIN = 'login --url <address> --code <invite> [--name <name>] [--no-setup]'
@@ -2554,13 +2561,14 @@ State
                                  With no text, what was said before is taken away.
 
 Displays
-  it open <id> [--on "<display>"]
+  it open <id> [--on "<display>" | --on-id <display-id>]
   it notify "<text>" [--id <id>] [--on "<display>"] [--sticky] [--button "Label=action"]…
   it displays
 
 What the person did
   it wait [--id <id>] [--follow] [--timeout <seconds>]
   it actions [--id <id>] [--all]
+  it actions --id <id> --follow  Observe actions without claiming or acknowledging them.
                                  List the actions still waiting. An agent is listed those on
                                  its own conversation's ${NOUN.many} and on ${NOUN.many} that no
                                  conversation has. --all lists every one, and so does a command
@@ -3081,6 +3089,8 @@ async function main(argv: string[]): Promise<void> {
     }
 
     case 'open': {
+      if (text(a, 'on') !== undefined && text(a, 'on-id') !== undefined) throw new Problem('Choose a display by name or id, not both.', 'invalid')
+      if (text(a, 'on-id') !== undefined && !text(a, 'on-id')) throw new Problem('A display id cannot be empty.', 'invalid')
       const slug = need(a._[0], `which ${NOUN.one}`, 'open <id> [--on "<display>"]')
       // A conversation that brings a page up for its person is the one they are talking to: the
       // page is its page from now on, also where another conversation made it. Someone who says
@@ -3094,6 +3104,7 @@ async function main(argv: string[]): Promise<void> {
         call<Shown & { took?: boolean }>('mutation', api.displays.show, {
           slug,
           ...(text(a, 'on') ? { display: text(a, 'on') } : {}),
+          ...(text(a, 'on-id') ? { displayId: text(a, 'on-id') } : {}),
           ...(mine ? { session: mine, agent: mine.harness } : {}),
         }),
       )
@@ -3152,6 +3163,10 @@ async function main(argv: string[]): Promise<void> {
       return wait(a, counted)
     case 'actions': {
       const slug = text(a, 'id')
+      if (a.flags.follow) {
+        if (!slug || a.flags.all) throw new Problem('A read-only action stream needs exactly one --id.', 'invalid')
+        return watchActions(slug)
+      }
       if (slug && a.flags.all) throw new Problem(`--id lists what waits on one ${NOUN.one}, and --all what waits on every one: give one of them.`, 'invalid')
       if (slug) return out((await call<Listed[]>('query', api.delivery.waiting, { slug })).map(printed))
       // An agent is listed what waits on its own conversation's pages, under every id the

@@ -6332,3 +6332,16 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and whether an agent 
     }
   })
 })
+
+test('exact display ID is sent without a name or ownership takeover', async () => {
+  const m = machine()
+  const b = await backend(m, ({ path }) => (path === 'displays:show' ? { displays: ['Zeph16'], displayIds: ['display-exact'], took: false } : null))
+  try {
+    const result = printed(await run(m, ['open', 'board', '--on-id', 'display-exact'], b.env))
+    expect(result).toMatchObject({ shownDisplayIds: ['display-exact'] })
+    expect(b.asked.filter((x) => x.path === 'displays:show').map((x) => x.args)).toEqual([{ slug: 'board', displayId: 'display-exact' }])
+    expect(b.asked.filter((x) => x.path === 'artifacts:take')).toEqual([])
+  } finally {
+    await b.close()
+  }
+})
