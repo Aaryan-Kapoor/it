@@ -10,6 +10,7 @@ import { eraseDeliveryRecovery } from '../delivery-recovery'
 import { elsewhere, inHome, type Machine, machine, machineFile, notSetUp, Problem, readJson, why, writePrivate } from '../lib'
 import { conversationsFile } from '../publish'
 import { launcherLooked, RESTART_CODE, startsByItself, stopFile, supervised } from '../service'
+import { standalone, sweepOldPrograms } from '../upgrade'
 import { ageBand, begin, countBand, counting, failureOf, record, recordNoted, sinceBegun } from '../usage'
 import { asAdmin, type Backend, endOf, removeCopies, startBackend } from './backend'
 import { backendFolder, noteNetwork, readConfig, type ServiceConfig } from './config'
@@ -51,6 +52,9 @@ export async function serve(say: (line: string) => void = (line) => void process
   keep()
   const keeping = setInterval(keep, KEEP_MS)
   launcherLooked(say)
+  // On Windows the program an update moved aside is removed once it has ended, which it has where this is the program that update put in its place
+  const program = process.platform === 'win32' ? standalone() : null
+  if (program) sweepOldPrograms(path.dirname(program))
   let failed = false
   // Counting begins with the service where no command has begun it, so that a service that
   // cannot start is counted as one that could not

@@ -15,10 +15,26 @@ import { type Problem, VERSION } from './src/lib'
 import * as backend from './src/serve/backend'
 import { aloneAt } from './src/serve/backend'
 import { removeInstallationFiles, withInstallationLock } from './src/uninstall-files'
-import { fetchNewer, keepBase, LOOKS_EVERY_MS, latest, programName, releases, watch, watched, watching } from './src/upgrade'
+import { fetchNewer, keepBase, LOOKS_EVERY_MS, latest, programName, releases, sweepOldPrograms, watch, watched, watching } from './src/upgrade'
 
 vi.mock('node:fs', async (original) => ({ ...(await original<typeof import('node:fs')>()) }))
 vi.mock('./src/serve/backend', async (original) => ({ ...(await original<typeof import('./src/serve/backend')>()) }))
+
+describe('the programs an update on Windows moved aside', () => {
+  test('are removed from the program’s folder, and nothing else there is', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'it-sweep-'))
+    try {
+      for (const name of ['it.exe', 'it.old.1700000000000.exe', 'it.old.1700000000001.exe', 'it.old.x.exe', 'it.exe.recovery.json', 'it-service.cmd'])
+        writeFileSync(path.join(dir, name), '')
+      sweepOldPrograms(dir)
+      expect(fs.readdirSync(dir).sort()).toEqual(['it-service.cmd', 'it.exe', 'it.exe.recovery.json', 'it.old.x.exe'])
+      // A folder that is not there is nothing to sweep
+      expect(() => sweepOldPrograms(path.join(dir, 'missing'))).not.toThrow()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('which version is newer', () => {
   test('is told by the three numbers, and never by a version that is not written as three', () => {
