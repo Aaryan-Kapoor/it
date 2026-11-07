@@ -101,6 +101,7 @@ beforeEach(() => {
         content.garbleNext--
         return new Response('{"removed": 10, "mo', { status: 200 })
       }
+      if (op === 'read') return new Response(JSON.stringify({ html: 'x'.repeat(100), bytes: 100, sha256: sha }))
       if (op === 'verify') return new Response(JSON.stringify({ ok: content.verifyOk, missing: content.verifyOk ? [] : ['index.html'] }))
       if (op === 'delete' && content.stuckNext > 0) {
         content.stuckNext--
@@ -7434,5 +7435,56 @@ describe('Restored exact display controls and browser reports', () => {
     expect((await m.as.query(api.displays.list, {}))[0]!.observed).toEqual([])
     expect(await code(a.browser.mutation(api.displays.report, { ...report, sequence: 2 }))).toBe('not_found')
   })
+})
 
+describe('Bounded account source read', () => {
+  test('Source reads are account scoped, bounded and contain no grants.', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    await person(t, 'bob')
+    const m = await machineOf(t, 'alice')
+    const other = await machineOf(t, 'bob')
+    await publish(m, 'source-page', { session: SESSION })
+    expect(await m.as.action(api.artifacts.source, { slug: 'source-page' })).toEqual({
+      id: 'source-page',
+      version: 1,
+      html: 'x'.repeat(100),
+      bytes: 100,
+      sha256: sha,
+    })
+    expect(await code(m.as.action(api.artifacts.source, { slug: 'source-page', maxBytes: 99 }))).toBe('limit')
+    expect(await code(m.as.action(api.artifacts.source, { slug: 'source-page', maxBytes: 65537 }))).toBe('invalid')
+    expect(await code(other.as.action(api.artifacts.source, { slug: 'source-page' }))).toBe('not_found')
+  })
+})
+
+describe('Source read consistency', () => {
+  test('A concurrent publication during the content fetch is refused, not returned as the current source.', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'read-race')
+    const fetcher = vi.mocked(fetch).getMockImplementation()!
+    let changed = false
+    vi.mocked(fetch).mockImplementation(async (...args) => {
+      if (String(args[0]).endsWith('/control/read') && !changed) {
+        changed = true
+        await publish(m, 'read-race')
+      }
+      return fetcher(...args)
+    })
+    expect(await code(m.as.action(api.artifacts.source, { slug: 'read-race' }))).toBe('conflict')
+  })
+  test('Content metadata mismatch is refused and a screen cannot use the enrolled-machine source API.', async () => {
+    const t = backend()
+    const p = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'read-integrity')
+    const fetcher = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (...args) =>
+      String(args[0]).endsWith('/control/read') ? new Response(JSON.stringify({ html: 'wrong', bytes: 5, sha256: sha })) : fetcher(...args),
+    )
+    expect(await code(m.as.action(api.artifacts.source, { slug: 'read-integrity' }))).toBe('conflict')
+    expect(await code(p.browser.action(api.artifacts.source, { slug: 'read-integrity' }))).toBe('forbidden')
+  })
 })

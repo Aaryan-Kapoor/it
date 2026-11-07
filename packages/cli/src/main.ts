@@ -396,6 +396,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   update: [1, 'update <id> (--file f | --dir d | --html "<…>" | pipe)'],
   list: [0, 'list'],
   read: [1, 'read <id>'],
+  'read-source': [1, 'read-source <id> [--max-bytes <n>]'],
   delete: [1, 'delete <id> [--status]'],
   rollback: [2, 'rollback <id> <version>'],
   patch: [2, "patch <id> '<json>' [--replace] [--if-revision <n>]"],
@@ -2466,6 +2467,7 @@ Pages
                                  Without --take, create makes nothing under an id that is
                                  another conversation's ${NOUN.one}, and says whose it is.
   it list | it read <id> | it rollback <id> <version>
+  it read-source <id> [--max-bytes <n>]   Read only published entry HTML, at most 65536 bytes.
   it delete <id> [--status]      Delete a page, or check its last deletion.
 
 State
@@ -2932,6 +2934,12 @@ async function main(argv: string[]): Promise<void> {
           ]),
         ),
       ])
+    }
+    case 'read-source': {
+      const slug = need(a._[0], 'which page', 'read-source <id> [--max-bytes <n>]')
+      return out(
+        await call('action', api.artifacts.source, { slug, ...(text(a, 'max-bytes') === undefined ? {} : { maxBytes: Number(text(a, 'max-bytes')) }) }),
+      )
     }
     case 'read': {
       const slug = need(a._[0], `which ${NOUN.one}`, 'read <id>')
