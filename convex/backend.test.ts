@@ -6504,6 +6504,47 @@ describe('cases at the edges', () => {
     expect((await alice.browser.query(api.artifacts.get, { slug: 'plan' })).wakeFailed).toBeNull()
   })
 
+  test('what was set aside is tried again when the owner asks before the rest of its conversation has been set aside', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(laptop, 'plan', { session: thread })
+    const submit = (id: string) =>
+      alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope(id) })
+    const { actionId } = await submit('click-0001')
+    const other = await submit('click-0002')
+    // The conversation takes nothing: the click is set aside, and the rest is to follow by itself
+    expect(await laptop.as.mutation(api.delivery.park, { id: actionId, for: thread, all: true })).toBe(true)
+    // The owner presses Retry before the rest has been reached
+    vi.setSystemTime(Date.now() + 1)
+    expect(await alice.browser.mutation(api.actions.retry, { artifactId: p.artifactId })).toEqual({ retried: 1 })
+    await settle(t)
+    // Retried after the machine gave up, the click keeps its fresh tries. What the person did
+    // not ask about is set aside as the machine decided
+    expect((await inbox(laptop, [thread])).map((c) => c.id)).toEqual([actionId])
+    expect((await t.run((ctx) => ctx.db.get(other.actionId)))?.parkedBy).toBe(laptop.id)
+  })
+
+  test('clicks tried again since their conversation was given up on are passed over, and what comes after them is still set aside', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(m, 'plan', { session: thread })
+    const [first] = await insertClicks(t, p.artifactId, 1, {}, Date.now() - 1000)
+    // More than a batch of clicks the person had tried again a moment from now, then a few more
+    const retried = await insertClicks(t, p.artifactId, 120, { retriedAt: Date.now() + 1 }, Date.now() - 900)
+    const after = await insertClicks(t, p.artifactId, 10, {}, Date.now() - 500)
+    expect(await m.as.mutation(api.delivery.park, { id: first as never, for: thread, all: true })).toBe(true)
+    vi.setSystemTime(Date.now() + 1)
+    await settle(t)
+    const rows = await t.run((ctx) => ctx.db.query('actions').collect())
+    const parked = new Set(rows.filter((x) => x.parkedBy === m.id).map((x) => x._id as string))
+    expect(retried.filter((id) => parked.has(id))).toEqual([])
+    expect(after.every((id) => parked.has(id))).toBe(true)
+  })
+
   test('only the owner’s browser can have what was set aside tried again, and nobody else’s asking changes anything', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

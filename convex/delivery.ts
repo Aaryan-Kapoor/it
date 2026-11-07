@@ -750,8 +750,10 @@ export const park = mutation({
       leaseMachineId: undefined,
       leaseExpiresAt: undefined,
     })
+    // The rest are set aside by what was decided now: one the person asks to have tried again
+    // after this, before the rest is reached, is tried again and not set aside by it
     if (all && !moved && x.harness && x.sessionId)
-      await ctx.scheduler.runAfter(0, internal.delivery.parkRest, { machineId: machine._id, harness: x.harness, sessionId: x.sessionId })
+      await ctx.scheduler.runAfter(0, internal.delivery.parkRest, { machineId: machine._id, harness: x.harness, sessionId: x.sessionId, decidedAt: Date.now() })
     return true
   },
 })
@@ -806,17 +808,52 @@ export const unparkRest = internalMutation({
 
 /** Sets aside everything else waiting for a conversation that takes nothing, a batch at a time, however much there is. */
 export const parkRest = internalMutation({
-  args: { machineId: v.id('machines'), harness: v.string(), sessionId: v.string() },
-  handler: async (ctx, { machineId, harness, sessionId }) => {
-    const rest = await ctx.db
-      .query('actions')
-      .withIndex('by_route', (q) => q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId))
-      .take(50)
+  args: {
+    machineId: v.id('machines'),
+    harness: v.string(),
+    sessionId: v.string(),
+    /** When the machine found that the conversation takes nothing. Absent from what was scheduled before this was carried. */
+    decidedAt: v.optional(v.number()),
+    /**
+     * Where the last batch stopped, by when its last click was made and when its record was:
+     * what is passed over below stays in the list, and the next batch starts after it.
+     */
+    after: v.optional(v.object({ made: v.number(), at: v.number() })),
+  },
+  handler: async (ctx, { machineId, harness, sessionId, decidedAt, after }) => {
+    // Those made at the same moment as the last one read, after it, and then those made later
+    const rest = after
+      ? await ctx.db
+          .query('actions')
+          .withIndex('by_route', (q) =>
+            q
+              .eq('machineId', machineId)
+              .eq('delivery', 'pending')
+              .eq('harness', harness)
+              .eq('sessionId', sessionId)
+              .eq('createdAt', after.made)
+              .gt('_creationTime', after.at),
+          )
+          .take(50)
+      : []
+    if (rest.length < 50)
+      rest.push(
+        ...(await ctx.db
+          .query('actions')
+          .withIndex('by_route', (q) => {
+            const route = q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId)
+            return after ? route.gt('createdAt', after.made) : route
+          })
+          .take(50 - rest.length)),
+      )
     for (const other of rest) {
       if (await stoppedSince(ctx, other)) {
         await dropStopped(ctx, other)
         continue
       }
+      // The person asked to have it tried again since the machine gave up on the conversation:
+      // it is to have its tries, and what was decided before that is not the last word on it
+      if (decidedAt !== undefined && other.retriedAt !== undefined && other.retriedAt >= decidedAt) continue
       // Only what is still for that conversation on that machine: a page that has changed
       // hands since has had its clicks addressed afresh, and they are gone from this list
       const to = await destination(ctx, other.artifactId)
@@ -824,8 +861,15 @@ export const parkRest = internalMutation({
         await ctx.db.patch(other._id, { machineId: undefined, parkedBy: machineId })
       else await ctx.db.patch(other._id, { ...to, parkedBy: undefined })
     }
-    // Each batch takes what it read out of the list it reads from, so the next starts afresh
-    if (rest.length === 50) await ctx.scheduler.runAfter(0, internal.delivery.parkRest, { machineId, harness, sessionId })
+    const last = rest.at(-1)
+    if (last && rest.length === 50)
+      await ctx.scheduler.runAfter(0, internal.delivery.parkRest, {
+        machineId,
+        harness,
+        sessionId,
+        decidedAt,
+        after: { made: last.createdAt, at: last._creationTime },
+      })
     return null
   },
 })
