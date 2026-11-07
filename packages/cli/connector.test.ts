@@ -9,7 +9,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { MARK, PROTOCOL_VERSION, WAKE_BACK_MS } from '@it/protocol'
+import { MARK, PROTOCOL_VERSION, TAKES, WAKE_BACK_MS } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS } from './src/addons.generated'
@@ -48,6 +48,10 @@ const stand = vi.hoisted(() => ({
   savedRuns: [] as Record<string, unknown>[],
   unknown: new Set<string>(),
   profiles: true,
+  /** What It says at its door of whether it takes every later form of a call this program knows: undefined where the door cannot be asked. */
+  takes: true as boolean | undefined,
+  /** How far this machine's clock is ahead of It's, which says its time at its door. */
+  fast: 0,
   /**
    * T3 Code as a test has it, which is not running unless the test says so: the thread each
    * conversation is held in, by the conversation's id; every time it was asked which thread
@@ -184,6 +188,7 @@ vi.mock('./src/lib', async (original) => {
       void saving.finally(() => stand.saving.delete(saving)).catch(() => {})
       return saving
     },
+    backendDoor: async () => (stand.takes === undefined ? undefined : { takes: stand.takes ? Object.values(TAKES) : [], now: Date.now() - stand.fast }),
     live: () => ({
       onUpdate: (fn: any, args: unknown, heard: (value: any) => void) => {
         stand.watching.set(getFunctionName(fn), (value) => {
@@ -333,6 +338,8 @@ afterEach(async () => {
   stand.savedRuns.length = 0
   stand.unknown.clear()
   stand.profiles = true
+  stand.takes = true
+  stand.fast = 0
   stand.answer = null
   // A lookup a test left unanswered is answered, so that nothing of it outlasts the test
   for (const asked of stand.t3.asked) asked.answer(null)
@@ -4777,6 +4784,389 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     await until(() => stand.codex.length === 1, 10_000)
     expect(stand.codex[0]!.args).toContain('--thread=thread-2')
   }, 30_000)
+})
+
+describe.skipIf(process.platform === 'win32')('a conversation held in a thread of T3 Code whose add-on is not heard from', () => {
+  const CLAUDE = '11111111-2222-4333-8444-555555555555'
+  /** The person has chosen Claude Code and Codex, and both have It's add-on in them. Auto-wake is off for both. */
+  const BOTH = {
+    wanted: ['claude-code', 'codex'],
+    found: [
+      { id: 'claude-code', version: '2.1.300', addon: 'connected' },
+      { id: 'codex', version: '1.0.0', addon: 'connected' },
+    ],
+  }
+  const click = (n: number, session: { harness: string; id: string } = { harness: 'claude-code', id: CLAUDE }) => ({
+    id: `click-${n}`,
+    artifact: `page-${n}`,
+    title: 'A page',
+    name: 'approve',
+    payload: '{"plan":"B"}',
+    // Made now, after the connector began to ask for its conversation, unless a test says otherwise
+    at: Date.now() + n,
+    attended: true,
+    session,
+  })
+  const asked = () =>
+    stand.asking.get('delivery:inboxPage') as {
+      listening: { harness: string; id: string }[]
+      held?: { harness: string; id: string; since: number }[]
+      queues: string[]
+    }
+  /** The conversations the connector asks the backend for the clicks of, whether as here or as held in a thread. */
+  const listened = () => [...asked().listening, ...(asked().held ?? [])].map((s) => `${s.harness}:${s.id}`).sort()
+  /**
+   * The backend answers as it does: with what is waiting for the conversations and queues the
+   * connector asks for, and nothing else, and for a conversation held in a thread only what was
+   * made after since when the connector has asked for it that way.
+   */
+  const backend = (...clicks: ReturnType<typeof click>[]) =>
+    stand.watching.get('delivery:inboxPage')!({
+      clicks: clicks.filter(
+        (c) =>
+          asked().listening.some((s) => s.harness === c.session.harness && s.id === c.session.id) ||
+          (asked().held ?? []).some((s) => s.harness === c.session.harness && s.id === c.session.id && c.at > s.since) ||
+          asked().queues.includes(c.session.harness),
+      ),
+      after: [],
+    })
+  const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
+  /** It neither put anything into Codex's queue nor reopened anything. */
+  const noOtherWay = () => {
+    expect(stand.codex).toEqual([])
+    expect(stand.calls.some((c) => c.name === 'machines:wakeFailed' || c.name === 'machines:runBegan')).toBe(false)
+  }
+  /** T3 Code is running, and It answers as it does: a click it has been told was handed over is given to no machine again. */
+  const withT3Code = () => {
+    stand.t3.running = true
+    const handed = new Set<string>()
+    stand.answer = (name, args) => {
+      if (name === 'delivery:handedOff') handed.add(args.id)
+      if (name === 'delivery:claim') return (args.ids as string[]).filter((id) => !handed.has(id))
+      return undefined
+    }
+  }
+  /** What a connector from before wrote down: the threads its conversations are held in, and the ids they had before. */
+  const noted =
+    (threads: Record<string, string>, aliases?: Record<string, string>) =>
+    (folder: string): void => {
+      writeFileSync(path.join(folder, 't3-threads.json'), JSON.stringify(threads))
+      if (aliases) writeFileSync(path.join(folder, 'aliases.json'), JSON.stringify(aliases))
+    }
+  const live = async () => (await local<{ sessions: string[] }>('/health'))?.sessions
+
+  test('a Claude Code conversation goes to its thread once T3 Code has let it go and its add-on has been quiet past the time it is watched for, and is never said to be listening', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    withT3Code()
+    await start('socket', BOTH, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    // The add-on asks while T3 Code holds the conversation's Claude Code
+    await local(`/clicks?harness=claude-code&session=${CLAUDE}`)
+    expect(await live()).toEqual([`claude-code:${CLAUDE}`])
+    // T3 Code lets it go, and its add-on is heard from no more for a minute and a half
+    await pass(95)
+    expect(await live()).toEqual([])
+    expect(listened()).toContain(`claude-code:${CLAUDE}`)
+    // Auto-wake is off for Claude Code, so its clicks are not asked for as reopenings
+    expect(asked().queues).not.toContain('claude-code')
+    backend(click(1))
+    for (let i = 0; i < 10 && !stand.t3.sent.length; i++) await pass()
+    // Its hooks were heard from, so what stands in the thread is a mark that a hook reads the click by
+    expect(stand.t3.sent.map((s) => s.thread)).toEqual(['t3-thread-c'])
+    for (let i = 0; i < 5 && !called('delivery:handedOff').includes('click-1'); i++) await pass()
+    expect(called('delivery:handedOff')).toContain('click-1')
+    noOtherWay()
+  }, 30_000)
+
+  test('a connector that starts anew asks for what the one before it noted, and the click goes to its thread without T3 Code being asked which', async () => {
+    withT3Code()
+    await start('socket', BOTH, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    expect(listened()).toEqual([`claude-code:${CLAUDE}`])
+    expect(await live()).toEqual([])
+    backend(click(1))
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+    expect(stand.t3.asked).toEqual([])
+    noOtherWay()
+  })
+
+  test('while T3 Code is not running the click waits, and goes to its thread once T3 Code is running again', async () => {
+    withT3Code()
+    stand.t3.running = false
+    await start('socket', BOTH, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    backend(click(1))
+    await pause(2500)
+    expect(stand.t3.sent).toEqual([])
+    expect(called('delivery:claim')).toEqual([])
+    expect(said.some((line) => line.includes('waits, since T3 Code is not running here'))).toBe(true)
+    stand.t3.running = true
+    await until(() => stand.t3.sent.length === 1, 12_000)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+    noOtherWay()
+  }, 30_000)
+
+  test('nothing is asked for a conversation of an app the person has not chosen, and its click is left where it is', async () => {
+    withT3Code()
+    await start('socket', { ...BOTH, wanted: ['codex'] }, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    expect(listened()).toEqual([])
+    backend(click(1))
+    await pause(2500)
+    expect(stand.t3.sent).toEqual([])
+    expect(called('delivery:claim')).toEqual([])
+  })
+
+  test.each([
+    ['the id it has now', 'claude-code:now'],
+    ['an id it had before it was cleared', 'claude-code:before'],
+  ])('one noted under %s is asked for under every id it is known by, and a click for a page made under either goes to its thread', async (_, key) => {
+    withT3Code()
+    await start('socket', BOTH, noted({ [key]: 't3-thread-c' }, { 'claude-code:before': 'claude-code:now' }))
+    expect(listened()).toEqual(['claude-code:before', 'claude-code:now'])
+    backend(click(1, { harness: 'claude-code', id: 'before' }), click(2, { harness: 'claude-code', id: 'now' }))
+    await until(() => stand.t3.sent.flatMap((s) => [...s.text.matchAll(/\[action ([^\]]+)\]/g)].map((m) => m[1])).length === 2)
+    expect(stand.t3.sent.every((s) => s.thread === 't3-thread-c')).toBe(true)
+    noOtherWay()
+  })
+
+  test('one whose thread T3 Code no longer takes messages for keeps being asked for, and its click waits for the thread rather than go into Codex’s queue or be set aside', async () => {
+    withT3Code()
+    // The thread was archived or deleted in T3 Code, which then refuses what is put to it
+    stand.t3.refusing = 'T3 Code has no such thread'
+    await start('socket', BOTH, noted({ 'codex:thread-1': 't3-thread-gone' }))
+    backend(click(1, { harness: 'codex', id: 'thread-1' }))
+    await until(() => stand.t3.refused.length === 1)
+    await pause(2500)
+    expect(stand.t3.refused.map((r) => r.thread)).toEqual(['t3-thread-gone'])
+    expect(listened()).toEqual(['codex:thread-1'])
+    expect(said.some((line) => line.includes('waits, since T3 Code did not take the last one'))).toBe(true)
+    for (const name of ['delivery:handedOff', 'delivery:park']) expect(called(name)).toEqual([])
+    noOtherWay()
+  })
+
+  test('a Codex conversation noted under the oldest of more ids than the latest few is held to its thread, and its click waits for T3 Code rather than go into Codex’s queue', async () => {
+    withT3Code()
+    stand.t3.running = false
+    // Noted under the id it had first, and cleared six times since: every earlier id leads to the one it has now
+    const before = Array.from({ length: 6 }, (_, n) => `codex:old-${n}`)
+    await start('socket', BOTH, noted({ 'codex:old-0': 't3-thread-c' }, Object.fromEntries(before.map((k) => [k, 'codex:thread-now']))))
+    expect(listened()).toContain('codex:old-0')
+    // Codex has the conversation open, so Codex's queue would take the click, and Auto-wake is off
+    backend(click(1, { harness: 'codex', id: 'old-0' }))
+    await pause(2500)
+    expect(stand.t3.sent).toEqual([])
+    expect(called('delivery:claim')).toEqual([])
+    expect(said.some((line) => line.includes('waits, since T3 Code is not running here'))).toBe(true)
+    noOtherWay()
+    stand.t3.running = true
+    await until(() => stand.t3.sent.length === 1, 12_000)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+    noOtherWay()
+  }, 30_000)
+
+  test.each([
+    ['the id it has now', 'claude-code:now'],
+    ['the oldest id it had', 'claude-code:before-0'],
+  ])(
+    'one noted under %s with seven earlier ids is asked for under all of them, and a click on a page made under the oldest goes to its thread',
+    async (_, key) => {
+      withT3Code()
+      const before = Array.from({ length: 7 }, (_, n) => `claude-code:before-${n}`)
+      await start('socket', BOTH, noted({ [key]: 't3-thread-c' }, Object.fromEntries(before.map((k) => [k, 'claude-code:now']))))
+      expect(listened()).toEqual([...before, 'claude-code:now'])
+      backend(click(1, { harness: 'claude-code', id: 'before-0' }))
+      await until(() => stand.t3.sent.length === 1)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      noOtherWay()
+    },
+  )
+
+  test('only what was made after the connector first asked for the conversation this way is asked for, so a click that waited weeks from before stays for it wait, and one made after goes to its thread', async () => {
+    withT3Code()
+    const began = Date.now()
+    await start('socket', BOTH, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    const since = asked().held?.[0]?.since ?? 0
+    expect(asked().held).toEqual([{ harness: 'claude-code', id: CLAUDE, since }])
+    expect(since).toBeGreaterThanOrEqual(began)
+    expect(since).toBeLessThanOrEqual(Date.now())
+    // Made three weeks ago, and waiting for the conversation since
+    const old = { ...click(1), at: Date.now() - 21 * 86_400_000 }
+    const made = click(2)
+    backend(old, made)
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent[0]!.text).toContain('[action click-2]')
+    await pause(1500)
+    expect(stand.t3.sent).toHaveLength(1)
+    // The old one is neither claimed, handed over nor set aside: it waits where it is, for `it wait` and the site
+    for (const name of ['delivery:claim', 'delivery:handedOff', 'delivery:park', 'delivery:release']) expect(called(name)).not.toContain('click-1')
+    noOtherWay()
+  })
+
+  test('on a machine whose clock is ahead of It’s, since when is counted by It’s clock, so that a click It received just after is not taken for one from before', async () => {
+    withT3Code()
+    // This machine's clock is 45 seconds fast
+    stand.fast = 45_000
+    const began = Date.now() - stand.fast
+    await start('socket', BOTH, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    const since = asked().held![0]!.since
+    expect(since).toBeGreaterThanOrEqual(began)
+    expect(since).toBeLessThanOrEqual(Date.now() - stand.fast)
+    // Received by It a second after the connector began to ask for the conversation this way
+    await pause(1000)
+    backend({ ...click(1), at: Date.now() - stand.fast })
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent[0]!.text).toContain('[action click-1]')
+    noOtherWay()
+  })
+
+  test('since when a conversation has been asked for this way is kept across a restart, and counted afresh only for one that is noted anew', async () => {
+    withT3Code()
+    await start('socket', BOTH, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    const since = asked().held![0]!.since
+    expect(JSON.parse(readFileSync(path.join(home, 't3-asked.json'), 'utf8'))).toEqual({ [`claude-code:${CLAUDE}`]: since })
+    await stop?.()
+    stop = null
+    await pause(20)
+    await start('socket', BOTH, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c', 'codex:thread-new': 't3-thread-x' }), home)
+    expect(asked().held).toEqual([
+      { harness: 'claude-code', id: CLAUDE, since },
+      { harness: 'codex', id: 'thread-new', since: expect.any(Number) },
+    ])
+    expect(asked().held![1]!.since).toBeGreaterThan(since)
+  })
+
+  test.each([
+    ['says it does not take them', false],
+    ['cannot be asked', undefined],
+  ])(
+    'where It %s, none is asked for this way and no click for one is offered, until It says it takes them',
+    async (_, takes) => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+      withT3Code()
+      stand.takes = takes
+      await start('socket', BOTH, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+      expect(asked().held).toBeUndefined()
+      expect(listened()).toEqual([])
+      backend({ ...click(1), at: Date.now() - 21 * 86_400_000 }, click(2))
+      await pause(1500)
+      expect(stand.t3.sent).toEqual([])
+      expect(called('delivery:claim')).toEqual([])
+      // Since when is counted from the start where It cannot be asked, and not where it has said it does not take them
+      const counted = readJson<Record<string, number>>(path.join(home, 't3-asked.json')) ?? {}
+      expect(Object.keys(counted)).toEqual(takes === false ? [] : [`claude-code:${CLAUDE}`])
+      // It is brought up to date, and says so at its door, which is asked again every minute
+      stand.takes = true
+      await pass(60)
+      expect(listened()).toEqual([`claude-code:${CLAUDE}`])
+      backend(click(3))
+      await until(() => stand.t3.sent.length === 1)
+      expect(stand.t3.sent[0]!.text).toContain('[action click-3]')
+      noOtherWay()
+    },
+    30_000,
+  )
+
+  test('a click offered while the conversation listened, before It could first be asked whether it takes them, is still asked for once It has said it does and the add-on has gone quiet', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    withT3Code()
+    stand.t3.running = false
+    // It's door cannot be asked as the connector starts
+    stand.takes = undefined
+    await start('socket', BOTH, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    await local(`/clicks?harness=claude-code&session=${CLAUDE}`)
+    expect(asked().listening).toEqual([{ harness: 'claude-code', id: CLAUDE }])
+    // A click is offered while the conversation listens, and waits, since T3 Code is not running
+    await pass(10)
+    const waiting = click(1)
+    backend(waiting)
+    await pass(5)
+    expect(stand.t3.sent).toEqual([])
+    expect(called('delivery:claim')).toEqual([])
+    // It says it takes them when its door is asked again a minute in, and the add-on is heard
+    // from no more: past the time it is watched for, the conversation is asked for this way
+    stand.takes = true
+    await pass(80)
+    expect(await live()).toEqual([])
+    expect(asked().held).toEqual([{ harness: 'claude-code', id: CLAUDE, since: expect.any(Number) }])
+    expect(asked().held![0]!.since).toBeLessThan(waiting.at)
+    stand.t3.running = true
+    for (let i = 0; i < 10 && !stand.t3.sent.length; i++) {
+      backend(waiting)
+      await pass()
+    }
+    // Its hooks were heard from, so what stands in the thread is a mark that a hook reads the click by
+    expect(stand.t3.sent.map((s) => s.thread)).toEqual(['t3-thread-c'])
+    for (let i = 0; i < 5 && !called('delivery:handedOff').includes('click-1'); i++) await pass()
+    expect(called('delivery:handedOff')).toContain('click-1')
+    noOtherWay()
+  }, 30_000)
+
+  test('more of them than there is room for are asked for in turn, all of them in time, without watching anew with every pass, and one whose click waits for its thread keeps its place', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    withT3Code()
+    stand.t3.running = false
+    const ids = Array.from({ length: 70 }, (_, n) => `conversation-${String(n).padStart(2, '0')}`)
+    await start('socket', BOTH, noted(Object.fromEntries(ids.map((id) => [`claude-code:${id}`, `t3-${id}`]))))
+    // One conversation is here and listening, and keeps its place in front of them
+    await local('/clicks?harness=codex&session=thread-here')
+    const everAsked = new Set<string>()
+    let watched = 0
+    let last = ''
+    for (let i = 0; i < 90; i++) {
+      const now = JSON.stringify(asked())
+      if (now !== last) {
+        watched++
+        last = now
+        expect(listened().length).toBeLessThanOrEqual(40)
+        for (const k of listened()) everAsked.add(k)
+        // The one that is here is in every subscription, and not only in one of them
+        expect(listened()).toContain('codex:thread-here')
+        backend()
+      }
+      await pass()
+    }
+    expect(ids.every((id) => everAsked.has(`claude-code:${id}`))).toBe(true)
+    // Turned once every five seconds at the most, and not with each of the ninety passes
+    expect(watched).toBeLessThanOrEqual(90 / 5 + 3)
+    // A click for one of them is offered while T3 Code is not running: it waits, and its
+    // conversation is asked for through the turns that follow, until T3 Code is running again
+    const late = ids.find((id) => listened().includes(`claude-code:${id}`))!
+    const waiting = click(1, { harness: 'claude-code', id: late })
+    backend(waiting)
+    for (let i = 0; i < 30; i++) {
+      await pass()
+      expect(listened()).toContain(`claude-code:${late}`)
+      backend(waiting)
+    }
+    expect(stand.t3.sent).toEqual([])
+    stand.t3.running = true
+    for (let i = 0; i < 10 && !stand.t3.sent.length; i++) {
+      await pass()
+      backend(waiting)
+    }
+    expect(stand.t3.sent).toEqual([{ thread: `t3-${late}`, text: '[It] "A page" (page-1): approve, with details [action click-1]' }])
+    noOtherWay()
+  }, 60_000)
+
+  test.each(['claude-code', 'codex'])(
+    'a %s conversation is neither put into Codex’s queue nor reopened, though Auto-wake is on for it, while T3 Code is not running',
+    async (harness) => {
+      withT3Code()
+      stand.t3.running = false
+      const id = harness === 'codex' ? 'thread-1' : CLAUDE
+      stand.closed.add('thread-1')
+      await start('socket', BOTH, noted({ [`${harness}:${id}`]: 't3-thread-c' }))
+      stand.watching.get('machines:me')!({ wanted: BOTH.wanted, wakes: BOTH.wanted.map((h) => ({ harness: h, since: Date.now() - 60_000 })) })
+      expect(listened()).toEqual([`${harness}:${id}`])
+      backend(click(1, { harness, id }))
+      await pause(3000)
+      expect(called('delivery:claim')).toEqual([])
+      noOtherWay()
+      stand.t3.running = true
+      await until(() => stand.t3.sent.length === 1, 12_000)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      noOtherWay()
+    },
+    30_000,
+  )
 })
 
 describe.skipIf(process.platform === 'win32')('a thread of T3 Code that is switched to another agent app', () => {

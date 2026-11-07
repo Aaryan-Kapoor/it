@@ -14,7 +14,22 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, MARK, newer, parseJson, QUEUES, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
+import {
+  ALIVE,
+  briefClick,
+  type Click,
+  describeClick,
+  LEASE_MS,
+  LISTENING_MOST,
+  MARK,
+  newer,
+  parseJson,
+  QUEUES,
+  TAKES,
+  WAKE_MOST,
+  WAKES,
+  wakesOn,
+} from '@it/protocol'
 import { ADDON_API, AddonRuntimes } from './addon-runtime'
 import { ADDONS } from './addons.generated'
 import {
@@ -32,6 +47,7 @@ import {
   api,
   ask,
   backend,
+  backendDoor,
   call,
   direct,
   elsewhere,
@@ -133,6 +149,8 @@ const CLAUDE_QUIET_MS = 20_000
  * is nothing more to wait for.
  */
 const SETTLE_MS = 300
+/** How far ahead of It's clock this machine's may be and still be let in: a proof made further ahead is refused at `/bridge/token`. */
+const CLOCK_SLACK_MS = 60_000
 const SERVE_MOST = 8 // how many clicks one answer to an add-on carries
 const SERVE_BYTES = 200_000 // and how large that answer may be: an add-on reads no more than a quarter of a megabyte
 const WAITER_BYTES = 700_000 // and how large the clicks in one answer to a waiter may be together: `it wait` reads no more than a megabyte
@@ -150,10 +168,10 @@ const journalFile = () => inHome('journal.jsonl')
 const aliasFile = () => inHome('aliases.json')
 /**
  * The ids a conversation is known by, as keys: the one it carries on under now, and the latest
- * few it had before it was cleared, under which the pages it made then are still recorded.
- * `aliases` leads each earlier id to the one that came after it.
+ * few it had before it was cleared, under which the pages it made then are still recorded, or
+ * as many of those as `most` says. `aliases` leads each earlier id to the one that came after it.
  */
-export function knownAs(aliases: ReadonlyMap<string, string>, key: string): string[] {
+export function knownAs(aliases: ReadonlyMap<string, string>, key: string, most = 5): string[] {
   const follow = (k: string) => {
     for (let hops = 0; hops < 10 && aliases.has(k); hops++) k = aliases.get(k)!
     return k
@@ -164,7 +182,7 @@ export function knownAs(aliases: ReadonlyMap<string, string>, key: string): stri
     ...[...aliases]
       .filter(([, to]) => follow(to) === now)
       .map(([from]) => from)
-      .slice(-5),
+      .slice(-most),
   ]
 }
 /** The conversations a conversation on this machine is known by, as the connector has written them down: itself, where nothing is written. */
@@ -179,6 +197,8 @@ export function conversationIds(s: { harness: string; id: string }): { harness: 
 const heardFile = () => inHome('heard.json')
 /** The conversations T3 Code has said it holds in a thread, each with the thread: a click for one goes to that thread and nowhere else. */
 const t3ThreadsFile = () => inHome('t3-threads.json')
+/** Since when the clicks of each of those conversations have been asked for whether or not its add-on is there: only what was done after is asked for that way. */
+const t3AskedFile = () => inHome('t3-asked.json')
 /** Where a connector that is stopping writes down which conversations it cut off in the middle of a turn. */
 const cutOffFile = () => inHome('cut-off.json')
 /** The conversations this connector has reopened and that are running now, each with the process that is it: read by the connector that starts next, if this one dies. */
@@ -707,13 +727,74 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (t3ThreadsUnread && !existsSync(t3ThreadsFile())) t3ThreadsUnread = false
     return t3ThreadsUnread
   }
-  /** The thread a conversation is held in, as noted, under any id the conversation had. */
+  /**
+   * The thread a conversation is held in, as noted, under any id the conversation had: every
+   * earlier id that is kept, and not only the latest few, since a note written under an id the
+   * conversation had long ago still says where its clicks go. Its clicks are asked for under
+   * the same ids (`heldInThreads`).
+   */
   const notedThread = (key: string): string | undefined => {
-    for (const k of knownAs(aliases, key)) {
+    for (const k of knownAs(aliases, key, Number.POSITIVE_INFINITY)) {
       const thread = t3Threads.get(k)
       if (thread) return thread
     }
     return undefined
+  }
+  /**
+   * How far It's clock is ahead of this machine's, as it last said at its door (`askHeld`), where
+   * it has said: It reads a conversation's clicks from a moment by its own clock, the one it
+   * receives each click by, and a moment by this machine's would leave out what came just after
+   * it on a machine whose clock is fast.
+   */
+  let itAhead: number | undefined
+  /**
+   * The time by It's clock, as near as this machine can tell, and never later than It's own: It
+   * said its time before its answer came, and where it has not said, this machine's clock may be
+   * as much as `CLOCK_SLACK_MS` ahead of it.
+   */
+  const itsNow = () => Date.now() + (itAhead ?? -CLOCK_SLACK_MS)
+  /**
+   * Since when the clicks of each id of a conversation held in a thread of T3 Code have been
+   * asked for whatever its add-on and Auto-wake say (`heldInThreads`), by It's clock (`itsNow`),
+   * so that a click It received after that is never taken for one from before on a machine whose
+   * clock is off: from when this connector, or one before it, first counted the id among those it
+   * asks for that way, once It took that. It asks for that way only what was done after, and a
+   * click that waited for the conversation from before, as one that had waited weeks when It was
+   * brought up to date, stays where it is, for `it wait` and the site: it does not start a turn
+   * in the thread by itself. Counted while the
+   * conversation is here too, so that a click it was offered while it listened is still asked
+   * for once its add-on has gone quiet. Kept across a restart, and kept to the ids that are
+   * noted: one that is noted again is counted afresh. A note that cannot be read or written
+   * only makes these later, which leaves more where it is and starts nothing.
+   */
+  const t3Asked = new Map<string, number>()
+  {
+    const read = readJson<Record<string, unknown>>(t3AskedFile())
+    if (read && typeof read === 'object' && !Array.isArray(read))
+      for (const [key, at] of Object.entries(read))
+        if (/^(claude-code|codex):./.test(key) && typeof at === 'number' && Number.isFinite(at) && at > 0) t3Asked.set(key, at)
+  }
+  /** Counts these ids from now where they are not counted yet, forgets the ones no conversation that is noted has any more, and writes that down where it changed. */
+  const countAsked = (ids: Iterable<string>, noted: ReadonlySet<string>) => {
+    const now = itsNow()
+    let changed = false
+    for (const k of ids)
+      if (!t3Asked.has(k)) {
+        t3Asked.set(k, now)
+        changed = true
+      }
+    for (const k of t3Asked.keys())
+      if (!noted.has(k)) {
+        t3Asked.delete(k)
+        changed = true
+      }
+    if (!changed || over || recovery.erased || t3ThreadsHeld()) return
+    try {
+      writePrivate(t3AskedFile(), Object.fromEntries(t3Asked))
+    } catch (err) {
+      // Kept in memory meanwhile, and written down with the next change
+      seldom('t3-asked', `the note of since when the clicks of conversations held in threads of T3 Code are asked for could not be written (${why(err)})`)
+    }
   }
   /** Notes that T3 Code holds a conversation in this thread, and writes the note down. */
   const noteThread = (key: string, thread: string) => {
@@ -3358,6 +3439,81 @@ async function connecting(say: (line: string) => void): Promise<void> {
   let nextInbox: { harness: string; id: string }[] | null = null
   let saidTooMany = false
   let unwatch: (() => void) | null = null
+  /** Whether the backend has answered what is watched now. */
+  let answered = false
+  /**
+   * Whether It takes the conversations held in threads asked for with since when
+   * (`TAKES.inboxHeld`), as it says at its door. An older It refuses that whole asking, and
+   * nothing would be offered for any conversation, so until It has said that it takes it,
+   * none of those conversations is asked for: their clicks wait as they did, and none made
+   * before is offered. Asked as the connector starts, every minute, and again where what is
+   * watched fails while they are asked for. Where the door cannot be asked it stays as it was,
+   * and it is not known until It has answered once. It says its time there too (`itAhead`).
+   */
+  let heldTaken: boolean | undefined
+  const askHeld = async () => {
+    const door = await backendDoor()
+    if (door === undefined || closing || over) return
+    // Taken as the answer came, after It said its time, so that what is worked out from it is never later than It's own
+    if (door.now !== undefined) itAhead = door.now - Date.now()
+    const takes = door.takes.includes(TAKES.inboxHeld)
+    if (takes === heldTaken) return
+    heldTaken = takes
+    watch()
+  }
+  /**
+   * The conversations held in threads of T3 Code that do not fit beside the ones that are here
+   * are asked for in turn, a few at a time: the last of them that was asked for before the ones
+   * asked for now, and since when those are asked for.
+   */
+  let threadsAfter = ''
+  let threadsMoved = 0
+  /**
+   * How long the conversations held in threads that are asked for together are asked for
+   * before the next ones are. Every turn watches anew, so turns are not taken with every pass.
+   */
+  const THREADS_TURN_MS = 5_000
+  /**
+   * The conversations held in threads of T3 Code, as noted, under every id each is known by,
+   * that are not among the ones that are here, and whose app is connected: a click for one of
+   * them is put to its thread wherever its app's add-on has gone quiet, which it does once T3
+   * Code lets the thread's agent app go. In a fixed order, so that they can be taken in turn.
+   *
+   * Every id is every earlier id that is kept, of which there are at most 500, as a click is
+   * routed by them (`notedThread`): a page made under an id the conversation had long ago is
+   * asked for as well, and a note under such an id holds the conversation's clicks to its thread.
+   */
+  const heldInThreads = (here: ReadonlySet<string>): string[] => {
+    // Every earlier id by the one each carries on under now, found once for all of them, as `knownAs` finds them for one
+    const earlier = new Map<string, string[]>()
+    for (const [from, to] of aliases) {
+      const now = follow(to)
+      const before = earlier.get(now)
+      if (before) before.push(from)
+      else earlier.set(now, [from])
+    }
+    const noted = new Set<string>()
+    const ids = new Set<string>()
+    for (const key of t3Threads.keys()) {
+      const now = follow(key)
+      for (const k of [key, now, ...(earlier.get(now) ?? [])]) {
+        noted.add(k)
+        if (connected(k.slice(0, k.indexOf(':')))) ids.add(k)
+      }
+    }
+    // Counted whether or not they are here, so that what one is offered while here is still
+    // asked for once it is not, and before It has said whether it takes them, so that what one
+    // is offered while It cannot be asked is still asked for once It has said it does. Where It
+    // has said it does not, they are forgotten, and counted afresh from when it says it does: a
+    // click that waited for one all that time does not start a turn the day It is brought up to
+    // date.
+    if (heldTaken === false) {
+      countAsked([], new Set())
+      return []
+    }
+    countAsked(ids, noted)
+    return [...ids].filter((k) => !here.has(k)).sort()
+  }
   function watch(advance = false): void {
     const now = Date.now()
     // The conversations that are here, the one heard from most recently first
@@ -3373,14 +3529,44 @@ async function connecting(say: (line: string) => void): Promise<void> {
       saidTooMany = true
       say(`more than ${LISTENING_MOST} conversations are open here; clicks for the ones heard from least recently wait until there is room`)
     }
-    const listening = named
-      .slice(0, LISTENING_MOST)
-      // In a fixed order, so that the same set is not taken for a different one
-      .sort()
-      .map((k) => ({ harness: k.slice(0, k.indexOf(':')), id: k.slice(k.indexOf(':') + 1) }))
+    // And in what room is left, the conversations held in threads of T3 Code that are not here.
+    // Their clicks are asked for whether or not they may be reopened, since a click for one
+    // goes to its thread and nowhere else (`t3For`), which is no reopening. Asked for this way
+    // they are not taken for conversations that are listening: what is said of those is said
+    // of the ones whose add-on has asked (`sessions`). Where more are held than there is room
+    // for, they are taken in turn, and one with a click on offer that is waiting for its
+    // thread keeps its place until the click has gone, in up to half the room. They are asked
+    // for apart from the ones that are here, each with since when (`t3Asked`), and only of an
+    // It that takes that (`heldTaken`): It reads for them only what came after.
+    const room = LISTENING_MOST - Math.min(named.length, LISTENING_MOST)
+    // Counted whatever It has said, and asked for only once it has said it takes them
+    const noted = t3ThreadsHeld() ? [] : heldInThreads(new Set(named))
+    const threads = heldTaken ? noted : []
+    const offeredFor = new Set(inbox.flatMap((c) => (c.session ? [keyOf(c.session.harness, c.session.id)] : [])))
+    const kept = threads.filter((k) => offeredFor.has(k)).slice(0, Math.floor(room / 2))
+    const turn = () => {
+      const rest = threads.filter((k) => !kept.includes(k))
+      return [...rest.filter((k) => k > threadsAfter), ...rest.filter((k) => k <= threadsAfter)].slice(0, room - kept.length)
+    }
+    let inTurn = turn()
+    // The next ones are taken once the backend has answered for these and they have had their time
+    if (threads.length > room && advance && answered && now - threadsMoved >= THREADS_TURN_MS && inTurn.length) {
+      threadsAfter = inTurn[inTurn.length - 1]!
+      threadsMoved = now
+      inTurn = turn()
+    }
+    const session = (k: string) => ({ harness: k.slice(0, k.indexOf(':')), id: k.slice(k.indexOf(':') + 1) })
+    // In a fixed order, so that the same set is not taken for a different one
+    const listening = named.slice(0, LISTENING_MOST).sort().map(session)
+    // Each with since when it has been asked for this way, which It reads only what came after
+    const held = [...kept, ...inTurn].sort().map((k) => ({ ...session(k), since: t3Asked.get(k)! }))
     // A click is asked for an app's own queue only while that app is connected, and for a
     // conversation that is closed only where it may be reopened
-    const scope = { listening, queues: [...new Set<string>([...QUEUES, ...WAKES.filter((h) => wakesNow.has(h))])].filter(connected) }
+    const scope = {
+      listening,
+      ...(held.length ? { held } : {}),
+      queues: [...new Set<string>([...QUEUES, ...WAKES.filter((h) => wakesNow.has(h))])].filter(connected),
+    }
     const scopeKey = JSON.stringify(scope)
     // A changed listener set advances an answered page too. Frequent add-on updates cannot
     // restart discovery at the first names, and an unanswered subscription advances nothing.
@@ -3394,6 +3580,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (next === watching) return
     watching = next
     const generation = ++watchGeneration
+    answered = false
     unwatch?.()
     unwatch = client.onUpdate(
       api.delivery.inboxPage,
@@ -3403,6 +3590,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (watchGeneration !== generation) return
         const clicks = page.clicks
         nextInbox = page.after
+        answered = true
         const here = performance.now()
         for (const click of clicks) {
           // A new owner gets its own window, including when the observation table is full.
@@ -3419,10 +3607,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
         for (const click of clicks) recoveredClicks.delete(click.id)
         void route()
       },
-      (err) => say(`inbox: ${why(err)}`),
+      (err) => {
+        say(`inbox: ${why(err)}`)
+        // It may have been put back to a version that does not take them: asked again, and they are left out where it says so
+        if (held.length && watchGeneration === generation) void askHeld()
+      },
     )
   }
   watch()
+  void askHeld()
 
   // A newer copy of this program has installed an add-on since this one started: the program
   // was brought up to date and this connector went on running. It stops, with a failure so
@@ -3697,7 +3890,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const alive = setInterval(() => void report(), ALIVE.everyMs)
   // Whether this machine still fits the It it joined is asked for as long as this runs: that
   // It may be updated under it, and so may this one. See `fitsNow`.
-  const fits = setInterval(() => void fitsNow(), FITS_EVERY_MS)
+  const fits = setInterval(() => {
+    void fitsNow()
+    void askHeld()
+  }, FITS_EVERY_MS)
   // Whether a newer It is out: asked a little after starting, and every half hour from then on
   const firstLook = setTimeout(() => void lookForNewer(), 20_000)
   const looks = setInterval(() => void lookForNewer(), LOOKS_EVERY_MS)

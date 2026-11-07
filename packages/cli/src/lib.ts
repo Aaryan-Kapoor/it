@@ -1370,16 +1370,26 @@ async function issuerAt(door: string, ending?: AbortSignal): Promise<string | un
 }
 
 /**
+ * What the It this machine asks says at its door: the later forms of a call it takes (of
+ * `TAKES`), of which an It of an earlier version names none, and the time by its own clock as it
+ * answered, where it says that. Nothing when it could not be asked.
+ */
+export async function backendDoor(): Promise<{ takes: string[]; now?: number } | undefined> {
+  const said = (await direct(`${backend().site}/cli/config`, { signal: within(15_000) })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null)) as { issuer?: unknown; takes?: unknown; now?: unknown } | null
+  if (typeof said?.issuer !== 'string') return undefined
+  const takes = Array.isArray(said.takes) ? said.takes.filter((t): t is string => typeof t === 'string') : []
+  return { takes, ...(typeof said.now === 'number' && Number.isFinite(said.now) ? { now: said.now } : {}) }
+}
+
+/**
  * Whether the It this machine asks takes a later form of a call (one of `TAKES`), as it says at
  * its door. False only on its own word that it does not: an It of an earlier version names none
  * there. Nothing when it could not be asked.
  */
 export async function backendTakes(form: string): Promise<boolean | undefined> {
-  const said = (await direct(`${backend().site}/cli/config`, { signal: within(15_000) })
-    .then((r) => (r.ok ? r.json() : null))
-    .catch(() => null)) as { issuer?: unknown; takes?: unknown } | null
-  if (typeof said?.issuer !== 'string') return undefined
-  return Array.isArray(said.takes) && said.takes.includes(form)
+  return (await backendDoor())?.takes.includes(form)
 }
 
 /** What a machine is told when It does not take it for one of the person's machines any more, with how it becomes one again. */

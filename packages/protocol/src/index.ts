@@ -19,6 +19,8 @@ export const TAKES = {
    * that does not take it refuses the whole call.
    */
   madeAt: 'actions.madeAt',
+  /** The inbox asked for the conversations held in threads of T3 Code, each with since when, and nothing made before that read for them. */
+  inboxHeld: 'delivery.inboxPage.held',
 } as const
 
 /** The word the interface uses for a thing shown on a display. It is said in one place so that it can be changed in one. */

@@ -83,7 +83,8 @@ async function listeningRows(
   ctx: QueryCtx,
   user: Doc<'users'>,
   machine: Doc<'machines'>,
-  listening: { harness: string; id: string }[],
+  /** And for each, where it has one, the moment only what was received after is read. */
+  listening: { harness: string; id: string; since?: number }[],
   read: (rows: Doc<'actions'>[]) => Doc<'actions'>[],
 ) {
   const rows: Doc<'actions'>[] = []
@@ -92,14 +93,19 @@ async function listeningRows(
   // conversation: a click whose page belonged to a machine that is gone (the person signed
   // this computer in again, say) has no machine, and still belongs to the conversation that
   // is here and listening.
+  //
+  // A conversation named with a moment is read from that moment on, in the index itself: what
+  // came before it is outside what is read, so no number of older clicks can take the places
+  // of one that came after.
   for (const s of listening.slice(0, LISTENING_MOST)) {
     // This machine's own, and those with no machine, are each read by themselves: read
     // together with everything else waiting for the conversation, a few clicks that are
     // another machine's, or were set aside, could stand in front of one this machine may take.
     const route = (machineId: Id<'machines'>) =>
-      ctx.db
-        .query('actions')
-        .withIndex('by_route', (q) => q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id))
+      ctx.db.query('actions').withIndex('by_route', (q) => {
+        const all = q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id)
+        return s.since === undefined ? all : all.gt('createdAt', s.since)
+      })
     // These come first and are at most four for each of forty conversations, which is within what may be read whatever they carry
     const own = read(await route(machine._id).take(2))
     // Those with no machine are read as exactly the ones this machine may take: this
@@ -111,15 +117,16 @@ async function listeningRows(
     const loose = read(
       await ctx.db
         .query('actions')
-        .withIndex('by_user_route', (q) =>
-          q
+        .withIndex('by_user_route', (q) => {
+          const all = q
             .eq('userId', user._id)
             .eq('delivery', 'pending')
             .eq('harness', s.harness)
             .eq('sessionId', s.id)
             .eq('machineId', undefined)
-            .eq('parkedBy', undefined),
-        )
+            .eq('parkedBy', undefined)
+          return s.since === undefined ? all : all.gt('createdAt', s.since)
+        })
         .take(2),
     )
     rows.push(...[...own, ...loose].sort((a, b) => a.createdAt - b.createdAt).slice(0, 2))
@@ -268,8 +275,18 @@ export const inboxPage = query({
     listening: v.array(session),
     queues: v.optional(v.array(v.string())),
     after: v.array(session),
+    /**
+     * The conversations held in threads of T3 Code that the connector asks for whether or not
+     * they are here and whether or not they may be reopened, each with since when it has asked
+     * for them that way, by this backend's clock, which it tells at its door. Only what was
+     * received after that is read for them: a click that had waited for such a conversation from
+     * before is left where it is, for `it wait` and the site, and does not start a turn by
+     * itself. A connector asks with this only where the backend names `TAKES.inboxHeld` at its
+     * door, since an older one refuses it.
+     */
+    held: v.optional(v.array(v.object({ harness: v.string(), id: v.string(), since: v.number() }))),
   },
-  handler: async (ctx, { listening, queues, after }) => {
+  handler: async (ctx, { listening, queues, after, held }) => {
     const { user, machine } = await requireMachine(ctx)
     let left = READ_MOST
     const bytes = new TextEncoder()
@@ -277,7 +294,10 @@ export const inboxPage = query({
       for (const x of rows) left -= carried(bytes, x)
       return rows
     }
-    const rows = await listeningRows(ctx, user, machine, listening, read)
+    // After the ones that are here, which are read whole, and within the same forty
+    const here = new Set(listening.map((s) => `${s.harness}:${s.id}`))
+    const named = [...listening, ...(held ?? []).filter((s) => !here.has(`${s.harness}:${s.id}`))]
+    const rows = await listeningRows(ctx, user, machine, named, read)
     const next: { harness: string; id: string }[] = []
     const asked = [...new Set(queues ?? [])].filter((h) => ([...QUEUES, ...WAKES] as readonly string[]).includes(h)).slice(0, 8)
     for (const [nth, harness] of asked.entries()) {
