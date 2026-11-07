@@ -162,6 +162,14 @@ If an update cannot load its backend functions, It keeps serving with the functi
 
 Machines compares the running versions already reported by the host and joined machines. A joined machine can say it is behind before its next release check. That alone does not offer an update: a release must also have been found by that machine.
 
+## An update from the site that does not finish
+
+The Machines page gives an update fifteen minutes from when you asked for it. Where the machine has not reported the new version by then, the page says the update did not finish and offers it again once the machine is on.
+
+Where the page says that the new version is in place and has not been heard from since it was started, the program was replaced and the service stopped to start again as it, which is how an update from the site finishes on Windows. The launcher goes on starting the new program every five seconds, and the service's log on that machine says what it met: run `it service logs` there. When a start fails before It is ready, It waits longer between attempts, and for a failure that needs a change from you it stops trying and says why in the log. Once the problem is fixed, `it setup` starts it again. The program the update moved aside, `it.old.*.exe` beside `it.exe`, is removed when the new version starts, and otherwise by the next update.
+
+On a Windows machine that joined an It, a background service that finds another It already running this machine's connector stops by itself and says so in its log, rather than waiting beside it. Two would otherwise be running where a launcher was left behind when its task was replaced, and the one that waited would take over with whatever program it was started as.
+
 ## The Windows command is missing after an interrupted update
 
 If an install or update was stopped while it was replacing `it.exe`, run the install command again. That restores the command without removing your pages or settings. Do not choose a program from the files named `it.old.*.exe` yourself.
