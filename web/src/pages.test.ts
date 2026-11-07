@@ -11,7 +11,15 @@ import type { Sent } from './outbox'
 const NOW = Date.UTC(2026, 9, 15, 12)
 const PAGE = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, agent: 'claude-code', machine: 'the laptop', machineSeenAt: NOW }
 /** What the backend last said of the page's clicks, newest first. */
-let recent: { at: number; delivery: string; outcome?: string | null; route?: string | null; handedAt?: number | null }[]
+let recent: {
+  at: number
+  delivery: string
+  outcome?: string | null
+  route?: string | null
+  handedAt?: number | null
+  parked?: boolean
+  expiresAt?: number | null
+}[]
 /** The person's machines as the backend gives them to the owner's browser, with the agent apps chosen on each. */
 let machines: { id: string; name?: string; wanted: string[]; harnesses?: { id: string; addon: string; version?: string }[] }[] | undefined
 const inventoryAsked = vi.fn()
@@ -45,10 +53,15 @@ const stopsAsked: {
 }[] = []
 const askedToStop = (input: { expectedRun?: string; expectedSession?: string }) =>
   new Promise<{ stopping: boolean }>((answer, refuse) => void stopsAsked.push({ input, answer, refuse }))
+/** What the backend is to answer each asking for what was set aside to be tried again with, in the order they were asked: nothing, until the test lets it. */
+const retriesAsked: { input: { artifactId: string; expectedSession?: string }; answer: () => void; refuse: (why: unknown) => void }[] = []
+const askedToRetry = (input: { artifactId: string; expectedSession?: string }) =>
+  new Promise<{ retried: number }>((answer, refuse) => void retriesAsked.push({ input, answer: () => answer({ retried: 1 }), refuse }))
 const queries: { name: string; args: unknown }[] = []
 vi.mock('convex/react', () => ({
   useConvex: () => client,
-  useMutation: (fn: unknown) => (getFunctionName(fn as never) === 'artifacts:stop' ? askedToStop : async () => null),
+  useMutation: (fn: unknown) =>
+    getFunctionName(fn as never) === 'artifacts:stop' ? askedToStop : getFunctionName(fn as never) === 'actions:retry' ? askedToRetry : async () => null,
   useQuery: (fn: unknown, args: unknown) => {
     const name = getFunctionName(fn as never)
     if (name === 'artifacts:get') pageQueries.push(args)
@@ -68,6 +81,8 @@ const said = () => host.querySelector('.status')?.textContent ?? null
 const allSaid = () => [...host.querySelectorAll('.status')].map((s) => s.textContent)
 /** The button that stops the page's agent, where it is offered. */
 const stops = () => [...host.querySelectorAll('button')].filter((b) => b.getAttribute('aria-label') === 'Stop the agent')
+/** The buttons on the bar that have these words on them. */
+const buttons = (words: string) => [...host.querySelectorAll('button')].filter((b) => b.textContent === words)
 const envelope = (id: string): Sent => ({ v: 1, clientActionId: id, name: 'approve', payload: '{"n":1}', contentVersion: 1 })
 const tick = () => act(async () => new Promise<void>((r) => setTimeout(r, 0)))
 /** Longer than a stop is on its way before the bar says so. */
@@ -110,6 +125,7 @@ beforeEach(() => {
   told.clear()
   answers.length = 0
   stopsAsked.length = 0
+  retriesAsked.length = 0
   queries.length = 0
   client.mutation.mockClear()
   inventoryAsked.mockClear()
@@ -201,6 +217,148 @@ describe('what the page’s bar says of the last thing the person did', () => {
     await shown()
     expect(said()).toBe('Couldn’t wake Pi: the folder its conversation was held in is not known on this machine, or is gone')
     Object.assign(PAGE, { wakeFailed: null })
+  })
+
+  test('a click its machine set aside is said to be that, with when it is deleted, and is said to be waiting again once it is no longer set aside', async () => {
+    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi' })
+    const MONTH = 30 * 86_400_000
+    // The day as the person's browser writes it: the middle of the day, so that no time zone moves it
+    const day = (at: number) => new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'long' })
+    recent = [{ at: NOW - 8000, delivery: 'pending', outcome: null, parked: true, expiresAt: NOW - 8000 + MONTH }]
+    await shown()
+    expect(day(NOW - 8000 + MONTH)).toContain('14')
+    expect(said()).toBe(
+      `Couldn’t hand it to Pi. It won’t try again until its conversation next runs, and deletes it on ${day(NOW - 8000 + MONTH)} if that hasn’t happened by then`,
+    )
+    expect(host.querySelector('.status')?.getAttribute('data-tone')).toBe('bad')
+    // The conversation was heard from again (or its page changed hands), and its machine has the click back to try
+    recent = [{ at: NOW - 8000, delivery: 'pending', outcome: null, parked: false, expiresAt: NOW - 8000 + MONTH }]
+    await drawnAgain()
+    expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
+    // A backend from before it said which clicks were set aside says nothing of it, and the bar is as it was
+    recent = [{ at: NOW - 8000, delivery: 'pending', outcome: null }]
+    await drawnAgain()
+    expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
+  })
+
+  test('clicks set aside after a conversation could not be reopened say why, how many there are, and the first day one of them is deleted', async () => {
+    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi', wakeFailed: { at: NOW - 1000, why: 'its command ended with an error' } })
+    const MONTH = 30 * 86_400_000
+    const day = (at: number) => new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'long' })
+    recent = [
+      { at: NOW - 8000, delivery: 'pending', outcome: null, parked: true, expiresAt: NOW - 8000 + MONTH },
+      { at: NOW - 3 * 86_400_000, delivery: 'pending', outcome: null, parked: true, expiresAt: NOW - 3 * 86_400_000 + MONTH },
+      { at: NOW - 4 * 86_400_000, delivery: 'handed_off', outcome: 'succeeded', parked: false, expiresAt: null },
+    ]
+    // Put back however the test ends, so that no other test finds a failed reopening it was never given
+    try {
+      await shown()
+      expect(said()).toBe(
+        `Couldn’t wake Pi (2): its command ended with an error. It won’t try again until its conversation next runs, and starts deleting them on ${day(NOW - 3 * 86_400_000 + MONTH)} if that hasn’t happened by then`,
+      )
+    } finally {
+      Object.assign(PAGE, { wakeFailed: null })
+    }
+  })
+
+  test('what was set aside is offered to be tried again in place of Wake, to the owner’s browser alone, and only where It runs this program’s own functions', async () => {
+    const MONTH = 30 * 86_400_000
+    // Under a day old, its app connected, and Auto-wake off: what is offered Wake when it is not set aside
+    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi', wake: { machineId: 'machine-1', harness: 'pi', on: false }, pending: 1 })
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null, parked: false, expiresAt: NOW - 60_000 + MONTH }]
+    functions = 'current'
+    try {
+      await shown()
+      expect(buttons('Wake it')).toHaveLength(1)
+      expect(buttons('Retry')).toHaveLength(0)
+      // Set aside: Auto-wake would bring back nothing that no machine is offered, and Retry is what does
+      recent = [{ ...recent[0]!, parked: true }]
+      await drawnAgain()
+      expect(said()).toMatch(/^Couldn’t hand it to Pi\. It won’t try again until its conversation next runs/)
+      expect(buttons('Retry')).toHaveLength(1)
+      expect(buttons('Wake it')).toHaveLength(0)
+      // A paired screen is told the same, and offered neither
+      await drawnAgain(false)
+      expect(said()).toMatch(/^Couldn’t hand it to Pi\./)
+      expect(buttons('Retry')).toHaveLength(0)
+      // Nor is it offered where It runs older functions, kept while this program's would not load, or where the door does not say which
+      for (const which of ['retained', undefined] as const) {
+        await act(async () => root.unmount())
+        host.remove()
+        functions = which
+        await shown()
+        expect(said()).toMatch(/^Couldn’t hand it to Pi\./)
+        expect(buttons('Retry')).toHaveLength(0)
+      }
+    } finally {
+      Object.assign(PAGE, { agent: 'claude-code', wake: null, pending: 0 })
+    }
+  })
+
+  test('Retry asks first, says once it has been on its way a moment that it is, is not offered twice meanwhile, and goes once what was set aside is back', async () => {
+    const MONTH = 30 * 86_400_000
+    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi', pending: 1 })
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null, parked: true, expiresAt: NOW - 60_000 + MONTH }]
+    functions = 'current'
+    const asking = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    try {
+      await shown()
+      // Not asked of It until the person says yes
+      await act(async () => buttons('Retry')[0]!.click())
+      expect(asking).toHaveBeenCalledWith(expect.stringMatching(/^Try again to hand this to Pi\? the laptop tries it/))
+      expect(retriesAsked).toHaveLength(0)
+      asking.mockReturnValue(true)
+      await act(async () => buttons('Retry')[0]!.click())
+      expect(retriesAsked.map((r) => r.input)).toEqual([{ artifactId: 'page-1', expectedSession: 'session-1' }])
+      expect(buttons('Retry')).toHaveLength(0)
+      // For the moment an answer usually takes, nothing more is said
+      expect(allSaid()).toHaveLength(1)
+      await aWhile()
+      expect(allSaid().at(-1)).toBe('Sending the retry. Keep this tab open until it is sent')
+      await act(async () => retriesAsked[0]!.answer())
+      expect(allSaid()).toHaveLength(1)
+      // It has them back to try: the bar says what it says of anything waiting, with nothing to try again
+      recent = [{ ...recent[0]!, parked: false }]
+      await drawnAgain()
+      expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
+      expect(buttons('Retry')).toHaveLength(0)
+    } finally {
+      Object.assign(PAGE, { agent: 'claude-code', pending: 0 })
+    }
+  })
+
+  test('Retry is offered beside Couldn’t wake where an earlier click was set aside, and not while a run It reopened is working, where Stop is', async () => {
+    const MONTH = 30 * 86_400_000
+    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi', pending: 2, wakeFailed: { at: NOW - 1000, why: 'its command ended with an error' } })
+    functions = 'current'
+    try {
+      // The last click is being tried and could not be reopened for; the one before it was set aside after its tries
+      recent = [
+        { at: NOW - 5000, delivery: 'pending', outcome: null, parked: false, expiresAt: NOW - 5000 + MONTH },
+        { at: NOW - 3_600_000, delivery: 'pending', outcome: null, parked: true, expiresAt: NOW - 3_600_000 + MONTH },
+      ]
+      await shown()
+      expect(said()).toBe('Couldn’t wake Pi (2): its command ended with an error')
+      expect(buttons('Retry')).toHaveLength(1)
+      // With nothing set aside, It is still trying by itself, and there is nothing to try again
+      recent = [recent[0]!]
+      await drawnAgain()
+      expect(said()).toBe('Couldn’t wake Pi (2): its command ended with an error')
+      expect(buttons('Retry')).toHaveLength(0)
+      // Set aside after it could not be reopened for, it is said so, and can be tried again
+      recent = [{ ...recent[0]!, parked: true }]
+      await drawnAgain()
+      expect(said()).toMatch(/^Couldn’t wake Pi: its command ended with an error\. It won’t try again/)
+      expect(buttons('Retry')).toHaveLength(1)
+      // A run of its conversation is working: the bar is about that, with Stop
+      Object.assign(PAGE, { run: { stopping: false } })
+      await drawnAgain()
+      expect(host.querySelector('.working')?.textContent).toContain('Working')
+      expect(stops()).toHaveLength(1)
+      expect(buttons('Retry')).toHaveLength(0)
+    } finally {
+      Object.assign(PAGE, { agent: 'claude-code', pending: 0, wakeFailed: null, run: null })
+    }
   })
 
   test('a waiting page gives the loaded add-on’s repair advice instead of diagnosing a closed conversation', async () => {

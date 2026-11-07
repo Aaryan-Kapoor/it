@@ -66,8 +66,8 @@ export async function requireMachine(ctx: Ctx): Promise<Extract<Caller, { kind: 
 // else they have, is the owner's.
 const OWNER_ONLY = 'Only a browser paired with `it site` can do this.'
 
-export async function requireOwner(ctx: Ctx): Promise<Browser> {
-  const c = await requireBrowser(ctx)
+export async function requireOwner(ctx: Ctx, expectedSession?: string): Promise<Browser> {
+  const c = await requireBrowser(ctx, expectedSession)
   return c.session.role === 'owner' ? c : fail('forbidden', OWNER_ONLY)
 }
 /** A machine, or the owner's browser: any caller there is but a paired screen. */

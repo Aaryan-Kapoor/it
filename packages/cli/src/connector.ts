@@ -563,10 +563,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * made, which harness it was for, and whether it joined a running turn or started one.
    */
   const counting = new Map<string, { at: number; harness: string | undefined; path: 'heard' | 'woke' }>()
-  /** Given up on by this machine, and It has not yet been told to set it aside. Told again until it has. */
-  const toPark = new Map<string, { for: { harness: string; id: string } | null; tag: string }>()
-  /** Set aside, and It has confirmed it. Should one come back on offer, it is left alone. */
-  const parked = new Set<string>()
+  /**
+   * Given up on by this machine, and It has not yet been told to set it aside. Told again until
+   * it has. Each is kept with the last time the person asked for it to be tried again, as It
+   * said when it was given up on: see `retried`.
+   */
+  const toPark = new Map<string, { for: { harness: string; id: string } | null; tag: string; retry: number }>()
+  /** Set aside, and It has confirmed it. Should one come back on offer, it is left alone, unless the person has asked since for it to be tried again. */
+  const parked = new Map<string, number>()
   /** Being put in a harness's queue right now; how often that has been tried, and when last. */
   const queueing = new Set<string>()
   /**
@@ -624,7 +628,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     return true
   }
-  const queueTries = new Map<string, { n: number; at: number; reopening: boolean }>()
+  /** How often a click has been tried and has come to nothing, when last, which way, and the last time the person had asked for it to be tried again then. */
+  const queueTries = new Map<string, { n: number; at: number; reopening: boolean; retry: number }>()
   /**
    * What is known of the thread in T3 Code that a conversation is held in: the thread, that T3
    * Code has none of it (asked again after a while, since a conversation may be brought into
@@ -1352,9 +1357,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
         }
         if (toPark.get(id) !== pending) continue
         toPark.delete(id)
-        parked.add(which)
+        parked.set(which, pending.retry)
         journal('parked', id)
-        if (parked.size > 2000) parked.delete(parked.values().next().value!)
+        if (parked.size > 2000) parked.delete(parked.keys().next().value!)
       }
     } finally {
       parking = false
@@ -1373,7 +1378,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   function revive(harness: string, id: string): void {
     const here = follow(keyOf(harness, id))
     const its = (tagged: string) => follow(tagged.slice(tagged.indexOf('|') + 1)) === here
-    for (const t of [...parked]) if (its(t)) parked.delete(t)
+    for (const t of [...parked.keys()]) if (its(t)) parked.delete(t)
     for (const t of [...queueTries.keys()]) if (its(t)) queueTries.delete(t)
     for (const [line, clickId] of [...stalled]) {
       if (follow(keyOf(harness, line)) !== here) continue
@@ -1391,6 +1396,31 @@ async function connecting(say: (line: string) => void): Promise<void> {
             )
         })
         .catch(() => {})
+  }
+  /**
+   * The person asked, from the click's page, for what was set aside there to be tried again,
+   * after the last time this machine gave up on this click, or failed to deliver it: It says when
+   * with the click. What this machine remembers of that is forgotten, and the click is tried
+   * again as one that has just come, with all its tries, the same pauses between them, and the
+   * same rules for when a conversation may be reopened. Each try is noted with the asking it came
+   * after, so that the same asking is acted on once, also by a connector that started since: one
+   * that remembers nothing has nothing to forget, and notes its own tries from then on.
+   */
+  function retried(click: Offered): void {
+    const asked = click.retriedAt
+    if (typeof asked !== 'number') return
+    const which = tag(click)
+    const aside = parked.get(which)
+    const tried = queueTries.get(which)
+    const pending = toPark.get(click.id)
+    const before = (retry: number | undefined) => retry !== undefined && retry < asked
+    if (!before(aside) && !before(tried?.retry) && !(pending?.tag === which && before(pending.retry))) return
+    parked.delete(which)
+    queueTries.delete(which)
+    if (pending?.tag === which) toPark.delete(click.id)
+    for (const [line, id] of [...stalled]) if (id === click.id) stalled.delete(line)
+    stalledAt.delete(click.id)
+    say(`click ${click.id} is tried again, as the person asked`)
   }
   /** The conversations this machine has reopened and that are running now, each with the way to stop it. */
   /**
@@ -2357,7 +2387,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         await confirmAll()
       } else {
         const n = (queueTries.get(tag(click))?.n ?? 0) + 1
-        queueTries.set(tag(click), { n, at: Date.now(), reopening })
+        queueTries.set(tag(click), { n, at: Date.now(), reopening, retry: click.retriedAt ?? 0 })
         stalled.set(line, click.id)
         stalledAt.set(click.id, Date.now())
         // Its thread of T3 Code is the only way it may go: it is tried there for as long as it waits, and never given up on
@@ -2378,7 +2408,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // Given up on from here. It is set aside so that it does not hide clicks that can be
           // delivered; it is still waiting, and the person and `it wait` still see it.
           say(`click ${click.id} was not taken by ${route} after ${n} tries (${refused}); it stays waiting`)
-          toPark.set(click.id, { for: click.session, tag: tag(click) })
+          toPark.set(click.id, { for: click.session, tag: tag(click), retry: click.retriedAt ?? 0 })
           await parkAll()
         } else {
           say(`click ${click.id} was not taken by ${route} (${refused}); try ${n} of ${QUEUE_WAITS.length}`)
@@ -2451,7 +2481,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // set aside: nothing would bring it back once T3 Code takes messages again. It waits for
     // T3 Code however long that takes, and is tried again after the longest of the pauses.
     if (tried && tried.n >= QUEUE_WAITS.length && !t3Only(key)) {
-      toPark.set(click.id, { for: click.session, tag: tag(click) })
+      toPark.set(click.id, { for: click.session, tag: tag(click), retry: tried.retry })
       return true
     }
     if (queueing.size >= 50 || (tried && Date.now() - tried.at < QUEUE_WAITS[Math.min(tried.n, QUEUE_WAITS.length - 1)]!)) return false
@@ -2654,7 +2684,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // delivered, set aside, or so long gone from what is offered that something else has it.
       // Being absent for a moment proves nothing: it is absent while its lease is given back.
       for (const [line, id] of stalled) {
-        const done = toConfirm.has(id) || toPark.has(id) || [...parked].some((p) => p.startsWith(`${id}|`))
+        const done = toConfirm.has(id) || toPark.has(id) || [...parked.keys()].some((p) => p.startsWith(`${id}|`))
         const longGone = !queueing.has(id) && !inbox.some((c) => c.id === id) && now - (stalledAt.get(id) ?? 0) > LEASE_MS + 90_000
         if (done || longGone) {
           stalled.delete(line)
@@ -2676,6 +2706,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
       }
       const offeredHere = new Map([...inbox, ...recoveredClicks.values()].map((c) => [c.id, c]))
       for (const id of t3Waits.keys()) if (!offeredHere.has(id)) t3Waits.delete(id)
+      // Before anything is decided about any of them: a click the person asked to have tried
+      // again may be one that a click behind it would otherwise wait for, or go with
+      for (const click of offeredHere.values()) retried(click)
       for (const click of [...offeredHere.values()].sort((a, b) => a.at - b.at)) {
         if (taken(click)) {
           recoveredClicks.delete(click.id)
@@ -3040,7 +3073,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           } catch {
             return [200, { cleared: 0, unkept: true }]
           }
-          for (const tagged of [...parked, ...queueTries.keys()]) back.add(tagged.slice(tagged.indexOf('|') + 1))
+          for (const tagged of [...parked.keys(), ...queueTries.keys()]) back.add(tagged.slice(tagged.indexOf('|') + 1))
           for (const { for: tried } of toPark.values()) if (tried) back.add(keyOf(tried.harness, tried.id))
           unread = false
           unreadWhereItWas = false

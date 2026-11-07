@@ -76,7 +76,7 @@ A newer version of It may bring a newer backend program, newer functions, or bot
 |---|---|
 | A page, with its state | Until you delete it, with `it delete <id>` or on the site |
 | Earlier versions of a page | The nine newest, which with the one that is shown makes ten versions kept. An older one goes when a newer one is published |
-| What was done on a page | A week after an agent was given it. A month if no agent ever took it |
+| What was done on a page | A week after an agent was given it. A month if no agent ever took it. Where its machine set it aside after tries that came to nothing, the bar above the page says the day it goes |
 | A file a page sent with an action | As long as its action. One whose action was never sent goes after eight days. All of them go with their page, and when you erase everything |
 | A notification | A month |
 | A publish that was begun and never finished | An hour. Completing it is allowed for thirty minutes |
