@@ -572,14 +572,27 @@ export async function t3ThreadOf(
 const refusedSends = new Map<string, number>()
 /** As many messages as are remembered as refused, the oldest forgotten first. */
 const REFUSED_SENDS_MOST = 1000
+/** The messages whose last sending went unanswered, so that T3 Code may have them. */
+const unansweredSends = new Set<string>()
 /** How many times T3 Code has refused this message, as far as this program has heard. */
 export const timesRefused = (what: string): number => refusedSends.get(what) ?? 0
+/** Whether this message's last sending went unanswered, so that it may be in the thread already and is to be sent again as it was. */
+export const wentUnanswered = (what: string): boolean => unansweredSends.has(what)
 /**
  * Notes how a message's sending ended: taken, nothing more is owed for it; refused by T3 Code,
  * the next sending is a new command; unanswered, the next sending is the same command again.
  */
 export function sendEnded(what: string, ended: 'taken' | 'refused' | 'unanswered'): void {
-  if (ended === 'unanswered') return
+  if (ended === 'unanswered') {
+    unansweredSends.delete(what)
+    unansweredSends.add(what)
+    for (const old of unansweredSends) {
+      if (unansweredSends.size <= REFUSED_SENDS_MOST) break
+      unansweredSends.delete(old)
+    }
+    return
+  }
+  unansweredSends.delete(what)
   const times = timesRefused(what)
   refusedSends.delete(what)
   if (ended === 'taken') return

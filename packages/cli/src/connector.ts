@@ -54,7 +54,7 @@ import { conversationFolder, conversationProfile, noteConversation } from './pub
 import { alone } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
-import { type T3, T3_HELD_MOST, type T3Search, t3Held, t3Refusal, t3Running, t3Search, t3Send, t3Server, t3ThreadOf } from './t3'
+import { type T3, T3_HELD_MOST, type T3Search, t3Held, t3Refusal, t3Running, t3Search, t3Send, t3Server, t3ThreadOf, wentUnanswered } from './t3'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, begin, record, startSender, thisMachine, thisProgram, three, timeBand } from './usage'
 import {
@@ -642,6 +642,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const t3Pending = new Map<string, { harness: string; id: string }>()
   const t3Retries = new Map<string, { at: number; delay: number }>()
   const t3Refused = new Map<string, number>()
+  /**
+   * The clicks of a message put to a thread that T3 Code did not answer, each by the clicks that
+   * message carried. T3 Code may have it, so it is sent again with those clicks and no others,
+   * which T3 Code takes for the same message; a click that came meanwhile goes in a message of its own.
+   */
+  const t3Unanswered = new Map<string, string[]>()
   let t3Seen: { at: number; server: T3 | undefined } | undefined
   /** How long before another search, after one that read every thread found none that holds the conversation. */
   const T3_AGAIN_MS = 6 * 3_600_000
@@ -2061,6 +2067,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
               !parked.has(tag(c)) &&
               !rode.has(c.id) &&
               (t3 !== undefined || wakes(harness, c.at)) &&
+              (t3 === undefined || (t3Unanswered.get(click.id)?.includes(c.id) ?? !t3Unanswered.has(c.id))) &&
               !awaited(c, Date.now()),
           )
           .sort((a, b) => a.at - b.at)
@@ -2207,10 +2214,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // hook of It's hands the agent the rest, and otherwise one short line for each click
       const lines = () => (t3 ? [click, ...withIt].map((c) => briefClick(asClick(c))).join('\n') : briefClick(asClick(click), false))
       // The same message to the same thread, sent again where T3 Code was not heard to answer, is the same command to it, and lands once
-      const put = (text: string) =>
-        t3
-          ? t3Send(t3.server, t3.thread, text, `${text === MARK ? 'mark' : 'line'} ${[click, ...withIt].map((c) => c.id).join(' ')}`)
-          : codexPut(threadOf(follow(key)), text)
+      const carried = () => [click, ...withIt].map((c) => c.id)
+      const named = (asMark: boolean) => `${asMark ? 'mark' : 'line'} ${carried().join(' ')}`
+      const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text, named(text === MARK)) : codexPut(threadOf(follow(key)), text))
       if (!reopening && turnRunning(follow(key), Date.now())) {
         await recovery.keepWaiters([click, ...withIt], follow(key))
       }
@@ -2262,6 +2268,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
             // on this machine alone. In Codex's queue it does not: that one is put on a
             // command line.
             await put(mark ? MARK : lines())
+      // A message T3 Code did not answer is sent again as it was, with the clicks it carried and no others
+      if (t3 && !reopening && refused !== NOT_STARTED) {
+        const ids = carried()
+        for (const id of ids) t3Unanswered.delete(id)
+        if (refused !== null && wentUnanswered(named(Boolean(mark)))) for (const id of ids) t3Unanswered.set(id, ids)
+        for (const old of t3Unanswered.keys()) {
+          if (t3Unanswered.size <= 1000) break
+          t3Unanswered.delete(old)
+        }
+      }
       // A mark that was not taken stands for nothing. One that was is waited on: a hook asks
       if (mark && refused !== null) await mark.takeAway()
       else mark?.wait()

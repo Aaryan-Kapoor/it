@@ -23,6 +23,7 @@ import {
   t3Server,
   t3ThreadOf,
   timesRefused,
+  wentUnanswered,
 } from './src/t3'
 
 const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-t3-'))
@@ -329,6 +330,7 @@ describe('the ids a message is put to a thread under', () => {
     // T3 Code took longer than It waits, or the connection closed: it may have the message, so the same ids go again
     sendEnded(what, 'unanswered')
     expect(timesRefused(what)).toBe(0)
+    expect(wentUnanswered(what)).toBe(true)
     // Refused, T3 Code would refuse those ids again, so new ones go
     sendEnded(what, 'refused')
     sendEnded(what, 'unanswered')
@@ -337,6 +339,7 @@ describe('the ids a message is put to a thread under', () => {
     // Taken, nothing is owed for it
     sendEnded(what, 'taken')
     expect(timesRefused(what)).toBe(0)
+    expect(wentUnanswered(what)).toBe(false)
   })
 })
 

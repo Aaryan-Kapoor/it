@@ -70,6 +70,9 @@ const stand = vi.hoisted(() => ({
     refused: [] as { thread: string; text: string }[],
     /** What each message put to a thread was named as, sent or refused: the same message sent again is named the same. */
     whats: [] as (string | undefined)[],
+    /** Whether T3 Code takes what it is given and its answer is lost on the way, and what it took that way. */
+    losing: false,
+    lost: new Set<string>(),
     /** By each thread, the conversation it runs now and those it ran before, and every time it was asked which thread runs one. */
     runs: new Map<string, { now: { harness: string; id: string }; before: { harness: string; id: string }[] }>(),
     looked: [] as { harness: string; ids: string[]; known?: string }[],
@@ -102,13 +105,20 @@ vi.mock('./src/t3', async (original) => ({
   },
   t3Send: async (_t3: unknown, thread: string, text: string, what?: string) => {
     stand.t3.whats.push(what)
+    // T3 Code took this message before, and its answer was lost: it answers as it did, and adds nothing
+    if (what !== undefined && stand.t3.lost.delete(what)) return null
     if (stand.t3.refusing !== null) {
       stand.t3.refused.push({ thread, text })
       return stand.t3.refusing
     }
     stand.t3.sent.push({ thread, text })
+    if (stand.t3.losing && what !== undefined) {
+      stand.t3.lost.add(what)
+      return 'T3 Code did not answer in time'
+    }
     return null
   },
+  wentUnanswered: (what: string) => stand.t3.lost.has(what),
 }))
 // Who has a Codex conversation open is read from Codex's own folder and from the system
 // (wake.test.ts tries that against real files and programs). Here the test says which are
@@ -331,6 +341,8 @@ afterEach(async () => {
   stand.t3.asked.length = 0
   stand.t3.sent.length = 0
   stand.t3.whats.length = 0
+  stand.t3.losing = false
+  stand.t3.lost.clear()
   stand.t3.refused.length = 0
   stand.t3.runs.clear()
   stand.t3.looked.length = 0
@@ -3640,6 +3652,29 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     offered(timers[7]!)
     await pass(2)
     expect(stand.t3.sent).toHaveLength(4)
+  })
+
+  test('a message T3 Code took but did not answer is sent again with the clicks it carried and no others, so it lands once, and a click that came meanwhile goes on its own', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    withT3Code()
+    stand.t3.threads.set('thread-1', 't3-thread-a')
+    await start()
+    // T3 Code takes the first click, and its answer never arrives
+    stand.t3.losing = true
+    offered(click(1))
+    for (let i = 0; i < 5 && stand.t3.lost.size < 1; i++) await pass()
+    expect(stand.t3.sent).toEqual([{ thread: 't3-thread-a', text: '[It] "A page" (page-1): approve, with details [action click-1]' }])
+    // Another click for the same conversation comes while the first waits to be sent again
+    stand.t3.losing = false
+    offered(click(1), { ...click(2), session: click(1).session })
+    await pass(601)
+    await until(() => called('delivery:handedOff').includes('click-1') && called('delivery:handedOff').includes('click-2'))
+    // The first went again as it was, which T3 Code took for the message it had, and the second went by itself
+    expect(stand.t3.whats).toEqual(['line click-1', 'line click-1', 'line click-2'])
+    expect(stand.t3.sent.map((s) => s.text)).toEqual([
+      '[It] "A page" (page-1): approve, with details [action click-1]',
+      '[It] "A page" (page-2): approve, with details [action click-2]',
+    ])
   })
 
   test('one whose conversation is held in a thread is put to the thread, though some Codex has the conversation open, and Codex’s queue is not used', async () => {
