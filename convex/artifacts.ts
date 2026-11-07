@@ -130,6 +130,8 @@ export const get = query({
       run: running(machine, a),
       // Why it could not be reopened, the last time that was tried and did not work, and when
       wakeFailed: failed(machine, a),
+      // What its clicks wait for that reopening cannot give, where its machine has said, and when
+      waitingFor: held(machine, a),
       // And when a person last stopped it, so that the page can say so of what was done before
       // then. The page keeps that moment itself, and goes on saying it when it has changed
       // conversation or machine since: what was dropped by the stop was stopped, and did not fail.
@@ -326,6 +328,13 @@ function failed(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): { at: num
   if (!machine || machine.revoked || !a.session) return null
   const f = (machine.fails ?? []).find((x) => x.harness === a.session?.harness && x.sessionId === a.session?.id)
   return f ? { at: f.at, why: f.why } : null
+}
+
+/** What a page's conversation's clicks wait for that reopening cannot give, where its machine last said. */
+function held(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): { at: number; why: string } | null {
+  if (!machine || machine.revoked || !a.session) return null
+  const h = (machine.holds ?? []).find((x) => x.harness === a.session?.harness && x.sessionId === a.session?.id)
+  return h ? { at: h.at, why: h.why } : null
 }
 
 /** How many stopped conversations a machine remembers: the last few, which is as many as anyone stops in a day. */

@@ -210,6 +210,12 @@ export default defineSchema({
     stops: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number() }))),
     /** The last few conversations that could not be reopened, when, and why in the connector's own words: never what a command printed. */
     fails: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), why: v.string() }))),
+    /**
+     * The last few conversations whose clicks wait for something reopening cannot give, when, and
+     * what: the app that holds the conversation (`t3-code`, `claude-desktop`, or `host` for one It
+     * does not know by name), or `unclear` where It cannot tell whether the conversation is closed.
+     */
+    holds: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), why: v.string() }))),
     /** When it was last written down that this machine, revoked, asked for a token: said once an hour and not each time. */
     refusalSaidAt: v.optional(v.number()),
     /** The earlier identity of the same computer whose place this one took, if it took one's. */
