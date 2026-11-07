@@ -777,7 +777,7 @@ async function download(it: Service, request: Request): Promise<Response> {
 // ---------- what the backend asks ----------
 
 async function control(it: Service, request: Request, asked: Asked): Promise<Response> {
-  const op = new URL(request.url).pathname.match(/^\/control\/(revoke|stage|verify|delete)$/)?.[1]
+  const op = new URL(request.url).pathname.match(/^\/control\/(revoke|stage|verify|delete|read)$/)?.[1]
   if (request.method !== 'POST' || !op) return deny(404)
   // Only the backend sends these. One that does not check out is either someone trying the
   // door or a fault between the two halves of the service, and either way wants looking at.
@@ -813,6 +813,32 @@ async function control(it: Service, request: Request, asked: Asked): Promise<Res
   if (typeof body.prefix !== 'string' || !ANY_PREFIX.test(body.prefix)) return refuse(400, 'malformed')
   const prefix = body.prefix
   const files = Array.isArray(body.files) ? (body.files as { path: unknown; size: unknown; sha256: unknown }[]) : []
+
+  if (op === 'read') {
+    // A signed, exact-version read of the entry document only. No caller-supplied path or URL.
+    if (!VERSION_PREFIX.test(prefix) || !Number.isInteger(body.maxBytes) || (body.maxBytes as number) < 1 || (body.maxBytes as number) > 65536)
+      return refuse(400, 'malformed')
+    if (it.records.wasDeleted(prefix)) return refuse(404, 'version_deleted')
+    const declared = (await it.files.declared(prefix))?.get('index.html')
+    if (!declared) return refuse(404, 'not_declared')
+    if (declared.size > (body.maxBytes as number)) return refuse(413, 'source_too_large')
+    const opened = await it.files.open(prefix, 'index.html')
+    if (!opened) return refuse(404, 'not_found')
+    if (opened.size !== declared.size) {
+      await opened.close()
+      return refuse(409, 'bytes_differ')
+    }
+    const bytes = new Uint8Array(await new Response(opened.bytes()).arrayBuffer())
+    if (createHash('sha256').update(bytes).digest('hex') !== declared.sha256) return refuse(409, 'bytes_differ')
+    if (it.records.wasDeleted(prefix)) return refuse(404, 'version_deleted')
+    let html: string
+    try {
+      html = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+    } catch {
+      return refuse(422, 'invalid_utf8')
+    }
+    return json(200, { html, bytes: bytes.length, sha256: declared.sha256 })
+  }
 
   if (op === 'stage') {
     // The backend declares a version's files before it gives anyone a grant to upload them. The

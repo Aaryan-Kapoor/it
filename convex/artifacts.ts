@@ -2,7 +2,7 @@ import { CODEX_MIN_VERSION, LIMITS, newer, QUOTA, WAKES, wakesOn } from '@it/pro
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
+import { action, internalMutation, internalQuery, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import { removeLater } from './content'
 import { artifactBySlug, ownArtifact, requireBrowser, requireCaller, requireMachine, requireMachineOrOwner, requireOwner } from './lib/authz'
 import { fail } from './lib/errors'
@@ -35,6 +35,39 @@ async function resolve(ctx: QueryCtx, userId: Id<'users'>, ref: { slug?: string;
 }
 export const ref = { slug: v.optional(v.string()), artifactId: v.optional(v.id('artifacts')) }
 export { resolve as resolveArtifact }
+
+/** Resolves the current entry document for this enrolled machine's account. */
+export const _source = internalQuery({
+  args: { slug: v.string(), maxBytes: v.number() },
+  handler: async (ctx, { slug, maxBytes }) => {
+    const { user } = await requireMachine(ctx)
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 65536) fail('invalid', 'Read at most 65536 bytes.')
+    const a = await resolve(ctx, user._id, { slug })
+    if (a.currentVersion === undefined) fail('not_found', 'No published page.')
+    const version = await ctx.db
+      .query('versions')
+      .withIndex('by_artifact_n', (q) => q.eq('artifactId', a._id).eq('n', a.currentVersion!))
+      .unique()
+    const entry = version?.files.find((f) => f.path === 'index.html')
+    if (!entry || version?.status !== 'live') fail('not_found', 'No published entry document.')
+    if (entry.size > maxBytes) fail('limit', 'The entry document exceeds the requested read limit.')
+    return { id: slug, version: a.currentVersion, prefix: prefixOf(user._id, a._id, a.currentVersion), bytes: entry.size, sha256: entry.sha256 }
+  },
+})
+
+/** Returns source text, never a mount ticket, content URL or arbitrary file. */
+export const source = action({
+  args: { slug: v.string(), maxBytes: v.optional(v.number()) },
+  handler: async (ctx, { slug, maxBytes = 65536 }): Promise<{ id: string; version: number; html: string; bytes: number; sha256: string }> => {
+    const before = await ctx.runQuery(internal.artifacts._source, { slug, maxBytes })
+    const content = await ctx.runAction(internal.content.read, { prefix: before.prefix, maxBytes })
+    const after = await ctx.runQuery(internal.artifacts._source, { slug, maxBytes })
+    if (after.prefix !== before.prefix || after.sha256 !== before.sha256) fail('conflict', 'The page changed while it was read.')
+    if (content.bytes !== before.bytes || content.sha256 !== before.sha256 || new TextEncoder().encode(content.html).length !== before.bytes)
+      fail('conflict', 'The source does not match the published version.')
+    return { id: slug, version: before.version, ...content }
+  },
+})
 
 /** Every page the caller has, newest first, each with how many clicks are waiting. */
 export const list = query({

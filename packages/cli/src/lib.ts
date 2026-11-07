@@ -31,7 +31,7 @@ import { installationHome } from './installation'
 import { keepOriginal, putAbsent, removeOriginal, restoreAbsent } from './preserve'
 import { added, shellEnv } from './shell-env'
 
-export const VERSION = '0.1.32'
+export const VERSION = '0.1.33'
 export const api: any = anyApi
 
 /** A failure the person or agent can act on. `hint` says what to do next. */

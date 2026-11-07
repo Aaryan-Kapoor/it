@@ -6345,3 +6345,18 @@ test('exact display ID is sent without a name or ownership takeover', async () =
     await b.close()
   }
 })
+
+describe('Bounded source command', () => {
+  test('The source command passes a bounded size and never requests a mount ticket.', async () => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn }) => (fn === 'artifacts:source' ? { id: 'plan', version: 2, html: '<p>x</p>', bytes: 8, sha256: 'fixture' } : null))
+    try {
+      const result = await run(m, ['read-source', 'plan', '--max-bytes', '100'], b.env)
+      expect(result.code).toBe(0)
+      expect(JSON.parse(result.out).html).toBe('<p>x</p>')
+      expect(b.asked).toEqual([{ path: 'artifacts:source', args: { slug: 'plan', maxBytes: 100 } }])
+    } finally {
+      await b.close()
+    }
+  })
+})
