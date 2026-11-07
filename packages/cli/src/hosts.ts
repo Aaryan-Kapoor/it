@@ -47,8 +47,7 @@ export interface Holder {
 }
 
 /** A thread id as T3 Code gives one: a line of reasonable length. Anything else is no thread. */
-const threadId = (t: unknown): string | undefined =>
-  typeof t === 'string' && t.length > 0 && t.length <= 512 && !/[\u0000-\u001f\u007f]/.test(t) ? t : undefined
+const threadId = (t: unknown): string | undefined => (typeof t === 'string' && t.length > 0 && t.length <= 512 && !/\p{Cc}/u.test(t) ? t : undefined)
 const entrypoint = (e: unknown): e is string => typeof e === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(e)
 
 /**
