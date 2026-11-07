@@ -3387,10 +3387,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * nothing would be offered for any conversation, so until It has said that it takes it,
    * none of those conversations is asked for: their clicks wait as they did, and none made
    * before is offered. Asked as the connector starts, every minute, and again where what is
-   * watched fails while they are asked for. Where the door cannot be asked it stays as it was.
-   * It says its time there too (`itAhead`).
+   * watched fails while they are asked for. Where the door cannot be asked it stays as it was,
+   * and it is not known until It has answered once. It says its time there too (`itAhead`).
    */
-  let heldTaken = false
+  let heldTaken: boolean | undefined
   const askHeld = async () => {
     const door = await backendDoor()
     if (door === undefined || closing || over) return
@@ -3441,7 +3441,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (connected(k.slice(0, k.indexOf(':')))) ids.add(k)
       }
     }
-    // Counted whether or not they are here, so that what one is offered while here is still asked for once it is not
+    // Counted whether or not they are here, so that what one is offered while here is still
+    // asked for once it is not, and before It has said whether it takes them, so that what one
+    // is offered while It cannot be asked is still asked for once It has said it does. Where It
+    // has said it does not, they are forgotten, and counted afresh from when it says it does: a
+    // click that waited for one all that time does not start a turn the day It is brought up to
+    // date.
+    if (heldTaken === false) {
+      countAsked([], new Set())
+      return []
+    }
     countAsked(ids, noted)
     return [...ids].filter((k) => !here.has(k)).sort()
   }
@@ -3470,7 +3479,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // for apart from the ones that are here, each with since when (`t3Asked`), and only of an
     // It that takes that (`heldTaken`): It reads for them only what came after.
     const room = LISTENING_MOST - Math.min(named.length, LISTENING_MOST)
-    const threads = heldTaken && !t3ThreadsHeld() ? heldInThreads(new Set(named)) : []
+    // Counted whatever It has said, and asked for only once it has said it takes them
+    const noted = t3ThreadsHeld() ? [] : heldInThreads(new Set(named))
+    const threads = heldTaken ? noted : []
     const offeredFor = new Set(inbox.flatMap((c) => (c.session ? [keyOf(c.session.harness, c.session.id)] : [])))
     const kept = threads.filter((k) => offeredFor.has(k)).slice(0, Math.floor(room / 2))
     const turn = () => {

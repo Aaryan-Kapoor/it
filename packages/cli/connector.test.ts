@@ -4914,6 +4914,9 @@ describe.skipIf(process.platform === 'win32')('a conversation held in a thread o
       await pause(1500)
       expect(stand.t3.sent).toEqual([])
       expect(called('delivery:claim')).toEqual([])
+      // Since when is counted from the start where It cannot be asked, and not where it has said it does not take them
+      const counted = readJson<Record<string, number>>(path.join(home, 't3-asked.json')) ?? {}
+      expect(Object.keys(counted)).toEqual(takes === false ? [] : [`claude-code:${CLAUDE}`])
       // It is brought up to date, and says so at its door, which is asked again every minute
       stand.takes = true
       await pass(60)
@@ -4925,6 +4928,41 @@ describe.skipIf(process.platform === 'win32')('a conversation held in a thread o
     },
     30_000,
   )
+
+  test('a click offered while the conversation listened, before It could first be asked whether it takes them, is still asked for once It has said it does and the add-on has gone quiet', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    withT3Code()
+    stand.t3.running = false
+    // It's door cannot be asked as the connector starts
+    stand.takes = undefined
+    await start('socket', BOTH, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    await local(`/clicks?harness=claude-code&session=${CLAUDE}`)
+    expect(asked().listening).toEqual([{ harness: 'claude-code', id: CLAUDE }])
+    // A click is offered while the conversation listens, and waits, since T3 Code is not running
+    await pass(10)
+    const waiting = click(1)
+    backend(waiting)
+    await pass(5)
+    expect(stand.t3.sent).toEqual([])
+    expect(called('delivery:claim')).toEqual([])
+    // It says it takes them when its door is asked again a minute in, and the add-on is heard
+    // from no more: past the time it is watched for, the conversation is asked for this way
+    stand.takes = true
+    await pass(80)
+    expect(await live()).toEqual([])
+    expect(asked().held).toEqual([{ harness: 'claude-code', id: CLAUDE, since: expect.any(Number) }])
+    expect(asked().held![0]!.since).toBeLessThan(waiting.at)
+    stand.t3.running = true
+    for (let i = 0; i < 10 && !stand.t3.sent.length; i++) {
+      backend(waiting)
+      await pass()
+    }
+    // Its hooks were heard from, so what stands in the thread is a mark that a hook reads the click by
+    expect(stand.t3.sent.map((s) => s.thread)).toEqual(['t3-thread-c'])
+    for (let i = 0; i < 5 && !called('delivery:handedOff').includes('click-1'); i++) await pass()
+    expect(called('delivery:handedOff')).toContain('click-1')
+    noOtherWay()
+  }, 30_000)
 
   test('more of them than there is room for are asked for in turn, all of them in time, without watching anew with every pass, and one whose click waits for its thread keeps its place', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
