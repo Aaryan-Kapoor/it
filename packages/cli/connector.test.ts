@@ -596,7 +596,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     attended: true,
     session: { harness: 'codex', id: `thread-${n}` },
   })
-  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inboxPage')!(clicks)
+  const offered = (...clicks: (ReturnType<typeof click> & { retriedAt?: number })[]) => stand.watching.get('delivery:inboxPage')!(clicks)
   // The connector tells that a run it reopened has ended by looking at every process on the
   // machine, and a process of the same person's that began after the run and cannot be read
   // may be a command the run started and let go of. While one is there the run is not known to
@@ -883,6 +883,71 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       await pass()
       await until(() => recoveryClaims().returning.length === 0)
       expect(recoveryClaims().targets).toEqual([])
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  test('a click set aside after its tries came to nothing is tried again, with all its tries, once the person asks, and so after the connector has started anew', async () => {
+    standIn()
+    await start()
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const parks = () => called('delivery:park').length
+    /** Codex's queue refuses the click every time it is tried, until it has been tried four times and is set aside. */
+    const refusedFourTimes = async () => {
+      const from = stand.codex.length
+      const parked = parks()
+      for (let n = 1; n <= 4; n++) {
+        if (n > 1) {
+          now += 601_000
+          await pass()
+        }
+        await until(() => stand.codex.length === from + n)
+        stand.codex[from + n - 1]!.end(new Error('declined'))
+        await settled()
+        // Not before its fourth try
+        expect(parks()).toBe(n === 4 ? parked + 1 : parked)
+      }
+      await until(() => parks() === parked + 1)
+    }
+    /** Whether the click is tried again within a few seconds and ten minutes, the longest pause between its tries. */
+    const triedAgain = async () => {
+      const from = stand.codex.length
+      for (let i = 0; i < 3 && stand.codex.length === from; i++) {
+        now += 601_000
+        await pass()
+        await settled()
+      }
+      return stand.codex.length > from
+    }
+    try {
+      offered(click(1))
+      await refusedFourTimes()
+      // Offered again as it was, as when another machine lets go of it: it is set aside again, and not tried
+      offered(click(1))
+      expect(await triedAgain()).toBe(false)
+      // The person asks for it to be tried again: it is tried, and is set aside only after four more tries
+      const asked = now
+      offered({ ...click(1), retriedAt: asked })
+      await refusedFourTimes()
+      expect(said.filter((line) => line.includes('click-1 is tried again'))).toHaveLength(1)
+      // The same asking is acted on once
+      offered({ ...click(1), retriedAt: asked })
+      expect(await triedAgain()).toBe(false)
+      // The connector starts anew, remembering nothing of its tries: what it tries, it notes with
+      // the asking it came after, and does not take that asking for a new one when it gives up
+      const folder = home
+      await stop!()
+      stop = null
+      await start('socket', {}, () => {}, folder)
+      offered({ ...click(1), retriedAt: asked })
+      await refusedFourTimes()
+      offered({ ...click(1), retriedAt: asked })
+      expect(await triedAgain()).toBe(false)
+      // And asked once more, it is tried once more
+      offered({ ...click(1), retriedAt: now })
+      expect(await triedAgain()).toBe(true)
     } finally {
       clock.mockRestore()
     }
