@@ -7,6 +7,7 @@ import { version } from '../package.json'
 import { askTwice } from './backend'
 import { IconGuide, IconMore, Mark } from './brand'
 import { Copyable } from './dialog'
+import { startDisplayReports } from './display-report'
 import { Finder } from './finder'
 import {
   api,
@@ -407,6 +408,9 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const key = displayKey()
   const display = useQuery(api.displays.mine, { key })
   const pages = useQuery(api.artifacts.list, {})
+  useEffect(() => {
+    if (display?.id) return startDisplayReports((report) => convex.mutation(api.displays.report, { key, ...report }))
+  }, [convex, key, display?.id])
   const [leaving, setLeaving] = useState(false)
   const [stillIn, setStillIn] = useState(false)
   // What is typed into the search, the finder and the tour's dialog, which the bar opens and the shell shows
