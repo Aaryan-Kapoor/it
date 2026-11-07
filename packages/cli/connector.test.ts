@@ -206,7 +206,7 @@ import { type ConnectorInfo, infoFile, local, mac, runConnector, wayOf } from '.
 import { DeliveryRecovery, eraseDeliveryRecovery } from './src/delivery-recovery'
 import * as files from './src/lib'
 import { readJson } from './src/lib'
-import { alone, startOf } from './src/serve/backend'
+import { alone, processOf, startOf } from './src/serve/backend'
 import { identity, SINCE_TOLD, WAS_STOPPED } from './src/wake'
 
 // The real clock, kept from before any test puts a stand-in in its place
@@ -4607,7 +4607,16 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
   test('a Claude Code conversation is not reopened while T3 Code is running and has yet to say which of its threads holds it, and is once T3 Code says that none does', async () => {
     withT3Code()
     stand.t3.slow = true
-    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+    // Its Claude Code has been closed since its page was made, so It knows that it is closed
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+    const holder = processOf(child.pid!)!
+    const gone = new Promise((resolve) => child.on('exit', resolve))
+    child.kill()
+    await gone
+    const note = { 'claude-code:11111111-2222-4333-8444-555555555555': { cwd: '/not-a-recorded-working-folder', at: Date.now(), holder } }
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }, (home) =>
+      writeFileSync(path.join(home, 'conversations.json'), JSON.stringify(note)),
+    )
     stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
     const claude = { ...click(9), session: { harness: 'claude-code', id: '11111111-2222-4333-8444-555555555555' } }
     offered(claude)
@@ -4902,6 +4911,205 @@ describe.skipIf(process.platform === 'win32')('a thread of T3 Code that is switc
     expect(stand.codex[0]!.args).toContain(`--thread=${codex.id}`)
     expect(carried()).toEqual([])
   })
+})
+
+describe.skipIf(process.platform === 'win32')('a conversation that an app holds, and one that It cannot tell is closed', () => {
+  const CLAUDE = { id: 'claude-code', version: '2.1.300', addon: 'connected' }
+  const ids = {
+    t3: '11111111-2222-4333-8444-000000000001',
+    desktop: '11111111-2222-4333-8444-000000000002',
+    sdk: '11111111-2222-4333-8444-000000000003',
+    terminal: '11111111-2222-4333-8444-000000000004',
+    old: '11111111-2222-4333-8444-000000000005',
+  }
+  const click = (n: number, session: { harness: string; id: string }) => ({
+    id: `click-${n}`,
+    artifact: `page-${n}`,
+    title: 'A page',
+    name: 'approve',
+    payload: '{}',
+    at: Date.now() - 10_000 + n,
+    attended: true,
+    session,
+  })
+  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inboxPage')!(clicks)
+  const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
+  /** Whether the connector tried to reopen it: it claims the click and, never told a folder that is there, says that it could not. */
+  const reopened = () => stand.calls.some((c) => c.name === 'machines:wakeFailed' || c.name === 'machines:runBegan')
+  /** What the connector told It the conversation's clicks wait for. */
+  const waitsFor = () => stand.calls.filter((c) => c.name === 'machines:waits').map((c) => c.args.why as string)
+  /** A program that has ended, as Claude Code's own process is once its window is closed. */
+  const ended = async () => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+    const holder = processOf(child.pid!)!
+    const gone = new Promise((resolve) => child.on('exit', resolve))
+    child.kill()
+    await gone
+    return holder
+  }
+  /** A program that still runs, as Claude Code's own does while its window is open. */
+  const running: ReturnType<typeof spawn>[] = []
+  afterEach(() => {
+    for (const child of running.splice(0)) child.kill()
+  })
+  /**
+   * What It has of a conversation in this folder before the connector starts: what the command
+   * that made its page noted, and what Claude Code wrote of it, each line with its entrypoint.
+   * The folder it was noted in is not there, so a conversation that is reopened stops at that.
+   */
+  const had = (
+    home: string,
+    session: { harness: string; id: string },
+    of: { held?: Record<string, unknown>; holder?: { pid: number; started: string; where: string }; entrypoints?: string[] },
+  ) => {
+    const cwd = path.join(home, 'a folder that is gone')
+    if (of.held || of.holder) {
+      const notes = readJson<Record<string, unknown>>(path.join(home, 'conversations.json')) ?? {}
+      notes[`${session.harness}:${session.id}`] = { cwd, at: Date.now(), ...(of.held ? { held: of.held } : {}), ...(of.holder ? { holder: of.holder } : {}) }
+      writeFileSync(path.join(home, 'conversations.json'), JSON.stringify(notes))
+    }
+    if (of.entrypoints) {
+      const dir = path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'))
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(
+        path.join(dir, `${session.id}.jsonl`),
+        of.entrypoints.map((entrypoint) => JSON.stringify({ type: 'user', message: { content: 'x' }, entrypoint, sessionId: session.id })).join('\n') + '\n',
+      )
+    }
+  }
+  /** The person has chosen Claude Code and Codex, and switched Auto-wake on for both. */
+  const woken = () =>
+    stand.watching.get('machines:me')!({
+      wanted: ['claude-code', 'codex'],
+      wakes: [
+        { harness: 'claude-code', since: Date.now() - 60_000 },
+        { harness: 'codex', since: Date.now() - 60_000 },
+      ],
+    })
+  const BOTH = { wanted: ['claude-code', 'codex'], found: [...CONNECTED, CLAUDE] }
+
+  test('a Claude Code conversation that made its page in a thread of T3 Code waits while T3 Code is not running, closed as it is, and then goes to that thread without T3 Code being searched', async () => {
+    const session = { harness: 'claude-code', id: ids.t3 }
+    const holder = await ended()
+    await start('socket', BOTH, (home) => had(home, session, { held: { by: 't3-code', thread: 't3-thread-a' }, holder, entrypoints: ['t3-code'] }))
+    woken()
+    offered(click(1, session))
+    await pause(2500)
+    // Its program has gone, and Auto-wake is on: it is not reopened all the same
+    expect(reopened()).toBe(false)
+    expect(called('delivery:claim')).toEqual([])
+    await until(() => waitsFor().includes('t3-code'))
+    stand.t3.running = true
+    await until(() => stand.t3.sent.length === 1, 10_000)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-a')
+    expect(stand.t3.asked).toEqual([])
+    expect(reopened()).toBe(false)
+  }, 30_000)
+
+  test('a Codex conversation that made its page in a thread of T3 Code goes only to that thread: not into Codex’s queue while T3 Code refuses it, and not reopened while T3 Code is down and no Codex has it open', async () => {
+    const open = { harness: 'codex', id: 'codex-open' }
+    const closed = { harness: 'codex', id: 'codex-closed' }
+    stand.closed.add('codex-closed')
+    stand.t3.running = true
+    stand.t3.refusing = 'T3 Code refused the message'
+    await start('socket', BOTH, (home) => {
+      had(home, open, { held: { by: 't3-code', thread: 't3-thread-open' } })
+      had(home, closed, { held: { by: 't3-code', thread: 't3-thread-closed' } })
+    })
+    woken()
+    offered(click(1, open))
+    // Some Codex has it open, which would take it into its queue: T3 Code is asked, and refuses
+    await until(() => stand.t3.refused.length === 1)
+    expect(stand.t3.refused[0]!.thread).toBe('t3-thread-open')
+    // At once, with no search of T3 Code's threads, and no five seconds' wait for one
+    expect(stand.t3.asked).toEqual([])
+    await pause(2500)
+    expect(stand.codex).toEqual([])
+    expect(waitsFor()).toContain('t3-code')
+    // T3 Code stops: the closed one is not reopened, whatever Auto-wake says
+    stand.t3.running = false
+    offered(click(1, open), click(2, closed))
+    await pause(2500)
+    expect(stand.codex).toEqual([])
+    expect(reopened()).toBe(false)
+  }, 30_000)
+
+  test('a Claude Code conversation that Claude Code wrote down as run by T3 Code, from before pages said so, is searched for in T3 Code and is never reopened while its thread is unknown', async () => {
+    const session = { harness: 'claude-code', id: ids.old }
+    const holder = await ended()
+    await start('socket', BOTH, (home) => had(home, session, { holder, entrypoints: ['sdk-ts', 't3-code', 'sdk-cli'] }))
+    woken()
+    offered(click(1, session))
+    await pause(2500)
+    // T3 Code is not running: it waits for T3 Code, and is not reopened
+    expect(reopened()).toBe(false)
+    expect(waitsFor()).toContain('t3-code')
+    // T3 Code runs and does not say which thread holds it, past the five seconds a click waits for it
+    stand.t3.running = true
+    stand.t3.slow = true
+    await until(() => stand.t3.asked.length === 1, 10_000)
+    await pause(6500)
+    expect(reopened()).toBe(false)
+    // And it goes to the thread T3 Code finds
+    stand.t3.asked[0]!.answer('t3-thread-found')
+    await until(() => stand.t3.sent.length === 1, 10_000)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-found')
+  }, 30_000)
+
+  test('a conversation of Claude’s desktop app waits for the app, closed as it is, and its add-on takes the click once the app has the conversation open', async () => {
+    const session = { harness: 'claude-code', id: ids.desktop }
+    const holder = await ended()
+    await start('socket', BOTH, (home) => had(home, session, { holder, entrypoints: ['sdk-ts', 'claude-desktop'] }))
+    woken()
+    offered(click(1, session))
+    await pause(2500)
+    expect(reopened()).toBe(false)
+    expect(called('delivery:claim')).toEqual([])
+    await until(() => waitsFor().includes('claude-desktop'))
+    // The app opens the conversation, and It's add-on in it asks: nothing holds back the click
+    const asks = () => local<{ clicks: { id: string }[] }>(`/clicks?harness=claude-code&session=${ids.desktop}`)
+    await asks()
+    await until(async () => ((await asks())?.clicks ?? []).some((c) => c.id === 'click-1'))
+  }, 30_000)
+
+  test('a conversation an app It does not know by name holds waits for that app, and the desktop app’s own word for itself counts where Claude Code wrote nothing yet', async () => {
+    const sdk = { harness: 'claude-code', id: ids.sdk }
+    const desktop = { harness: 'claude-code', id: ids.desktop }
+    const holder = await ended()
+    await start('socket', BOTH, (home) => {
+      had(home, sdk, { holder, entrypoints: ['sdk-ts'] })
+      had(home, desktop, { holder, held: { by: 'claude-desktop' } })
+    })
+    woken()
+    offered(click(1, sdk), click(2, desktop))
+    await pause(2500)
+    expect(reopened()).toBe(false)
+    await until(() => waitsFor().includes('host') && waitsFor().includes('claude-desktop'))
+  }, 30_000)
+
+  test('a terminal’s Claude Code conversation is reopened only once It knows that its program has gone: not where nothing was noted of it, nor while it runs', async () => {
+    const session = { harness: 'claude-code', id: ids.terminal }
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+    running.push(child)
+    await start('socket', BOTH, (home) => had(home, session, { entrypoints: ['cli', 'sdk-cli'] }))
+    woken()
+    // Nothing noted of the program that held it, as for a page made before It noted one: it may be open, so it waits
+    offered(click(1, session))
+    await pause(2500)
+    expect(reopened()).toBe(false)
+    await until(() => waitsFor().includes('unclear'))
+    // Its program noted, and running: it waits still
+    had(home, session, { holder: processOf(child.pid!)!, entrypoints: ['cli'] })
+    offered({ ...click(2, session) })
+    await pause(2500)
+    expect(reopened()).toBe(false)
+    // Its program has ended: it is closed, and reopened
+    const gone = new Promise((resolve) => child.on('exit', resolve))
+    child.kill()
+    await gone
+    await until(() => reopened(), 25_000)
+    expect(called('delivery:claim')).toContain('click-2')
+  }, 40_000)
 })
 
 describe('the way a click goes when no add-on is there to take it', () => {
