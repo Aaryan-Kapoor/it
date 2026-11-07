@@ -48,6 +48,8 @@ const stand = vi.hoisted(() => ({
   savedRuns: [] as Record<string, unknown>[],
   unknown: new Set<string>(),
   profiles: true,
+  /** What It says at its door of whether it takes every later form of a call this program knows: undefined where the door cannot be asked. */
+  takes: true as boolean | undefined,
   /**
    * T3 Code as a test has it, which is not running unless the test says so: the thread each
    * conversation is held in, by the conversation's id; every time it was asked which thread
@@ -171,6 +173,7 @@ vi.mock('./src/lib', async (original) => {
       void saving.finally(() => stand.saving.delete(saving)).catch(() => {})
       return saving
     },
+    backendTakes: async () => stand.takes,
     live: () => ({
       onUpdate: (fn: any, args: unknown, heard: (value: any) => void) => {
         stand.watching.set(getFunctionName(fn), (value) => {
@@ -320,6 +323,7 @@ afterEach(async () => {
   stand.savedRuns.length = 0
   stand.unknown.clear()
   stand.profiles = true
+  stand.takes = true
   stand.answer = null
   // A lookup a test left unanswered is answered, so that nothing of it outlasts the test
   for (const asked of stand.t3.asked) asked.answer(null)
@@ -4660,17 +4664,32 @@ describe.skipIf(process.platform === 'win32')('a conversation held in a thread o
     title: 'A page',
     name: 'approve',
     payload: '{"plan":"B"}',
-    at: Date.now() - 10_000 + n,
+    // Made now, after the connector began to ask for its conversation, unless a test says otherwise
+    at: Date.now() + n,
     attended: true,
     session,
   })
-  const asked = () => stand.asking.get('delivery:inboxPage') as { listening: { harness: string; id: string }[]; queues: string[] }
-  /** The conversations the connector asks the backend for the clicks of. */
-  const listened = () => asked().listening.map((s) => `${s.harness}:${s.id}`)
-  /** The backend answers as it does: with what is waiting for the conversations and queues the connector asks for, and nothing else. */
+  const asked = () =>
+    stand.asking.get('delivery:inboxPage') as {
+      listening: { harness: string; id: string }[]
+      held?: { harness: string; id: string; since: number }[]
+      queues: string[]
+    }
+  /** The conversations the connector asks the backend for the clicks of, whether as here or as held in a thread. */
+  const listened = () => [...asked().listening, ...(asked().held ?? [])].map((s) => `${s.harness}:${s.id}`).sort()
+  /**
+   * The backend answers as it does: with what is waiting for the conversations and queues the
+   * connector asks for, and nothing else, and for a conversation held in a thread only what was
+   * made after since when the connector has asked for it that way.
+   */
   const backend = (...clicks: ReturnType<typeof click>[]) =>
     stand.watching.get('delivery:inboxPage')!({
-      clicks: clicks.filter((c) => listened().includes(`${c.session.harness}:${c.session.id}`) || asked().queues.includes(c.session.harness)),
+      clicks: clicks.filter(
+        (c) =>
+          asked().listening.some((s) => s.harness === c.session.harness && s.id === c.session.id) ||
+          (asked().held ?? []).some((s) => s.harness === c.session.harness && s.id === c.session.id && c.at > s.since) ||
+          asked().queues.includes(c.session.harness),
+      ),
       after: [],
     })
   const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
@@ -4805,6 +4824,71 @@ describe.skipIf(process.platform === 'win32')('a conversation held in a thread o
       expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
       noOtherWay()
     },
+  )
+
+  test('only what was made after the connector first asked for the conversation this way is asked for, so a click that waited weeks from before stays for it wait, and one made after goes to its thread', async () => {
+    withT3Code()
+    const began = Date.now()
+    await start('socket', BOTH, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    const since = asked().held?.[0]?.since ?? 0
+    expect(asked().held).toEqual([{ harness: 'claude-code', id: CLAUDE, since }])
+    expect(since).toBeGreaterThanOrEqual(began)
+    expect(since).toBeLessThanOrEqual(Date.now())
+    // Made three weeks ago, and waiting for the conversation since
+    const old = { ...click(1), at: Date.now() - 21 * 86_400_000 }
+    const made = click(2)
+    backend(old, made)
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent[0]!.text).toContain('[action click-2]')
+    await pause(1500)
+    expect(stand.t3.sent).toHaveLength(1)
+    // The old one is neither claimed, handed over nor set aside: it waits where it is, for `it wait` and the site
+    for (const name of ['delivery:claim', 'delivery:handedOff', 'delivery:park', 'delivery:release']) expect(called(name)).not.toContain('click-1')
+    noOtherWay()
+  })
+
+  test('since when a conversation has been asked for this way is kept across a restart, and counted afresh only for one that is noted anew', async () => {
+    withT3Code()
+    await start('socket', BOTH, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    const since = asked().held![0]!.since
+    expect(JSON.parse(readFileSync(path.join(home, 't3-asked.json'), 'utf8'))).toEqual({ [`claude-code:${CLAUDE}`]: since })
+    await stop?.()
+    stop = null
+    await pause(20)
+    await start('socket', BOTH, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c', 'codex:thread-new': 't3-thread-x' }), home)
+    expect(asked().held).toEqual([
+      { harness: 'claude-code', id: CLAUDE, since },
+      { harness: 'codex', id: 'thread-new', since: expect.any(Number) },
+    ])
+    expect(asked().held![1]!.since).toBeGreaterThan(since)
+  })
+
+  test.each([
+    ['says it does not take them', false],
+    ['cannot be asked', undefined],
+  ])(
+    'where It %s, none is asked for this way and no click for one is offered, until It says it takes them',
+    async (_, takes) => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+      withT3Code()
+      stand.takes = takes
+      await start('socket', BOTH, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+      expect(asked().held).toBeUndefined()
+      expect(listened()).toEqual([])
+      backend({ ...click(1), at: Date.now() - 21 * 86_400_000 }, click(2))
+      await pause(1500)
+      expect(stand.t3.sent).toEqual([])
+      expect(called('delivery:claim')).toEqual([])
+      // It is brought up to date, and says so at its door, which is asked again every minute
+      stand.takes = true
+      await pass(60)
+      expect(listened()).toEqual([`claude-code:${CLAUDE}`])
+      backend(click(3))
+      await until(() => stand.t3.sent.length === 1)
+      expect(stand.t3.sent[0]!.text).toContain('[action click-3]')
+      noOtherWay()
+    },
+    30_000,
   )
 
   test('more of them than there is room for are asked for in turn, all of them in time, without watching anew with every pass, and one whose click waits for its thread keeps its place', async () => {

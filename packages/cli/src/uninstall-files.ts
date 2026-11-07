@@ -31,6 +31,7 @@ export const ROOT_FILES = [
   'conversation-notes-erasing',
   'aliases.json',
   't3-threads.json',
+  't3-asked.json',
   'runs.json',
   'runs.json.unreadable',
   'cut-off.json',
