@@ -67,7 +67,7 @@ import {
 import { incompatible } from './login'
 import { profileEnvironment, readProfile } from './profiles'
 import { conversationFolder, conversationProfile, noteConversation } from './publish'
-import { alone } from './serve/backend'
+import { alone, lockHeld } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
 import { type T3, T3_HELD_MOST, type T3Search, t3Held, t3Refusal, t3Running, t3Search, t3Send, t3Server, t3ThreadOf, wentUnanswered } from './t3'
@@ -472,6 +472,13 @@ const lockHolder = (): number | undefined => {
   const pid = readJson<{ pid?: unknown }>(lockFile())?.pid
   return typeof pid === 'number' ? pid : undefined
 }
+/**
+ * Whether a connector holds this folder's lock at this moment, by the lock and the process it
+ * names: what a service waiting for another connector to go looks at. The note a connector
+ * writes of where it listens says nothing of this, since the lock is taken before it is written
+ * and kept until after it has been taken away.
+ */
+export const connectorHeld = (): boolean => lockHeld(lockFile())
 /** Whether the lock is this program's at this moment. */
 const holdsLock = () => lockHolder() === process.pid
 /** What a connector stops with when the lock it took has come to be another's: it does nothing more as the folder's connector. */

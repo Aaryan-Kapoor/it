@@ -5,11 +5,11 @@ import { existsSync, rmSync } from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { contentPort } from '@it/protocol'
-import { runConnector } from '../connector'
+import { connectorHeld, runConnector } from '../connector'
 import { eraseDeliveryRecovery } from '../delivery-recovery'
-import { elsewhere, home, inHome, type Machine, machine, machineFile, notSetUp, Problem, readJson, why, writePrivate } from '../lib'
+import { elsewhere, inHome, type Machine, machine, machineFile, notSetUp, Problem, readJson, why, writePrivate } from '../lib'
 import { conversationsFile } from '../publish'
-import { launcherLooked, RESTART_CODE, runningFor, startsByItself, stopFile, supervised } from '../service'
+import { launcherLooked, RESTART_CODE, startsByItself, stopFile, supervised } from '../service'
 import { standalone, sweepOldPrograms } from '../upgrade'
 import { ageBand, begin, countBand, counting, failureOf, record, recordNoted, sinceBegun } from '../usage'
 import { asAdmin, type Backend, endOf, removeCopies, startBackend } from './backend'
@@ -656,7 +656,10 @@ const HELD_SAID_MS = 30 * 60_000
  * Windows launcher. Where another connector already holds this folder, as one started by hand
  * or a launcher that a replaced task left running (#353) does, it waits, and looks again at
  * longer and longer intervals up to HELD_WAITS's last, saying so in its log when it begins and
- * then only every HELD_SAID_MS. Once the other has gone it does not take the connector itself:
+ * then only every HELD_SAID_MS. The other has gone when the connector's lock is held by no
+ * running process (`connectorHeld`): the note a connector writes of where it listens is missing
+ * while one is starting and stopping, and names an old process where one was left behind, so
+ * it says nothing either way. Once the other has gone it does not take the connector itself:
  * it ends with RESTART_CODE, and its launcher starts the program that is installed now. A
  * service that had waited for days would otherwise take over as the program it was started as,
  * which after an update from the site is the one the update moved aside. It never ends well
@@ -695,7 +698,7 @@ export async function connector(say: (line: string) => void, asked: AbortSignal,
       continue
     }
     if (heldTimes > 0) {
-      if (!runningFor(home())) {
+      if (!connectorHeld()) {
         say('the connector that held this folder has stopped; this service ends to be started again as the program installed now')
         process.exitCode = RESTART_CODE
         return true

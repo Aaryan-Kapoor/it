@@ -9,6 +9,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { afterUpgrade } from './src/connector'
 import { Problem } from './src/lib'
+import { alone } from './src/serve/backend'
 import { launcherAsWritten, launcherStartsAgain, RESTART_CODE, restartWay, windowsLauncher } from './src/service'
 
 const stand = vi.hoisted(() => ({ connectorEnds: 0, refused: undefined as Error | undefined, ran: 0 }))
@@ -221,13 +222,39 @@ process.exit(n === 1 ? ${RESTART_CODE} : 0)
 // #353: a second service for the same folder, started by a launcher of its own, finds the
 // connector held by another, such as one a person started or a launcher a replaced task left
 // running. It cannot tell which, so it never ends its own launcher: it waits, and once the other
-// has gone it is started again by its launcher as the program installed now.
+// has gone it is started again by its launcher as the program installed now. Whether the other
+// has gone is told by the connector's lock and the process it names, never by the note a
+// connector writes beside it, which is missing while one starts and stops.
 describe('a service that is the connector alone and finds another connector holding the folder', () => {
   const before = process.env.IT_HOME
   let folder = ''
-  afterEach(() => {
-    vi.useRealTimers()
+  /** The other connector's hold on the folder's lock, which this process takes as a connector does. */
+  let letGo: (() => void) | undefined
+  let holding: Promise<unknown> | undefined
+  const hold = async () => {
+    let taken!: () => void
+    const took = new Promise<void>((r) => {
+      taken = r
+    })
+    const kept = new Promise<void>((r) => {
+      letGo = r
+    })
+    holding = alone('connector', async () => {
+      taken()
+      await kept
+    })
+    await took
+  }
+  /** And the other goes, letting its lock go. */
+  const gone = async () => {
+    letGo?.()
+    await holding
+    letGo = undefined
     stand.refused = undefined
+  }
+  afterEach(async () => {
+    await gone()
+    vi.useRealTimers()
     stand.ran = 0
     stand.connectorEnds = 0
     process.exitCode = undefined
@@ -235,55 +262,50 @@ describe('a service that is the connector alone and finds another connector hold
     else process.env.IT_HOME = before
     if (folder) rmSync(folder, { recursive: true, force: true })
   })
-  /** Another connector holds the folder, as a running one notes it there: this process stands in for it. */
-  const holding = () => {
-    writeFileSync(path.join(folder, 'connector.json'), JSON.stringify({ pid: process.pid }))
-    writeFileSync(path.join(folder, 'connector.lock'), JSON.stringify({ pid: process.pid }))
-  }
-  /** And has gone, taking its notes with it. */
-  const gone = () => {
-    rmSync(path.join(folder, 'connector.json'), { force: true })
-    rmSync(path.join(folder, 'connector.lock'), { force: true })
-    stand.refused = undefined
-  }
   const held = async () => {
     folder = mkdtempSync(path.join(os.tmpdir(), 'it-restart-held-'))
     process.env.IT_HOME = folder
     writeFileSync(path.join(folder, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'the laptop', token: 'x' }))
-    holding()
+    await hold()
     stand.ran = 0
     stand.refused = new Problem('A connector is already running for this folder.', 'already_running')
     return (await import('./src/serve')).connector
   }
-
-  test('under the Windows launcher, waits for the other to go, saying so seldom, then ends to be started again, and the next start takes over', async () => {
-    vi.useFakeTimers()
-    const connector = await held()
-    const lines: string[] = []
-    let over: boolean | undefined
+  /** Runs a service the launcher started, and says whether and how it has ended. */
+  const waiting = (connector: Awaited<ReturnType<typeof held>>, lines: string[] = []) => {
+    const state: { over?: boolean } = {}
     const ending = connector(
       (line) => void lines.push(line),
       new AbortController().signal,
       () => 'SIGTERM',
       true,
     ).then((failed) => {
-      over = failed
+      state.over = failed
       return failed
     })
-    // Twenty minutes of the other holding it: waited out at longer and longer intervals, and said once
+    return { ending, state }
+  }
+  const dead = (): number => spawnSync(process.execPath, ['-e', '']).pid
+
+  test('under the Windows launcher, waits for the other to go, saying so seldom, then ends to be started again, and the next start takes over', async () => {
+    const connector = await held()
+    vi.useFakeTimers()
+    const lines: string[] = []
+    const { ending, state } = waiting(connector, lines)
+    // Twenty minutes of the other holding it, with no note of where it listens: waited out at longer and longer intervals, and said once
     await vi.advanceTimersByTimeAsync(20 * 60_000)
-    expect(over).toBeUndefined()
+    expect(state.over).toBeUndefined()
     expect(lines).toEqual([
       'connector: could not start: already_running',
       'another It already runs the connector for this folder; this service waits for it to stop, and then starts again',
     ])
     // Half an hour on, that it is still waiting is said once more
     await vi.advanceTimersByTimeAsync(15 * 60_000)
-    expect(over).toBeUndefined()
+    expect(state.over).toBeUndefined()
     expect(lines.at(-1)).toBe('another It still runs the connector for this folder; this service goes on waiting for it to stop')
     expect(lines).toHaveLength(3)
     // The other goes: within the longest wait, this one ends with the restart code, which its launcher answers, and has not run a connector itself
-    gone()
+    await gone()
     await vi.advanceTimersByTimeAsync(5 * 60_000)
     expect(await ending).toBe(true)
     expect(process.exitCode).toBe(RESTART_CODE)
@@ -301,6 +323,54 @@ describe('a service that is the connector alone and finds another connector hold
       ),
     ).toBe(true)
     expect(stand.ran).toBe(1)
+  })
+
+  test('a note of where the other listens that names a process long gone does not end the wait while the other holds the lock', async () => {
+    const connector = await held()
+    writeFileSync(path.join(folder, 'connector.json'), JSON.stringify({ pid: dead() }))
+    vi.useFakeTimers()
+    const { state } = waiting(connector)
+    await vi.advanceTimersByTimeAsync(20 * 60_000)
+    expect(state.over).toBeUndefined()
+    expect(process.exitCode).toBeUndefined()
+  })
+
+  test('a lock the other let go and took again between two looks ends nothing, nor does one taken again just before the program started anew', async () => {
+    const connector = await held()
+    vi.useFakeTimers()
+    const first = waiting(connector)
+    await vi.advanceTimersByTimeAsync(10_000)
+    // Let go and taken again before the service looks: at its look, the lock is held
+    await gone()
+    await hold()
+    await vi.advanceTimersByTimeAsync(20 * 60_000)
+    expect(first.state.over).toBeUndefined()
+    // Let go for long enough that the service looks, it ends to be started again
+    await gone()
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(await first.ending).toBe(true)
+    expect(process.exitCode).toBe(RESTART_CODE)
+    // And before its launcher starts the program anew, another takes the lock: that one waits too, and does not end while it is held
+    process.exitCode = undefined
+    await hold()
+    stand.refused = new Problem('A connector is already running for this folder.', 'already_running')
+    const second = waiting(connector)
+    await vi.advanceTimersByTimeAsync(20 * 60_000)
+    expect(second.state.over).toBeUndefined()
+    expect(process.exitCode).toBeUndefined()
+    expect(stand.ran).toBe(0)
+  })
+
+  test('a lock whose holder is gone is no hold, though a process now has its number', async () => {
+    const connector = await held()
+    // The lock names this process's number and another start: the holder it names has ended, and the number is another's now
+    const file = path.join(folder, 'connector.lock')
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), started: '1' }))
+    vi.useFakeTimers()
+    const { ending } = waiting(connector)
+    await vi.advanceTimersByTimeAsync(31_000)
+    expect(await ending).toBe(true)
+    expect(process.exitCode).toBe(RESTART_CODE)
   })
 
   test('anywhere else, waits for it as before, until it is asked to stop', async () => {
