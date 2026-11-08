@@ -1422,6 +1422,18 @@ async function connecting(say: (line: string) => void): Promise<void> {
   let inbox: Offered[] = []
   let routing = false
   let stopping: ((code: number) => void) | null = null
+  /**
+   * A stop asked for before this connector is ready to stop, with its code. An update asked for
+   * on the site can finish while the connector is still starting: the site is watched before
+   * the first report has been made, and the stopping is made ready only after it. Left to
+   * `stopping`, which is nothing until then, the stop was lost, and the old program ran on with
+   * the new one in its place and the site told that it was starting again as it.
+   */
+  let stopAsked: number | undefined
+  const stopWith = (code: number) => {
+    if (stopping) stopping(code)
+    else stopAsked ??= code
+  }
 
   let confirming = false
   async function confirmAll(): Promise<void> {
@@ -3738,7 +3750,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       await afterUpgrade(done, service.restartWay(), {
         say,
         tell: (args) => call('mutation', api.machines.upgrading, args),
-        stop: (code) => stopping?.(code),
+        stop: stopWith,
       })
     } catch (err) {
       say(`upgrade: ${why(err)}`)
@@ -3968,8 +3980,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
   let asked = false
   const code = await new Promise<number>((resolve) => {
     stopping = resolve
-    // It may have been found out before this point was reached
+    // It may have been found out before this point was reached, and a stop may have been asked for
     if (notOurs) resolve(0)
+    if (stopAsked !== undefined) resolve(stopAsked)
     for (const sig of ['SIGINT', 'SIGTERM'] as const)
       process.once(sig, () => {
         say(`stopping (${sig})`)
