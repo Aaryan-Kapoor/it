@@ -70,6 +70,72 @@ Each save remembers which edit it saved, so that the answer to an older one cann
 </script>
 ```
 
+## Keeping everything in state
+
+Everything a page shows that can change, and every control on it, lives in its state. Then you change what it shows without publishing it again, and `it state` tells you what the user sees and has chosen before they send anything. Publish again with `it update` only when the page's code or layout changes: a new version reloads the page on every screen, and whatever was typed there and not yet saved or sent is lost.
+
+- **What the page shows is in your part of the state,** drawn in `It.onState`. Keep a list as an object keyed by id, with the ids in an `order` array, since a patch merges objects and replaces an array whole. Adding a card is then `it patch board '{"items":{"c3":{"title":"Call the bank"}},"order":["c1","c2","c3"]}'`, and taking it away is `it patch board '{"items":{"c3":null},"order":["c1","c2"]}'`.
+- **Each control keeps its value with `It.store.set`, under a key of its own, at every change:** text fields, choices, toggles, sliders, tabs, filters, sorting, what is selected or open, the view, and the step of a flow. `it state board` shows them under `_page`.
+- **You set a control under `controls.<name>` in your part of the state,** as in `it set board controls.show open`. The page takes a value of yours when it differs from the last one it took, which it keeps under `<name>-from-agent`, and stores it as the control's value, so whichever of you changed a control last wins. A text field the user is typing in keeps their text. To give a control again a value it already took from you, after the user changed it, take that record away in the same patch: `it patch board '{"controls":{"show":"open"},"_page":{"show-from-agent":null}}'`.
+- **Name the controls in the page,** in a comment beside them, so that you find the names when you come back to it.
+- **What the user decides still comes to you as an action,** with `It.action`, or `It.stage` and `It.commit`. A control's value is for knowing what they see and for steering it, and your answer goes back into the state.
+
+A control that is not a form field, such as a tab or the item that is open, works the same way: draw it from its stored value, and store the new value whenever either of you changes it.
+
+```html
+<!-- Controls: `show` (all or open) and `find` (text to look for). Set one with
+     `it set board controls.show open`. Each control's value is kept under its name with
+     It.store, and `it state board` shows it under `_page`. -->
+<label>Show
+  <select data-control="show">
+    <option value="all">All</option>
+    <option value="open">Open</option>
+  </select>
+</label>
+<label>Find <input data-control="find" type="search"></label>
+<p id="unsaved" role="status" hidden>A setting was not saved.</p>
+<ul id="cards"></ul>
+<script>
+  const controls = [...document.querySelectorAll('[data-control]')]
+  const control = (name) => controls.find((el) => el.dataset.control === name)
+  const valueOf = (el) => (el.type === 'checkbox' ? el.checked : el.value)
+  const put = (el, value) => (el.type === 'checkbox' ? (el.checked = Boolean(value)) : (el.value = value ?? ''))
+  const typing = (el) => el === document.activeElement && (el.tagName === 'TEXTAREA' || /^(text|search|email|url|number)$/.test(el.type))
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+  const keep = (key, value) => It.store.set(key, value).catch(() => (document.getElementById('unsaved').hidden = false))
+
+  function draw() {
+    const { items = {}, order = [] } = It.state
+    const find = control('find').value.toLowerCase()
+    const shown = order
+      .map((id) => items[id])
+      .filter((item) => item && (control('show').value === 'all' || !item.done) && item.title.toLowerCase().includes(find))
+    document.getElementById('cards').replaceChildren(...shown.map((item) => Object.assign(document.createElement('li'), { textContent: item.title })))
+  }
+
+  It.onState((state) => {
+    for (const el of controls) {
+      const name = el.dataset.control
+      const asked = state.controls?.[name]
+      const kept = It.store.get(name)
+      if (asked !== undefined && !same(asked, It.store.get(name + '-from-agent'))) {
+        // A value the agent gave that this page has not taken yet
+        keep(name + '-from-agent', asked)
+        if (!typing(el)) put(el, asked)
+        keep(name, valueOf(el))
+      } else if (kept === undefined) keep(name, valueOf(el))
+      else if (!typing(el)) put(el, kept)
+    }
+    draw()
+  })
+  for (const el of controls)
+    el.addEventListener('input', () => {
+      keep(el.dataset.control, valueOf(el))
+      draw()
+    })
+</script>
+```
+
 ## Changing state that something else may have changed
 
 A page can change its own state while you work, and so can another conversation. Where a change of yours must not overwrite one you have not seen, read the state with `it state deploy-plan`, which prints its `revision` beside it, and give that number back: `it patch deploy-plan '{"total":42}' --if-revision 7`. The change is made only while the state is still at that revision. If it has moved on, the command is refused with the code `conflict`: read the state again and decide anew.

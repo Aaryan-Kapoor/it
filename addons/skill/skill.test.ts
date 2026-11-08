@@ -5,7 +5,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { JSDOM } from 'jsdom'
 import { describe, expect, onTestFinished, test } from 'vitest'
 import { RUNTIME } from '../../packages/content/src/runtime.generated'
-import { CHANNEL_VERSION, LIMITS, QUOTA, SHRINK, STORAGE, STORE_EVERY_MS, sizeSaid } from '../../packages/protocol/src/index'
+import { CHANNEL_VERSION, deepMerge, LIMITS, QUOTA, SHRINK, STORAGE, STORE_EVERY_MS, STORE_KEY, sizeSaid } from '../../packages/protocol/src/index'
 
 const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8')
 /** What an agent reads whole each time it uses It. */
@@ -23,9 +23,11 @@ const code = [...skill.matchAll(/```[a-z]*\n([\s\S]*?)```|`([^`\n]+)`/g)].flatMa
 /** The `it` commands among it, each as its words. */
 const commands = code.filter((line) => /^it [a-z]/.test(line)).map((line) => line.split(/\s+/))
 
-/** Run the documented draft example with the served runtime and control the site's answers. */
-const draftPage = () => {
-  const example = /```html\n([\s\S]*?)```/.exec(more.page!)![1]!
+/** The skill's examples of a page, each as it is written in `it help page`. */
+const examples = [...more.page!.matchAll(/```html\n([\s\S]*?)```/g)].map((m) => m[1]!)
+
+/** Run one example page with the served runtime, with its timers and the site's port in the test's hands. */
+const runExample = (example: string) => {
   const script = /<script>([\s\S]*?)<\/script>/.exec(example)![1]!
   const w = new JSDOM(`<!doctype html><body>${example.replace(/<script>[\s\S]*?<\/script>/, '')}</body>`, {
     url: 'http://content.test/s/a-token/v/1/index.html',
@@ -49,7 +51,6 @@ const draftPage = () => {
   w.dispatchEvent(
     Object.assign(new w.Event('message'), { origin: 'http://app.test', source: w.parent, data: { type: 'it:port', v: CHANNEL_VERSION }, ports: [port] }),
   )
-  const box = w.document.getElementById('draft')
   const stores = () => sent.filter((m) => m.type === 'it:store')
   /** Time goes by long enough for the runtime's pause between two writes of what the page keeps, and what it holds is sent. */
   const settled = async () => {
@@ -60,6 +61,14 @@ const draftPage = () => {
     }
     await new Promise(setImmediate)
   }
+  const arrives = (state: unknown, revision: number) => port.onmessage!({ data: { type: 'it:state', state, revision } })
+  return { w, later, port, stores, settled, arrives }
+}
+
+/** Run the documented draft example with the served runtime and control the site's answers. */
+const draftPage = () => {
+  const { w, later, port, stores, settled, arrives } = runExample(examples[0]!)
+  const box = w.document.getElementById('draft')
   return {
     box,
     retry: w.document.getElementById('draft-retry'),
@@ -68,7 +77,7 @@ const draftPage = () => {
       box.value = text
       box.dispatchEvent(new w.Event('input'))
     },
-    arrives: (state: unknown, revision: number) => port.onmessage!({ data: { type: 'it:state', state, revision } }),
+    arrives,
     settled,
     /** Run only the documented debounce, and the runtime's pause between writes, which is shorter, and not its connection retry. */
     async aMomentLater() {
@@ -89,10 +98,42 @@ const draftPage = () => {
   }
 }
 
+/** Run the documented example of a page that keeps what it shows and its controls in its state. */
+const controlsPage = () => {
+  const example = examples.find((html) => html.includes('data-control'))!
+  const { w, port, stores, settled, arrives } = runExample(example)
+  const control = (name: string) => w.document.querySelector(`[data-control="${name}"]`)
+  let answered = 0
+  return {
+    control,
+    arrives,
+    /** It accepts every write the page sends, one after another, as the site does: each at a revision past any state sent here. */
+    async settled() {
+      await settled()
+      while (answered < stores().length) {
+        const { requestId } = stores()[answered]
+        port.onmessage!({ data: { type: 'it:result', requestId, ok: true, revision: 100 + answered++ } })
+        await settled()
+      }
+    },
+    /** The titles of the cards it shows, in order. */
+    cards: () => [...w.document.querySelectorAll('#cards li')].map((li: any) => li.textContent),
+    /** What it has kept with It.store, the last value under each name. */
+    kept: () => Object.fromEntries(stores().flatMap((m) => m.changes.map(([key, text]: [string, string]) => [key, JSON.parse(text)]))),
+    /** The user changes a control: the field takes the value and says so, as a browser does. */
+    changes(name: string, value: string) {
+      const el = control(name)
+      el.value = value
+      el.dispatchEvent(new w.Event('input', { bubbles: true }))
+    },
+  }
+}
+
 describe('the agent skill', () => {
   test('is short, and names each part it leaves out where an agent would want it, by the command that prints it', () => {
-    // It is read whole every time, by every agent that uses It: what it once held was 27 KB
-    expect(Buffer.byteLength(short)).toBeLessThan(12_500)
+    // It is read whole every time, by every agent that uses It: what it once held was 27 KB. It
+    // grew by a kilobyte when it came to say that a page keeps all it shows, and its controls, in its state
+    expect(Buffer.byteLength(short)).toBeLessThan(13_500)
     expect(readdirSync(new URL('./more', import.meta.url)).sort()).toEqual(PARTS.map((part) => `${part}.md`))
     // A part nothing in the skill points to is never opened
     for (const part of PARTS) expect(short, part).toContain(`\`it help ${part}\``)
@@ -485,6 +526,82 @@ describe('the agent skill', () => {
     expect(p.stored()).toEqual(['a draft', 'a draft', 'a draft with another sentence'])
     await p.answer(2, true)
     expect(p.said()).toBe('Saved.')
+  })
+
+  test('says to keep what a page shows and every control in its state, and to publish again only for the page itself, saying what that costs', () => {
+    expect(short).toContain('Change them with `it set` or `it patch`, never `it update`.')
+    expect(short).toMatch(
+      /Publish again only when the page's code or layout changes, since a new version reloads it on every screen and loses what the user typed/,
+    )
+    expect(more.page).toContain('a new version reloads the page on every screen, and whatever was typed there and not yet saved or sent is lost')
+    expect(short).toContain('**Every control is stateful.**')
+    expect(short).toMatch(/keeps its value with `It\.store\.set` under its own key as it changes, so that `it state` shows you what the user sees/)
+    expect(short).toContain('**You can set any control** under `controls.<name>` in your state')
+    expect(short).toContain('**What the user decides still comes to you as an action,**')
+    // A list keyed by id with an `order` array, because a patch merges an object and replaces an array whole, as the skill says
+    expect(short).toContain('Keep a list as an object keyed by id, with an `order` array of the ids, since a patch replaces an array whole.')
+    expect(deepMerge({ items: { c1: { title: 'a' } }, order: ['c1', 'c2'] }, { items: { c3: { title: 'b' } }, order: ['c3'] })).toEqual({
+      items: { c1: { title: 'a' }, c3: { title: 'b' } },
+      order: ['c3'],
+    })
+    // What the page keeps is read under `_page`, and an agent's patch there changes only the values it names
+    expect(STORE_KEY).toBe('_page')
+    expect(more.page).toContain(`"${STORE_KEY}":{"show-from-agent":null}`)
+    expect(source('../../convex/state.ts')).toMatch(/named \? \{ merge: inside \?\? \{\} \}/)
+  })
+
+  test('its example of controls, run as it is written, stores every control, takes what the agent sets, and keeps what the user changed or is typing', async () => {
+    const items = { c1: { title: 'Buy milk', done: true }, c2: { title: 'Call the bank', done: false } }
+    const p = controlsPage()
+    // Opened: it draws the list in its order, and stores each control as it stands, so the agent sees it
+    p.arrives({ items, order: ['c2', 'c1'] }, 1)
+    expect(p.cards()).toEqual(['Call the bank', 'Buy milk'])
+    await p.settled()
+    expect(p.kept()).toEqual({ show: 'all', find: '' })
+    // The agent sets a control: the page shows it, stores it, and remembers that it took it
+    p.arrives({ items, order: ['c2', 'c1'], controls: { show: 'open' } }, 2)
+    expect(p.control('show').value).toBe('open')
+    expect(p.cards()).toEqual(['Call the bank'])
+    await p.settled()
+    expect(p.kept()).toMatchObject({ show: 'open', 'show-from-agent': 'open' })
+    // The user changes it back: that is stored, and stays through the agent's next change of something else
+    p.changes('show', 'all')
+    expect(p.cards()).toEqual(['Call the bank', 'Buy milk'])
+    p.arrives({ items: { ...items, c3: { title: 'Pay rent', done: false } }, order: ['c2', 'c1', 'c3'], controls: { show: 'open' } }, 3)
+    expect(p.control('show').value).toBe('all')
+    expect(p.cards()).toEqual(['Call the bank', 'Buy milk', 'Pay rent'])
+    await p.settled()
+    expect(p.kept()).toMatchObject({ show: 'all' })
+    // The agent sets the text the user is typing in: their text stays, and is what is stored
+    p.control('find').focus()
+    p.changes('find', 'ba')
+    p.arrives({ items, order: ['c2', 'c1'], controls: { show: 'open', find: 'milk' } }, 4)
+    expect(p.control('find').value).toBe('ba')
+    expect(p.cards()).toEqual(['Call the bank'])
+    await p.settled()
+    expect(p.kept()).toMatchObject({ find: 'ba', 'find-from-agent': 'milk' })
+  })
+
+  test('its example of controls, opened again, keeps what the user chose last, and takes what the agent set while it was closed', async () => {
+    const items = { c1: { title: 'Buy milk', done: true } }
+    // The user changed the control after the page took the agent's value: theirs stays
+    const later = controlsPage()
+    later.arrives({ items, order: ['c1'], controls: { show: 'open' }, _page: { show: 'all', 'show-from-agent': 'open', find: '' } }, 9)
+    expect(later.control('show').value).toBe('all')
+    expect(later.cards()).toEqual(['Buy milk'])
+    await later.settled()
+    expect(later.kept()).toEqual({})
+    // The agent set a value while no screen showed the page: it is taken, and stored
+    const closed = controlsPage()
+    closed.arrives({ items, order: ['c1'], controls: { show: 'open' }, _page: { show: 'all', 'show-from-agent': 'all', find: '' } }, 9)
+    expect(closed.control('show').value).toBe('open')
+    expect(closed.cards()).toEqual([])
+    await closed.settled()
+    expect(closed.kept()).toEqual({ show: 'open', 'show-from-agent': 'open' })
+    // The agent gives a value again that the page took before, taking that record away in the same patch, as the skill says
+    const again = controlsPage()
+    again.arrives({ items, order: ['c1'], controls: { show: 'open' }, _page: { show: 'all', find: '' } }, 9)
+    expect(again.control('show').value).toBe('open')
   })
 
   test('says how much of what is waiting one `it wait` or one `it actions` prints, in the number the program keeps, and to run it again past that', () => {
