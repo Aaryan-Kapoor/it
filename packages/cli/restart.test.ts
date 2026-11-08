@@ -11,12 +11,13 @@ import { afterUpgrade } from './src/connector'
 import { Problem } from './src/lib'
 import { launcherAsWritten, launcherStartsAgain, RESTART_CODE, restartWay, windowsLauncher } from './src/service'
 
-const stand = vi.hoisted(() => ({ connectorEnds: 0, refused: undefined as Error | undefined }))
+const stand = vi.hoisted(() => ({ connectorEnds: 0, refused: undefined as Error | undefined, ran: 0 }))
 // The connector the service runs, as a stand-in that stops at once with the code a test gives it
 vi.mock('./src/connector', async (original) => ({
   ...(await original<typeof import('./src/connector')>()),
   runConnector: async () => {
     if (stand.refused) throw stand.refused
+    stand.ran++
     process.exitCode = stand.connectorEnds
   },
 }))
@@ -177,7 +178,7 @@ describe('the service, stopped to be started again as a newer It', () => {
   test('ends with the restart code, which is what has its launcher start it again at once', async () => {
     const { code, lines } = await served(RESTART_CODE)
     expect(code).toBe(RESTART_CODE)
-    expect(lines.at(-1)).toBe('service stopped, to be started again as the newer It')
+    expect(lines.at(-1)).toBe('service stopped, to be started again by its launcher as the program installed now')
   })
 
   test('and one that stops to make way for a newer It installed by another command still ends as a failure, as it did', async () => {
@@ -217,42 +218,89 @@ process.exit(n === 1 ? ${RESTART_CODE} : 0)
   }, 90_000)
 })
 
-// #353: a second service for the same folder, started by a launcher of its own, found the
-// connector held and waited beside the first for as long as it ran
+// #353: a second service for the same folder, started by a launcher of its own, finds the
+// connector held by another, such as one a person started or a launcher a replaced task left
+// running. It cannot tell which, so it never ends its own launcher: it waits, and once the other
+// has gone it is started again by its launcher as the program installed now.
 describe('a service that is the connector alone and finds another connector holding the folder', () => {
   const before = process.env.IT_HOME
   let folder = ''
   afterEach(() => {
+    vi.useRealTimers()
     stand.refused = undefined
+    stand.ran = 0
+    stand.connectorEnds = 0
     process.exitCode = undefined
     if (before === undefined) delete process.env.IT_HOME
     else process.env.IT_HOME = before
     if (folder) rmSync(folder, { recursive: true, force: true })
   })
+  /** Another connector holds the folder, as a running one notes it there: this process stands in for it. */
+  const holding = () => {
+    writeFileSync(path.join(folder, 'connector.json'), JSON.stringify({ pid: process.pid }))
+    writeFileSync(path.join(folder, 'connector.lock'), JSON.stringify({ pid: process.pid }))
+  }
+  /** And has gone, taking its notes with it. */
+  const gone = () => {
+    rmSync(path.join(folder, 'connector.json'), { force: true })
+    rmSync(path.join(folder, 'connector.lock'), { force: true })
+    stand.refused = undefined
+  }
   const held = async () => {
     folder = mkdtempSync(path.join(os.tmpdir(), 'it-restart-held-'))
     process.env.IT_HOME = folder
     writeFileSync(path.join(folder, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'the laptop', token: 'x' }))
+    holding()
+    stand.ran = 0
     stand.refused = new Problem('A connector is already running for this folder.', 'already_running')
     return (await import('./src/serve')).connector
   }
 
-  test('under the Windows launcher, stops and ends well, so that the launcher’s loop ends instead of starting it again', async () => {
+  test('under the Windows launcher, waits for the other to go, saying so seldom, then ends to be started again, and the next start takes over', async () => {
+    vi.useFakeTimers()
     const connector = await held()
     const lines: string[] = []
+    let over: boolean | undefined
+    const ending = connector(
+      (line) => void lines.push(line),
+      new AbortController().signal,
+      () => 'SIGTERM',
+      true,
+    ).then((failed) => {
+      over = failed
+      return failed
+    })
+    // Twenty minutes of the other holding it: waited out at longer and longer intervals, and said once
+    await vi.advanceTimersByTimeAsync(20 * 60_000)
+    expect(over).toBeUndefined()
+    expect(lines).toEqual([
+      'connector: could not start: already_running',
+      'another It already runs the connector for this folder; this service waits for it to stop, and then starts again',
+    ])
+    // Half an hour on, that it is still waiting is said once more
+    await vi.advanceTimersByTimeAsync(15 * 60_000)
+    expect(over).toBeUndefined()
+    expect(lines.at(-1)).toBe('another It still runs the connector for this folder; this service goes on waiting for it to stop')
+    expect(lines).toHaveLength(3)
+    // The other goes: within the longest wait, this one ends with the restart code, which its launcher answers, and has not run a connector itself
+    gone()
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(await ending).toBe(true)
+    expect(process.exitCode).toBe(RESTART_CODE)
+    expect(lines.at(-1)).toBe('the connector that held this folder has stopped; this service ends to be started again as the program installed now')
+    expect(stand.ran).toBe(0)
+    // Started again by its launcher, as the program installed now, it takes the connector
+    process.exitCode = undefined
+    stand.connectorEnds = RESTART_CODE
     expect(
       await connector(
-        (line) => void lines.push(line),
+        () => {},
         new AbortController().signal,
         () => 'SIGTERM',
         true,
       ),
-    ).toBe(false)
-    expect(lines).toEqual([
-      'connector: could not start: already_running',
-      'another It already runs the connector for this folder, so this service stops, and its launcher with it',
-    ])
-    expect(process.exitCode).toBeUndefined()
+    ).toBe(true)
+    expect(stand.ran).toBe(1)
   })
 
   test('anywhere else, waits for it as before, until it is asked to stop', async () => {
@@ -271,7 +319,22 @@ describe('a service that is the connector alone and finds another connector hold
     expect(await ending).toBe(false)
   })
 
-  test('another failure to start is waited out under the launcher too: only a connector that is already running ends the service', async () => {
+  test('under the launcher, a service asked to stop while it waits stops, and ends well', async () => {
+    const connector = await held()
+    const asked = new AbortController()
+    const ending = connector(
+      () => {},
+      asked.signal,
+      () => 'SIGTERM',
+      true,
+    )
+    await new Promise((r) => setTimeout(r, 200))
+    asked.abort()
+    expect(await ending).toBe(false)
+    expect(process.exitCode).toBeUndefined()
+  })
+
+  test('another failure to start is waited out under the launcher as before, and does not end the service', async () => {
     const connector = await held()
     stand.refused = new Problem('It could not be reached.', 'offline')
     const asked = new AbortController()
