@@ -355,15 +355,15 @@ describe('what is said of an agent app on a machine', () => {
       { ...laptop, latest: '0.1.1', upgrade: { at: 1, state: 'installed', version: '0.1.1' } },
     ])
     expect(said()).toEqual([
-      'It 0.1.1 is installed on the laptop. It runs once It is started again there: stop it serve where it is running, and start it. As it starts it brings the add-ons in the agent apps there up to date. An app that is already running goes on with the add-on it loaded, which still takes clicks, until it is restarted, and its line on this page then says so.',
+      'It 0.1.1 is installed on the laptop. It runs once It is started again there. If you started It in a terminal with it serve, stop it and start it again. Otherwise run it setup in a terminal on that machine, which starts It again and lets the next update start it again by itself. As it starts it brings the add-ons in the agent apps there up to date. An app that is already running goes on with the add-on it loaded, which still takes clicks, until it is restarted, and its line on this page then says so.',
     ])
-    // On Windows too: a service the system starts there comes back by itself, so a machine that says this was started by hand, and is never sent to `it setup`
+    // On Windows the same: a machine whose service an It from before 0.1.35 registered says this too, and `it setup` is what starts It again there
     await showing([
       { ...desk, connectorVersion: '0.1.1' },
       { ...laptop, system: 'win32', latest: '0.1.1', upgrade: { at: 1, state: 'installed', version: '0.1.1' } },
     ])
-    expect(said()[0]).toContain('stop it serve where it is running, and start it.')
-    expect(said()[0]).not.toContain('it setup')
+    expect(said()[0]).toContain('If you started It in a terminal with it serve, stop it and start it again.')
+    expect(said()[0]).toContain('Otherwise run it setup in a terminal on that machine')
   })
 
   test.each([null, '0.1.0', '0.9.5'])('a joined machine shows a newer host before its next release lookup, last result %s', async (latest) => {

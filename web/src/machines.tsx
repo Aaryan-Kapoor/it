@@ -204,10 +204,12 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
   if (state === 'installed')
     return (
       <p className="panel-note newer" data-tone="wait">
-        {/* Only where It was started by hand: a service the system starts comes back as the new program by itself, on Windows too */}
-        It {m.upgrade?.version ?? ''} is installed on {m.name}. It runs once It is started again there: stop <code>it serve</code> where it is running, and
-        start it. As it starts it brings the add-ons in the agent apps there up to date. An app that is already running goes on with the add-on it loaded, which
-        still takes clicks, until it is restarted, and its line on this page then says so.
+        {/* Said by a machine that could not start It again by itself: one started in a terminal, and one whose service was registered by an It
+            from before 0.1.35, whose launcher does not say that it is the service, as well as an older It that sent every Windows machine here */}
+        It {m.upgrade?.version ?? ''} is installed on {m.name}. It runs once It is started again there. If you started It in a terminal with{' '}
+        <code>it serve</code>, stop it and start it again. Otherwise run <code>it setup</code> in a terminal on that machine, which starts It again and lets the
+        next update start it again by itself. As it starts it brings the add-ons in the agent apps there up to date. An app that is already running goes on with
+        the add-on it loaded, which still takes clicks, until it is restarted, and its line on this page then says so.
       </p>
     )
   const behind = !m.runsIt && newer(host, m.connectorVersion)
