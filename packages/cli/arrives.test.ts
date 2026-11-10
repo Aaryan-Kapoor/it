@@ -1,7 +1,17 @@
 // What `it create`, `it update`, `it tour show` and `it status` say to an agent of whether what
 // the person does on its pages arrives in its conversation by itself, and what to do about it.
 import { describe, expect, test } from 'vitest'
-import { arrives, claudeAfterSetup, claudeReloadLine, claudeRunning, loadAddon, RELOAD_PLUGINS_SINCE, reloadLine, tooOldToReload } from './src/arrives'
+import {
+  arrives,
+  claudeAfterSetup,
+  claudeReloadLine,
+  claudeRunning,
+  loadAddon,
+  notLoadedHere,
+  RELOAD_PLUGINS_SINCE,
+  reloadLine,
+  tooOldToReload,
+} from './src/arrives'
 import type { Route } from './src/connector'
 
 const claude = { harness: 'claude-code', id: '11111111-2222-4333-8444-555555555555' }
@@ -84,6 +94,22 @@ describe('whether what the person does arrives by itself', () => {
       expect(said.via).toBeUndefined()
       expect(said.next).toContain('`it wait')
     }
+  })
+
+  test('gives the words to load the add-on in exactly the case that is named for anything else that asks', () => {
+    const cases = [
+      { session: claude, addonHere: false, route: route() },
+      { session: claude, addonHere: false, route: route({ thread: 'held' }) },
+      { session: claude, addonHere: false, route: route({ thread: 'unknown' }) },
+      { session: claude, addonHere: false, route: route({ connected: false }) },
+      { session: claude, addonHere: false, route: route({ listening: true }) },
+      { session: claude, addonHere: false, route: route({ runtime: 'incompatible' }) },
+      { session: claude, addonHere: true, route: route() },
+      { session: claude, addonHere: false, route: null },
+      { session: { harness: 'codex', id: 'thread-1' }, addonHere: false, route: route() },
+    ] as const
+    for (const f of cases) expect(notLoadedHere(f)).toBe(arrives(f).next.includes('word for word'))
+    expect(cases.filter((f) => notLoadedHere(f))).toHaveLength(1)
   })
 
   test('says which page to wait on where there is one, and asks for no page where there is none', () => {

@@ -80,6 +80,23 @@ export interface Facts {
   tour?: boolean
 }
 
+/**
+ * Whether nothing the person does arrives in this conversation for now because it is a Claude
+ * Code conversation that has not loaded It's add-on, as one that was open when the add-on was
+ * installed or updated has not, and nothing else keeps what they do from it or takes it there
+ * another way: the one case in which `arrives` gives the words for the person to load it, and
+ * by which anything else that asks for them goes. Whether `/reload-plugins` can load it there
+ * is `tooOldToReload`.
+ */
+export const notLoadedHere = (f: Facts): boolean =>
+  f.session?.harness === 'claude-code' &&
+  f.addonHere === false &&
+  f.route !== null &&
+  f.route.connected &&
+  !f.route.listening &&
+  f.route.thread === 'none' &&
+  f.route.runtime !== 'incompatible'
+
 /** Whether what the person does arrives by itself, by which way, and what to do, from what It knows of the conversation. */
 export function arrives(f: Facts): Arrives {
   const on = f.slug ? 'this page' : 'your pages'
@@ -119,7 +136,7 @@ export function arrives(f: Facts): Arrives {
     return not(
       `The add-on that ${app} has loaded cannot take clicks from this It, so nothing the person does arrives here by itself. \`it status\` says what to do about it.`,
     )
-  if (harness === 'claude-code' && f.addonHere === false) {
+  if (notLoadedHere(f)) {
     // Said word for word, and once: in the tour, where an agent that installed It said it with the
     // pairing link, it is not said again until the ending, and then only where it was not said
     const line = reloadLine(f.claude)
