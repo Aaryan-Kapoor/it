@@ -550,15 +550,22 @@ const ofPairing = (ctx: MutationCtx, sessionId: Id<'sessions'>) =>
  * it was given and has not used, stop working, and what it asked for before cannot be given a
  * ticket after. The page it is locked to is asked onto it at once, and shown afresh.
  */
-async function putUnder(ctx: MutationCtx, d: Doc<'displays'>, lock: Doc<'displays'>['lockedTo'], opts: { fresh?: boolean } = {}): Promise<void> {
+async function putUnder(
+  ctx: MutationCtx,
+  d: Doc<'displays'>,
+  lock: Doc<'displays'>['lockedTo'],
+  opts: { fresh?: boolean; revokeInMs?: number } = {},
+): Promise<Id<'contentJobs'> | null> {
   const now = Date.now()
   const change: Partial<Doc<'displays'>> = { lockedTo: lock, lockEnded: undefined }
   if (lock) change.showing = { artifactId: lock.artifactId, at: Math.max(now, (d.showing?.at ?? 0) + 1) }
+  let job: Id<'contentJobs'> | null = null
   if (lock && !opts.fresh && d.lockedTo?.artifactId !== lock.artifactId) {
     change.epoch = d.epoch + 1
-    await revokeLater(ctx, { userId: d.userId, displayId: d._id, epoch: d.epoch + 1 })
+    job = await revokeLater(ctx, { userId: d.userId, displayId: d._id, epoch: d.epoch + 1 }, { inMs: opts.revokeInMs })
   }
   await ctx.db.patch(d._id, change)
+  return job
 }
 
 /**
@@ -576,14 +583,13 @@ async function oneLock(ctx: MutationCtx, d: Doc<'displays'>, opts: { fresh?: boo
 }
 
 /**
- * Locks a display to one of the person's pages: from then on no agent brings another page up
- * there, it is never the display chosen where an agent names none, a screen is let open no other
- * page there, and the site on it keeps to that page. The page is brought up there at once.
- *
- * Asked by a paired browser and never by an agent: the owner's browser locks any display, and a
- * screen itself and no other. Every display of the same browser's pairing is locked with it.
+ * How long the revocation a lock asks for waits before it is tried by itself: the lock asks for
+ * it at once and waits for the answer, and this is what is left to try again where that failed.
  */
-export const lock = mutation({
+const LOCK_REVOKE_BACKUP_MS = 5_000
+
+/** The lock itself, as one transaction: answers with the revocations it asked for, which `lock` waits for. */
+export const _lock = internalMutation({
   args: { displayId: v.id('displays'), artifactId: v.id('artifacts') },
   handler: async (ctx, { displayId, artifactId }) => {
     const c = await requireBrowser(ctx)
@@ -592,9 +598,36 @@ export const lock = mutation({
     const page = await ownArtifact(ctx, c.user._id, artifactId)
     if (page.currentVersion === undefined) fail('not_found', 'That page has nothing published yet.')
     const lock = { artifactId: page._id, at: Date.now() }
-    for (const x of await ofPairing(ctx, d.sessionId)) await putUnder(ctx, x, lock)
+    const jobs: Id<'contentJobs'>[] = []
+    for (const x of await ofPairing(ctx, d.sessionId)) {
+      const job = await putUnder(ctx, x, lock, { revokeInMs: LOCK_REVOKE_BACKUP_MS })
+      if (job) jobs.push(job)
+    }
     log('display.locked', { userId: c.user._id, displayId: d._id, by: c.session.role })
-    return null
+    return { jobs }
+  },
+})
+
+/**
+ * Locks a display to one of the person's pages: from then on no agent brings another page up
+ * there, it is never the display chosen where an agent names none, a screen is let open no other
+ * page there, and the site on it keeps to that page. The page is brought up there at once.
+ *
+ * Asked by a paired browser and never by an agent: the owner's browser locks any display, and a
+ * screen itself and no other. Every display of the same browser's pairing is locked with it.
+ *
+ * A display locked to another page than it showed is signed out of what it showed, and this
+ * answers only once the content service has said so: from then on a showing the display had of
+ * another page, and a ticket it was given for one, open nothing. `revoked` is false where the
+ * content service could not be told just now. The display is locked all the same, and It goes
+ * on telling the content service until it hears, as it does for a sign-out.
+ */
+export const lock = action({
+  args: { displayId: v.id('displays'), artifactId: v.id('artifacts') },
+  handler: async (ctx, args): Promise<{ revoked: boolean }> => {
+    const { jobs } = await overClashes(() => ctx.runMutation(internal.displays._lock, args))
+    const told = await Promise.all(jobs.map((jobId) => ctx.runAction(internal.content.revokeNow, { jobId })))
+    return { revoked: told.every(Boolean) }
   },
 })
 
