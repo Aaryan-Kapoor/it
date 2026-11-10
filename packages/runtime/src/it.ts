@@ -550,26 +550,29 @@ function opensAWindow(target: string): boolean {
 /** The shadow roots a script made, in which a frame can be as well as in the document. */
 const shadowRoots: WeakRef<ShadowRoot>[] = []
 /**
- * The name a frame of the page's goes by now, which is the name a link's target finds it by, or
- * `null` where that cannot be told. A document of the page's own in the frame, such as one the
- * page wrote into it, has a name that can be read, and may have changed it since. Another site's
- * document hides its name: the page's name for the frame is taken only where the browser itself
- * finds that frame by it, and a frame inside a shadow root, which the browser's lookup does not
- * reach, cannot be told.
+ * The browser's own lookup of the page's frames by the names they go by now, which nothing of
+ * the page's can stand in for or change, taken before anything of the page's runs.
  */
-function nameOf(frame: Element, inDocument: boolean): string | null {
+const BY_NAME: object | null = Object.getPrototypeOf(Window.prototype)
+const describe = Object.getOwnPropertyDescriptor
+/**
+ * Whether a frame of the page's goes by a name now, which is the name a link's target finds it
+ * by. A document of the page's own in the frame has a name that can be read, and may have changed
+ * it since. Another site's document hides it, and the browser's own lookup by name says instead:
+ * it reaches the frames of the document, and a frame of another site's inside a shadow root
+ * cannot be told.
+ */
+function goesBy(frame: Element, target: string, inDocument: boolean): boolean {
   const shown = (frame as HTMLIFrameElement).contentWindow
-  if (!shown) return null
+  if (!shown) return false
   try {
-    return shown.name
+    return shown.name === target
   } catch {}
-  const said = frame.getAttribute('name')
-  // A number names the page's frames in order, and the page's own properties stand in front of the browser's lookup
-  if (!inDocument || said === null || /^\d+$/.test(said) || Object.hasOwn(window, said)) return null
+  if (!inDocument || !BY_NAME) return false
   try {
-    return (window as unknown as Record<string, unknown>)[said] === shown ? said : null
+    return describe(BY_NAME, target)?.value === shown
   } catch {
-    return null
+    return false
   }
 }
 /**
@@ -582,14 +585,14 @@ function nameOf(frame: Element, inDocument: boolean): string | null {
 function namesAFrame(target: string): boolean {
   if (target === '' || IN_PLACE.has(target.toLowerCase()) || target.toLowerCase() === '_blank') return false
   const FRAMES = 'iframe, frame, object'
-  for (const frame of document.querySelectorAll(FRAMES)) if (nameOf(frame, true) === target) return true
+  for (const frame of document.querySelectorAll(FRAMES)) if (goesBy(frame, target, true)) return true
   for (let n = shadowRoots.length - 1; n >= 0; n--) {
     const root = shadowRoots[n]!.deref()
     if (!root) {
       shadowRoots.splice(n, 1)
       continue
     }
-    for (const frame of root.querySelectorAll(FRAMES)) if (nameOf(frame, false) === target) return true
+    for (const frame of root.querySelectorAll(FRAMES)) if (goesBy(frame, target, false)) return true
   }
   return false
 }
