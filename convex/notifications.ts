@@ -4,10 +4,10 @@
 import { LIMITS, MESSAGE } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
-import type { Id } from './_generated/dataModel'
+import type { Doc, Id } from './_generated/dataModel'
 import { type MutationCtx, mutation, query } from './_generated/server'
 import { madeAt, record } from './actions'
-import { aim, targetOf } from './lib/aim'
+import { aim, nameOf, targetOf } from './lib/aim'
 import { artifactBySlug, type Browser, displayByKey, findDisplay, requireBrowser, requireMachine } from './lib/authz'
 import { counted } from './lib/counted'
 import { fail } from './lib/errors'
@@ -25,12 +25,13 @@ export const send = mutation({
     slug: v.optional(v.string()),
     display: v.optional(v.string()),
     displayId: v.optional(v.string()),
+    everywhere: v.optional(v.boolean()),
     sticky: v.optional(v.boolean()),
     buttons: v.optional(v.array(button)),
   },
-  handler: async (ctx, { text, slug, display, displayId: byId, sticky, buttons }) => {
+  handler: async (ctx, { text, slug, display, displayId: byId, everywhere, sticky, buttons }) => {
     const { user } = await requireMachine(ctx)
-    const target = targetOf({ display, displayId: byId })
+    const target = targetOf({ display, displayId: byId, everywhere })
     await rateLimit(ctx, 'notify', user._id)
     const clean = text.trim()
     if (!clean || clean.length > LIMITS.notificationText) fail('invalid', `A notification is 1 to ${LIMITS.notificationText} characters.`)
@@ -47,14 +48,33 @@ export const send = mutation({
         if (b.action === MESSAGE) fail('invalid', `A button may not send an action named ${MESSAGE}, which is what a person types above a page.`)
       }
     }
-    // For the display named, by its name or its id, or with none named for every display. Of
-    // several displays that share a name, the first is sent it, as it always has been
-    const displayId: Id<'displays'> | undefined = 'none' in target ? undefined : (await aim(ctx, user._id, target)).asked[0]!._id
+    // To the display named, by its name or its id, to every display agents may use, or else to
+    // the one display the person is most likely using, as a page is shown. Where nothing is open,
+    // that is first of all a display that takes notifications, which is how one reaches a closed display
+    const aimed = await aim(ctx, user._id, target, { pushed: true })
+    // Two displays that came to share a name under an earlier It cannot be told apart by it, and
+    // neither is sent it: each has an id of its own. Said without the name, which is the person's
+    if ('name' in target && aimed.asked.length > 1)
+      fail('conflict', 'More than one display has that name. Send it to one of them by its id, with --on-id; `it displays` lists the ids.', {
+        sharedName: true,
+      })
+    // A display named that cannot take it is sent nothing, and the refusal says why: its pairing
+    // ended, or agents may not use it
+    if (aimed.to.length === 0 && ('id' in target || 'name' in target))
+      fail('forbidden', 'That display takes nothing from agents now.', { notSent: aimed.notShown[0]?.reason ?? 'not_paired' })
+    // Where none can take it, nothing is sent either: kept, it would reach the very displays that
+    // were left out as soon as one was paired again or opened to agents
+    if (aimed.to.length === 0) fail('forbidden', 'No display can take this notification now.', { notSent: 'nowhere' })
+    // Sent to every display, it is for the displays that can take it now, and for no display
+    // paired later
+    const every = 'everywhere' in target
+    const displayId: Id<'displays'> | undefined = every ? undefined : aimed.to[0]!._id
     const id = await ctx.db.insert('notifications', {
       userId: user._id,
       text: clean,
       artifactId: artifact?._id,
       displayId,
+      ...(every ? { to: aimed.to.map((d) => d._id) } : {}),
       sticky: sticky ?? false,
       buttons: buttons?.length ? buttons : undefined,
       // What the page shows now is what a button of this is about, however much later it is pressed
@@ -67,9 +87,27 @@ export const send = mutation({
     // been closed, so a second look a few minutes on pushes to it if nobody has seen this yet.
     await ctx.scheduler.runAfter(0, internal.push.deliver, { notificationId: id })
     await ctx.scheduler.runAfter(LATE_PUSH_MS, internal.push.deliver, { notificationId: id })
-    return { id }
+    return {
+      id,
+      displays: aimed.to.map(nameOf),
+      displayIds: aimed.to.map((d) => d._id),
+      notShown: aimed.notShown,
+      ...(aimed.chosen ? { chosen: aimed.chosen } : {}),
+    }
   },
 })
+
+/**
+ * Whether a notification belongs to a display: one sent to it, or one sent to every display that
+ * it was among when that was sent. A display that agents may not use is shown none of what went
+ * to every display. An earlier It kept no list of who a notification to every display went to:
+ * such a one is for each display that was there when it was sent.
+ */
+export function isFor(n: Doc<'notifications'>, d: Doc<'displays'>): boolean {
+  if (n.displayId) return n.displayId === d._id
+  if (d.agentsOff) return false
+  return n.to ? n.to.includes(d._id) : d.createdAt <= n.createdAt
+}
 
 /** The tray: what this display should show, newest first. */
 export const list = query({
@@ -92,6 +130,8 @@ export const list = query({
     const out = []
     for (const n of recent) {
       if (out.length >= TRAY) break
+      if (display && !isFor(n, display)) continue
+      if (!display && n.displayId === undefined) continue
       if (n.artifactId && !slugs.has(n.artifactId)) slugs.set(n.artifactId, (await ctx.db.get(n.artifactId))?.slug ?? null)
       // What was sent about a page that has since been deleted is shown no more. Deleting the
       // page puts away its notices in bounded steps. Until those finish, none offers a
@@ -118,7 +158,7 @@ async function shownOn(ctx: MutationCtx, c: Browser, key: string, ids: Id<'notif
   const out = []
   for (const id of ids.slice(0, 100)) {
     const n = await ctx.db.get(id)
-    if (n && n.userId === c.user._id && (!n.displayId || n.displayId === display._id)) out.push(n)
+    if (n && n.userId === c.user._id && isFor(n, display)) out.push(n)
   }
   return out
 }
@@ -168,7 +208,7 @@ export const answer = mutation({
     // Like the tray it is pressed in, a display answers what is for every display or for itself.
     // This comes before anything is said of the notification: one that is for another display
     // is, to this one, no notification, whatever has become of it.
-    if (n.displayId && n.displayId !== display._id) fail('not_found', 'No such notification.')
+    if (!isFor(n, display)) fail('not_found', 'No such notification.')
     if (n.answeredAt) return { actionId: null }
     if (expectedSession === undefined)
       fail('conflict', 'Reload It before answering this notification, so the request belongs to your current pairing.', { reload: true })
