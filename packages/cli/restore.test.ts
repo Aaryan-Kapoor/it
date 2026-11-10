@@ -98,7 +98,8 @@ beforeAll(async () => {
   const schema = request.appDefinition.schema.source
   request.appDefinition.schema.source = schema.replace(
     /generatedName:\s*(\w+)\.string\(\),/,
-    (whole, v: string) => `${whole} usedAt: ${v}.optional(${v}.number()), reports: ${v}.optional(${v}.array(${v}.object({ at: ${v}.number(), visible: ${v}.boolean() }))),`,
+    (whole, v: string) =>
+      `${whole} usedAt: ${v}.optional(${v}.number()), reports: ${v}.optional(${v}.array(${v}.object({ at: ${v}.number(), visible: ${v}.boolean() }))),`,
   )
   expect(request.appDefinition.schema.source).not.toBe(schema)
   // And a module of their own that uses them, bundled whole as the backend takes a module
@@ -252,7 +253,10 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
       mkdirSync(path.join(folder, 'page'))
       writeFileSync(path.join(folder, 'page', 'index.html'), index)
       writeFileSync(path.join(folder, 'page', 'app.js'), 'console.log("plan")')
-      expect(await said(older, ['create', 'Plan', '--id', 'plan', '--dir', path.join(folder, 'page'), '--state', '{"step":1}'])).toMatchObject({ id: 'plan', version: 1 })
+      expect(await said(older, ['create', 'Plan', '--id', 'plan', '--dir', path.join(folder, 'page'), '--state', '{"step":1}'])).toMatchObject({
+        id: 'plan',
+        version: 1,
+      })
       expect(await said(older, ['set', 'plan', 'step', '2'])).toMatchObject({ revision: 2 })
       const asSite = { origin: door, 'x-it-site': '1', 'content-type': 'application/json' }
       const code = new URL((await said(older, ['site', '--no-open'])).url).hash.slice(1)
@@ -305,7 +309,12 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
       expect(await said(newer, ['set', 'plan', 'step', '3'])).toMatchObject({ revision: 3 })
       expect(await said(newer, ['create', 'Later', '--id', 'later', '--html', '<p>later</p>'])).toMatchObject({ id: 'later' })
       await stopped(service)
-      expect(json(inBackend('data.json'))).toMatchObject({ release: programToo ? NEWER_RELEASE : RELEASE, it: NEWER, functionsOf: NEWER, functions: NEWER_HASH })
+      expect(json(inBackend('data.json'))).toMatchObject({
+        release: programToo ? NEWER_RELEASE : RELEASE,
+        it: NEWER,
+        functionsOf: NEWER,
+        functions: NEWER_HASH,
+      })
 
       // The older It is not started on the newer data
       const refused = serve(older, 'refused.log')
@@ -350,10 +359,12 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
       const status = await said(older, ['status', '--json'])
       expect(status.database).toEqual({ release: RELEASE, it: VERSION, functions: FUNCTIONS_HASH, functionsOf: VERSION })
       // The functions it has are the older ones: the newer module is not among them
-      expect(await asAdmin(backend, 'restoring:seen', {}).then(
-        () => 'answered',
-        () => 'not there',
-      )).toBe('not there')
+      expect(
+        await asAdmin(backend, 'restoring:seen', {}).then(
+          () => 'answered',
+          () => 'not there',
+        ),
+      ).toBe('not there')
       // The page opens on the display, with its state as it was before the upgrade, and what was done since is gone
       expect(await said(older, ['state', 'plan'])).toEqual({ state: { step: 2 }, revision: 2 })
       expect((await said(older, ['list'])).map((page: { id: string }) => page.id)).toEqual(['plan'])
