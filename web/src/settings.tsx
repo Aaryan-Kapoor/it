@@ -2,7 +2,8 @@
 // and erasing everything.
 
 import { TAKES } from '@it/protocol'
-import { useConvex, useMutation, useQuery } from 'convex/react'
+import { useAction, useConvex, useMutation, useQuery } from 'convex/react'
+import { ConvexError } from 'convex/values'
 import qrcode from 'qrcode-generator'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { version } from '../package.json'
@@ -14,6 +15,7 @@ import {
   doneLeaving,
   forgetAll,
   type Id,
+  NOT_YET_REVOKED,
   navigate,
   noteErased,
   refusal,
@@ -72,7 +74,7 @@ function DisplayItem({
   const rename = useMutation(api.displays.rename)
   const forget = useMutation(api.displays.forget)
   const allowAgents = useMutation(api.displays.allowAgents)
-  const lock = useMutation(api.displays.lock)
+  const lock = useAction(api.displays.lock)
   const unlock = useMutation(api.displays.unlock)
   const lockable = useTakes(TAKES.displayLock)
   // Offered only where the backend has the switch: one whose functions are older has none
@@ -174,7 +176,9 @@ function DisplayItem({
               onChange={(e) =>
                 act(
                   e.target.value
-                    ? lock({ displayId: d.id as Id<'displays'>, artifactId: e.target.value as Id<'artifacts'> })
+                    ? lock({ displayId: d.id as Id<'displays'>, artifactId: e.target.value as Id<'artifacts'> }).then((r) =>
+                        r.revoked ? undefined : Promise.reject(new ConvexError({ code: 'unavailable', message: NOT_YET_REVOKED })),
+                      )
                     : unlock({ displayId: d.id as Id<'displays'> }),
                 )
               }

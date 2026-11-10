@@ -33,6 +33,7 @@ vi.mock('convex/react', () => ({
   useConvex: () => client,
   useConvexAuth: () => ({ isLoading: false, isAuthenticated: true }),
   useMutation: (fn: unknown) => (args: unknown) => client.mutation(fn, args),
+  useAction: (fn: unknown) => (args: unknown) => client.action(fn, args),
   useQuery: (fn: unknown) => {
     const said = watched[getFunctionName(fn as never)]
     return typeof said === 'function' ? said() : said
@@ -843,6 +844,7 @@ describe('a display locked to a page', () => {
     cookie = CODES.screencode0000000002!
     watched['artifacts:get'] = PAGE
     watched['displays:mine'] = { ...DISPLAY, lockedTo: null, lockEnded: false }
+    answers['displays:lock'] = () => ({ revoked: true })
     await start('/p/plan')
     await act(async () => void host.querySelector<HTMLButtonElement>('header button[aria-label="Lock this display to this page"]')!.click())
     expect(asked.find((a) => a.what === 'displays:lock')!.args).toEqual({ displayId: 'display-1', artifactId: 'page-1' })

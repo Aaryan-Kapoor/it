@@ -1,10 +1,10 @@
 // The person's pages: the grid of all of them, and one of them shown.
 
 import { ALIVE, LIMITS, NOUN, TAKES, WAKE_BACK_MS } from '@it/protocol'
-import { useConvex, useMutation, useQuery } from 'convex/react'
+import { useAction, useConvex, useMutation, useQuery } from 'convex/react'
 import { Component, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { copy, IconBack, IconLink, IconLock, IconPin, IconSay, IconSend, IconSettings, IconStop, IconX, Mark } from './brand'
-import { agentName, ago, api, dayOf, type Id, navigate, refusal, useNow, useTakes } from './lib'
+import { agentName, ago, api, dayOf, type Id, NOT_YET_REVOKED, navigate, refusal, useNow, useTakes } from './lib'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
 import { dismissMessage, message, onItsWayUntil, outboxChanges, pendingMessage, refusedClick, thisSession, unsaved, unsent, watchOutbox } from './outbox'
@@ -283,7 +283,7 @@ export interface LockableDisplay {
  * whoever stands at the screen.
  */
 function Lock({ display, page, here }: { display: LockableDisplay; page: { id: string }; here: boolean }) {
-  const lock = useMutation(api.displays.lock)
+  const lock = useAction(api.displays.lock)
   const unlock = useMutation(api.displays.unlock)
   const failed = (err: unknown) => say(refusal(err).message)
   if (here)
@@ -310,7 +310,9 @@ function Lock({ display, page, here }: { display: LockableDisplay; page: { id: s
       className="nav-action"
       title="Lock this display to this page: it keeps to it, and agents show no other page here"
       aria-label="Lock this display to this page"
-      onClick={() => void lock({ displayId: display.id as Id<'displays'>, artifactId: page.id as Id<'artifacts'> }).catch(failed)}
+      onClick={() =>
+        void lock({ displayId: display.id as Id<'displays'>, artifactId: page.id as Id<'artifacts'> }).then((r) => r.revoked || say(NOT_YET_REVOKED), failed)
+      }
     >
       <IconLock />
     </button>

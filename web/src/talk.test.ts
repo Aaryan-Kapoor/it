@@ -24,6 +24,7 @@ const client = {
   subscribeToConnectionState: () => () => {},
 }
 vi.mock('convex/react', () => ({
+  useAction: () => async () => ({ revoked: true }),
   useConvex: () => client,
   useMutation: () => async () => null,
   useQuery: (fn: unknown) => ({ 'artifacts:get': page, 'actions:forArtifact': [] })[getFunctionName(fn as never)],

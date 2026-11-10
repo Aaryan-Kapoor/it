@@ -15,6 +15,7 @@ const ask = async (fn: unknown, args: unknown) => {
   return answers[name]?.(args) ?? null
 }
 vi.mock('convex/react', () => ({
+  useAction: () => async () => ({ revoked: true }),
   useMutation: (fn: unknown) => (args: unknown) => ask(fn, args),
   useQuery: (fn: unknown) => watched[getFunctionName(fn as never)],
 }))

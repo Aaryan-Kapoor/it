@@ -508,6 +508,9 @@ export function renaming<T>(asked: Promise<T>, name: string): Promise<T> {
   })
 }
 
+/** Said where a display was locked and what it had open elsewhere could not be stopped just yet. */
+export const NOT_YET_REVOKED = 'Locked. A page this display had open elsewhere stops working as soon as It can reach the part of It that shows pages.'
+
 // ---------- time ----------
 
 export function ago(at: number, now = serverNow()): string {

@@ -13,6 +13,7 @@ let notes: Record<string, unknown>[]
 let answer: { accept: () => void; refuse: (why: unknown) => void } | null
 const asked: string[] = []
 vi.mock('convex/react', () => ({
+  useAction: () => async () => ({ revoked: true }),
   useConvex: () => ({
     mutation: (fn: unknown) => {
       asked.push(getFunctionName(fn as never))

@@ -26,6 +26,7 @@ let watched: Record<string, unknown>
 vi.mock('convex/react', () => ({
   useConvex: () => client,
   useMutation: (fn: unknown) => (args: unknown) => client.mutation(fn, args),
+  useAction: (fn: unknown) => (args: unknown) => client.action(fn, args),
   useQuery: (fn: unknown) => watched[getFunctionName(fn as never)],
 }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -305,6 +306,7 @@ describe('locking a display to a page from the Displays page', () => {
       { id: 'page-2', slug: 'board', title: 'Board', version: 2 },
       { id: 'page-3', slug: 'draft', title: 'Draft', version: null },
     ]
+    answers['displays:lock'] = () => ({ revoked: false })
     const { Displays } = await import('./settings')
     await show(createElement(Displays, { thisDisplay: 'display-1' }))
     const rows = [...host.querySelectorAll('ul.rows')[0]!.querySelectorAll('li')]
@@ -321,6 +323,8 @@ describe('locking a display to a page from the Displays page', () => {
         one.dispatchEvent(new Event('change', { bubbles: true }))
       })
     await choose(picks[0]!, 'page-1')
+    // Locked, with what it had open elsewhere not stopped just yet: said in so many words
+    expect(host.textContent).toContain('A page this display had open elsewhere stops working as soon as It can reach')
     await choose(picks[1]!, '')
     expect(calls).toEqual([
       { fn: 'displays:lock', args: { displayId: 'display-1', artifactId: 'page-1' } },
