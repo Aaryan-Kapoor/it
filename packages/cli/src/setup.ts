@@ -31,7 +31,7 @@ import path from 'node:path'
 import { CODEX_MIN_VERSION, HARNESSES, type Harness, newer as newerVersion } from '@it/protocol'
 import type { AddonRuntime } from './addon-runtime'
 import { ADDONS, LICENSE } from './addons.generated'
-import { codexConfig } from './codex-settings'
+import { CODEX_RULES, CODEX_RULES_REL, codexConfig } from './codex-settings'
 import { harnessEnv, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
 import { checkHardLinks, keepOriginal, putAbsent, removeOriginal, removeOwnOriginals, restoreAbsent, withoutFileWait } from './preserve'
 import { alone as oneAtATime } from './serve/backend'
@@ -603,13 +603,23 @@ interface Adapter {
   note?(at: Place): Promise<string | null>
   /** Refuses an occupied plugin or marketplace name unless this installation owns it. */
   preflight?(at: Place, was: Installation | undefined): Promise<string | undefined>
-  /** `wrote` records ownership before a file changes and after its replacement finishes. */
+  /**
+   * Whether a file of the add-on that this program may write is not as this version would have
+   * it, though the add-on's version is this one's: a file that is not part of the version, and
+   * changes on its own. The add-on is then put in again.
+   */
+  stale?(at: Place, was: Installation | undefined): boolean
+  /**
+   * `wrote` records ownership before a file changes and after its replacement finishes. `restart`
+   * says that the app reads something new only once it starts again, though the build of the
+   * add-on's code is the one it had.
+   */
   install(
     dir: string,
     at: Place,
     was: Installation | undefined,
     wrote: (files: Put[]) => void,
-  ): Promise<Ran & { files?: Put[]; aside?: string[]; recovery?: string[] }>
+  ): Promise<Ran & { files?: Put[]; aside?: string[]; recovery?: string[]; restart?: boolean }>
   /** Takes the add-on out. What it returns are the files it did not take out. */
   remove(at: Place, was?: Installation): Promise<Left | undefined>
   /** Something the person still has to do inside the harness, if anything. */
@@ -798,30 +808,66 @@ const settingsAt = (at: Place, variable: string, usual: string): string => {
   const said = at.env[variable]
   return path.resolve(said ? said.replace(/^~(?=$|[\\/])/, os.homedir()) : path.join(os.homedir(), usual))
 }
-/** Puts the skill into an app's settings folder, once the app's own command has put the plugin in. */
+/** Where Codex's file of rules of It's own is, in Codex's settings folder. */
+const codexRulesIn = (root: string) => path.join(root, ...CODEX_RULES_REL.split('/'))
+/**
+ * Whether a file of the add-on's that is only ever written where nothing of the person's is in
+ * its place may be written: nothing is there, or what is there is this program's and as it left
+ * it. Anything else is the person's, and is not set aside either, since a file set aside under
+ * another name would no longer do what it did. Such a file is then simply not this program's,
+ * and the note of it goes.
+ */
+function free(root: string, file: string, was: Installation | undefined): boolean {
+  const now = lookAt(root, file)
+  return (
+    now.is === 'none' ||
+    (now.is === 'file' &&
+      matchesPut(
+        was?.files?.find((f) => f.path === file),
+        now.sha256,
+      ))
+  )
+}
+/**
+ * Puts the skill into an app's settings folder, once the app's own command has put the plugin
+ * in, with any other file of the add-on's that is put there only where it is free (see `free`).
+ */
 function withSkill(
   installed: Ran,
   root: string,
   dir: string,
   was: Installation | undefined,
   wrote: (files: Put[]) => void,
+  ifFree: { rel: string; text: string }[] = [],
 ): Ran & { files?: Put[]; aside?: string[]; recovery?: string[] } {
   if (!installed.ok) return installed
   const put = putFiles(
     root,
     () => {
       const data = readFileSync(path.join(dir, ...SKILL_FILE.split('/')))
-      return [{ to: path.join(root, ...SKILL_FILE.split('/')), data, sha256: sum(data) }]
+      const others = ifFree
+        .map(({ rel, text }) => ({ to: path.join(root, ...rel.split('/')), data: Buffer.from(text) }))
+        .filter(({ to }) => free(root, to, was))
+        .map((f) => ({ ...f, sha256: sum(f.data) }))
+      return [{ to: path.join(root, ...SKILL_FILE.split('/')), data, sha256: sum(data) }, ...others]
     },
     was,
     wrote,
   )
   return { ok: put.err === undefined, out: installed.out, err: put.err ?? installed.err, files: put.files, aside: put.aside, recovery: put.recovery }
 }
-/** Takes the skill out again, where this program has a note of putting it there. An installation from before the skill was put beside the plugin has none, and nothing to take. */
-function withoutSkill(root: string, was: Installation | undefined): Left | undefined {
+/**
+ * Takes the skill out again, where this program has a note of putting it there, with the other
+ * files `withSkill` put beside it. An installation from before the skill was put beside the
+ * plugin has none, and nothing to take. A file of `ifFree` that the person has changed since is
+ * theirs, and is left as it is without keeping the add-on from being gone: it is no part of what
+ * the app loads.
+ */
+function withoutSkill(root: string, was: Installation | undefined, ifFree: string[] = []): Left | undefined {
   if (!was?.files) return undefined
   const left = takeFiles(root, was.files)
+  const theirs = new Set(ifFree.map((rel) => path.join(root, ...rel.split('/'))))
+  left.changed = left.changed.filter((file) => !theirs.has(file))
   takeFolders(root, [path.dirname(SKILL_FILE)])
   return left.changed.length || left.closed.length || left.outside.length || left.recovery?.length ? left : undefined
 }
@@ -911,7 +957,25 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
         if (!added.ok) return added
       }
       const installed = await run('codex', ['plugin', 'add', `${PLUGIN}@${MARKET}`], 60_000, env)
-      return withSkill(installed, settingsAt(at, 'CODEX_HOME', '.codex'), dir, was, wrote)
+      // With the skill goes the file of rules that lets `it` out of Codex's sandbox, which as
+      // Codex comes reaches nothing on this machine. One of that name that is not It's is the
+      // person's, and stays as it is. Codex reads its rules as it starts, so a change to them is
+      // one it has to be started again for.
+      const root = settingsAt(at, 'CODEX_HOME', '.codex')
+      const rules = codexRulesIn(root)
+      const before = lookAt(root, rules)
+      const put = withSkill(installed, root, dir, was, wrote, [{ rel: CODEX_RULES_REL, text: CODEX_RULES }])
+      const after = lookAt(root, rules)
+      const changed = after.is === 'file' && (before.is !== 'file' || before.sha256 !== after.sha256)
+      return changed ? { ...put, restart: true } : put
+    },
+    // The rules are no part of the add-on's version, so a change to them alone, or a file of It's
+    // that is gone or holds what an earlier It wrote, is seen here
+    stale(at, was) {
+      const root = settingsAt(at, 'CODEX_HOME', '.codex')
+      const rules = codexRulesIn(root)
+      const now = lookAt(root, rules)
+      return free(root, rules, was) && !(now.is === 'file' && now.sha256 === sum(CODEX_RULES))
     },
     async remove(at, was) {
       if (await unplaced(this, at, was)) return NOWHERE
@@ -923,7 +987,7 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       if ((await this.present(at)) !== false) return { changed: [], closed: [], outside: [], pending: true }
       await run('codex', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
       if (!(await marketplaceGone('codex', env))) return { changed: [], closed: [], outside: [], pending: true }
-      return withoutSkill(settingsAt(at, 'CODEX_HOME', '.codex'), was)
+      return withoutSkill(settingsAt(at, 'CODEX_HOME', '.codex'), was, [CODEX_RULES_REL])
     },
     pending() {
       // Codex runs no hook until the person has approved it, and says nothing when it skips one.
@@ -1767,6 +1831,9 @@ export async function connect(
   // plugin. The add-on is put in again whole. A file that is there and has been changed is the
   // person's, and is no reason to.
   if (doing === 'nothing' && was?.files?.some((f) => reached(f.path) === 'none')) doing = 'install'
+  // The same where a file this program may write is not as this version would have it, though
+  // the add-on's own version is this one: Codex's rules, which are no part of it
+  if (doing === 'nothing' && adapter.stale?.(at, was)) doing = 'install'
   if (doing === 'nothing') return before
   if (doing === 'leave to the newer program') {
     newer = true
@@ -1827,9 +1894,10 @@ export async function connect(
     return { id, version: before.version, addon: 'error', detail }
   }
   keep(id, noted(ADDONS[id]!.version, r.files, ADDONS[id]!.build))
-  // An app that had this very build of the add-on's code has nothing to load anew. One whose
-  // build is not known, as after an install that did not finish, is taken to have another
-  told({ id, did: 'installed', ...(was?.version !== 'installing' && was?.build === ADDONS[id]!.build ? {} : { restart: true }) })
+  // An app that had this very build of the add-on's code has nothing to load anew, unless the
+  // install says it has, as Codex has when its rules changed. One whose build is not known, as
+  // after an install that did not finish, is taken to have another
+  told({ id, did: 'installed', ...(was?.version !== 'installing' && was?.build === ADDONS[id]!.build && !r.restart ? {} : { restart: true }) })
   return (await statusOf(id)) ?? before
 }
 
