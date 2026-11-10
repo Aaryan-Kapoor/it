@@ -168,7 +168,7 @@ It keeps a page away from the site and from the other pages. It does not limit w
 
 - A page's scripts can load anything from the internet and send anything they hold there. Do not put a secret in a page.
 - A page can open a tab to any site once you click in it, as any web page can. It does not ask you first, and keeps no record of where a link led.
-- On a plain `http` address other than `localhost`, such as the machine's address on your network or its name on your tailnet, the browser does not keep a page and a tab it opens apart by itself, and the script It puts in the page does it instead. A page that goes around that script can keep a hold on a tab it opened, and send that tab elsewhere later. On `localhost` and over `https` the browser keeps the two apart by itself.
+- Where the site is reached at an address other than `localhost`, such as the machine's address on your network or its name on your tailnet, the browser does not keep a page and a tab it opens apart by itself, and the script It puts in the page does it instead. A page that goes around that script can keep a hold on a tab it opened, and send that tab elsewhere later. At `localhost` the browser keeps the two apart by itself.
 - A page chooses what an action says. The site tells the agent whether someone had just used the page when an action was sent, and no more than that. A page that shows content from elsewhere, such as an email or a web page, can be made by that content to send an action that the person did not choose. An agent should not take an action alone as the person's approval of something that matters, and the agent skill says so.
 
 ### A notification passes through the browser's push service

@@ -507,9 +507,10 @@ function quietenWithin(root: ParentNode): void {
 // the page. A link within the page, or to another of its own files, stays as the page wrote it.
 //
 // A window the page opens leaves the sandbox, so every way out is made to leave no hold either
-// way: the window has no opener, the page is given no handle on it, and no referrer is sent. On
-// localhost and over https the browser cuts the opener by itself, since the site sends
-// `Cross-Origin-Opener-Policy`; on plain http only this does. A window of a kind that would hold
+// way: the window has no opener, the page is given no handle on it, and no referrer is sent.
+// Where the site is reached at this machine's own name, such as localhost, the browser cuts the
+// opener by itself, since the site sends `Cross-Origin-Opener-Policy` there; anywhere else only
+// this does. A window of a kind that would hold
 // what the page made, `javascript:`, `data:` or `blob:`, is not opened at all. An address that
 // only the person's system can open, a mail, phone or messages link, is one a sandboxed frame
 // cannot hand to the system, so the site is asked to open it.
