@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { learnClock, readClocks, reportClock } from './lib'
 import { type Report, reportPage, startReports, USED_EVERY_MS, VISIBLE_EVERY_MS } from './presence'
 
 let stop: (() => void) | undefined
@@ -22,7 +23,8 @@ function reporter(opts: { takes?: () => boolean; answer?: (r: Report) => Promise
   stop = startReports(
     (r) => {
       sent.push(r)
-      return opts.answer ? opts.answer(r) : Promise.resolve()
+      // Answered as the backend answers: the use it said is taken
+      return opts.answer ? opts.answer(r) : Promise.resolve({ accepted: true, used: r.used === true })
     },
     opts.takes ?? (() => true),
     { document, window, now: () => Date.now() },
@@ -195,7 +197,7 @@ test('each report says when it was made, by the backend’s clock, and keeps tha
       })
     },
     () => true,
-    { document, window, now: () => Date.now(), observed: () => backend },
+    { document, window, now: () => Date.now(), clock: { at: () => backend, ask: () => {}, learned: () => () => {} } },
   )
   expect(sent).toEqual([expect.objectContaining({ sequence: 1, observedAt: 1_000_000 })])
   // What is made while the first is held is made when it is sent, not when it came up
@@ -206,4 +208,116 @@ test('each report says when it was made, by the backend’s clock, and keeps tha
   expect(sent.at(-1)).toMatchObject({ sequence: 2, observedAt: 1_060_000 })
   // The report itself never changes after it was made, so a connection that sends it again sends its time
   expect(sent[0]!.observedAt).toBe(1_000_000)
+})
+
+/** A clock this test sets: the backend's time where it is known closely enough, and word of when it is learned. */
+function clockOf() {
+  let at: number | undefined
+  let asked = 0
+  const told = new Set<() => void>()
+  return {
+    clock: {
+      at: () => at,
+      ask: () => void asked++,
+      learned: (then: () => void) => {
+        told.add(then)
+        return () => told.delete(then)
+      },
+    },
+    set: (to: number | undefined) => {
+      at = to
+    },
+    learn: (to: number) => {
+      at = to
+      for (const then of told) then()
+    },
+    asked: () => asked,
+  }
+}
+
+test('without the backend’s time known closely enough, a report says no time and no use, asks for it, and says the use once it is learned', async () => {
+  const c = clockOf()
+  const sent: Report[] = []
+  stop = startReports(
+    (r) => {
+      sent.push(r)
+      return Promise.resolve({ accepted: true, used: r.used === true })
+    },
+    () => true,
+    { document, window, now: () => Date.now(), clock: c.clock },
+  )
+  expect(sent).toEqual([expect.objectContaining({ sequence: 1, visible: true })])
+  expect(sent[0]).not.toHaveProperty('observedAt')
+  await vi.advanceTimersByTimeAsync(USED_EVERY_MS)
+  click()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.at(-1)).not.toHaveProperty('used')
+  expect(sent.at(-1)).not.toHaveProperty('observedAt')
+  expect(c.asked()).toBeGreaterThan(0)
+  // The heartbeat it asked for is answered a moment later: the use is said, dated
+  await vi.advanceTimersByTimeAsync(1000)
+  c.learn(5_000_000)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.at(-1)).toMatchObject({ used: true, observedAt: 5_000_000 })
+  // Taken, it is not said again
+  const count = sent.length
+  c.learn(5_001_000)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent).toHaveLength(count)
+})
+
+test('a use the backend did not take is kept and said again while it is a use of a moment ago, and not after', async () => {
+  const c = clockOf()
+  c.set(1_000_000)
+  let take = false
+  const sent: Report[] = []
+  stop = startReports(
+    (r) => {
+      sent.push(r)
+      return Promise.resolve({ accepted: true, used: take && r.used === true })
+    },
+    () => true,
+    { document, window, now: () => Date.now(), clock: c.clock },
+  )
+  await vi.advanceTimersByTimeAsync(USED_EVERY_MS)
+  click()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.at(-1)).toMatchObject({ used: true })
+  const asked = c.asked()
+  expect(asked).toBeGreaterThan(0)
+  // Learned afresh, the clock lets it be said again, and this time it is taken
+  take = true
+  c.learn(1_002_000)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.at(-1)).toMatchObject({ used: true, observedAt: 1_002_000 })
+  const count = sent.length
+  c.learn(1_003_000)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent).toHaveLength(count)
+  // One not taken, and not said again within ten seconds, is not said as a use after them
+  take = false
+  click()
+  await vi.advanceTimersByTimeAsync(USED_EVERY_MS + 1000)
+  c.learn(1_020_000)
+  await vi.advanceTimersByTimeAsync(VISIBLE_EVERY_MS)
+  expect(sent.at(-1)).not.toHaveProperty('used')
+})
+
+test('after the machine slept, the backend’s time is not known closely enough to date a report until it is learned again', () => {
+  // The browser's clocks, as this test moves them: the one that only goes forward stands still in sleep
+  let mono = 1_000_000
+  let wall = Date.now()
+  vi.spyOn(performance, 'now').mockImplementation(() => mono)
+  vi.spyOn(Date, 'now').mockImplementation(() => wall)
+  learnClock(wall, { sent: { mono: mono - 100, wall: wall - 100 }, back: { mono, wall } })
+  expect(reportClock()).toBe(Math.floor(wall + 50))
+  // Three minutes asleep
+  wall += 180_000
+  expect(reportClock()).toBeUndefined()
+  // A heartbeat on waking teaches it again
+  const sent = readClocks()
+  mono += 80
+  wall += 80
+  learnClock(wall - 40, { sent, back: readClocks() })
+  expect(reportClock()).toBe(Math.floor(wall))
 })

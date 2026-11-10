@@ -3,7 +3,7 @@
 // it shows. An agent's page goes to that display when the agent names none. Nothing of what the
 // person did is said: only that they did something, at most once in ten seconds.
 
-import { backendNow, serverNow } from './lib'
+import { askClock, onClockLearned, reportClock } from './lib'
 
 /** How often a tab whose site is visible says so. */
 export const VISIBLE_EVERY_MS = 60_000
@@ -47,12 +47,18 @@ export interface Report {
    * When this report was made, by the backend's clock as this browser has learned it. The
    * connection holds a call through an outage and sends it again as it was, so this is how the
    * backend tells a report made a moment ago from one that waited, and keeps the second as of then.
+   * Left out where the browser does not know that time closely enough, and then `used` is too.
    */
   observedAt?: number
 }
 
-/** The backend's time now, as closely as this browser knows it. */
-const backendTime = (): number => backendNow()?.at ?? serverNow()
+/** The backend's clock, as a reporter goes by it: its time where it is known closely enough, a way to ask for it at once, and word of when it is learned. */
+export interface ReportClock {
+  at: () => number | undefined
+  ask: () => void
+  learned: (then: () => void) => () => void
+}
+const backendClock: ReportClock = { at: reportClock, ask: askClock, learned: onClockLearned }
 
 /** 16 random bytes, in hex: made with `getRandomValues`, which a site reached over plain http has too, and `randomUUID` not. */
 export const tabId = (): string => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('')
@@ -68,7 +74,12 @@ export const tabId = (): string => Array.from(crypto.getRandomValues(new Uint8Ar
  * that one is answered, so that a connection that was down sends one report when it is back and
  * not every one it missed. A report that failed is not sent again by itself: the next is sent
  * when there is something to say, or at the next minute. A use is said only within ten seconds of
- * it, and a use said once is not said again.
+ * it, and is said again, within those ten seconds, until the backend answers that it took it.
+ *
+ * A report says when it was made, by the backend's clock, only where this browser knows that
+ * clock closely enough (`clock`). Where it does not, as before the first heartbeat is answered and
+ * after the machine slept, the report says no time and no use, the backend's clock is asked for at
+ * once, and once it is learned a report is made again with the use that was kept.
  *
  * Nothing is sent while `takes()` is false, which is asked each time: a backend whose functions
  * are older than the site has nowhere to take a report, and one that is updated while the site is
@@ -82,14 +93,16 @@ export const tabId = (): string => Array.from(crypto.getRandomValues(new Uint8Ar
 export function startReports(
   send: (report: Report) => Promise<unknown>,
   takes: () => boolean,
-  at: { document: Document; window: Window; now: () => number; observed?: () => number } = {
+  at: { document: Document; window: Window; now: () => number; clock?: ReportClock } = {
     document,
     window,
     now: () => performance.now(),
-    observed: backendTime,
+    clock: backendClock,
   },
 ): () => void {
-  const { document: doc, window: win, now, observed } = at
+  const { document: doc, window: win, now, clock } = at
+  /** Whether the last report could say no time, so that one is made again once the clock is learned. */
+  let untimed = false
   const tab = tabId()
   let sequence = 0
   /** When the person last used the site here, by a clock that only goes forward, and when the last use that was said happened. */
@@ -104,7 +117,10 @@ export function startReports(
   const report = (closing = false): Report | null => {
     if (!takes()) return null
     const shown = !closing && visible()
-    const used = shown && usedAt > saidUseOf && now() - usedAt < USED_EVERY_MS
+    const observedAt = clock?.at()
+    untimed = clock !== undefined && observedAt === undefined
+    if (untimed) clock!.ask()
+    const used = !untimed && shown && usedAt > saidUseOf && now() - usedAt < USED_EVERY_MS
     const what = closing ? { phase: 'none' as const } : page
     return {
       tab,
@@ -112,7 +128,7 @@ export function startReports(
       ...what,
       visible: shown,
       ...(used ? { used: true as const } : {}),
-      ...(observed ? { observedAt: observed() } : {}),
+      ...(observedAt !== undefined ? { observedAt } : {}),
     }
   }
   const tell = () => {
@@ -127,11 +143,13 @@ export function startReports(
     asking = true
     void send(r)
       .then(
-        () => {
-          if (r.used) {
-            saidUseOf = use
-            toldUsedAt = now()
-          }
+        (answer) => {
+          if (!r.used) return
+          // Said, but not taken, as by a backend whose clock this one had wrong: kept, and said
+          // again once the clock is learned afresh, while it is still a use of a moment ago
+          if ((answer as { used?: unknown } | undefined)?.used !== true) return clock?.ask()
+          saidUseOf = use
+          toldUsedAt = now()
         },
         () => {},
       )
@@ -175,6 +193,10 @@ export function startReports(
   win.addEventListener('pageshow', tell)
   win.addEventListener('online', tell)
   pageChanged.add(tell)
+  // Learned afresh, the clock lets a report say when it was made, and the use that was kept with it
+  const unlearn = clock?.learned(() => {
+    if (untimed || (usedAt > saidUseOf && now() - usedAt < USED_EVERY_MS)) tell()
+  })
   const beat = win.setInterval(() => visible() && tell(), VISIBLE_EVERY_MS)
   const looking = win.setInterval(look, LOOK_EVERY_MS)
   tell()
@@ -188,6 +210,7 @@ export function startReports(
     win.removeEventListener('pageshow', tell)
     win.removeEventListener('online', tell)
     pageChanged.delete(tell)
+    unlearn?.()
     win.clearInterval(beat)
     win.clearInterval(looking)
     win.clearTimeout(later)

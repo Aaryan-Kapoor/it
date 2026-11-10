@@ -27,6 +27,7 @@ import {
   refusal,
   reloadWhenThere,
   renaming,
+  setClockAsker,
   signOutConfirmed,
   signOutLater,
   signOutTokenSpent,
@@ -514,10 +515,13 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
     beat()
     const t = setInterval(beat, 60_000)
     document.addEventListener('visibilitychange', beat)
+    // A tab that cannot say when it said something, as after the machine slept, asks at once
+    const unask = setClockAsker(beat)
     return () => {
       live = false
       clearInterval(t)
       document.removeEventListener('visibilitychange', beat)
+      unask()
     }
   }, [convex, key])
 

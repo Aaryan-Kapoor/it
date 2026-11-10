@@ -327,7 +327,8 @@ export const REPORT_SKEW_MS = 10_000
  * taken only from one that arrives within `REPORT_SKEW_MS` of when it was made, and that was not
  * made more than that ahead of now. A report that
  * says no time, as from a site of before reports said it, is kept as of now and is never taken
- * for a use.
+ * for a use. The answer says whether the use was taken (`used`), so that a tab keeps one that was
+ * not and says it again.
  */
 export const report = mutation({
   args: {
@@ -384,9 +385,12 @@ export const report = mutation({
       .slice(0, TABS - 1)
     const reports = [...others, { tab: a.tab, sequence: a.sequence, at, epoch: d.epoch, phase: a.phase, visible: a.visible, ...page }]
     const change: Partial<Doc<'displays'>> = { reports, reportedAt: Math.max(...reports.map((r) => r.at)) }
-    if (a.visible && a.used && timely && at - (d.usedAt ?? 0) > 5000) change.usedAt = at
+    // Whether the use it said was taken, which the tab goes by to say it again or not: a use
+    // within five seconds of the last one written is taken, and needs no writing
+    const used = a.visible && a.used === true && timely
+    if (used && at - (d.usedAt ?? 0) > 5000) change.usedAt = at
     await ctx.db.patch(d._id, change)
-    return { accepted: true, now }
+    return { accepted: true, now, used }
   },
 })
 

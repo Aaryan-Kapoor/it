@@ -258,7 +258,7 @@ describe('what each tab of a display says of itself', () => {
   test('is kept per tab, by the backend’s clock, and one older than what the tab said last is ignored', async () => {
     const { browser, row } = await household()
     const laptop = await browser('owner', key(1))
-    expect(await laptop.as.mutation(api.displays.report, said(laptop, TAB, 1, true))).toEqual({ accepted: true, now: Date.now() })
+    expect(await laptop.as.mutation(api.displays.report, said(laptop, TAB, 1, true))).toEqual({ accepted: true, now: Date.now(), used: false })
     await laptop.as.mutation(api.displays.report, said(laptop, OTHER, 1, false))
     vi.advanceTimersByTime(1000)
     expect(await laptop.as.mutation(api.displays.report, said(laptop, TAB, 3, false))).toMatchObject({ accepted: true })
@@ -360,7 +360,7 @@ describe('what each tab of a display says of itself', () => {
     // down: it is sent again, unchanged, a minute later, when the connection is back
     const made = said(laptop, TAB, 1, true, { used: true })
     vi.advanceTimersByTime(60_000)
-    expect(await laptop.as.mutation(api.displays.report, made)).toMatchObject({ accepted: true })
+    expect(await laptop.as.mutation(api.displays.report, made)).toMatchObject({ accepted: true, used: false })
     let d = await row(laptop.id)
     expect(d.usedAt).toBe(registered)
     expect(d.reports!.find((r) => r.tab === TAB)!.at).toBe(made.observedAt)
@@ -371,7 +371,7 @@ describe('what each tab of a display says of itself', () => {
     // One that arrives within the clock's leeway of when it was made is a use, as of then
     const timely = said(laptop, TAB, 2, true, { used: true })
     vi.advanceTimersByTime(REPORT_SKEW_MS)
-    await laptop.as.mutation(api.displays.report, timely)
+    expect(await laptop.as.mutation(api.displays.report, timely)).toMatchObject({ accepted: true, used: true })
     d = await row(laptop.id)
     expect(d.usedAt).toBe(timely.observedAt)
     expect(d.reports!.map((r) => r.tab)).toEqual([TAB])

@@ -358,7 +358,35 @@ export const learnClock = (serverNow: number, trip?: { sent: ClockReading; back:
     return
   }
   skew = trip.back.wall - (serverNow + (trip.back.mono - trip.sent.mono) / 2)
-  clock.learn(serverNow, trip.sent, trip.back)
+  if (clock.learn(serverNow, trip.sent, trip.back)) for (const learned of [...clockLearned]) learned()
+}
+/** What is told each time the backend's clock is learned from a heartbeat. */
+const clockLearned = new Set<() => void>()
+/** Tells `then` each time the backend's clock is learned. Returns what stops it. */
+export const onClockLearned = (then: () => void): (() => void) => {
+  clockLearned.add(then)
+  return () => clockLearned.delete(then)
+}
+let clockAsker: (() => void) | undefined
+/** Sets what asks the backend for its clock at once, which is the display's heartbeat. Returns what unsets it. */
+export const setClockAsker = (ask: () => void): (() => void) => {
+  clockAsker = ask
+  return () => {
+    if (clockAsker === ask) clockAsker = undefined
+  }
+}
+/** Asks the backend for its clock at once, where something asks it: after a sleep, what this browser knew of it is too uncertain. */
+export const askClock = (): void => clockAsker?.()
+/** How far out the backend's time may be for a tab to say by it when it said something of itself (`displays.report`), well within what the backend allows. */
+export const REPORT_CLOCK_MS = 3000
+/**
+ * The backend's time now, where this browser knows it to within `REPORT_CLOCK_MS`. Otherwise
+ * nothing: before the clock is learned, and after the machine slept, when the clock that only
+ * goes forward stood still while the time went on, which shows as the time being that far out.
+ */
+export const reportClock = (): number | undefined => {
+  const n = clock.now()
+  return n && n.within <= REPORT_CLOCK_MS ? n.at : undefined
 }
 export const serverNow = () => Date.now() - skew
 /**
