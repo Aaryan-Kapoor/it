@@ -3831,10 +3831,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (door === undefined) return seldom('door', 'could not ask It at its door which later forms of a call it takes; asked again in a minute')
     // Taken as the answer came, after It said its time, so that what is worked out from it is never later than It's own
     if (door.now !== undefined) itAhead = door.now - Date.now()
-    const before = holdBackTaken
+    // What was held back meanwhile is told with the next pass, which comes every second. Not with
+    // a pass of its own: one that came as a hand-over was handing nothing over would try that
+    // click again at once, where it is to wait for the next second like any other
     holdBackTaken = door.takes.includes(TAKES.heldBack)
-    // What was held back meanwhile is told now, the way It takes
-    if (before !== holdBackTaken) soon(10)
     const takes = door.takes.includes(TAKES.inboxHeld)
     if (takes === heldTaken) return
     heldTaken = takes

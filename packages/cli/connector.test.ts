@@ -55,6 +55,8 @@ const stand = vi.hoisted(() => ({
   profiles: true,
   /** What It says at its door of whether it takes every later form of a call this program knows: undefined where the door cannot be asked. */
   takes: true as boolean | undefined,
+  /** Where a test holds It's door from answering until it lets it: the door answers once this is settled. */
+  doorHeld: null as null | Promise<void>,
   /** How far this machine's clock is ahead of It's, which says its time at its door. */
   fast: 0,
   /**
@@ -218,7 +220,10 @@ vi.mock('./src/lib', async (original) => {
       void saving.finally(() => stand.saving.delete(saving)).catch(() => {})
       return saving
     },
-    backendDoor: async () => (stand.takes === undefined ? undefined : { takes: stand.takes ? Object.values(TAKES) : [], now: Date.now() - stand.fast }),
+    backendDoor: async () => {
+      await stand.doorHeld
+      return stand.takes === undefined ? undefined : { takes: stand.takes ? Object.values(TAKES) : [], now: Date.now() - stand.fast }
+    },
     live: () => ({
       onUpdate: (fn: any, args: unknown, heard: (value: any) => void) => {
         stand.watching.set(getFunctionName(fn), (value) => {
@@ -370,6 +375,7 @@ afterEach(async () => {
   stand.unknown.clear()
   stand.profiles = true
   stand.takes = true
+  stand.doorHeld = null
   stand.fast = 0
   stand.answer = null
   stand.fetched = null
@@ -1560,6 +1566,34 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       await pause(500)
       expect(stand.calls.filter((c) => c.name === 'machines:runBegan')).toHaveLength(1)
       expect(given(bin, 0)).toBe('')
+      // The next second's pass tries it again
+      await pass()
+      await until(() => stand.calls.filter((c) => c.name === 'machines:runBegan').length === 2)
+    },
+  )
+
+  test.skipIf(process.platform === 'win32')(
+    'It’s door answering just as a hand-over has handed nothing over does not bring on another hand-over before the next second',
+    async () => {
+      holdingCodex()
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(folder)
+      standIn()
+      // The door does not answer until the test lets it
+      let open = () => {}
+      stand.doorHeld = new Promise<void>((r) => {
+        open = r
+      })
+      await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+      stand.closed.add('thread-1')
+      await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1' } })
+      stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+      offered(onFirst(1))
+      await until(() => called('delivery:release').includes('click-1'))
+      // It answers now, as a slow door does
+      open()
+      await pause(500)
+      expect(stand.calls.filter((c) => c.name === 'machines:runBegan')).toHaveLength(1)
       // The next second's pass tries it again
       await pass()
       await until(() => stand.calls.filter((c) => c.name === 'machines:runBegan').length === 2)
