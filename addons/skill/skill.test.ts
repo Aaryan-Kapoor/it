@@ -5,7 +5,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { JSDOM } from 'jsdom'
 import { describe, expect, onTestFinished, test } from 'vitest'
 import { RUNTIME } from '../../packages/content/src/runtime.generated'
-import { CHANNEL_VERSION, LIMITS, QUOTA, SHRINK, STORAGE, STORE_EVERY_MS, sizeSaid } from '../../packages/protocol/src/index'
+import { CHANNEL_VERSION, deepMerge, LIMITS, QUOTA, SHRINK, STORAGE, STORE_EVERY_MS, STORE_KEY, sizeSaid } from '../../packages/protocol/src/index'
 
 const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8')
 /** What an agent reads whole each time it uses It. */
@@ -23,9 +23,11 @@ const code = [...skill.matchAll(/```[a-z]*\n([\s\S]*?)```|`([^`\n]+)`/g)].flatMa
 /** The `it` commands among it, each as its words. */
 const commands = code.filter((line) => /^it [a-z]/.test(line)).map((line) => line.split(/\s+/))
 
-/** Run the documented draft example with the served runtime and control the site's answers. */
-const draftPage = () => {
-  const example = /```html\n([\s\S]*?)```/.exec(more.page!)![1]!
+/** The skill's examples of a page, each as it is written in `it help page`. */
+const examples = [...more.page!.matchAll(/```html\n([\s\S]*?)```/g)].map((m) => m[1]!)
+
+/** Run one example page with the served runtime, with its timers and the site's port in the test's hands. */
+const runExample = (example: string) => {
   const script = /<script>([\s\S]*?)<\/script>/.exec(example)![1]!
   const w = new JSDOM(`<!doctype html><body>${example.replace(/<script>[\s\S]*?<\/script>/, '')}</body>`, {
     url: 'http://content.test/s/a-token/v/1/index.html',
@@ -49,7 +51,6 @@ const draftPage = () => {
   w.dispatchEvent(
     Object.assign(new w.Event('message'), { origin: 'http://app.test', source: w.parent, data: { type: 'it:port', v: CHANNEL_VERSION }, ports: [port] }),
   )
-  const box = w.document.getElementById('draft')
   const stores = () => sent.filter((m) => m.type === 'it:store')
   /** Time goes by long enough for the runtime's pause between two writes of what the page keeps, and what it holds is sent. */
   const settled = async () => {
@@ -60,6 +61,14 @@ const draftPage = () => {
     }
     await new Promise(setImmediate)
   }
+  const arrives = (state: unknown, revision: number) => port.onmessage!({ data: { type: 'it:state', state, revision } })
+  return { w, later, port, stores, settled, arrives }
+}
+
+/** Run the documented draft example with the served runtime and control the site's answers. */
+const draftPage = () => {
+  const { w, later, port, stores, settled, arrives } = runExample(examples[0]!)
+  const box = w.document.getElementById('draft')
   return {
     box,
     retry: w.document.getElementById('draft-retry'),
@@ -68,7 +77,7 @@ const draftPage = () => {
       box.value = text
       box.dispatchEvent(new w.Event('input'))
     },
-    arrives: (state: unknown, revision: number) => port.onmessage!({ data: { type: 'it:state', state, revision } }),
+    arrives,
     settled,
     /** Run only the documented debounce, and the runtime's pause between writes, which is shorter, and not its connection retry. */
     async aMomentLater() {
@@ -89,10 +98,143 @@ const draftPage = () => {
   }
 }
 
+/**
+ * One page's state as It keeps it, shared by every screen that shows the documented example of
+ * controls. It applies each write in the order it takes them, at the next revision, answers the
+ * screen that wrote, and sends every screen what changed, as the site does. What it sends a
+ * screen waits there until the test delivers it, so the test chooses who hears what first.
+ */
+const sharedPage = (agent: Record<string, unknown>, stored: Record<string, unknown> = {}) => {
+  const example = examples.find((html) => html.includes('data-control'))!
+  const kept = new Map(Object.entries(stored))
+  let revision = 1
+  /** Whether It refuses the page's writes for good, as it does once the page's state is full. */
+  let full = false
+  const screens: Screen[] = []
+  const whole = () => (kept.size > 0 ? { ...agent, [STORE_KEY]: Object.fromEntries(kept) } : { ...agent })
+  const toAll = (message: unknown) => {
+    for (const screen of screens) screen.inbox.push(message)
+  }
+  function openScreen() {
+    const { w, later, port, stores, settled } = runExample(example)
+    const control = (name: string) => w.document.querySelector(`[data-control="${name}"]`)
+    const inbox: unknown[] = [{ type: 'it:state', state: whole(), revision }]
+    /** What each field held when the user went into it: a browser says a change was made only when it holds something else when they leave. */
+    const atFocus = new Map<unknown, string>()
+    let taken = 0
+    return {
+      inbox,
+      control,
+      settled,
+      /** A while goes by, and whatever the page or It's script meant to do after a while is done. */
+      async aWhileLater() {
+        for (const [id, { fn }] of [...later]) {
+          later.delete(id)
+          fn()
+        }
+        await settled()
+      },
+      /** Every write this screen has sent, each as the values it set. */
+      writes: (): Record<string, unknown>[] =>
+        stores().map((m) => Object.fromEntries(m.changes.map(([key, text]: [string, string]) => [key, JSON.parse(text)]))),
+      /** The writes it sent that It has not taken yet. */
+      untaken() {
+        const sent = stores().slice(taken)
+        taken += sent.length
+        return sent
+      },
+      /** What It sent this screen arrives, in the order It sent it, and what the page set meanwhile goes out. */
+      async hears() {
+        while (inbox.length > 0) port.onmessage!({ data: inbox.shift() })
+        await settled()
+      },
+      cards: () => [...w.document.querySelectorAll('#cards li')].map((li: any) => li.textContent),
+      saysUnsaved: () => !w.document.getElementById('unsaved').hidden,
+      retries: () => w.document.getElementById('retry').click(),
+      /** The user chooses in a dropdown, and the browser says so, and that the change is made. */
+      chooses(name: string, value: string) {
+        const el = control(name)
+        el.value = value
+        el.dispatchEvent(new w.Event('input', { bubbles: true }))
+        el.dispatchEvent(new w.Event('change', { bubbles: true }))
+      },
+      /** The user types in a field, and is still in it. */
+      types(name: string, value: string) {
+        const el = control(name)
+        if (w.document.activeElement !== el) {
+          el.focus()
+          atFocus.set(el, el.value)
+        }
+        el.value = value
+        el.dispatchEvent(new w.Event('input', { bubbles: true }))
+      },
+      /** The user leaves the field: the browser says a change was made, if it holds something else than when they went in, and the field loses the focus. */
+      leaves(name: string) {
+        const el = control(name)
+        if (el.value !== atFocus.get(el)) el.dispatchEvent(new w.Event('change', { bubbles: true }))
+        el.blur()
+      },
+    }
+  }
+  type Screen = ReturnType<typeof openScreen>
+  /** It takes each write this screen has sent, in order. */
+  function takes(screen: Screen) {
+    for (const { requestId, changes } of screen.untaken()) {
+      if (full) {
+        screen.inbox.push({ type: 'it:result', requestId, ok: false, error: 'The page has stored as much as it may.' })
+        continue
+      }
+      revision += 1
+      const values: [string, unknown][] = changes.map(([key, text]: [string, string]) => [key, JSON.parse(text)])
+      for (const [key, value] of values) kept.set(key, value)
+      screen.inbox.push({ type: 'it:result', requestId, ok: true, revision })
+      toAll({ type: 'it:changed', revision, kept: values })
+    }
+  }
+  return {
+    kept,
+    takes,
+    /** A screen opens the page. It is sent the state as It holds it now, which arrives when the test delivers it. */
+    open() {
+      const screen = openScreen()
+      screens.push(screen)
+      return screen
+    },
+    refuses(refusing: boolean) {
+      full = refusing
+    },
+    /** The agent writes values under `_page`, as `it set` and `it patch` do: each merged into what is kept under its name. */
+    agentSets(values: Record<string, unknown>) {
+      revision += 1
+      const changed: [string, unknown][] = []
+      for (const [key, value] of Object.entries(values)) {
+        const merged = deepMerge(kept.get(key), value)
+        if (merged === undefined) kept.delete(key)
+        else kept.set(key, merged)
+        changed.push([key, merged ?? null])
+      }
+      toAll({ type: 'it:changed', revision, state: { ...agent }, kept: changed })
+    },
+    /** It takes what each screen wrote and every screen hears what it was sent, until nothing more moves. */
+    async settles() {
+      for (let round = 0; round < 20; round++) {
+        for (const screen of screens) {
+          await screen.settled()
+          takes(screen)
+        }
+        if (screens.every((screen) => screen.inbox.length === 0)) return
+        for (const screen of screens) await screen.hears()
+      }
+      throw new Error('The screens and It went on writing to each other')
+    },
+  }
+}
+
 describe('the agent skill', () => {
   test('is short, and names each part it leaves out where an agent would want it, by the command that prints it', () => {
-    // It is read whole every time, by every agent that uses It: what it once held was 27 KB
-    expect(Buffer.byteLength(short)).toBeLessThan(12_500)
+    // It is read whole every time, by every agent that uses It: what it once held was 27 KB. It
+    // grew by half a kilobyte when it came to say that a page keeps all it shows, and its controls, in its state
+    expect(Buffer.byteLength(short)).toBeLessThan(13_000)
     expect(readdirSync(new URL('./more', import.meta.url)).sort()).toEqual(PARTS.map((part) => `${part}.md`))
     // A part nothing in the skill points to is never opened
     for (const part of PARTS) expect(short, part).toContain(`\`it help ${part}\``)
@@ -485,6 +627,170 @@ describe('the agent skill', () => {
     expect(p.stored()).toEqual(['a draft', 'a draft', 'a draft with another sentence'])
     await p.answer(2, true)
     expect(p.said()).toBe('Saved.')
+  })
+
+  const board = { items: { c1: { title: 'Buy milk', done: true }, c2: { title: 'Call the bank', done: false } }, order: ['c2', 'c1'] }
+
+  test.each(['the first screen', 'the second screen'])(
+    'its example of controls stores each as it stands, and shows what the agent sets on every screen, %s hearing it first, writing nothing back',
+    async (first) => {
+      const page = sharedPage(board)
+      const [a, b] = [page.open(), page.open()]
+      await page.settles()
+      // Opened: each control is stored as it stands, so that the agent sees it, and the list is drawn in its order
+      expect(Object.fromEntries(page.kept)).toEqual({ show: 'all', find: '' })
+      expect(a.cards()).toEqual(['Call the bank', 'Buy milk'])
+      const written = [a.writes().length, b.writes().length]
+      // One screen has the field focused, and nothing typed in it: that is no edit to keep
+      a.control('find').focus()
+      page.agentSets({ show: 'open', find: 'bank' })
+      for (const screen of first === 'the first screen' ? [a, b] : [b, a]) await screen.hears()
+      await page.settles()
+      for (const screen of [a, b]) {
+        expect(screen.control('show').value).toBe('open')
+        expect(screen.control('find').value).toBe('bank')
+        expect(screen.cards()).toEqual(['Call the bank'])
+      }
+      // The agent's change is one value, and no screen writes another in answer to it
+      expect([a.writes().length, b.writes().length]).toEqual(written)
+      expect(Object.fromEntries(page.kept)).toEqual({ show: 'open', find: 'bank' })
+      // Opened again, it shows what is kept
+      const again = page.open()
+      await page.settles()
+      expect(again.control('show').value).toBe('open')
+      expect(again.cards()).toEqual(['Call the bank'])
+    },
+  )
+
+  test.each([
+    ['the user’s', 'milk'],
+    ['the agent’s', 'bank'],
+  ])('its example of controls, on two screens, ends where %s write saved last', async (last, wins) => {
+    const page = sharedPage(board, { show: 'all', find: '' })
+    const [a, b] = [page.open(), page.open()]
+    await page.settles()
+    a.types('find', 'milk')
+    a.leaves('find')
+    await a.settled()
+    if (last === 'the user’s') {
+      page.agentSets({ find: 'bank' })
+      page.takes(a)
+    } else {
+      page.takes(a)
+      page.agentSets({ find: 'bank' })
+    }
+    await page.settles()
+    expect(page.kept.get('find')).toBe(wins)
+    for (const screen of [a, b, page.open()]) {
+      await page.settles()
+      expect(screen.control('find').value).toBe(wins)
+      expect(screen.cards()).toEqual([wins === 'milk' ? 'Buy milk' : 'Call the bank'])
+    }
+  })
+
+  test('its example of controls keeps what was typed before the state arrived, once the field is left, over the older value', async () => {
+    const page = sharedPage(board, { show: 'all', find: 'milk' })
+    const a = page.open()
+    // Typed and left before the state that was sent as the page opened has arrived
+    a.types('find', 'ba')
+    a.leaves('find')
+    await a.settled()
+    page.takes(a)
+    await a.hears()
+    expect(a.control('find').value).toBe('ba')
+    await page.settles()
+    expect(a.control('find').value).toBe('ba')
+    expect(a.cards()).toEqual(['Call the bank'])
+    expect(page.kept.get('find')).toBe('ba')
+    const again = page.open()
+    await page.settles()
+    expect(again.control('find').value).toBe('ba')
+  })
+
+  test('its example of controls shows a value the agent set while the user typed once they leave the field, unless they typed after it came', async () => {
+    const page = sharedPage(board, { show: 'all', find: '' })
+    const [a, b] = [page.open(), page.open()]
+    await page.settles()
+    a.types('find', 'ba')
+    await page.settles()
+    page.agentSets({ find: 'milk' })
+    await page.settles()
+    // The user is still typing: their text stays and draws the list, while the other screen shows the agent's
+    expect(a.control('find').value).toBe('ba')
+    expect(a.cards()).toEqual(['Call the bank'])
+    expect(b.control('find').value).toBe('milk')
+    expect(page.kept.get('find')).toBe('milk')
+    // They leave the field: the agent's value was saved after theirs, and shows now, with nothing written in answer
+    const written = a.writes().length
+    a.leaves('find')
+    await page.settles()
+    expect(a.control('find').value).toBe('milk')
+    expect(a.cards()).toEqual(['Buy milk'])
+    expect(a.writes().length).toBe(written)
+    // They type again after the agent's next value came: theirs is saved after it, and stays
+    a.types('find', 'c')
+    await page.settles()
+    page.agentSets({ find: 'rent' })
+    await page.settles()
+    a.types('find', 'call')
+    a.leaves('find')
+    await page.settles()
+    for (const screen of [a, b, page.open()]) {
+      await page.settles()
+      expect(screen.control('find').value).toBe('call')
+    }
+    expect(page.kept.get('find')).toBe('call')
+    // An edit taken back to what the field held is still an edit until they leave, though the browser then says no change was made
+    a.types('find', 'callx')
+    a.types('find', 'call')
+    await page.settles()
+    page.agentSets({ find: 'milk' })
+    await page.settles()
+    expect(a.control('find').value).toBe('call')
+    a.leaves('find')
+    await page.settles()
+    expect(a.control('find').value).toBe('milk')
+  })
+
+  test('its example of controls keeps a change It refused for good on the screen, sends it again only when the user asks, and keeps it once saved', async () => {
+    const page = sharedPage(board, { show: 'all', find: '' })
+    const a = page.open()
+    await page.settles()
+    page.refuses(true)
+    a.chooses('show', 'open')
+    await page.settles()
+    expect(a.control('show').value).toBe('open')
+    expect(a.cards()).toEqual(['Call the bank'])
+    expect(a.saysUnsaved()).toBe(true)
+    // Nothing sends it again by itself, not even a change of the agent's to something else
+    const written = a.writes().length
+    page.agentSets({ find: '' })
+    await page.settles()
+    await a.aWhileLater()
+    await page.settles()
+    expect(a.writes().length).toBe(written)
+    expect(a.control('show').value).toBe('open')
+    expect(page.kept.get('show')).toBe('all')
+    // The user tries again once It takes it
+    page.refuses(false)
+    a.retries()
+    await page.settles()
+    expect(a.writes().length).toBe(written + 1)
+    expect(a.saysUnsaved()).toBe(false)
+    expect(page.kept.get('show')).toBe('open')
+    const again = page.open()
+    await page.settles()
+    expect(again.control('show').value).toBe('open')
+    // A page opened while its state is full stores its controls once, and says so, and stops there
+    const fresh = sharedPage(board)
+    fresh.refuses(true)
+    const opened = fresh.open()
+    await fresh.settles()
+    await opened.aWhileLater()
+    await fresh.settles()
+    expect(opened.writes().length).toBe(1)
+    expect(opened.saysUnsaved()).toBe(true)
+    expect(opened.cards()).toEqual(['Call the bank', 'Buy milk'])
   })
 
   test('says how much of what is waiting one `it wait` or one `it actions` prints, in the number the program keeps, and to run it again past that', () => {

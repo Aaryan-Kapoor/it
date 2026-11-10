@@ -70,6 +70,108 @@ Each save remembers which edit it saved, so that the answer to an older one cann
 </script>
 ```
 
+## Keeping everything in state
+
+Everything a page shows that can change, and every control on it, lives in its state. Then you change what it shows without publishing it again, and `it state` tells you what the user sees and has chosen before they send anything. Publish again with `it update` only when the page's files change, such as its code, its layout or a picture added to its folder: a new version reloads the page on every screen, and whatever was typed there and not yet saved or sent is lost.
+
+- **What the page shows is in your part of the state,** drawn in `It.onState`. Keep a list as an object keyed by id, with the ids in an `order` array, since a patch merges objects and replaces an array whole. Adding a card is then `it patch board '{"items":{"c3":{"title":"Call the bank"}},"order":["c1","c2","c3"]}'`, and taking it away is `it patch board '{"items":{"c3":null},"order":["c1","c2"]}'`.
+- **Each control keeps one value with `It.store.set`, under a key of its own, at every change:** text fields, choices, toggles, sliders, tabs, filters, sorting, what is selected or open, the view, and the step of a flow. `it state board` shows them under `_page`. Name them in a comment in the page, so that you find them when you come back to it.
+- **You change a control by writing that same value under `_page`:** `it set board _page.show open`, or `it patch board '{"_page":{"show":"open","find":""}}'` for several. Only the values you name change. Keep each under 32 KB: It does not hold you to that, but the page could not save a larger value back. The latest saved write wins, whether it was yours or the page's.
+- **A change the user is making keeps going.** A value of yours that arrives while they type in a field or drag a slider waits until they finish, by leaving the field or letting go, and then shows, unless they changed it again after it arrived. A change the page could not save, as when its state is full, stays on the screen with a button to try again, and is not sent again by itself. The example below does both. Do not bind a control with `data-it-bind`: that keeps an edit only until it is saved, and then puts in your next value even while the user types.
+- **A file input cannot be kept,** by `It.store` or by you: the browser lets no page keep or set the file chosen in one. Send the file with an action.
+- **What the user decides still comes to you as an action,** with `It.action`, or `It.stage` and `It.commit`. `It.store` does not change what was staged, so stage the values the controls show when the user submits. Your answer goes back into the state.
+
+A control that is not a form field, such as a tab or the item that is open, works the same way: draw it from its stored value, and store it whenever the user changes it.
+
+```html
+<!-- Controls, each kept with It.store under its name and shown by `it state board` under `_page`:
+     `show` (all or open) and `find` (text to look for). Change one with `it set board _page.show open`. -->
+<label>Show
+  <select data-control="show">
+    <option value="all">All</option>
+    <option value="open">Open</option>
+  </select>
+</label>
+<label>Find <input data-control="find" type="search"></label>
+<p id="unsaved" role="status" hidden>A change was not saved. <button id="retry" type="button">Try again</button></p>
+<ul id="cards"></ul>
+<script>
+  const controls = [...document.querySelectorAll('[data-control]')]
+  const control = (name) => controls.find((el) => el.dataset.control === name)
+  const valueOf = (el) => (el.type === 'checkbox' ? el.checked : el.value)
+  function put(el, value) {
+    if (el.type === 'checkbox') el.checked = Boolean(value)
+    else if (el.value !== String(value ?? '')) el.value = value ?? ''
+  }
+  const first = new Map(controls.map((el) => [el, valueOf(el)]))
+  const editing = new Set() // controls the user is changing and has not finished with
+  const saving = new Map() // the number of each control's latest save, until It answers it
+  const unsaved = new Set() // controls whose latest save It refused
+  let saves = 0
+  let opened = false
+
+  // Shows a control's stored value, unless the user is changing it or their change is not saved
+  function show(el) {
+    const name = el.dataset.control
+    if (editing.has(el) || saving.has(name) || unsaved.has(name)) return
+    put(el, It.store.get(name) ?? first.get(el))
+  }
+
+  function save(el) {
+    const name = el.dataset.control
+    const save = ++saves
+    saving.set(name, save)
+    const answered = (ok) => {
+      if (saving.get(name) !== save) return
+      saving.delete(name)
+      if (ok) unsaved.delete(name)
+      else unsaved.add(name)
+      document.getElementById('unsaved').hidden = unsaved.size === 0
+      show(el)
+      draw()
+    }
+    It.store.set(name, valueOf(el)).then(() => answered(true), () => answered(false))
+  }
+
+  function draw() {
+    const { items = {}, order = [] } = It.state
+    const find = control('find').value.toLowerCase()
+    const shown = order
+      .map((id) => items[id])
+      .filter((item) => item && (control('show').value === 'all' || !item.done) && item.title.toLowerCase().includes(find))
+    document.getElementById('cards').replaceChildren(...shown.map((item) => Object.assign(document.createElement('li'), { textContent: item.title })))
+  }
+
+  It.onState(() => {
+    for (const el of controls) {
+      // When the page opens, a control with no stored value is stored as it stands, so that the agent sees it
+      if (!opened && It.store.get(el.dataset.control) === undefined) save(el)
+      show(el)
+    }
+    opened = true
+    draw()
+  })
+  for (const el of controls) {
+    el.addEventListener('input', () => {
+      editing.add(el)
+      save(el)
+      draw()
+    })
+    // The user has finished: a choice made, a slider let go, a field left. A value that came meanwhile shows now
+    const finished = () => {
+      editing.delete(el)
+      show(el)
+      draw()
+    }
+    el.addEventListener('change', finished)
+    el.addEventListener('blur', finished)
+  }
+  document.getElementById('retry').addEventListener('click', () => {
+    for (const el of controls) if (unsaved.has(el.dataset.control)) save(el)
+  })
+</script>
+```
+
 ## Changing state that something else may have changed
 
 A page can change its own state while you work, and so can another conversation. Where a change of yours must not overwrite one you have not seen, read the state with `it state deploy-plan`, which prints its `revision` beside it, and give that number back: `it patch deploy-plan '{"total":42}' --if-revision 7`. The change is made only while the state is still at that revision. If it has moved on, the command is refused with the code `conflict`: read the state again and decide anew.

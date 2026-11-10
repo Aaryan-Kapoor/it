@@ -33,11 +33,15 @@ Run it by that name alone, `it`, every time. One command at a time, with its val
 - **`It.action(name, data)`** sends one action to you. It returns a promise that resolves when It has accepted it, and rejects when it was refused.
 - **Files go in the data as they are**: `It.action('receipt', { photo: input.files[0] })` sends a `File` or `Blob` (input, drop, `canvas.toBlob`) whole. Never slice one or write it as text. A photo is shrunk to 1600 px unless a third argument says `{ original: true }`.
 - **`It.stage(key, value)` then `It.commit(name)`** are for anything with several choices: staging is local, and one commit sends everything staged as a single action. Use it for anything with a Submit, so that you are woken once, on what the user decided.
-- **`It.state`** is the page's state, a JSON object you change from the command line: `it set deploy-plan status "Deploying… 3 of 7"`, `it patch deploy-plan '{"steps":{"build":"done"}}'`. It is empty when the page's scripts first run and arrives a moment later: **`It.onState(fn)`** runs `fn(state)` when it arrives and whenever it changes. Change what a page shows through state, and do not republish for it.
+- **`It.state`** is the page's state, a JSON object you change from the command line: `it set deploy-plan status "Deploying… 3 of 7"`, `it patch deploy-plan '{"steps":{"build":"done"}}'`. It is empty when the page's scripts first run and arrives a moment later: **`It.onState(fn)`** runs `fn(state)` when it arrives and whenever it changes.
 - **`data-it-bind="path"`** puts a value from the state into an element's text (or the value of an input, a text box, a dropdown or a progress bar, or an image's source). **`data-it-show="path"`** shows an element only while the value is truthy, and `"!path"` reverses it.
 - **`It.store.set(key, value)` / `It.store.get(key)`** keep what the page itself changes, such as a draft, with the page and on every display. Read what was saved inside `It.onState`: before the state arrives, `It.store.get` returns `undefined`.
 
 A page is shown in a sandbox with no cookies and no storage that lasts, cannot frame its own files, and may hold and send only so much. Before you write a page that stores anything, loads a worker, frames a file, or is large or busy, or publishes again after a failure, read `it help page`.
+
+## Keep the page in its state
+
+Everything a page shows that can change, and every control on it, lives in its state. Then you change what it shows with `it set` or `it patch`, and `it state` tells you what the user sees and has chosen. Publish again only when the page's files change: a new version reloads it on every screen and loses what was typed and not yet saved. Each control keeps its value with `It.store`, where you can set it too. What the user decides still comes to you as an action. `it help page` has the pattern.
 
 ## Whether what they do arrives by itself
 
