@@ -1125,7 +1125,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
       t3Pending.delete(key)
       t3Retries.delete(key)
     }
-    noteThread(key, runs.thread)
+    // What is written down is the thread its clicks go to, which is the one a search found first where it did
+    const holding = t3Known.get(key)
+    if (holding !== undefined && holding !== 'asking' && holding.thread) noteThread(key, holding.thread)
     return { ...answer, thread: 'held' }
   }
   /**
