@@ -807,6 +807,17 @@ describe('the agent skill', () => {
     expect(skill).not.toContain('they are all printed')
   })
 
+  test('says that `it actions --id` lists the newest within a bound, that a short list is not the end, and how to page through the rest by the notes the program prints', () => {
+    expect(more.actions).toContain('With `--id <id>` it lists the newest that wait on that one page, and fewer than 50 where they carry a lot')
+    expect(more.actions).toContain('a short list there does not mean that nothing older waits')
+    expect(more.actions).toContain('answering the newest and stopping can leave older ones unanswered')
+    expect(more.actions).toContain('with `it actions --id <id> --after 0`, and then with `--after` set to the `cursor` of the last one listed')
+    // The notes it points to are the program's own words: it says older ones wait, how to read them, and that more wait after a page
+    const program = source('../../packages/cli/src/watch-actions.ts')
+    expect(program).toContain('Older actions wait on this ${NOUN.one} than these. To read every one, oldest first, run \\`it actions --id ${slug} --after 0\\`')
+    expect(program).toContain('More actions wait after these: run \\`it actions --id ${slug} --after ${last}\\`.')
+  })
+
   test('says that `it actions` lists what is this conversation’s and what is no conversation’s, that --all lists the rest marked as another’s, and that none of it is a wall between agents', () => {
     expect(more.actions).toContain("`it actions` lists what waits on this conversation's pages, and on pages that no conversation has")
     expect(more.actions).toContain(
