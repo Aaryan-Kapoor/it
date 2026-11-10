@@ -531,7 +531,7 @@ function shownAs(shown: Shown): {
     said.push(
       shown.chosen === 'open'
         ? `No display was named, so it is shown on ${named(where)} alone: of the displays with It’s site open, that is the one used most recently.`
-        : `No display was named and none has It’s site open now, so it was sent to ${named(where)} alone, the display used most recently. A display whose site is closed does not bring a page up by itself, so the user needs the link: give them \`url\` in the chat.`,
+        : `No display was named and none has It’s site open now, so it was sent to ${named(where)} alone, the display used most recently. A display whose site is closed does not bring a page up by itself, so the user needs the link${shown.url ? ': give them `url` in the chat' : ''}.`,
       ELSEWHERE,
     )
   else {
@@ -547,7 +547,8 @@ function shownAs(shown: Shown): {
         `Agents may not use ${andJoined(off)}: the user turned that off for ${off.length === 1 ? 'it' : 'each of them'}, on the display itself or on the site under Displays, and only the user can turn it on again.`,
       )
     if (!shown.displays.length && !notShownOn.length) said.push(noDisplay())
-    if (!shown.displays.length) said.push('No display brought it up, so give the user `url` in the chat to open it.')
+    // Said only where It gave the address, which an It of an earlier version does not
+    if (!shown.displays.length && shown.url) said.push('No display brought it up, so give the user `url` in the chat to open it.')
   }
   return {
     shownOn: shown.displays,
