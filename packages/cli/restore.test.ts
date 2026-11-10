@@ -36,7 +36,9 @@ const program = [process.env.IT_BACKEND_BIN, path.join(os.homedir(), '.cache/con
   (file): file is string => Boolean(file) && existsSync(file!),
 )
 
-const ports = bases(33_000, 8)
+// Below the ports the system hands to outgoing connections, which begin at 32768 on Linux, and
+// apart from every other file's
+const ports = bases(29_500, 8)
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 /** Waits for something for a generous while, and where it has not come by then, says what was there in its place. */
 const comes = async (what: () => boolean | Promise<boolean>, seen: () => unknown, ms = 120_000) => {
