@@ -533,7 +533,10 @@ describe.skipIf(process.platform === 'win32')('the actions on a page against an 
 })
 
 describe.skipIf(process.platform === 'win32')('listing the actions on a page', () => {
-  test('what is printed stays within 256 KB, however much fifty actions carried, keeping the newest', async () => {
+  // Two runs of the program: the newest, and the first page after the start. Paging on through
+  // every page is the program's own loop over the same read, and is followed to the end in
+  // watch-actions.test.ts, where it starts no program
+  test('what is printed stays within 256 KB, however much fifty actions carried, keeping the newest, or the first after a cursor with where the next page begins', async () => {
     const m = machine()
     const b = await backend()
     try {
@@ -545,18 +548,13 @@ describe.skipIf(process.platform === 'win32')('listing the actions on a page', (
       expect(listed.length).toBeGreaterThan(0)
       expect(listed.at(-1)!.id).toBe('a50')
       expect(JSON.parse(ran.err.trim()).note).toMatch(/--after 0/)
-      // Paged through from the start, a page at a time, every one of them is read
-      const seen: string[] = []
-      for (let after = '0', n = 0; n < 60; n++) {
-        const page = await run(m, ['actions', '--id', 'board', '--after', after], b.env)
-        expect(page.code).toBe(0)
-        expect(Buffer.byteLength(page.out)).toBeLessThanOrEqual(256 * 1024)
-        const got = JSON.parse(page.out) as { id: string; cursor: string }[]
-        seen.push(...got.map((x) => x.id))
-        if (!page.err.trim()) break
-        after = got.at(-1)!.cursor
-      }
-      expect(seen).toEqual(ids(1, 50))
+      const page = await run(m, ['actions', '--id', 'board', '--after', '0'], b.env)
+      expect(page.code).toBe(0)
+      expect(Buffer.byteLength(page.out)).toBeLessThanOrEqual(256 * 1024)
+      const first = JSON.parse(page.out) as { id: string; cursor: string }[]
+      expect(first.map((x) => x.id)).toEqual(ids(1, first.length))
+      expect(first.length).toBeLessThan(50)
+      expect(JSON.parse(page.err.trim()).note).toBe(`More actions wait after these: run \`it actions --id board --after ${first.at(-1)!.cursor}\`.`)
     } finally {
       await b.close()
     }

@@ -416,6 +416,31 @@ describe('listing the actions on a page', () => {
     }
   })
 
+  test('paged on by the cursor each note names, every one of fifty that carried much is listed once, each page within the bound', async () => {
+    const big = (n: number) => action(n, { payload: JSON.stringify(Array.from({ length: 3600 }, () => [10, 10])) })
+    const fifty = Array.from({ length: 50 }, (_, i) => big(i + 1))
+    // As the backend reads them: those after the cursor, oldest first, 50 at the most
+    stand.answer = (name, args) => {
+      if (name !== 'delivery:waitingPage') return null
+      const after = args.after === '0' ? 0 : Number(String(args.after).split('.')[1])
+      const later = fifty.filter((a) => Number(a.cursor.split('.')[1]) > after)
+      return page(later.slice(0, 50), later.length > 50, args.after)
+    }
+    const seen: string[] = []
+    let pages = 0
+    for (let after = '0'; pages < 60; pages++) {
+      const { list, notes } = await listActions('board', after)
+      expect(Buffer.byteLength(`${JSON.stringify(list, null, 2)}\n`)).toBeLessThanOrEqual(LISTED_MOST)
+      seen.push(...list.map((x) => x.id))
+      if (!notes.length) break
+      const next = /--after (\S+)`\.$/.exec(notes[0]!)?.[1]
+      expect(next).toBe(list.at(-1)!.cursor)
+      after = next!
+    }
+    expect(seen).toEqual(fifty.map((a) => a.id))
+    expect(pages).toBeGreaterThan(1)
+  })
+
   test('one that does not fit by itself is listed without its data, with how to read it', () => {
     const deep = { id: 'a1', data: Array.from({ length: 30_000 }, () => [[[1]]]) }
     const { list, left } = bounded([deep, { id: 'a2', data: 1 }], 'oldest')
