@@ -3976,8 +3976,9 @@ fieldset.media-bar {
 .media-waiting .media-bar-icon {
   color: var(--danger);
 }
-/* While a page records: a red dot, how long, and Stop */
-.media-rec {
+/* While a page records: a red dot, how long, and Stop. The camera live to a page looks the same, and says it is live */
+.media-rec,
+.media-cam {
   flex: none;
   gap: 7px;
   padding: 0 3px 0 9px;
@@ -3988,7 +3989,8 @@ fieldset.media-bar {
 .media-rec:has(.media-thumb) {
   padding-left: 3px;
 }
-.media-rec-dot {
+.media-rec-dot,
+.media-cam-dot {
   flex: none;
   width: 8px;
   height: 8px;
@@ -3996,14 +3998,16 @@ fieldset.media-bar {
   background: var(--danger);
   animation: media-rec-pulse 1.4s ease-in-out infinite;
 }
-.media-rec[data-state="paused"] .media-rec-dot {
+.media-rec[data-state="paused"] .media-rec-dot,
+.media-cam[data-state="paused"] .media-cam-dot {
   animation: none;
   background: var(--wait);
 }
 .media-rec-time {
   font-variant-numeric: tabular-nums;
 }
-.media-rec-stop {
+.media-rec-stop,
+.media-cam-stop {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -4018,7 +4022,8 @@ fieldset.media-bar {
   font-weight: 550;
   cursor: pointer;
 }
-.media-rec-stop:hover {
+.media-rec-stop:hover,
+.media-cam-stop:hover {
   background: var(--danger);
 }
 /* What the camera records, inside the bar, the height of the bar's row */
@@ -4099,7 +4104,8 @@ fieldset.media-bar {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .media-rec-dot {
+  .media-rec-dot,
+  .media-cam-dot {
     animation: none;
   }
 }

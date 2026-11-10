@@ -4,7 +4,8 @@
 // (mount.tsx), and a browser gives the microphone and the camera only to an origin it can ask the
 // person about. So the site records, under its own origin, for a page that asks it to, and hands
 // the page what was recorded as a file. The page sends that where it sends anything: to its
-// agent with an action, which It keeps as it keeps any file an action carries.
+// agent with an action, which It keeps as it keeps any file an action carries. A page that wants
+// the camera live is sent its pictures as they come, and makes its own stream of them.
 //
 // The browser asks the person once whether the site may use the microphone, and that would then
 // be for every page there is. So the site asks first, in words of its own, for each page on each
@@ -157,6 +158,7 @@ function closeWhatIsTakenBack(): void {
   // tab can take it back and allow it again before this one hears of either
   for (const l of [...live]) if (grantFor(l.user, l.page, l.owner, l.kinds) !== l.grant) l.end('taken_back')
   if (shooting && grantFor(shooting.user, shooting.page, shooting.owner, ['camera']) !== shooting.grant) shooting.close()
+  for (const c of [...cameras]) if (grantFor(c.user, c.page, c.owner, ['camera']) !== c.grant) c.end('taken_back')
 }
 /** Whether the person allowed this page, as this conversation has it, every one of these on this screen. */
 export function allowed(user: string, page: string, owner: string, kinds: MediaKind[]): boolean {
@@ -187,6 +189,7 @@ export function forgetGrants(user: string): void {
   keep(user, [])
   for (const l of [...live]) l.end('taken_back')
   shooting?.close()
+  for (const c of [...cameras]) c.end('taken_back')
 }
 // Another tab of this browser allowed something or took it back: this one goes by that too
 if (typeof window !== 'undefined')
@@ -347,7 +350,7 @@ const SIZES: Record<'audio' | 'video', string[]> = {
   video: ['width', 'height', 'frameRate', 'aspectRatio'],
 }
 /** One of the two, as the browser is to be asked for it. A page may say plain switches and sizes, and for the camera which way it faces. */
-function asked(given: unknown, kind: 'audio' | 'video'): boolean | MediaTrackConstraints {
+function asked(given: unknown, kind: 'audio' | 'video', by = 'It.record'): boolean | MediaTrackConstraints {
   if (given === undefined || given === null || given === false) return false
   if (given === true) return true
   if (typeof given !== 'object' || Array.isArray(given)) throw new Error(`${kind} is true, false, or an object of plain settings.`)
@@ -356,9 +359,21 @@ function asked(given: unknown, kind: 'audio' | 'video'): boolean | MediaTrackCon
     if (SWITCHES[kind].includes(name) && typeof value === 'boolean') out[name] = value
     else if (SIZES[kind].includes(name) && typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 10_000) out[name] = value
     else if (kind === 'video' && name === 'facingMode' && (value === 'user' || value === 'environment')) out[name] = value
-    else throw new Error(`It.record does not take ${kind}.${name.slice(0, 40)} as it was given.`)
+    else throw new Error(`${by} does not take ${kind}.${name.slice(0, 40)} as it was given.`)
   }
   return out
+}
+/** What a page asked of the camera it sees live, held to what the site takes: plain sizes and which way it faces. */
+export function cameraVideoOf(given: unknown): true | MediaTrackConstraints {
+  if (given === undefined || given === null) return true
+  const video = asked(given, 'video', 'It.camera')
+  if (video === false) throw new Error('It.camera needs the camera.')
+  if (video === true) return true
+  // Asked for no more than is sent
+  const most: Record<string, number> = { width: LIVE_CAMERA.longestSide, height: LIVE_CAMERA.longestSide, frameRate: LIVE_CAMERA.perSecond }
+  return Object.fromEntries(
+    Object.entries(video).map(([name, value]) => [name, typeof value === 'number' && name in most ? Math.min(value, most[name]!) : value]),
+  )
 }
 const within = (given: unknown, bounds: { least: number; most: number; given: number }): number =>
   typeof given === 'number' && Number.isFinite(given) ? Math.min(bounds.most, Math.max(bounds.least, Math.round(given))) : bounds.given
@@ -598,7 +613,7 @@ export async function shoot(
   page: { page: string; title: string; user: string; owner: string; grant: string },
   facing: 'user' | 'environment' | undefined,
 ): Promise<{ photo: Promise<Blob | null>; cancel: () => void }> {
-  if (shooting || live.length) throw new Error('The camera is in use on this screen just now.')
+  if (shooting || live.length || cameras.length) throw new Error('The camera is in use on this screen just now.')
   const stream = await navigator.mediaDevices.getUserMedia({ video: facing ? { facingMode: facing } : true, audio: false })
   let given: (photo: Blob | null) => void = () => {}
   const photo = new Promise<Blob | null>((resolve) => {
@@ -628,4 +643,217 @@ export async function shoot(
   changed()
   for (const t of stream.getTracks()) t.addEventListener('ended', () => close(null), { once: true })
   return { photo, cancel: () => close(null) }
+}
+
+// ---------- the camera, live to a page ----------
+//
+// No browser hands a sandboxed document the camera's track, or a frame of video, from the site:
+// each is refused, or never arrives. A picture does. So the site opens the camera and sends the
+// page each picture it gives, as an ImageBitmap, and the page draws them onto a canvas of its own
+// and makes its stream from that, for a video element or a call it makes itself. The site sends
+// a few at a time and no more, and the next only once the page says it has drawn one, so that a
+// page that is slow to draw is given fewer pictures rather than more and more of them waiting.
+
+/** Why the live camera ended without the page asking: as a recording ends, but never for its length or its size. */
+export type CameraWhy = Exclude<Why, 'too_long' | 'too_large'>
+/** The camera live to a page, as It's bar shows it. */
+export interface LiveCamera {
+  id: string
+  user: string
+  page: string
+  owner: string
+  /** The grant it was opened under (`grantFor`): taken back, by this tab or another, it ends, whatever is allowed since. */
+  grant: string
+  title: string
+  since: number
+  state: 'live' | 'paused'
+  /** Ends it without the page asking, and tells the page why. */
+  end: (why: CameraWhy) => void
+}
+let cameras: LiveCamera[] = []
+/** The cameras live to a page on this screen. */
+export const useCameras = (): LiveCamera[] => useSyncExternalStore(watch, () => cameras)
+/** A page's live camera, if it has one. */
+export const cameraFor = (page: string): LiveCamera | undefined => cameras.find((c) => c.page === page)
+/** Each live camera's own word for whether the screen shows the site, by its id. */
+const shown = new Map<string, (hidden: boolean) => void>()
+// While the screen does not show the site the camera waits, and the page is given nothing
+if (typeof document !== 'undefined')
+  document.addEventListener('visibilitychange', () => {
+    for (const show of [...shown.values()]) show(document.visibilityState === 'hidden')
+  })
+
+/**
+ * What the site holds the live camera to, whatever the page asks of it. `atOnce`: how many
+ * pictures a page may have been sent and not yet said it drew, one being drawn and the next on its
+ * way. `perSecond` and `longestSide`: no more pictures than that in any second, and none larger
+ * than that many pixels on its longer side, since what a page asks of the camera is only what the
+ * browser is asked for. `checkEveryMs`: how often it is asked whether the page may still have the
+ * camera, whether or not a picture is sent. `usedEveryMs`: how often an open camera notes that the
+ * page uses what it was allowed, so that it does not lapse while it is open.
+ */
+export const LIVE_CAMERA = { atOnce: 2, perSecond: 30, longestSide: 1920, checkEveryMs: 1000, usedEveryMs: 60 * 60_000 } as const
+
+/** What the live camera is for: the page, as the person was asked about it, and who is given its pictures and told of it. */
+export interface CameraFor {
+  /** The camera's own id, for It's bar. */
+  id: string
+  user: string
+  page: string
+  owner: string
+  /** The grant the person allowed it under. */
+  grant: string
+  title: string
+  /**
+   * Why the page may not have the camera any more, or nothing where it may. Asked before each
+   * picture is handed on, and every `checkEveryMs` while the camera is open, whatever the page has
+   * drawn: a page that draws nothing is sent nothing, and would otherwise never be asked about.
+   */
+  still: () => CameraWhy | null
+  /** One picture for the page, numbered in the order the camera gave it, which is handed on. */
+  picture: (frame: number, picture: ImageBitmap) => void
+  /** The camera paused, went on, or ended without the page asking. */
+  told: (state: 'live' | 'paused' | 'ended', why?: CameraWhy) => void
+}
+/** The live camera, as the frame that opened it holds it. */
+export interface Opened {
+  id: string
+  /** The page has drawn this picture: another may be sent in its place. */
+  drawn: (frame: number) => void
+  /** Closes it, as the page asked. */
+  stop: () => void
+  /** Closes it without the page asking, and tells the page why. */
+  end: (why: CameraWhy) => void
+}
+
+/**
+ * Opens the camera live, for a page that the person allowed it on this screen, and sends the
+ * page its pictures until it is closed. Rejects with what the browser said where it would not
+ * give the camera.
+ */
+export async function openCamera(video: true | MediaTrackConstraints, page: CameraFor): Promise<Opened> {
+  const stream = await navigator.mediaDevices.getUserMedia({ video, audio: false })
+  // The camera's picture, in a video element that is never shown: what each picture is taken from
+  const view = document.createElement('video')
+  view.muted = true
+  view.playsInline = true
+  view.srcObject = stream
+  try {
+    await view.play()
+  } catch (err) {
+    for (const t of stream.getTracks()) t.stop()
+    throw err
+  }
+  /** The pictures sent that the page has not said it drew, and how many are being made. */
+  const sent = new Set<number>()
+  let making = 0
+  let frames = 0
+  /** When each of the pictures begun in the last second was begun. */
+  const begun: number[] = []
+  let state: 'live' | 'paused' = 'live'
+  let over = false
+  let usedAt = Date.now()
+  const close = (): boolean => {
+    if (over) return false
+    over = true
+    clearInterval(watching)
+    cameras = cameras.filter((c) => c.id !== page.id)
+    shown.delete(page.id)
+    for (const t of stream.getTracks()) t.stop()
+    view.srcObject = null
+    changed()
+    return true
+  }
+  const end = (why: CameraWhy) => {
+    if (close()) page.told('ended', why)
+  }
+  // Asked whether the page may still have it whatever is sent, paused or not; and while it may, an
+  // open camera is the page using what it was allowed, noted now and then and not for each picture
+  const watching = setInterval(() => {
+    const not = page.still()
+    if (not) return end(not)
+    if (Date.now() - usedAt < LIVE_CAMERA.usedEveryMs) return
+    usedAt = Date.now()
+    usedNow(page.user, page.page)
+  }, LIVE_CAMERA.checkEveryMs)
+  const show = (hidden: boolean) => {
+    const now = hidden ? 'paused' : 'live'
+    if (over || state === now) return
+    state = now
+    // A camera whose track gives nothing is one the browser lets go of, and says so to the person
+    for (const t of stream.getTracks()) t.enabled = !hidden
+    cameras = cameras.map((c) => (c.id === page.id ? { ...c, state: now } : c))
+    changed()
+    page.told(now)
+  }
+  // Each new picture where the browser says when there is one, and otherwise each time the screen
+  // is drawn, which is told by the time the video has reached
+  const each = typeof view.requestVideoFrameCallback === 'function'
+  let reached = -1
+  const next = () => {
+    if (each) view.requestVideoFrameCallback(picture)
+    else requestAnimationFrame(picture)
+  }
+  /** A picture the camera gave: sent where the page has room for one, and passed over where it has none. */
+  function picture() {
+    if (over) return
+    next()
+    if (state === 'paused' || sent.size + making >= LIVE_CAMERA.atOnce || view.readyState < 2) return
+    if (!each) {
+      if (view.currentTime === reached) return
+      reached = view.currentTime
+    }
+    // No more in any second than the most, however fast the camera gives them
+    const now = performance.now()
+    while (begun.length && now - begun[0]! >= 1000) begun.shift()
+    if (begun.length >= LIVE_CAMERA.perSecond) return
+    begun.push(now)
+    // And none larger than the most on its longer side, made smaller as it is taken
+    const width = view.videoWidth
+    const height = view.videoHeight
+    const scale = Math.min(1, LIVE_CAMERA.longestSide / Math.max(width, height, 1))
+    making++
+    ;(scale < 1
+      ? createImageBitmap(view, { resizeWidth: Math.round(width * scale), resizeHeight: Math.round(height * scale), resizeQuality: 'medium' })
+      : createImageBitmap(view)
+    ).then(
+      (made) => {
+        making--
+        // Closed, or the screen stopped showing the site, while it was made
+        if (over || state === 'paused') return made.close()
+        const not = page.still()
+        if (not) {
+          made.close()
+          return end(not)
+        }
+        const frame = ++frames
+        sent.add(frame)
+        page.picture(frame, made)
+      },
+      () => {
+        making--
+      },
+    )
+  }
+  // A camera that goes away, or that the person turns off from the browser's own controls, ends it
+  for (const t of stream.getTracks()) t.addEventListener('ended', () => end('device'), { once: true })
+  cameras = [
+    ...cameras,
+    { id: page.id, user: page.user, page: page.page, owner: page.owner, grant: page.grant, title: page.title, since: Date.now(), state, end },
+  ]
+  shown.set(page.id, show)
+  changed()
+  // Opened while the screen does not show the site: it waits at once
+  if (document.visibilityState === 'hidden') show(true)
+  next()
+  return {
+    id: page.id,
+    drawn: (frame) => {
+      sent.delete(frame)
+    },
+    stop: () => {
+      close()
+    },
+    end,
+  }
 }

@@ -1,20 +1,22 @@
 // What the person sees of the microphone and the camera (media.ts), all of it inside It's own bar
 // at the top of a page, and none of it over the page: the question It asks before a page may use
 // them on this screen, what the browser is asking about where it asks itself, that a page records
-// and the button that stops it, the small view of the camera for a photo, and the button that
-// takes back what was allowed. Under Settings is what this screen has allowed, where it is taken
+// or has the camera live and the buttons that stop each, the small view of the camera for a photo,
+// and the button that takes back what was allowed. Under Settings is what this screen has allowed, where it is taken
 // back too.
 import type { MediaKind } from '@it/protocol'
 import { useEffect, useRef, useState } from 'react'
 import { IconStop } from './brand'
 import { ago, useNow } from './lib'
 import {
+  cameraFor,
   cannotRecord,
   dismissNote,
   endsAt,
   grantsOf,
   kindsSaid,
   type Live,
+  type LiveCamera,
   liveFor,
   noteFor,
   takeBack,
@@ -214,6 +216,38 @@ function Recording({ l }: { l: Live }) {
 }
 
 /**
+ * The camera live to a page, in the bar: a red dot, that the page sees the camera as it happens,
+ * and Stop. No picture of the camera is shown here, since the page shows the picture itself.
+ */
+function CameraLive({ c }: { c: LiveCamera }) {
+  const paused = c.state === 'paused'
+  return (
+    <span
+      className="media-bar media-cam"
+      data-state={c.state}
+      role="status"
+      aria-label={`The camera is ${paused ? 'paused' : 'live'} to “${c.title}”`}
+      title={paused ? 'The camera is paused while the screen does not show It' : `The camera is live to “${c.title}”: the page sees its picture as it happens`}
+    >
+      <span className="media-cam-dot" aria-hidden="true" />
+      <span className="media-cam-what" aria-hidden="true">
+        Camera {paused ? 'paused' : 'live'}
+      </span>
+      <button
+        type="button"
+        className="media-cam-stop"
+        title="Stop the camera. The page sees nothing more from it."
+        aria-label="Stop the camera"
+        onClick={() => c.end('person')}
+      >
+        <IconStop />
+        Stop
+      </button>
+    </span>
+  )
+}
+
+/**
  * A photo the page asked for, in the bar: Take and Cancel, and under them, hanging from the bar,
  * the camera's picture as small as a person can still aim by. The photo is taken at the size the
  * camera gives, whatever the size of this view.
@@ -267,19 +301,33 @@ function Note({ page }: { page: string }) {
 /**
  * Everything about the microphone and the camera for the page shown, in It's bar, where nothing
  * on the page can cover it: It's question, or which page the browser is asking about, or the
- * photo being taken, or what records, or how the last recording stopped.
+ * photo being taken, or what records, or how the last recording stopped. The camera live to the
+ * page is said beside whichever of those is shown, since it goes on all the while, a recording of
+ * sound beside it among them.
  */
 export function MediaBar({ page }: { page: string }) {
   useMediaChanges()
   const asking = useAsking()
   const browser = useBrowserAsking()
   const shooting = useShooting()
-  if (asking?.page === page) return <Ask page={page} />
-  if (browser?.page === page) return <BrowserAsks page={page} />
-  if (shooting?.page === page) return <Photo page={page} />
+  const c = cameraFor(page)
   const l = liveFor(page)
-  if (l) return <Recording l={l} />
-  return <Note page={page} />
+  return (
+    <>
+      {c && <CameraLive c={c} />}
+      {asking?.page === page ? (
+        <Ask page={page} />
+      ) : browser?.page === page ? (
+        <BrowserAsks page={page} />
+      ) : shooting?.page === page ? (
+        <Photo page={page} />
+      ) : l ? (
+        <Recording l={l} />
+      ) : (
+        <Note page={page} />
+      )}
+    </>
+  )
 }
 
 /**
@@ -290,7 +338,7 @@ export function MediaAllowed({ user, page, title }: { user: string; page: string
   useMediaChanges()
   const [sure, setSure] = useState(false)
   const grant = grantsOf(user).find((g) => g.page === page)
-  if (!grant || liveFor(page)) return null
+  if (!grant || liveFor(page) || cameraFor(page)) return null
   if (sure)
     return (
       <fieldset className="media-bar media-takeback" aria-label={`Take back ${kindsSaid(grant.kinds)} from “${title}”?`}>
