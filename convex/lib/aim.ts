@@ -155,10 +155,12 @@ async function byId(ctx: Ctx, userId: Id<'users'>, raw: string): Promise<Doc<'di
  * person's. The machine that asked knows what it asked, and reads the displays with `it displays`.
  *
  * `pushed` is for a notification, which reaches a display whose site is closed only as a push.
- * `page` is the page to be shown, which a display locked to another page does not show. A
- * notification has none, and goes to a locked display that is named or asked for with every
- * display. Where none is named, a locked display is never the one chosen, for a page or a
- * notification: it is kept to its page, which is what the person is doing there.
+ * `page` is the page to be shown. A lock is about pages alone: a display locked to another page
+ * does not show this one, and where no display is named, a locked display is never the one
+ * chosen to show a page, its own page included, since it keeps to the page it has. A
+ * notification has no page, and a lock is nothing to it: a locked display takes one sent to it
+ * by name or id, or to every display, and is the display in use for one sent with none named,
+ * as any other display is.
  */
 export async function aim(ctx: Ctx, userId: Id<'users'>, target: Target, opts: { pushed?: boolean; page?: Id<'artifacts'> } = {}): Promise<Aimed> {
   let asked: Doc<'displays'>[]
@@ -179,7 +181,7 @@ export async function aim(ctx: Ctx, userId: Id<'users'>, target: Target, opts: {
   }
   const why = new Map<Id<'displays'>, Reason | null>()
   const none = 'none' in target
-  const locked = (d: Doc<'displays'>) => d.lockedTo !== undefined && (none || (opts.page !== undefined && d.lockedTo.artifactId !== opts.page))
+  const locked = (d: Doc<'displays'>) => d.lockedTo !== undefined && opts.page !== undefined && (none || d.lockedTo.artifactId !== opts.page)
   for (const d of asked) why.set(d._id, !(await stillPaired(ctx, d)) ? 'not_paired' : d.agentsOff ? 'agents_off' : locked(d) ? 'locked' : null)
   const left = (d: Doc<'displays'>, reason: Reason) => ({ display: nameOf(d), displayId: d._id, reason })
   if (!none)
