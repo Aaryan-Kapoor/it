@@ -25,6 +25,10 @@ export interface Listed {
   nowStateRevision?: number
   /** The files it carried beside its data. */
   files?: { name: string; type: string; bytes: number }[]
+  /** Which of the person's displays it was done on, where the backend says. */
+  displayId?: string
+  /** Its place among the actions waiting on its page, where it was read a page at a time (`delivery.waitingPage`). */
+  cursor?: string
 }
 /** A click as this program prints it for an agent. */
 export const printed = (c: Listed) => ({
@@ -58,6 +62,10 @@ export const printed = (c: Listed) => ({
         saveWith: `it action ${c.id} --save <file>${c.files.length > 1 ? ' --number <n>' : ''}`,
       }
     : {}),
+  // Which display it was done on, by the id the backend knows it by, where it says
+  ...(c.displayId ? { sourceDisplayId: c.displayId } : {}),
+  // Where it stands among what waits on its page: `it actions --id <page> --after <cursor>` lists what came after it
+  ...(c.cursor ? { cursor: c.cursor } : {}),
 })
 /** Writes a line and resolves once it has really left this process. */
 const emit = async (value: unknown) => {
