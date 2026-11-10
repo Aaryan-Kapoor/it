@@ -6112,6 +6112,15 @@ describe('cases at the edges', () => {
         expect(await code(m.as.query(api.delivery.waitingPage, { slug: 'plan', after }))).toBe('invalid')
       }
       expect(await code(m.as.query(api.delivery.waitingPage, { slug: 'none' }))).toBe('not_found')
+      // A cursor that names no page's record, or a record of another kind, is no cursor: never a deleted page's
+      const [action] = await insertClicks(t, (await m.as.query(api.delivery.waitingPage, { slug: 'plan' })).from.split('.')[0]!, 1)
+      for (const after of ['fake.1', 'fake.0', `${action}.1`, `${action}.0`]) {
+        const said = await m.as.query(api.delivery.waitingPage, { slug: 'plan', after }).then(
+          () => 'ok',
+          (e: unknown) => (e instanceof ConvexError ? JSON.parse(e.data as string).code : `not a refusal: ${String(e)}`),
+        )
+        expect([after, said]).toEqual([after, 'invalid'])
+      }
     })
   })
 

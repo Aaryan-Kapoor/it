@@ -477,6 +477,10 @@ export const waitingPage = query({
     const cursor = after === undefined ? undefined : actionCursor(after)
     if (cursor === undefined && after !== undefined)
       fail('invalid', 'That is not a place among the actions on a page: give the `cursor` of one that was listed, or 0 for the start.')
+    // What names no page's record, or a record of something else, is no cursor of any page: it is
+    // refused as that, and never taken for a cursor of a page that has since been deleted
+    if (cursor?.page !== undefined && ctx.db.normalizeId('artifacts', cursor.page) === null)
+      fail('invalid', 'That is not a place among the actions on a page: give the `cursor` of one that was listed, or 0 for the start.')
     const a = (await artifactBySlug(ctx, user._id, slug)) ?? fail('not_found', 'No such page.')
     // A cursor of a page that was deleted, where another has been made under its id since: its
     // places are not this page's, whose actions are numbered afresh, and read as this page's
