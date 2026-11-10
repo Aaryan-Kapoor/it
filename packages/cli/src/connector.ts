@@ -589,6 +589,10 @@ export const OPEN_WITHOUT_ADDON =
 const HOLD_AT_ONCE = 50
 /** The longest a connector waits before it tries again to tell It why a click is held back. */
 const TELL_AGAIN_MOST_MS = 5 * 60_000
+/** How long a held-back click waits for It's door to say how it is told, before it is told the way every It takes. */
+const DOOR_WAIT_MS = 2 * 60_000
+/** How a held-back click is told: kept with the click (`delivery.holdBack`), or as why its conversation could not be woken (`machines.wakeFailed`). */
+type TellWay = 'kept' | 'woken'
 /** Why a conversation could not be reopened, and then that it has not loaded It's add-on, together in what the backend keeps. */
 export const notLoadedToo = (why: string): string => {
   const room = 300 - NOT_LOADED.length - 2
@@ -2284,7 +2288,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * that keeps no reason with a click never offers one, so there this note is what keeps the
    * click from being told again.
    */
-  const telling = new Map<string, { reason: string | null; asking: boolean; said: boolean; tries: number; next: number; until: number }>()
+  const telling = new Map<string, { reason: string | null; via: TellWay; asking: boolean; said: boolean; tries: number; next: number; until: number }>()
   let tellingSwept = 0
   /** Lets go, once a minute at most, of what is noted of clicks that have been deleted by now, having waited as long as a click may. */
   const sweepTelling = () => {
@@ -2293,26 +2297,35 @@ async function connecting(say: (line: string) => void): Promise<void> {
     for (const [id, t] of telling) if (!t.asking && t.until < tellingSwept) telling.delete(id)
   }
   /** What is to be told in the next batch, by click, and whether one is to go soon. */
-  const toTell = new Map<string, { click: Offered; reason: string | null }>()
+  const toTell = new Map<string, { click: Offered; reason: string | null; via: TellWay }>()
   let tellingSoon = false
   /**
    * Whether It takes `delivery.holdBack` (`TAKES.heldBack`), as it says at its door. An It of an
    * earlier build does not, and is told as it was before (`heldBackSaid`). Until the door has
-   * answered, nothing is told either way: an It that does not have the call would be asked for
+   * answered, nothing is told for a while: an It that does not have the call would be asked for
    * it, and one that has it would be told the older way. The clicks are told once it answers.
    */
   let holdBackTaken: boolean | undefined
+  /** Since when the door has not said, as this connector started. */
+  const doorUnknownFrom = Date.now()
   /**
-   * Says to It, for clicks held back for the same reason, why. An It that does not keep that
-   * with its clicks is told it as why their conversations could not be woken, which it says on
-   * the page for its last few conversations: the most such an It can do.
+   * The way a held-back click is told now: kept with the click, where It takes that; as why its
+   * conversation could not be woken, where It does not, or where its door has not said for
+   * `DOOR_WAIT_MS`, which every It takes, so that the person is not left without a word while
+   * the door stays shut; and not yet, before that.
    */
-  const heldBackSaid = async (clicks: Offered[], reason: string | null): Promise<void> => {
-    if (holdBackTaken === true) {
+  const tellWay = (): TellWay | undefined =>
+    holdBackTaken === true ? 'kept' : holdBackTaken === false || Date.now() - doorUnknownFrom >= DOOR_WAIT_MS ? 'woken' : undefined
+  /**
+   * Says to It, for clicks held back for the same reason, why: kept with each click (`kept`), or
+   * as why their conversations could not be woken (`woken`), which an It of an earlier build says
+   * on the page for its last few conversations, the most such an It can do.
+   */
+  const heldBackSaid = async (clicks: Offered[], reason: string | null, via: TellWay): Promise<void> => {
+    if (via === 'kept') {
       await call('mutation', api.delivery.holdBack, { ids: clicks.map((c) => c.id), why: reason })
       return
     }
-    if (holdBackTaken === undefined) throw new Problem('It has not said yet whether it keeps why a click is held back.', 'unavailable')
     if (reason === null) return
     const conversations = new Map(clicks.map((c) => [keyOf(c.session!.harness, c.session!.id), c.session!]))
     for (const session of conversations.values())
@@ -2321,17 +2334,22 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** Sends what is to be told, as few calls as it takes, each click marked told only once It has said it has it. */
   const tellNow = () => {
     tellingSoon = false
-    const byReason = new Map<string | null, Offered[]>()
-    for (const { click, reason } of toTell.values()) byReason.set(reason, [...(byReason.get(reason) ?? []), click])
+    const batches = new Map<string, { reason: string | null; via: TellWay; clicks: Offered[] }>()
+    for (const { click, reason, via } of toTell.values()) {
+      const batch = `${via}\u0000${reason}`
+      const got = batches.get(batch) ?? { reason, via, clicks: [] }
+      got.clicks.push(click)
+      batches.set(batch, got)
+    }
     toTell.clear()
-    for (const [reason, clicks] of byReason)
+    for (const { reason, via, clicks } of batches.values())
       for (let i = 0; i < clicks.length; i += HOLD_AT_ONCE) {
         const some = clicks.slice(i, i + HOLD_AT_ONCE)
-        void heldBackSaid(some, reason).then(
+        void heldBackSaid(some, reason, via).then(
           () => {
             for (const c of some) {
               const t = telling.get(c.id)
-              if (t?.reason === reason) Object.assign(t, { asking: false, said: true })
+              if (t?.reason === reason && t.via === via) Object.assign(t, { asking: false, said: true })
             }
             const first = some[0]!.session!
             if (reason !== null)
@@ -2344,7 +2362,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             let wait = 0
             for (const c of some) {
               const t = telling.get(c.id)
-              if (t?.reason !== reason) continue
+              if (t?.reason !== reason || t.via !== via) continue
               wait = Math.min(TELL_AGAIN_MOST_MS, 2_000 * 2 ** t.tries)
               Object.assign(t, { asking: false, tries: t.tries + 1, next: performance.now() + wait })
             }
@@ -2369,14 +2387,18 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (!telling.get(click.id)?.asking) telling.delete(click.id)
       return
     }
-    // Not until It has said at its door which way it is told (`holdBackTaken`): told then
-    if (holdBackTaken === undefined) return
+    // Not until It has said at its door which way it is told, or has not said for a while (`tellWay`)
+    const via = tellWay()
+    if (via === undefined) return
     const t = telling.get(click.id)
-    if (t?.reason === reason && (t.asking || t.said || performance.now() < t.next)) return
+    const same = t?.reason === reason && t.via === via
+    // Told already, or being told, or waiting to be told again. Told the older way while the
+    // door was shut, it is told again the way It keeps, once It says it takes that
+    if (same && (t.asking || t.said || performance.now() < t.next)) return
     // From when this machine first saw it, which is never before It received it: not from when it was made
     const until = t?.until ?? Date.now() + (RETENTION.pendingActionDays + 1) * 86_400_000
-    telling.set(click.id, { reason, asking: true, said: false, tries: t?.reason === reason ? t.tries : 0, next: 0, until })
-    toTell.set(click.id, { click, reason })
+    telling.set(click.id, { reason, via, asking: true, said: false, tries: same ? t.tries : 0, next: 0, until })
+    toTell.set(click.id, { click, reason, via })
     if (!tellingSoon) {
       tellingSoon = true
       queueMicrotask(tellNow)
@@ -3803,13 +3825,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
   let heldTaken: boolean | undefined
   const askHeld = async () => {
     const door = await backendDoor()
-    if (door === undefined || closing || over) return
+    if (closing || over) return
+    // Asked again with the next minute. Said, now and then, since clicks held back meanwhile are
+    // told the older way after a while, and only the door's answer would say that It keeps more
+    if (door === undefined) return seldom('door', 'could not ask It at its door which later forms of a call it takes; asked again in a minute')
     // Taken as the answer came, after It said its time, so that what is worked out from it is never later than It's own
     if (door.now !== undefined) itAhead = door.now - Date.now()
-    const knew = holdBackTaken !== undefined
+    const before = holdBackTaken
     holdBackTaken = door.takes.includes(TAKES.heldBack)
     // What was held back meanwhile is told now, the way It takes
-    if (!knew) soon(10)
+    if (before !== holdBackTaken) soon(10)
     const takes = door.takes.includes(TAKES.inboxHeld)
     if (takes === heldTaken) return
     heldTaken = takes

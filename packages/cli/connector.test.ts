@@ -1266,7 +1266,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(failures()).toHaveLength(2)
   })
 
-  test('while It has not said at its door whether it keeps why a click is held back, nothing is told either way, and the click is still not reopened', async () => {
+  test('for a while after It has not said at its door whether it keeps why a click is held back, nothing is told either way, and the click is still not reopened', async () => {
     // The door cannot be asked
     stand.takes = undefined
     await reopensFor('claude-code', CLAUDE_ID, { addon: false })
@@ -1275,6 +1275,45 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(holds()).toEqual([])
     expect(failures()).toEqual([])
     expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+  })
+
+  test('where It’s door stays shut past the wait, each held-back click is told once the way every It takes, and the way It keeps once the door says it takes that', async () => {
+    // Only the minute's own asking is faked, so that it can be brought on; everything else runs as it does
+    standIn()
+    stand.takes = undefined
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered(blocked(1), blocked(2))
+    await new Promise((r) => setTimeout(r, 1500))
+    expect(failures()).toEqual([])
+    // Two minutes on, the door still shut
+    const later = Date.now() + 121_000
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => later + (performance.now() % 1000))
+    try {
+      offered(blocked(1), blocked(2))
+      await until(() => failures().length > 0)
+      // One word for the conversation's two clicks, which is all an It of any build keeps of it, and none again
+      for (let n = 0; n < 3; n++) {
+        await new Promise((r) => setTimeout(r, 500))
+        offered(blocked(1), blocked(2))
+      }
+      await new Promise((r) => setTimeout(r, 1000))
+      expect(failures().map((c) => c.args)).toEqual([{ for: { harness: 'claude-code', id: CLAUDE_ID }, why: OPEN_WITHOUT_ADDON }])
+      expect(holds()).toEqual([])
+      expect(said.some((line) => line.includes('could not ask It at its door'))).toBe(true)
+      // The door opens, and says It keeps a reason with a click: each is told that way, once
+      stand.takes = true
+      await vi.advanceTimersByTimeAsync(60_000)
+      offered(blocked(1), blocked(2))
+      await until(() => heldIds().length >= 2)
+      expect(holds().map((c) => c.args)).toEqual([{ ids: ['click-1', 'click-2'], why: OPEN_WITHOUT_ADDON }])
+      offered(blocked(1, { heldBack: OPEN_WITHOUT_ADDON }), blocked(2, { heldBack: OPEN_WITHOUT_ADDON }))
+      await new Promise((r) => setTimeout(r, 1500))
+      expect(holds()).toHaveLength(1)
+      expect(failures()).toHaveLength(1)
+      expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+    } finally {
+      clock.mockRestore()
+    }
   })
 
   test('a click that goes off the page of the inbox and comes round again keeps its wait before It is asked again', async () => {
