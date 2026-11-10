@@ -27,6 +27,7 @@ const stand = vi.hoisted(() => ({
   found: [] as { id: string; version?: string; addon: string }[],
   /** The folders Claude Code keeps its settings in where It's add-on was put. */
   claudeFolders: [] as string[],
+  claudeScans: 0,
   /** Every call the connector made to the backend. */
   calls: [] as { name: string; args: any }[],
   /** Every event the connector recorded for usage reporting, with its properties. */
@@ -205,12 +206,14 @@ vi.mock('./src/claude-open', async (original) => {
   const real = await original<typeof import('./src/claude-open')>()
   return {
     ...real,
-    openClaude: (folders: readonly string[]) =>
-      real.openClaude(
+    openClaude: (folders: readonly string[]) => {
+      stand.claudeScans++
+      return real.openClaude(
         folders,
         () => true,
         () => true,
-      ),
+      )
+    },
   }
 })
 vi.mock('./src/usage', () => ({
@@ -383,6 +386,7 @@ afterEach(async () => {
   stand.recorded.length = 0
   stand.reconciled.length = 0
   stand.claudeFolders.length = 0
+  stand.claudeScans = 0
   said.length = 0
   stand.codex.length = 0
   stand.closed.clear()
@@ -6633,6 +6637,34 @@ describe('how what is done on a conversation’s pages would reach it, as the co
     offered({ ...click(2), session: { harness: 'codex', id: 'thread-1' } })
     await until(() => stand.t3.sent.some((m) => m.text.includes('click-2')))
     expect(stand.t3.sent.every((m) => m.thread === 't3-thread-a')).toBe(true)
+  })
+
+  test('a hundred clicks share one process scan, and a later routing pass refreshes it', async () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-claude-'))
+    made.push(folder)
+    mkdirSync(path.join(folder, 'sessions'))
+    writeFileSync(
+      path.join(folder, 'sessions', '1.json'),
+      JSON.stringify({ pid: 1, sessionId: claude, startedAt: Date.now() - 60_000, kind: 'interactive', entrypoint: 'cli' }),
+    )
+    stand.claudeFolders.push(folder)
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+    const real = Date.now
+    const ahead = vi.spyOn(Date, 'now').mockImplementation(() => real() + 60_000)
+    try {
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: real() - 60_000 }] })
+      const session = { harness: 'claude-code', id: claude }
+      // An open conversation without the add-on must be held, for every click in the backlog.
+      const clicks = Array.from({ length: 100 }, (_, n) => ({ ...click(n + 1), session }))
+      offered(...clicks)
+      await until(() => stand.calls.filter((c) => c.name === 'delivery:holdBack').flatMap((c) => c.args.ids).length === 100)
+      expect(stand.claudeScans).toBe(1)
+      expect(stand.calls.filter((c) => c.name === 'delivery:holdBack').every((c) => c.args.why === OPEN_WITHOUT_ADDON)).toBe(true)
+      // The next pass after the short cache window must read the processes again.
+      await until(() => stand.claudeScans > 1, 4000)
+    } finally {
+      ahead.mockRestore()
+    }
   })
 
   test.each([false, true])(

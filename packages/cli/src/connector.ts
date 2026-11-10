@@ -33,7 +33,7 @@ import {
 } from '@it/protocol'
 import { ADDON_API, type AddonRuntime, AddonRuntimes } from './addon-runtime'
 import { ADDONS } from './addons.generated'
-import { openClaude } from './claude-open'
+import { type OpenClaude, openClaude } from './claude-open'
 import {
   DeliveryRecovery,
   eraseDeliveryRecovery,
@@ -1582,10 +1582,22 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const connectorBegan = Date.now()
   let notLoadedSaid: string | undefined
   let notLoadedAsking = false
-  const notLoadedNow = (): { harness: string; sessionId: string; since: number }[] => {
+  // Process discovery may start PowerShell on Windows. Share it with the banner and nearby
+  // routing passes, but filter current add-on contact and T3 ownership on every use.
+  const OPEN_CACHE_MS = 2000
+  let openChecked = -Infinity
+  let openFound: OpenClaude[] = []
+  const openNow = (): OpenClaude[] => {
+    if (performance.now() - openChecked >= OPEN_CACHE_MS) {
+      openFound = openClaude(claudeFolders())
+      openChecked = performance.now()
+    }
+    return openFound
+  }
+  const notLoadedNow = (open: () => OpenClaude[] = openNow): { harness: string; sessionId: string; since: number }[] => {
     const now = Date.now()
     if (!connected('claude-code') || now - connectorBegan < NOT_HEARD_MS) return []
-    return openClaude(claudeFolders())
+    return open()
       .filter((c) => now - c.startedAt >= NOT_HEARD_MS)
       .filter((c) => {
         const key = keyOf('claude-code', c.id)
@@ -2580,12 +2592,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * heard from by an older add-on. Only Claude Code's own notes and processes count: Codex, Pi, OpenCode
    * and Hermes are never taken to be.
    */
-  const unloaded = (session: { harness: string; id: string }): boolean => {
+  const unloaded = (session: { harness: string; id: string }, open: () => OpenClaude[] = openNow): boolean => {
     const key = keyOf(session.harness, session.id)
     return (
       session.harness === 'claude-code' &&
       ((publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))) ||
-        notLoadedNow().some((c) => follow(keyOf(c.harness, c.sessionId)) === follow(key)))
+        notLoadedNow(open).some((c) => follow(keyOf(c.harness, c.sessionId)) === follow(key)))
     )
   }
   /**
@@ -2725,8 +2737,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * types /reload-plugins in it, which its page says for as long as it waits, as why it was not
    * woken. One no longer kept from it has that taken away from its page.
    */
-  const keptShut = (click: Offered): boolean => {
-    if (!unloaded(click.session!)) {
+  const keptShut = (click: Offered, open: () => OpenClaude[] = openNow): boolean => {
+    if (!unloaded(click.session!, open)) {
       if (click.heldBack !== undefined) tellHeld(click, null)
       return false
     }
@@ -3295,6 +3307,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
   async function route(): Promise<void> {
     if (routing || closing || unfitting || recovery.erased) return
     routing = true
+    // Even a pass that outlasts the cache window reads the process table at most once.
+    let openSnapshot: OpenClaude[] | undefined
+    const openThisPass = (): OpenClaude[] => {
+      openSnapshot ??= openNow()
+      return openSnapshot
+    }
     try {
       // Discovery outlives the click that started it, including a completed fallback delivery.
       for (const [key, session] of t3Pending) if (connected(session.harness)) t3For(key, session)
@@ -3524,7 +3542,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
                 !runtimes.blocksWake(session.harness) &&
                 !t3Undecided(key) &&
                 // Asked last, since it tells the page: only of a click that would otherwise be reopened for
-                !keptShut(click),
+                !keptShut(click, openThisPass),
             })
         if (forAddOn) {
           // Route 1: the add-on will ask for it, or the running turn's next hook will
