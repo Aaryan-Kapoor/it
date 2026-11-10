@@ -7,6 +7,7 @@ import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import { type MutationCtx, mutation, query } from './_generated/server'
 import { madeAt, record } from './actions'
+import { aim, targetOf } from './lib/aim'
 import { artifactBySlug, type Browser, displayByKey, findDisplay, requireBrowser, requireMachine } from './lib/authz'
 import { counted } from './lib/counted'
 import { fail } from './lib/errors'
@@ -23,11 +24,13 @@ export const send = mutation({
     text: v.string(),
     slug: v.optional(v.string()),
     display: v.optional(v.string()),
+    displayId: v.optional(v.string()),
     sticky: v.optional(v.boolean()),
     buttons: v.optional(v.array(button)),
   },
-  handler: async (ctx, { text, slug, display, sticky, buttons }) => {
+  handler: async (ctx, { text, slug, display, displayId: byId, sticky, buttons }) => {
     const { user } = await requireMachine(ctx)
+    const target = targetOf({ display, displayId: byId })
     await rateLimit(ctx, 'notify', user._id)
     const clean = text.trim()
     if (!clean || clean.length > LIMITS.notificationText) fail('invalid', `A notification is 1 to ${LIMITS.notificationText} characters.`)
@@ -44,15 +47,9 @@ export const send = mutation({
         if (b.action === MESSAGE) fail('invalid', `A button may not send an action named ${MESSAGE}, which is what a person types above a page.`)
       }
     }
-    let displayId: Id<'displays'> | undefined
-    if (display) {
-      const all = await ctx.db
-        .query('displays')
-        .withIndex('by_user', (q) => q.eq('userId', user._id))
-        .take(50)
-      const hit = all.find((d) => (d.name ?? d.generatedName).toLowerCase() === display.trim().toLowerCase())
-      displayId = hit?._id ?? fail('not_found', 'No display has that name.', { noSuchDisplay: true })
-    }
+    // For the display named, by its name or its id, or with none named for every display. Of
+    // several displays that share a name, the first is sent it, as it always has been
+    const displayId: Id<'displays'> | undefined = 'none' in target ? undefined : (await aim(ctx, user._id, target)).asked[0]!._id
     const id = await ctx.db.insert('notifications', {
       userId: user._id,
       text: clean,
