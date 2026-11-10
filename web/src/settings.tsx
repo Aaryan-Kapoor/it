@@ -76,7 +76,7 @@ function DisplayItem({
   const allowAgents = useMutation(api.displays.allowAgents)
   const lock = useAction(api.displays.lock)
   const unlock = useMutation(api.displays.unlock)
-  const lockable = useTakes(TAKES.displayLock)
+  const lockable = useBackendTakes(TAKES.displayLock)
   // Offered only where the backend has the switch: one whose functions are older has none
   const switchable = useBackendTakes(TAKES.agentsSwitch)
   const [name, setName] = useState<string | null>(null)

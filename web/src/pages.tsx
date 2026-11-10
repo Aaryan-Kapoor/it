@@ -4,7 +4,7 @@ import { ALIVE, LIMITS, NOUN, TAKES, WAKE_BACK_MS } from '@it/protocol'
 import { useAction, useConvex, useMutation, useQuery } from 'convex/react'
 import { Component, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { copy, IconBack, IconLink, IconLock, IconPin, IconSay, IconSend, IconSettings, IconStop, IconX, Mark } from './brand'
-import { agentName, ago, api, dayOf, type Id, NOT_YET_REVOKED, navigate, refusal, useNow, useTakes } from './lib'
+import { agentName, ago, api, dayOf, type Id, NOT_YET_REVOKED, navigate, refusal, useBackendTakes, useNow } from './lib'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
 import { dismissMessage, message, onItsWayUntil, outboxChanges, pendingMessage, refusedClick, thisSession, unsaved, unsent, watchOutbox } from './outbox'
@@ -352,7 +352,7 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
   // A display locked to this page keeps to it: there is no way back from it while it is locked
   const lockedHere = display?.lockedTo?.slug === slug
   // Offered only where the backend has the lock: one whose functions are older has none
-  const takesLock = useTakes(TAKES.displayLock)
+  const takesLock = useBackendTakes(TAKES.displayLock)
   // Escape goes back, from wherever on the site's own part of the screen the keyboard is. With
   // something open over the page, the notifications among them, it closes that and no more
   useEffect(() => {
