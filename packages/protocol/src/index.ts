@@ -59,14 +59,25 @@ export const TAKES = {
  * The cursor "0" stands before every action.
  */
 export type ActionPlace = { seq: number } | { at: number; id: string }
-export const placeCursor = (p: ActionPlace): string => ('seq' in p ? String(p.seq) : `o${p.at}:${p.id}`)
-/** The place a cursor names: null for the start, and nothing for text that is no cursor. */
-export function actionPlace(cursor: string): ActionPlace | null | undefined {
-  if (cursor === '0') return null
-  if (/^[1-9]\d{0,15}$/.test(cursor)) return { seq: Number(cursor) }
+/**
+ * A cursor names the page it was given on, by the id of the page's record, and the place on it:
+ * `<page>.<place>`, where the place is a number, `o<when>:<id>` for an action kept from before
+ * actions were numbered, or `0` for the start. A page deleted and made again under the same id is
+ * another record, numbered afresh, so a cursor of the old one is refused there rather than taken
+ * for a place on the new one. "0" by itself is the start of whatever page has that id now.
+ */
+export const placeCursor = (page: string, p: ActionPlace | null): string => `${page}.${p === null ? '0' : 'seq' in p ? String(p.seq) : `o${p.at}:${p.id}`}`
+/** The page and the place a cursor names, a place of null being the start; nothing for text that is no cursor. */
+export function actionCursor(cursor: string): { page?: string; place: ActionPlace | null } | undefined {
+  if (cursor === '0') return { place: null }
   // A record's id is letters and digits; the backend's stand-in for tests puts a semicolon in its own
-  const m = /^o(\d{1,16}(?:\.\d{1,20})?):([A-Za-z0-9_;-]{1,64})$/.exec(cursor)
-  return m ? { at: Number(m[1]), id: m[2]! } : undefined
+  const m = /^([A-Za-z0-9_;-]{1,64})\.(.*)$/.exec(cursor)
+  if (!m) return undefined
+  const rest = m[2]!
+  if (rest === '0') return { page: m[1]!, place: null }
+  if (/^[1-9]\d{0,15}$/.test(rest)) return { page: m[1]!, place: { seq: Number(rest) } }
+  const old = /^o(\d{1,16}(?:\.\d{1,20})?):([A-Za-z0-9_;-]{1,64})$/.exec(rest)
+  return old ? { page: m[1]!, place: { at: Number(old[1]), id: old[2]! } } : undefined
 }
 /** Which of two places comes first: below zero where `a` does, above where `b` does, zero where they are one. */
 export function comparePlaces(a: ActionPlace | null, b: ActionPlace | null): number {

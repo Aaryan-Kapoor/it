@@ -1,7 +1,7 @@
 // The actions waiting on one page, as `it actions --id` lists them and `it actions --id --follow`
 // watches them. Both only read: nothing here claims, holds, hands off, sets aside or answers an
 // action, so whatever else delivers the person's actions goes on as it would without them.
-import { actionPlace, comparePlaces, NOUN, TAKES } from '@it/protocol'
+import { actionCursor, comparePlaces, NOUN, TAKES } from '@it/protocol'
 import { api, backendTakes, call, handed, live, machine, notKnown, Problem, translate } from './lib'
 import { type Listed, printed } from './wait'
 
@@ -124,7 +124,8 @@ export async function watchActions(slug: string, after: string | undefined, note
   let start: string | undefined
   if (await pagedRead()) {
     const first = await call<Page>('query', api.delivery.waitingPage, { slug, ...(after === undefined ? {} : { after }) })
-    start = after ?? first.from
+    // Where It says these begin, which names the page's record: a watch from it is refused if the page is made again
+    start = first.from
   } else {
     if (after !== undefined) throw new Problem(`${OLDER}, and cannot follow the actions on a ${NOUN.one} from a cursor ${UPDATE}.`, 'invalid')
     note(
@@ -191,8 +192,20 @@ export async function watchActions(slug: string, after: string | undefined, note
     )
   } else {
     /** The place of the last action printed, or where the watch began: only what stands after it is printed. */
-    let printedTo = actionPlace(start)
-    if (printedTo === undefined) throw new Problem('That is not a place among the actions on a page.', 'invalid')
+    const begun = actionCursor(start)
+    if (begun === undefined) throw new Problem('It gave no place among the actions on the page to begin from.', 'error')
+    let printedTo = begun.place
+    /**
+     * The record of the page this watch follows. Should the page be deleted and another made under
+     * its id, the watch is refused (`conflict`), as a watch of a deleted page is (`not_found`):
+     * either way it ends, and started again it follows the page there is then from its newest.
+     */
+    const following = begun.page
+    const replaced = () =>
+      new Problem(
+        `The ${NOUN.one} ${slug} that this was following was deleted, and another made under its id. Start again without --after to follow the new one.`,
+        'conflict',
+      )
     /** Which watch is the current one: what an earlier one still had on its way when it was replaced moves nothing on. */
     let watching = 0
     let waitFor: number = ASK_AGAIN_MS[0]
@@ -207,11 +220,12 @@ export async function watchActions(slug: string, after: string | undefined, note
             if (stopped) return
             for (const action of page.actions) {
               if (stopped) return
-              const at = actionPlace(action.cursor)
+              const at = actionCursor(action.cursor)
               if (at === undefined) throw new Problem('It gave an action no place among the actions on its page.', 'error')
-              if (comparePlaces(at, printedTo!) <= 0) continue
+              if (following !== undefined && at.page !== following) return stop(replaced())
+              if (comparePlaces(at.place, printedTo) <= 0) continue
               if (!(await emit(action))) return
-              printedTo = at
+              printedTo = at.place
             }
             // A full page: what comes after it is watched next, once It has said that it still has this read
             const last = page.actions.at(-1)

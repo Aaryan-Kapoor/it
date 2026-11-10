@@ -5910,7 +5910,7 @@ describe('cases at the edges', () => {
       // A follower that started now has read the newest of them, and watches after the last
       const first = await m.as.query(api.delivery.waitingPage, { slug: 'plan' })
       expect(first.actions.map((c) => c.id)).toEqual(old)
-      expect(first).toMatchObject({ from: '0', earlier: false, more: false })
+      expect(first).toMatchObject({ from: `${p.artifactId}.0`, earlier: false, more: false })
       const watching = first.actions.at(-1)!.cursor
       expect(await m.as.query(api.delivery.waitingPage, { slug: 'plan', after: watching })).toMatchObject({ actions: [], more: false })
       const [fresh] = await insertClicks(t, p.artifactId, 1, {}, now)
@@ -6070,8 +6070,37 @@ describe('cases at the edges', () => {
       expect(old.map(seqOf)).toEqual([undefined, undefined, undefined])
       const read = (await pages(m, 'plan')).flatMap((page) => page.actions)
       expect(read.map((c) => c.id)).toEqual([...old, ...made, ...twice])
-      expect(read.slice(3).map((c) => c.cursor)).toEqual(['1', '2', '3', '4'])
-      expect((await m.as.query(api.delivery.waitingPage, { slug: 'plan', after: '2' })).actions.map((c) => c.id)).toEqual(twice)
+      expect(read.slice(3).map((c) => c.cursor)).toEqual(['1', '2', '3', '4'].map((n) => `${p.artifactId}.${n}`))
+      expect((await m.as.query(api.delivery.waitingPage, { slug: 'plan', after: `${p.artifactId}.2` })).actions.map((c) => c.id)).toEqual(twice)
+    })
+
+    test('a cursor of a page that was deleted is refused on the page made again under its id, and says to start again', async () => {
+      const t = backend()
+      const alice = await person(t, 'alice')
+      const m = await machineOf(t, 'alice')
+      const click = (artifactId: string, id: string) =>
+        alice.browser.mutation(api.actions.submit, { artifactId: artifactId as never, displayKey: displayKey('alice'), envelope: envelope(id) })
+      const first = await publish(m, 'plan')
+      await click(first.artifactId, 'click-0001')
+      const [old] = (await m.as.query(api.delivery.waitingPage, { slug: 'plan' })).actions
+      expect(old!.cursor).toBe(`${first.artifactId}.1`)
+      await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+      await settle(t)
+      const again = await publish(m, 'plan')
+      expect(again.artifactId).not.toBe(first.artifactId)
+      // Numbered afresh: its first action is 1 again, which the old cursor would have passed over
+      const { actionId } = await click(again.artifactId, 'click-0002')
+      const refused = await m.as.query(api.delivery.waitingPage, { slug: 'plan', after: old!.cursor }).then(
+        () => null,
+        (e: ConvexError<string>) => JSON.parse(e.data),
+      )
+      expect(refused).toMatchObject({ code: 'conflict', staleCursor: true, message: expect.stringContaining('Start again without --after.') })
+      // A cursor of the start of the old page is just as stale; the start of whatever page is there is not
+      expect(await code(m.as.query(api.delivery.waitingPage, { slug: 'plan', after: `${first.artifactId}.0` }))).toBe('conflict')
+      const fresh = await m.as.query(api.delivery.waitingPage, { slug: 'plan', after: '0' })
+      expect(fresh.actions.map((c) => [c.id, c.cursor])).toEqual([[actionId, `${again.artifactId}.1`]])
+      expect(fresh.from).toBe(`${again.artifactId}.0`)
+      expect((await m.as.query(api.delivery.waitingPage, { slug: 'plan' })).from).toBe(`${again.artifactId}.0`)
     })
 
     test('a place that is not one is refused, and so is a page that is not there', async () => {

@@ -6,7 +6,20 @@
 // Two things about a click never change while it is delivered: which machine it is for, and
 // which conversation. Who holds the lease is recorded separately, so a machine that borrows a
 // click and dies does not take it away from its owner.
-import { type ActionPlace, actionPlace, LEASE_MS, LIMITS, LISTENING_MOST, placeCursor, QUEUES, WAKE_BACK_MS, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
+import {
+  type ActionPlace,
+  actionCursor,
+  LEASE_MS,
+  LIMITS,
+  LISTENING_MOST,
+  NOUN,
+  placeCursor,
+  QUEUES,
+  WAKE_BACK_MS,
+  WAKE_MOST,
+  WAKES,
+  wakesOn,
+} from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -461,10 +474,20 @@ export const waitingPage = query({
   args: { slug: v.string(), after: v.optional(v.string()) },
   handler: async (ctx, { slug, after }) => {
     const { user } = await requireMachine(ctx)
-    const place = after === undefined ? undefined : actionPlace(after)
-    if (place === undefined && after !== undefined)
+    const cursor = after === undefined ? undefined : actionCursor(after)
+    if (cursor === undefined && after !== undefined)
       fail('invalid', 'That is not a place among the actions on a page: give the `cursor` of one that was listed, or 0 for the start.')
     const a = (await artifactBySlug(ctx, user._id, slug)) ?? fail('not_found', 'No such page.')
+    // A cursor of a page that was deleted, where another has been made under its id since: its
+    // places are not this page's, whose actions are numbered afresh, and read as this page's
+    // they would pass over its actions without a word
+    if (cursor?.page !== undefined && cursor.page !== a._id)
+      fail(
+        'conflict',
+        `That cursor is of a ${NOUN.one} that was deleted. The ${NOUN.one} under this id now is another one, and its actions are not after that cursor. Start again without --after.`,
+        { staleCursor: true },
+      )
+    const place = cursor?.place
     /** The numbered ones, in order, after a number or from the first. */
     const numbered = (order: 'asc' | 'desc', after = 0) =>
       ctx.db
@@ -511,7 +534,8 @@ export const waitingPage = query({
     const rows: Doc<'actions'>[] = []
     let earlier = false
     let more = false
-    let from = after ?? '0'
+    // Always of this page, so that a watch begun from it is refused, not misled, if the page is made again
+    let from = placeCursor(a._id, place ?? null)
     if (place === undefined) {
       async function* newestFirst() {
         yield* numbered('desc')
@@ -521,7 +545,7 @@ export const waitingPage = query({
       rows.reverse()
       if (left) {
         earlier = true
-        from = placeCursor(placeOfRow(left))
+        from = placeCursor(a._id, placeOfRow(left))
       }
     } else {
       const at = place
@@ -532,7 +556,7 @@ export const waitingPage = query({
       more = (await fill(later(), rows)) !== undefined
     }
     const clicks = await asClicks(ctx, rows)
-    const places = new Map(rows.map((x) => [x._id as string, placeCursor(placeOfRow(x))]))
+    const places = new Map(rows.map((x) => [x._id as string, placeCursor(a._id, placeOfRow(x))]))
     return { actions: clicks.map((c) => ({ ...c, cursor: places.get(c.id)! })), from, more, earlier }
   },
 })
