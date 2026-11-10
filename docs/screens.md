@@ -22,6 +22,18 @@ When an agent shows a page without naming a display, it goes to the display you 
 
 Each display has a switch, "Open to agents": on the Displays page, for every display, in a browser paired as yours, and under Settings on the display itself, which can switch itself and no other. A display closed to agents is never chosen, is left out of every display, and is refused when an agent names it, which tells the agent why. Nothing is pushed to it, and it is shown no notification sent to every display. The switch keeps agents from bringing pages up there and from sending it notifications. A page that is already open there stays open, and its agent still hears what you do on it and can still change it.
 
+## Locking a display to a page
+
+A display can be locked to one page, to keep it there: a display in the gym kept on the workout page, say, so that no agent puts a code review over it. On the page, the lock button in the bar above it locks the display it is shown on, and the owner's browser can also lock any display to a page under Displays, with "Locked to". While a display is locked:
+
+- It keeps to that page. The site on it goes nowhere else but its own settings: not back to your pages, not to another page by a link, a key, a notification or the browser's own way back. The bar above the page says "Locked here", and pressing it unlocks the display.
+- No agent brings another page up there. Asked for that display by its name or id, the agent is told it is `locked`, and it is left out of every display. It is never the display chosen when an agent names none, even for its own page. A notification is no page: one sent to that display by name, or to every display, still reaches it.
+- It is refused any other page by It itself, and not only by its site: a modified or older site gets no other page shown there. Locking a display to another page than it showed ends what it showed, as signing it out does, and shows the locked page afresh.
+
+A display unlocks itself from the page or from its settings, and the owner's browser unlocks any display under Displays. Agents have no way to lock or unlock a display, and are told to ask you. Every display that one browser registered, if its site data was cleared or it was given a new key, is under the same lock. A display keeps its lock when its browser signs out and is paired again. Deleting the page a display is locked to, from your browser or by an agent, ends the lock, and the display says so.
+
+A lock is about navigation and nothing more. It keeps the screen on its page and agents from putting another page there. It is no wall between that screen and your other pages: whoever is at a paired screen can still read the titles of your pages, and, with a modified site, read another page's state and send actions on it, as any paired screen can. It is a convenience, and not a way to hand a screen to someone you would not give a paired screen to.
+
 A display stays on the Displays page when the pairing of its browser is ended, and is said there to be not paired. It shows nothing until that browser is paired again, which makes it the same display, and forgetting it takes it off the page.
 
 ## The first screen, and the tour
