@@ -4,7 +4,7 @@
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { api } from './_generated/api'
+import { api, internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { REPORT_MS, REPORT_SKEW_MS } from './displays'
 import schema from './schema'
@@ -384,6 +384,29 @@ describe('what each tab of a display says of itself', () => {
     d = await row(laptop.id)
     expect(d.usedAt).toBe(timely.observedAt)
     expect(d.reports!.find((r) => r.tab === TAB)!.at).toBe(Date.now())
+  })
+
+  test('what a display that was closed said last goes at the hourly cleaning, and what a display in use says now stays', async () => {
+    const { t, browser, row } = await household()
+    const closed = await browser('owner', key(1))
+    const open = await browser('screen', key(2))
+    const quiet = await browser('screen', key(3))
+    await closed.as.mutation(api.displays.report, said(closed, TAB, 1, false))
+    expect((await row(closed.id)).reportedAt).toBe(Date.now())
+    // An hour on, the one display still open says so again, a moment before the cleaning
+    vi.advanceTimersByTime(3_600_000)
+    await open.as.mutation(api.displays.report, said(open, TAB, 1, true))
+    await t.mutation(internal.retention.sweepRecords, {})
+    const gone = await row(closed.id)
+    expect([gone.reports, gone.reportedAt]).toEqual([undefined, undefined])
+    expect((await row(open.id)).reports!.map((r) => r.tab)).toEqual([TAB])
+    expect((await row(open.id)).reportedAt).toBe(Date.now())
+    // A display that never said anything is as it was, and so is when the person last used the closed one
+    expect((await row(quiet.id)).reports).toBeUndefined()
+    expect(gone.usedAt).toBeDefined()
+    // And the display that was closed is heard again as soon as it speaks
+    await closed.as.mutation(api.displays.report, said(closed, TAB, 2, true))
+    expect((await row(closed.id)).reports!.map((r) => r.sequence)).toEqual([2])
   })
 
   test('names only a showing this display made, since its last sign-out, and a page shown only once its ticket was given', async () => {

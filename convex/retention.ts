@@ -11,6 +11,7 @@ import { noLongerWaiting } from './actions'
 import { prefixOf } from './artifacts'
 import { removeLater } from './content'
 import { confirmed } from './deletions'
+import { REPORT_MS } from './displays'
 import { letGoOfFiles } from './files'
 import { forgetCounts } from './lib/limits'
 import { log } from './lib/log'
@@ -269,7 +270,7 @@ export const sweepActions = internalMutation({
   },
 })
 
-/** Bookkeeping that has expired: mounts, spent proofs, old notifications, idle rate-limit buckets, forgotten keys, codes, sessions that ended or went unused, revoked machines. */
+/** Bookkeeping that has expired: mounts, spent proofs, old notifications, idle rate-limit buckets, forgotten keys, codes, sessions that ended or went unused, revoked machines, and what the tabs of a display said of themselves once all of it has run out. */
 export const sweepRecords = internalMutation({
   args: {},
   handler: async (ctx) => {
@@ -365,6 +366,15 @@ export const sweepRecords = internalMutation({
       else unnamed.push(m)
     }
     await drop(unnamed)
+    // What the tabs of a display said of themselves, once the newest of it has run out: a
+    // display that is closed says nothing more, and what it said last is not kept for ever
+    const unheard = await ctx.db
+      .query('displays')
+      .withIndex('by_reported', (q) => q.gt('reportedAt', 0).lt('reportedAt', now - REPORT_MS))
+      .take(LIGHT)
+    for (const d of unheard) await ctx.db.patch(d._id, { reports: undefined, reportedAt: undefined })
+    if (unheard.length === LIGHT) full = true
+    removed += unheard.length
     if (full) await ctx.scheduler.runAfter(0, internal.retention.sweepRecords, {})
     if (removed) log('sweep.records', { removed })
     return null

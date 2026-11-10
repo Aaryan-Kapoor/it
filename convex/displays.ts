@@ -377,9 +377,8 @@ export const report = mutation({
       .filter((r) => r.tab !== a.tab)
       .sort((x, y) => y.at - x.at)
       .slice(0, TABS - 1)
-    const change: Partial<Doc<'displays'>> = {
-      reports: [...others, { tab: a.tab, sequence: a.sequence, at, epoch: d.epoch, phase: a.phase, visible: a.visible, ...page }],
-    }
+    const reports = [...others, { tab: a.tab, sequence: a.sequence, at, epoch: d.epoch, phase: a.phase, visible: a.visible, ...page }]
+    const change: Partial<Doc<'displays'>> = { reports, reportedAt: Math.max(...reports.map((r) => r.at)) }
     if (a.visible && a.used && timely && at - (d.usedAt ?? 0) > 5000) change.usedAt = at
     await ctx.db.patch(d._id, change)
     return { accepted: true, now }

@@ -155,6 +155,8 @@ export default defineSchema({
         }),
       ),
     ),
+    /** When the newest of `reports` was said, so that the hourly cleaning finds the displays whose every report has run out. */
+    reportedAt: v.optional(v.number()),
     /** When the person last clicked, tapped or typed on the site here, to within ten seconds, or when the display was registered. */
     usedAt: v.optional(v.number()),
     /** The session of the browser that registered it: forgetting the display ends that session, and that session ending signs the display out. */
@@ -169,7 +171,8 @@ export default defineSchema({
     .index('by_user', ['userId'])
     .index('by_user_key', ['userId', 'key'])
     .index('by_session', ['sessionId'])
-    .index('by_push_endpoint', ['push.endpoint']),
+    .index('by_push_endpoint', ['push.endpoint'])
+    .index('by_reported', ['reportedAt']),
 
   // A display the person told It to forget. Its key is refused from then on, so a browser that
   // was closed at the time cannot quietly register itself again when it is next opened.
