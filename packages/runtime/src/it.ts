@@ -698,7 +698,7 @@ const followedIn = new WeakMap<Event, Element>()
  * run. The window hears of every link in the document, and each shadow root a script makes
  * hears of its own.
  */
-function onTheWay(e: Event, capture: boolean): void {
+function onTheWay(e: Event, capture: boolean, sends = true): void {
   const path = e.composedPath()
   for (const el of path)
     if (el instanceof Element) {
@@ -708,15 +708,20 @@ function onTheWay(e: Event, capture: boolean): void {
   // Seen from outside in, so that each listener that sees deeper says which link it was
   const seen = linkIn(path)
   if (capture && seen) followedIn.set(e, seen)
-  if (e.type === 'keydown') return
   const link = followedIn.get(e) ?? seen
-  if (!link) return
+  // A closed shadow root hides the link from the window's path: it is set right as it stands now, after the page's handlers too
+  if (link && !path.includes(link)) {
+    stopAuditing(link)
+    guide(link)
+  }
+  if (e.type === 'keydown' || !link) return
   if (opensRefused(link, aside(e))) {
     e.preventDefault()
     return
   }
-  // After the page's own handlers, which may have taken the click for themselves
-  if (capture || e.type !== 'click' || e.defaultPrevented) return
+  // After the page's own handlers, which may have taken the click for themselves. Only the
+  // window sends a link to the site, once, and after every handler of the page's
+  if (capture || !sends || e.type !== 'click' || e.defaultPrevented) return
   const to = leadsTo(link)
   if (to && SYSTEM.has(to.protocol) && !link.hasAttribute('download')) {
     e.preventDefault()
@@ -732,7 +737,12 @@ Element.prototype.attachShadow = function (this: Element, init: ShadowRootInit) 
   const root = attachShadow.call(this, init)
   watcher.observe(root, WATCHED)
   shadowRoots.push(new WeakRef(root))
-  for (const event of FOLLOWING) root.addEventListener(event, (e) => onTheWay(e, true), true)
+  // Before the handlers inside the root, and again after them: a handler there may change the
+  // link and keep the event from going further
+  for (const event of FOLLOWING) {
+    root.addEventListener(event, (e) => onTheWay(e, true), true)
+    root.addEventListener(event, (e) => onTheWay(e, false, false))
+  }
   return root
 }
 // A form is checked on its way out too, with the button that sent it, which may name its own target

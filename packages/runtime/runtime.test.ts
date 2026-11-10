@@ -889,6 +889,49 @@ describe('the script inside a page', () => {
       ])
     })
 
+    test('a link in a closed shadow root that a handler of the page’s changes is set right again after the handler, where the window cannot see it and where the event goes no further than the root', async () => {
+      const p = load()
+      const doc = p.w.document
+      const host = doc.body.appendChild(doc.createElement('div'))
+      const root = host.attachShadow({ mode: 'closed' })
+      root.innerHTML =
+        '<a id="out" href="https://elsewhere.invalid/a">out</a><a id="in" href="#here">in</a><a id="late" href="https://elsewhere.invalid/d">late</a><a id="kept" href="https://elsewhere.invalid/b">kept</a>'
+      await settled()
+      expect([root.getElementById('out').getAttribute('target'), root.getElementById('out').getAttribute('rel')]).toEqual(['_blank', 'noopener noreferrer'])
+      // The stand-in browser follows no link
+      p.w.addEventListener('click', (e: Event) => e.preventDefault())
+      /** Follows a link as a person does, and gives what it says once every handler has run: what the browser follows it by. */
+      const follow = (link: Element) => {
+        link.dispatchEvent(new p.w.MouseEvent('click', { bubbles: true, cancelable: true, composed: true }))
+        return [link.getAttribute('target'), link.getAttribute('rel'), link.getAttribute('ping'), link.getAttribute('href')]
+      }
+      const out = root.getElementById('out')
+      out.addEventListener('click', () => {
+        out.setAttribute('target', 'fresh')
+        out.setAttribute('rel', 'opener')
+        out.setAttribute('ping', 'https://elsewhere.invalid/ping')
+      })
+      expect(follow(out)).toEqual(['_blank', 'noopener noreferrer', null, 'https://elsewhere.invalid/a'])
+      // A link within the page that its handler sends to another site
+      const inside = root.getElementById('in')
+      inside.addEventListener('click', () => inside.setAttribute('href', 'https://elsewhere.invalid/c'))
+      expect(follow(inside)).toEqual(['_blank', 'noopener noreferrer', null, 'https://elsewhere.invalid/c'])
+      // Changed by a handler outside the root, after the root has heard the event go by
+      const late = root.getElementById('late')
+      const changesLate = () => late.setAttribute('target', 'fresh')
+      doc.addEventListener('click', changesLate)
+      expect(follow(late)).toEqual(['_blank', 'noopener noreferrer', null, 'https://elsewhere.invalid/d'])
+      doc.removeEventListener('click', changesLate)
+      // And where a handler outside the root keeps the event from reaching the window
+      const kept = root.getElementById('kept')
+      kept.addEventListener('click', () => kept.setAttribute('target', 'fresh'))
+      host.addEventListener('click', (e: Event) => {
+        e.stopPropagation()
+        e.preventDefault()
+      })
+      expect(follow(kept)).toEqual(['_blank', 'noopener noreferrer', null, 'https://elsewhere.invalid/b'])
+    })
+
     test('a link in a shadow root a script makes, open or closed, is set right as it appears and on its way to a click, and one that would open a window of what the page made, or a mail link, is held as any other', async () => {
       const p = load()
       const doc = p.w.document
