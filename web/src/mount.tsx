@@ -65,7 +65,7 @@ const siteTouched = () => {
 for (const kind of ['pointerdown', 'pointerup', 'mouseup', 'touchend', 'click', 'keydown', 'keyup']) window.addEventListener(kind, siteTouched, true)
 /** How long a page has to load and say hello. */
 const READY_MS = 20_000
-/** How soon after the browser refuses to show another site in a page's frame the frame loads what it shows instead: the browser's error page. */
+/** How close together the browser refuses to show another site in a page's frame and the frame loads what it shows instead, the browser's error page, in either order. */
 const REFUSED_LOAD_MS = 2000
 /**
  * Where pages are shown from: the port after the site's own, on the machine the site itself was
@@ -414,17 +414,26 @@ export function Mount({
     // it, since the frame may show only the pages' port, and in Chromium leaves its error page in
     // the frame, which loads in place of the page. The browser tells the site which site it
     // refused and not the address, so what was asked for cannot be opened from here. The page is
-    // shown again instead, rather than left as an error page.
+    // shown again instead, rather than left as an error page. The browser says that it refused a
+    // moment after the error page has loaded, or before, so the two are taken in either order,
+    // and each goes with one of the other at most.
     let refusedAt = Number.NEGATIVE_INFINITY
+    let loadedAt = Number.NEGATIVE_INFINITY
+    const together = () => {
+      if (!ready || Math.abs(refusedAt - loadedAt) >= REFUSED_LOAD_MS) return
+      refusedAt = Number.NEGATIVE_INFINITY
+      loadedAt = Number.NEGATIVE_INFINITY
+      showAgain()
+    }
     const refused = (e: Event) => {
-      if ((e as SecurityPolicyViolationEvent).effectiveDirective === 'frame-src') refusedAt = Date.now()
+      if ((e as SecurityPolicyViolationEvent).effectiveDirective !== 'frame-src') return
+      refusedAt = Date.now()
+      together()
     }
     const framed = frame.current
     const loaded = () => {
-      // A refusal goes with the load that comes of it, and with no later one
-      const was = refusedAt
-      refusedAt = Number.NEGATIVE_INFINITY
-      if (ready && Date.now() - was < REFUSED_LOAD_MS) showAgain()
+      loadedAt = Date.now()
+      together()
     }
     document.addEventListener('securitypolicyviolation', refused)
     framed?.addEventListener('load', loaded)
