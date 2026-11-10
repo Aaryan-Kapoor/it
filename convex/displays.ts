@@ -62,6 +62,7 @@ const view = (d: Doc<'displays'>) => ({
   named: d.name !== undefined,
   lastSeenAt: d.lastSeenAt,
   push: d.push !== undefined,
+  agents: d.agentsOff !== true,
 })
 
 /** A browser that has just been paired registers itself on the spot. The person can name it later. */
@@ -496,23 +497,45 @@ export const forget = mutation({
 })
 
 /**
- * An agent asks for a page to be brought up: on one display named by its id, on the displays
- * that have a name, or on every display where it names none (`lib/aim.ts`). The answer names the
- * displays it is shown on, with their ids beside them in `displayIds`, and, in `notShown`, each
- * one it was asked onto and is not shown on, with why: `not_paired` for a display whose browser's
- * pairing has ended, which shows nothing until that browser is paired again.
+ * Whether agents may show pages and send notifications on a display. The owner's browser says so
+ * for any display, and a screen for itself and no other: to a screen another display is none.
+ * Agents have no way to change it.
+ */
+export const allowAgents = mutation({
+  args: { displayId: v.id('displays'), allowed: v.boolean() },
+  handler: async (ctx, { displayId, allowed }) => {
+    const c = await requireBrowser(ctx)
+    const d = await ownDisplay(ctx, c.user._id, displayId)
+    if (!speaksFor(c, d)) fail('not_found', 'No such display.')
+    if ((d.agentsOff === true) === !allowed) return null
+    await ctx.db.patch(d._id, { agentsOff: allowed ? undefined : true })
+    log('display.agents', { userId: c.user._id, displayId: d._id, allowed })
+    return null
+  },
+})
+
+/**
+ * An agent asks for a page to be brought up: on one display named by its id, on every display of
+ * a name, on every display agents may use with `everywhere`, or, where it names none, on the one
+ * display the person is most likely using (`lib/aim.ts`). The answer names the displays it is
+ * shown on, with their ids in `displayIds`, says in `chosen` why a display was chosen where none
+ * was named, and lists in `notShown` each other display with why it was not shown there:
+ * `not_paired` for a display whose browser's pairing has ended, which shows nothing until that
+ * browser is paired again; `agents_off` for one the person said agents may not use; and
+ * `not_chosen` for one passed over for the display in use.
  */
 export const show = mutation({
   args: {
     slug: v.string(),
     display: v.optional(v.string()),
     displayId: v.optional(v.string()),
+    everywhere: v.optional(v.boolean()),
     session: v.optional(session),
     agent: v.optional(v.string()),
   },
-  handler: async (ctx, { slug, display, displayId, session: mine, agent }) => {
+  handler: async (ctx, { slug, display, displayId, everywhere, session: mine, agent }) => {
     const { user, machine } = await requireMachine(ctx)
-    const target = targetOf({ display, displayId })
+    const target = targetOf({ display, displayId, everywhere })
     await rateLimit(ctx, 'show', user._id)
     const artifact = (await artifactBySlug(ctx, user._id, slug)) ?? fail('not_found', 'No such page.')
     const aimed = await aim(ctx, user._id, target)
@@ -525,6 +548,12 @@ export const show = mutation({
     // A page changes owner only if at least one requested display can show it. All display
     // changes and ownership changes commit together, including the rate-limit checks.
     const took = mine && aimed.to.length ? (await takePage(ctx, artifact, machine, mine, agent)).took : false
-    return { displays: aimed.to.map(nameOf), displayIds: aimed.to.map((d) => d._id), notShown: aimed.notShown, took }
+    return {
+      displays: aimed.to.map(nameOf),
+      displayIds: aimed.to.map((d) => d._id),
+      notShown: aimed.notShown,
+      took,
+      ...(aimed.chosen ? { chosen: aimed.chosen } : {}),
+    }
   },
 })

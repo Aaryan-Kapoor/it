@@ -159,6 +159,8 @@ export default defineSchema({
     reportedAt: v.optional(v.number()),
     /** When the person last clicked, tapped or typed on the site here, to within ten seconds, or when the display was registered. */
     usedAt: v.optional(v.number()),
+    /** Set where the person said that agents may not show pages or send notifications on this display. */
+    agentsOff: v.optional(v.boolean()),
     /** The session of the browser that registered it: forgetting the display ends that session, and that session ending signs the display out. */
     sessionId: v.id('sessions'),
     /** Earlier pairings of this display, whose invitations are ended when it is forgotten. */
@@ -515,6 +517,8 @@ export default defineSchema({
     text: v.string(),
     artifactId: v.optional(v.id('artifacts')),
     displayId: v.optional(v.id('displays')),
+    /** For a notification sent to every display: the displays that could take it when it was sent, and no display paired after. An earlier It left this out, and its notification is for every display that was there when it was sent. */
+    to: v.optional(v.array(v.id('displays'))),
     sticky: v.boolean(),
     buttons: v.optional(v.array(button)),
     /** What its page was showing when it was sent: pressing one of its buttons answers that, whatever the page shows by then. */

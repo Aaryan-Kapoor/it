@@ -41,6 +41,7 @@ export const exportStart = mutation({
         createdAt: d.createdAt,
         lastSeenAt: d.lastSeenAt,
         ...(d.usedAt === undefined ? {} : { usedAt: d.usedAt }),
+        agents: d.agentsOff !== true,
       })),
     }
   },
