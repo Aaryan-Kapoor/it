@@ -91,6 +91,7 @@ import {
   shutIn,
   siteAddress,
   textOf,
+  throughDoor,
   VERSION,
   why,
   windowsPathCommand,
@@ -104,7 +105,7 @@ import { joinedBefore, login, runsItsOwn } from './login'
 import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
 import { failure, foldRepeats, forPerson } from './output'
 import { keepToOwner } from './owner'
-import { gather, noteConversation, publish } from './publish'
+import { gather, noteConversation, publish, unlinkedNote } from './publish'
 import { alone, asAdmin, nothingLeft, standing, startBackend } from './serve/backend'
 import { noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
@@ -318,21 +319,36 @@ async function source(a: Args) {
   const html = text(a, 'html') ?? (text(a, 'file') || text(a, 'dir') ? undefined : await piped())
   return gather({ html, file: text(a, 'file'), dir: text(a, 'dir') })
 }
+/** Where a command was told to show or send something, as it is asked of It. */
+type Where = { display?: string; displayId?: string; everywhere?: true }
 /**
- * Where a command was told to show or send something: on the display of a name, with `--on`, or
- * on the one display of an id, with `--on-id`. Never both, and neither of them empty. Read before
- * anything is published, so that a command that cannot say where publishes nothing.
+ * Where a command was told to show or send something: on the display of a name, with `--on`, on
+ * the one display of an id, with `--on-id`, on every display agents may use, with
+ * `--everywhere`, or, with none of them, on the display the person is using. Only one of them,
+ * and neither name nor id empty. A name is always a name, "all" too. Read before anything is
+ * published, so that a command that cannot say where publishes nothing.
  */
-function aimedAt(a: Args): { display?: string; displayId?: string } {
+function aimedAt(a: Args): Where {
   const name = a.flags.on
   const id = a.flags['on-id']
-  if (name !== undefined && id !== undefined)
-    throw new Problem('A display is named with --on or with --on-id, not both.', 'invalid', '`it displays` lists each display with its name and its id.')
+  const everywhere = a.flags.everywhere === true
+  if ([name !== undefined, id !== undefined, everywhere].filter(Boolean).length > 1)
+    throw new Problem(
+      'A display is named with --on or with --on-id, and every display is asked for with --everywhere: give only one of them.',
+      'invalid',
+      '`it displays` lists each display with its name and its id.',
+    )
   if (name !== undefined && (typeof name !== 'string' || !name.trim())) throw new Problem('--on needs the name of a display.', 'invalid')
   if (id !== undefined && (typeof id !== 'string' || !id.trim())) throw new Problem('--on-id needs the id of a display.', 'invalid')
+  if (everywhere) return { everywhere: true }
   if (typeof id === 'string') return { displayId: id.trim() }
   return typeof name === 'string' ? { display: name } : {}
 }
+/** The later forms of a call that naming a display by its id, or asking for every display, is, for showing a page and for sending a notification. */
+const SHOW_FORMS = { byId: TAKES.showById, everywhere: TAKES.showEverywhere }
+const NOTIFY_FORMS = { byId: TAKES.notifyById, everywhere: TAKES.notifyEverywhere }
+/** Names in quotes, joined as a sentence joins them. */
+const andJoined = (names: string[]): string => (names.length === 1 ? names[0]! : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`)
 /**
  * What the It this machine asks has said of whether it takes a later form of a call, once it
  * has said it either way. A lookup that could not be made is not kept, so it is made again.
@@ -372,26 +388,95 @@ async function canAimById(a: Args, form: string): Promise<void> {
   if (takes === undefined) throw unknownForm()
 }
 /**
- * Runs something that names a display. The backend says only that there is none of that name
- * or id: which was asked for, and which there are, is said here, where it is the person's own
+ * Before every display is asked for, or anything is published to be shown on them all: whether
+ * the It this machine asks has said whether it takes `everywhere`, either way. Where it could not
+ * be asked, the command is refused as `offline`, with nothing sent and nothing published. Does
+ * nothing where every display is not asked for.
+ */
+async function canAimEverywhere(a: Args, form: string): Promise<void> {
+  if (!aimedAt(a).everywhere) return
+  if ((await takesForm(form)) === undefined) throw unknownForm()
+}
+/**
+ * Runs something that names where it goes, with `run` given what to ask It. The backend says only
+ * that there is no display of that name or id, or that the one named takes nothing now and why:
+ * which display was asked for, and which there are, is said here, where it is the person's own
  * machine saying it.
  *
  * A display named by its id is asked for only once It has said it takes the form (`canAimById`).
+ * Every display is asked for with `everywhere` only where It has said it takes that. On its word
+ * that it does not, every display is asked for with none named, which on such an It is every
+ * display, and the answer says so in `older`. Where It could not be asked, nothing is sent or
+ * published, and the command is refused as `offline`.
  */
-async function onDisplay<T>(a: Args, run: () => Promise<T>, byId: string = TAKES.showById): Promise<T> {
+/** A display named as the person would read it: by its name, or by its id. */
+const whichDisplay = (target: Where): string => (target.displayId !== undefined ? `The display ${named(target.displayId)}` : named(target.display ?? ''))
+/**
+ * What is said where the one display named takes nothing from agents now, alike for a page and a
+ * notification: closed to agents, or no longer paired. `link` is the page's, where there is one to give instead.
+ */
+function notTaken(target: Where, code: 'agents_off' | 'not_paired', what: 'sent' | 'shown', address: { url?: string; urlNote?: string } = {}): Problem {
+  const which = whichDisplay(target)
+  const nothing = what === 'sent' ? 'Nothing was sent.' : 'It was shown nowhere.'
+  // The link as \`it create\` gives it, with why it is not at the place chosen for links where it is not
+  const link = address.url ? ` Or give the user its link: ${address.url}${address.urlNote ? ` ${address.urlNote}` : ''}` : ''
+  const instead = `Leave out --on and --on-id to ${what === 'sent' ? 'send it to' : 'show it on'} the display in use.${link}`
+  return code === 'agents_off'
+    ? new Problem(
+        `Agents may not use ${which}: the user turned that off for it, on the display itself or on the site under Displays. ${nothing}`,
+        'agents_off',
+        `${instead} Only the user can let agents use that display again.`,
+      )
+    : new Problem(`${which} is not paired any more, and takes nothing until its browser is paired again. ${nothing}`, 'not_paired', instead)
+}
+async function onDisplay<T extends object>(
+  a: Args,
+  run: (where: Where) => Promise<T>,
+  forms: { byId: string; everywhere: string } = SHOW_FORMS,
+): Promise<T & { older?: true }> {
   const target = aimedAt(a)
-  await canAimById(a, byId)
+  await canAimById(a, forms.byId)
+  await canAimEverywhere(a, forms.everywhere)
   try {
-    return await run()
+    if (target.everywhere && saidTakes.get(forms.everywhere) === false) return { ...(await run({})), older: true }
+    return await run(target)
   } catch (err) {
     if (!(err instanceof Problem)) throw err
+    const which = whichDisplay(target)
+    if (err.code === 'agents_off' || err.code === 'not_paired') throw notTaken(target, err.code, 'sent')
+    if (err.code === 'shared_name') {
+      const ids = await call<{ id: string; name: string }[]>('query', api.displays.list).then(
+        (all) => all.filter((d) => d.name.toLowerCase() === (target.display ?? '').trim().toLowerCase()).map((d) => `${named(d.name)} (${d.id})`),
+        () => [] as string[],
+      )
+      throw new Problem(
+        `More than one display is called ${which}, so it is not clear which one is meant. Nothing was sent.`,
+        'conflict',
+        `Send it to one of them by its id, with --on-id <id>${ids.length ? `: ${andJoined(ids)}` : '. `it displays` lists the ids.'}`,
+      )
+    }
+    // None was named, and none can take it: each display, with why, as far as It says
+    if (err.code === 'nowhere') {
+      const all = await call<{ name: string; paired?: boolean; agents?: boolean }[]>('query', api.displays.list).catch(() => null)
+      const why = (d: { paired?: boolean; agents?: boolean }) =>
+        d.paired === false ? 'is not paired any more' : d.agents === false ? 'is closed to agents' : null
+      const each = (all ?? []).flatMap((d) => (why(d) ? [`${named(d.name)} ${why(d)}`] : []))
+      throw new Problem(
+        'No display can take it now, so nothing was sent.',
+        'nowhere',
+        all && !all.length ? noDisplay() : each.length ? `${andJoined(each)}.` : undefined,
+      )
+    }
     if (err.code !== 'no_such_display') throw err
     const all = await call<{ id: string; name: string }[]>('query', api.displays.list).then(
       (all) => all.map((d) => (target.displayId !== undefined ? `${named(d.name)} (${d.id})` : named(d.name))).join(', '),
       () => '',
     )
-    const which = target.displayId !== undefined ? `No display has the id ${named(target.displayId)}.` : `No display is called ${named(target.display ?? '')}.`
-    throw new Problem(which, 'not_found', all ? `Displays: ${all}` : noDisplay())
+    const said = target.displayId !== undefined ? `No display has the id ${named(target.displayId)}.` : `No display is called ${named(target.display ?? '')}.`
+    // "all" is the name of a display like any other: every display is asked for in its own way
+    const every = target.display?.trim().toLowerCase() === 'all' ? ' To ask every display, use --everywhere in place of --on.' : ''
+    // The list of displays ends a sentence of its own where another follows it
+    throw new Problem(said, 'not_found', `${all ? `Displays: ${all}${every ? '.' : ''}` : noDisplay()}${every}`)
   }
 }
 /**
@@ -401,23 +486,57 @@ async function onDisplay<T>(a: Args, run: () => Promise<T>, byId: string = TAKES
  */
 const noDisplay = () =>
   `No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${siteAddress() ?? 'the site'} in a browser on this machine and pair that browser. Other displays are added from there.`
-/** What It answers when asked to show a page: the displays it is now shown on, and each one it was asked onto and is not shown on, with why. */
+/**
+ * What It answers when asked to show a page: the displays it is now shown on, and each other one
+ * with why it is not shown there. `chosen` says, where no display was named, whether the one
+ * chosen had the site open or was only the one used last. `older` is this command's own: that
+ * `--everywhere` was asked of an It of an earlier version, with no display named.
+ */
 interface Shown {
   displays: string[]
   /** The ids of the displays it is shown on, in the same order. An It of an earlier version leaves them out. */
   displayIds?: string[]
   notShown?: { display: string; displayId?: string; reason: string }[]
+  chosen?: 'open' | 'last_used'
+  older?: true
+  /** The page's address, as a publish gives it: the site's on this computer, the link at the place chosen for links, or why it cannot be there. An It of an earlier version leaves them out. */
+  url?: string
+  link?: string
+  unlinked?: { to: string; why: string }
 }
-async function show(slug: string, a: Args) {
-  return onDisplay(a, () => call<Shown>('mutation', api.displays.show, { slug, ...aimedAt(a) }))
+/** The page's address to give the person, as `it create` gives it: `url`, and `urlNote` where it is not at the place chosen for links. */
+function addressOf(shown: Shown): { url?: string; urlNote?: string } {
+  const link = typeof shown.link === 'string' && /^http:\/\/[^/?#]+\/p\//.test(shown.link) ? shown.link : undefined
+  const url = link ?? (typeof shown.url === 'string' ? throughDoor(shown.url) : undefined)
+  if (!url) return {}
+  return { url, ...(shown.unlinked && !link ? { urlNote: unlinkedNote(shown.unlinked) } : {}) }
 }
 /**
+ * Shows a page. Where the one display named, by its name or its id, shows nothing, that is a
+ * refusal, said as \`it notify\` says it and with the page's link: an agent that asked for that
+ * display gets no answer that reads as success. Shown somewhere, it is answered as it was.
+ */
+async function show(slug: string, a: Args, also: Record<string, unknown> = {}) {
+  const shown = await onDisplay(a, (where) => call<Shown & { took?: boolean }>('mutation', api.displays.show, { slug, ...where, ...also }))
+  const target = aimedAt(a)
+  const reason = shown.notShown?.[0]?.reason
+  if ((target.display !== undefined || target.displayId !== undefined) && !shown.displays.length && (reason === 'agents_off' || reason === 'not_paired'))
+    throw notTaken(target, reason, 'shown', addressOf(shown))
+  return shown
+}
+/** What is said where `--everywhere` was asked of an It of an earlier version, of a page or of a notification. */
+const OLDER = (what: string) =>
+  `The It this machine asked is of an earlier version than this command, and does not take \`--everywhere\`. It was asked with no display named, which on that It ${what} on every display, those closed to agents among them. Update that It, with \`it upgrade\` on the machine it runs on, or the Update button on its Machines page.`
+/** How an agent asks for another display, or for every one. */
+const ELSEWHERE = 'To show it elsewhere, run this again with `--on "<display>"` or `--on-id <id>`, or with `--everywhere` for every display agents may use.'
+/**
  * What is printed of where a page was asked to be shown: `shownOn` names the displays it is
- * shown on, and `notShownOn` each display it was asked onto and is not shown on, with the
- * reason beside it. A display is one the person named and kept, and it stays when the pairing
- * of its browser is ended: it then shows nothing until that browser is paired again, which is
- * the one reason there is, `not_paired`. The `hint` says so in words, and where no display was
- * there to be asked at all, how one is paired.
+ * shown on, with their ids in `shownDisplayIds`, and `notShownOn` each other display, with the
+ * reason beside it: `not_paired` for one whose browser's pairing was ended, which shows nothing
+ * until that browser is paired again; `agents_off` for one the user said agents may not use; and
+ * `not_chosen` for one passed over for the display in use, where no display was named. The `hint`
+ * says in words where the page went and why, and where no display was there to be asked at all,
+ * how one is paired.
  */
 function shownAs(shown: Shown): {
   shownOn: string[]
@@ -426,18 +545,67 @@ function shownAs(shown: Shown): {
   hint?: string
 } {
   const notShownOn = shown.notShown ?? []
-  const ended = notShownOn.filter((d) => d.reason === 'not_paired').map((d) => named(d.display))
-  const one = ended.length === 1
-  const which = one ? ended[0]! : `${ended.slice(0, -1).join(', ')} and ${ended.at(-1)}`
-  const hint = ended.length
-    ? `${which} ${one ? 'is' : 'are'} not paired any more: the pairing of ${one ? 'its browser' : 'their browsers'} was ended, and ${one ? 'it shows' : 'they show'} nothing until ${one ? 'that browser is' : 'those browsers are'} paired again. On the machine It runs on, \`it site\` pairs the browser there. Another screen is paired from the site, under Displays, with “Add a display”.`
-    : shown.displays.length || notShownOn.length
-      ? undefined
-      : noDisplay()
+  const of = (reason: string) => notShownOn.filter((d) => d.reason === reason).map((d) => named(d.display))
+  const ended = of('not_paired')
+  const off = of('agents_off')
+  const said: string[] = []
+  const where = shown.displays[0]
+  if (shown.chosen && where !== undefined)
+    said.push(
+      shown.chosen === 'open'
+        ? `No display was named, so it is shown on ${named(where)} alone: of the displays with It’s site open, that is the one used most recently.`
+        : `No display was named and none has It’s site open now, so it was sent to ${named(where)} alone, the display used most recently. A display whose site is closed does not bring a page up by itself, so the user needs the link${shown.url ? ': give them `url` in the chat' : ''}.`,
+      ELSEWHERE,
+    )
+  else {
+    if (shown.older) said.push(OLDER('shows the page'))
+    if (ended.length) {
+      const one = ended.length === 1
+      said.push(
+        `${andJoined(ended)} ${one ? 'is' : 'are'} not paired any more: the pairing of ${one ? 'its browser' : 'their browsers'} was ended, and ${one ? 'it shows' : 'they show'} nothing until ${one ? 'that browser is' : 'those browsers are'} paired again. On the machine It runs on, \`it site\` pairs the browser there. Another screen is paired from the site, under Displays, with “Add a display”.`,
+      )
+    }
+    if (off.length)
+      said.push(
+        `Agents may not use ${andJoined(off)}: the user turned that off for ${off.length === 1 ? 'it' : 'each of them'}, on the display itself or on the site under Displays, and only the user can turn it on again.`,
+      )
+    if (!shown.displays.length && !notShownOn.length) said.push(noDisplay())
+    // Said only where It gave the address, which an It of an earlier version does not
+    if (!shown.displays.length && shown.url) said.push('No display brought it up, so give the user `url` in the chat to open it.')
+  }
   return {
     shownOn: shown.displays,
     ...(shown.displayIds ? { shownDisplayIds: shown.displayIds } : {}),
     ...(notShownOn.length ? { notShownOn } : {}),
+    ...(said.length ? { hint: said.join(' ') } : {}),
+  }
+}
+/**
+ * What is printed of a notification that was sent: its id, `sentTo`, the displays it went to,
+ * with their ids in `sentToIds`, and `notSentTo`, each other display with why, as `it open` says
+ * them. A backend that does not say where it went is printed as it answered.
+ */
+function notified(sent: { id: string } & Partial<Shown>): {
+  id: string
+  sentTo?: string[]
+  sentToIds?: string[]
+  notSentTo?: { display: string; displayId?: string; reason: string }[]
+  hint?: string
+} {
+  if (!Array.isArray(sent.displays)) return { id: sent.id, ...(sent.older ? { hint: OLDER('sends the notification') } : {}) }
+  const notSentTo = sent.notShown ?? []
+  const where = sent.displays[0]
+  const hint =
+    sent.chosen && where !== undefined
+      ? sent.chosen === 'open'
+        ? `No display was named, so it went to ${named(where)} alone: of the displays with It’s site open, that is the one used most recently. To send it elsewhere, use \`--on "<display>"\` or \`--on-id <id>\`, or \`--everywhere\` for every display agents may use.`
+        : `No display was named and none has It’s site open now, so it went to ${named(where)} alone, where it waits in the tray and comes as a notification if that display takes them.`
+      : undefined
+  return {
+    id: sent.id,
+    sentTo: sent.displays,
+    ...(sent.displayIds ? { sentToIds: sent.displayIds } : {}),
+    ...(notSentTo.length ? { notSentTo } : {}),
     ...(hint ? { hint } : {}),
   }
 }
@@ -470,7 +638,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   rollback: [2, 'rollback <id> <version>'],
   patch: [2, "patch <id> '<json>' [--replace] [--if-revision <n>]"],
   state: [1, 'state <id>'],
-  open: [1, 'open <id> [--on "<display>" | --on-id <display-id>]'],
+  open: [1, 'open <id> [--on "<display>" | --on-id <display-id> | --everywhere]'],
   displays: [0, 'displays'],
   wait: [0, 'wait [--id <id>] [--follow] [--timeout <seconds>]'],
   actions: [0, 'actions [--id <id> [--after <cursor>] [--follow]]'],
@@ -509,7 +677,10 @@ async function create(a: Args) {
   aimedAt(a)
   // Asked before anything is published, so that a page meant for a display It cannot reach by
   // its id is not published there to no display
-  if (a.flags.open === true) await canAimById(a, TAKES.showById)
+  if (a.flags.open === true) {
+    await canAimById(a, TAKES.showById)
+    await canAimEverywhere(a, TAKES.showEverywhere)
+  }
   const take = a.flags.take === true
   const page = { slug, title, files: await source(a), agent: text(a, 'agent'), state, shown: a.flags.open === true }
   let done: Awaited<ReturnType<typeof publish>>
@@ -785,6 +956,7 @@ async function tour(a: Args) {
   // The agent's plate on the page carries the name of the agent app that is giving the tour, where that is known
   aimedAt(a)
   await canAimById(a, TAKES.showById)
+  await canAimEverywhere(a, TAKES.showEverywhere)
   const by = sessionAsked()?.session.harness
   const made = tourPage(name, given, text(a, 'agent') ?? (by && Object.hasOwn(KNOWN, by) ? KNOWN[by as Harness].label : undefined))
   // The page is this conversation's from now on, whoever showed it last. An agent app that does
@@ -808,7 +980,10 @@ async function tour(a: Args) {
 
 async function update(a: Args) {
   aimedAt(a)
-  if (a.flags.open === true) await canAimById(a, TAKES.showById)
+  if (a.flags.open === true) {
+    await canAimById(a, TAKES.showById)
+    await canAimEverywhere(a, TAKES.showEverywhere)
+  }
   // Written as `it create` is, with the id in `--id` and a title in front of it, it is taken as that:
   // an agent that has just made a page with the one often asks for the other in the same shape
   const named = text(a, 'id')
@@ -2624,8 +2799,8 @@ async function serviceCommand(a: Args) {
 const HELP = `it ${VERSION}: put a live ${NOUN.one} on any display you own, and hear back what happens on it.
 
 Pages
-  it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)  [--state '{…}'] [--open [--on "<display>" | --on-id <display-id>]]
-  it update <id> (--file f | --dir d | --html "<…>" | pipe) [--title "<title>"] [--open [--on "<display>" | --on-id <display-id>]]
+  it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)  [--state '{…}'] [--open [--on "<display>" | --on-id <display-id> | --everywhere]]
+  it update <id> (--file f | --dir d | --html "<…>" | pipe) [--title "<title>"] [--open [--on "<display>" | --on-id <display-id> | --everywhere]]
                                  Both take [--agent <name>], a label for who made it,
                                  which its owning conversation can change explicitly, and
                                  [--take], which gives the ${NOUN.one} to this conversation.
@@ -2645,11 +2820,16 @@ State
                                  With no text, what was said before is taken away.
 
 Displays
-  it open <id> [--on "<display>" | --on-id <display-id>]
-                                 --on names a display by its name, and --on-id by its id,
-                                 which stays when the display is renamed and is one
-                                 display's alone.
-  it notify "<text>" [--id <id>] [--on "<display>" | --on-id <display-id>] [--sticky] [--button "Label=action"]…
+  it open <id> [--on "<display>" | --on-id <display-id> | --everywhere]
+                                 Bring a ${NOUN.one} up on the display in use: of the displays with
+                                 the site open, the one used last, and with none open, the one
+                                 used last of all. --on names a display by its name, "all" too,
+                                 and --on-id by its id, which stays when the display is renamed.
+                                 --everywhere asks every display. None is asked that the person
+                                 closed to agents. --open on create and update does the same.
+  it notify "<text>" [--id <id>] [--on "<display>" | --on-id <display-id> | --everywhere] [--sticky] [--button "Label=action"]…
+                                 Sent to a display in the same way. With --everywhere, it is for
+                                 the displays there now, and not for one paired later.
   it displays                    List each display with its name and its id.
 
 What the person did
@@ -3175,8 +3355,8 @@ async function main(argv: string[]): Promise<void> {
     }
 
     case 'open': {
-      const slug = need(a._[0], `which ${NOUN.one}`, 'open <id> [--on "<display>" | --on-id <display-id>]')
-      const where = aimedAt(a)
+      const slug = need(a._[0], `which ${NOUN.one}`, 'open <id> [--on "<display>" | --on-id <display-id> | --everywhere]')
+      aimedAt(a)
       // A conversation that brings a page up for its person is the one they are talking to: the
       // page is its page from now on, also where another conversation made it. Someone who says
       // "show me the board again" the next day gets an agent that opens what is there, and what
@@ -3185,13 +3365,7 @@ async function main(argv: string[]): Promise<void> {
       const mine = asked?.session
       // Which conversation this is was a choice among the apps that had marked this command: said, so that an agent that is another one knows
       const guessed = sessionNote(asked, `This ${NOUN.one} was shown for`, `run \`it open ${slug}\` again with IT_HARNESS and IT_SESSION set to your own.`)
-      const result = await onDisplay(a, () =>
-        call<Shown & { took?: boolean }>('mutation', api.displays.show, {
-          slug,
-          ...where,
-          ...(mine ? { session: mine, agent: mine.harness } : {}),
-        }),
-      )
+      const result = await show(slug, a, mine ? { session: mine, agent: mine.harness } : {})
       // Noted only once It has answered, since it is as the page is shown that it becomes this
       // conversation's: a page It refuses to show leaves no note of the conversation
       if (mine) await noteConversation(mine)
@@ -3200,6 +3374,7 @@ async function main(argv: string[]): Promise<void> {
       const taken = `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.`
       return out({
         id: slug,
+        ...addressOf(result),
         ...shown,
         ...(took ? { note: taken } : {}),
         ...(guessed ? { session: guessed } : {}),
@@ -3215,15 +3390,15 @@ async function main(argv: string[]): Promise<void> {
       })
       const sent = await onDisplay(
         a,
-        () =>
-          call('mutation', api.notifications.send, {
+        (where) =>
+          call<{ id: string } & Partial<Shown>>('mutation', api.notifications.send, {
             text: body,
             ...(text(a, 'id') ? { slug: text(a, 'id') } : {}),
             ...where,
             ...(a.flags.sticky ? { sticky: true } : {}),
             ...(buttons.length ? { buttons } : {}),
           }),
-        TAKES.notifyById,
+        NOTIFY_FORMS,
       )
       // Counted: which agent app sent it, whether it had buttons, stays up, or is about a page, and whether it went to one display or to all. Never what it says
       usage.record('notification.sent', {
@@ -3231,12 +3406,12 @@ async function main(argv: string[]): Promise<void> {
         buttons: buttons.length > 0,
         sticky: a.flags.sticky === true,
         page: text(a, 'id') !== undefined,
-        to: where.display !== undefined || where.displayId !== undefined ? 'one' : 'all',
+        to: where.everywhere ? 'all' : 'one',
       })
-      return out(sent)
+      return out(notified(sent))
     }
     case 'displays': {
-      const shown = await call<{ id: string; name: string; paired?: boolean; lastSeenAt?: number }[]>('query', api.displays.list)
+      const shown = await call<{ id: string; name: string; paired?: boolean; lastSeenAt?: number; agents?: boolean }[]>('query', api.displays.list)
       if (!forPerson(a)) return out(shown)
       if (!shown.length) return tell(['No display is paired. `it site` opens the site in a browser on this machine and pairs that browser.'])
       return tell([
@@ -3244,7 +3419,7 @@ async function main(argv: string[]): Promise<void> {
         ...columns(
           shown.map((d) => [
             `  ${d.name}`,
-            d.paired === false ? 'not paired any more' : 'paired',
+            `${d.paired === false ? 'not paired any more' : 'paired'}${d.agents === false ? ', closed to agents' : ''}`,
             d.lastSeenAt ? `seen ${ago(d.lastSeenAt)}` : 'never seen',
             d.id,
           ]),

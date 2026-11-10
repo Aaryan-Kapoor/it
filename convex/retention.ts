@@ -75,6 +75,12 @@ async function removeHangers(ctx: MutationCtx, artifactId: Id<'artifacts'>): Pro
     .withIndex('by_artifact', (q) => q.eq('artifactId', artifactId))
     .take(LIGHT)
   for (const n of notifications) await ctx.db.delete(n._id)
+  // And where each of those that went to every display was in a display's tray
+  const recipients = await ctx.db
+    .query('recipients')
+    .withIndex('by_artifact', (q) => q.eq('artifactId', artifactId))
+    .take(LIGHT)
+  for (const r of recipients) await ctx.db.delete(r._id)
   const publications = await ctx.db
     .query('publications')
     .withIndex('by_artifact_n', (q) => q.eq('artifactId', artifactId))
@@ -86,7 +92,8 @@ async function removeHangers(ctx: MutationCtx, artifactId: Id<'artifacts'>): Pro
     versions.length === VERSIONS ||
     actions.length === HEAVY ||
     attachments.length === HEAVY ||
-    notifications.length === LIGHT
+    notifications.length === LIGHT ||
+    recipients.length === LIGHT
   if (!more) await forgetCounts(ctx, artifactId)
   return more
 }
@@ -124,7 +131,7 @@ async function purge(ctx: MutationCtx, userId: Id<'users'>): Promise<boolean> {
   // With each record goes what was kept under its id to hold it to a pace, and, for a machine,
   // the proofs it has used: none of it is left for the hourly cleaning to come to. A showing's
   // record is among what goes here, though its display and its page are gone already.
-  for (const table of ['displays', 'machines', 'sessions', 'invites', 'mounts', 'deletions'] as const) {
+  for (const table of ['recipients', 'presence', 'displays', 'machines', 'sessions', 'invites', 'mounts', 'deletions'] as const) {
     const rows = await ctx.db
       .query(table)
       .withIndex('by_user', (q: any) => q.eq('userId', userId))
@@ -312,6 +319,13 @@ export const sweepRecords = internalMutation({
         .withIndex('by_created', (q) => q.lt('createdAt', now - RETENTION.notificationDays * DAY))
         .take(LIGHT),
     )
+    // Each display's row of one sent to every display, which goes at the same age
+    await drop(
+      await ctx.db
+        .query('recipients')
+        .withIndex('by_created', (q) => q.lt('createdAt', now - RETENTION.notificationDays * DAY))
+        .take(LIGHT),
+    )
     await drop(
       await ctx.db
         .query('rateLimits')
@@ -368,13 +382,16 @@ export const sweepRecords = internalMutation({
     await drop(unnamed)
     // What the tabs of a display said of themselves, once the newest of it has run out: a
     // display that is closed says nothing more, and what it said last is not kept for ever
-    const unheard = await ctx.db
-      .query('displays')
-      .withIndex('by_reported', (q) => q.gt('reportedAt', 0).lt('reportedAt', now - REPORT_MS))
-      .take(LIGHT)
-    for (const d of unheard) await ctx.db.patch(d._id, { reports: undefined, reportedAt: undefined })
-    if (unheard.length === LIGHT) full = true
-    removed += unheard.length
+    // (and what an earlier build kept of it on the display itself)
+    for (const table of ['presence', 'displays'] as const) {
+      const unheard = await ctx.db
+        .query(table)
+        .withIndex('by_reported', (q) => q.gt('reportedAt', 0).lt('reportedAt', now - REPORT_MS))
+        .take(LIGHT)
+      for (const d of unheard) await ctx.db.patch(d._id, { reports: undefined, reportedAt: undefined })
+      if (unheard.length === LIGHT) full = true
+      removed += unheard.length
+    }
     if (full) await ctx.scheduler.runAfter(0, internal.retention.sweepRecords, {})
     if (removed) log('sweep.records', { removed })
     return null

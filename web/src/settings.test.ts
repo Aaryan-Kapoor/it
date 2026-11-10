@@ -254,6 +254,44 @@ describe('live previews on this screen', () => {
   })
 })
 
+describe('the switch that opens a display to agents or closes it', () => {
+  const ROWS = [
+    { ...DISPLAYS[0]!, agents: true },
+    { ...DISPLAYS[1]!, agents: false },
+  ]
+  const switches = () =>
+    [...host.querySelectorAll<HTMLInputElement>('input[role="switch"]')].filter((i) => i.closest('label')?.textContent?.includes('Open to agents'))
+
+  test('is offered only once the backend names it, to the owner on every display, and says which are closed', async () => {
+    const { learnTakes } = await import('./lib')
+    learnTakes([])
+    watched['displays:list'] = ROWS
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    expect(switches()).toHaveLength(0)
+    expect(host.textContent).not.toContain('Closed to agents')
+    await act(async () => learnTakes(['displays.allowAgents']))
+    expect(switches().map((i) => i.checked)).toEqual([true, false])
+    expect(host.textContent).toContain('Closed to agents')
+    await act(async () => switches()[1]!.click())
+    expect(calls).toContainEqual({ fn: 'displays:allowAgents', args: { displayId: 'display-2', allowed: true } })
+    // And taken away again where the backend stops naming it
+    await act(async () => learnTakes([]))
+    expect(switches()).toHaveLength(0)
+  })
+
+  test('is offered to a screen for itself', async () => {
+    const { learnTakes } = await import('./lib')
+    learnTakes(['displays.allowAgents'])
+    const { Settings } = await import('./settings')
+    await show(createElement(Settings, { user: 'user-1', owner: false, display: ROWS[0]!, onSignOut: vi.fn() }))
+    expect(switches()).toHaveLength(1)
+    await act(async () => switches()[0]!.click())
+    expect(calls).toContainEqual({ fn: 'displays:allowAgents', args: { displayId: 'display-1', allowed: false } })
+    learnTakes([])
+  })
+})
+
 describe('a name another display has', () => {
   test('is refused in the person’s own words, with the name they typed', async () => {
     const { ConvexError } = await import('convex/values')

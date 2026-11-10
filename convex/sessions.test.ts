@@ -321,9 +321,9 @@ describe('what ending a session ends', () => {
   test('nothing is pushed to a display whose session has ended, whatever subscription its record still holds', async () => {
     const h = await household()
     const [first] = h.ids
-    const note = await h.machine.mutation(api.notifications.send, { text: 'Are you there?' })
+    const note = await h.machine.mutation(api.notifications.send, { text: 'Are you there?', everywhere: true })
     await vi.advanceTimersByTimeAsync(200_000)
-    const asked = () => h.t.query(internal.push._targets, { notificationId: note.id })
+    const asked = () => h.t.query(internal.push._targets, { notificationId: note.id, now: Date.now() })
     expect((await asked())?.targets.map((x) => x.displayId).sort()).toEqual([...h.ids, h.untouched.id].sort())
     // The session ends, and its record of the subscription is put back as if the ending had missed it
     await endOf(h.t, h.screen)
@@ -379,13 +379,15 @@ describe('a display whose browser’s pairing has ended', () => {
     await owner.browser.mutation(api.sessions.end, { session: screen.session as never })
     // Asked onto that display by name
     expect(await machine.mutation(api.displays.show, { slug: 'plan', display: 'Kitchen' })).toEqual({
+      url: expect.any(String),
       displays: [],
       displayIds: [],
       notShown: [{ display: 'Kitchen', displayId: expect.any(String), reason: 'not_paired' }],
       took: false,
     })
     // Asked onto every display: it is shown on the ones that are paired, and that one is named as left out
-    expect(await machine.mutation(api.displays.show, { slug: 'plan' })).toEqual({
+    expect(await machine.mutation(api.displays.show, { slug: 'plan', everywhere: true })).toEqual({
+      url: expect.any(String),
       displays: ['Laptop'],
       displayIds: [expect.any(String)],
       notShown: [{ display: 'Kitchen', displayId: expect.any(String), reason: 'not_paired' }],
@@ -397,6 +399,7 @@ describe('a display whose browser’s pairing has ended', () => {
     // Paired again, it is asked onto as any display is
     await register(await screenOf(t, owner), KEY)
     expect(await machine.mutation(api.displays.show, { slug: 'plan', display: 'kitchen' })).toEqual({
+      url: expect.any(String),
       displays: ['Kitchen'],
       displayIds: [expect.any(String)],
       notShown: [],

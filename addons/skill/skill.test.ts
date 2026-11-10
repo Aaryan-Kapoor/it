@@ -347,7 +347,7 @@ describe('the agent skill', () => {
       /If `shownOn` is empty and there is neither `notShown` nor `notShownOn`, .* give the user the `url`, and tell them that no display is paired\./,
     )
     // A display that was asked for by name and shows nothing is said of that display, and not of all of them
-    expect(skill).toContain('Where `notShownOn` names the display you asked for, it is that display that shows nothing')
+    expect(skill).toContain('Where the one display you named takes nothing now, the command is refused as `it notify` is')
     // The word for a display that can be shown on is the program's own: what it says when there is none
     expect(main).toContain('No display is paired yet')
     expect(skill).not.toMatch(/signed in|sign one in|signs? in\b/)
@@ -487,9 +487,15 @@ describe('the agent skill', () => {
   test('tells an agent what a display that is not paired means, and how to change state only while it is as it was read', () => {
     // What the command prints of a display it was asked onto and that shows nothing, and the one reason there is
     expect(main).toMatch(/notShownOn\?: \{ display: string; displayId\?: string; reason: string \}\[\]/)
-    expect(main).toContain("d.reason === 'not_paired'")
-    expect(skill).toContain('If `notShownOn` is there, it lists each display the page was asked onto and is not shown on, with a `reason`.')
-    expect(skill).toContain('The one reason is `not_paired`')
+    expect(main).toContain("of('not_paired')")
+    expect(skill).toContain('If `notShownOn` is there, it lists each other display with a `reason`.')
+    // Every reason the skill names is one the backend gives
+    for (const reason of ['not_chosen', 'not_paired', 'agents_off']) {
+      expect(skill).toContain(`\`${reason}\``)
+      expect(source('../../convex/lib/aim.ts')).toContain(`'${reason}'`)
+    }
+    for (const code of ['agents_off', 'not_paired', 'nowhere']) expect(skill).toContain(`\`${code}\``)
+    expect(source('../../convex/notifications.ts')).toContain("notSent: 'nowhere'")
     expect(source('../../convex/displays.ts')).toMatch(/paired: await stillPaired\(ctx, d\)/)
     expect(skill).toContain("Each display has `paired`, which is `false` for one whose browser's pairing was ended")
     // The revision `it state` prints is the one `--if-revision` is held to, and a state that has moved on is refused as a conflict
@@ -839,9 +845,7 @@ describe('the agent skill', () => {
   test('says that a page is a conversation’s to keep or to take only where the harness names the conversation, and what to do where it does not', () => {
     // With no conversation named, the command does not ask for the page as its own, nothing is taken by opening it, and taking it is refused
     expect(source('../../packages/cli/src/publish.ts')).toContain('...(input.own && !input.take && session ? { own: true } : {})')
-    expect(main).toMatch(
-      /const mine = asked\?\.session[\s\S]{0,900}api\.displays\.show[\s\S]{0,300}\.\.\.\(mine \? \{ session: mine, agent: mine\.harness \} : \{\}\)/,
-    )
+    expect(main).toMatch(/const mine = asked\?\.session[\s\S]{0,900}show\(slug, a, mine \? \{ session: mine, agent: mine\.harness \} : \{\}\)/)
     expect(source('../../convex/displays.ts')).toMatch(
       /const took = mine && aimed\.to\.length \? \(await takePage\(ctx, artifact, machine, mine, agent\)\)\.took : false/,
     )

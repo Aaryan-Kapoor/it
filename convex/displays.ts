@@ -4,8 +4,9 @@ import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { action, internalMutation, type MutationCtx, mutation, query } from './_generated/server'
 import { takePage } from './artifacts'
+import { site } from './config'
 import { revokeLater } from './content'
-import { aim, nameOf, stillPaired, targetOf } from './lib/aim'
+import { aim, nameOf, seenOf, stillPaired, targetOf } from './lib/aim'
 import {
   artifactBySlug,
   displayByKey,
@@ -23,6 +24,7 @@ import { fail } from './lib/errors'
 import { quota, rateLimit } from './lib/limits'
 import { log } from './lib/log'
 import { mint } from './lib/signing'
+import { linkNow } from './network'
 import { session } from './schema'
 import { endSession, signOutDisplay } from './sessions'
 
@@ -62,6 +64,7 @@ const view = (d: Doc<'displays'>) => ({
   named: d.name !== undefined,
   lastSeenAt: d.lastSeenAt,
   push: d.push !== undefined,
+  agents: d.agentsOff !== true,
 })
 
 /** A browser that has just been paired registers itself on the spot. The person can name it later. */
@@ -133,7 +136,7 @@ export const register = mutation({
       if (!going) quota(mine.length, QUOTA.displays, 'displays', user._id)
       else {
         await signOutDisplay(ctx, going)
-        await ctx.db.delete(going._id)
+        await dropDisplay(ctx, going._id)
         for (const id of going.previousSessions ?? []) await endSession(ctx, id, 'forgotten', session._id)
         letGo = going._id
         log('display.let_go', { userId: user._id, displayId: going._id, idleMs: now - going.lastSeenAt })
@@ -292,6 +295,16 @@ export const heartbeat = mutation({
   },
 })
 
+/** Removes a display's record, and what it said of itself with it. */
+async function dropDisplay(ctx: MutationCtx, displayId: Id<'displays'>): Promise<void> {
+  const kept = await ctx.db
+    .query('presence')
+    .withIndex('by_display', (q) => q.eq('displayId', displayId))
+    .unique()
+  if (kept) await ctx.db.delete(kept._id)
+  await ctx.db.delete(displayId)
+}
+
 /** A tab's own id, made afresh each time the site is loaded there. */
 const TAB = /^[A-Za-z0-9_-]{16,64}$/
 /** How long what a tab last said of itself stands. A visible tab says so again every minute. */
@@ -362,7 +375,12 @@ export const report = mutation({
     // word, so this keeps a clock that is wrong from saying a use is newer than it was; a paired
     // browser that meant to could still say it was used when it was not
     const timely = a.observedAt !== undefined && Math.abs(now - a.observedAt) <= REPORT_SKEW_MS
-    const fresh = (d.reports ?? []).filter((r) => r.epoch === d.epoch && now - r.at < REPORT_MS && r.at <= now)
+    const kept = await ctx.db
+      .query('presence')
+      .withIndex('by_display', (q) => q.eq('displayId', d._id))
+      .unique()
+    const seen = await seenOf(ctx, d)
+    const fresh = seen.reports.filter((r) => r.epoch === d.epoch && now - r.at < REPORT_MS && r.at <= now)
     const before = fresh.find((r) => r.tab === a.tab)
     if (before && a.sequence <= before.sequence) return { accepted: false, now }
     await rateLimit(ctx, 'reportDisplay', d._id)
@@ -387,12 +405,15 @@ export const report = mutation({
       .sort((x, y) => y.at - x.at)
       .slice(0, TABS - 1)
     const reports = [...others, { tab: a.tab, sequence: a.sequence, at, epoch: d.epoch, phase: a.phase, visible: a.visible, ...page }]
-    const change: Partial<Doc<'displays'>> = { reports, reportedAt: Math.max(...reports.map((r) => r.at)) }
+    // Written to the display's presence, and never to the display itself, whose record a tray and
+    // much of the site read: a report a few times a minute would have them all read again
+    const change: Partial<Doc<'presence'>> = { reports, reportedAt: Math.max(...reports.map((r) => r.at)) }
     // Whether the use it said was taken, which the tab goes by to say it again or not: a use
     // within five seconds of the last one written is taken, and needs no writing
     const used = a.visible && a.used === true && timely
-    if (used && at - (d.usedAt ?? 0) > 5000) change.usedAt = at
-    await ctx.db.patch(d._id, change)
+    if (used && at - (seen.usedAt ?? 0) > 5000) change.usedAt = at
+    if (kept) await ctx.db.patch(kept._id, change)
+    else await ctx.db.insert('presence', { userId: d.userId, displayId: d._id, ...change })
     return { accepted: true, now, used }
   },
 })
@@ -487,7 +508,7 @@ export const forget = mutation({
     const d = await ownDisplay(ctx, user._id, displayId)
     await signOutDisplay(ctx, d)
     await ctx.db.insert('forgotten', { userId: user._id, key: d.key, at: Date.now() })
-    await ctx.db.delete(d._id)
+    await dropDisplay(ctx, d._id)
     // Whatever else that same browser had registered as is signed out as its session ends
     for (const id of [d.sessionId, ...(d.previousSessions ?? [])]) await endSession(ctx, id, 'forgotten')
     log('display.forgotten', { userId: user._id, displayId: d._id, sessionId: d.sessionId })
@@ -496,23 +517,45 @@ export const forget = mutation({
 })
 
 /**
- * An agent asks for a page to be brought up: on one display named by its id, on the displays
- * that have a name, or on every display where it names none (`lib/aim.ts`). The answer names the
- * displays it is shown on, with their ids beside them in `displayIds`, and, in `notShown`, each
- * one it was asked onto and is not shown on, with why: `not_paired` for a display whose browser's
- * pairing has ended, which shows nothing until that browser is paired again.
+ * Whether agents may show pages and send notifications on a display. The owner's browser says so
+ * for any display, and a screen for itself and no other: to a screen another display is none.
+ * Agents have no way to change it.
+ */
+export const allowAgents = mutation({
+  args: { displayId: v.id('displays'), allowed: v.boolean() },
+  handler: async (ctx, { displayId, allowed }) => {
+    const c = await requireBrowser(ctx)
+    const d = await ownDisplay(ctx, c.user._id, displayId)
+    if (!speaksFor(c, d)) fail('not_found', 'No such display.')
+    if ((d.agentsOff === true) === !allowed) return null
+    await ctx.db.patch(d._id, { agentsOff: allowed ? undefined : true })
+    log('display.agents', { userId: c.user._id, displayId: d._id, allowed })
+    return null
+  },
+})
+
+/**
+ * An agent asks for a page to be brought up: on one display named by its id, on every display of
+ * a name, on every display agents may use with `everywhere`, or, where it names none, on the one
+ * display the person is most likely using (`lib/aim.ts`). The answer names the displays it is
+ * shown on, with their ids in `displayIds`, says in `chosen` why a display was chosen where none
+ * was named, and lists in `notShown` each other display with why it was not shown there:
+ * `not_paired` for a display whose browser's pairing has ended, which shows nothing until that
+ * browser is paired again; `agents_off` for one the person said agents may not use; and
+ * `not_chosen` for one passed over for the display in use.
  */
 export const show = mutation({
   args: {
     slug: v.string(),
     display: v.optional(v.string()),
     displayId: v.optional(v.string()),
+    everywhere: v.optional(v.boolean()),
     session: v.optional(session),
     agent: v.optional(v.string()),
   },
-  handler: async (ctx, { slug, display, displayId, session: mine, agent }) => {
+  handler: async (ctx, { slug, display, displayId, everywhere, session: mine, agent }) => {
     const { user, machine } = await requireMachine(ctx)
-    const target = targetOf({ display, displayId })
+    const target = targetOf({ display, displayId, everywhere })
     await rateLimit(ctx, 'show', user._id)
     const artifact = (await artifactBySlug(ctx, user._id, slug)) ?? fail('not_found', 'No such page.')
     const aimed = await aim(ctx, user._id, target)
@@ -525,6 +568,18 @@ export const show = mutation({
     // A page changes owner only if at least one requested display can show it. All display
     // changes and ownership changes commit together, including the rate-limit checks.
     const took = mine && aimed.to.length ? (await takePage(ctx, artifact, machine, mine, agent)).took : false
-    return { displays: aimed.to.map(nameOf), displayIds: aimed.to.map((d) => d._id), notShown: aimed.notShown, took }
+    // The page's address, as a publish gives it: the site's on this computer, and the link at
+    // the place the owner chose for links where It can be reached there. An agent gives it to the
+    // person where no display brought the page up, or where it went to one they may not be at
+    const at = await linkNow(ctx)
+    return {
+      displays: aimed.to.map(nameOf),
+      displayIds: aimed.to.map((d) => d._id),
+      notShown: aimed.notShown,
+      took,
+      ...(aimed.chosen ? { chosen: aimed.chosen } : {}),
+      url: `${site()}/p/${artifact.slug}`,
+      ...(at && 'at' in at ? { link: `${at.at}/p/${artifact.slug}` } : at ? { unlinked: at.unlinked } : {}),
+    }
   },
 })

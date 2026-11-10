@@ -36,6 +36,22 @@ export const publicationResult = v.object({
   took: v.optional(v.boolean()),
 })
 
+/**
+ * What one tab of a display last said of itself (`displays.report`), by the backend's clock:
+ * whether it was visible, and what it showed, as a showing of the display's own and its page's
+ * version. The shape is the one earlier local builds of It wrote, so that a database of theirs loads.
+ */
+const tabReport = v.object({
+  tab: v.string(),
+  sequence: v.number(),
+  at: v.number(),
+  epoch: v.number(),
+  phase: v.union(v.literal('none'), v.literal('loading'), v.literal('shown'), v.literal('failed')),
+  visible: v.boolean(),
+  artifactId: v.optional(v.id('artifacts')),
+  version: v.optional(v.number()),
+})
+
 export default defineSchema({
   // A person. There is one, whose subject is `owner`, made when the first machine is enrolled.
   users: defineTable({
@@ -135,30 +151,14 @@ export default defineSchema({
     /** What an agent asked this display to show, and when. */
     showing: v.optional(v.object({ artifactId: v.id('artifacts'), at: v.number() })),
     push: v.optional(v.object({ endpoint: v.string(), p256dh: v.string(), auth: v.string() })),
-    /**
-     * What each tab of it last said of itself (`displays.report`), by the backend's clock: whether
-     * it was visible, and what it showed, as a showing of this display's own and its page's
-     * version. At most sixteen, and only of the sign-out number they were said under. The shape is
-     * the one earlier local builds of It wrote, so that a database of theirs loads.
-     */
-    reports: v.optional(
-      v.array(
-        v.object({
-          tab: v.string(),
-          sequence: v.number(),
-          at: v.number(),
-          epoch: v.number(),
-          phase: v.union(v.literal('none'), v.literal('loading'), v.literal('shown'), v.literal('failed')),
-          visible: v.boolean(),
-          artifactId: v.optional(v.id('artifacts')),
-          version: v.optional(v.number()),
-        }),
-      ),
-    ),
+    /** What each tab of it last said of itself, where an earlier build kept that here. It is read where `presence` has nothing, and is no longer written. */
+    reports: v.optional(v.array(tabReport)),
     /** When the newest of `reports` was said, so that the hourly cleaning finds the displays whose every report has run out. */
     reportedAt: v.optional(v.number()),
-    /** When the person last clicked, tapped or typed on the site here, to within ten seconds, or when the display was registered. */
+    /** When the display was registered, by someone standing at it. Later uses are kept in `presence`, as are what its tabs say now: `reports` and `reportedAt` here are only what an earlier build wrote. */
     usedAt: v.optional(v.number()),
+    /** Set where the person said that agents may not show pages or send notifications on this display. */
+    agentsOff: v.optional(v.boolean()),
     /** The session of the browser that registered it: forgetting the display ends that session, and that session ending signs the display out. */
     sessionId: v.id('sessions'),
     /** Earlier pairings of this display, whose invitations are ended when it is forgotten. */
@@ -172,6 +172,23 @@ export default defineSchema({
     .index('by_user_key', ['userId', 'key'])
     .index('by_session', ['sessionId'])
     .index('by_push_endpoint', ['push.endpoint'])
+    .index('by_reported', ['reportedAt']),
+
+  // What a display says of itself as it is used (`displays.report`), apart from the display's own
+  // record. That record is read by a tray and by much of the site, and a report written onto it a
+  // few times a minute would have every one of those read again each time. One per display.
+  presence: defineTable({
+    userId: v.id('users'),
+    displayId: v.id('displays'),
+    /** What each of its tabs last said, at most sixteen, and only of the sign-out number they were said under. */
+    reports: v.optional(v.array(tabReport)),
+    /** When the newest of `reports` was said, so that the hourly cleaning finds the ones whose every report has run out. */
+    reportedAt: v.optional(v.number()),
+    /** When the person last clicked, tapped or typed on the site there, to within ten seconds. */
+    usedAt: v.optional(v.number()),
+  })
+    .index('by_display', ['displayId'])
+    .index('by_user', ['userId'])
     .index('by_reported', ['reportedAt']),
 
   // A display the person told It to forget. Its key is refused from then on, so a browser that
@@ -515,6 +532,8 @@ export default defineSchema({
     text: v.string(),
     artifactId: v.optional(v.id('artifacts')),
     displayId: v.optional(v.id('displays')),
+    /** For a notification sent to every display: the displays that could take it when it was sent, and no display paired after. An earlier It left this out, and its notification is for every display that was there when it was sent. */
+    to: v.optional(v.array(v.id('displays'))),
     sticky: v.boolean(),
     buttons: v.optional(v.array(button)),
     /** What its page was showing when it was sent: pressing one of its buttons answers that, whatever the page shows by then. */
@@ -528,11 +547,34 @@ export default defineSchema({
     dismissedAt: v.optional(v.number()),
     /** The displays this has already been pushed to, so a second pass does not push it twice. */
     pushedTo: v.optional(v.array(v.id('displays'))),
+    /** Set on one sent to every display once a row in `recipients` was written for each display in `to`. One an earlier It sent has none. */
+    listed: v.optional(v.boolean()),
   })
     .index('by_user', ['userId', 'createdAt'])
     .index('by_artifact', ['artifactId'])
-    // What one display's tray holds: what is addressed to it (or to every display) and not dismissed
+    // What one display's tray holds of what is addressed to it alone, and not dismissed
     .index('by_user_target', ['userId', 'displayId', 'dismissedAt', 'createdAt'])
+    // What an earlier It sent to every display, which has no rows in `recipients`, and not dismissed
+    .index('by_user_unlisted', ['userId', 'displayId', 'listed', 'dismissedAt', 'createdAt'])
+    .index('by_created', ['createdAt']),
+
+  // One row for each display a notification sent to every display was for, so that a display's
+  // tray reads its own rows and nothing that went to other displays. What is done with the
+  // notification (seen, answered, dismissed) is kept on the notification, for every display at
+  // once. Its dismissal is copied here as well, so that the tray's index leaves out what was dismissed.
+  recipients: defineTable({
+    userId: v.id('users'),
+    notificationId: v.id('notifications'),
+    displayId: v.id('displays'),
+    /** The page it is about, so that a page's rows go with the page. */
+    artifactId: v.optional(v.id('artifacts')),
+    createdAt: v.number(),
+    dismissedAt: v.optional(v.number()),
+  })
+    .index('by_display_time', ['displayId', 'dismissedAt', 'createdAt'])
+    .index('by_notification', ['notificationId'])
+    .index('by_artifact', ['artifactId'])
+    .index('by_user', ['userId'])
     .index('by_created', ['createdAt']),
 
   // A page's deletion receipt stays until seven days after confirmed completion.

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { learnClock, readClocks, reportClock } from './lib'
-import { type Report, reportPage, startReports, USED_EVERY_MS, VISIBLE_EVERY_MS } from './presence'
+import { lastWord, type Report, reportPage, startReports, USED_EVERY_MS, VISIBLE_EVERY_MS } from './presence'
 
 let stop: (() => void) | undefined
 let shown: 'visible' | 'hidden'
@@ -411,4 +411,39 @@ test('a use too old after a sleep stays too old where the browser’s clock is t
   click()
   await vi.advanceTimersByTimeAsync(0)
   expect(sent.at(-1)).toMatchObject({ used: true })
+})
+
+test('a closing tab’s report is also given to the way that outlasts the tab, the same report as on the connection', async () => {
+  const sent: Report[] = []
+  const last: Report[] = []
+  stop = startReports(
+    (r) => {
+      sent.push(r)
+      return new Promise(() => {})
+    },
+    () => true,
+    { document, window, now: () => Date.now(), last: (r) => void last.push(r) },
+  )
+  window.dispatchEvent(new Event('pagehide'))
+  expect(last).toEqual([sent.at(-1)])
+  expect(last[0]).toMatchObject({ phase: 'none', visible: false })
+})
+
+test('the last word goes to the backend’s address for a call, kept going after the tab, with the token, and not at all without one', () => {
+  const asked = vi.fn(async () => new Response('{}'))
+  vi.stubGlobal('fetch', asked)
+  try {
+    const report: Report = { tab: 'a'.repeat(32), sequence: 4, phase: 'none', visible: false, observedAt: 7 }
+    lastWord(report, { key: 'the-key', epoch: 2, expectedSession: 'session-1' }, null)
+    expect(asked).not.toHaveBeenCalled()
+    lastWord(report, { key: 'the-key', epoch: 2, expectedSession: 'session-1' }, 'a-token')
+    expect(asked).toHaveBeenCalledWith('/api/mutation', {
+      method: 'POST',
+      keepalive: true,
+      headers: { 'content-type': 'application/json', authorization: 'Bearer a-token' },
+      body: JSON.stringify({ path: 'displays:report', args: { key: 'the-key', epoch: 2, expectedSession: 'session-1', ...report }, format: 'json' }),
+    })
+  } finally {
+    vi.unstubAllGlobals()
+  }
 })

@@ -3250,7 +3250,12 @@ try {
   const keptBack = new Promise((resolve) => {
     letGo = resolve
   })
+  // The request the first tab signs out with, which is the one whose answer is kept back: the
+  // site asks for an ended session's cookie to be cleared at the same address, and an answer to
+  // that is no answer to signing out
+  let signingOut
   await lateOne.context.route('**/session/end', async (route) => {
+    signingOut ??= route.request()
     const response = await route.fetch()
     const lines = response
       .headersArray()
@@ -3278,9 +3283,22 @@ try {
       .filter((d) => d.name in namedHere)
       .map((d) => `${namedHere[d.name]}: ${d.paired}`)
       .sort(),
+    // Named, and showing nothing, the page is refused as a notification to that display is,
+    // with why and with the page's link to give instead
     askedOnto: await it(A, ['open', slug, '--on', LATE]).then(
-      (said) => ({ shownOn: said.shownOn, notShownOn: said.notShownOn, saysWhy: /is not paired any more/.test(said.hint ?? '') }),
-      (e) => ({ failed: e.code ?? e.message }),
+      (said) => ({ shownOn: said.shownOn, notShownOn: said.notShownOn }),
+      (e) => {
+        let hint = ''
+        try {
+          hint = JSON.parse(e.stderr.trim().split('\n').pop())?.error?.hint ?? ''
+        } catch {}
+        return {
+          refused: e.code,
+          exit: e.exit,
+          saysWhy: /is not paired any more/.test(e.message),
+          givesLink: /Or give the user its link: http:\/\/\S+\/p\//.test(hint),
+        }
+      },
     ),
     saidOnThePage: Boolean(await until(() => itsRowThere.getByText('Not paired').isVisible(), 10_000)),
   }
@@ -3300,11 +3318,11 @@ try {
   )
   const listedAgain = (await it(A, ['displays'])).find((d) => d.name === LATE)?.paired
   check(
-    'a display whose browser’s pairing has ended stays, and is said to be not paired where an agent lists the displays and on the owner’s Displays page; an agent that asks for a page on it is told it is not shown there, and why; and paired again, the browser is that same display',
+    'a display whose browser’s pairing has ended stays, and is said to be not paired where an agent lists the displays and on the owner’s Displays page; an agent that asks for a page on it is refused, with why and with the page’s link; and paired again, the browser is that same display',
     JSON.stringify(whileEnded) ===
       JSON.stringify({
         listedAs: ['it: false', 'the owner’s: true', 'the screen’s: true'],
-        askedOnto: { shownOn: [], notShownOn: [{ display: LATE, displayId: itsDisplay.id, reason: 'not_paired' }], saysWhy: true },
+        askedOnto: { refused: 'not_paired', exit: 1, saysWhy: true, givesLink: true },
         saidOnThePage: true,
       }) &&
       sameDisplay &&
@@ -3314,7 +3332,7 @@ try {
   // Now the answer reaches the first tab. It is about the session that was signed out, and the
   // browser holds another by now.
   const reachedIt = tabOne
-    .waitForResponse((r) => new URL(r.url()).pathname === '/session/end', { timeout: 30_000 })
+    .waitForResponse((r) => r.request() === signingOut, { timeout: 30_000 })
     .then(
       (r) => r.status(),
       () => 'never',
@@ -3354,7 +3372,8 @@ try {
       }),
     JSON.stringify(lateAnswer),
   )
-  await lateOne.context.unroute('**/session/end')
+  // Whatever is still on its way through the route when the browser is closed is let go, and not taken for the run failing
+  await lateOne.context.unrouteAll({ behavior: 'ignoreErrors' })
   // That browser pairs a screen, and the owner then forgets the display it is. The site says
   // first what goes with it, and the browser's pairing and the screen's end with the display.
   const pairedByIt = await pairedByScript(`${APP}/pair#${await codeFrom(pairedAfresh, 'a screen')}`)

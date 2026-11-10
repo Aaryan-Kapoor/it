@@ -1451,6 +1451,263 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('`it open` with no display named says which display was chosen and why, and how to ask for another', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show'
+        ? {
+            displays: ['Desk'],
+            displayIds: ['jh7desk'],
+            notShown: [
+              { display: 'TV', displayId: 'k57tv', reason: 'agents_off' },
+              { display: 'Phone', displayId: 'p1', reason: 'not_chosen' },
+            ],
+            took: false,
+            chosen: 'open',
+          }
+        : null,
+    )
+    try {
+      const opened = await run(m, ['open', 'board'], b.env)
+      expect(b.asked.find((x) => x.path === 'displays:show')!.args).toEqual({ slug: 'board' })
+      const said = printed(opened)
+      expect(said).toMatchObject({ shownOn: ['Desk'], shownDisplayIds: ['jh7desk'] })
+      expect(said.hint).toContain('No display was named, so it is shown on "Desk" alone')
+      expect(said.hint).toContain('--everywhere')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it open` gives the page’s link where no display brought it up or it went to a display whose site is closed, as `it create` gives it', async () => {
+    const m = machine()
+    let answer: Record<string, unknown> = {}
+    const b = await backend(m, (asked) => (asked.path === 'displays:show' ? answer : null))
+    try {
+      // Sent to the display used last, whose site is closed: the person needs the link
+      answer = { displays: ['Desk'], displayIds: ['jh7desk'], notShown: [], took: false, chosen: 'last_used', url: 'http://127.0.0.1:39000/p/board' }
+      let said = printed(await run(m, ['open', 'board'], b.env))
+      expect(said.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/p\/board$/)
+      expect(said.hint).toContain('give them `url` in the chat')
+      // At the place the owner chose for links, where It is reached there
+      answer = { ...answer, link: 'http://studio.tail1234.ts.net:21000/p/board' }
+      said = printed(await run(m, ['open', 'board'], b.env))
+      expect(said.url).toBe('http://studio.tail1234.ts.net:21000/p/board')
+      expect(said).not.toHaveProperty('urlNote')
+      // Where it cannot be there, this machine's address, with why
+      answer = { ...answer, link: undefined, unlinked: { to: 'tailnet', why: 'off' } }
+      said = printed(await run(m, ['open', 'board'], b.env))
+      expect(said.url).toMatch(/\/p\/board$/)
+      expect(String(said.urlNote)).toContain('this url is the one this machine reaches It by')
+      // Shown on no display at all, where none was named
+      answer = {
+        displays: [],
+        displayIds: [],
+        notShown: [{ display: 'TV', displayId: 'k57tv', reason: 'not_paired' }],
+        took: false,
+        url: 'http://127.0.0.1:39000/p/board',
+      }
+      said = printed(await run(m, ['open', 'board', '--everywhere'], b.env))
+      expect(said.url).toMatch(/\/p\/board$/)
+      expect(said.hint).toContain('give the user `url` in the chat')
+      // Where the one display named shows nothing, the refusal carries the link
+      const refused = await run(m, ['open', 'board', '--on', 'TV'], b.env)
+      expect([refused.code, error(refused).code]).toEqual([1, 'not_paired'])
+      expect(error(refused).hint).toMatch(/give the user its link: http:\/\/127\.0\.0\.1:\d+\/p\/board$/)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a refused `it open` gives the link with why it is not at the place chosen for links, by name and by id', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show'
+        ? {
+            displays: [],
+            displayIds: [],
+            notShown: [{ display: 'TV', displayId: 'k57tv', reason: 'agents_off' }],
+            took: false,
+            url: 'http://127.0.0.1:39000/p/board',
+            unlinked: { to: 'tailnet', why: 'off' },
+          }
+        : null,
+    )
+    b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.notifyById] })
+    try {
+      for (const target of [
+        ['--on', 'TV'],
+        ['--on-id', 'k57tv'],
+      ]) {
+        const refused = await run(m, ['open', 'board', ...target], b.env)
+        expect([target[0], refused.code, error(refused).code]).toEqual([target[0], 1, 'agents_off'])
+        expect(error(refused).hint).toMatch(/Or give the user its link: http:\/\/127\.0\.0\.1:\d+\/p\/board Links are set to be at /)
+        expect(error(refused).hint).toContain('this url is the one this machine reaches It by. Tell the user that when you give it.')
+      }
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a page sent to a display named that takes nothing now is refused as a notification is, with the same code, words and exit, and shown somewhere it is answered', async () => {
+    const m = machine()
+    let reason = 'agents_off'
+    const b = await backend(m, (asked) =>
+      asked.path === 'publish:begin'
+        ? { artifactId: 'artifact-1', slug: 'board', version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+        : asked.path === 'publish:finish'
+          ? { slug: 'board', version: 1, url: 'https://site.example/p/board' }
+          : asked.path === 'displays:show'
+            ? 'displayId' in asked.args && asked.args.displayId === 'shown'
+              ? { displays: ['Desk'], displayIds: ['shown'], notShown: [], took: false }
+              : { displays: [], displayIds: [], notShown: [{ display: 'TV', displayId: 'k57tv', reason }], took: false }
+            : asked.path === 'notifications:send'
+              ? new Refusal({ code: 'forbidden', message: 'That display takes nothing from agents now.', notSent: reason } as never)
+              : null,
+    )
+    b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.notifyById] })
+    try {
+      for (const r of ['agents_off', 'not_paired']) {
+        reason = r
+        for (const target of [
+          ['--on', 'TV'],
+          ['--on-id', 'k57tv'],
+        ]) {
+          const opened = await run(m, ['open', 'board', ...target], b.env)
+          const sent = await run(m, ['notify', 'hello', ...target], b.env)
+          expect([opened.code, error(opened).code]).toEqual([sent.code, error(sent).code])
+          expect([opened.code, error(opened).code]).toEqual([1, r])
+          // The same sentence but for what was not done
+          expect(error(opened).message.replace('It was shown nowhere.', 'Nothing was sent.')).toBe(error(sent).message)
+        }
+      }
+      // Shown on the display named, it is answered as before
+      const shown = await run(m, ['open', 'board', '--on-id', 'shown'], b.env)
+      expect([shown.code, printed(shown).shownOn]).toEqual([0, ['Desk']])
+      // And with --open, the page is published and only showing it is said to have failed, with a code that is not 0
+      reason = 'agents_off'
+      const created = await run(m, ['create', 'Board', '--html', '<p>hi</p>', '--open', '--on', 'TV'], b.env)
+      expect(created.code).toBe(1)
+      expect(printed(created).notShown).toMatchObject({ code: 'agents_off' })
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--everywhere` asks every display in so many words, `--on all` is the name "all", and neither goes with --on or --on-id', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show' && asked.args.display === 'all'
+        ? new Refusal({ code: 'not_found', message: 'No display has that name.', noSuchDisplay: true } as never)
+        : asked.path === 'displays:show'
+          ? { displays: ['Desk', 'TV'], took: false }
+          : asked.path === 'notifications:send'
+            ? { id: 'n1', displays: ['Desk', 'TV'], displayIds: ['d', 't'], notShown: [] }
+            : asked.path === 'displays:list'
+              ? [{ id: 'd', name: 'Desk' }]
+              : null,
+    )
+    b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showEverywhere, TAKES.notifyEverywhere] })
+    try {
+      expect(printed(await run(m, ['open', 'board', '--everywhere'], b.env))).toMatchObject({ shownOn: ['Desk', 'TV'] })
+      expect(b.asked.find((x) => x.path === 'displays:show')!.args).toEqual({ slug: 'board', everywhere: true })
+      expect(printed(await run(m, ['notify', 'hi', '--everywhere'], b.env))).toEqual({ id: 'n1', sentTo: ['Desk', 'TV'], sentToIds: ['d', 't'] })
+      expect(b.asked.find((x) => x.path === 'notifications:send')!.args).toEqual({ text: 'hi', everywhere: true })
+      const named = await run(m, ['open', 'board', '--on', 'all'], b.env)
+      expect([named.code, error(named).code]).toEqual([1, 'not_found'])
+      expect(error(named).hint).toBe('Displays: "Desk". To ask every display, use --everywhere in place of --on.')
+      for (const words of [
+        ['open', 'board', '--everywhere', '--on', 'Desk'],
+        ['notify', 'hi', '--everywhere', '--on-id', 'd'],
+      ])
+        expect(error(await run(m, words, b.env)).code).toBe('invalid')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('against an It of an earlier version, `--everywhere` is asked again with no display named, which there is every display, and says so', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      'everywhere' in asked.args
+        ? SERVER_ERROR
+        : asked.path === 'displays:show'
+          ? { displays: ['Desk', 'TV'], notShown: [] }
+          : asked.path === 'notifications:send'
+            ? { id: 'n1' }
+            : null,
+    )
+    try {
+      const opened = printed(await run(m, ['open', 'board', '--everywhere'], b.env))
+      expect(opened).toMatchObject({ shownOn: ['Desk', 'TV'] })
+      expect(opened.hint).toContain('earlier version')
+      expect(printed(await run(m, ['notify', 'hi', '--everywhere'], b.env))).toEqual({ id: 'n1', hint: expect.stringContaining('earlier version') })
+      // Each was asked with no display named, and never in the form It said it does not take
+      expect(b.asked.filter((x) => x.path === 'displays:show').map((x) => x.args)).toEqual([{ slug: 'board' }])
+      expect(b.asked.filter((x) => x.path === 'notifications:send').map((x) => x.args)).toEqual([{ text: 'hi' }])
+      // An It that says it takes it is not asked again, and its failure is said as it is
+      b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showEverywhere] })
+      const failed = await run(m, ['open', 'board', '--everywhere'], b.env)
+      expect([failed.code, error(failed).code]).toEqual([1, 'error'])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('where It cannot say whether it takes `--everywhere`, nothing is sent or published, and the command is refused as offline', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'displays:show' ? { displays: ['Desk'], took: false } : { id: 'n1' }))
+    try {
+      b.config.answer = () => ({})
+      for (const words of [
+        ['open', 'board', '--everywhere'],
+        ['notify', 'hello', '--everywhere'],
+        ['create', 'Board', '--html', '<p>hi</p>', '--open', '--everywhere'],
+        ['update', 'board', '--html', '<p>hi</p>', '--open', '--everywhere'],
+        ['tour', 'show', 'menu', '--everywhere'],
+      ]) {
+        const ran = await run(m, words, b.env)
+        expect([words.join(' '), ran.code === 0, error(ran).code]).toEqual([words.join(' '), false, 'offline'])
+      }
+      expect(b.asked).toEqual([])
+      expect(b.uploads).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it notify` to a display that takes nothing now, to none, or to a name two displays share, is refused with why, and nothing is sent', async () => {
+    const m = machine()
+    let refusal: Record<string, unknown> = {}
+    const b = await backend(m, (asked) =>
+      asked.path === 'notifications:send'
+        ? new Refusal(refusal as never)
+        : asked.path === 'displays:list'
+          ? [
+              { id: 'a1', name: 'TV', paired: true, agents: true },
+              { id: 'b2', name: 'tv', paired: true, agents: false },
+            ]
+          : null,
+    )
+    try {
+      refusal = { code: 'forbidden', message: 'That display takes nothing from agents now.', notSent: 'agents_off' }
+      let ran = await run(m, ['notify', 'hi', '--on', 'Kitchen'], b.env)
+      expect([ran.code, error(ran).code, error(ran).message]).toEqual([1, 'agents_off', expect.stringContaining('Agents may not use "Kitchen"')])
+      refusal = { code: 'forbidden', message: 'No display can take this notification now.', notSent: 'nowhere' }
+      ran = await run(m, ['notify', 'hi'], b.env)
+      expect([error(ran).code, error(ran).hint]).toEqual(['nowhere', '"tv" is closed to agents.'])
+      refusal = { code: 'conflict', message: 'More than one display has that name.', sharedName: true }
+      ran = await run(m, ['notify', 'hi', '--on', 'TV'], b.env)
+      expect([error(ran).code, error(ran).message]).toEqual([
+        'conflict',
+        'More than one display is called "TV", so it is not clear which one is meant. Nothing was sent.',
+      ])
+      expect(error(ran).hint).toBe('Send it to one of them by its id, with --on-id <id>: "TV" (a1) and "tv" (b2)')
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it notify --on-id` sends to that display by its id', async () => {
     const m = machine()
     const b = await backend(m, (asked) => (asked.path === 'notifications:send' ? { id: 'n1' } : null))
@@ -4241,15 +4498,12 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
     })
     const AGAIN = 'On the machine It runs on, `it site` pairs the browser there. Another screen is paired from the site, under Displays, with “Add a display”.'
     try {
+      // Named, and showing nothing, it is refused as \`it notify\` refuses it
       const one = await run(m, ['open', 'plan', '--on', 'Kitchen'], b.env)
-      expect([one.code, printed(one)]).toEqual([
-        0,
-        {
-          id: 'plan',
-          shownOn: [],
-          notShownOn: [{ display: 'Kitchen', reason: 'not_paired' }],
-          hint: `"Kitchen" is not paired any more: the pairing of its browser was ended, and it shows nothing until that browser is paired again. ${AGAIN}`,
-        },
+      expect([one.code, error(one).code, error(one).message]).toEqual([
+        1,
+        'not_paired',
+        '"Kitchen" is not paired any more, and takes nothing until its browser is paired again. It was shown nowhere.',
       ])
       const created = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>', '--open'], b.env)
       expect([created.code, printed(created)]).toEqual([

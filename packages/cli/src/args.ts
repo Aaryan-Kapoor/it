@@ -22,6 +22,7 @@ export const BOOLEAN = new Set([
   'wait',
   'supervised',
   'refresh',
+  'everywhere',
 ])
 /** The switches that take a value: every other name a command line gives is refused, so that a misspelt one is never taken for nothing and the word after it never lost. */
 export const VALUED = new Set([
@@ -55,8 +56,8 @@ export interface Args {
 }
 /** The options each command can honour. JSON and help apply to every public command. */
 export const OPTIONS: Record<string, readonly string[]> = {
-  create: ['id', 'file', 'dir', 'html', 'state', 'agent', 'open', 'on', 'on-id', 'take'],
-  update: ['id', 'file', 'dir', 'html', 'title', 'agent', 'open', 'on', 'on-id', 'take'],
+  create: ['id', 'file', 'dir', 'html', 'state', 'agent', 'open', 'on', 'on-id', 'everywhere', 'take'],
+  update: ['id', 'file', 'dir', 'html', 'title', 'agent', 'open', 'on', 'on-id', 'everywhere', 'take'],
   list: [],
   read: [],
   delete: ['status'],
@@ -65,8 +66,8 @@ export const OPTIONS: Record<string, readonly string[]> = {
   patch: ['replace', 'if-revision'],
   state: [],
   say: [],
-  open: ['on', 'on-id'],
-  notify: ['id', 'on', 'on-id', 'sticky', 'button'],
+  open: ['on', 'on-id', 'everywhere'],
+  notify: ['id', 'on', 'on-id', 'everywhere', 'sticky', 'button'],
   displays: [],
   wait: ['id', 'follow', 'timeout'],
   actions: ['id', 'all', 'follow', 'after'],
@@ -84,7 +85,7 @@ export const OPTIONS: Record<string, readonly string[]> = {
   service: [],
   skill: [],
   tour: ['wait', 'timeout'],
-  'tour show': ['agent', 'param', 'on', 'on-id'],
+  'tour show': ['agent', 'param', 'on', 'on-id', 'everywhere'],
   'tour clear': [],
   telemetry: [],
   upgrade: ['check'],

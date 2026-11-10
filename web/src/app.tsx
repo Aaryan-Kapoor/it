@@ -54,10 +54,10 @@ import {
 } from './outbox'
 import { Grid, PageView, wasShown } from './pages'
 import { hasPending, watchPending } from './pending'
-import { startReports } from './presence'
+import { backendClock, lastWord, startReports } from './presence'
 import { dropPushHere, mendPush, pushSupport, turnOffPush, turnOnPush } from './push'
 import { ServiceNotice } from './service'
-import { codeSeen, current, signOut as endSession, pair, pairAsScreen, recheck, useSession } from './session'
+import { codeSeen, current, signOut as endSession, heldToken, pair, pairAsScreen, recheck, useSession } from './session'
 import { Displays, Settings } from './settings'
 import { TourDialog } from './welcome'
 
@@ -534,6 +534,14 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
     return startReports(
       (r) => convex.mutation(api.displays.report, { key, epoch, expectedSession: session, ...r }),
       () => backendTakes(TAKES.displayReports),
+      {
+        document,
+        window,
+        now: () => performance.now(),
+        clock: backendClock,
+        // And the report a closing tab makes goes the way that outlasts the tab
+        last: (r) => lastWord(r, { key, epoch, expectedSession: session }, heldToken()),
+      },
     )
   }, [convex, key, epoch, session])
 

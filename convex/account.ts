@@ -9,6 +9,7 @@ import { internal } from './_generated/api'
 import { mutation, query } from './_generated/server'
 import { revokeLater } from './content'
 import { receipt } from './deletions'
+import { seenOf } from './lib/aim'
 import { ownArtifact, requireOwner } from './lib/authz'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
@@ -36,12 +37,18 @@ export const exportStart = mutation({
       /** Whose export this is. The pieces that belong to no one page are asked for by this, so that an export never mixes two people's. */
       owner: user._id,
       pages: artifacts.map((a) => a._id),
-      displays: displays.map((d) => ({
-        name: d.name ?? d.generatedName,
-        createdAt: d.createdAt,
-        lastSeenAt: d.lastSeenAt,
-        ...(d.usedAt === undefined ? {} : { usedAt: d.usedAt }),
-      })),
+      displays: await Promise.all(
+        displays.map(async (d) => {
+          const { usedAt } = await seenOf(ctx, d)
+          return {
+            name: d.name ?? d.generatedName,
+            createdAt: d.createdAt,
+            lastSeenAt: d.lastSeenAt,
+            ...(usedAt === undefined ? {} : { usedAt }),
+            agents: d.agentsOff !== true,
+          }
+        }),
+      ),
     }
   },
 })
