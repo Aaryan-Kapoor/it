@@ -1222,6 +1222,18 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     expect(existsSync(path.join(folder, 'backend'))).toBe(false)
   })
 
+  test('a supervised start where It was never set up stops, and the service’s status says to run `it setup`', async () => {
+    expect(await well(run(['serve', '--supervised', '--log', path.join(folder, 'service.log')]))).toBe(0)
+    expect(kept('startup.json')).toMatchObject({ failures: 1, code: 'not_set_up', retryAt: null })
+    const reported = run(['service', 'status', '--json'])
+    expect(await well(reported)).toBe(0)
+    expect(JSON.parse(reported.out()).startup).toMatchObject({
+      paused: true,
+      code: 'not_set_up',
+      hint: 'Run `it setup`, which sets It up and starts it again in the background.',
+    })
+  })
+
   test('a supervised start stops for broken settings, then starts after they are repaired and clears its failure', async () => {
     expect(await well(run(['setup', '--none', '--no-service']))).toBe(0)
     const settings = path.join(folder, 'service.json')
