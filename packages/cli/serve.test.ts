@@ -1735,6 +1735,8 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
         url: `${door}/p/plan`,
         // And the agent is told to put that address in the chat, as for every page newly made
         tell: 'Give the user this url in the chat, in one short line that says what is on the page.',
+        // No display was asked, since --open was not given
+        hint: 'The page is published and not shown on any display, because --open was not given. Run `it open plan` to show it, or add --open when you publish.',
       })
       // Read back from the second machine, it is all there
       expect(await said(['read', 'plan'])).toMatchObject({
