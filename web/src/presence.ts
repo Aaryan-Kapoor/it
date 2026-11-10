@@ -111,10 +111,17 @@ export function startReports(
   /**
    * The same, by the browser's own clock. Where the machine sleeps, the clock that only goes
    * forward may stand still, and a use from before the sleep would look as if it were a moment
-   * ago: a use is of a moment ago only where both clocks say so.
+   * ago. So a use is as old as the longer of the two says, where the browser's clock went forward:
+   * one that was set back says nothing of how long ago it was. Once either says it is too old to be
+   * a use of a moment ago, it is that for good (`spent`), whatever a clock is set to after, and
+   * only another use is said.
    */
   let usedWallAt = Number.NEGATIVE_INFINITY
-  const fresh = () => now() - usedAt < USED_EVERY_MS && Math.abs(wall() - usedWallAt) < USED_EVERY_MS
+  let spent = true
+  const fresh = () => {
+    if (!spent && Math.max(now() - usedAt, wall() - usedWallAt, 0) >= USED_EVERY_MS) spent = true
+    return !spent
+  }
   let saidUseOf = Number.NEGATIVE_INFINITY
   let toldUsedAt = Number.NEGATIVE_INFINITY
   let asking = false
@@ -173,6 +180,7 @@ export function startReports(
     if (!visible()) return
     usedAt = now()
     usedWallAt = wall()
+    spent = false
     const wait = toldUsedAt + USED_EVERY_MS - usedAt
     if (wait <= 0) tell()
     else if (later === undefined)

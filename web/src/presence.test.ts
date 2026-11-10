@@ -354,3 +354,61 @@ test('a use kept from before the machine slept is not said as a use after it, an
   await vi.advanceTimersByTimeAsync(0)
   expect(sent.at(-1)).toMatchObject({ used: true, observedAt: 1_180_000 })
 })
+
+/** A reporter whose two clocks this test moves, and whose backend never takes a use, so that one stays kept. */
+function keptAcross() {
+  const c = clockOf()
+  c.set(1_000_000)
+  const clocks = { mono: 0, wall: 50_000_000 }
+  const sent: Report[] = []
+  stop = startReports(
+    (r) => {
+      sent.push(r)
+      return Promise.resolve({ accepted: true, used: false })
+    },
+    () => true,
+    { document, window, now: () => clocks.mono, wall: () => clocks.wall, clock: c.clock },
+  )
+  return { c, clocks, sent }
+}
+
+test('a use a second old is still a use where the browser’s clock is set back meanwhile', async () => {
+  const { c, clocks, sent } = keptAcross()
+  await vi.advanceTimersByTimeAsync(0)
+  click()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.at(-1)).toMatchObject({ used: true })
+  // A second on, the browser's clock is put a minute back
+  clocks.mono += 1000
+  clocks.wall += 1000 - 60_000
+  c.learn(1_001_000)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.at(-1)).toMatchObject({ used: true, observedAt: 1_001_000 })
+})
+
+test('a use too old after a sleep stays too old where the browser’s clock is then set back to about when it was made', async () => {
+  const { c, clocks, sent } = keptAcross()
+  await vi.advanceTimersByTimeAsync(0)
+  click()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.at(-1)).toMatchObject({ used: true })
+  // Three minutes asleep, and a tenth of a second by the clock that stood still
+  clocks.mono += 100
+  clocks.wall += 180_000
+  let count = sent.length
+  c.learn(1_180_000)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.slice(count).filter((r) => r.used)).toEqual([])
+  // The browser's clock is put back to a moment after the click: still no use, with nothing done since
+  clocks.mono += 100
+  clocks.wall -= 179_000
+  count = sent.length
+  c.learn(1_181_000)
+  await vi.advanceTimersByTimeAsync(VISIBLE_EVERY_MS)
+  expect(sent.length).toBeGreaterThan(count)
+  expect(sent.slice(count).filter((r) => r.used)).toEqual([])
+  // Only another use is said
+  click()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.at(-1)).toMatchObject({ used: true })
+})
