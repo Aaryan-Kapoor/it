@@ -39,7 +39,7 @@ import {
 } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
-import { type Arrives, arrives, claudeAfterSetup, claudeReloadLine, claudeRunning, tellWordForWord } from './arrives'
+import { type Arrives, arrives, claudeAfterSetup, claudeReloadLine, claudeRunning, reloadLine, tellWordForWord } from './arrives'
 import { choices, conversationIds, local, type Route, refusedFor } from './connector'
 import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
@@ -120,6 +120,7 @@ import {
   CODEX_RULE_FILE,
   CODEX_SHUT,
   claudeDesktopHere,
+  claudeFolders,
   codexLetsItOut,
   codexRuleLetsItOut,
   detectAll,
@@ -140,7 +141,7 @@ import { zshDirectory } from './shell-profile'
 import { GUIDE, NAMES, END as TOUR_END, STEPS as TOUR_STEPS, tourPage } from './tour'
 import { finishInstallationRemoval, installationFile, removeInstallationFiles, stepOutOf, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
-import { addonsSaid, afterUpgrade, restartLine } from './upgraded'
+import { addonsSaid, afterUpgrade, RELOAD_OPEN, restartLine } from './upgraded'
 import * as usage from './usage'
 import { type Listed, printed, wait } from './wait'
 import { listActions, watchActions } from './watch-actions'
@@ -228,8 +229,20 @@ function wakesSaid(woken: string[]): string | null {
  * just brought to another build: one that is running goes on with the build it loaded until it is
  * restarted. An app connected for the first time is told what to do by `AFTER`.
  */
-const restartSaid = (outcomes: AddonOutcome[], before: Set<Harness>): string | null =>
-  restartLine(outcomes.filter((o) => o.did === 'installed' && o.restart && before.has(o.id)).map((o) => KNOWN[o.id].label))
+/**
+ * What an app whose add-on was brought up to date is to do to load the new one: restart, or,
+ * in Claude Code, type /reload-plugins in each conversation that was open, which loads it there
+ * without a restart. A conversation that was open goes on with what it loaded until then, which
+ * after 0.1.36 is nothing at all.
+ */
+const restartSaid = (outcomes: AddonOutcome[], before: Set<Harness>): string | null => {
+  const brought = outcomes.filter((o) => o.did === 'installed' && o.restart && before.has(o.id))
+  const lines = [
+    restartLine(brought.filter((o) => o.id !== 'claude-code').map((o) => KNOWN[o.id].label)),
+    brought.some((o) => o.id === 'claude-code') ? RELOAD_OPEN : null,
+  ].filter(Boolean)
+  return lines.length ? lines.join(' ') : null
+}
 
 function appsSaid(found: LoadedStatus[], advise = true, withCodex = true): string[] {
   // Said as long as it is so, as Codex's is: otherwise someone who uses Claude Code in its desktop app alone is told only that no app was found
@@ -1685,7 +1698,11 @@ async function refreshing(a: Args) {
   return tell([
     !outcomes.length ? 'Every add-on this It folder put into an agent app is up to date.' : undefined,
     brought.length ? `Brought up to date: ${brought.join(', ')}.` : undefined,
-    ...addonsSaid({ started: 'by hand', addons: outcomes }, (id) => KNOWN[id].label),
+    ...addonsSaid(
+      { started: 'by hand', addons: outcomes },
+      (id) => KNOWN[id].label,
+      outcomes.some((o) => o.id === 'claude-code' && o.did === 'installed'),
+    ),
   ])
 }
 
@@ -2006,10 +2023,7 @@ async function settingUpLed(a: Args, begunAlready = false) {
     }
     // Claude Code, connected just now from inside one of its conversations that has not loaded the add-on: said last of all, to the person
     const reload =
-      wanted.includes('claude-code') &&
-      !connectedBefore.has('claude-code') &&
-      after.some((h) => h.id === 'claude-code' && h.addon === 'connected') &&
-      claudeReloadLine()
+      wanted.includes('claude-code') && after.some((h) => h.id === 'claude-code' && h.addon === 'connected') && claudeReloadLine()
         ? 'Claude Code: the conversation this ran in was already open when It’s add-on was installed, so it has not loaded it. Type /reload-plugins in it, so that what you do on a page reaches it.'
         : undefined
 
@@ -2366,11 +2380,8 @@ async function settingUp(a: Args, joined: boolean) {
     // Claude Code, connected just now from inside one of its conversations that has not loaded the add-on: said last of all,
     // since it is what decides whether what the person does on a page reaches the conversation they are in, and
     // said to the agent, with the words it is to tell the person, since the agent is the one that reads it
-    const reloadLine =
-      wanted.includes('claude-code') && !before.has('claude-code') && after.some((h) => h.id === 'claude-code' && h.addon === 'connected')
-        ? claudeReloadLine()
-        : undefined
-    if (reloadLine) say(`\n${claudeAfterSetup()}`)
+    const toTell = wanted.includes('claude-code') && after.some((h) => h.id === 'claude-code' && h.addon === 'connected') ? claudeReloadLine() : undefined
+    if (toTell) say(`\n${claudeAfterSetup()}`)
     if (!forPerson(a))
       out({
         harnesses: after,
@@ -2381,11 +2392,9 @@ async function settingUp(a: Args, joined: boolean) {
         ...(unasked ? { hint: unasked } : {}),
         // An agent that is installing It reads this whole, whatever it was given of the guide.
         // Said once an agent app is connected: until then the hint above is what comes next
-        ...(after.some((h) => h.addon === 'connected' || h.addon === 'needs_approval')
-          ? { next: reloadLine ? afterSetupTelling(reloadLine) : AFTER_SETUP }
-          : {}),
+        ...(after.some((h) => h.addon === 'connected' || h.addon === 'needs_approval') ? { next: toTell ? afterSetupTelling(toTell) : AFTER_SETUP } : {}),
         // And the words themselves, last of all in what it prints
-        ...(reloadLine ? { tell: tellWordForWord(reloadLine) } : {}),
+        ...(toTell ? { tell: tellWordForWord(toTell) } : {}),
       })
     // Setup that leaves It not running where it was wanted has not done what it was asked, and ends by saying so
     if (trouble) process.exitCode = 1
@@ -2738,6 +2747,20 @@ async function status(a: Args) {
   // anything, in a Claude Code started with the same environment: it says nothing of that itself
   const info = readJson<{ socket?: unknown; port?: unknown }>(inHome('connector.json'))
   const behindProxy = !!info && !(typeof info.socket === 'string' && info.socket) && typeof info.port === 'number' && proxiedForClaude(process.env)
+  // What runs is older than this program, as after an upgrade of an It that was started by hand
+  // and has not been started again: said, with how to start it as this one
+  const runs = typeof connector.version === 'string' ? connector.version : null
+  const older =
+    runs && newer(VERSION, runs)
+      ? service.installedHere()
+        ? `It is still running as ${runs}, older than this program, ${VERSION}. Run \`it setup\` to start it again as ${VERSION}.`
+        : `It is still running as ${runs}, older than this program, ${VERSION}: stop \`it serve\` where it is running, and start it again.`
+      : undefined
+  // The Claude Code conversations open on this machine that have not loaded It's add-on, as its connector told It
+  const unloaded = typeof machine?.notLoaded === 'number' ? machine.notLoaded : 0
+  const reload = unloaded
+    ? `${unloaded === 1 ? 'A Claude Code conversation that is open here has' : `${unloaded} Claude Code conversations that are open here have`} not loaded It’s add-on, so what is done on ${unloaded === 1 ? 'its pages does not reach it' : 'their pages does not reach them'}. Type /reload-plugins in ${unloaded === 1 ? 'it' : 'each of them'}.`
+    : undefined
   const stands = {
     ...(blocked ? { blocked: true, hint } : {}),
     running: blocked ? null : running,
@@ -2756,6 +2779,8 @@ async function status(a: Args) {
     // A newer version that this machine has learned is out, where it looks for one
     ...(newerOut ? { update: { latest: newerOut, how: 'Run `it upgrade`.' } } : {}),
     ...(hint && !blocked ? { hint } : {}),
+    ...(older && !blocked ? { restart: older } : {}),
+    ...(reload && !blocked ? { reload } : {}),
   }
   if (!forPerson(a)) {
     // Asked from a conversation: whether what is done on its pages arrives there by itself, which
@@ -2795,7 +2820,9 @@ async function status(a: Args) {
                 : `The network is on, for anyone on this network. Devices on it open the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`,
     ...appsSaid(stands.harnesses),
     ...(stands.harnesses.some((h) => 'proxied' in h) ? [PROXIED] : []),
+    reload,
     ...serviceSaid(stands.background, stands.connector, running && enrolled),
+    older,
     newerOut ? `It ${newerOut} is out, and this is ${VERSION}. \`it upgrade\` puts it in place.` : `This is It ${VERSION}.`,
   ])
 }
@@ -3156,6 +3183,17 @@ async function main(argv: string[]): Promise<void> {
       if (started === 'failed' || failedAddons.length) process.exitCode = 1
       // Counted: from which version to which, and whether It runs as the new one
       usage.record('upgrade.done', { from: usage.three(done.from), to: usage.three(done.to), by: 'command', result: started === 'failed' ? 'failed' : 'ok' })
+      // Where Claude Code has It's add-on here, its conversations that were open have not loaded the new one
+      const claude = claudeFolders().length > 0
+      // And what whoever reads this is to do: start It again where it was started by hand and runs the old version still
+      const byHand =
+        started === 'by hand' && after.running ? 'It is still running as the old version: stop `it serve` where it is running, and start it again.' : undefined
+      const reload = claude
+        ? after.addonsLater
+          ? `Once it runs as the new version, ${RELOAD_OPEN.charAt(0).toLowerCase()}${RELOAD_OPEN.slice(1)}`
+          : RELOAD_OPEN
+        : undefined
+      const hint = [byHand, reload].filter(Boolean).join(' ')
       const result = {
         upgraded: true,
         from: done.from,
@@ -3164,6 +3202,9 @@ async function main(argv: string[]): Promise<void> {
         ...(why ? { problem: why } : {}),
         ...(after.addons ? { addons: after.addons } : {}),
         ...(after.addonsLater ? { addonsLater: true } : {}),
+        ...(hint ? { hint } : {}),
+        // An agent that upgraded It from a Claude Code conversation is in one of those: it tells the person, word for word
+        ...(claude && sessionAsked()?.session.harness === 'claude-code' ? { tell: tellWordForWord(reloadLine(claudeRunning())) } : {}),
       }
       if (!forPerson(a)) return out(result)
       return tell([
@@ -3175,7 +3216,7 @@ async function main(argv: string[]): Promise<void> {
             : after.running
               ? 'It runs as the new version once it is started again: stop `it serve` where it is running, and start it.'
               : 'It runs as the new version the next time it is started, with `it serve`.',
-        ...addonsSaid(after, (id) => KNOWN[id].label),
+        ...addonsSaid(after, (id) => KNOWN[id].label, claudeFolders().length > 0),
       ])
     }
     case 'runs': {
