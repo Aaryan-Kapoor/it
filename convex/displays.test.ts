@@ -941,6 +941,9 @@ describe('a display locked to a page', () => {
     expect((await h.row(h.tv.id)).showing?.artifactId).toBe(h.workout)
   })
 
+  // Needs `picture` on `mounts.create`, which #362 brings: see the TODO in convex/mounts.ts
+  test.todo('a picture is refused on a locked display, for its own page too')
+
   test('a screen is let open no other page there, whatever site asks, while the owner’s browser elsewhere still opens any', async () => {
     const h = await locked()
     await h.tv.as.action(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })
