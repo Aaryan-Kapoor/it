@@ -104,7 +104,7 @@ The lines below work on It's folder: the one `IT_HOME` names, where that is set 
 On Linux and macOS:
 
 1. Where you started It yourself with `it serve`, stop that with Ctrl-C.
-2. Put the name of the copy's folder after `copy=` in these lines, and paste them into a terminal that runs bash or zsh. In fish, type `sh` first. They stop the background service and keep it from starting again by itself, copy It's folder aside, and then put the copy in place of the database. They stop at the first command that fails. They change nothing where the copy is not there, It is still running, the folder kept aside is there already, or a part of It's folder that matters is a link, since a copy of a link would not hold what it leads to.
+2. Put the name of the copy's folder after `copy=` in these lines, and paste them into a terminal that runs bash or zsh. In fish, type `sh` first. They stop the background service and keep it from starting again by itself, copy It's folder aside, and then put the copy in place of the database. They stop at the first command that fails. They change nothing where the copy is not there, It is still running, a folder kept aside or a copy cut short by an earlier run is there already, or a part of It's folder or of the copy that matters is a link, since a copy of a link would not hold what it leads to. They copy It's folder into a new folder of their own, and give that folder its name only once the copy is whole.
 
    ```sh
    (
@@ -113,29 +113,34 @@ On Linux and macOS:
      live=$(cd -P "${IT_HOME:-$HOME/.it}" && pwd -P)
      saved="$live-after-upgrade"
      copy=before-...
-     cd "$live/backend"
-     if [ ! -f "$copy/data.json" ]; then echo "There is no copy named $copy in $live/backend, so nothing was changed." >&2; exit 1; fi
-     if [ -e lock ]; then echo "It is still running, so nothing was changed. Stop it, and run these lines again." >&2; exit 1; fi
-     if [ -e "$saved" ] || [ -L "$saved" ]; then echo "$saved is there already, so nothing was changed." >&2; exit 1; fi
-     for part in "$live/backend" "$live/content" "$live/content-data" db.sqlite3 data.json storage; do
-       if [ -L "$part" ]; then echo "$part is a link, so a copy of It's folder would not hold what it leads to, and nothing was changed." >&2; exit 1; fi
+     from="$live/backend/$copy"
+     if [ ! -f "$from/data.json" ]; then echo "There is no copy named $copy in $live/backend, so nothing was changed." >&2; exit 1; fi
+     if [ -e "$live/backend/lock" ]; then echo "It is still running, so nothing was changed. Stop it, and run these lines again." >&2; exit 1; fi
+     for left in "$saved" "$saved".part.*; do
+       if [ -e "$left" ] || [ -L "$left" ]; then echo "$left is there already, so nothing was changed. Look at what is in it, remove it yourself if you do not need it, and run these lines again." >&2; exit 1; fi
      done
-     echo "Copying It's folder to $saved."
-     rm -rf "$saved.part"
-     cp -Rp "$live" "$saved.part"
-     mv "$saved.part" "$saved"
-     if [ "$saved/backend/data.json" -ef "$live/backend/data.json" ]; then echo "$saved is not a copy of its own, so nothing more was changed." >&2; exit 1; fi
+     for entry in "$live/backend" "$live/content" "$live/content-data" "$live/backend"/db.sqlite3* "$live/backend/data.json" "$live/backend/storage" "$from" "$from"/db.sqlite3* "$from/data.json" "$from/storage"; do
+       if [ -L "$entry" ]; then echo "$entry is a link, so a copy would not hold what it leads to, and nothing was changed." >&2; exit 1; fi
+     done
+     part=$(mktemp -d "$saved.part.XXXXXX")
+     echo "Copying It's folder to $part."
+     cp -Rp "$live"/. "$part"
+     for file in "$live/backend"/db.sqlite3* "$live/backend/data.json"; do
+       if [ ! -f "$part/backend/${file##*/}" ] || [ -L "$part/backend/${file##*/}" ] || [ "$part/backend/${file##*/}" -ef "$file" ]; then echo "$part is not a whole copy of its own, so nothing in It's folder was changed. Remove it yourself." >&2; exit 1; fi
+     done
+     mv "$part" "$saved"
      echo "It's folder as it was is kept in $saved."
+     cd "$live/backend"
      rm -rf db.sqlite3* data.json storage
-     cp -p "$copy"/db.sqlite3* "$copy"/data.json .
-     cp -Rp "$copy"/storage .
+     cp -p "$from"/db.sqlite3* "$from"/data.json .
+     cp -Rp "$from"/storage .
      echo "The copy is in place."
    )
    ```
 
    The last thing they say is "The copy is in place." Where they stop before that, nothing after the command that failed has run, and the line just above says why.
 
-   - If they stopped before saying that It's folder as it was is kept, It's folder has not been changed. Put right what the message says, and run the lines again. A copy that was cut short, in a folder whose name ends in `-after-upgrade.part`, is removed by the next run.
+   - If they stopped before saying that It's folder as it was is kept, It's folder has not been changed. Where they had begun copying it, they named the folder they were copying it to, whose name ends in `-after-upgrade.part.` and a few letters, and a copy that was cut short is left there. Look at it and remove it yourself, put right what the message says, and run the lines again. The lines never remove such a folder themselves, and refuse to begin while one is there, since they cannot tell what it holds.
    - If they stopped after saying so, put the kept folder back first, with the lines in [Putting the kept folder back](#putting-the-kept-folder-back). Then run these lines again.
    - If It ended without tidying up after itself, the lines say that it is still running when it is not. Start it once with `it serve`, stop it with Ctrl-C, and run them again.
 3. Install the older version, naming its release, as `v0.1.36` is named here:
@@ -163,30 +168,41 @@ On Windows, in PowerShell, which may be Windows PowerShell 5.1:
        }
        $item.FullName
      }
+     $folder = if ($env:IT_HOME) { [IO.Path]::GetFullPath([IO.Path]::Combine((Get-Location -PSProvider FileSystem).ProviderPath, $env:IT_HOME)) } else { Join-Path $HOME '.it' }
+     if ($env:IT_HOME) { $env:IT_HOME = $folder }
      Set-Location $env:TEMP
      it service uninstall
      if ($LASTEXITCODE -ne 0) { throw 'The background service could not be stopped, so nothing was changed.' }
-     $folder = if ($env:IT_HOME) { $env:IT_HOME } else { Join-Path $HOME '.it' }
      $live = Get-RealPath $folder
      $saved = "$live-after-upgrade"
      $backend = Join-Path $live 'backend'
      $from = Join-Path $backend $copy
      if (-not (Test-Path -LiteralPath (Join-Path $from 'data.json'))) { throw "There is no copy named $copy in $backend, so nothing was changed." }
      if (Test-Path -LiteralPath (Join-Path $backend 'lock')) { throw 'It is still running, so nothing was changed. Stop it, and run this again.' }
-     if (Test-Path -LiteralPath $saved) { throw "$saved is there already, so nothing was changed." }
-     foreach ($part in 'backend', 'content', 'content-data', 'backend\db.sqlite3', 'backend\data.json', 'backend\storage') {
-       $at = Join-Path $live $part
-       if ((Test-Path -LiteralPath $at) -and (Get-Item -LiteralPath $at -Force).LinkType) { throw "$at is a link, so a copy of It's folder would not hold what it leads to, and nothing was changed." }
+     $name = Split-Path -Leaf $saved
+     $left = @(Get-ChildItem -LiteralPath (Split-Path -Parent $live) -Force | Where-Object { $_.Name -eq $name -or $_.Name -like "$name.part.*" })
+     if ($left.Count -gt 0) { throw "$($left[0].FullName) is there already, so nothing was changed. Look at what is in it, remove it yourself if you do not need it, and run this again." }
+     $entries = @()
+     foreach ($at in (Join-Path $live 'backend'), (Join-Path $live 'content'), (Join-Path $live 'content-data'), $from, (Join-Path $backend 'data.json'), (Join-Path $backend 'storage'), (Join-Path $from 'data.json'), (Join-Path $from 'storage')) {
+       if (Test-Path -LiteralPath $at) { $entries += Get-Item -LiteralPath $at -Force }
      }
-     "Copying It's folder to $saved."
-     if (Test-Path -LiteralPath "$saved.part") { Remove-Item -LiteralPath "$saved.part" -Recurse -Force }
-     Copy-Item -LiteralPath $live -Destination "$saved.part" -Recurse -Force
-     Move-Item -LiteralPath "$saved.part" -Destination $saved
-     if ((Get-RealPath (Join-Path $saved 'backend')) -eq (Get-RealPath $backend)) { throw "$saved is not a copy of its own, so nothing more was changed." }
+     $entries += @(Get-ChildItem -LiteralPath $backend -Filter 'db.sqlite3*' -Force) + @(Get-ChildItem -LiteralPath $from -Filter 'db.sqlite3*' -Force)
+     foreach ($entry in $entries) {
+       if ($entry.LinkType) { throw "$($entry.FullName) is a link, so a copy would not hold what it leads to, and nothing was changed." }
+     }
+     $part = "$saved.part." + [guid]::NewGuid().ToString('N')
+     New-Item -ItemType Directory -Path $part | Out-Null
+     "Copying It's folder to $part."
+     Get-ChildItem -LiteralPath $live -Force | Copy-Item -Destination $part -Recurse -Force
+     foreach ($file in @(Get-ChildItem -LiteralPath $backend -Filter 'db.sqlite3*' -Force | ForEach-Object { $_.Name }) + 'data.json') {
+       $copied = Join-Path (Join-Path $part 'backend') $file
+       if (-not (Test-Path -LiteralPath $copied -PathType Leaf) -or (Get-Item -LiteralPath $copied -Force).LinkType) { throw "$part is not a whole copy of its own, so nothing in It's folder was changed. Remove it yourself." }
+     }
+     Move-Item -LiteralPath $part -Destination $saved
      "It's folder as it was is kept in $saved."
-     Get-ChildItem -LiteralPath $backend -Filter 'db.sqlite3*' | Remove-Item -Force
+     Get-ChildItem -LiteralPath $backend -Filter 'db.sqlite3*' -Force | Remove-Item -Force
      Remove-Item -LiteralPath (Join-Path $backend 'data.json'), (Join-Path $backend 'storage') -Recurse -Force
-     Get-ChildItem -LiteralPath $from -Filter 'db.sqlite3*' | Copy-Item -Destination $backend
+     Get-ChildItem -LiteralPath $from -Filter 'db.sqlite3*' -Force | Copy-Item -Destination $backend
      Copy-Item -LiteralPath (Join-Path $from 'data.json') -Destination $backend
      Copy-Item -LiteralPath (Join-Path $from 'storage') -Destination $backend -Recurse
      'The copy is in place.'
@@ -239,10 +255,11 @@ On Windows, stop It with Ctrl-C where you started it with `it serve`, and paste 
     }
     $item.FullName
   }
+  $folder = if ($env:IT_HOME) { [IO.Path]::GetFullPath([IO.Path]::Combine((Get-Location -PSProvider FileSystem).ProviderPath, $env:IT_HOME)) } else { Join-Path $HOME '.it' }
+  if ($env:IT_HOME) { $env:IT_HOME = $folder }
   Set-Location $env:TEMP
   it service uninstall
   if ($LASTEXITCODE -ne 0) { throw 'The background service could not be stopped, so nothing was changed.' }
-  $folder = if ($env:IT_HOME) { $env:IT_HOME } else { Join-Path $HOME '.it' }
   $live = Get-RealPath $folder
   $saved = "$live-after-upgrade"
   $replaced = "$live-replaced"
