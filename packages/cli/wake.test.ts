@@ -1515,6 +1515,33 @@ describe('a reopened run on Windows, as it is put to the system', () => {
       expect(windowsProgram('claude', 'C:\\npm', exists, read)).toEqual([`C:\\npm\\${targets['claude-native']}`])
     })
 
+    test('a setting without quotes in one of their scripts with spaces at its end, which cmd.exe would set with them, makes it a script of another kind', () => {
+      const { targets, scripts } = shims
+      const files = { [`C:\\npm\\${targets.codex}`]: '', 'C:\\npm\\node.exe': '' }
+      const starts = (script: string) => {
+        const { exists, read } = disk({ ...files, 'C:\\npm\\codex.cmd': script })
+        return windowsProgram('codex', 'C:\\npm', exists, read)
+      }
+      const started = ['C:\\npm\\node.exe', `C:\\npm\\${targets.codex}`]
+      let refused = 0
+      for (const [by, written] of Object.entries(scripts)) {
+        expect([by, starts(written.codex)]).toEqual([by, started])
+        // Spaces at the end of a line that sets nothing change nothing
+        const spaced = written.codex.replace(/^(?!\s*@?SET [^"]).*?(?=\r?\n|$)/gim, (line) => (line ? `${line} \t` : line))
+        expect(spaced).not.toBe(written.codex)
+        expect([by, starts(spaced)]).toEqual([by, started])
+        for (const setting of ['SET dp0=%~dp0', 'SET PATHEXT=%PATHEXT:;.JS;=;%']) {
+          if (!written.codex.includes(setting)) continue
+          for (const end of [' ', '\t', '  ']) {
+            expect([by, setting, end, starts(written.codex.replace(setting, `${setting}${end}`))]).toEqual([by, setting, end, null])
+            refused++
+          }
+        }
+      }
+      // dp0 in npm 6's and in npm 7's to 10's, and PATHEXT in each of the five
+      expect(refused).toBe(3 * (3 + 5))
+    })
+
     test('a command script that is not wholly one of theirs, or names its file anywhere but from its own folder, is read for nothing', () => {
       const PATH = 'C:\\npm;C:\\Program Files\\nodejs'
       const files = {

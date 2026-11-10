@@ -945,14 +945,18 @@ function templateOf(lines: string[]): RegExp {
  * named from the script's own folder, and whether it hands them to Node with it. The script is
  * read only where the whole of it is one of those package managers' own (SHIMS): any other line,
  * or one of theirs changed, makes it a script of another kind. Lines are compared without the
- * spaces around them, lines with nothing in them, or case. And the file must be named from the
+ * spaces around them, lines with nothing in them, or case, except for spaces at the end of a
+ * setting without quotes, which are part of what it sets and make it another. And the file must be named from the
  * script's folder, and nowhere else: not with a drive or from the top of one, and with no
  * variable in it that cmd.exe would fill in (`%`, or `!` where it fills those in too).
  */
 function shimTarget(text: string): { file: string; node: boolean } | null {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
+  const said = text.split(/\r?\n/).map((line) => line.replace(/\r+$/, '').trimStart())
+  // A setting without quotes takes everything after its `=`, the spaces at its end too: `dp0`
+  // and `PATHEXT` would then be other than the template has them
+  if (said.some((line) => /^@?set\s+[^"\s]/i.test(line) && /\s$/.test(line))) return null
+  const lines = said
+    .map((line) => line.trimEnd())
     .filter(Boolean)
     .join('\n')
   for (const shim of SHIMS) {
