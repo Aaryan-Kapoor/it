@@ -757,9 +757,28 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
       const stuck = pasted(documented('-replaced'), home, undefined, 0, scratch, shell, bothStay)
       expect([shell, stuck.code, stuck.out]).toEqual([shell, 1, ''])
       expect(stuck.err).toBe(
-        `mv: cannot move ${home}-after-upgrade\nmv: cannot move ${home}-replaced\nThe kept folder could not be moved into place, and It's folder could not be moved back either. It's folder is now ${home}-replaced, and the kept folder is still ${home}-after-upgrade. Once nothing has a file open in it, move It's folder back with: mv "${home}-replaced" "${home}"\n${SETUP}`,
+        `mv: cannot move ${home}-after-upgrade\nmv: cannot move ${home}-replaced\nThe kept folder could not be moved into place, and It's folder could not be moved back either. It's folder is now ${home}-replaced, and the kept folder is still ${home}-after-upgrade. Once nothing has a file open in it, move It's folder back with: mv '${home}-replaced' '${home}'\n${SETUP}`,
       )
       expect([existsSync(home), tree(`${home}-replaced`), tree(`${home}-after-upgrade`)]).toEqual([false, asItIs, kept])
+    }
+    // In a folder whose name has in it what a shell or a person pasting might take for something
+    // else, the lines put the copy back, and where neither folder can be moved the command they
+    // print moves It's folder back when it is pasted
+    for (const shell of SHELLS) {
+      const parent = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'it-restore-named-')))
+      const home = path.join(parent, `it $cash \`tick\` "double" 'single'`)
+      beside.push(parent)
+      cpSync(folder, home, { recursive: true })
+      const put = pasted(documented('copy='), home, kept[0], 0, scratch, shell)
+      expect([shell, put.code, put.err, put.out.split('\n').at(-2)]).toEqual([shell, 0, '', 'The copy is in place.'])
+      const asItIs = tree(home)
+      const stuck = pasted(documented('-replaced'), home, undefined, 0, scratch, shell, bothStay)
+      expect([shell, stuck.code, existsSync(home), tree(`${home}-replaced`)]).toEqual([shell, 1, false, asItIs])
+      const command = /move It's folder back with: (.*)\n/.exec(stuck.err)?.[1]
+      expect(command).toBeDefined()
+      const moved = spawnSync(shell, ['-c', command!], { encoding: 'utf8' })
+      expect([shell, command, moved.status, moved.stderr]).toEqual([shell, command, 0, ''])
+      expect([tree(home), existsSync(`${home}-replaced`), existsSync(`${home}-after-upgrade`)]).toEqual([asItIs, false, true])
     }
   }, 600_000)
 
