@@ -554,7 +554,7 @@ async function putUnder(
   ctx: MutationCtx,
   d: Doc<'displays'>,
   lock: Doc<'displays'>['lockedTo'],
-  opts: { fresh?: boolean; revokeInMs?: number } = {},
+  opts: { fresh?: boolean; revokeInMs?: number; confirm?: boolean } = {},
 ): Promise<Id<'contentJobs'> | null> {
   const now = Date.now()
   const change: Partial<Doc<'displays'>> = { lockedTo: lock, lockEnded: undefined }
@@ -563,6 +563,11 @@ async function putUnder(
   if (lock && !opts.fresh && d.lockedTo?.artifactId !== lock.artifactId) {
     change.epoch = d.epoch + 1
     job = await revokeLater(ctx, { userId: d.userId, displayId: d._id, epoch: d.epoch + 1 }, { inMs: opts.revokeInMs })
+  } else if (lock && opts.confirm) {
+    // Locked to the page it is locked to already: nothing it shows is ended, and its number is
+    // not raised. What is asked for is that the content service has its number as it is now,
+    // which an earlier lock may not have got through to it, so that what is said of it is so
+    job = await revokeLater(ctx, { userId: d.userId, displayId: d._id, epoch: d.epoch }, { inMs: opts.revokeInMs })
   }
   await ctx.db.patch(d._id, change)
   return job
@@ -599,12 +604,14 @@ export const _lock = internalMutation({
     if (page.currentVersion === undefined) fail('not_found', 'That page has nothing published yet.')
     const lock = { artifactId: page._id, at: Date.now() }
     const jobs: Id<'contentJobs'>[] = []
+    const displayIds: Id<'displays'>[] = []
     for (const x of await ofPairing(ctx, d.sessionId)) {
-      const job = await putUnder(ctx, x, lock, { revokeInMs: LOCK_REVOKE_BACKUP_MS })
+      const job = await putUnder(ctx, x, lock, { revokeInMs: LOCK_REVOKE_BACKUP_MS, confirm: true })
       if (job) jobs.push(job)
+      displayIds.push(x._id)
     }
     log('display.locked', { userId: c.user._id, displayId: d._id, by: c.session.role })
-    return { jobs }
+    return { jobs, userId: c.user._id, displayIds }
   },
 })
 
@@ -619,15 +626,22 @@ export const _lock = internalMutation({
  * A display locked to another page than it showed is signed out of what it showed, and this
  * answers only once the content service has said so: from then on a showing the display had of
  * another page, and a ticket it was given for one, open nothing. `revoked` is false where the
- * content service could not be told just now. The display is locked all the same, and It goes
- * on telling the content service until it hears, as it does for a sign-out.
+ * content service could not be told just now, or has yet to take in any revocation of the
+ * display's, by this lock or another. The display is locked all the same, and It goes on telling
+ * the content service until it hears, as it does for a sign-out. A lock to the page a display is
+ * locked to already ends nothing, and asks the content service only to confirm the number the
+ * display has now.
  */
 export const lock = action({
   args: { displayId: v.id('displays'), artifactId: v.id('artifacts') },
   handler: async (ctx, args): Promise<{ revoked: boolean }> => {
-    const { jobs } = await overClashes(() => ctx.runMutation(internal.displays._lock, args))
+    const { jobs, userId, displayIds } = await overClashes(() => ctx.runMutation(internal.displays._lock, args))
     const told = await Promise.all(jobs.map((jobId) => ctx.runAction(internal.content.revokeNow, { jobId })))
-    return { revoked: told.every(Boolean) }
+    // Said only where the content service has taken in each display's number as it is now, and
+    // nothing is still to be asked of it for any of them: a lock asked for a moment before, or
+    // one whose revocation is still being tried, may have left something
+    const pending = await ctx.runQuery(internal.content._pendingRevokes, { userId, displayIds })
+    return { revoked: told.every(Boolean) && pending === 0 }
   },
 })
 
