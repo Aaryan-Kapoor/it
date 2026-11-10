@@ -1,10 +1,11 @@
 // Going back to an older It once a newer one has changed the data, by putting back the copy the
 // newer one kept before it changed anything, as "Going back to an older It" in docs/data.md
-// says, and going forward again. The lines that put the copy back and that go forward are read
-// from that page and run exactly as they are written there, with `sh` and nothing added, so the
-// page cannot come to say something that does not work. Where they stop `it service uninstall`
-// is a stand-in that says what it was asked and ends as it is told to: no service of this
-// machine's is touched.
+// says, and putting the folder kept aside back again. The lines that do both are read from that
+// page and run exactly as they are written there, with `sh` and nothing added or changed, but
+// the copy's name where they ask for it. They are told It's folder by IT_HOME, as a person whose
+// folder is not `~/.it` is told to do, so the page cannot come to say something that does not
+// work. Where they stop the background service, `it service uninstall` is a stand-in that says
+// what it was asked and ends as it is told to: no service of this machine's is touched.
 //
 // The older It is this source. A newer one is this source too, under a later version number,
 // with functions whose schema gives every display two optional fields the older schema does not
@@ -19,7 +20,22 @@
 // itself, and the steps on macOS and on Windows, whose PowerShell commands are not run.
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { ConvexHttpClient } from 'convex/browser'
@@ -56,6 +72,8 @@ const NEWEST = VERSION.replace(/\d+$/, (patch) => String(Number(patch) + 2))
 const NEWER_RELEASE = 'precompiled-2099-01-01-abcdef0'
 
 let folder: string
+/** The folder the lines keep things beside: the test's own folder, as the system names it with every link in it followed. */
+let real: string
 let scratch: string
 /** A folder with `it` in it that stands in for the command the documented lines run. */
 let stub: string
@@ -174,7 +192,8 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }))
 let beside: string[]
 beforeEach(async () => {
   folder = mkdtempSync(path.join(os.tmpdir(), 'it-restore-'))
-  beside = [folder, `${folder}-after-upgrade`, `${folder}-rolled-back`]
+  real = realpathSync(folder)
+  beside = [folder, `${real}-after-upgrade`, `${real}-after-upgrade.part`, `${real}-replaced`]
   process.env.IT_PORT = String(await ports.next())
 }, 120_000)
 
@@ -284,20 +303,19 @@ function documented(marker: string): string {
   return found[0]!
 }
 /**
- * Runs documented lines with `sh`, as a person pastes them, for It's folder `home`: the folder
- * they name is put where they say `~/.it`, and the copy's name where they say `copy=before-...`.
- * Nothing else of them is changed. `it` is the stand-in, which ends as `ends` says.
+ * Runs documented lines with `sh`, as a person pastes them, in a terminal where IT_HOME names
+ * It's folder `home`. The copy's name is put where they say `copy=before-...`, and nothing else
+ * of them is changed. `it` is the stand-in, which ends as `ends` says.
  */
 function pasted(lines: string, home: string, copy?: string, ends = 0) {
-  expect(lines).toContain('~/.it')
-  let script = lines.replaceAll('~/.it', `'${home}'`)
+  let script = lines
   if (copy !== undefined) {
     expect(script).toMatch(/^ *copy=before-\.\.\.$/m)
     script = script.replace(/^( *)copy=before-\.\.\.$/m, `$1copy=${copy}`)
   }
   const asked = path.join(scratch, `asked-${Math.random().toString(36).slice(2)}`)
   const ran = spawnSync('sh', ['-c', script], {
-    env: { PATH: `${stub}:${process.env.PATH}`, HOME: home, STUB_ASKED: asked, STUB_ENDS: String(ends) },
+    env: { PATH: `${stub}:${process.env.PATH}`, HOME: scratch, IT_HOME: home, STUB_ASKED: asked, STUB_ENDS: String(ends) },
     encoding: 'utf8',
   })
   return { code: ran.status, out: ran.stdout, err: ran.stderr, asked: existsSync(asked) ? readFileSync(asked, 'utf8') : '' }
@@ -306,9 +324,9 @@ function pasted(lines: string, home: string, copy?: string, ends = 0) {
 describe.skipIf(!program || windows)('going back to an older It by putting back the copy from before the upgrade', () => {
   test.each([
     ['newer functions, with a display signed out since', false, true],
-    ['newer functions and a newer backend program', true, false],
+    ['newer functions and a newer backend program, where It’s folder is reached through a link in a folder with a space in its name', true, false],
   ])(
-    'after an It with %s has changed the data, the documented lines put the copy back, the older It starts on it with its page and state as they were, and the documented lines go forward again',
+    'after an It with %s has changed the data, the documented lines put the copy back, the older It starts on it with its page and state as they were, and the documented lines put the kept folder back again',
     async (_, programToo, signedOut) => {
       const newer = programToo ? newerBoth : newerFunctions
       const port = Number(process.env.IT_PORT)
@@ -430,27 +448,52 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
         rmSync(control, { recursive: true, force: true })
       }
 
+      // The lines are told It's folder as the person's terminal would name it: in one case
+      // through a link, in a folder with a space in its name, that leads to it
+      let home = folder
+      if (programToo) {
+        const spaced = path.join(mkdtempSync(path.join(os.tmpdir(), 'it-restore-link-')), 'a home with spaces')
+        mkdirSync(spaced)
+        home = path.join(spaced, '.it')
+        symlinkSync(folder, home)
+        beside.push(path.dirname(spaced), `${home}-after-upgrade`, `${home}-replaced`)
+      }
+      const saved = `${real}-after-upgrade`
       // The documented lines, where the service cannot be stopped, change nothing
       const back = documented('copy=')
       const asItWas = tree(folder)
-      const unstopped = pasted(back, folder, copy, 1)
+      const unstopped = pasted(back, home, copy, 1)
       expect([unstopped.code, unstopped.out, unstopped.asked]).toEqual([1, '', 'service uninstall\n'])
       expect(tree(folder)).toEqual(asItWas)
-      expect(existsSync(`${folder}-after-upgrade`)).toBe(false)
+      expect(existsSync(saved)).toBe(false)
+      // Where It's folder cannot be copied whole, they stop before anything of it is changed, and the next run clears what was cut short
+      if (process.getuid?.() !== 0) {
+        const unreadable = path.join(folder, 'unreadable')
+        writeFileSync(unreadable, 'kept from whoever copies')
+        chmodSync(unreadable, 0)
+        const cut = pasted(back, home, copy)
+        rmSync(unreadable, { force: true })
+        expect(cut.code).not.toBe(0)
+        expect(cut.out).toBe(`Copying It's folder to ${saved}.\n`)
+        expect([tree(folder), existsSync(saved), existsSync(`${saved}.part`)]).toEqual([asItWas, false, true])
+      }
       // Run as they are written, they stop the service, keep the whole folder as it was, and put the copy back
-      const put = pasted(back, folder, copy)
+      const put = pasted(back, home, copy)
       expect([put.code, put.err, put.asked]).toEqual([0, '', 'service uninstall\n'])
-      expect(put.out).toMatch(/kept in .*-after-upgrade\.\nThe copy is in place\.\n$/)
-      expect(tree(`${folder}-after-upgrade`)).toEqual(asItWas)
+      expect(put.out).toBe(`Copying It's folder to ${saved}.\nIt's folder as it was is kept in ${saved}.\nThe copy is in place.\n`)
+      expect(lstatSync(saved).isDirectory()).toBe(true)
+      expect(tree(saved)).toEqual(asItWas)
+      expect(existsSync(`${saved}.part`)).toBe(false)
       expect(json(path.join(folder, 'backend', 'data.json'))).toEqual(before)
       expect(existsSync(path.join(folder, 'backend', 'copy.json'))).toBe(false)
+      if (home !== folder) expect([readlinkSync(home), existsSync(`${home}-after-upgrade`)]).toEqual([folder, false])
       // A second run refuses, and changes nothing anywhere
       const restored = tree(folder)
-      const again = pasted(back, folder, copy)
+      const again = pasted(back, home, copy)
       expect(again.code).toBe(1)
       expect(again.out).toBe('')
-      expect(again.err).toMatch(/-after-upgrade is there already, so nothing was changed\.\n$/)
-      expect([tree(folder), tree(`${folder}-after-upgrade`)]).toEqual([restored, asItWas])
+      expect(again.err).toBe(`${saved} is there already, so nothing was changed.\n`)
+      expect([tree(folder), tree(saved)]).toEqual([restored, asItWas])
 
       // The older It starts on it, with its own functions in it and none refused
       service = serve(older, 'restored.log')
@@ -487,11 +530,13 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
       await stopped(service)
 
       // Going forward again with the documented lines puts the whole folder back as it was kept
-      const forward = pasted(documented('-rolled-back'), folder)
+      const forward = pasted(documented('-replaced'), home)
       expect([forward.code, forward.err, forward.asked]).toEqual([0, '', 'service uninstall\n'])
-      expect(forward.out).toBe("It's folder is as it was before you went back.\n")
+      expect(forward.out).toBe(`It's folder is the one that was kept, and the one it replaced is in ${real}-replaced.\n`)
       expect(tree(folder)).toEqual(asItWas)
-      expect(json(path.join(`${folder}-rolled-back`, 'backend', 'data.json'))).toMatchObject({ it: VERSION, functionsOf: VERSION })
+      expect(existsSync(saved)).toBe(false)
+      expect(json(path.join(`${real}-replaced`, 'backend', 'data.json'))).toMatchObject({ it: VERSION, functionsOf: VERSION })
+      if (home !== folder) expect(readlinkSync(home)).toBe(folder)
       // And the newer It starts on it, with its own second version, its own bytes and its own state
       service = serve(newer.program, 'forward.log')
       await started(service)
@@ -533,7 +578,7 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
     expect(noted[`before-functions-${newest.hash.slice(0, 12)}`]).toMatchObject({ it: NEWER, release: NEWER_RELEASE })
     // Each is put back in a copy of the folder, as the page says, and the older It is started on it: it runs on the one chosen, and refuses the other
     for (const copy of kept) {
-      const home = mkdtempSync(path.join(os.tmpdir(), 'it-restore-choice-'))
+      const home = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'it-restore-choice-')))
       beside.push(home, `${home}-after-upgrade`)
       cpSync(folder, home, { recursive: true })
       expect(pasted(documented('copy='), home, copy)).toMatchObject({ code: 0, err: '' })
@@ -546,5 +591,16 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
         expect(tried.lines()).toMatch(/could not start: backend_older\n$/)
       }
     }
+    // A folder whose backend keeps its stored files through a link is refused before anything is copied or changed
+    const linked = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'it-restore-linked-')))
+    beside.push(linked, `${linked}-after-upgrade`, `${linked}-storage`)
+    cpSync(folder, linked, { recursive: true })
+    renameSync(path.join(linked, 'backend', 'storage'), `${linked}-storage`)
+    symlinkSync(`${linked}-storage`, path.join(linked, 'backend', 'storage'))
+    const unlinked = tree(linked)
+    const refused = pasted(documented('copy='), linked, kept[0])
+    expect([refused.code, refused.out]).toEqual([1, ''])
+    expect(refused.err).toBe(`storage is a link, so a copy of It's folder would not hold what it leads to, and nothing was changed.\n`)
+    expect([tree(linked), existsSync(`${linked}-after-upgrade`)]).toEqual([unlinked, false])
   }, 600_000)
 })
