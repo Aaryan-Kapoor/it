@@ -17,17 +17,16 @@
 const HARNESS = 'claude-code'
 const ADDON_VERSION = 'IT_ADDON_BUILD'
 const INSTANCE = Math.random().toString(36).slice(2)
-const addon = ($) => ({
-  api: 1,
-  version: ADDON_VERSION,
-  delivery: typeof $?.session?.id === 'function' && typeof $?.prompt?.submit === 'function' && typeof $?.clock?.every === 'function',
-  idle: true,
-  missing: [
-    ...(typeof $?.session?.id === 'function' ? [] : ['session']),
-    ...(typeof $?.prompt?.submit === 'function' ? [] : ['submit']),
-    ...(typeof $?.clock?.every === 'function' ? [] : ['clock']),
-  ],
-})
+// Claude Code loads a mod only where `$` is written as `$.noun.event(...)` at a call site, and
+// refuses the whole module where it is read in any other way, a `typeof` look at one among
+// them. So what this Claude Code has of what a click needs (the conversation's id, a way to
+// submit a prompt, and a clock) is never looked at: each is called as it is needed, and one
+// whose call throws a TypeError, as a call to something that is not there does, is noted here
+// as missing, and the connector is told.
+const lacking = new Set()
+/** Whether a call failed because what it called is not there, rather than for a reason of its own. */
+const absent = (err) => err?.name === 'TypeError'
+const addon = () => ({ api: 1, version: ADDON_VERSION, delivery: lacking.size === 0, idle: true, missing: [...lacking] })
 // What Claude is told of It as a part of its own instructions, which this add-on adds: when a
 // page is the answer. The skill says how, and Claude reads it only once it has decided to use
 // It. The same words as every add-on that says them, kept in It's protocol as `WHEN`.
@@ -162,7 +161,7 @@ async function proxied($) {
 
 const ask = ($, path, body) => within($, 3000, asking($, path, body))
 async function asking($, path, body) {
-  if (path === '/session' || path.startsWith('/clicks?')) body = { ...body, instance: INSTANCE, addon: addon($) }
+  if (path === '/session' || path.startsWith('/clicks?')) body = { ...body, instance: INSTANCE, addon: addon() }
   const c = await find($)
   if (!c) return null
   try {
@@ -235,7 +234,18 @@ function handOver($) {
   }
   // As the person's own message, in a few words. Claude Code shows a prompt submitted that way
   // as it is; one submitted any other way it wraps in several lines of its own, each time.
-  $.prompt.submit({ text: briefOf(clicks), asUser: true }).then(
+  let submitted
+  try {
+    submitted = $.prompt.submit({ text: briefOf(clicks), asUser: true })
+  } catch (err) {
+    // This Claude Code has no way to submit a prompt: the clicks wait here, and the connector is
+    // told at the next check, and gives this add-on no more
+    if (absent(err)) lacking.add('submit')
+    for (const c of clicks) submitting.delete(c.id)
+    pending.unshift(...clicks)
+    return
+  }
+  Promise.resolve(submitted).then(
     (result) => {
       // A prompt that another hook refused never reached Claude, so it is not reported as given
       if (result && result.drop !== undefined) return refused()
@@ -268,12 +278,20 @@ async function check($) {
 }
 
 async function checkOnce($) {
-  if (!addon($).delivery) {
-    await ask($, '/addon', { harness: HARNESS, instance: INSTANCE, addon: addon($) })
+  if (!addon().delivery) {
+    await ask($, '/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
     return
   }
   const began = generation
-  const id = await $.session.id()
+  let id
+  try {
+    id = await $.session.id()
+  } catch (err) {
+    if (!absent(err)) throw err
+    lacking.add('session')
+    await ask($, '/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
+    return
+  }
   // The same conversation after /clear carries on under a new id, and pages made under the old
   // id follow it there
   const carriedOn = cleared !== null && id !== cleared
@@ -379,12 +397,15 @@ export function register(on) {
   })
   on('session.start', async ($, e, next) => {
     // Keep reporting a missing delivery API for as long as this process stays open.
-    if (!ticking && typeof $.clock?.every === 'function') {
-      ticking = true
-      $.clock.every(1000, () => check($).catch(() => {}))
-    }
-    if (!addon($).delivery) {
-      await ask($, '/addon', { harness: HARNESS, instance: INSTANCE, addon: addon($) })
+    if (!ticking)
+      try {
+        $.clock.every(1000, () => check($).catch(() => {}))
+        ticking = true
+      } catch (err) {
+        if (absent(err)) lacking.add('clock')
+      }
+    if (!addon().delivery) {
+      await ask($, '/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
       return next(e)
     }
     running = false

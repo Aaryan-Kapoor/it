@@ -224,28 +224,50 @@ describe('the Claude Code add-on', () => {
     expect(describeClick({ ...fault, payload: null })).toContain('an error it gave no words for')
   })
 
-  test('keeps reporting when the submission API was missing as the session started', async () => {
-    vi.resetModules()
-    const { register } = await import('./it-bridge/hooks/register.js')
-    const host = fakeHost()
-    delete (host.$.prompt as { submit?: unknown }).submit
-    register(host.on)
-    await host.fire('session.start')
-    await host.tick()
-    await host.tick()
-    expect(asked.filter((a) => a.path === '/addon')).toHaveLength(3)
-    expect(host.submits).toEqual([])
-    expect(acks()).toEqual([])
-  })
-
-  test('reports a missing submission API without taking a click', async () => {
+  test('a Claude Code with no way to submit a prompt is found out at the first click, which is never reported as given, and from then on the connector is told and asked for no clicks', async () => {
     const host = await start()
     delete (host.$.prompt as { submit?: unknown }).submit
     offered = [{ id: 'click-missing', text: 'A click' }]
     await host.tick()
-    expect(asked.find((a) => a.path === '/addon')?.body).toMatchObject({ harness: 'claude-code', addon: { api: 1, delivery: false } })
+    await host.settle()
+    await host.tick()
+    expect(asked.filter((a) => a.path === '/addon').at(-1)?.body).toMatchObject({
+      harness: 'claude-code',
+      addon: { api: 1, delivery: false, missing: ['submit'] },
+    })
+    const askedForClicks = asked.filter((a) => a.path.startsWith('/clicks')).length
+    await host.tick()
+    expect(asked.filter((a) => a.path.startsWith('/clicks'))).toHaveLength(askedForClicks)
+    expect(asked.filter((a) => a.path === '/addon').length).toBeGreaterThan(1)
     expect(host.submits).toEqual([])
     expect(acks()).toEqual([])
+  })
+
+  test('a Claude Code with no clock is found out as the session starts, and the connector is told', async () => {
+    vi.resetModules()
+    const { register } = await import('./it-bridge/hooks/register.js')
+    const host = fakeHost()
+    delete (host.$.clock as { every?: unknown }).every
+    register(host.on)
+    await host.fire('session.start')
+    expect(asked.find((a) => a.path === '/addon')?.body).toMatchObject({ harness: 'claude-code', addon: { api: 1, delivery: false, missing: ['clock'] } })
+    expect(asked.some((a) => a.path.startsWith('/clicks'))).toBe(false)
+  })
+
+  test('a Claude Code that does not say which conversation this is is found out at the first check, and the connector is told', async () => {
+    const host = await start()
+    delete (host.$.session as { id?: unknown }).id
+    await host.tick()
+    expect(asked.find((a) => a.path === '/addon')?.body).toMatchObject({ harness: 'claude-code', addon: { api: 1, delivery: false, missing: ['session'] } })
+    expect(asked.some((a) => a.path.startsWith('/clicks'))).toBe(false)
+    expect([host.env.IT_HARNESS, host.env.IT_SESSION]).toEqual([undefined, undefined])
+  })
+
+  test('a Claude Code that has all of it says so with every asking, and names nothing as missing', async () => {
+    const host = await start()
+    await host.tick()
+    expect(asked.find((a) => a.path.startsWith('/clicks'))?.body).toMatchObject({ addon: { api: 1, delivery: true, missing: [] } })
+    expect(asked.some((a) => a.path === '/addon')).toBe(false)
   })
 
   test('an idle conversation is given a click as a turn, in the connector’s own words, and only then is it reported', async () => {
