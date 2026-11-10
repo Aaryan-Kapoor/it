@@ -30,6 +30,7 @@ import {
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
+import { stamp } from '../packages/cli/stamp.mjs'
 import { root, sleep } from './lib.mjs'
 import { redact } from './logs.mjs'
 
@@ -119,6 +120,15 @@ writeFileSync(
 const held = lay(path.join(releases, 'download', 'held'))
 let reachedHeld = false
 let letGo = () => {}
+// Two releases for a script that names its own, laid out as the latest is, and which release
+// the stand-in serves as the latest, which a test can change: before an install, or in the
+// middle of one, where the install is held at a file of its own release until the test says
+let latestIs = latest
+lay(path.join(releases, 'download', 'v0.0.2'))
+lay(path.join(releases, 'download', 'v0.0.3'))
+let holdAt = null
+let heldThere = false
+let goOn = () => {}
 // And one whose program is the one its checksums were made for, and cannot be started on any
 // system: what stands in for a program built for another system's libraries or another chip
 const unstartable = path.join(releases, 'download', 'unstartable')
@@ -136,19 +146,24 @@ writeFileSync(
 const saysOfUsage = (r) => /reports usage|telemetry/i.test(r.said)
 /** Everything asked of this machine's stand-in servers, by the host that was asked and the path. */
 const asked = []
-/** And of those, what said it was asked for where CI is set. */
-const askedFromCi = []
 const serve = (handler) =>
   new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       asked.push(`${req.headers.host}${req.url}`)
-      if (req.headers['x-it-ci'] === '1') askedFromCi.push(`${req.headers.host}${req.url}`)
       handler(req, res)
     })
     server.listen(0, '127.0.0.1', () => resolve(server))
   })
 const server = await serve(async (req, res) => {
-  const file = path.join(releases, decodeURIComponent((req.url ?? '/').split('?')[0]))
+  const wanted = decodeURIComponent((req.url ?? '/').split('?')[0])
+  // Held before the file is looked up, so that what is sent is whatever the latest is once the test lets it go
+  if (wanted === holdAt) {
+    heldThere = true
+    await new Promise((resolve) => {
+      goOn = resolve
+    })
+  }
+  const file = wanted.startsWith('/latest/download/') ? path.join(latestIs, wanted.slice('/latest/download/'.length)) : path.join(releases, wanted)
   if (!file.startsWith(releases) || !existsSync(file)) return res.writeHead(404).end()
   if (file === path.join(held, 'LICENSE.md')) {
     reachedHeld = true
@@ -425,26 +440,6 @@ try {
       ['/latest/download/LICENSE.md', '/latest/download/SHA256SUMS', '/latest/download/THIRD_PARTY_NOTICES.md', `/latest/download/${program}`].sort().join(),
     asked.join(' '),
   )
-
-  // ---------- a download made where CI is set says so ----------
-  for (const [name, ci, marked] of [
-    ['ci-set', 'true', true],
-    ['ci-false', 'false', false],
-    // Read as the program reads it, without the spaces and quotes around it
-    ['ci-quoted', ` "False" `, false],
-    ['ci-unset', undefined, false],
-  ]) {
-    asked.length = 0
-    askedFromCi.length = 0
-    const r = await install(name, { CI: ci })
-    check(
-      marked
-        ? 'where CI is set, every download says that it was asked for there, so that the site can count it apart from a person’s'
-        : `where CI is ${ci === undefined ? 'not set' : `set to ${ci}`}, no download says that it was asked for there`,
-      r.code === 0 && asked.length === 4 && askedFromCi.length === (marked ? 4 : 0),
-      `${r.said}\nasked: ${asked.join(' ')}\nsaid it came from CI: ${askedFromCi.join(' ')}`,
-    )
-  }
 
   if (!windows) {
     // ---------- the PATH, in the file the person's own shell reads ----------
@@ -1632,6 +1627,75 @@ try {
     named.code === 0 && existsSync(named.it) && asked.every((a) => a.includes('/download/v0.0.1/')),
     `${named.said} ${asked.join(' ')}`,
   )
+  // A script published with a release downloads from that release alone, whichever is latest
+  const sha = (file) => createHash('sha256').update(readFileSync(file)).digest('hex')
+  const scriptName = windows ? 'install.ps1' : 'install.sh'
+  const stamped = (tag) => {
+    const copy = path.join(tmp, `stamped-${tag}-${scriptName}`)
+    writeFileSync(copy, stamp(scriptName, readFileSync(path.join(root, 'install', scriptName), 'utf8'), tag))
+    return copy
+  }
+  const fromItsRelease = (r, tag) =>
+    r.code === 0 &&
+    existsSync(r.it) &&
+    sha(r.it) === sha(path.join(built, program)) &&
+    asked.length === 4 &&
+    asked.every((a) => a.includes(`/download/${tag}/`))
+  asked.length = 0
+  latestIs = other
+  const before = await install('latest-before', {}, { script: stamped('v0.0.2') })
+  latestIs = latest
+  check(
+    'a script published with a release installs that release when a newer one is published before it runs, and asks nothing of the latest',
+    fromItsRelease(before, 'v0.0.2'),
+    `${before.said}\nasked: ${asked.join(' ')}`,
+  )
+  asked.length = 0
+  holdAt = `/download/v0.0.3/${program}`
+  heldThere = false
+  const during = install('latest-during', {}, { script: stamped('v0.0.3') })
+  const reachedTheProgram = await until(() => heldThere)
+  latestIs = other
+  goOn()
+  const duringDone = await during
+  holdAt = null
+  latestIs = latest
+  check(
+    'and when a newer one is published while it runs, between its checksums and its program, every file still comes from its own release and is installed',
+    reachedTheProgram && fromItsRelease(duringDone, 'v0.0.3'),
+    `${duringDone.said}\nasked: ${asked.join(' ')}`,
+  )
+  // The script in the repository names no release and follows the latest, so there the same
+  // change sends it another release's program after this one's checksums, which refuse it
+  holdAt = `/latest/download/${program}`
+  heldThere = false
+  const following = install('latest-during-unstamped', {})
+  const reachedItsProgram = await until(() => heldThere)
+  latestIs = other
+  goOn()
+  const followingDone = await following
+  holdAt = null
+  latestIs = latest
+  check(
+    'where the script follows the latest instead, the same change gives it a program its checksums do not vouch for, which is refused, and nothing is installed',
+    reachedItsProgram &&
+      followingDone.code !== 0 &&
+      followingDone.flat.includes(`The download of ${program} does not match its published checksum`) &&
+      !existsSync(followingDone.it),
+    followingDone.said,
+  )
+  asked.length = 0
+  const namedOver = await install('stamped-named', { IT_VERSION: 'v0.0.1' }, { script: stamped('v0.0.2') })
+  const namedOverAsked = [...asked]
+  const namedOverRight = fromItsRelease(namedOver, 'v0.0.1')
+  asked.length = 0
+  const latestOver = await install('stamped-latest', { IT_VERSION: 'latest' }, { script: stamped('v0.0.2') })
+  check(
+    'IT_VERSION still names another release to such a script, or the latest',
+    namedOverRight && latestOver.code === 0 && asked.length === 4 && asked.every((a) => a.includes('/latest/download/')),
+    `${namedOver.said}\n${latestOver.said}\nasked: ${namedOverAsked.join(' ')} then ${asked.join(' ')}`,
+  )
+
   const elsewhere = await install('elsewhere', { IT_HOME: path.join(tmp, 'elsewhere', 'kept here') })
   check(
     'with IT_HOME set, that folder is used, spaces and all',

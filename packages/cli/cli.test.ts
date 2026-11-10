@@ -2606,6 +2606,9 @@ describe('the line a person pastes to join an It on another computer', () => {
   const CODE = 'abcd1234efgh5678ijkl'
   test('is read for its address and its invite, in each form the site gives it in', () => {
     // The line that installs and joins, and the joining alone
+    expect(
+      joinLine(`curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.sh | sh -s -- login --url ${URL_} --code ${CODE}`),
+    ).toEqual({ url: URL_, code: CODE })
     expect(joinLine(`curl -fsSL https://itcan.do/install.sh | sh -s -- login --url ${URL_} --code ${CODE}`)).toEqual({ url: URL_, code: CODE })
     expect(joinLine(`it login --url ${URL_} --code ${CODE}`)).toEqual({ url: URL_, code: CODE })
     expect(joinLine(`  $ it login --url ${URL_} --code ${CODE}  `)).toEqual({ url: URL_, code: CODE })
@@ -2621,5 +2624,9 @@ describe('the line a person pastes to join an It on another computer', () => {
     expect(joinLine(`it login --url ${URL_}`)).toBeUndefined()
     expect(joinLine(`it login --code ${CODE}`)).toBeUndefined()
     expect(joinLine('curl -fsSL https://itcan.do/install.sh | sh')).toBeUndefined()
+    expect(joinLine('curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.sh | sh')).toBeUndefined()
+    // Nor where the invite is there and the address of the It is not
+    expect(joinLine(`curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.sh | sh -s -- login --code ${CODE}`)).toBeUndefined()
+    expect(joinLine(`curl -fsSL https://itcan.do/install.sh | sh -s -- login --code ${CODE}`)).toBeUndefined()
   })
 })

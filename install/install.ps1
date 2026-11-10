@@ -1,6 +1,6 @@
 # Installs It on your computer: one program, in ~\.it\bin.
 #
-#   irm https://itcan.do/install.ps1 | iex
+#   irm https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.ps1 | iex
 #
 # It downloads the program, checks it against the published checksum, and puts it in ~\.it\bin,
 # with the license it comes under and the notices of what it includes in ~\.it. It needs
@@ -12,11 +12,14 @@
 # changes one thing: the program's folder is added to the PATH that Windows keeps for your own
 # account.
 #
-# IT_INSTALL_BASE names another place to download from, laid out as GitHub lays out a
-# repository's releases. IT_VERSION names a release other than the latest, by its tag.
+# It downloads from It's releases on GitHub, at https://github.com/Aaryan-Kapoor/it/releases.
+# The copy of this script published with a release downloads everything from that release, and
+# the copy in the repository downloads the latest. IT_VERSION names another release by its tag,
+# or latest for the newest. IT_INSTALL_BASE names another place to download from, laid out as
+# GitHub lays out a repository's releases.
 # IT_INSTALL_NO_PATH, set to anything, leaves your PATH alone.
 # To join another computer, pass login and its arguments with:
-#   & ([scriptblock]::Create((irm https://itcan.do/install.ps1))) login --url <address> --code <code>
+#   & ([scriptblock]::Create((irm https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.ps1))) login --url <address> --code <code>
 #
 # Run by a person in a console window, it shows a few short lines and then goes straight on to
 # the setup, which the program leads. Run any other way (by a script, by an agent, with what it
@@ -53,8 +56,14 @@
   $then = $false
   # Whether a command typed as `it` in this window is found, which the setup says where it is not
   $onPath = '0'
-  $base = if ($env:IT_INSTALL_BASE) { $env:IT_INSTALL_BASE.TrimEnd('/') } else { 'https://itcan.do/releases' }
-  $version = if ($env:IT_VERSION) { $env:IT_VERSION } else { 'latest' }
+  # The release this script belongs to. In the repository it names none. The copy published
+  # with a release has that release's tag written here when the release is built, so that the
+  # checksums and every file they vouch for come from the one release this script came from,
+  # even when a newer release is published before or while it runs.
+  $release = ''
+  $usual = 'https://github.com/Aaryan-Kapoor/it/releases'
+  $base = if ($env:IT_INSTALL_BASE) { $env:IT_INSTALL_BASE.TrimEnd('/') } else { $usual }
+  $version = if ($env:IT_VERSION) { $env:IT_VERSION } elseif ($release) { $release } else { 'latest' }
   if ($version -notmatch '^[A-Za-z0-9._-]+$') { throw "IT_VERSION must be a release's tag." }
   $from = if ($version -eq 'latest') { "$base/latest/download" } else { "$base/download/$version" }
   # Only over https, and a redirect may only lead to https. The one exception is a base on this
@@ -63,10 +72,6 @@
   # password, it is not followed anywhere else, and it is asked directly, whatever proxy this
   # system is set to use: a proxy would carry what is asked of this machine off it, in the clear.
   $plain = $base -match '^http://(127\.0\.0\.1|localhost):[0-9]+(/|$)'
-  # Where CI is set, every download says so, and itcan.do counts it apart from a person's. CI is
-  # read as the program reads it: without the spaces or quotes around it, and set to anything but
-  # nothing, 0, false, no or off.
-  $ci = @('', '0', 'false', 'no', 'off') -notcontains "$env:CI".Trim([char[]]" `t`r`n`"'").ToLower()
   if (-not $plain -and $base -notmatch '^https://') { throw 'IT_INSTALL_BASE must be an https address.' }
   if (-not $env:IT_HOME -and -not $env:USERPROFILE) { throw 'Neither USERPROFILE nor IT_HOME is set, so there is nowhere to install It.' }
   # A folder given as a relative path is taken from where this was run, as PowerShell knows it:
@@ -189,7 +194,6 @@ public static bool LacksSse42() {
         $request = [Net.WebRequest]::Create($at)
         $request.AllowAutoRedirect = $false
         $request.UserAgent = 'it-install'
-        if ($ci) { $request.Headers.Add('X-It-CI', '1') }
         # A proxy that has no address is no proxy at all
         if ($plain) { $request.Proxy = New-Object Net.WebProxy }
         # An answer that is a refusal comes as an error, with the answer inside it
@@ -347,7 +351,7 @@ public static bool LacksSse42() {
     if ($base) {
       $note = Join-Path $root 'releases.json'
       try {
-        if ($base -eq 'https://itcan.do/releases') { if (Test-Path -LiteralPath $note) { Remove-Item -Force -LiteralPath $note } }
+        if ($base -eq $usual) { if (Test-Path -LiteralPath $note) { Remove-Item -Force -LiteralPath $note } }
         else {
           $part = "$note.$PID"
           [IO.File]::WriteAllText($part, (ConvertTo-Json @{ base = $base } -Compress) + "`n", (New-Object Text.UTF8Encoding $false))
