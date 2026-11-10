@@ -1751,9 +1751,11 @@ try {
   const linkedTo = []
   const linked = http.createServer((req, res) => {
     linkedTo.push({ asked: req.url, referer: req.headers.referer ?? null })
+    // A document that gives its frame another name than the page gave it
+    const renames = req.url === '/renames' ? '<script>window.name = "moved"</script>' : ''
     res
       .writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      .end('<!doctype html><title>Another site</title><link rel="icon" href="data:,"><h1>Another site</h1>')
+      .end(`<!doctype html><title>Another site</title><link rel="icon" href="data:,"><h1>Another site</h1>${renames}`)
   })
   await new Promise((resolve) => linked.listen(0, '127.0.0.1', resolve))
   const out = `http://127.0.0.1:${linked.address().port}`
@@ -1845,6 +1847,50 @@ try {
       linkedTo.every((left) => left.referer === null),
     JSON.stringify({ handle, scripted: Boolean(scripted), linkedTo }),
   )
+  // Frames of the other site's in the page, as a link's target finds them: by the name each goes
+  // by now, as the browser's own lookup says, which nothing of the page's can stand in for. One
+  // keeps the name the page gave it, one gives itself another, and one has none, and the page
+  // makes a property that leads to the second under the name it gave it
+  await linking.evaluate((out) => {
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      `<iframe name="out-frame" src="${out}/frame"></iframe><iframe name="out-moved" src="${out}/renames"></iframe><iframe id="out-unnamed" src="${out}/unnamed"></iframe>`,
+    )
+  }, out)
+  await until(() => ['/frame', '/renames', '/unnamed'].every((asked) => linkedTo.some((left) => left.asked === asked)), 15_000, 50)
+  await page.waitForTimeout(1500)
+  const aimedAt = await linking.evaluate((out) => {
+    const moved = [...document.querySelectorAll('iframe')].find((frame) => frame.name === 'out-moved').contentWindow
+    Window.prototype['out-moved'] = moved
+    let unnamed = -1
+    for (let n = 0; n < window.length; n++) if (window[n] === document.getElementById('out-unnamed').contentWindow) unnamed = n
+    const aims = {
+      kept: 'out-frame',
+      'renamed, by the name it was given': 'out-moved',
+      'renamed, by the name it took': 'moved',
+      'unnamed, by its number': String(unnamed),
+    }
+    const said = {}
+    for (const [kind, target] of Object.entries(aims)) {
+      const link = Object.assign(document.createElement('a'), { href: `${out}/aimed`, target, textContent: kind })
+      document.body.append(link)
+      // On its way to being followed, from the keyboard
+      link.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      said[kind] = [link.getAttribute('target'), link.getAttribute('rel')]
+      link.remove()
+    }
+    delete Window.prototype['out-moved']
+    for (const frame of document.querySelectorAll('iframe[name="out-frame"], iframe[name="out-moved"], #out-unnamed')) frame.remove()
+    return said
+  }, out)
+  check(
+    'a link aimed at a frame of another site’s in the page is followed there by the name the frame goes by now, and aimed at any other name, a number or a name the page made to lead to a frame, opens a tab of its own with no hold either way',
+    JSON.stringify(aimedAt.kept) === JSON.stringify(['out-frame', null]) &&
+      ['renamed, by the name it was given', 'renamed, by the name it took', 'unnamed, by its number'].every(
+        (kind) => JSON.stringify(aimedAt[kind]) === JSON.stringify(['_blank', 'noopener noreferrer']),
+      ),
+    JSON.stringify(aimedAt),
+  )
   // A plain link inside a closed shadow root, which hides what is in it from the rest of the
   // page: one a script made, and one declared in markup, which no script of the page's is given.
   // Neither can be reached by a locator, so each is clicked where it is drawn.
@@ -1863,6 +1909,7 @@ try {
   }, out)
   /** Clicks where something in the page is drawn, as a person would. */
   const clickOn = async (selector) => {
+    await page.frameLocator('.mount iframe').locator(selector).scrollIntoViewIfNeeded()
     const box = await page.frameLocator('.mount iframe').locator(selector).boundingBox()
     await page.mouse.click(box.x + 20, box.y + box.height / 2)
   }
