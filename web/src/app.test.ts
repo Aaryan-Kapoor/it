@@ -696,7 +696,9 @@ describe('what each tab says of itself', () => {
     await start()
     await settle()
     expect(asked.find((a) => a.what === 'displays:heartbeat')!.args).toEqual({ key: expect.any(String) })
-    expect(asked.find((a) => a.what === 'displays:report')!.args).toEqual({
+    // The first goes before the heartbeat's answer teaches the backend's clock, and so says no time
+    const reports = asked.filter((a) => a.what === 'displays:report').map((a) => a.args)
+    expect(reports[0]).toEqual({
       key: expect.any(String),
       epoch: 0,
       expectedSession: expect.any(String),
@@ -704,8 +706,9 @@ describe('what each tab says of itself', () => {
       sequence: 1,
       phase: 'none',
       visible: true,
-      observedAt: expect.any(Number),
     })
+    // and the next, once it is learned, says when it was made
+    expect(reports[1]).toMatchObject({ sequence: 2, visible: true, observedAt: expect.any(Number) })
   })
 })
 
