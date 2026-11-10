@@ -1856,7 +1856,10 @@ try {
     const declared = document.createElement('div')
     declared.id = 'closed-declared'
     document.body.append(declared)
-    declared.setHTMLUnsafe(`<template shadowrootmode="closed"><a href="${out}/declared" style="display:block;padding:12px">declared closed</a></template>`)
+    // A declared root is attached to an element inside the markup, never to the one it is set on
+    declared.setHTMLUnsafe(
+      `<div><template shadowrootmode="closed"><a href="${out}/declared" style="display:block;padding:12px">declared closed</a></template></div>`,
+    )
   }, out)
   /** Clicks where something in the page is drawn, as a person would. */
   const clickOn = async (selector) => {
