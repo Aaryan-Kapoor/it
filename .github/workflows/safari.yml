@@ -32,7 +32,9 @@ jobs:
   safari:
     name: ${{ matrix.name }}
     runs-on: macos-latest
-    timeout-minutes: 30
+    # Enough for the simulator's slowest boot (8 minutes at most), the check's own 15 minutes and
+    # the steps that stop everything afterwards
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -92,10 +94,19 @@ jobs:
         run: |
           sudo safaridriver --enable
           nohup safaridriver -p 4444 > "$RUNNER_TEMP/safaridriver.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/safaridriver.pid"
           for _ in $(seq 1 30); do curl -sf http://127.0.0.1:4444/status > /dev/null && exit 0; sleep 1; done
           echo "::error::safaridriver did not answer"; exit 1
+      # The check ends itself within 15 minutes, having ended each session it began
       - name: Safari pairs, shows a page, and a press of its button reaches It
-        run: node e2e/safari.mjs --out "$RUNNER_TEMP/screens" ${SIMULATOR:+--simulator "$SIMULATOR"}
+        timeout-minutes: 17
+        run: node e2e/safari.mjs --within 900 --out "$RUNNER_TEMP/screens" ${SIMULATOR:+--simulator "$SIMULATOR"}
+      # Whatever was started of either, and nothing that was not
+      - name: Stop safaridriver and the simulator
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/safaridriver.pid" ]; then kill "$(cat "$RUNNER_TEMP/safaridriver.pid")" 2>/dev/null || true; fi
+          if [ -n "${SIMULATOR:-}" ]; then xcrun simctl shutdown "$SIMULATOR" 2>/dev/null || true; fi
       - name: Stop It
         if: always() && steps.stack.outcome != 'skipped'
         working-directory: ${{ runner.temp }}
