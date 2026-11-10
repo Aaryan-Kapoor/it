@@ -222,12 +222,13 @@ On Windows, in PowerShell, which may be Windows PowerShell 5.1:
            $copied = Get-Entry (Join-Path (Join-Path $part 'backend') $file)
            if (-not $copied -or $copied.PSIsContainer -or (Test-Link $copied)) { throw "$part is not a whole copy of its own, so nothing in It's folder was changed. Remove it yourself." }
          }
-         Move-Item -LiteralPath $part -Destination $saved
+         [IO.Directory]::Move($part, $saved)
          "It's folder as it was is kept in $saved."
          $aside = Join-Path $backend ('replaced.' + [guid]::NewGuid().ToString('N'))
          New-Item -ItemType Directory -Path $aside | Out-Null
          foreach ($item in @(Get-ChildItem -LiteralPath $backend -Force | Where-Object { $_.Name -like 'db.sqlite3*' -or $_.Name -in 'data.json', 'storage' })) {
-           Move-Item -LiteralPath $item.FullName -Destination $aside
+           $to = Join-Path $aside $item.Name
+           if ($item.PSIsContainer) { [IO.Directory]::Move($item.FullName, $to) } else { [IO.File]::Move($item.FullName, $to) }
          }
          "What the copy replaced is in $aside."
          Get-ChildItem -LiteralPath $from -Force | Where-Object { $_.Name -like 'db.sqlite3*' -or $_.Name -eq 'data.json' } | Copy-Item -Destination $backend
@@ -254,7 +255,7 @@ Once the older It is running, `it status` says that the database is at the older
 
 ### Putting the kept folder back
 
-These lines put the folder that was kept aside back in the place of It's folder, whole. They are how you go forward to the newer data again, and how you undo the steps above where they stopped partway. The folder they replace is not deleted: it is moved beside the kept one, under a name that ends in `-replaced`. If the kept folder then cannot be moved into place, they move It's folder back and say so, and if even that fails, they say where each folder is.
+These lines put the folder that was kept aside back in the place of It's folder, whole. They are how you go forward to the newer data again, and how you undo the steps above where they stopped partway. The folder they replace is not deleted: it is moved beside the kept one, under a name that ends in `-replaced`. Each folder is moved whole or not at all. If the kept folder then cannot be moved into place, they move It's folder back and say so, and if even that fails, they say where each folder is and how to move It's folder back once nothing has a file open in it.
 
 Going forward this way loses everything that was published, changed or deleted while you were on the older It, because the folder comes back whole, with the newer It's database and the files of its pages together. Putting back only the database would not do: a page published again on the older It can have written its files where the newer database expects others, and the newer It would then show the older bytes under the newer version.
 
@@ -267,14 +268,19 @@ On Linux and macOS, stop It with Ctrl-C where you started it with `it serve`, an
   saved="$live-after-upgrade"
   if [ ! -d "$saved" ] || [ -L "$saved" ]; then echo "There is no folder $saved to put back, so nothing was changed." >&2; exit 1; fi
   if [ -e "$live-replaced" ] || [ -L "$live-replaced" ]; then echo "$live-replaced is there already, so nothing was changed." >&2; exit 1; fi
+  disk() { stat -c %d "$1" 2>/dev/null || stat -f %d "$1"; }
+  for folder in "$live" "$saved"; do
+    if [ "$(disk "$folder")" != "$(disk "$(dirname "$live")")" ]; then echo "$folder is on a disk of its own, apart from the folder it is in, so it cannot be moved whole, and nothing was changed. Move the folders yourself." >&2; exit 1; fi
+  done
   it service uninstall
   trap 'if [ $? -ne 0 ]; then echo "The background service is stopped and not registered. Once the folder is as you want it, run it setup to start it again." >&2; fi' EXIT
   if [ -e "$live/backend/lock" ]; then echo "It is still running, so nothing in its folder was changed. Stop it, and run these lines again." >&2; exit 1; fi
   cd /
-  mv "$live" "$live-replaced"
+  if ! mv "$live" "$live-replaced"; then echo "It's folder could not be moved aside, so nothing in it was changed. Close whatever has a file open in $live, and run these lines again." >&2; exit 1; fi
   if ! mv "$saved" "$live"; then
-    if mv "$live-replaced" "$live"; then echo "The kept folder could not be moved into place, so It's folder was moved back and nothing in it was changed. Close whatever has a file open in $saved, and run these lines again." >&2
-    else echo "The kept folder could not be moved into place, and It's folder could not be moved back either. It's folder is now $live-replaced, and the kept folder is still $saved. Move $live-replaced back to $live yourself before anything else." >&2; fi
+    if [ -e "$live" ] || [ -L "$live" ]; then echo "The kept folder could not be moved into place, and something is now at $live, so It's folder was left at $live-replaced and the kept folder at $saved. Look at what is at $live before you move anything." >&2
+    elif mv "$live-replaced" "$live"; then echo "The kept folder could not be moved into place, so It's folder was moved back and nothing in it was changed. Close whatever has a file open in $saved, and run these lines again." >&2
+    else echo "The kept folder could not be moved into place, and It's folder could not be moved back either. It's folder is now $live-replaced, and the kept folder is still $saved. Once nothing has a file open in it, move It's folder back with: mv \"$live-replaced\" \"$live\"" >&2; fi
     exit 1
   fi
   echo "It's folder is the one that was kept, and the one it replaced is in $live-replaced."
@@ -315,12 +321,13 @@ On Windows, stop It with Ctrl-C where you started it with `it serve`, and paste 
     if ($LASTEXITCODE -ne 0) { throw 'The background service could not be stopped, so nothing was changed.' }
     try {
       if (Get-Entry (Join-Path $live 'backend\lock')) { throw 'It is still running, so nothing in its folder was changed. Stop it, and run this again.' }
-      Move-Item -LiteralPath $live -Destination $replaced
+      try { [IO.Directory]::Move($live, $replaced) } catch { throw "It's folder could not be moved aside ($($_.Exception.Message)), so nothing in it was changed. Close whatever has a file open in $live, and run this again." }
       try {
-        Move-Item -LiteralPath $saved -Destination $live
+        [IO.Directory]::Move($saved, $live)
       } catch {
         $why = $_.Exception.Message
-        try { Move-Item -LiteralPath $replaced -Destination $live } catch { throw "The kept folder could not be moved into place ($why), and It's folder could not be moved back either. It's folder is now $replaced, and the kept folder is still $saved. Move $replaced back to $live yourself before anything else." }
+        if (Get-Entry $live) { throw "The kept folder could not be moved into place ($why), and something is now at $live, so It's folder was left at $replaced and the kept folder at $saved. Look at what is at $live before you move anything." }
+        try { [IO.Directory]::Move($replaced, $live) } catch { throw "The kept folder could not be moved into place ($why), and It's folder could not be moved back either. It's folder is now $replaced, and the kept folder is still $saved. Once nothing has a file open in it, move It's folder back with: [IO.Directory]::Move('$replaced', '$live')" }
         throw "The kept folder could not be moved into place ($why), so It's folder was moved back and nothing in it was changed. Close whatever has a file open in $saved, and run this again."
       }
       "It's folder is the one that was kept, and the one it replaced is in $replaced."
