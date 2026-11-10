@@ -127,7 +127,8 @@ On Linux and macOS:
        done
      done
      it service uninstall
-     if [ -e "$live/backend/lock" ]; then echo "It is still running, so nothing was changed. Stop it, and run these lines again." >&2; exit 1; fi
+     trap 'if [ $? -ne 0 ]; then echo "The background service is stopped and not registered. Once the folder is as you want it, run it setup to start it again." >&2; fi' EXIT
+     if [ -e "$live/backend/lock" ]; then echo "It is still running, so nothing in its folder was changed. Stop it, and run these lines again." >&2; exit 1; fi
      part=$(mktemp -d "$saved.part.XXXXXX")
      echo "Copying It's folder to $part."
      cp -Rp "$live"/. "$part"
@@ -151,7 +152,10 @@ On Linux and macOS:
    )
    ```
 
-   The last thing they say is "The copy is in place." Where they stop before that, nothing after the command that failed has run, and the line just above says why.
+   The last thing they say is "The copy is in place." Where they stop before that, nothing after the command that failed has run, and the message says why.
+
+   - If they stopped before stopping the background service, nothing was changed, the service is as it was, and the message says what to put right before you run the lines again.
+   - If they stopped after stopping it, the last line says that the service is stopped and not registered. Do what the points below say for It's folder, and then either run the lines again or, to stay on the newer It for now, run `it setup` to start the service again.
 
    - If they stopped before saying that It's folder as it was is kept, It's folder has not been changed. Where they had begun copying it, they named the folder they were copying it to, whose name ends in `-after-upgrade.part.` and a few letters, and a copy that was cut short is left there. Look at it and remove it yourself, put right what the message says, and run the lines again. The lines never remove such a folder themselves, and refuse to begin while one is there, since they cannot tell what it holds.
    - If they stopped after saying so, put the kept folder back first, with the lines in [Putting the kept folder back](#putting-the-kept-folder-back). Then run these lines again.
@@ -236,7 +240,7 @@ Once the older It is running, `it status` says that the database is at the older
 
 ### Putting the kept folder back
 
-These lines put the folder that was kept aside back in the place of It's folder, whole. They are how you go forward to the newer data again, and how you undo the steps above where they stopped partway. The folder they replace is not deleted: it is moved beside the kept one, under a name that ends in `-replaced`.
+These lines put the folder that was kept aside back in the place of It's folder, whole. They are how you go forward to the newer data again, and how you undo the steps above where they stopped partway. The folder they replace is not deleted: it is moved beside the kept one, under a name that ends in `-replaced`. If the kept folder then cannot be moved into place, they move It's folder back and say so, and if even that fails, they say where each folder is.
 
 Going forward this way loses everything that was published, changed or deleted while you were on the older It, because the folder comes back whole, with the newer It's database and the files of its pages together. Putting back only the database would not do: a page published again on the older It can have written its files where the newer database expects others, and the newer It would then show the older bytes under the newer version.
 
@@ -245,15 +249,20 @@ On Linux and macOS, stop It with Ctrl-C where you started it with `it serve`, an
 ```sh
 (
   set -e
-  it service uninstall
   live=$(cd -P "${IT_HOME:-$HOME/.it}" && pwd -P)
   saved="$live-after-upgrade"
   if [ ! -d "$saved" ] || [ -L "$saved" ]; then echo "There is no folder $saved to put back, so nothing was changed." >&2; exit 1; fi
-  if [ -e "$live/backend/lock" ]; then echo "It is still running, so nothing was changed. Stop it, and run these lines again." >&2; exit 1; fi
   if [ -e "$live-replaced" ] || [ -L "$live-replaced" ]; then echo "$live-replaced is there already, so nothing was changed." >&2; exit 1; fi
+  it service uninstall
+  trap 'if [ $? -ne 0 ]; then echo "The background service is stopped and not registered. Once the folder is as you want it, run it setup to start it again." >&2; fi' EXIT
+  if [ -e "$live/backend/lock" ]; then echo "It is still running, so nothing in its folder was changed. Stop it, and run these lines again." >&2; exit 1; fi
   cd /
   mv "$live" "$live-replaced"
-  mv "$saved" "$live"
+  if ! mv "$saved" "$live"; then
+    if mv "$live-replaced" "$live"; then echo "The kept folder could not be moved into place, so It's folder was moved back and nothing in it was changed. Close whatever has a file open in $saved, and run these lines again." >&2
+    else echo "The kept folder could not be moved into place, and It's folder could not be moved back either. It's folder is now $live-replaced, and the kept folder is still $saved. Move $live-replaced back to $live yourself before anything else." >&2; fi
+    exit 1
+  fi
   echo "It's folder is the one that was kept, and the one it replaced is in $live-replaced."
 )
 ```
