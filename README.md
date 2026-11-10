@@ -91,13 +91,13 @@ Install It from https://itcan.do and set it up on this computer.
 Or install it yourself. On macOS and Linux:
 
 ```text
-curl -fsSL https://itcan.do/install.sh | sh
+curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.sh | sh
 ```
 
 On Windows, in PowerShell:
 
 ```text
-irm https://itcan.do/install.ps1 | iex
+irm https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.ps1 | iex
 ```
 
 Then ask your agent for the first thing: **“Give me the It tour.”**

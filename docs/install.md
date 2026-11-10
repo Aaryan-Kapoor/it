@@ -17,11 +17,11 @@ It has been used on Linux and on Windows, and on macOS only on test machines so 
 ## Installing
 
 ```sh
-curl -fsSL https://itcan.do/install.sh | sh        # macOS and Linux
-irm https://itcan.do/install.ps1 | iex             # Windows
+curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.sh | sh    # macOS and Linux
+irm https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.ps1 | iex         # Windows
 ```
 
-Each command downloads one program for your system, checks it against its published checksum and puts it in `~/.it/bin`, with the licence and the third-party notices beside it in `~/.it`. It asks for no administrator rights, and it installs no runtime and no package manager. It also adds `~/.it/bin` to your PATH, by a line in your shell's profile or in your user settings on Windows. Where the folder is on the PATH already, your profile is left as it is, unless none of the files your shell reads names the folder: then only the terminal you are in has it, as the one `it uninstall` was run in does, and the line is added so that a new terminal has it too. The checksum is published in the same place as the program, so it guards against a download that was damaged or cut short, and it is not a signature.
+Each command fetches the install script from It's latest release on GitHub, and the script downloads one program for your system from the same release, checks it against its published checksum and puts it in `~/.it/bin`, with the licence and the third-party notices beside it in `~/.it`. It asks for no administrator rights, and it installs no runtime and no package manager. It also adds `~/.it/bin` to your PATH, by a line in your shell's profile or in your user settings on Windows. Where the folder is on the PATH already, your profile is left as it is, unless none of the files your shell reads names the folder: then only the terminal you are in has it, as the one `it uninstall` was run in does, and the line is added so that a new terminal has it too. The checksum is published in the same place as the program, so it guards against a download that was damaged or cut short, and it is not a signature.
 
 On macOS and Linux the shell named by `SHELL` selects these files. Missing files are made, and an existing profile that is a symlink is written through to its target.
 
@@ -38,10 +38,10 @@ Run at a terminal, the command says what it did in a few lines and goes straight
 
 The programs are built for five systems: Linux and macOS on Intel and ARM chips, and Windows on Intel. Three variables change what the scripts do. `IT_HOME` names another folder than `~/.it` for everything It keeps. `IT_VERSION` names a release other than the latest, by its tag. `IT_INSTALL_NO_PATH`, set to anything, leaves your PATH alone.
 
-To have a computer join an It that runs on another one, give the install script the joining as its arguments. On macOS and Linux, use `curl -fsSL https://itcan.do/install.sh | sh -s -- login --url <address> --code <code>`, which is the line that It's site shows under Machines, "Add a machine". In PowerShell, use:
+To have a computer join an It that runs on another one, give the install script the joining as its arguments. On macOS and Linux, use `curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.sh | sh -s -- login --url <address> --code <code>`, which is the line that It's site shows under Machines, "Add a machine". In PowerShell, use:
 
 ```powershell
-& ([scriptblock]::Create((irm https://itcan.do/install.ps1))) login --url '<address>' --code '<code>'
+& ([scriptblock]::Create((irm https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.ps1))) login --url '<address>' --code '<code>'
 ```
 
 Replace the address and code with the ones the other computer shows. Keep each argument separate, and quote values that contain spaces. The program is installed and then joins, and no local It is set up on that computer. If joining fails, the installed program stays and the script says that joining failed. Run `it login` again with a new code. [Agents on another computer](agents.md#agents-on-another-computer) has the rest.
