@@ -1141,3 +1141,93 @@ describe('what Claude Code asks of a module before it loads it', () => {
     },
   )
 })
+
+describe('what the add-on says of whether its conversation is at work', () => {
+  /** What each asking for clicks said of the conversation’s turn, in the order they were made. */
+  const saidWithClicks = () => asked.filter((a) => a.path.startsWith('/clicks')).map((a) => a.body.turn as boolean | undefined)
+  /** And what each receipt said of it. */
+  const saidWithReceipts = () => asked.filter((a) => a.path === '/ack').map((a) => a.body.turn as boolean | undefined)
+
+  test('every asking for clicks says whether a turn of the conversation itself is running, and a helper’s turn is none of it', async () => {
+    const host = await start()
+    await host.tick()
+    await host.fire('turn.start')
+    await host.tick()
+    // A subagent starts and finishes inside the conversation's turn, which is still running
+    await host.fire('turn.start', { agentId: 'subagent-7' })
+    await host.tick()
+    await host.fire('turn.complete', { agentId: 'subagent-7' })
+    await host.tick()
+    await host.fire('turn.complete')
+    await host.tick()
+    // And a helper that runs while the conversation is not working does not make it work
+    await host.fire('turn.start', { agentId: 'subagent-8' })
+    await host.tick()
+    expect(saidWithClicks()).toEqual([false, true, true, true, false, false])
+    // It is told beside what the connector is asked already, and takes nothing away from that
+    expect(asked.filter((a) => a.path.startsWith('/clicks')).at(-1)?.body).toMatchObject({ addon: { api: 1, delivery: true }, turn: false })
+  })
+
+  test('a click that starts a turn is at work from the moment its prompt is taken, through the turn, and no longer', async () => {
+    const host = await start()
+    offered = [{ id: 'click-1', text: 'one' }]
+    await host.tick()
+    // Submitted, and not taken yet: nothing is at work
+    await host.tick()
+    expect(saidWithClicks()).toEqual([false, false])
+    host.submits[0]!.settle()
+    await host.settle()
+    // Taken: the receipt says the conversation is at work, though its turn has not begun
+    expect([acks(), wokes(), saidWithReceipts()]).toEqual([['click-1'], [true], [true]])
+    await host.tick()
+    await host.fire('turn.start')
+    await host.tick()
+    await host.fire('turn.complete')
+    await host.tick()
+    expect(saidWithClicks().slice(2)).toEqual([true, true, false])
+  })
+
+  test('a prompt that is taken only once its turn has begun, or is over, does not leave the conversation at work after it', async () => {
+    const host = await start()
+    offered = [{ id: 'click-1', text: 'one' }]
+    await host.tick()
+    // Claude Code says the turn has begun, and that it is over, before it answers for the prompt
+    await host.fire('turn.start')
+    await host.fire('turn.complete')
+    host.submits[0]!.settle()
+    await host.settle()
+    await host.tick()
+    expect([saidWithReceipts(), saidWithClicks().at(-1)]).toEqual([[false], false])
+  })
+
+  test('a prompt that was refused starts nothing, and the conversation is not said to be at work', async () => {
+    const host = await start()
+    offered = [{ id: 'click-1', text: 'one' }]
+    await host.tick()
+    host.submits[0]!.settle({ drop: 'refused by a hook' })
+    await host.settle()
+    await host.tick()
+    expect([acks(), saidWithClicks().at(-1)]).toEqual([[], false])
+  })
+
+  test('a click that joined a running turn says so with its receipt, and a conversation that ends takes its work with it', async () => {
+    const host = await start()
+    await host.fire('turn.start')
+    offered = [{ id: 'click-1', text: 'one' }]
+    await host.tick()
+    await host.fire('tool.call', {}, { output: 'x' })
+    await host.settle()
+    expect([wokes(), saidWithReceipts()]).toEqual([[false], [true]])
+    // A click taken as a prompt, whose conversation ends before its turn begins
+    await host.fire('turn.complete')
+    offered = [{ id: 'click-2', text: 'two' }]
+    await host.tick()
+    host.submits[0]!.settle()
+    await host.settle()
+    expect(saidWithReceipts()).toEqual([true, true])
+    await host.fire('session.end', { sessionId: 'session-1', reason: 'other' })
+    await host.fire('session.start')
+    await host.tick()
+    expect(saidWithClicks().at(-1)).toBe(false)
+  })
+})
