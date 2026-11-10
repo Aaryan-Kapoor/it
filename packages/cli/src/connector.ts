@@ -70,7 +70,21 @@ import { conversationFolder, conversationProfile, noteConversation, publishedWit
 import { alone, lockHeld } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
-import { type T3, T3_HELD_MOST, type T3Search, t3Held, t3Refusal, t3Running, t3Search, t3Send, t3Server, t3ThreadOf, wentUnanswered } from './t3'
+import {
+  type T3,
+  T3_HELD_MOST,
+  type T3Now,
+  type T3Search,
+  t3Held,
+  t3Refusal,
+  t3Running,
+  t3RunsNow,
+  t3Search,
+  t3Send,
+  t3Server,
+  t3ThreadOf,
+  wentUnanswered,
+} from './t3'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, begin, record, startSender, thisMachine, thisProgram, three, timeBand } from './usage'
 import {
@@ -1051,17 +1065,26 @@ async function connecting(say: (line: string) => void): Promise<void> {
       })
     return stillAsking()
   }
-  /** How long a question about a conversation's way waits for T3 Code to say whether a thread holds it. */
-  const ROUTE_T3_MS = 3_000
+  /**
+   * How long a question about a conversation's way waits for T3 Code to say whether one of its
+   * threads runs it. The first asking since this connector started includes T3 Code's own command
+   * issuing It a session, which takes a couple of seconds on its own; later ones are quicker.
+   */
+  const ROUTE_T3_MS = 8_000
   /**
    * How what is done on a conversation's pages would reach it now, as far as this connector can
    * tell, for `it create`, `it update` and `it status` to say to the agent: whether the
    * conversation's add-on is listening, and whether a thread of T3 Code holds it, which T3 Code
    * then takes the click to whatever the add-on does. `thread` is `unknown` where T3 Code is
-   * running and has not said within a few seconds whether one of its threads holds the
+   * running and could not say within a few seconds whether one of its threads runs the
    * conversation, where it would not take a message for it a moment ago, and where the note of
-   * the threads cannot be read. The look is the one a click makes, and what it finds is noted
-   * as a click's look notes it.
+   * the threads cannot be read.
+   *
+   * It is asked by a command that the conversation runs at this moment, so a thread that holds the
+   * conversation runs it now, and only the threads in the middle of a run or changed lately are
+   * read (`t3RunsNow`), never every thread of a large workspace. A thread found to run it is
+   * noted as a click's look notes it. Found in none, that is said for now and noted nowhere: a
+   * click for the conversation once it has been closed asks T3 Code afresh, of every thread.
    */
   const wayFor = async (harness: string, id: string): Promise<Route> => {
     const key = follow(keyOf(harness, id))
@@ -1075,19 +1098,33 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (notedThread(key) !== undefined) return { ...answer, thread: 'held' }
     if (t3ThreadsHeld()) return { ...answer, thread: 'unknown' }
     if (!t3Seen || now - t3Seen.at > 5000) t3Seen = { at: now, server: t3Server() }
-    if (!t3Seen.server) return { ...answer, thread: 'none' }
+    const server = t3Seen.server
+    if (!server) return { ...answer, thread: 'none' }
     const refused = t3Refused.get(key)
     if (refused !== undefined && now - refused < T3_REFUSED_MS) return { ...answer, thread: 'unknown' }
-    const settled = () => {
-      const known = t3Known.get(key)
-      return known !== undefined && known !== 'asking' && (known.thread !== null || Date.now() - known.at < T3_AGAIN_MS) ? known : undefined
+    const known = t3Known.get(key)
+    if (known !== undefined && known !== 'asking' && known.thread) return { ...answer, thread: 'held' }
+    const ids = [...new Set([id, threadOf(key)])]
+    const runs = await t3RunsNow(server, { harness, ids, cwd: conversationFolder({ harness, id }) }, AbortSignal.timeout(ROUTE_T3_MS)).catch(
+      (): T3Now => ({ status: 'unknown' }),
+    )
+    if (runs.status !== 'found') return { ...answer, thread: runs.status === 'none' ? 'none' : 'unknown' }
+    if (notedThread(key) === undefined) say(`${a(harness)} conversation (${short(id)}) is held in a thread of T3 Code`)
+    // A search for its thread that a click began is over, whether one is under way or only what
+    // one read is kept, and what it would say in the end counts for nothing, as when the
+    // conversation is heard from (`followThread`): one that read the thread before T3 Code had the
+    // conversation's id would otherwise end in none and keep its clicks from the thread
+    const knownNow = t3Known.get(key)
+    if (knownNow === undefined || knownNow === 'asking' || !knownNow.thread) {
+      t3Known.set(key, { thread: runs.thread, at: Date.now() })
+      t3Searches.delete(key)
+      t3Pending.delete(key)
+      t3Retries.delete(key)
     }
-    // Not known, or known to be in none too long ago to go by: asked, as a click asks
-    if (!settled()) t3For(key, { harness, id })
-    const until = steady() + ROUTE_T3_MS
-    while (!settled() && steady() < until) await new Promise((r) => setTimeout(r, 50))
-    const known = settled()
-    return { ...answer, thread: known === undefined ? 'unknown' : known.thread ? 'held' : 'none' }
+    // What is written down is the thread its clicks go to, which is the one a search found first where it did
+    const holding = t3Known.get(key)
+    if (holding !== undefined && holding !== 'asking' && holding.thread) noteThread(key, holding.thread)
+    return { ...answer, thread: 'held' }
   }
   /**
    * A person can switch a thread of T3 Code to another agent app, and the thread then runs

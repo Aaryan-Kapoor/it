@@ -8,7 +8,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { version } from '../package.json'
 import { About } from './about'
 import { Dialog } from './dialog'
-import { ago, api, doneLeaving, forgetAll, type Id, noteErased, refusal, serverNow, startLeaving, useBackendTakes, useNow, useOpener } from './lib'
+import {
+  ago,
+  api,
+  doneLeaving,
+  forgetAll,
+  type Id,
+  noteErased,
+  refusal,
+  renaming as refusedAs,
+  serverNow,
+  startLeaving,
+  useBackendTakes,
+  useNow,
+  useOpener,
+} from './lib'
 import { LinkChoice, NetworkSwitch, NoAddress, OtherAddresses, PhoneNote, useNetwork, useWhere } from './network'
 import { thisPairing } from './outbox'
 import { goesAlong, type Paired, PairedBrowsers } from './paired'
@@ -59,7 +73,7 @@ function DisplayItem({
           className="inline row-main"
           onSubmit={(e) => {
             e.preventDefault()
-            void act(rename({ displayId: d.id as Id<'displays'>, name }).then(() => setName(null)))
+            void act(refusedAs(rename({ displayId: d.id as Id<'displays'>, name }), name).then(() => setName(null)))
           }}
         >
           <input

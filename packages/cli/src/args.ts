@@ -33,6 +33,7 @@ export const VALUED = new Set([
   'agent',
   'title',
   'on',
+  'on-id',
   'button',
   'timeout',
   'if-revision',
@@ -53,8 +54,8 @@ export interface Args {
 }
 /** The options each command can honour. JSON and help apply to every public command. */
 export const OPTIONS: Record<string, readonly string[]> = {
-  create: ['id', 'file', 'dir', 'html', 'state', 'agent', 'open', 'on', 'take'],
-  update: ['id', 'file', 'dir', 'html', 'title', 'agent', 'open', 'on', 'take'],
+  create: ['id', 'file', 'dir', 'html', 'state', 'agent', 'open', 'on', 'on-id', 'take'],
+  update: ['id', 'file', 'dir', 'html', 'title', 'agent', 'open', 'on', 'on-id', 'take'],
   list: [],
   read: [],
   delete: ['status'],
@@ -63,8 +64,8 @@ export const OPTIONS: Record<string, readonly string[]> = {
   patch: ['replace', 'if-revision'],
   state: [],
   say: [],
-  open: ['on'],
-  notify: ['id', 'on', 'sticky', 'button'],
+  open: ['on', 'on-id'],
+  notify: ['id', 'on', 'on-id', 'sticky', 'button'],
   displays: [],
   wait: ['id', 'follow', 'timeout'],
   actions: ['id', 'all'],
@@ -82,7 +83,7 @@ export const OPTIONS: Record<string, readonly string[]> = {
   service: [],
   skill: [],
   tour: ['wait', 'timeout'],
-  'tour show': ['agent', 'param', 'on'],
+  'tour show': ['agent', 'param', 'on', 'on-id'],
   'tour clear': [],
   telemetry: [],
   upgrade: ['check'],

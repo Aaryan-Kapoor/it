@@ -318,20 +318,79 @@ async function source(a: Args) {
   return gather({ html, file: text(a, 'file'), dir: text(a, 'dir') })
 }
 /**
- * Runs something that names a display. The backend says only that there is none of that name:
- * which name was asked for, and which there are, is said here, where it is the person's own
- * machine saying it.
+ * Where a command was told to show or send something: on the display of a name, with `--on`, or
+ * on the one display of an id, with `--on-id`. Never both, and neither of them empty. Read before
+ * anything is published, so that a command that cannot say where publishes nothing.
  */
-async function onDisplay<T>(a: Args, run: () => Promise<T>): Promise<T> {
+function aimedAt(a: Args): { display?: string; displayId?: string } {
+  const name = a.flags.on
+  const id = a.flags['on-id']
+  if (name !== undefined && id !== undefined)
+    throw new Problem('A display is named with --on or with --on-id, not both.', 'invalid', '`it displays` lists each display with its name and its id.')
+  if (name !== undefined && (typeof name !== 'string' || !name.trim())) throw new Problem('--on needs the name of a display.', 'invalid')
+  if (id !== undefined && (typeof id !== 'string' || !id.trim())) throw new Problem('--on-id needs the id of a display.', 'invalid')
+  if (typeof id === 'string') return { displayId: id.trim() }
+  return typeof name === 'string' ? { display: name } : {}
+}
+/**
+ * What the It this machine asks has said of whether it takes a later form of a call, once it
+ * has said it either way. A lookup that could not be made is not kept, so it is made again.
+ */
+const saidTakes = new Map<string, boolean>()
+async function takesForm(form: string): Promise<boolean | undefined> {
+  const known = saidTakes.get(form)
+  if (known !== undefined) return known
+  const said = await backendTakes(form)
+  if (said !== undefined) saidTakes.set(form, said)
+  return said
+}
+const olderForId = () =>
+  new Problem(
+    'The It this machine reaches is of an earlier version, and cannot be asked for a display by its id.',
+    'invalid',
+    'Name the display with --on "<name>" instead, or update It. `it status` says which version it is.',
+  )
+/** What is said where It could not say whether it takes a later form of a call: nothing is sent in a form it may not take. */
+const unknownForm = () =>
+  new Problem(
+    'It could not be asked whether it takes this, so nothing was sent and nothing was published.',
+    'offline',
+    'Check that It is running and can be reached (`it status`), then try again.',
+  )
+/**
+ * Before a display is asked for by its id, or anything is published to be shown on one: whether
+ * the It this machine asks takes the form, on its own word. Where it says it does not, the command
+ * is refused as `invalid`, and it never asks again by a name, since the id was given to reach that
+ * display and no other. Where it could not be asked, the command is refused as `offline`. Either
+ * way nothing is sent and nothing is published. Does nothing where no display is named by its id.
+ */
+async function canAimById(a: Args, form: string): Promise<void> {
+  if (aimedAt(a).displayId === undefined) return
+  const takes = await takesForm(form)
+  if (takes === false) throw olderForId()
+  if (takes === undefined) throw unknownForm()
+}
+/**
+ * Runs something that names a display. The backend says only that there is none of that name
+ * or id: which was asked for, and which there are, is said here, where it is the person's own
+ * machine saying it.
+ *
+ * A display named by its id is asked for only once It has said it takes the form (`canAimById`).
+ */
+async function onDisplay<T>(a: Args, run: () => Promise<T>, byId: string = TAKES.showById): Promise<T> {
+  const target = aimedAt(a)
+  await canAimById(a, byId)
   try {
     return await run()
   } catch (err) {
-    if (!(err instanceof Problem) || err.code !== 'no_such_display') throw err
-    const names = await call<{ name: string }[]>('query', api.displays.list).then(
-      (all) => all.map((d) => named(d.name)).join(', '),
+    if (!(err instanceof Problem)) throw err
+    if (err.code !== 'no_such_display') throw err
+    const all = await call<{ id: string; name: string }[]>('query', api.displays.list).then(
+      (all) => all.map((d) => (target.displayId !== undefined ? `${named(d.name)} (${d.id})` : named(d.name))).join(', '),
       () => '',
     )
-    throw new Problem(`No display is called ${named(text(a, 'on') ?? '')}.`, 'not_found', names ? `Displays: ${names}` : noDisplay())
+    const which = target.displayId !== undefined ? `No display has the id ${named(target.displayId)}.` : `No display is called ${named(target.display ?? '')}.`
+    throw new Problem(which, 'not_found', all ? `Displays: ${all}` : noDisplay())
   }
 }
 /**
@@ -344,10 +403,12 @@ const noDisplay = () =>
 /** What It answers when asked to show a page: the displays it is now shown on, and each one it was asked onto and is not shown on, with why. */
 interface Shown {
   displays: string[]
-  notShown?: { display: string; reason: string }[]
+  /** The ids of the displays it is shown on, in the same order. An It of an earlier version leaves them out. */
+  displayIds?: string[]
+  notShown?: { display: string; displayId?: string; reason: string }[]
 }
 async function show(slug: string, a: Args) {
-  return onDisplay(a, () => call<Shown>('mutation', api.displays.show, { slug, ...(text(a, 'on') ? { display: text(a, 'on') } : {}) }))
+  return onDisplay(a, () => call<Shown>('mutation', api.displays.show, { slug, ...aimedAt(a) }))
 }
 /**
  * What is printed of where a page was asked to be shown: `shownOn` names the displays it is
@@ -357,7 +418,12 @@ async function show(slug: string, a: Args) {
  * the one reason there is, `not_paired`. The `hint` says so in words, and where no display was
  * there to be asked at all, how one is paired.
  */
-function shownAs(shown: Shown): { shownOn: string[]; notShownOn?: { display: string; reason: string }[]; hint?: string } {
+function shownAs(shown: Shown): {
+  shownOn: string[]
+  shownDisplayIds?: string[]
+  notShownOn?: { display: string; displayId?: string; reason: string }[]
+  hint?: string
+} {
   const notShownOn = shown.notShown ?? []
   const ended = notShownOn.filter((d) => d.reason === 'not_paired').map((d) => named(d.display))
   const one = ended.length === 1
@@ -367,7 +433,12 @@ function shownAs(shown: Shown): { shownOn: string[]; notShownOn?: { display: str
     : shown.displays.length || notShownOn.length
       ? undefined
       : noDisplay()
-  return { shownOn: shown.displays, ...(notShownOn.length ? { notShownOn } : {}), ...(hint ? { hint } : {}) }
+  return {
+    shownOn: shown.displays,
+    ...(shown.displayIds ? { shownDisplayIds: shown.displayIds } : {}),
+    ...(notShownOn.length ? { notShownOn } : {}),
+    ...(hint ? { hint } : {}),
+  }
 }
 
 const LOGIN = 'login --url <address> --code <invite> [--name <name>] [--no-setup]'
@@ -398,7 +469,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   rollback: [2, 'rollback <id> <version>'],
   patch: [2, "patch <id> '<json>' [--replace] [--if-revision <n>]"],
   state: [1, 'state <id>'],
-  open: [1, 'open <id> [--on "<display>"]'],
+  open: [1, 'open <id> [--on "<display>" | --on-id <display-id>]'],
   displays: [0, 'displays'],
   wait: [0, 'wait [--id <id>] [--follow] [--timeout <seconds>]'],
   actions: [0, 'actions [--id <id>]'],
@@ -434,6 +505,10 @@ async function create(a: Args) {
   // the board again" the next day means that very page, and the conversation in front of them
   // says so, with `it open` or with --take. `it update` leaves a page with whoever has it,
   // unless told --take.
+  aimedAt(a)
+  // Asked before anything is published, so that a page meant for a display It cannot reach by
+  // its id is not published there to no display
+  if (a.flags.open === true) await canAimById(a, TAKES.showById)
   const take = a.flags.take === true
   const page = { slug, title, files: await source(a), agent: text(a, 'agent'), state, shown: a.flags.open === true }
   let done: Awaited<ReturnType<typeof publish>>
@@ -514,8 +589,9 @@ function anothers(slug: string, theirs: Made | null): Problem {
 async function arrivalHere(slug?: string): Promise<Arrives | undefined> {
   const session = sessionAsked()?.session
   if (!session) return undefined
+  // The connector gives T3 Code up to eight seconds, the first time a couple of them to issue It a session
   const asked = await local<Partial<Route>>(`/route?harness=${encodeURIComponent(session.harness)}&session=${encodeURIComponent(session.id)}`, {
-    timeoutMs: 5000,
+    timeoutMs: 10_000,
   })
   // An answer that is not one is no answer: a connector from before it answered this says nothing of it
   const route =
@@ -690,6 +766,8 @@ async function tour(a: Args) {
     given[param.slice(0, eq)] = loose(param.slice(eq + 1))
   }
   // The agent's plate on the page carries the name of the agent app that is giving the tour, where that is known
+  aimedAt(a)
+  await canAimById(a, TAKES.showById)
   const by = sessionAsked()?.session.harness
   const made = tourPage(name, given, text(a, 'agent') ?? (by && Object.hasOwn(KNOWN, by) ? KNOWN[by as Harness].label : undefined))
   // The page is this conversation's from now on, whoever showed it last. An agent app that does
@@ -712,6 +790,8 @@ async function tour(a: Args) {
 }
 
 async function update(a: Args) {
+  aimedAt(a)
+  if (a.flags.open === true) await canAimById(a, TAKES.showById)
   // Written as `it create` is, with the id in `--id` and a title in front of it, it is taken as that:
   // an agent that has just made a page with the one often asks for the other in the same shape
   const named = text(a, 'id')
@@ -2591,8 +2671,8 @@ async function serviceCommand(a: Args) {
 const HELP = `it ${VERSION}: put a live ${NOUN.one} on any display you own, and hear back what happens on it.
 
 Pages
-  it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)  [--state '{…}'] [--open] [--on "<display>"]
-  it update <id> (--file f | --dir d | --html "<…>" | pipe) [--title "<title>"] [--open] [--on "<display>"]
+  it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)  [--state '{…}'] [--open [--on "<display>" | --on-id <display-id>]]
+  it update <id> (--file f | --dir d | --html "<…>" | pipe) [--title "<title>"] [--open [--on "<display>" | --on-id <display-id>]]
                                  Both take [--agent <name>], a label for who made it,
                                  which its owning conversation can change explicitly, and
                                  [--take], which gives the ${NOUN.one} to this conversation.
@@ -2612,9 +2692,12 @@ State
                                  With no text, what was said before is taken away.
 
 Displays
-  it open <id> [--on "<display>"]
-  it notify "<text>" [--id <id>] [--on "<display>"] [--sticky] [--button "Label=action"]…
-  it displays
+  it open <id> [--on "<display>" | --on-id <display-id>]
+                                 --on names a display by its name, and --on-id by its id,
+                                 which stays when the display is renamed and is one
+                                 display's alone.
+  it notify "<text>" [--id <id>] [--on "<display>" | --on-id <display-id>] [--sticky] [--button "Label=action"]…
+  it displays                    List each display with its name and its id.
 
 What the person did
   it wait [--id <id>] [--follow] [--timeout <seconds>]
@@ -3140,7 +3223,8 @@ async function main(argv: string[]): Promise<void> {
     }
 
     case 'open': {
-      const slug = need(a._[0], `which ${NOUN.one}`, 'open <id> [--on "<display>"]')
+      const slug = need(a._[0], `which ${NOUN.one}`, 'open <id> [--on "<display>" | --on-id <display-id>]')
+      const where = aimedAt(a)
       // A conversation that brings a page up for its person is the one they are talking to: the
       // page is its page from now on, also where another conversation made it. Someone who says
       // "show me the board again" the next day gets an agent that opens what is there, and what
@@ -3152,7 +3236,7 @@ async function main(argv: string[]): Promise<void> {
       const result = await onDisplay(a, () =>
         call<Shown & { took?: boolean }>('mutation', api.displays.show, {
           slug,
-          ...(text(a, 'on') ? { display: text(a, 'on') } : {}),
+          ...where,
           ...(mine ? { session: mine, agent: mine.harness } : {}),
         }),
       )
@@ -3170,20 +3254,24 @@ async function main(argv: string[]): Promise<void> {
       })
     }
     case 'notify': {
+      const where = aimedAt(a)
       const body = need(a._.join(' ') || (await piped()), 'what to say', 'notify "<text>"')
       const buttons = (a.many.button ?? []).map((b) => {
         const eq = b.lastIndexOf('=')
         if (eq < 1) throw new Problem('A button is "Label=action".', 'invalid')
         return { label: b.slice(0, eq), action: b.slice(eq + 1) }
       })
-      const sent = await onDisplay(a, () =>
-        call('mutation', api.notifications.send, {
-          text: body,
-          ...(text(a, 'id') ? { slug: text(a, 'id') } : {}),
-          ...(text(a, 'on') ? { display: text(a, 'on') } : {}),
-          ...(a.flags.sticky ? { sticky: true } : {}),
-          ...(buttons.length ? { buttons } : {}),
-        }),
+      const sent = await onDisplay(
+        a,
+        () =>
+          call('mutation', api.notifications.send, {
+            text: body,
+            ...(text(a, 'id') ? { slug: text(a, 'id') } : {}),
+            ...where,
+            ...(a.flags.sticky ? { sticky: true } : {}),
+            ...(buttons.length ? { buttons } : {}),
+          }),
+        TAKES.notifyById,
       )
       // Counted: which agent app sent it, whether it had buttons, stays up, or is about a page, and whether it went to one display or to all. Never what it says
       usage.record('notification.sent', {
@@ -3191,19 +3279,25 @@ async function main(argv: string[]): Promise<void> {
         buttons: buttons.length > 0,
         sticky: a.flags.sticky === true,
         page: text(a, 'id') !== undefined,
-        to: text(a, 'on') ? 'one' : 'all',
+        to: where.display !== undefined || where.displayId !== undefined ? 'one' : 'all',
       })
       return out(sent)
     }
     case 'displays': {
-      const shown = await call<{ name: string; paired?: boolean; lastSeenAt?: number }[]>('query', api.displays.list)
+      const shown = await call<{ id: string; name: string; paired?: boolean; lastSeenAt?: number }[]>('query', api.displays.list)
       if (!forPerson(a)) return out(shown)
       if (!shown.length) return tell(['No display is paired. `it site` opens the site in a browser on this machine and pairs that browser.'])
       return tell([
         `${shown.length} display${shown.length === 1 ? '' : 's'}:`,
         ...columns(
-          shown.map((d) => [`  ${d.name}`, d.paired === false ? 'not paired any more' : 'paired', d.lastSeenAt ? `seen ${ago(d.lastSeenAt)}` : 'never seen']),
+          shown.map((d) => [
+            `  ${d.name}`,
+            d.paired === false ? 'not paired any more' : 'paired',
+            d.lastSeenAt ? `seen ${ago(d.lastSeenAt)}` : 'never seen',
+            d.id,
+          ]),
         ),
+        'A display is named with --on "<name>", or by the id beside it with --on-id <id>.',
       ])
     }
 

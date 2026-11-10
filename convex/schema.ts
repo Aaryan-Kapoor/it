@@ -135,6 +135,30 @@ export default defineSchema({
     /** What an agent asked this display to show, and when. */
     showing: v.optional(v.object({ artifactId: v.id('artifacts'), at: v.number() })),
     push: v.optional(v.object({ endpoint: v.string(), p256dh: v.string(), auth: v.string() })),
+    /**
+     * What each tab of it last said of itself (`displays.report`), by the backend's clock: whether
+     * it was visible, and what it showed, as a showing of this display's own and its page's
+     * version. At most sixteen, and only of the sign-out number they were said under. The shape is
+     * the one earlier local builds of It wrote, so that a database of theirs loads.
+     */
+    reports: v.optional(
+      v.array(
+        v.object({
+          tab: v.string(),
+          sequence: v.number(),
+          at: v.number(),
+          epoch: v.number(),
+          phase: v.union(v.literal('none'), v.literal('loading'), v.literal('shown'), v.literal('failed')),
+          visible: v.boolean(),
+          artifactId: v.optional(v.id('artifacts')),
+          version: v.optional(v.number()),
+        }),
+      ),
+    ),
+    /** When the newest of `reports` was said, so that the hourly cleaning finds the displays whose every report has run out. */
+    reportedAt: v.optional(v.number()),
+    /** When the person last clicked, tapped or typed on the site here, to within ten seconds, or when the display was registered. */
+    usedAt: v.optional(v.number()),
     /** The session of the browser that registered it: forgetting the display ends that session, and that session ending signs the display out. */
     sessionId: v.id('sessions'),
     /** Earlier pairings of this display, whose invitations are ended when it is forgotten. */
@@ -147,7 +171,8 @@ export default defineSchema({
     .index('by_user', ['userId'])
     .index('by_user_key', ['userId', 'key'])
     .index('by_session', ['sessionId'])
-    .index('by_push_endpoint', ['push.endpoint']),
+    .index('by_push_endpoint', ['push.endpoint'])
+    .index('by_reported', ['reportedAt']),
 
   // A display the person told It to forget. Its key is refused from then on, so a browser that
   // was closed at the time cannot quietly register itself again when it is next opened.

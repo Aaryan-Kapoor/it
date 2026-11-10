@@ -458,6 +458,49 @@ export async function t3Running(
   return undefined
 }
 
+/** How many of the threads that are running or changed lately are read at most to say whether one of them runs a conversation now, and how many of them at once. */
+const NOW_MOST = 24
+const NOW_AT_ONCE = 4
+
+/** Whether a thread runs a conversation now: the thread, none at all, or not known. */
+export type T3Now = { status: 'found'; thread: string } | { status: 'none' } | { status: 'unknown' }
+
+/**
+ * Whether a thread of T3 Code runs a conversation at this moment, as asked by a command that the
+ * conversation runs at this moment. A thread that runs such a conversation is in the middle of a
+ * run, or changed in the last few minutes, so only those are read, which in a workspace of many
+ * hundreds of threads are a few: every one of them, the likeliest first and a few at a time. It is
+ * `none` only where every one of them was read and none runs the conversation now, by any of the
+ * ids it is known by. It is `unknown` where T3 Code could not be asked, a thread could not be
+ * read, there were more of them than are read, or the time ran out first.
+ */
+export async function t3RunsNow(
+  t3: T3,
+  of: { harness: string; ids: readonly string[]; cwd?: string },
+  signal: AbortSignal = AbortSignal.timeout(DISCOVERY_MS),
+): Promise<T3Now> {
+  const shell = await ask<{ threads?: unknown; projects?: unknown }>(t3, 'GET', '/api/orchestration/shell', signal)
+  if (!shell || !Array.isArray(shell.threads)) return { status: 'unknown' }
+  const lately = Date.now() - LIVELY_MS
+  const lively = (shell.threads as { activeRunId?: unknown; updatedAt?: unknown }[]).filter(
+    (t) => typeof t?.activeRunId === 'string' || (typeof t?.updatedAt === 'string' && Date.parse(t.updatedAt) > lately),
+  )
+  const candidates = likeliest({ threads: lively, projects: shell.projects }, of, Number.POSITIVE_INFINITY)
+  let sure = candidates.length <= NOW_MOST
+  for (let at = 0; at < Math.min(candidates.length, NOW_MOST); at += NOW_AT_ONCE) {
+    if (signal.aborted) return { status: 'unknown' }
+    const batch = candidates.slice(at, Math.min(at + NOW_AT_ONCE, NOW_MOST))
+    const snapshots = await Promise.all(batch.map((thread) => ask(t3, 'GET', `/api/orchestration/threads/${encodeURIComponent(thread)}/bounded`, signal)))
+    for (const [i, thread] of batch.entries()) {
+      const { now } = conversationsOf(snapshots[i], thread)
+      if (now?.harness === of.harness && of.ids.includes(now.id)) return { status: 'found', thread }
+      // A thread that could not be read may be the one
+      if (snapshots[i] === undefined) sure = false
+    }
+  }
+  return sure && !signal.aborted ? { status: 'none' } : { status: 'unknown' }
+}
+
 /**
  * How far the looking for one conversation's thread has come. It is done in searches, each of
  * which lists the threads once and reads at most so many of them, and what is kept from one

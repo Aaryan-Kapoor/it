@@ -3232,7 +3232,7 @@ try {
     JSON.stringify(whileEnded) ===
       JSON.stringify({
         listedAs: ['it: false', 'the owner’s: true', 'the screen’s: true'],
-        askedOnto: { shownOn: [], notShownOn: [{ display: LATE, reason: 'not_paired' }], saysWhy: true },
+        askedOnto: { shownOn: [], notShownOn: [{ display: LATE, displayId: itsDisplay.id, reason: 'not_paired' }], saysWhy: true },
         saidOnThePage: true,
       }) &&
       sameDisplay &&

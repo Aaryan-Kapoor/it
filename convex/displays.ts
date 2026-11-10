@@ -2,9 +2,10 @@ import { AUDIENCE, LIMITS, parseJson, QUOTA, TAKES } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { action, internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
+import { action, internalMutation, type MutationCtx, mutation, query } from './_generated/server'
 import { takePage } from './artifacts'
 import { revokeLater } from './content'
+import { aim, nameOf, stillPaired, targetOf } from './lib/aim'
 import {
   artifactBySlug,
   displayByKey,
@@ -151,6 +152,8 @@ export const register = mutation({
       generatedName: unlike,
       createdAt: now,
       lastSeenAt: now,
+      // Someone paired it a moment ago, there, and is standing at it
+      usedAt: now,
       epoch: 0,
       sessionId: session._id,
       screen: screenOf(userAgent),
@@ -224,17 +227,6 @@ export const mine = query({
 })
 
 /**
- * Whether the browser a display is still holds the session it registered under. A display's
- * record stays when that session ends, so that the browser is the same display once it is
- * paired again. Until it is, the display shows nothing, and is said to be not paired wherever
- * displays are listed.
- */
-async function stillPaired(ctx: QueryCtx | MutationCtx, d: Doc<'displays'>): Promise<boolean> {
-  const session = await ctx.db.get(d.sessionId)
-  return session !== null && session.endedAt === undefined
-}
-
-/**
  * Every display the person has: for the owner's browser, and for a machine that is to show
  * something on one. `paired` is false for a display whose browser's pairing has ended.
  */
@@ -252,6 +244,24 @@ export const list = query({
   },
 })
 
+/**
+ * A name that another display already goes by, in any letter case, is refused: an agent asks for
+ * a display by its name, and two displays of one name could not be told apart. Displays that
+ * already share a name keep it, and each is still reached by its id. Kept apart here so that what
+ * becomes of a name already taken can be changed in one place.
+ */
+async function refuseTakenName(ctx: MutationCtx, d: Doc<'displays'>, name: string): Promise<void> {
+  const wanted = name.toLowerCase()
+  // Its own name, said again or in other letters, is kept, even where another display shares it
+  if (nameOf(d).toLowerCase() === wanted) return
+  const all = await ctx.db
+    .query('displays')
+    .withIndex('by_user', (q) => q.eq('userId', d.userId))
+    .take(QUOTA.displays)
+  if (all.some((other) => other._id !== d._id && nameOf(other).toLowerCase() === wanted))
+    fail('conflict', 'Another screen already has that name. Pick another name.', { nameTaken: true })
+}
+
 export const rename = mutation({
   args: { displayId: v.id('displays'), name: v.string() },
   handler: async (ctx, { displayId, name }) => {
@@ -261,6 +271,7 @@ export const rename = mutation({
     if (!speaksFor(c, d)) fail('not_found', 'No such display.')
     const clean = name.trim()
     if (!clean || clean.length > LIMITS.displayName) fail('invalid', `A display name is 1 to ${LIMITS.displayName} characters.`)
+    await refuseTakenName(ctx, d, clean)
     await ctx.db.patch(d._id, { name: clean })
     return null
   },
@@ -278,6 +289,111 @@ export const heartbeat = mutation({
     const now = Date.now()
     if (now - d.lastSeenAt > 55_000) await ctx.db.patch(d._id, { lastSeenAt: now })
     return { now, takes }
+  },
+})
+
+/** A tab's own id, made afresh each time the site is loaded there. */
+const TAB = /^[A-Za-z0-9_-]{16,64}$/
+/** How long what a tab last said of itself stands. A visible tab says so again every minute. */
+export const REPORT_MS = 150_000
+/** How many tabs of one display are kept. A tab past this many puts out the one that spoke longest ago. */
+const TABS = 16
+/**
+ * How far a tab's word of when it said something, by the backend's clock as the tab learned it,
+ * may be from when it arrives, and still be a use the person made a moment ago. A report that
+ * waited longer, as one does that the connection held through an outage and sent again with the
+ * arguments it had, says what was so then, and is kept as said then.
+ */
+export const REPORT_SKEW_MS = 10_000
+
+/**
+ * What one tab of a display says of itself: whether it is visible, whether the person used it a
+ * moment ago, and what it shows. Only the display's own browser says it, under the pairing and
+ * the sign-out number it said it under: a report that waited out a sign-out or a new pairing is
+ * refused, and one older than what the tab last said is ignored. Kept per tab, so that one window
+ * in the back does not hide another of the same browser that is in front of the person. Each tab
+ * says this every minute while it is visible, once when it is hidden, and whenever what it shows
+ * changes.
+ *
+ * What it shows is a showing (`mountId`) that this display made itself, under its sign-out number
+ * now: `loading`, `shown` once its ticket was given, or `failed`, and `none` with no showing.
+ * Nothing of what the person did is kept, only when: `usedAt`, written at most once in five
+ * seconds. All of it is the browser's word, and never proof of what is on the glass.
+ *
+ * Each report says when the tab made it (`observedAt`), by the backend's clock as the tab learned
+ * it, and is kept as of then, never later than now: a report that was held back, as the
+ * connection holds a call through an outage and sends it again unchanged, does not say what was
+ * so then as what is so now. One that is already too old to stand is not taken, and a use is
+ * taken only from one that arrives within `REPORT_SKEW_MS` of when it was made, and that was not
+ * made more than that ahead of now. A report that
+ * says no time, as from a site of before reports said it, is kept as of now and is never taken
+ * for a use. The answer says whether the use was taken (`used`), so that a tab keeps one that was
+ * not and says it again.
+ */
+export const report = mutation({
+  args: {
+    key: v.string(),
+    epoch: v.number(),
+    tab: v.string(),
+    sequence: v.number(),
+    phase: v.union(v.literal('none'), v.literal('loading'), v.literal('shown'), v.literal('failed')),
+    visible: v.boolean(),
+    mountId: v.optional(v.string()),
+    used: v.optional(v.boolean()),
+    observedAt: v.optional(v.number()),
+    expectedSession: v.string(),
+  },
+  handler: async (ctx, a) => {
+    const c = await requireBrowser(ctx, a.expectedSession)
+    const d = await displayByKey(ctx, c, a.key)
+    // The owner's browser may act for every display, but says how it is only of its own
+    if (d.sessionId !== c.session._id) fail('not_found', 'This display is not registered.')
+    if (!TAB.test(a.tab) || !Number.isSafeInteger(a.sequence) || a.sequence < 1) fail('invalid', 'That is not what a tab says of itself.')
+    if (a.phase === 'none' && a.mountId !== undefined) fail('invalid', 'A tab that shows nothing names no showing.')
+    if (a.phase !== 'none' && a.mountId === undefined) fail('invalid', 'A tab that shows a page names its showing.')
+    if (a.observedAt !== undefined && !Number.isFinite(a.observedAt)) fail('invalid', 'That is not what a tab says of itself.')
+    const now = Date.now()
+    if (a.epoch !== d.epoch) return { accepted: false, now }
+    // As of when the tab made it, which no clock can make later than now
+    const at = Math.min(now, a.observedAt ?? now)
+    if (now - at >= REPORT_MS) return { accepted: false, now }
+    // Within the leeway of the clocks either way: one made further ahead than that is from a
+    // clock that runs fast, and is kept as of now, but is no use. A report is the browser's own
+    // word, so this keeps a clock that is wrong from saying a use is newer than it was; a paired
+    // browser that meant to could still say it was used when it was not
+    const timely = a.observedAt !== undefined && Math.abs(now - a.observedAt) <= REPORT_SKEW_MS
+    const fresh = (d.reports ?? []).filter((r) => r.epoch === d.epoch && now - r.at < REPORT_MS && r.at <= now)
+    const before = fresh.find((r) => r.tab === a.tab)
+    if (before && a.sequence <= before.sequence) return { accepted: false, now }
+    await rateLimit(ctx, 'reportDisplay', d._id)
+    let page: { artifactId: Id<'artifacts'>; version: number } | undefined
+    if (a.mountId !== undefined) {
+      const mountId = a.mountId
+      const m = await ctx.db
+        .query('mounts')
+        .withIndex('by_mount', (q) => q.eq('mountId', mountId))
+        .unique()
+      // A showing of this display's own, made since its last sign-out, and shown only once its
+      // ticket was given. A card's live preview on the grid is no page shown (`picture`): what the
+      // display shows is the page it has open, and never one of the pictures beside it
+      if (!m || m.userId !== c.user._id || m.displayId !== d._id || m.epoch !== d.epoch || (a.phase === 'shown' && !m.ticketGiven))
+        fail('not_found', 'No such showing on this display.')
+      if (m.picture) fail('invalid', 'A card’s live preview is no page shown.')
+      page = { artifactId: m.artifactId, version: m.version }
+    }
+    // Never one refused for want of room: the tabs that spoke longest ago make way
+    const others = fresh
+      .filter((r) => r.tab !== a.tab)
+      .sort((x, y) => y.at - x.at)
+      .slice(0, TABS - 1)
+    const reports = [...others, { tab: a.tab, sequence: a.sequence, at, epoch: d.epoch, phase: a.phase, visible: a.visible, ...page }]
+    const change: Partial<Doc<'displays'>> = { reports, reportedAt: Math.max(...reports.map((r) => r.at)) }
+    // Whether the use it said was taken, which the tab goes by to say it again or not: a use
+    // within five seconds of the last one written is taken, and needs no writing
+    const used = a.visible && a.used === true && timely
+    if (used && at - (d.usedAt ?? 0) > 5000) change.usedAt = at
+    await ctx.db.patch(d._id, change)
+    return { accepted: true, now, used }
   },
 })
 
@@ -380,42 +496,35 @@ export const forget = mutation({
 })
 
 /**
- * An agent asks for a page to be brought up: on one named display, or on all of them. The
- * answer names the displays it is shown on, and, in `notShown`, each one it was asked onto and
- * is not shown on, with why: `not_paired` for a display whose browser's pairing has ended,
- * which shows nothing until that browser is paired again.
+ * An agent asks for a page to be brought up: on one display named by its id, on the displays
+ * that have a name, or on every display where it names none (`lib/aim.ts`). The answer names the
+ * displays it is shown on, with their ids beside them in `displayIds`, and, in `notShown`, each
+ * one it was asked onto and is not shown on, with why: `not_paired` for a display whose browser's
+ * pairing has ended, which shows nothing until that browser is paired again.
  */
 export const show = mutation({
-  args: { slug: v.string(), display: v.optional(v.string()), session: v.optional(session), agent: v.optional(v.string()) },
-  handler: async (ctx, { slug, display, session: mine, agent }) => {
+  args: {
+    slug: v.string(),
+    display: v.optional(v.string()),
+    displayId: v.optional(v.string()),
+    session: v.optional(session),
+    agent: v.optional(v.string()),
+  },
+  handler: async (ctx, { slug, display, displayId, session: mine, agent }) => {
     const { user, machine } = await requireMachine(ctx)
+    const target = targetOf({ display, displayId })
     await rateLimit(ctx, 'show', user._id)
     const artifact = (await artifactBySlug(ctx, user._id, slug)) ?? fail('not_found', 'No such page.')
-    const all = await ctx.db
-      .query('displays')
-      .withIndex('by_user', (q) => q.eq('userId', user._id))
-      .take(QUOTA.displays)
-    const wanted = display?.trim().toLowerCase()
-    const targets = wanted ? all.filter((d) => (d.name ?? d.generatedName).toLowerCase() === wanted) : all
-    // Said without the name that was asked for and without the names there are: a refusal is
-    // kept in the backend's own record of what failed, and a display's name is the person's.
-    // The machine that asked knows what it asked, and reads the names with `it displays`.
-    if (wanted && targets.length === 0) fail('not_found', 'No display has that name.', { noSuchDisplay: true })
-    const shown: string[] = []
-    const notShown: { display: string; reason: 'not_paired' }[] = []
-    for (const d of targets) {
-      const name = d.name ?? d.generatedName
-      if (await stillPaired(ctx, d)) {
-        // The time of a showing is what a display goes by to tell a new asking from one it has
-        // seen, and so it never goes back: a clock that was set back would otherwise have every
-        // display ignore what it is asked to show until the clock had caught up again
-        await ctx.db.patch(d._id, { showing: { artifactId: artifact._id, at: Math.max(Date.now(), (d.showing?.at ?? 0) + 1) } })
-        shown.push(name)
-      } else notShown.push({ display: name, reason: 'not_paired' })
+    const aimed = await aim(ctx, user._id, target)
+    for (const d of aimed.to) {
+      // The time of a showing is what a display goes by to tell a new asking from one it has
+      // seen, and so it never goes back: a clock that was set back would otherwise have every
+      // display ignore what it is asked to show until the clock had caught up again
+      await ctx.db.patch(d._id, { showing: { artifactId: artifact._id, at: Math.max(Date.now(), (d.showing?.at ?? 0) + 1) } })
     }
     // A page changes owner only if at least one requested display can show it. All display
     // changes and ownership changes commit together, including the rate-limit checks.
-    const took = mine && shown.length ? (await takePage(ctx, artifact, machine, mine, agent)).took : false
-    return { displays: shown, notShown, took }
+    const took = mine && aimed.to.length ? (await takePage(ctx, artifact, machine, mine, agent)).took : false
+    return { displays: aimed.to.map(nameOf), displayIds: aimed.to.map((d) => d._id), notShown: aimed.notShown, took }
   },
 })
