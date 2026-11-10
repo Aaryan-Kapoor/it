@@ -211,6 +211,8 @@ const SCREEN = marked('Test screen')
 const DEPLOYING = `Deploying 3 of 7 ${PRIVATE_MARK}status`
 const PLAN = `${PRIVATE_MARK}B`
 const children = []
+/** The programs that hold a file as an agent app does (holdAsCodex): stopped with the connectors, and with no log of their own to keep. */
+const holders = []
 const browsers = []
 // Where what each test machine wrote down is kept: for CI to keep, and for the checks at the end
 const KEPT = process.env.IT_E2E_LOGS ?? path.join(tmp, 'logs')
@@ -490,7 +492,7 @@ function startConnector(h, extraEnv = {}) {
  * Takes the lock Codex takes on a conversation's file on Windows, as Rust's File::try_lock takes
  * it: the file opened for reading and writing and shared with every program for all three, and
  * then LockFileEx, to itself and without waiting, over every byte from the first. The program
- * that holds it is one of the run's, stopped with the others at the end. Resolves once it holds
+ * that holds it is one of the run's, stopped with the connectors at the end. Resolves once it holds
  * the lock.
  */
 const HOLDS_AS_CODEX = `$ErrorActionPreference = 'Stop'
@@ -509,7 +511,7 @@ function holdAsCodex(file) {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     })
-    children.push(child)
+    holders.push(child)
     let said = ''
     child.stdout.on('data', (bytes) => {
       said += bytes
@@ -5898,8 +5900,8 @@ try {
   // Everything the run started is stopped first, and what each wrote down is put where it is
   // read back only then: what a connector says as it stops is part of what it wrote. Each is
   // asked to stop, made to when it has not, and waited for until nothing more can come from it.
-  await Promise.all(children.map((c) => stopped(c)))
-  allStopped = children.every((c) => c.exitCode !== null || c.signalCode !== null)
+  await Promise.all([...children, ...holders].map((c) => stopped(c)))
+  allStopped = [...children, ...holders].every((c) => c.exitCode !== null || c.signalCode !== null)
   for (const b of browsers) await b.close().catch(() => {})
   try {
     keep()
