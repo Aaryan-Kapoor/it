@@ -570,8 +570,10 @@ describe('a program held to the time a script has left', () => {
     await expect(within(300, stalled)('home', ['actions', '--id', 'p'], { onStart: (c) => (child = c) })).rejects.toThrow('it actions: no answer within 0.3 s')
     expect(Date.now() - begun).toBeLessThan(3000)
     await new Promise((resolve) => (child.exitCode === null && child.signalCode === null ? child.once('exit', resolve) : resolve()))
-    expect(child.signalCode).toBe('SIGKILL')
+    // The stand-in never ends by itself, so a program that has ended was ended by the deadline. Windows
+    // tells of that with an exit code where other systems name the signal
     expect(() => process.kill(child.pid, 0)).toThrow()
+    if (process.platform !== 'win32') expect(child.signalCode).toBe('SIGKILL')
   })
 
   test('starts nothing when no time is left, and gives what a program that ends in time printed', async () => {
