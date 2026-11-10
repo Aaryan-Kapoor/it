@@ -3240,9 +3240,22 @@ try {
       .filter((d) => d.name in namedHere)
       .map((d) => `${namedHere[d.name]}: ${d.paired}`)
       .sort(),
+    // Named, and showing nothing, the page is refused as a notification to that display is,
+    // with why and with the page's link to give instead
     askedOnto: await it(A, ['open', slug, '--on', LATE]).then(
-      (said) => ({ shownOn: said.shownOn, notShownOn: said.notShownOn, saysWhy: /is not paired any more/.test(said.hint ?? '') }),
-      (e) => ({ failed: e.code ?? e.message }),
+      (said) => ({ shownOn: said.shownOn, notShownOn: said.notShownOn }),
+      (e) => {
+        let hint = ''
+        try {
+          hint = JSON.parse(e.stderr.trim().split('\n').pop())?.error?.hint ?? ''
+        } catch {}
+        return {
+          refused: e.code,
+          exit: e.exit,
+          saysWhy: /is not paired any more/.test(e.message),
+          givesLink: /Or give the user its link: http:\/\/\S+\/p\//.test(hint),
+        }
+      },
     ),
     saidOnThePage: Boolean(await until(() => itsRowThere.getByText('Not paired').isVisible(), 10_000)),
   }
@@ -3262,11 +3275,11 @@ try {
   )
   const listedAgain = (await it(A, ['displays'])).find((d) => d.name === LATE)?.paired
   check(
-    'a display whose browser’s pairing has ended stays, and is said to be not paired where an agent lists the displays and on the owner’s Displays page; an agent that asks for a page on it is told it is not shown there, and why; and paired again, the browser is that same display',
+    'a display whose browser’s pairing has ended stays, and is said to be not paired where an agent lists the displays and on the owner’s Displays page; an agent that asks for a page on it is refused, with why and with the page’s link; and paired again, the browser is that same display',
     JSON.stringify(whileEnded) ===
       JSON.stringify({
         listedAs: ['it: false', 'the owner’s: true', 'the screen’s: true'],
-        askedOnto: { shownOn: [], notShownOn: [{ display: LATE, displayId: itsDisplay.id, reason: 'not_paired' }], saysWhy: true },
+        askedOnto: { refused: 'not_paired', exit: 1, saysWhy: true, givesLink: true },
         saidOnThePage: true,
       }) &&
       sameDisplay &&
