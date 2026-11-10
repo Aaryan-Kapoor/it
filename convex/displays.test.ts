@@ -978,6 +978,33 @@ describe('a display locked to a page', () => {
     expect(await code(picture(h.tv, h.review))).toBe('ok')
   })
 
+  test('a locked display still gets notifications, to every display, by name, by id and as a push, and keeps to its page', async () => {
+    const h = await locked()
+    const PUSH = 'https://fcm.googleapis.com/fcm/send/the-tv'
+    await h.tv.as.mutation(api.push.subscribe, { key: h.tv.key, endpoint: PUSH, p256dh: 'p', auth: 'a' })
+    await h.laptop.as.action(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })
+    await h.laptop.as.mutation(api.displays.rename, { displayId: h.tv.id, name: 'Gym' })
+    const shown = (await h.row(h.tv.id)).showing
+    const everywhere = await h.agent.mutation(api.notifications.send, { text: 'to every display', everywhere: true })
+    expect(everywhere.displayIds).toContain(h.tv.id)
+    const byName = await h.agent.mutation(api.notifications.send, { text: 'by name', display: 'gym' })
+    expect(byName.displayIds).toEqual([h.tv.id])
+    const byId = await h.agent.mutation(api.notifications.send, { text: 'by id', displayId: h.tv.id })
+    expect(byId.displayIds).toEqual([h.tv.id])
+    // In its tray, each of them
+    const tray = (await h.tv.as.query(api.notifications.list, { key: h.tv.key })).map((n: { text: string }) => n.text)
+    expect(tray).toEqual(expect.arrayContaining(['to every display', 'by name', 'by id']))
+    // And pushed to it once its site is closed, as to any display
+    vi.advanceTimersByTime(200_000)
+    for (const sent of [everywhere, byName, byId])
+      expect((await h.t.query(internal.push._targets, { notificationId: sent.id, now: Date.now() }))?.targets.map((x: { displayId: string }) => x.displayId)).toContain(h.tv.id)
+    expect(await h.t.query(internal.push._still, { notificationId: byId.id, displayId: h.tv.id, endpoint: PUSH })).toBe(true)
+    // None of it moves the display off its page, nor ends its lock
+    const after = await h.row(h.tv.id)
+    expect(after.showing).toEqual(shown)
+    expect(after.lockedTo?.artifactId).toBe(h.workout)
+  })
+
   test('a screen is let open no other page there, whatever site asks, while the owner’s browser elsewhere still opens any', async () => {
     const h = await locked()
     await h.tv.as.action(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })
