@@ -5559,6 +5559,241 @@ describe.skipIf(process.platform === 'win32')('a thread of T3 Code that is switc
   })
 })
 
+describe.skipIf(process.platform === 'win32')('whether a conversation that was handed a click is at work, as It is told', () => {
+  const CLAUDE = { harness: 'claude-code', id: 'conversation-1' }
+  const APPS = { wanted: ['claude-code', 'codex', 'pi'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }
+  const click = (n: number, session = CLAUDE, ago = 1000) => ({
+    id: `click-${n}`,
+    artifact: 'plan',
+    title: 'A page',
+    name: 'approve',
+    payload: '{}',
+    at: Date.now() - ago,
+    attended: true,
+    session,
+  })
+  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inboxPage')!(clicks)
+  /** What It was told of turns, in the order it was told. */
+  const told = () => stand.calls.filter((c) => c.name === 'turns:say').map((c) => c.args)
+  /** Claude Code's add-on asks for its conversation's clicks, saying whether a turn is running where it says so at all. */
+  const asks = (turn?: boolean, id = CLAUDE.id) =>
+    local<{ clicks: { id: string }[] }>(`/clicks?harness=claude-code&session=${id}`, { method: 'POST', body: turn === undefined ? {} : { turn } })
+  /** A click is offered to a conversation of Claude Code that is listening, given to its add-on, and reported as handed over. */
+  const handed = async (n: number, receipt: Record<string, unknown>, turn?: boolean) => {
+    offered(click(n))
+    await until(async () => ((await asks(turn))?.clicks ?? []).some((c) => c.id === `click-${n}`))
+    expect(await local('/ack', { method: 'POST', body: { ids: [`click-${n}`], ...receipt } })).toEqual({ ok: true, acked: 1 })
+  }
+  const RUNNING = { for: CLAUDE, running: true }
+  const ENDED = { for: CLAUDE, running: false }
+
+  test('a connector that starts says that none of this machine’s turns is known any more, and tells nothing of a conversation it handed nothing to', async () => {
+    standIn()
+    await start('socket', APPS)
+    await pass()
+    expect(told()).toEqual([{}])
+    // Its turns come and go, as Claude Code's add-on says with everything it asks, and Codex's hooks say
+    for (const turn of [false, true, true, false, true, false]) await asks(turn)
+    for (const busy of [true, false, true]) await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy } })
+    await pass(3)
+    expect(told()).toEqual([{}])
+  })
+
+  test('a click that starts a turn has It told that the turn is running, and that it ended only when it has, after which the conversation is watched no more', async () => {
+    standIn()
+    await start('socket', APPS)
+    await asks(false)
+    // Taken as a prompt: the add-on says with its receipt that the conversation is at work
+    await handed(1, { woke: true, turn: true }, false)
+    await until(() => told().length === 2)
+    expect(told()).toEqual([{}, RUNNING])
+    // It goes on working, and nothing more is told for as long as it does
+    for (let n = 0; n < 5; n++) {
+      await asks(true)
+      await pass()
+    }
+    expect(told()).toEqual([{}, RUNNING])
+    await asks(false)
+    await until(() => told().length === 3)
+    expect(told()).toEqual([{}, RUNNING, ENDED])
+    // The hand-over was confirmed to It before the turn's end was told
+    const order = stand.calls.map((c) => (c.name === 'delivery:handedOff' ? 'handed' : c.name === 'turns:say' && c.args.running === false ? 'ended' : ''))
+    expect(order.indexOf('handed')).toBeGreaterThan(-1)
+    expect(order.indexOf('handed')).toBeLessThan(order.indexOf('ended'))
+    // A turn the person begins themselves afterwards is none of the page's
+    for (const turn of [true, true, false]) {
+      await asks(turn)
+      await pass()
+    }
+    expect(told()).toEqual([{}, RUNNING, ENDED])
+  })
+
+  test('a click that joins a running turn has that turn told as running, and one handed over before the turn is seen to begin has it told once it does', async () => {
+    standIn()
+    await start('socket', APPS)
+    await asks(true)
+    await handed(1, { woke: false, turn: true }, true)
+    await until(() => told().length === 2)
+    await asks(false)
+    await until(() => told().length === 3)
+    expect(told()).toEqual([{}, RUNNING, ENDED])
+    // An add-on that says the turn is running only once it has begun: nothing is told until it says so, and the conversation is watched meanwhile
+    await handed(2, { woke: true }, false)
+    await pass(2)
+    await asks(false)
+    await pass()
+    expect(told().length).toBe(3)
+    await asks(true)
+    await until(() => told().length === 4)
+    await asks(false)
+    await until(() => told().length === 5)
+    expect(told().slice(3)).toEqual([RUNNING, ENDED])
+  })
+
+  test('that a turn ended is not told while the hand-over to its conversation has yet to be confirmed to It', async () => {
+    standIn()
+    await start('socket', APPS)
+    await asks(false)
+    // It cannot be told that the click was handed over, and is asked again with every pass
+    let refuse = true
+    stand.answer = (name) => (name === 'delivery:handedOff' && refuse ? Promise.reject(new Error('no answer')) : undefined)
+    await handed(1, { woke: true, turn: true }, false)
+    await until(() => told().length === 2)
+    // The turn is over long before It hears of the hand-over
+    await asks(false)
+    await pass(3)
+    expect(told()).toEqual([{}, RUNNING])
+    expect(stand.calls.filter((c) => c.name === 'delivery:handedOff').length).toBeGreaterThan(1)
+    refuse = false
+    await pass(2)
+    await until(() => told().length === 3)
+    expect(told()).toEqual([{}, RUNNING, ENDED])
+    const last = stand.calls.map((c) => c.name)
+    expect(last.lastIndexOf('delivery:handedOff')).toBeLessThan(last.lastIndexOf('turns:say'))
+  })
+
+  test('nothing is told before It has heard that none of this machine’s turns is known, and what It could not be told is told with a later pass', async () => {
+    standIn()
+    let refusals = 2
+    stand.answer = (name) => (name === 'turns:say' && refusals-- > 0 ? Promise.reject(new Error('no answer')) : undefined)
+    await start('socket', APPS)
+    await asks(false)
+    await handed(1, { woke: true, turn: true }, false)
+    await pass(3)
+    await until(() => told().length === 4)
+    expect(told()).toEqual([{}, {}, {}, RUNNING])
+    expect(said.filter((line) => line.includes('turn'))).toEqual(['could not tell It how a conversation’s turn stands (Error); trying again'])
+  })
+
+  test('an add-on that stops saying whether a turn is running, in the middle of one, has what It was told taken back', async () => {
+    await start('socket', APPS)
+    await asks(false)
+    await handed(1, { woke: true, turn: true }, false)
+    await until(() => told().length === 2)
+    // Claude Code is closed in the middle of the turn, or its machine sleeps: nothing more is said
+    const began = Date.now()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(began + 15_000)
+      await pause(1500)
+      expect(told()).toEqual([{}, RUNNING])
+      vi.setSystemTime(began + 25_000)
+      await until(() => told().length === 3)
+      // Neither running nor ended: not known any more
+      expect(told()).toEqual([{}, RUNNING, { for: CLAUDE }])
+      // And an add-on that speaks again later is the page's no more
+      await asks(true)
+      await pause(1500)
+      expect(told().length).toBe(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 30_000)
+
+  test('a conversation whose add-on says nothing of turns is told of in no way, though it was handed a click', async () => {
+    standIn()
+    await start('socket', APPS)
+    // Claude Code's add-on from before it said so, and an app whose add-on never says when it is busy
+    await asks()
+    await handed(1, { woke: true })
+    expect(await local('/session', { method: 'POST', body: { harness: 'pi', session: 'conversation-9' } })).toEqual({ ok: true })
+    offered(click(2, { harness: 'pi', id: 'conversation-9' }))
+    await until(async () => ((await local<{ clicks: { id: string }[] }>('/clicks?harness=pi&session=conversation-9'))?.clicks ?? []).length === 1)
+    expect(await local('/ack', { method: 'POST', body: { ids: ['click-2'], woke: true } })).toEqual({ ok: true, acked: 1 })
+    await pass(3)
+    expect(
+      stand.calls
+        .filter((c) => c.name === 'delivery:handedOff')
+        .map((c) => c.args.id)
+        .sort(),
+    ).toEqual(['click-1', 'click-2'])
+    expect(told()).toEqual([{}])
+  })
+
+  test('a Codex conversation is known by what its hooks say: a click its turn takes with a hook is that turn’s, and the turn’s end is told when its last hook says so', async () => {
+    standIn()
+    await start('socket', APPS)
+    const codex = { harness: 'codex', id: 'thread-1' }
+    const hook = (pathname: string, busy: boolean) =>
+      local<{ clicks?: { id: string }[] }>(pathname, { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy } })
+    // A turn is running, and a click made a moment ago is kept for its next hook
+    await hook('/session', true)
+    offered(click(1, codex))
+    await until(async () => ((await hook('/clicks?harness=codex&session=thread-1', true))?.clicks ?? []).length === 1)
+    expect(await local('/ack', { method: 'POST', body: { ids: ['click-1'], woke: false } })).toEqual({ ok: true, acked: 1 })
+    await until(() => told().length === 2)
+    await hook('/clicks?harness=codex&session=thread-1', true)
+    await pass()
+    expect(told()).toEqual([{}, { for: codex, running: true }])
+    // Its Stop hook hands nothing more over, and says the turn is done
+    await hook('/session', false)
+    await until(() => told().length === 3)
+    expect(told()[2]).toEqual({ for: codex, running: false })
+  })
+
+  test('a click that Codex’s queue takes behind a running turn is watched through that turn and into its own, which begins when that one is done', async () => {
+    standIn()
+    await start('socket', APPS)
+    const codex = { harness: 'codex', id: 'thread-1' }
+    const busy = (on: boolean) => local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: on } })
+    await busy(true)
+    await busy(false)
+    // Put into Codex's own queue while the conversation is not working, and a turn of the person's own begins before
+    // Codex has taken it: the queue holds it until that turn is done
+    offered(click(1, codex))
+    await until(() => stand.codex.length === 1)
+    await busy(true)
+    stand.codex[0]!.end()
+    await until(() => told().length === 2)
+    expect(told()).toEqual([{}, { for: codex, running: true }])
+    // The turn it stood behind ends, and its own begins at once: nothing says that the agent finished in between
+    await busy(false)
+    await busy(true)
+    await pass(2)
+    expect(told()).toEqual([{}, { for: codex, running: true }])
+    await busy(false)
+    await until(() => told().length === 3)
+    expect(told()[2]).toEqual({ for: codex, running: false })
+    // And once that is told, the conversation is watched no more
+    await busy(true)
+    await busy(false)
+    await pass(2)
+    expect(told().length).toBe(3)
+  })
+
+  test('an It from before it took any of this is told nothing more once it has said so', async () => {
+    standIn()
+    stand.answer = (name) => (name === 'turns:say' ? Promise.reject(new Error('Could not find public function for turns:say')) : undefined)
+    await start('socket', APPS)
+    await asks(false)
+    await handed(1, { woke: true, turn: true }, false)
+    await asks(true)
+    await pass(3)
+    expect(told()).toEqual([{}])
+    expect(said.filter((line) => line.includes('turn'))).toEqual([])
+  })
+})
+
 describe('the way a click goes when no add-on is there to take it', () => {
   /** The way, and what was asked to find it, in the order it was asked. */
   const way = (has: { inT3: boolean; codexOpen: boolean; reopens: boolean }) => {
