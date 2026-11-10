@@ -1211,15 +1211,14 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
       .filter(Boolean)
       .map((line) => line.replace(/^\S+ /, ''))
 
-  test('`it serve` on a machine where It was never set up says to run `it setup`, and starts nothing', async () => {
+  test('`it serve` on a machine where It was never set up says to run `it setup` with no terminal to say it to, and starts nothing', async () => {
+    // Its output is taken as an agent takes it: not to a terminal, where it would be sent back to run `it serve` in one
     const ran = run(['serve', '--log', path.join(folder, 'service.log')])
     expect(await ran.ended).toBe(1)
     expect(lines()).toEqual(['could not start: not_set_up'])
-    expect(JSON.parse(ran.err().trim().split('\n').pop()!).error).toEqual({
-      code: 'not_set_up',
-      message: 'It could not start.',
-      hint: 'Run `it serve` in a terminal to read why.',
-    })
+    const said = JSON.parse(ran.err().trim().split('\n').pop()!).error
+    expect(said).toEqual({ code: 'not_set_up', message: 'It has not been set up on this machine, so run `it setup` first.' })
+    expect(JSON.stringify(said)).not.toContain('it serve')
     expect(existsSync(path.join(folder, 'backend'))).toBe(false)
   })
 

@@ -2330,6 +2330,14 @@ async function status(a: Args) {
 }
 
 /**
+ * Why the service could not start, where It says that in the same words wherever it is said,
+ * naming none of the person's folders, and where what is to be done is not to run the service
+ * again: it is said as it is, at a terminal or not. Told to run `it serve` in a terminal to read
+ * why, an agent that has just run `it serve` runs it again and is told the same.
+ */
+const SAID_AS_IT_IS = new Set(['not_set_up', 'blocked', 'already_running', 'lock_not_taken'])
+
+/**
  * Runs something that goes on until it is stopped, which is the service.
  * What it says goes to the log it was given, or else to the terminal. `named` is how the
  * person is told of it, and `command` what they run to see it start.
@@ -2376,14 +2384,15 @@ async function keepRunning(a: Args, named: string, command: string, run: (line: 
     await run(line)
   } catch (err) {
     // Why it could not start is written down as a fixed word: one of this program's own
-    // codes, or the system's code for what a file or a socket refused. The explanation names
-    // the person's folders, so it is said only to a person at a terminal. Started by a
-    // supervisor, what this program prints may be kept as well, and the code is all it says.
+    // codes, or the system's code for what a file or a socket refused. The explanation may name
+    // the person's folders, so it is said only to a person at a terminal, unless it is one that
+    // names none of them (SAID_AS_IT_IS). Started by a supervisor, what this program prints may
+    // be kept as well, and otherwise the code is all it says.
     const own = err instanceof Problem && /^[a-z_]{1,40}$/.test(err.code) ? err.code : undefined
     const system = String((err as { code?: unknown })?.code ?? '')
     const code = own ?? (/^E[A-Z0-9_]{2,30}$/.test(system) ? system : 'error')
     line(`could not start: ${code}`)
-    if (process.stderr.isTTY) throw err
+    if (process.stderr.isTTY || (err instanceof Problem && SAID_AS_IT_IS.has(err.code))) throw err
     throw new Problem(`${named} could not start.`, code, `Run \`${command}\` in a terminal to read why.`)
   }
   // It has stopped, and said so. Whatever is still pending (a token being asked for again
