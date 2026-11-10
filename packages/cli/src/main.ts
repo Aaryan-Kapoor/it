@@ -409,6 +409,24 @@ async function canAimEverywhere(a: Args, form: string): Promise<void> {
  * display, and the answer says so in `older`. Where It could not be asked, nothing is sent or
  * published, and the command is refused as `offline`.
  */
+/** A display named as the person would read it: by its name, or by its id. */
+const whichDisplay = (target: Where): string => (target.displayId !== undefined ? `The display ${named(target.displayId)}` : named(target.display ?? ''))
+/**
+ * What is said where the one display named takes nothing from agents now, alike for a page and a
+ * notification: closed to agents, or no longer paired. `link` is the page's, where there is one to give instead.
+ */
+function notTaken(target: Where, code: 'agents_off' | 'not_paired', what: 'sent' | 'shown', link?: string): Problem {
+  const which = whichDisplay(target)
+  const nothing = what === 'sent' ? 'Nothing was sent.' : 'It was shown nowhere.'
+  const instead = `Leave out --on and --on-id to ${what === 'sent' ? 'send it to' : 'show it on'} the display in use.${link ? ` Or give the user its link: ${link}` : ''}`
+  return code === 'agents_off'
+    ? new Problem(
+        `Agents may not use ${which}: the user turned that off for it, on the display itself or on the site under Displays. ${nothing}`,
+        'agents_off',
+        `${instead} Only the user can let agents use that display again.`,
+      )
+    : new Problem(`${which} is not paired any more, and takes nothing until its browser is paired again. ${nothing}`, 'not_paired', instead)
+}
 async function onDisplay<T extends object>(
   a: Args,
   run: (where: Where) => Promise<T>,
@@ -422,16 +440,8 @@ async function onDisplay<T extends object>(
     return await run(target)
   } catch (err) {
     if (!(err instanceof Problem)) throw err
-    const which = target.displayId !== undefined ? `The display ${named(target.displayId)}` : named(target.display ?? '')
-    const instead = 'Leave out --on and --on-id to send it to the display in use.'
-    if (err.code === 'agents_off')
-      throw new Problem(
-        `Agents may not use ${which}: the user turned that off for it, on the display itself or on the site under Displays. Nothing was sent.`,
-        'agents_off',
-        `${instead} Only the user can let agents use that display again.`,
-      )
-    if (err.code === 'not_paired')
-      throw new Problem(`${which} is not paired any more, and takes nothing until its browser is paired again. Nothing was sent.`, 'not_paired', instead)
+    const which = whichDisplay(target)
+    if (err.code === 'agents_off' || err.code === 'not_paired') throw notTaken(target, err.code, 'sent')
     if (err.code === 'shared_name') {
       const ids = await call<{ id: string; name: string }[]>('query', api.displays.list).then(
         (all) => all.filter((d) => d.name.toLowerCase() === (target.display ?? '').trim().toLowerCase()).map((d) => `${named(d.name)} (${d.id})`),
@@ -498,8 +508,18 @@ function addressOf(shown: Shown): { url?: string; urlNote?: string } {
   if (!url) return {}
   return { url, ...(shown.unlinked && !link ? { urlNote: unlinkedNote(shown.unlinked) } : {}) }
 }
+/**
+ * Shows a page. Where the one display named, by its name or its id, shows nothing, that is a
+ * refusal, said as \`it notify\` says it and with the page's link: an agent that asked for that
+ * display gets no answer that reads as success. Shown somewhere, it is answered as it was.
+ */
 async function show(slug: string, a: Args, also: Record<string, unknown> = {}) {
-  return onDisplay(a, (where) => call<Shown & { took?: boolean }>('mutation', api.displays.show, { slug, ...where, ...also }))
+  const shown = await onDisplay(a, (where) => call<Shown & { took?: boolean }>('mutation', api.displays.show, { slug, ...where, ...also }))
+  const target = aimedAt(a)
+  const reason = shown.notShown?.[0]?.reason
+  if ((target.display !== undefined || target.displayId !== undefined) && !shown.displays.length && (reason === 'agents_off' || reason === 'not_paired'))
+    throw notTaken(target, reason, 'shown', addressOf(shown).url)
+  return shown
 }
 /** What is said where `--everywhere` was asked of an It of an earlier version, of a page or of a notification. */
 const OLDER = (what: string) =>

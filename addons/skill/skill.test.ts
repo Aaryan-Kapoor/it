@@ -347,7 +347,7 @@ describe('the agent skill', () => {
       /If `shownOn` is empty and there is neither `notShown` nor `notShownOn`, .* give the user the `url`, and tell them that no display is paired\./,
     )
     // A display that was asked for by name and shows nothing is said of that display, and not of all of them
-    expect(skill).toContain('Where `notShownOn` names the display you asked for, it is that display that shows nothing')
+    expect(skill).toContain('Where the one display you named takes nothing now, the command is refused as `it notify` is')
     // The word for a display that can be shown on is the program's own: what it says when there is none
     expect(main).toContain('No display is paired yet')
     expect(skill).not.toMatch(/signed in|sign one in|signs? in\b/)

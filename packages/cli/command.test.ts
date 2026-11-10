@@ -1499,7 +1499,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       said = printed(await run(m, ['open', 'board'], b.env))
       expect(said.url).toMatch(/\/p\/board$/)
       expect(String(said.urlNote)).toContain('this url is the one this machine reaches It by')
-      // Shown on no display at all
+      // Shown on no display at all, where none was named
       answer = {
         displays: [],
         displayIds: [],
@@ -1507,9 +1507,58 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
         took: false,
         url: 'http://127.0.0.1:39000/p/board',
       }
-      said = printed(await run(m, ['open', 'board', '--on', 'TV'], b.env))
+      said = printed(await run(m, ['open', 'board', '--everywhere'], b.env))
       expect(said.url).toMatch(/\/p\/board$/)
       expect(said.hint).toContain('give the user `url` in the chat')
+      // Where the one display named shows nothing, the refusal carries the link
+      const refused = await run(m, ['open', 'board', '--on', 'TV'], b.env)
+      expect([refused.code, error(refused).code]).toEqual([1, 'not_paired'])
+      expect(error(refused).hint).toMatch(/give the user its link: http:\/\/127\.0\.0\.1:\d+\/p\/board$/)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a page sent to a display named that takes nothing now is refused as a notification is, with the same code, words and exit, and shown somewhere it is answered', async () => {
+    const m = machine()
+    let reason = 'agents_off'
+    const b = await backend(m, (asked) =>
+      asked.path === 'publish:begin'
+        ? { artifactId: 'artifact-1', slug: 'board', version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+        : asked.path === 'publish:finish'
+          ? { slug: 'board', version: 1, url: 'https://site.example/p/board' }
+          : asked.path === 'displays:show'
+            ? 'displayId' in asked.args && asked.args.displayId === 'shown'
+              ? { displays: ['Desk'], displayIds: ['shown'], notShown: [], took: false }
+              : { displays: [], displayIds: [], notShown: [{ display: 'TV', displayId: 'k57tv', reason }], took: false }
+            : asked.path === 'notifications:send'
+              ? new Refusal({ code: 'forbidden', message: 'That display takes nothing from agents now.', notSent: reason } as never)
+              : null,
+    )
+    b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.notifyById] })
+    try {
+      for (const r of ['agents_off', 'not_paired']) {
+        reason = r
+        for (const target of [
+          ['--on', 'TV'],
+          ['--on-id', 'k57tv'],
+        ]) {
+          const opened = await run(m, ['open', 'board', ...target], b.env)
+          const sent = await run(m, ['notify', 'hello', ...target], b.env)
+          expect([opened.code, error(opened).code]).toEqual([sent.code, error(sent).code])
+          expect([opened.code, error(opened).code]).toEqual([1, r])
+          // The same sentence but for what was not done
+          expect(error(opened).message.replace('It was shown nowhere.', 'Nothing was sent.')).toBe(error(sent).message)
+        }
+      }
+      // Shown on the display named, it is answered as before
+      const shown = await run(m, ['open', 'board', '--on-id', 'shown'], b.env)
+      expect([shown.code, printed(shown).shownOn]).toEqual([0, ['Desk']])
+      // And with --open, the page is published and only showing it is said to have failed, with a code that is not 0
+      reason = 'agents_off'
+      const created = await run(m, ['create', 'Board', '--html', '<p>hi</p>', '--open', '--on', 'TV'], b.env)
+      expect(created.code).toBe(1)
+      expect(printed(created).notShown).toMatchObject({ code: 'agents_off' })
     } finally {
       await b.close()
     }
@@ -4419,15 +4468,12 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
     })
     const AGAIN = 'On the machine It runs on, `it site` pairs the browser there. Another screen is paired from the site, under Displays, with “Add a display”.'
     try {
+      // Named, and showing nothing, it is refused as \`it notify\` refuses it
       const one = await run(m, ['open', 'plan', '--on', 'Kitchen'], b.env)
-      expect([one.code, printed(one)]).toEqual([
-        0,
-        {
-          id: 'plan',
-          shownOn: [],
-          notShownOn: [{ display: 'Kitchen', reason: 'not_paired' }],
-          hint: `"Kitchen" is not paired any more: the pairing of its browser was ended, and it shows nothing until that browser is paired again. ${AGAIN}`,
-        },
+      expect([one.code, error(one).code, error(one).message]).toEqual([
+        1,
+        'not_paired',
+        '"Kitchen" is not paired any more, and takes nothing until its browser is paired again. It was shown nowhere.',
       ])
       const created = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>', '--open'], b.env)
       expect([created.code, printed(created)]).toEqual([
