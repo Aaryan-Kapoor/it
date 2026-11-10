@@ -61,10 +61,10 @@ const action = (n: number, payload = JSON.stringify({ n })) => ({
   at: 1_000 + n,
   attended: true,
   session: null,
-  cursor: `${1_000 + n}:${1_000 + n}`,
+  cursor: String(1_000 + n),
 })
 type Action = ReturnType<typeof action>
-const placeOf = (cursor: string) => (cursor === '0' ? 0 : Number(cursor.split(':')[0]))
+const placeOf = (cursor: string) => Number(cursor)
 
 /** A token as the backend makes one: a JWT, which the live client reads to know when to fetch the next. */
 function jwt(n: number, lifetime: number) {
@@ -337,7 +337,7 @@ describe.skipIf(process.platform === 'win32')('following the actions on a page, 
       const f = started(m, ['actions', '--id', 'board', '--follow'], b.env)
       await until('the fifty waiting to be printed', () => f.lines.length === 50)
       expect(f.lines.map((l) => l.id)).toEqual(ids(1, 50))
-      expect(f.lines[0]).toMatchObject({ id: 'a1', page: 'board', action: 'press', data: { n: 1 }, cursor: '1001:1001' })
+      expect(f.lines[0]).toMatchObject({ id: 'a1', page: 'board', action: 'press', data: { n: 1 }, cursor: '1001' })
       // A 51st, with the fifty older ones still waiting
       b.pending.push(action(51))
       b.changed()
@@ -402,7 +402,7 @@ describe.skipIf(process.platform === 'win32')('following the actions on a page, 
     const b = await backend()
     try {
       for (let n = 1; n <= 5; n++) b.pending.push(action(n))
-      const f = started(m, ['actions', '--id', 'board', '--follow', '--after', '1003:1003'], b.env)
+      const f = started(m, ['actions', '--id', 'board', '--follow', '--after', '1003'], b.env)
       await until('those after the cursor', () => f.lines.length === 2)
       expect(f.lines.map((l) => l.id)).toEqual(['a4', 'a5'])
       f.child.kill('SIGTERM')
@@ -442,12 +442,14 @@ describe.skipIf(process.platform === 'win32')('the actions on a page against an 
         expect(ran.code).toBe(2)
         expect(lastError(ran.err)).toMatchObject({ code: 'invalid', message: expect.stringMatching(/earlier version/) })
       }
+      // The newer read was never asked of it, by a call or by a watch
+      expect(b.said.calls.map((c) => c.udfPath)).not.toContain('delivery:waitingPage')
     } finally {
       await b.close()
     }
   })
 
-  test('where It cannot be asked what it takes, the refusal is what is said, and nothing older is read in its place', async () => {
+  test('where It cannot be asked what it takes, that is what is said, and nothing is read, newer or older', async () => {
     const m = machine()
     const b = await backend({ takes: null })
     b.answers['delivery:waitingPage'] = () => ({ error: '[Request ID: 5f3c] Server Error' })
@@ -455,8 +457,13 @@ describe.skipIf(process.platform === 'win32')('the actions on a page against an 
       b.pending.push(action(1))
       const ran = await run(m, ['actions', '--id', 'board'], b.env)
       expect(ran.code).toBe(1)
-      expect(lastError(ran.err).message).toMatch(/Server Error/)
-      expect(b.said.calls.map((c) => c.udfPath)).toEqual(['delivery:waitingPage'])
+      expect(lastError(ran.err).code).toBe('offline')
+      expect(b.said.calls).toEqual([])
+      const f = started(m, ['actions', '--id', 'board', '--follow'], b.env)
+      expect(await f.exited).toBe(1)
+      expect(lastError(f.err()).code).toBe('offline')
+      expect(b.said.calls.map((c) => c.udfPath)).toEqual(['artifacts:get'])
+      expect(b.said.connections).toBe(0)
     } finally {
       await b.close()
     }
