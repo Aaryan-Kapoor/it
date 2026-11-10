@@ -329,7 +329,7 @@ function documented(marker: string): string {
  */
 const SHELLS = ['sh', 'bash', ...(zsh ? [zsh] : [])]
 let pasteIn = 'sh'
-function pasted(lines: string, home: string, copy?: string, ends = 0, cwd = scratch, shell = pasteIn) {
+function pasted(lines: string, home: string, copy?: string, ends = 0, cwd = scratch, shell = pasteIn, first = stub) {
   let script = lines
   if (copy !== undefined) {
     expect(script).toMatch(/^ *copy=before-\.\.\.$/m)
@@ -337,7 +337,7 @@ function pasted(lines: string, home: string, copy?: string, ends = 0, cwd = scra
   }
   const asked = path.join(scratch, `asked-${Math.random().toString(36).slice(2)}`)
   const ran = spawnSync(shell, ['-c', script], {
-    env: { PATH: `${stub}:${process.env.PATH}`, HOME: scratch, IT_HOME: home, STUB_ASKED: asked, STUB_ENDS: String(ends) },
+    env: { PATH: `${first}:${stub}:${process.env.PATH}`, HOME: scratch, IT_HOME: home, STUB_ASKED: asked, STUB_ENDS: String(ends) },
     cwd,
     encoding: 'utf8',
   })
@@ -503,6 +503,7 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
         chmodSync(unreadable, 0)
         const cut = pasted(back, home, copy)
         rmSync(unreadable, { force: true })
+        expect(cut.err).toMatch(/run it setup to start it again\.\n$/)
         const [left, ...more] = staged(real)
         expect([cut.code === 0, more, cut.out]).toEqual([false, [], `Copying It's folder to ${left}.\n`])
         expect(left).toMatch(/-after-upgrade\.part\.\w{6}$/)
@@ -676,6 +677,65 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
       expect([name, shell, refused.code, refused.out, refused.asked]).toEqual([name, shell, 1, '', ''])
       expect(refused.err).toBe(`${path.join(linked, 'backend', name)} is a link, so a copy would not hold what it leads to, and nothing was changed.\n`)
       expect([tree(linked), existsSync(`${linked}-after-upgrade`), staged(linked)]).toEqual([unlinked, false, []])
+    }
+    /** A copy of the folder as it is now, under a name of its own, with whatever `also` adds. */
+    const cloned = (also: (home: string) => void = () => {}) => {
+      const home = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'it-restore-clone-')))
+      beside.push(home, `${home}-after-upgrade`, `${home}-replaced`)
+      cpSync(folder, home, { recursive: true })
+      also(home)
+      return home
+    }
+    const SETUP = 'The background service is stopped and not registered. Once the folder is as you want it, run it setup to start it again.\n'
+    for (const shell of SHELLS) {
+      // A copy that is not there is refused before the background service is touched
+      let home = cloned()
+      let asItIs = tree(home)
+      const none = pasted(documented('copy='), home, 'before-nothing', 0, scratch, shell)
+      expect([shell, none.code, none.out, none.asked]).toEqual([shell, 1, '', ''])
+      expect(none.err).toBe(`There is no copy named before-nothing in ${home}/backend, so nothing was changed.\n`)
+      expect(tree(home)).toEqual(asItIs)
+      // It still running is found only once the service is stopped, and then the person is told how to start it again
+      home = cloned((home) => writeFileSync(path.join(home, 'backend', 'lock'), '{}'))
+      asItIs = tree(home)
+      const running = pasted(documented('copy='), home, kept[0], 0, scratch, shell)
+      expect([shell, running.code, running.out, running.asked]).toEqual([shell, 1, '', 'service uninstall\n'])
+      expect(running.err).toBe(`It is still running, so nothing in its folder was changed. Stop it, and run these lines again.\n${SETUP}`)
+      expect([tree(home), existsSync(`${home}-after-upgrade`), staged(home)]).toEqual([asItIs, false, []])
+      // Putting back a kept folder that is not there is refused before the service is touched
+      const nothingKept = pasted(documented('-replaced'), home, undefined, 0, scratch, shell)
+      expect([shell, nothingKept.code, nothingKept.asked]).toEqual([shell, 1, ''])
+      expect(nothingKept.err).toBe(`There is no folder ${home}-after-upgrade to put back, so nothing was changed.\n`)
+    }
+    // Where the kept folder cannot be moved into place, It's folder is moved back; where that
+    // fails too, the person is told where each folder is. `mv` is a stand-in that refuses to move
+    // the folders it is told to, and is the real one otherwise
+    const real_mv = spawnSync('sh', ['-c', 'command -v mv'], { encoding: 'utf8' }).stdout.trim()
+    const refusingMv = (name: string, refused: string) => {
+      const dir = path.join(scratch, name)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(path.join(dir, 'mv'), `#!/bin/sh\ncase "$1" in ${refused}) echo "mv: cannot move $1" >&2; exit 1 ;; esac\nexec '${real_mv}' "$@"\n`, {
+        mode: 0o755,
+      })
+      return dir
+    }
+    const keptStays = refusingMv('mv-kept', '*-after-upgrade')
+    const bothStay = refusingMv('mv-both', '*-after-upgrade | *-replaced')
+    for (const shell of SHELLS) {
+      const home = cloned((home) => cpSync(folder, `${home}-after-upgrade`, { recursive: true }))
+      const asItIs = tree(home)
+      const back = pasted(documented('-replaced'), home, undefined, 0, scratch, shell, keptStays)
+      expect([shell, back.code, back.out, back.asked]).toEqual([shell, 1, '', 'service uninstall\n'])
+      expect(back.err).toBe(
+        `mv: cannot move ${home}-after-upgrade\nThe kept folder could not be moved into place, so It's folder was moved back and nothing in it was changed. Close whatever has a file open in ${home}-after-upgrade, and run these lines again.\n${SETUP}`,
+      )
+      expect([tree(home), existsSync(`${home}-replaced`), existsSync(`${home}-after-upgrade`)]).toEqual([asItIs, false, true])
+      const stuck = pasted(documented('-replaced'), home, undefined, 0, scratch, shell, bothStay)
+      expect([shell, stuck.code, stuck.out]).toEqual([shell, 1, ''])
+      expect(stuck.err).toBe(
+        `mv: cannot move ${home}-after-upgrade\nmv: cannot move ${home}-replaced\nThe kept folder could not be moved into place, and It's folder could not be moved back either. It's folder is now ${home}-replaced, and the kept folder is still ${home}-after-upgrade. Move ${home}-replaced back to ${home} yourself before anything else.\n${SETUP}`,
+      )
+      expect([existsSync(home), tree(`${home}-replaced`), existsSync(`${home}-after-upgrade`)]).toEqual([false, asItIs, true])
     }
   }, 600_000)
 
