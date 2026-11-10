@@ -156,7 +156,8 @@ const deny = (status = 401, headers: Record<string, string> = {}) => new Respons
 // The sandbox is the whole of what keeps one page from another, so it is said on every answer
 // the pages' port gives: a file, a refusal, a redirect, a fault. A document that arrives with it
 // has an origin of its own, in the site's frame or in a tab by itself, and so does every
-// document it loads or window it opens.
+// document it loads. A window it opens leaves the sandbox as an ordinary tab, so a window of
+// another site is that site's own, and one of the pages' files is sandboxed by this all the same.
 //
 // A sandboxed document is another origin even to its own files. A page's module scripts, its
 // fonts and what it fetches are only given to it if the answer says any origin may read them,

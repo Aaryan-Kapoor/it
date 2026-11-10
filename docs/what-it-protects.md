@@ -40,6 +40,8 @@ A display keeps eight earlier pairings. Access invited by an older pairing ends 
 
 A page is written by an agent, and may show content that neither the agent nor you wrote. It is kept apart from the site that shows it and from every other page. Pages are served from a port of their own, and a browser is told to run each one as a sandboxed document that shares nothing with anything else: it has no cookies and no storage in the browser, it cannot read the site's pages or your pairing, it cannot read another page, and it cannot move the tab it is shown in. Only the site may frame a page.
 
+A link from a page leaves the sandbox. A link to another site opens in a new tab, as an ordinary tab of that site, and neither the page nor the tab has a hold on the other: the tab has no opener, the page is given no handle on it, and no referrer is sent, so the site is not told the address the page is shown at. A tab of the page's own files is sandboxed as the page is. A mail, phone or messages link, and an address a page's script asks It to open, is opened by the site, and only from your own click or key in the page.
+
 A page's files are at an address that cannot be guessed, made for one showing on one screen. The address stops answering when nothing has asked under it for ten minutes, when it is a day old, when the page is deleted, when its display is signed out, and when It stops. For a deleted page and a display that was signed out, that is a moment after and not the same instant, and longer where the part of It that serves the files could not be told: [What It keeps](data.md#how-long-things-are-kept) says how long. A page tells the site only that it wants to send an action for itself, with any files it attaches, or to keep values of its own, and how much it may send is bounded, its actions and its values each by itself. The site does not open a file a page sends: it keeps and uploads the bytes as they are, and the page's own frame is where a photo is made smaller.
 
 ### The site loads only itself
@@ -165,6 +167,8 @@ It has no command that makes its long-lived secrets anew: the secrets in `servic
 It keeps a page away from the site and from the other pages. It does not limit what a page does in its own frame.
 
 - A page's scripts can load anything from the internet and send anything they hold there. Do not put a secret in a page.
+- A page can open a tab to any site once you click in it, as any web page can. It does not ask you first, and keeps no record of where a link led.
+- On a plain `http` address other than `localhost`, such as the machine's address on your network or its name on your tailnet, the browser does not keep a page and a tab it opens apart by itself, and the script It puts in the page does it instead. A page that goes around that script can keep a hold on a tab it opened, and send that tab elsewhere later. On `localhost` and over `https` the browser keeps the two apart by itself.
 - A page chooses what an action says. The site tells the agent whether someone had just used the page when an action was sent, and no more than that. A page that shows content from elsewhere, such as an email or a web page, can be made by that content to send an action that the person did not choose. An agent should not take an action alone as the person's approval of something that matters, and the agent skill says so.
 
 ### A notification passes through the browser's push service
