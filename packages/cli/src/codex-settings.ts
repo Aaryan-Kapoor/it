@@ -37,19 +37,16 @@ import path from 'node:path'
 export const CODEX_RULE = 'prefix_rule(pattern=["it"], decision="allow")'
 /**
  * The commands of `it` that change It on this machine, rather than use it: its installation, its
- * service, whom it answers, and the hold it keeps on conversations it cannot tell are over. An
- * agent has no need to run them unasked. Codex takes the strictest of the rules a command
- * matches, so these still ask the person first in the file It writes, and where nobody can be
- * asked, as in a conversation It reopened, they are refused. A rule names a command by its first
- * words, and `it` always takes its first word as the command.
+ * service, whom it answers, what it reports, and the hold it keeps on conversations it cannot tell
+ * are over. An agent has no need to run them unasked. Codex takes the strictest of the rules a
+ * command matches, so these still ask the person first in the file It writes, and where nobody can
+ * be asked, as in a conversation It reopened, they are refused. A rule names a command by its
+ * first words, and `it` always takes its first word as the command. Each is asked about whole,
+ * with whatever follows it: `it` takes an option or `--` before the word that says what to do, as
+ * in `it service --json uninstall`, and a rule that named that word too would not match there.
+ * So the forms of these that only say how things are, such as `it service status`, ask as well.
  */
-const CODEX_ASKED = [
-  '["it", ["setup", "uninstall", "upgrade", "login", "logout", "serve"]]',
-  '["it", "service", ["install", "uninstall"]]',
-  '["it", "network", ["on", "off", "tailscale"]]',
-  '["it", ["telemetry", "updates"], ["on", "off"]]',
-  '["it", "runs", "clear"]',
-]
+export const CODEX_ASKED = ['setup', 'uninstall', 'upgrade', 'login', 'logout', 'serve', 'service', 'network', 'runs', 'telemetry', 'updates'] as const
 /** Where It keeps the file of its own in Codex's settings folder, with the rules that let `it` out of the sandbox. */
 export const CODEX_RULES_REL = 'rules/it.rules'
 /**
@@ -63,7 +60,7 @@ export const CODEX_RULES = `# Written by It when \`it setup\` connected Codex. I
 # It brings this file up to date with its add-on, and removes it when Codex is disconnected or
 # It is uninstalled. Once you change it, it is yours, and It leaves it alone.
 ${CODEX_RULE}
-${CODEX_ASKED.map((pattern) => `prefix_rule(pattern=${pattern}, decision="prompt", justification="This changes It on this machine rather than using it.")`).join('\n')}
+prefix_rule(pattern=["it", [${CODEX_ASKED.map((word) => `"${word}"`).join(', ')}]], decision="prompt", justification="This command can change It on this machine rather than use it.")
 `
 const codexHome = () => process.env.CODEX_HOME || path.join(os.homedir(), '.codex')
 
