@@ -50,6 +50,35 @@ export const TAKES = {
   waitingPage: 'delivery.waitingPage',
 } as const
 
+/**
+ * Where an action stands among those waiting on its page, in the one order `delivery.waitingPage`
+ * reads them in, and its `cursor` as text. An action made since It numbered them has its page's
+ * next number (`seq`), given under the page's own record, so that one committed later always has
+ * a higher number than any committed before it. One kept before then has none, and stands before
+ * every numbered one, by when its record was made and then by its id, which no other shares.
+ * The cursor "0" stands before every action.
+ */
+export type ActionPlace = { seq: number } | { at: number; id: string }
+export const placeCursor = (p: ActionPlace): string => ('seq' in p ? String(p.seq) : `o${p.at}:${p.id}`)
+/** The place a cursor names: null for the start, and nothing for text that is no cursor. */
+export function actionPlace(cursor: string): ActionPlace | null | undefined {
+  if (cursor === '0') return null
+  if (/^[1-9]\d{0,15}$/.test(cursor)) return { seq: Number(cursor) }
+  // A record's id is letters and digits; the backend's stand-in for tests puts a semicolon in its own
+  const m = /^o(\d{1,16}(?:\.\d{1,20})?):([A-Za-z0-9_;-]{1,64})$/.exec(cursor)
+  return m ? { at: Number(m[1]), id: m[2]! } : undefined
+}
+/** Which of two places comes first: below zero where `a` does, above where `b` does, zero where they are one. */
+export function comparePlaces(a: ActionPlace | null, b: ActionPlace | null): number {
+  const rank = (p: ActionPlace | null) => (p === null ? 0 : 'seq' in p ? 2 : 1)
+  if (rank(a) !== rank(b)) return rank(a) - rank(b)
+  if (a === null || b === null) return 0
+  if ('seq' in a && 'seq' in b) return a.seq - b.seq
+  const x = a as { at: number; id: string }
+  const y = b as { at: number; id: string }
+  return x.at !== y.at ? x.at - y.at : x.id < y.id ? -1 : x.id > y.id ? 1 : 0
+}
+
 /** The word the interface uses for a thing shown on a display. It is said in one place so that it can be changed in one. */
 export const NOUN = { one: 'page', many: 'pages', One: 'Page', Many: 'Pages' } as const
 

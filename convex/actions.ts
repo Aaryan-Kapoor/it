@@ -118,6 +118,11 @@ export async function record(
               .first()
           )?.title ?? '')
   const now = Date.now()
+  // Its number on the page, read and written under the page's record: two clicks recorded at
+  // once on one page touch the same record, so one of them is run again after the other, and the
+  // one committed later always has the higher number (`delivery.waitingPage` reads by it)
+  // The record as it is now, not as the caller read it: a caller may record more than one click
+  const seq = ((await ctx.db.get(artifact._id))?.actionSeq ?? 0) + 1
   const actionId = await ctx.db.insert('actions', {
     userId: artifact.userId,
     artifactId: artifact._id,
@@ -132,11 +137,12 @@ export async function record(
     createdAt: now,
     madeAt: Math.min(input.madeAt ?? now, now),
     delivery: 'pending',
+    seq,
     ...to,
     ...(attachment ? { attachment: attachment._id, files: attachment.files } : {}),
   })
   if (attachment) await ctx.db.patch(attachment._id, { actionId })
-  await ctx.db.patch(artifact._id, { waiting: (artifact.waiting ?? 0) + 1 })
+  await ctx.db.patch(artifact._id, { waiting: (artifact.waiting ?? 0) + 1, actionSeq: seq })
   await bump(ctx, artifact.userId, { waiting: 1 })
   // Made before the person stopped the conversation it is for, and only arriving now, as a click
   // saved while It could not be reached does: it goes with the stop, as it would have had it

@@ -282,6 +282,8 @@ export default defineSchema({
     order: v.optional(v.number()),
     /** Clicks on this page not yet handed to an agent. */
     waiting: v.optional(v.number()),
+    /** The number the last action recorded on this page was given (`actions.seq`). */
+    actionSeq: v.optional(v.number()),
     /** When a person last stopped the agent from this page: what was done on the page up to then is delivered to nobody, whoever the page belongs to by now. */
     stoppedThrough: v.optional(v.number()),
     /** What the page's agent last said above the page, in its own words, and when. */
@@ -454,8 +456,17 @@ export default defineSchema({
     /** The files it carried beside what it carried, in order, each received whole, and the record they are kept under. */
     attachment: v.optional(v.id('attachments')),
     files: v.optional(v.array(v.object({ name: v.string(), type: v.string(), size: v.number(), sha256: v.string() }))),
+    /**
+     * Its number among the actions recorded on its page, one more than the last, given under the
+     * page's record so that one committed later always has a higher number. Absent from what was
+     * recorded before It numbered them.
+     */
+    seq: v.optional(v.number()),
   })
     .index('by_artifact_client', ['artifactId', 'clientActionId'])
+    // A page's waiting clicks in the order `delivery.waitingPage` reads them: those recorded
+    // before they were numbered first, then by number
+    .index('by_artifact_seq', ['artifactId', 'delivery', 'seq'])
     .index('by_route', ['machineId', 'delivery', 'harness', 'sessionId', 'createdAt'])
     // By when each click was made: a harness's queue and a closed conversation are offered
     // clicks by these, so that what was made before Auto-wake's cutoff, or before a stop, is
