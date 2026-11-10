@@ -777,7 +777,7 @@ HTMLFormElement.prototype.submit = function (this: HTMLFormElement) {
 }
 
 const openWindow = window.open
-window.open = function (this: Window, url?: string | URL, target?: string, features?: string) {
+function openOut(this: Window, url?: string | URL, target?: string, features?: string): WindowProxy | null {
   quietenWithin(document)
   const said = url === undefined || url === null ? '' : String(url)
   const to = said === '' ? null : addressOf(said)
@@ -795,6 +795,15 @@ window.open = function (this: Window, url?: string | URL, target?: string, featu
   const asked = features === undefined || features === null ? '' : String(features)
   return openWindow.call(this, url, where, `${asked}${asked.trim() ? ',' : ''}noopener,noreferrer`)
 }
+window.open = openOut
+// Given an address, a name and features, `document.open` opens a window as `window.open` does,
+// and in Firefox hands the page that window, of the page's own origin, with all of its own
+// functions. It is held to the same.
+const openDocument = Document.prototype.open as (...given: unknown[]) => unknown
+Document.prototype.open = function (this: Document, ...given: unknown[]) {
+  if (given.length > 2) return openOut.call(window, given[0] as string | URL, given[1] as string, given[2] as string)
+  return openDocument.apply(this, given)
+} as typeof Document.prototype.open
 
 // What the page's own script fails with is said to the site, which says it above the page. The
 // person cannot see a script fail: they see a button that does nothing, and take it for an

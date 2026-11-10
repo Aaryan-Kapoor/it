@@ -881,11 +881,16 @@ describe('the script inside a page', () => {
       p.w.open('', 'lookalike')
       p.w.open('', 'before')
       p.w.open('https://elsewhere.invalid/g', 'after')
+      // And so is one asked of the document, which opens a window as `window.open` does when given an address, a name and features
+      doc.open('', 'lookalike', '')
+      doc.open('https://elsewhere.invalid/h', 'before', 'popup')
       expect(asked).toEqual([
         ['', '0', 'noopener,noreferrer'],
         ['', 'lookalike', 'noopener,noreferrer'],
         ['', 'before', 'noopener,noreferrer'],
         ['https://elsewhere.invalid/g', 'after', undefined],
+        ['', 'lookalike', 'noopener,noreferrer'],
+        ['https://elsewhere.invalid/h', '_blank', 'popup,noopener,noreferrer'],
       ])
     })
 
