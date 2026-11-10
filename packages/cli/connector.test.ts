@@ -1314,6 +1314,29 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(holds()).toEqual([])
   })
 
+  test('a click made long before It received it, as in a browser that could not reach It for a week, is noted for as long as It keeps it, and told of once', async () => {
+    const DAY = 86_400_000
+    stand.takes = false
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    // Auto-wake has been on for two months, and the click was made 29 days ago and received just now
+    stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60 * DAY }] })
+    const old = blocked(1, { at: Date.now() - 29 * DAY })
+    offered(old)
+    await until(() => failures().length > 0)
+    // Three days on, It still keeps the click, which it counts from receiving it, and so does this machine's note of it
+    const later = Date.now() + 3 * DAY
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => later + (performance.now() % 1))
+    try {
+      offered(old)
+      await new Promise((r) => setTimeout(r, 1500))
+      offered(old)
+      await new Promise((r) => setTimeout(r, 1500))
+      expect(failures()).toHaveLength(1)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
   test('six hundred held-back clicks are each told of once, fifty at most to a call, and none again while they wait', async () => {
     await reopensFor('claude-code', CLAUDE_ID, { addon: false })
     const many = Array.from({ length: 600 }, (_, i) => blocked(i + 1))

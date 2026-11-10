@@ -2278,8 +2278,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * through the conversations, so that one that comes round again neither skips its wait nor is
    * told again: until It offers the click with that said, which is then the record of it, kept
    * with the click itself; until this machine takes the click; and at most until the click would
-   * be deleted for nobody having taken it (`until`). An It that keeps no reason with a click
-   * never offers one, so there this note is what keeps the click from being told again.
+   * be deleted for nobody having taken it (`until`), counted from when this machine first saw it.
+   * It counts from when it received the click, which may be days after the click was made in a
+   * browser that could not reach it, and is never before this machine was offered it. An It
+   * that keeps no reason with a click never offers one, so there this note is what keeps the
+   * click from being told again.
    */
   const telling = new Map<string, { reason: string | null; asking: boolean; said: boolean; tries: number; next: number; until: number }>()
   let tellingSwept = 0
@@ -2370,7 +2373,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (holdBackTaken === undefined) return
     const t = telling.get(click.id)
     if (t?.reason === reason && (t.asking || t.said || performance.now() < t.next)) return
-    const until = click.at + (RETENTION.pendingActionDays + 1) * 86_400_000
+    // From when this machine first saw it, which is never before It received it: not from when it was made
+    const until = t?.until ?? Date.now() + (RETENTION.pendingActionDays + 1) * 86_400_000
     telling.set(click.id, { reason, asking: true, said: false, tries: t?.reason === reason ? t.tries : 0, next: 0, until })
     toTell.set(click.id, { click, reason })
     if (!tellingSoon) {
