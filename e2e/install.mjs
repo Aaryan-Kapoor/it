@@ -156,14 +156,15 @@ const serve = (handler) =>
   })
 const server = await serve(async (req, res) => {
   const wanted = decodeURIComponent((req.url ?? '/').split('?')[0])
-  const file = wanted.startsWith('/latest/download/') ? path.join(latestIs, wanted.slice('/latest/download/'.length)) : path.join(releases, wanted)
-  if (!file.startsWith(releases) || !existsSync(file)) return res.writeHead(404).end()
-  if (file === holdAt) {
+  // Held before the file is looked up, so that what is sent is whatever the latest is once the test lets it go
+  if (wanted === holdAt) {
     heldThere = true
     await new Promise((resolve) => {
       goOn = resolve
     })
   }
+  const file = wanted.startsWith('/latest/download/') ? path.join(latestIs, wanted.slice('/latest/download/'.length)) : path.join(releases, wanted)
+  if (!file.startsWith(releases) || !existsSync(file)) return res.writeHead(404).end()
   if (file === path.join(held, 'LICENSE.md')) {
     reachedHeld = true
     await new Promise((resolve) => {
@@ -1650,7 +1651,7 @@ try {
     `${before.said}\nasked: ${asked.join(' ')}`,
   )
   asked.length = 0
-  holdAt = path.join(releases, 'download', 'v0.0.3', program)
+  holdAt = `/download/v0.0.3/${program}`
   heldThere = false
   const during = install('latest-during', {}, { script: stamped('v0.0.3') })
   const reachedTheProgram = await until(() => heldThere)
@@ -1665,8 +1666,8 @@ try {
     `${duringDone.said}\nasked: ${asked.join(' ')}`,
   )
   // The script in the repository names no release and follows the latest, so there the same
-  // change mixes two releases, and the checksums refuse what does not belong
-  holdAt = path.join(latest, program)
+  // change sends it another release's program after this one's checksums, which refuse it
+  holdAt = `/latest/download/${program}`
   heldThere = false
   const following = install('latest-during-unstamped', {})
   const reachedItsProgram = await until(() => heldThere)
@@ -1676,8 +1677,11 @@ try {
   holdAt = null
   latestIs = latest
   check(
-    'where the script follows the latest instead, the same change is caught by the checksums, and nothing is installed',
-    reachedItsProgram && followingDone.code !== 0 && !existsSync(followingDone.it),
+    'where the script follows the latest instead, the same change gives it a program its checksums do not vouch for, which is refused, and nothing is installed',
+    reachedItsProgram &&
+      followingDone.code !== 0 &&
+      followingDone.flat.includes(`The download of ${program} does not match its published checksum`) &&
+      !existsSync(followingDone.it),
     followingDone.said,
   )
   asked.length = 0
