@@ -2983,6 +2983,8 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
           version: 2,
           url: `${b.url}/p/board`,
           note: 'This page was another conversation’s, and is this one’s now: what is done on it comes here.',
+          // With no connector here to ask, whether what is done on it arrives by itself is not known
+          arrives: expect.objectContaining({ byItself: 'unknown' }),
         },
       ])
       // The page is this same conversation's, under the id it had before its app gave it a new one, which the connector here
@@ -3064,6 +3066,7 @@ describe.skipIf(process.platform === 'win32')('a command that two agent apps hav
           url: `${b.url}/p/plan`,
           note: 'This page was given to the an-app-of-their-own conversation theirs-1. This command also carried the marks of Codex, and which of them ran it could not be told. If that is not the conversation you are in, publish it again with --take, and with IT_HARNESS and IT_SESSION set to your own app and conversation.',
           tell: TELL,
+          arrives: expect.objectContaining({ byItself: 'unknown' }),
         },
       ])
       // And that is the conversation the backend was told
@@ -3078,7 +3081,10 @@ describe.skipIf(process.platform === 'win32')('a command that two agent apps hav
       // One app's marks alone leave nothing to say
       b.asked.length = 0
       const alone = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], { ...b.env, CODEX_THREAD_ID: 'codex-1' })
-      expect([alone.code, printed(alone)]).toEqual([0, { id: 'plan', version: 1, url: `${b.url}/p/plan`, tell: TELL }])
+      expect([alone.code, printed(alone)]).toEqual([
+        0,
+        { id: 'plan', version: 1, url: `${b.url}/p/plan`, tell: TELL, arrives: expect.objectContaining({ byItself: 'unknown' }) },
+      ])
       expect(b.asked.find((x) => x.path === 'publish:begin')!.args.session).toEqual({ harness: 'codex', id: 'codex-1' })
     } finally {
       await b.close()
