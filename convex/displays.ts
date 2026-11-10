@@ -298,6 +298,13 @@ const TAB = /^[A-Za-z0-9_-]{16,64}$/
 export const REPORT_MS = 150_000
 /** How many tabs of one display are kept. A tab past this many puts out the one that spoke longest ago. */
 const TABS = 16
+/**
+ * How far a tab's word of when it said something, by the backend's clock as the tab learned it,
+ * may be from when it arrives, and still be a use the person made a moment ago. A report that
+ * waited longer, as one does that the connection held through an outage and sent again with the
+ * arguments it had, says what was so then, and is kept as said then.
+ */
+export const REPORT_SKEW_MS = 10_000
 
 /**
  * What one tab of a display says of itself: whether it is visible, whether the person used it a
@@ -312,6 +319,14 @@ const TABS = 16
  * now: `loading`, `shown` once its ticket was given, or `failed`, and `none` with no showing.
  * Nothing of what the person did is kept, only when: `usedAt`, written at most once in five
  * seconds. All of it is the browser's word, and never proof of what is on the glass.
+ *
+ * Each report says when the tab made it (`observedAt`), by the backend's clock as the tab learned
+ * it, and is kept as of then, never later than now: a report that was held back, as the
+ * connection holds a call through an outage and sends it again unchanged, does not say what was
+ * so then as what is so now. One that is already too old to stand is not taken, and a use is
+ * taken only from one that arrives within `REPORT_SKEW_MS` of when it was made. A report that
+ * says no time, as from a site of before reports said it, is kept as of now and is never taken
+ * for a use.
  */
 export const report = mutation({
   args: {
@@ -323,6 +338,7 @@ export const report = mutation({
     visible: v.boolean(),
     mountId: v.optional(v.string()),
     used: v.optional(v.boolean()),
+    observedAt: v.optional(v.number()),
     expectedSession: v.string(),
   },
   handler: async (ctx, a) => {
@@ -333,8 +349,13 @@ export const report = mutation({
     if (!TAB.test(a.tab) || !Number.isSafeInteger(a.sequence) || a.sequence < 1) fail('invalid', 'That is not what a tab says of itself.')
     if (a.phase === 'none' && a.mountId !== undefined) fail('invalid', 'A tab that shows nothing names no showing.')
     if (a.phase !== 'none' && a.mountId === undefined) fail('invalid', 'A tab that shows a page names its showing.')
+    if (a.observedAt !== undefined && !Number.isFinite(a.observedAt)) fail('invalid', 'That is not what a tab says of itself.')
     const now = Date.now()
     if (a.epoch !== d.epoch) return { accepted: false, now }
+    // As of when the tab made it, which no clock can make later than now
+    const at = Math.min(now, a.observedAt ?? now)
+    if (now - at >= REPORT_MS) return { accepted: false, now }
+    const timely = a.observedAt !== undefined && now - a.observedAt <= REPORT_SKEW_MS
     const fresh = (d.reports ?? []).filter((r) => r.epoch === d.epoch && now - r.at < REPORT_MS && r.at <= now)
     const before = fresh.find((r) => r.tab === a.tab)
     if (before && a.sequence <= before.sequence) return { accepted: false, now }
@@ -357,9 +378,9 @@ export const report = mutation({
       .sort((x, y) => y.at - x.at)
       .slice(0, TABS - 1)
     const change: Partial<Doc<'displays'>> = {
-      reports: [...others, { tab: a.tab, sequence: a.sequence, at: now, epoch: d.epoch, phase: a.phase, visible: a.visible, ...page }],
+      reports: [...others, { tab: a.tab, sequence: a.sequence, at, epoch: d.epoch, phase: a.phase, visible: a.visible, ...page }],
     }
-    if (a.visible && a.used && now - (d.usedAt ?? 0) > 5000) change.usedAt = now
+    if (a.visible && a.used && timely && at - (d.usedAt ?? 0) > 5000) change.usedAt = at
     await ctx.db.patch(d._id, change)
     return { accepted: true, now }
   },

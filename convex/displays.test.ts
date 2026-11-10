@@ -6,7 +6,7 @@ import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { REPORT_MS } from './displays'
+import { REPORT_MS, REPORT_SKEW_MS } from './displays'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -248,6 +248,8 @@ describe('what each tab of a display says of itself', () => {
     phase: 'none' as const,
     visible,
     expectedSession: b.session,
+    // Made as it is sent, by the backend's clock
+    observedAt: Date.now(),
     ...extra,
   })
   const TAB = 'a'.repeat(32)
@@ -347,6 +349,41 @@ describe('what each tab of a display says of itself', () => {
     vi.advanceTimersByTime(4000)
     await laptop.as.mutation(api.displays.report, said(laptop, TAB, 4, true, { used: true }))
     expect((await row(laptop.id)).usedAt).toBe(Date.now())
+  })
+
+  test('a report held back through an outage longer than a use stands is kept as of when it was made, and is no use now', async () => {
+    const { browser, row } = await household()
+    const laptop = await browser('owner', key(1))
+    const registered = (await row(laptop.id)).usedAt!
+    vi.advanceTimersByTime(60_000)
+    // The person used the display, and the report of it was made then, but the connection was
+    // down: it is sent again, unchanged, a minute later, when the connection is back
+    const made = said(laptop, TAB, 1, true, { used: true })
+    vi.advanceTimersByTime(60_000)
+    expect(await laptop.as.mutation(api.displays.report, made)).toMatchObject({ accepted: true })
+    let d = await row(laptop.id)
+    expect(d.usedAt).toBe(registered)
+    expect(d.reports!.find((r) => r.tab === TAB)!.at).toBe(made.observedAt)
+    // One that waited longer than a report stands is not taken at all
+    const older = said(laptop, OTHER, 1, true, { used: true })
+    vi.advanceTimersByTime(REPORT_MS)
+    expect(await laptop.as.mutation(api.displays.report, older)).toMatchObject({ accepted: false })
+    // One that arrives within the clock's leeway of when it was made is a use, as of then
+    const timely = said(laptop, TAB, 2, true, { used: true })
+    vi.advanceTimersByTime(REPORT_SKEW_MS)
+    await laptop.as.mutation(api.displays.report, timely)
+    d = await row(laptop.id)
+    expect(d.usedAt).toBe(timely.observedAt)
+    expect(d.reports!.map((r) => r.tab)).toEqual([TAB])
+    // A time from a clock that runs ahead is taken as now, never later, and one that says no time is never a use
+    vi.advanceTimersByTime(60_000)
+    await laptop.as.mutation(api.displays.report, said(laptop, TAB, 3, true, { observedAt: Date.now() + 3_600_000 }))
+    expect((await row(laptop.id)).reports!.find((r) => r.tab === TAB)!.at).toBe(Date.now())
+    vi.advanceTimersByTime(60_000)
+    await laptop.as.mutation(api.displays.report, said(laptop, TAB, 4, true, { used: true, observedAt: undefined }))
+    d = await row(laptop.id)
+    expect(d.usedAt).toBe(timely.observedAt)
+    expect(d.reports!.find((r) => r.tab === TAB)!.at).toBe(Date.now())
   })
 
   test('names only a showing this display made, since its last sign-out, and a page shown only once its ticket was given', async () => {

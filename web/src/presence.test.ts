@@ -182,3 +182,28 @@ test('the page a tab shows is said with each report as it changes, and a tab tha
   await vi.advanceTimersByTimeAsync(0)
   expect(sent.at(-1)).not.toHaveProperty('mountId')
 })
+
+test('each report says when it was made, by the backend’s clock, and keeps that time however late it is sent', async () => {
+  let backend = 1_000_000
+  const sent: Report[] = []
+  let answer: (() => void) | undefined
+  stop = startReports(
+    (r) => {
+      sent.push(r)
+      return new Promise<void>((done) => {
+        answer = done
+      })
+    },
+    () => true,
+    { document, window, now: () => Date.now(), observed: () => backend },
+  )
+  expect(sent).toEqual([expect.objectContaining({ sequence: 1, observedAt: 1_000_000 })])
+  // What is made while the first is held is made when it is sent, not when it came up
+  click()
+  backend += 60_000
+  answer!()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.at(-1)).toMatchObject({ sequence: 2, observedAt: 1_060_000 })
+  // The report itself never changes after it was made, so a connection that sends it again sends its time
+  expect(sent[0]!.observedAt).toBe(1_000_000)
+})

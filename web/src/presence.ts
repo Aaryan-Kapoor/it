@@ -3,6 +3,8 @@
 // it shows. An agent's page goes to that display when the agent names none. Nothing of what the
 // person did is said: only that they did something, at most once in ten seconds.
 
+import { backendNow, serverNow } from './lib'
+
 /** How often a tab whose site is visible says so. */
 export const VISIBLE_EVERY_MS = 60_000
 /**
@@ -41,7 +43,16 @@ export interface Report {
   visible: boolean
   /** That the person clicked, tapped, typed or scrolled here within the last ten seconds. */
   used?: true
+  /**
+   * When this report was made, by the backend's clock as this browser has learned it. The
+   * connection holds a call through an outage and sends it again as it was, so this is how the
+   * backend tells a report made a moment ago from one that waited, and keeps the second as of then.
+   */
+  observedAt?: number
 }
+
+/** The backend's time now, as closely as this browser knows it. */
+const backendTime = (): number => backendNow()?.at ?? serverNow()
 
 /** 16 random bytes, in hex: made with `getRandomValues`, which a site reached over plain http has too, and `randomUUID` not. */
 export const tabId = (): string => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('')
@@ -71,9 +82,14 @@ export const tabId = (): string => Array.from(crypto.getRandomValues(new Uint8Ar
 export function startReports(
   send: (report: Report) => Promise<unknown>,
   takes: () => boolean,
-  at: { document: Document; window: Window; now: () => number } = { document, window, now: () => performance.now() },
+  at: { document: Document; window: Window; now: () => number; observed?: () => number } = {
+    document,
+    window,
+    now: () => performance.now(),
+    observed: backendTime,
+  },
 ): () => void {
-  const { document: doc, window: win, now } = at
+  const { document: doc, window: win, now, observed } = at
   const tab = tabId()
   let sequence = 0
   /** When the person last used the site here, by a clock that only goes forward, and when the last use that was said happened. */
@@ -90,7 +106,14 @@ export function startReports(
     const shown = !closing && visible()
     const used = shown && usedAt > saidUseOf && now() - usedAt < USED_EVERY_MS
     const what = closing ? { phase: 'none' as const } : page
-    return { tab, sequence: ++sequence, ...what, visible: shown, ...(used ? { used: true as const } : {}) }
+    return {
+      tab,
+      sequence: ++sequence,
+      ...what,
+      visible: shown,
+      ...(used ? { used: true as const } : {}),
+      ...(observed ? { observedAt: observed() } : {}),
+    }
   }
   const tell = () => {
     if (stopped) return
