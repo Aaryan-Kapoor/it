@@ -66,7 +66,7 @@ The agent apps are named as `claude-code`, `codex`, `openclaw`, `hermes`, `openc
 | `display.paired` | A browser is paired and opens the site as a display for the first time | `screen` and `sameMachine`: as above. `first`: `true` or `false`, whether it is the only display there is |
 | `answer.sent` | You do something on a page that is sent to the agent | `screen`: as above. `from`: `page` for something done on the page itself, `notification` for a button of a notification, `message` for words typed to the agent in the box above a page |
 | `answer.delivered` | The backend has confirmed that your answer was handed over to an agent app for its conversation. For Codex's queue that is the queue accepting the answer, which can be before any turn has run | `path`: `heard`, `woke` or `waited`. `after`: how long after you answered the hand-over was confirmed, one of `under 1 second`, `1 to 10 seconds`, `10 to 60 seconds`, `1 to 10 minutes`, `10 to 60 minutes`, `1 to 24 hours` or `over 24 hours`. `agent`: which agent app the answer was for |
-| `agent.woken` | An add-on reports a turn starting, a queue or T3 Code accepts a message, or an Auto-wake attempt ends. The result is recorded before the backend confirms delivery, as described below | `result`: `resumed`, `declined` or `failed`. `agent`: as for `answer.delivered` |
+| `agent.woken` | An add-on reports a turn starting, a queue or T3 Code accepts a message, or an Auto-wake attempt ends. The result is recorded before the backend confirms delivery, as described below | `result`: `resumed`, `declined` or `failed`. `agent`: as for `answer.delivered`. `why`: `none` for `resumed`, and for `declined` or `failed` one of the words below that says what stopped the hand-over |
 | `notification.sent` | `it notify` has sent a notification | `agent`: which agent app's conversation sent it. `buttons`: `true` or `false`, whether it has any. `sticky`: `true` or `false`, whether it stays until dismissed. `page`: `true` or `false`, whether it is about a page. `to`: `one` display or `all` |
 | `notification.ended` | You answer a notification with one of its buttons, or put it away unanswered | `how`: `answered` or `dismissed`. `pushed`: `true` or `false`, whether it had been pushed to a display that was closed |
 | `tour.shown` | `it tour show` brings up a page of It's own tour | `page`: which of the tour's pages, one of `menu`, `whiteboard`, `chess`, `checklist`, `drums`, `button` or `done`. `agent`: which agent app gives the tour |
@@ -96,6 +96,28 @@ Among live add-ons, only Claude Code reports whether it started a turn. Answers 
 `declined` and `failed` are not confirmed hand-overs. An Auto-wake run interrupted because the service stops or its hold on the answers is lost reports no wake result for that attempt. Because `agent.woken` is recorded before backend confirmation, `resumed` can be counted without any corresponding `answer.delivered`.
 
 For example, one Auto-wake run carrying five clicks counts one `agent.woken` with `resumed` when the run succeeds, and up to five `answer.delivered` events with `woke` as delivery is confirmed. If the run succeeds but the backend confirmation is never received, that one `resumed` can stand alone. A process that merely starts and then fails counts `declined` or `failed`, not `resumed`.
+
+### Why a hand-over did not happen
+
+When a hand-over is `declined` or `failed`, `why` says what stopped it, as one of these words. It is made on your machine from the reason It gives on the page, and the reason's own words, which can name an app and how it ended, are never sent.
+
+- `not_found`: the agent app's command was not found.
+- `not_started`: the agent app's command could not be started.
+- `exited`: the agent app's command ended with an error.
+- `timeout`: the agent app's command did not finish, or did not answer, in the time It gives it.
+- `unnoted`: the reopened run started, and was ended because It could not note it down.
+- `bad_id`: the conversation's id is not one the agent app would have made.
+- `unsupported`: It has no way to reopen a conversation of that agent app.
+- `no_folder`: the folder the conversation was held in is not known on this machine, or is gone.
+- `profile`: the agent app's profile that the conversation was held in is not recorded, cannot be restored safely, or is gone.
+- `unconfirmed`: an open agent app cannot confirm which of its idle conversations it holds.
+- `reopening`: the conversation was being reopened already.
+- `runs_unread`: It could not read its own note of which conversations were running when it last stopped.
+- `unsettled`: a turn of the conversation from before may still be running and could not be checked on.
+- `untold`: It's backend could not be told that the conversation was being reopened.
+- `t3_unreachable`: T3 Code could not be reached, closed the connection, or did not answer in time.
+- `t3_refused`: T3 Code did not let It in, or refused or failed at the message.
+- `other`: any other reason.
 
 ## What is never sent
 

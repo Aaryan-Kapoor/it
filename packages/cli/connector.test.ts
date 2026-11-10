@@ -27,6 +27,8 @@ const stand = vi.hoisted(() => ({
   found: [] as { id: string; version?: string; addon: string }[],
   /** Every call the connector made to the backend. */
   calls: [] as { name: string; args: any }[],
+  /** Every event the connector recorded for usage reporting, with its properties. */
+  recorded: [] as { name: string; properties: Record<string, unknown> }[],
   saving: new Set<Promise<void>>(),
   /** What a call answers, when the test wants something other than the usual. Undefined leaves it to the usual. */
   answer: null as null | ((name: string, args: any) => unknown),
@@ -179,7 +181,7 @@ vi.mock('./src/setup', () => ({
 vi.mock('./src/usage', () => ({
   agentOf: (harness: unknown) => String(harness ?? 'unknown'),
   begin: () => {},
-  record: () => {},
+  record: (name: string, properties: Record<string, unknown>) => void stand.recorded.push({ name, properties }),
   startSender: () => ({ stop: () => {} }),
   thisMachine: () => ({}),
   thisProgram: () => ({}),
@@ -340,6 +342,7 @@ afterEach(async () => {
   stand.watching.clear()
   stand.asking.clear()
   stand.calls.length = 0
+  stand.recorded.length = 0
   stand.reconciled.length = 0
   said.length = 0
   stand.codex.length = 0
@@ -739,6 +742,8 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     stand.codex[0]!.end()
     await until(() => called('delivery:handedOff').includes('click-1'))
     expect(conversationProfile({ harness: 'codex', id: 'thread-1' })).toBeUndefined()
+    // A hand-over that happened has no why
+    expect(stand.recorded.filter((r) => r.name === 'agent.woken').map((r) => r.properties)).toEqual([{ result: 'resumed', agent: 'codex', why: 'none' }])
   })
 
   test('Auto-wake reopens a legacy conversation with no profile in the service’s environment and gives it the click.', async () => {
@@ -1160,6 +1165,9 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     })
     expect(stand.codex).toEqual([])
     expect(said.some((line) => line.includes('was not taken by the reopening of its conversation'))).toBe(true)
+    // Counted with the word for why, and nothing of the words themselves
+    await until(() => stand.recorded.some((r) => r.name === 'agent.woken'))
+    expect(stand.recorded.find((r) => r.name === 'agent.woken')!.properties).toEqual({ result: 'declined', agent: 'codex', why: 'no_folder' })
   })
 
   /** A click on the page of the conversation thread-1, made a moment after click(n) would be. */

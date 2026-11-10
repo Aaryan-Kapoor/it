@@ -30,6 +30,7 @@ import path from 'node:path'
 import { HARNESSES } from '@it/protocol'
 import { claimLock } from './legacy-lock'
 import { inHome, Problem, VERSION } from './lib'
+import { WAKE_WHY } from './wake-why'
 
 export const DEFAULT_URL = 'https://itcan.do/api/usage'
 export const DOCS = 'https://itcan.do/usage-reporting'
@@ -228,7 +229,7 @@ export const ALLOWED = {
   'display.paired': { screen: SCREENS, sameMachine: EITHER, first: EITHER },
   'answer.sent': { screen: SCREENS, from: ['page', 'notification', 'message'] },
   'answer.delivered': { path: ['heard', 'woke', 'waited'], after: TIMES, agent: AGENTS },
-  'agent.woken': { result: ['resumed', 'declined', 'failed'], agent: AGENTS },
+  'agent.woken': { result: ['resumed', 'declined', 'failed'], agent: AGENTS, why: WAKE_WHY },
   'notification.sent': { agent: AGENTS, buttons: EITHER, sticky: EITHER, page: EITHER, to: ['one', 'all'] },
   'notification.ended': { how: ['answered', 'dismissed'], pushed: EITHER },
   'tour.shown': { page: TOUR_PAGES, agent: AGENTS },

@@ -94,6 +94,7 @@ import {
   WOKEN,
   windowsProgram,
 } from './wake'
+import { wakeWhy } from './wake-why'
 
 /** A click as an add-on receives it: its data as a value, the one wording agents read, and the few words a person is shown where an app has another place for the rest. */
 export interface Delivered extends Click {
@@ -2548,7 +2549,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             rode.add(c.id)
           }
         }
-        record('agent.woken', { result: 'resumed', agent: agentOf(harness) })
+        record('agent.woken', { result: 'resumed', agent: agentOf(harness), why: 'none' })
         if (stalled.get(line) === click.id) stalled.delete(line)
         await confirmAll()
       } else {
@@ -2558,7 +2559,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
         stalledAt.set(click.id, Date.now())
         // Its thread of T3 Code is the only way it may go: it is tried there for as long as it waits, and never given up on
         const forThread = t3 !== undefined && t3Only(key)
-        record('agent.woken', { result: n >= QUEUE_WAITS.length && !forThread ? 'failed' : 'declined', agent: agentOf(harness) })
+        // Why, as one of a few fixed words made from the refusal: its own words stay on this machine
+        record('agent.woken', { result: n >= QUEUE_WAITS.length && !forThread ? 'failed' : 'declined', agent: agentOf(harness), why: wakeWhy(refused ?? '') })
         if (reopening) notReopened(click.session!, refused)
         // T3 Code could not take it, and is not asked again for a while (see `t3For`). A conversation that may go
         // other ways goes as any other meanwhile, which is tried at once; one held in a thread waits for it
@@ -3369,7 +3371,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // running. One that does not say is taken to have been heard at once.
       const woke = body.woke === true
       // One report is one turn, however many clicks it carried: counted as one waking
-      if (woke && ids.length) record('agent.woken', { result: 'resumed', agent: agentOf(held.get(ids[0]!)!.click.session?.harness) })
+      if (woke && ids.length) record('agent.woken', { result: 'resumed', agent: agentOf(held.get(ids[0]!)!.click.session?.harness), why: 'none' })
       for (const clickId of ids) {
         const click = held.get(clickId)!.click
         counting.set(clickId, { at: click.at, harness: click.session?.harness, path: woke ? 'woke' : 'heard' })
