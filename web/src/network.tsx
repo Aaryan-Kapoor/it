@@ -148,12 +148,15 @@ export function useNetwork() {
   const ask = useCallback(
     (to: Way) => {
       if (!said || waiting) return
-      // What a browser that came over the network loses with the way it came by is said before it is done
-      if (to !== 'on' && said.on && !onThatMachine()) {
+      // What a browser that came over the network loses with the way it came by is said before it is done: with the
+      // network off, kept to the tailnet, and, where It answers the internet too, kept to the network the machine is on
+      if ((to !== 'on' || said.internet === true) && said.on && !onThatMachine()) {
         const loses =
           to === 'off'
             ? 'This browser reaches It over the network. With the network off it loses It, and the network is turned on again only at the machine It runs on.'
-            : 'Kept to your tailnet, It answers this browser only if it reached It over the tailnet.'
+            : to === 'tailscale'
+              ? 'Kept to your tailnet, It answers this browser only if it reached It over the tailnet.'
+              : 'Kept to the network the machine It runs on is on, It answers this browser only if it reached It there, and not over the internet. If it did not, it loses It, and the internet is opened to again only at that machine.'
         if (!confirm(`${loses} Go on?`)) return
       }
       setFailed('')

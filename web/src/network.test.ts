@@ -771,6 +771,26 @@ describe('the network as a switch', () => {
     expect(said()).toBe(
       'It answers the internet too, over plain http, because it network internet was run on the machine It runs on, and that machine has a public address (203.0.113.7). Choosing one of these stops that.',
     )
+    // On the machine It runs on there is nothing to lose, and nothing is asked
+    const asking = vi.fn((_: string) => false)
+    vi.stubGlobal('confirm', asking)
+    await pick(1)
+    expect(asking).not.toHaveBeenCalled()
+    expect(asked).toEqual([{ to: 'on' }])
+  })
+
+  test('where It answers the internet too, a browser that came from elsewhere is told before It is kept to the network the machine is on, and nothing is done on a no', async () => {
+    browser.reconfigure({ url: 'http://[2001:db8::20]:4700/displays' })
+    watched['network:get'] = stands({ on: true, internet: true, addresses: [LAN] })
+    const asking = vi.fn((_: string) => false)
+    vi.stubGlobal('confirm', asking)
+    await panel()
+    await pick(1)
+    expect(asking.mock.calls[0]![0]).toContain(
+      'Kept to the network the machine It runs on is on, It answers this browser only if it reached It there, and not over the internet.',
+    )
+    expect(calls).toEqual([])
+    asking.mockReturnValue(true)
     await pick(1)
     expect(asked).toEqual([{ to: 'on' }])
   })
