@@ -13,8 +13,10 @@
 # account.
 #
 # It downloads from It's releases on GitHub, at https://github.com/Aaryan-Kapoor/it/releases.
-# IT_INSTALL_BASE names another place to download from, laid out as GitHub lays out a
-# repository's releases. IT_VERSION names a release other than the latest, by its tag.
+# The copy of this script published with a release downloads everything from that release, and
+# the copy in the repository downloads the latest. IT_VERSION names another release by its tag,
+# or latest for the newest. IT_INSTALL_BASE names another place to download from, laid out as
+# GitHub lays out a repository's releases.
 # IT_INSTALL_NO_PATH, set to anything, leaves your PATH alone.
 # To join another computer, pass login and its arguments with:
 #   & ([scriptblock]::Create((irm https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.ps1))) login --url <address> --code <code>
@@ -54,9 +56,14 @@
   $then = $false
   # Whether a command typed as `it` in this window is found, which the setup says where it is not
   $onPath = '0'
+  # The release this script belongs to. In the repository it names none. The copy published
+  # with a release has that release's tag written here when the release is built, so that the
+  # checksums and every file they vouch for come from the one release this script came from,
+  # even when a newer release is published before or while it runs.
+  $release = ''
   $usual = 'https://github.com/Aaryan-Kapoor/it/releases'
   $base = if ($env:IT_INSTALL_BASE) { $env:IT_INSTALL_BASE.TrimEnd('/') } else { $usual }
-  $version = if ($env:IT_VERSION) { $env:IT_VERSION } else { 'latest' }
+  $version = if ($env:IT_VERSION) { $env:IT_VERSION } elseif ($release) { $release } else { 'latest' }
   if ($version -notmatch '^[A-Za-z0-9._-]+$') { throw "IT_VERSION must be a release's tag." }
   $from = if ($version -eq 'latest') { "$base/latest/download" } else { "$base/download/$version" }
   # Only over https, and a redirect may only lead to https. The one exception is a base on this

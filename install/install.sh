@@ -26,8 +26,10 @@
 # computer runs It or joins one, and one that has set up its own cannot join.
 #
 # It downloads from It's releases on GitHub, at https://github.com/Aaryan-Kapoor/it/releases.
-# IT_INSTALL_BASE names another place to download from, laid out as GitHub lays out a
-# repository's releases. IT_VERSION names a release other than the latest, by its tag.
+# The copy of this script published with a release downloads everything from that release, and
+# the copy in the repository downloads the latest. IT_VERSION names another release by its tag,
+# or latest for the newest. IT_INSTALL_BASE names another place to download from, laid out as
+# GitHub lays out a repository's releases.
 # IT_INSTALL_NO_PATH, set to anything, leaves your PATH and your shell's profile alone.
 #
 # Plain letters only in this script, and every name in braces where a letter could follow it:
@@ -71,10 +73,15 @@ if [ "$#" -gt 0 ]; then
   join=1
 fi
 
+# The release this script belongs to. In the repository it names none. The copy published with
+# a release has that release's tag written here when the release is built, so that the
+# checksums and every file they vouch for come from the one release this script came from,
+# even when a newer release is published before or while it runs.
+RELEASE=""
 USUAL="https://github.com/Aaryan-Kapoor/it/releases"
 BASE="${IT_INSTALL_BASE:-${USUAL}}"
 BASE="${BASE%/}"
-VERSION="${IT_VERSION:-latest}"
+VERSION="${IT_VERSION:-${RELEASE:-latest}}"
 
 # Where it goes. Settled before anything is downloaded, so that nothing is half done when a
 # folder cannot be worked out.

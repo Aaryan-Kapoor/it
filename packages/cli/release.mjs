@@ -7,6 +7,7 @@ import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'no
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { signature, unsign } from '../../scripts/unsign.mjs'
+import { stamp } from './stamp.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 export const TARGETS = ['linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64', 'windows-x64']
@@ -46,6 +47,14 @@ try {
 const tag = process.argv.find((word) => word.startsWith('--tag='))?.slice(6)
 if (tag !== undefined && tag !== `v${VERSION}`) {
   console.error(`the tag of a release is "v" and its version, and the source says it is ${VERSION}, which the tag ${tag} is not`)
+  process.exit(1)
+}
+// Each install script must take this release's tag, which is found out before anything is built
+const scripts = {}
+try {
+  for (const name of ['install.sh', 'install.ps1']) scripts[name] = stamp(name, readFileSync(path.join(here, '../../install', name), 'utf8'), `v${VERSION}`)
+} catch (e) {
+  console.error(e.message)
   process.exit(1)
 }
 // What each program carries inside it is written first: the add-ons, the tour, the site, and
@@ -127,7 +136,8 @@ for (const target of TARGETS) {
 }
 // The terms and the notices of what the programs include go beside them, so that whoever takes
 // a program from here takes those too, and so do the two install scripts. All are in the
-// checksums like the programs.
+// checksums like the programs. The install scripts are given this release's tag, so that each
+// downloads from this release alone (`stamp.mjs`).
 for (const [name, from] of [
   ['LICENSE.md', 'LICENSE.md'],
   ['THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.md'],
@@ -135,7 +145,8 @@ for (const [name, from] of [
   ['install.sh', 'install/install.sh'],
   ['install.ps1', 'install/install.ps1'],
 ]) {
-  copyFileSync(path.join(here, '../..', from), path.join(out, name))
+  if (scripts[name] !== undefined) writeFileSync(path.join(out, name), scripts[name])
+  else copyFileSync(path.join(here, '../..', from), path.join(out, name))
   sums.push(
     `${createHash('sha256')
       .update(readFileSync(path.join(out, name)))

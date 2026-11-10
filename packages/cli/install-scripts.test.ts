@@ -9,6 +9,7 @@ import { INSTALL } from '@it/protocol'
 import { expect, test } from 'vitest'
 import { markedInstallation, markInstallation } from './src/installation'
 import { withInstallationLock } from './src/uninstall-files'
+import { stamp } from './stamp.mjs'
 
 const exec = promisify(execFile)
 const windows = process.platform === 'win32'
@@ -124,4 +125,38 @@ test.skipIf(windows)('install.sh notes another place it downloaded from, and tak
   } finally {
     rmSync(folder, { recursive: true, force: true })
   }
+})
+
+test('a release writes its tag into each install script once, in the one line that names its release, and into nothing else', () => {
+  for (const [name, line, stamped] of [
+    ['install.sh', '\nRELEASE=""\n', '\nRELEASE="v1.2.3"\n'],
+    ['install.ps1', "\n  $release = ''\n", "\n  $release = 'v1.2.3'\n"],
+  ] as const) {
+    const text = script(name)
+    // In the repository a script names no release, and installs the latest
+    expect(text.split(line).length, name).toBe(2)
+    const out = stamp(name, text, 'v1.2.3')
+    expect(out, name).toBe(text.replace(line, stamped))
+    expect(() => stamp(name, out, 'v1.2.4'), name).toThrow('exactly once')
+    expect(() => stamp(name, text + line, 'v1.2.3'), name).toThrow('exactly once')
+    for (const tag of ['latest', '1.2.3', 'v1.2', 'v1.2.3"; rm -rf ~; "', "v1.2.3'"])
+      expect(() => stamp(name, text, tag), `${name} ${tag}`).toThrow('not the tag')
+  }
+  expect(() => stamp('LICENSE.md', 'RELEASE=""', 'v1.2.3')).toThrow('not an install script')
+})
+
+test.skipIf(windows)('install.sh takes the release it names, unless IT_VERSION names another or the latest', () => {
+  const text = stamp('install.sh', script('install.sh'), 'v1.2.3')
+  const start = text.indexOf('\nRELEASE=')
+  const end = text.indexOf('\ncase "$(uname -s)"', start)
+  const part = text.slice(start, end)
+  const from = (env: Record<string, string>) =>
+    execFileSync('/bin/sh', ['-c', `set -eu\nsay() { printf '%s\\n' "$1"; }\n${part}\nprintf '%s' "\${FROM}"`], {
+      env: { PATH: process.env.PATH, HOME: '/nowhere', ...env },
+      encoding: 'utf8',
+    })
+  expect(from({})).toBe(`${INSTALL.releases}/download/v1.2.3`)
+  expect(from({ IT_VERSION: 'v0.1.0' })).toBe(`${INSTALL.releases}/download/v0.1.0`)
+  expect(from({ IT_VERSION: 'latest' })).toBe(`${INSTALL.releases}/latest/download`)
+  expect(from({ IT_INSTALL_BASE: 'https://example.com/mirror/' })).toBe('https://example.com/mirror/download/v1.2.3')
 })
