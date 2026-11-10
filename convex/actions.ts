@@ -460,6 +460,10 @@ export const forArtifact = query({
       // said to be set aside, though it is still marked as such, to be set aside again if that
       // delivery comes to nothing
       parked: x.delivery === 'pending' && x.parkedBy !== undefined,
+      // Why the machine it waits for will not start its conversation for it, for as long as it
+      // waits there and nobody has taken it: said on the bar however many other conversations
+      // have failed since, which the machine's own list of failures does not keep
+      heldBack: x.delivery === 'pending' && x.heldBack && x.heldBack.by === x.machineId ? x.heldBack.why : null,
       // When it goes if no agent has taken it by then, as the hourly sweep of what nobody took
       // counts it: from when It got it. What was handed over goes a week after, and is done with
       expiresAt: x.delivery === 'handed_off' ? null : x.createdAt + RETENTION.pendingActionDays * 86_400_000,

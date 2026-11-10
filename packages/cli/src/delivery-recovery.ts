@@ -20,6 +20,8 @@ export interface Offered {
   files?: { name: string; type: string; bytes: number }[]
   /** When the person last asked, from its page, for it to be tried again after it was set aside. Older backends never say. */
   retriedAt?: number
+  /** Why this machine said it holds it back from reopening its conversation, as It keeps that with the click. Older backends never say. */
+  heldBack?: string
 }
 export type Given = { who: string; at: number }
 export type WaitCopy = { click: Offered; key: string; given?: Given }

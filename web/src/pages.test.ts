@@ -20,6 +20,7 @@ let recent: {
   parked?: boolean
   expiresAt?: number | null
   madeAt?: number
+  heldBack?: string | null
 }[]
 /** The person's machines as the backend gives them to the owner's browser, with the agent apps chosen on each. */
 let machines: { id: string; name?: string; wanted: string[]; harnesses?: { id: string; addon: string; version?: string }[] }[] | undefined
@@ -218,6 +219,33 @@ describe('what the page’s bar says of the last thing the person did', () => {
     await shown()
     expect(said()).toBe('Couldn’t wake Pi: the folder its conversation was held in is not known on this machine, or is gone')
     Object.assign(PAGE, { wakeFailed: null })
+  })
+
+  test('a click its machine holds back is said to be that, with why, for as long as it waits, whatever the machine’s last failure was', async () => {
+    const WHY =
+      'its conversation is open without It’s add-on, as when it was open before It was installed, so It did not start a second copy of it: type /reload-plugins in it, or open it again if you closed it, and what you did reaches it'
+    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'claude-code', wakeFailed: null })
+    recent = [{ at: NOW - 2000, delivery: 'pending', outcome: null, heldBack: WHY }]
+    await shown()
+    expect(said()).toBe(`Couldn’t wake Claude Code: ${WHY}`)
+    await act(async () => root.unmount())
+    host.remove()
+    // Long after, with the machine's own failures for other conversations gone, it is still said, and counted
+    recent = [
+      { at: NOW - 3_600_000, delivery: 'pending', outcome: null, heldBack: WHY },
+      { at: NOW - 3_700_000, delivery: 'pending', outcome: null, heldBack: WHY },
+    ]
+    Object.assign(PAGE, { pending: 2 })
+    await shown()
+    expect(said()).toBe(`Couldn’t wake Claude Code (2): ${WHY}`)
+    await act(async () => root.unmount())
+    host.remove()
+    // Taken by an agent, it is on its way, and is not said to be held back
+    recent = [{ at: NOW - 8000, delivery: 'leased', outcome: null, heldBack: null }]
+    Object.assign(PAGE, { pending: 0 })
+    await shown()
+    expect(said()).toBe('Sent. Claude Code is busy, and gets it when it is free')
+    Object.assign(PAGE, { agent: 'pi' })
   })
 
   test('a click its machine set aside is said to be that, with when it is deleted, and is said to be waiting again once it is no longer set aside', async () => {

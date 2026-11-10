@@ -55,6 +55,8 @@ const stand = vi.hoisted(() => ({
   profiles: true,
   /** What It says at its door of whether it takes every later form of a call this program knows: undefined where the door cannot be asked. */
   takes: true as boolean | undefined,
+  /** Where a test holds It's door from answering until it lets it: the door answers once this is settled. */
+  doorHeld: null as null | Promise<void>,
   /** How far this machine's clock is ahead of It's, which says its time at its door. */
   fast: 0,
   /**
@@ -218,7 +220,10 @@ vi.mock('./src/lib', async (original) => {
       void saving.finally(() => stand.saving.delete(saving)).catch(() => {})
       return saving
     },
-    backendDoor: async () => (stand.takes === undefined ? undefined : { takes: stand.takes ? Object.values(TAKES) : [], now: Date.now() - stand.fast }),
+    backendDoor: async () => {
+      await stand.doorHeld
+      return stand.takes === undefined ? undefined : { takes: stand.takes ? Object.values(TAKES) : [], now: Date.now() - stand.fast }
+    },
     live: () => ({
       onUpdate: (fn: any, args: unknown, heard: (value: any) => void) => {
         stand.watching.set(getFunctionName(fn), (value) => {
@@ -250,7 +255,7 @@ vi.mock('./src/lib', async (original) => {
   }
 })
 
-import { type ConnectorInfo, infoFile, local, mac, NOT_LOADED, notLoadedToo, type Route, runConnector, wayOf } from './src/connector'
+import { type ConnectorInfo, infoFile, local, mac, NOT_LOADED, notLoadedToo, OPEN_WITHOUT_ADDON, type Route, runConnector, wayOf } from './src/connector'
 import { DeliveryRecovery, eraseDeliveryRecovery } from './src/delivery-recovery'
 import * as files from './src/lib'
 import { readJson } from './src/lib'
@@ -370,6 +375,7 @@ afterEach(async () => {
   stand.unknown.clear()
   stand.profiles = true
   stand.takes = true
+  stand.doorHeld = null
   stand.fast = 0
   stand.answer = null
   stand.fetched = null
@@ -685,7 +691,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     attended: true,
     session: { harness: 'codex', id: `thread-${n}` },
   })
-  const offered = (...clicks: (ReturnType<typeof click> & { retriedAt?: number })[]) => stand.watching.get('delivery:inboxPage')!(clicks)
+  const offered = (...clicks: (ReturnType<typeof click> & { retriedAt?: number; heldBack?: string })[]) => stand.watching.get('delivery:inboxPage')!(clicks)
   // The connector tells that a run it reopened has ended by looking at every process on the
   // machine, and a process of the same person's that began after the run and cannot be read
   // may be a command the run started and let go of. While one is there the run is not known to
@@ -1186,32 +1192,261 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(stand.recorded.find((r) => r.name === 'agent.woken')!.properties).toEqual({ result: 'declined', agent: 'codex', why: 'no_folder' })
   })
 
-  test.each([false, true])(
-    'a Claude Code conversation that published its page without It’s add-on, and cannot be reopened, has its page say how to load the add-on, unless the add-on was heard from it: heard %s',
-    async (heard) => {
-      const id = '11111111-2222-4333-8444-555555555555'
-      await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }, (home) => {
+  /** A connector that reopens conversations of `harness`, with what is noted of the conversation `id` written in its folder before it starts. */
+  const reopensFor = async (harness: string, id: string, note: Record<string, unknown> | null, heard = false) => {
+    await start('socket', { wanted: [harness], found: [...CONNECTED, { id: harness, version: '2.1.300', addon: 'connected' }] }, (home) => {
+      if (note)
         writeFileSync(
           path.join(home, 'conversations.json'),
-          JSON.stringify({ [`claude-code:${id}`]: { cwd: path.join(home, 'gone'), at: Date.now(), addon: false } }),
+          JSON.stringify({ [`${harness}:${id}`]: { cwd: path.join(home, 'gone'), at: Date.now(), ...note } }),
         )
-        if (heard) writeFileSync(path.join(home, 'heard.json'), JSON.stringify({ [`claude-code:${id}`]: 1 }))
-      })
-      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
-      offered({ ...click(1), session: { harness: 'claude-code', id } })
-      await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'))
-      expect(stand.calls.find((c) => c.name === 'machines:wakeFailed')!.args).toEqual({
-        for: { harness: 'claude-code', id },
-        // Why it could not be reopened is said either way, and for one that has not loaded the add-on, what lets it hear the page after it
-        why: heard
-          ? 'the folder its conversation was held in is not known on this machine, or is gone'
-          : `the folder its conversation was held in is not known on this machine, or is gone. ${NOT_LOADED}`,
-      })
-      // What is counted is still the word for why the reopening failed
-      await until(() => stand.recorded.some((r) => r.name === 'agent.woken'))
-      expect(stand.recorded.find((r) => r.name === 'agent.woken')!.properties).toEqual({ result: 'declined', agent: 'claude-code', why: 'no_folder' })
-    },
-  )
+      if (heard) writeFileSync(path.join(home, 'heard.json'), JSON.stringify({ [`${harness}:${id}`]: 1 }))
+    })
+    stand.watching.get('machines:me')!({ wanted: [harness], wakes: [{ harness, since: Date.now() - 60_000 }] })
+  }
+  const failures = () => stand.calls.filter((c) => c.name === 'machines:wakeFailed')
+  const GONE = 'the folder its conversation was held in is not known on this machine, or is gone'
+  const CLAUDE_ID = '11111111-2222-4333-8444-555555555555'
+
+  const holds = () => stand.calls.filter((c) => c.name === 'delivery:holdBack')
+  const heldIds = () => holds().flatMap((c) => c.args.ids as string[])
+  const blocked = (n: number, more: Record<string, unknown> = {}) => ({ ...click(n), session: { harness: 'claude-code', id: CLAUDE_ID }, ...more })
+
+  test('a Claude Code conversation that published its page without It’s add-on, and has not been heard from since, is never reopened, and why is kept with each click for its page, said once', async () => {
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered(blocked(1))
+    await until(() => holds().length > 0)
+    expect(holds()[0]!.args).toEqual({ ids: ['click-1'], why: OPEN_WITHOUT_ADDON })
+    expect(OPEN_WITHOUT_ADDON).toContain('type /reload-plugins in it')
+    expect(OPEN_WITHOUT_ADDON.length).toBeLessThanOrEqual(300)
+    await until(() => said.some((line) => line.includes('is open without It’s add-on, so it is not reopened')))
+    // Looked at again pass after pass, the click is still not reopened for, and It is not told again
+    await new Promise((r) => setTimeout(r, 2500))
+    expect(holds()).toHaveLength(1)
+    expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+    expect(failures()).toEqual([])
+    expect(said.some((line) => line.includes('the reopening of its conversation'))).toBe(false)
+    // Nothing was tried, so no waking is counted
+    expect(stand.recorded.some((r) => r.name === 'agent.woken')).toBe(false)
+    // Offered again with that kept, it is not told again; a later click is told of in its turn
+    offered(blocked(1, { heldBack: OPEN_WITHOUT_ADDON }), blocked(2))
+    await until(() => holds().length > 1)
+    expect(holds()[1]!.args).toEqual({ ids: ['click-2'], why: OPEN_WITHOUT_ADDON })
+    offered(blocked(1, { heldBack: OPEN_WITHOUT_ADDON }), blocked(2, { heldBack: OPEN_WITHOUT_ADDON }))
+    await new Promise((r) => setTimeout(r, 2500))
+    expect(holds()).toHaveLength(2)
+  })
+
+  test('where It could not be told why a click is held back, it is told again a while later, until it has it', async () => {
+    let refused = 0
+    stand.answer = (name) => {
+      if (name === 'delivery:holdBack' && refused++ === 0) throw new Error('It did not answer in time, so whether that went through is not known.')
+      return undefined
+    }
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered(blocked(1))
+    await until(() => holds().length > 1, 10_000)
+    expect(holds().map((c) => c.args)).toEqual([
+      { ids: ['click-1'], why: OPEN_WITHOUT_ADDON },
+      { ids: ['click-1'], why: OPEN_WITHOUT_ADDON },
+    ])
+    expect(said.some((line) => line.includes('could not tell It why a click waits'))).toBe(true)
+    // Told once it was taken, and not again while it is being offered
+    await new Promise((r) => setTimeout(r, 4500))
+    expect(holds()).toHaveLength(2)
+    expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+  })
+
+  test('an It that does not keep why a click is held back is told it as why its conversation could not be woken, once for each click', async () => {
+    // It names none of the later forms of a call at its door, as an It of an earlier build does
+    stand.takes = false
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered(blocked(1))
+    await until(() => failures().length > 0)
+    expect(failures()[0]!.args).toEqual({ for: { harness: 'claude-code', id: CLAUDE_ID }, why: OPEN_WITHOUT_ADDON })
+    offered(blocked(1), blocked(2))
+    await until(() => failures().length > 1)
+    await new Promise((r) => setTimeout(r, 2500))
+    // Never asked what it does not take, and told once for each click
+    expect(holds()).toEqual([])
+    expect(failures()).toHaveLength(2)
+  })
+
+  test('for a while after It has not said at its door whether it keeps why a click is held back, nothing is told either way, and the click is still not reopened', async () => {
+    // The door cannot be asked
+    stand.takes = undefined
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered(blocked(1))
+    await new Promise((r) => setTimeout(r, 3000))
+    expect(holds()).toEqual([])
+    expect(failures()).toEqual([])
+    expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+  })
+
+  test('where It’s door stays shut past the wait, each held-back click is told once the way every It takes, and the way It keeps once the door says it takes that', async () => {
+    // Only the minute's own asking is faked, so that it can be brought on; everything else runs as it does
+    standIn()
+    stand.takes = undefined
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered(blocked(1), blocked(2))
+    await new Promise((r) => setTimeout(r, 1500))
+    expect(failures()).toEqual([])
+    // Two minutes on, the door still shut
+    const later = Date.now() + 121_000
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => later + (performance.now() % 1000))
+    try {
+      offered(blocked(1), blocked(2))
+      await until(() => failures().length > 0)
+      // One word for the conversation's two clicks, which is all an It of any build keeps of it, and none again
+      for (let n = 0; n < 3; n++) {
+        await new Promise((r) => setTimeout(r, 500))
+        offered(blocked(1), blocked(2))
+      }
+      await new Promise((r) => setTimeout(r, 1000))
+      expect(failures().map((c) => c.args)).toEqual([{ for: { harness: 'claude-code', id: CLAUDE_ID }, why: OPEN_WITHOUT_ADDON }])
+      expect(holds()).toEqual([])
+      expect(said.some((line) => line.includes('could not ask It at its door'))).toBe(true)
+      // The door opens, and says It keeps a reason with a click: each is told that way, once
+      stand.takes = true
+      await vi.advanceTimersByTimeAsync(60_000)
+      offered(blocked(1), blocked(2))
+      await until(() => heldIds().length >= 2)
+      expect(holds().map((c) => c.args)).toEqual([{ ids: ['click-1', 'click-2'], why: OPEN_WITHOUT_ADDON }])
+      offered(blocked(1, { heldBack: OPEN_WITHOUT_ADDON }), blocked(2, { heldBack: OPEN_WITHOUT_ADDON }))
+      await new Promise((r) => setTimeout(r, 1500))
+      expect(holds()).toHaveLength(1)
+      expect(failures()).toHaveLength(1)
+      expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  test('a click that goes off the page of the inbox and comes round again keeps its wait before It is asked again', async () => {
+    const asked: number[] = []
+    stand.answer = (name) => {
+      if (name !== 'delivery:holdBack') return undefined
+      asked.push(performance.now())
+      throw new Error('It did not answer in time, so whether that went through is not known.')
+    }
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered(blocked(1))
+    await until(() => asked.length > 0)
+    // The inbox pages on to other conversations and back, twice, within the wait
+    offered()
+    offered(blocked(1))
+    await new Promise((r) => setTimeout(r, 300))
+    offered()
+    offered(blocked(1))
+    await new Promise((r) => setTimeout(r, 800))
+    expect(asked).toHaveLength(1)
+    await until(() => asked.length > 1, 8000)
+    expect(asked[1]! - asked[0]!).toBeGreaterThanOrEqual(1900)
+  })
+
+  test('an It of an earlier build is told once for each click, also where the inbox pages away from the click and back', async () => {
+    stand.takes = false
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered(blocked(1))
+    await until(() => failures().length > 0)
+    for (let n = 0; n < 3; n++) {
+      offered()
+      await new Promise((r) => setTimeout(r, 200))
+      offered(blocked(1))
+      await new Promise((r) => setTimeout(r, 800))
+    }
+    expect(failures()).toHaveLength(1)
+    expect(holds()).toEqual([])
+  })
+
+  test('a click made long before It received it, as in a browser that could not reach It for a week, is noted for as long as It keeps it, and told of once', async () => {
+    const DAY = 86_400_000
+    stand.takes = false
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    // Auto-wake has been on for two months, and the click was made 29 days ago and received just now
+    stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60 * DAY }] })
+    const old = blocked(1, { at: Date.now() - 29 * DAY })
+    offered(old)
+    await until(() => failures().length > 0)
+    // Three days on, It still keeps the click, which it counts from receiving it, and so does this machine's note of it
+    const later = Date.now() + 3 * DAY
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => later + (performance.now() % 1))
+    try {
+      offered(old)
+      await new Promise((r) => setTimeout(r, 1500))
+      offered(old)
+      await new Promise((r) => setTimeout(r, 1500))
+      expect(failures()).toHaveLength(1)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  test('six hundred held-back clicks are each told of once, fifty at most to a call, and none again while they wait', async () => {
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    const many = Array.from({ length: 600 }, (_, i) => blocked(i + 1))
+    offered(...many)
+    await until(() => heldIds().length >= 600, 20_000)
+    expect(new Set(heldIds()).size).toBe(600)
+    expect(holds().every((c) => c.args.ids.length <= 50 && c.args.why === OPEN_WITHOUT_ADDON)).toBe(true)
+    await new Promise((r) => setTimeout(r, 3000))
+    expect(heldIds()).toHaveLength(600)
+    // Offered a page at a time, as It offers them, with what It keeps of each: nothing is told again
+    for (let i = 0; i < 600; i += 100) offered(...many.slice(i, i + 100).map((c) => ({ ...c, heldBack: OPEN_WITHOUT_ADDON })))
+    offered(...many.map((c) => ({ ...c, heldBack: OPEN_WITHOUT_ADDON })))
+    await new Promise((r) => setTimeout(r, 2500))
+    expect(heldIds()).toHaveLength(600)
+    expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+  })
+
+  test('started again, the connector knows from what It keeps with the click that its page has been told, and tells it nothing again', async () => {
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered(blocked(1))
+    await until(() => holds().length > 0)
+    const before = home
+    await stop?.()
+    stop = null
+    stand.calls.length = 0
+    stand.watching.clear()
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }, () => {}, before)
+    stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
+    offered(blocked(1, { heldBack: OPEN_WITHOUT_ADDON }))
+    await new Promise((r) => setTimeout(r, 3000))
+    expect(holds()).toEqual([])
+    expect(failures()).toEqual([])
+    expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+  })
+
+  test('a click whose conversation is no longer kept from reopening has why it was taken off its page, and is reopened', async () => {
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false }, true)
+    offered(blocked(1, { heldBack: OPEN_WITHOUT_ADDON }))
+    await until(() => holds().length > 0)
+    expect(holds()[0]!.args).toEqual({ ids: ['click-1'], why: null })
+    await until(() => failures().length > 0)
+    expect(failures()[0]!.args.why).toBe(GONE)
+  })
+
+  test.each([
+    ['its add-on heard from since', { addon: false }, true],
+    ['a note that it published with its add-on', {}, false],
+    ['no note of it', null, false],
+  ] as const)('a closed Claude Code conversation with %s is reopened as before, and why it could not be is said without the advice', async (_, note, heard) => {
+    await reopensFor('claude-code', CLAUDE_ID, note, heard)
+    offered({ ...click(1), session: { harness: 'claude-code', id: CLAUDE_ID } })
+    await until(() => failures().length > 0)
+    expect(failures()[0]!.args).toEqual({ for: { harness: 'claude-code', id: CLAUDE_ID }, why: GONE })
+    expect(said.some((line) => line.includes('was not taken by the reopening of its conversation'))).toBe(true)
+    await until(() => stand.recorded.some((r) => r.name === 'agent.woken'))
+    expect(stand.recorded.find((r) => r.name === 'agent.woken')!.properties).toEqual({ result: 'declined', agent: 'claude-code', why: 'no_folder' })
+  })
+
+  test.each(['pi', 'opencode', 'hermes'])('a conversation of %s is reopened as before, whatever is noted of It’s add-on in it', async (harness) => {
+    await reopensFor(harness, 'conversation-1', { addon: false })
+    offered({ ...click(1), session: { harness, id: 'conversation-1' } })
+    await until(() => failures().length > 0)
+    expect(failures()[0]!.args).toEqual({ for: { harness, id: 'conversation-1' }, why: GONE })
+    expect(said.some((line) => line.includes('was not taken by the reopening of its conversation'))).toBe(true)
+  })
 
   test('a reason too long to fit beside the advice to load the add-on is cut short, so that the advice is never what the backend cuts off', () => {
     const said = notLoadedToo(`Claude Code exited with 1, and its last words were: ${'x'.repeat(400)}`)
@@ -1331,6 +1566,34 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       await pause(500)
       expect(stand.calls.filter((c) => c.name === 'machines:runBegan')).toHaveLength(1)
       expect(given(bin, 0)).toBe('')
+      // The next second's pass tries it again
+      await pass()
+      await until(() => stand.calls.filter((c) => c.name === 'machines:runBegan').length === 2)
+    },
+  )
+
+  test.skipIf(process.platform === 'win32')(
+    'It’s door answering just as a hand-over has handed nothing over does not bring on another hand-over before the next second',
+    async () => {
+      holdingCodex()
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(folder)
+      standIn()
+      // The door does not answer until the test lets it
+      let open = () => {}
+      stand.doorHeld = new Promise<void>((r) => {
+        open = r
+      })
+      await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+      stand.closed.add('thread-1')
+      await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1' } })
+      stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+      offered(onFirst(1))
+      await until(() => called('delivery:release').includes('click-1'))
+      // It answers now, as a slow door does
+      open()
+      await pause(500)
+      expect(stand.calls.filter((c) => c.name === 'machines:runBegan')).toHaveLength(1)
       // The next second's pass tries it again
       await pass()
       await until(() => stand.calls.filter((c) => c.name === 'machines:runBegan').length === 2)
