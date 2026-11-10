@@ -11,7 +11,7 @@ import { AUDIENCE, PUBLICATION, STORAGE, sizeSaid } from '@it/protocol'
 import { ConvexError, v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
-import { type ActionCtx, internalAction, internalMutation, internalQuery, type MutationCtx } from './_generated/server'
+import { type ActionCtx, internalAction, internalMutation, internalQuery, type MutationCtx, type QueryCtx } from './_generated/server'
 import { door } from './config'
 import { confirmed } from './deletions'
 import { overClashes } from './lib/clash'
@@ -143,6 +143,29 @@ export async function removeLater(
 
 export const _job = internalQuery({ args: { jobId: v.id('contentJobs') }, handler: (ctx, { jobId }) => ctx.db.get(jobId) })
 
+/** What a revocation is about: which display, and the number it raises that display to. */
+const revokeOf = (job: { op: string; body: string }): { displayId: string; epoch: number } | null => {
+  if (job.op !== 'revoke') return null
+  const said = JSON.parse(job.body) as { displayId?: unknown; epoch?: unknown }
+  return typeof said.displayId === 'string' && typeof said.epoch === 'number' ? { displayId: said.displayId, epoch: said.epoch } : null
+}
+/** The revocations not yet confirmed for any of these displays of a person's. */
+export async function pendingRevokes(ctx: QueryCtx | MutationCtx, userId: Id<'users'>, displayIds: string[]) {
+  const jobs = await ctx.db
+    .query('contentJobs')
+    .withIndex('by_user', (q) => q.eq('userId', userId))
+    .take(BATCH)
+  return jobs.flatMap((job) => {
+    const r = revokeOf(job)
+    return r && displayIds.includes(r.displayId) ? [{ job, ...r }] : []
+  })
+}
+/** How many revocations are not yet confirmed for these displays: none, once the content service has taken in what each one's number now is. */
+export const _pendingRevokes = internalQuery({
+  args: { userId: v.id('users'), displayIds: v.array(v.string()) },
+  handler: async (ctx, { userId, displayIds }) => (await pendingRevokes(ctx, userId, displayIds)).length,
+})
+
 export const _settle = internalMutation({
   args: { jobId: v.id('contentJobs'), outcome: v.union(v.literal('done'), v.literal('more'), v.literal('failed')) },
   handler: async (ctx, { jobId, outcome }) => {
@@ -150,6 +173,12 @@ export const _settle = internalMutation({
     if (!job) return null
     if (outcome === 'done') {
       if (job.deletionId) await confirmed(ctx, job.deletionId, 'contentAt')
+      // A display raised to a number has been raised past every lower one: what was still to
+      // be asked for it, to a number no higher, is asked for nothing that is not done
+      const raised = revokeOf(job)
+      if (raised)
+        for (const other of await pendingRevokes(ctx, job.userId, [raised.displayId]))
+          if (other.job._id !== jobId && other.epoch <= raised.epoch) await ctx.db.delete(other.job._id)
       const person = job.thenDeleteUser
       if (person) {
         // Everything the content service had of the person's is gone, so whatever else was still
