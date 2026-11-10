@@ -69,6 +69,8 @@ npm run check:notices   # only if you changed what a part depends on; `npm run n
 
 The end-to-end suite runs everything together in a real browser. `node e2e/stack.mjs` starts It in a folder of its own, `node e2e/ready.mjs` waits for it, `node e2e/run.mjs --quick` runs the suite in about five minutes, and `node e2e/stop.mjs` stops the stack. CI runs all of this on every pull request, and `.github/workflows/it.yml` is what it runs.
 
+On a Mac, `node e2e/safari.mjs` runs Safari itself against a running stack, which Playwright cannot drive. It pairs Safari with the stack, opens a page, presses the page's button through safaridriver, and checks that It holds the action. It needs `sudo safaridriver --enable` once and `safaridriver -p 4444` listening. With `--simulator <udid>` it runs in the Safari of a booted iOS Simulator, where a pass shows that the page renders and that its action reaches It, but not always that a real tap made it: WebDriver's click and taps there often do not reach the page, so the button may be pressed from a script instead, and the run then says so in a warning. `.github/workflows/safari.yml` runs both on one of GitHub's Macs every night and when asked, and it blocks no pull request.
+
 ## What makes a change easy to accept
 
 - It keeps to what It is. It connects agents that people already run, and never runs one for them. It reaches each agent app as a plugin to the unmodified program, with the app's own official commands, and wraps nobody's command. It needs nothing but the person's own machine: no account, no key from anyone, and no service that someone else runs.
