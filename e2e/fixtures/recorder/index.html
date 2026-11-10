@@ -9,7 +9,10 @@
     <button id="record" onclick="record()">Record</button>
     <button id="stop" onclick="stop()">Stop and send</button>
     <button id="photo" onclick="photo()">Photo</button>
+    <button id="live" onclick="live()">Live camera</button>
     <p id="out"></p>
+    <video id="view" autoplay muted playsinline width="320"></video>
+    <p>Pictures: <span id="frames">0</span></p>
     <script>
       // What a page that records a voice-over does: It records for it, and the take goes to the agent as a file
       const out = document.getElementById('out')
@@ -27,6 +30,22 @@
         try {
           const file = await It.photo()
           out.textContent = `photo ${file.type} ${file.size}`
+        } catch (e) {
+          out.textContent = `refused: ${e.message}`
+        }
+      }
+      // What a page that shows the camera live does: It sends it the camera's pictures, and it shows the stream it makes of them
+      let cam = null
+      let pictures = 0
+      async function live() {
+        // What the page said before is not taken for what the camera says now
+        out.textContent = ''
+        try {
+          cam = await It.camera()
+          document.getElementById('view').srcObject = cam.stream
+          cam.onframe = () => (document.getElementById('frames').textContent = String(++pictures))
+          cam.onchange = (state, why) => (out.textContent = `camera ${state}${why ? `: ${why}` : ''}`)
+          out.textContent = 'live'
         } catch (e) {
           out.textContent = `refused: ${e.message}`
         }
