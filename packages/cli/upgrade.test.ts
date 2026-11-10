@@ -61,7 +61,11 @@ describe('which version is newer', () => {
 describe.skipIf(process.platform === 'win32')('a newer release', () => {
   let folder: string
   let server: http.Server
+  /** The newest release's files, and every release's by its tag: the newest is one of those. */
   let files: Record<string, Buffer | string>
+  let tagged: Record<string, Record<string, Buffer | string>>
+  /** Called with each request once its file is found and before it is sent, for a test that changes the releases in the middle of an upgrade. */
+  let onAsk: (url: string) => void
   let asked: string[]
   /** The file that never ends: its first half is sent, and then a byte now and again for as long as anyone listens. */
   let trickled: string | null
@@ -80,6 +84,7 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     files.SHA256SUMS = Object.entries(files)
       .map(([file, holds]) => `${createHash('sha256').update(holds).digest('hex')}  ${file}\n`)
       .join('')
+    tagged[`v${version}`] = files
   }
   const here = () => path.join(folder, 'bin', 'it')
   const refused = async () => (await fetchNewer({ program: here() }).catch((err) => err)) as Problem
@@ -91,11 +96,15 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     mkdirSync(path.join(folder, 'bin'))
     writeFileSync(here(), says(VERSION), { mode: 0o755 })
     asked = []
+    tagged = {}
+    onAsk = () => {}
     trickled = null
     server = http.createServer((req, res) => {
       asked.push(req.url ?? '')
-      const file = files[(req.url ?? '').replace('/latest/download/', '')]
-      if (!(req.url ?? '').startsWith('/latest/download/') || file === undefined) return void res.writeHead(404).end()
+      const at = /^\/(?:latest\/download|download\/([^/]+))\/([^/]+)$/.exec(req.url ?? '')
+      const file = at ? (at[1] === undefined ? files : tagged[at[1]])?.[at[2]!] : undefined
+      onAsk(req.url ?? '')
+      if (file === undefined) return void res.writeHead(404).end()
       if ((req.url ?? '').endsWith(`/${trickled}`)) {
         const whole = Buffer.from(file)
         res.writeHead(200, { 'content-length': String(whole.length + 1_000_000) })
@@ -560,6 +569,33 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     })
     expect((await refused()).code).toBe('offline')
     untouched()
+  })
+
+  test.each([
+    ['after latest.json says which version is newest', '/latest/download/latest.json'],
+    ['between the checksums and the program', '/download/v9.9.9/SHA256SUMS'],
+  ])('installs exactly the version that was announced, with every file from its release, when a newer release is published %s', async (_when, after) => {
+    release('9.9.9')
+    // The newer release is published once the upgrade has asked for this, and is the latest from then on
+    onAsk = (url) => {
+      if (url === after) {
+        onAsk = () => {}
+        release('9.9.10')
+      }
+    }
+    expect(await fetchNewer({ program: here() })).toMatchObject({ to: '9.9.9' })
+    expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
+    expect(readFileSync(path.join(folder, 'LICENSE.md'), 'utf8')).toBe('the terms of 9.9.9\n')
+    expect(readFileSync(path.join(folder, 'THIRD_PARTY_NOTICES.md'), 'utf8')).toBe('the notices of 9.9.9\n')
+    expect(asked).toEqual([
+      '/latest/download/latest.json',
+      '/download/v9.9.9/SHA256SUMS',
+      `/download/v9.9.9/${name}`,
+      '/download/v9.9.9/LICENSE.md',
+      '/download/v9.9.9/THIRD_PARTY_NOTICES.md',
+    ])
+    // The newer release really was the latest by then, and is what the next look finds
+    expect(await latest()).toBe('9.9.10')
   })
 
   test('compares the normalized version of the program with the advertised release', async () => {
