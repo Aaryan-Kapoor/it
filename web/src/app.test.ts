@@ -840,6 +840,36 @@ describe('a display locked to a page', () => {
     await vi.waitFor(() => expect(names()).toEqual(expect.arrayContaining(['displays:signOut', '/session/end'])), 10_000)
   }, 20_000)
 
+  test('opened at its grid while what it is is still on its way, a locked screen never draws the grid or a card’s picture, and comes up on its page', async () => {
+    cookie = CODES.screencode0000000002!
+    watched['artifacts:get'] = PAGE
+    watched['artifacts:list'] = [{ ...PAGE, pinned: false }]
+    // The display's own record has not come yet
+    watched['displays:mine'] = undefined
+    let grid = 0
+    const seen = new MutationObserver(() => {
+      if (document.querySelector('.grid-view, .card')) grid++
+    })
+    seen.observe(document.body, { childList: true, subtree: true })
+    await start('/')
+    expect(document.querySelector('.grid-view')).toBeNull()
+    expect(location.pathname).toBe('/')
+    // It comes, and says the display is locked
+    watched['displays:mine'] = locked
+    const react = await import('react')
+    const { App } = await import('./app')
+    await act(async () => {
+      root.render(react.createElement(App))
+      await tick()
+    })
+    await vi.waitFor(() => expect(location.pathname).toBe('/p/plan'))
+    seen.disconnect()
+    expect(grid).toBe(0)
+    // One showing, the page's own, and no picture of a card
+    expect(names().filter((what) => what === 'mounts:create')).toHaveLength(1)
+    expect(host.querySelector('header .lock-mark')).not.toBeNull()
+  })
+
   test('a page on a display that is not locked offers to lock the display to it, where the backend names the lock', async () => {
     cookie = CODES.screencode0000000002!
     watched['artifacts:get'] = PAGE
