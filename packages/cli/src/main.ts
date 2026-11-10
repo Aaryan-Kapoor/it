@@ -142,6 +142,7 @@ import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from
 import { addonsSaid, afterUpgrade, restartLine } from './upgraded'
 import * as usage from './usage'
 import { type Listed, printed, wait } from './wait'
+import { listActions, watchActions } from './watch-actions'
 
 // Everything is written through `written`, which follows each write until it has left the
 // process, and nothing here ends the process before all of it has: see `end` and `left`.
@@ -472,7 +473,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   open: [1, 'open <id> [--on "<display>" | --on-id <display-id>]'],
   displays: [0, 'displays'],
   wait: [0, 'wait [--id <id>] [--follow] [--timeout <seconds>]'],
-  actions: [0, 'actions [--id <id>]'],
+  actions: [0, 'actions [--id <id> [--after <cursor>] [--follow]]'],
   action: [1, 'action <action-id> [--save <file> [--number <n>]]'],
   ack: [1, 'ack <action-id> [--failed]'],
 }
@@ -2654,10 +2655,15 @@ Displays
 What the person did
   it wait [--id <id>] [--follow] [--timeout <seconds>]
   it actions [--id <id>] [--all]
+  it actions --id <id> [--after <cursor>] [--follow]
                                  List the actions still waiting. An agent is listed those on
                                  its own conversation's ${NOUN.many} and on ${NOUN.many} that no
                                  conversation has. --all lists every one, and so does a command
-                                 that no conversation ran. --id lists those on one ${NOUN.one}.
+                                 that no conversation ran. --id lists the newest of those on
+                                 one ${NOUN.one}, and --after the ones that came after the action
+                                 with that cursor, oldest first (0 for the first ones).
+                                 --follow keeps printing each one that comes, a line each, and
+                                 never claims or answers one: it is for a program that watches.
   it action <action-id> [--save <file> [--number <n>]]
                                  Print one action in full, by the id in its message. --save
                                  writes a file it carried (a photo, a drawing, a document) to a
@@ -3251,8 +3257,20 @@ async function main(argv: string[]): Promise<void> {
       return wait(a, counted)
     case 'actions': {
       const slug = text(a, 'id')
+      const after = text(a, 'after')
+      // Only watched: nothing is claimed or answered by it, so whatever else delivers the person's actions goes on as before
+      if (a.flags.follow) {
+        if (!slug || a.flags.all) throw new Problem('A read-only action stream needs exactly one --id.', 'invalid', `it actions --id <id> --follow`)
+        return watchActions(slug, after, say)
+      }
+      if (after !== undefined && !slug)
+        throw new Problem(`--after pages through what waits on one ${NOUN.one}: name it with --id.`, 'invalid', `it actions --id <id> --after <cursor>`)
       if (slug && a.flags.all) throw new Problem(`--id lists what waits on one ${NOUN.one}, and --all what waits on every one: give one of them.`, 'invalid')
-      if (slug) return out((await call<Listed[]>('query', api.delivery.waiting, { slug })).map(printed))
+      if (slug) {
+        const { list, notes } = await listActions(slug, after)
+        for (const line of notes) say(JSON.stringify({ note: line }))
+        return out(list)
+      }
       // An agent is listed what waits on its own conversation's pages, under every id the
       // conversation has had, and on pages no conversation has: what is done on another
       // conversation's page is that conversation's to answer. The backend reads each

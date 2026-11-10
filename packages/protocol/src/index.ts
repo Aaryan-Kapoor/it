@@ -42,7 +42,53 @@ export const TAKES = {
    * one has no such function and the site would fill its log with refusals.
    */
   displayReports: 'displays.report',
+  /**
+   * A page's waiting actions read a bounded page at a time, the newest by default and those
+   * after a place with `after`, each with its place: what `it actions --id` lists and `--follow`
+   * watches. An earlier backend has only `delivery.waiting`, which gives the oldest 50.
+   */
+  waitingPage: 'delivery.waitingPage',
 } as const
+
+/**
+ * Where an action stands among those waiting on its page, in the one order `delivery.waitingPage`
+ * reads them in, and its `cursor` as text. An action made since It numbered them has its page's
+ * next number (`seq`), given under the page's own record, so that one committed later always has
+ * a higher number than any committed before it. One kept before then has none, and stands before
+ * every numbered one, by when its record was made and then by its id, which no other shares.
+ * The cursor "0" stands before every action.
+ */
+export type ActionPlace = { seq: number } | { at: number; id: string }
+/**
+ * A cursor names the page it was given on, by the id of the page's record, and the place on it:
+ * `<page>.<place>`, where the place is a number, `o<when>:<id>` for an action kept from before
+ * actions were numbered, or `0` for the start. A page deleted and made again under the same id is
+ * another record, numbered afresh, so a cursor of the old one is refused there rather than taken
+ * for a place on the new one. "0" by itself is the start of whatever page has that id now.
+ */
+export const placeCursor = (page: string, p: ActionPlace | null): string => `${page}.${p === null ? '0' : 'seq' in p ? String(p.seq) : `o${p.at}:${p.id}`}`
+/** The page and the place a cursor names, a place of null being the start; nothing for text that is no cursor. */
+export function actionCursor(cursor: string): { page?: string; place: ActionPlace | null } | undefined {
+  if (cursor === '0') return { place: null }
+  // A record's id is letters and digits; the backend's stand-in for tests puts a semicolon in its own
+  const m = /^([A-Za-z0-9_;-]{1,64})\.(.*)$/.exec(cursor)
+  if (!m) return undefined
+  const rest = m[2]!
+  if (rest === '0') return { page: m[1]!, place: null }
+  if (/^[1-9]\d{0,15}$/.test(rest)) return { page: m[1]!, place: { seq: Number(rest) } }
+  const old = /^o(\d{1,16}(?:\.\d{1,20})?):([A-Za-z0-9_;-]{1,64})$/.exec(rest)
+  return old ? { page: m[1]!, place: { at: Number(old[1]), id: old[2]! } } : undefined
+}
+/** Which of two places comes first: below zero where `a` does, above where `b` does, zero where they are one. */
+export function comparePlaces(a: ActionPlace | null, b: ActionPlace | null): number {
+  const rank = (p: ActionPlace | null) => (p === null ? 0 : 'seq' in p ? 2 : 1)
+  if (rank(a) !== rank(b)) return rank(a) - rank(b)
+  if (a === null || b === null) return 0
+  if ('seq' in a && 'seq' in b) return a.seq - b.seq
+  const x = a as { at: number; id: string }
+  const y = b as { at: number; id: string }
+  return x.at !== y.at ? x.at - y.at : x.id < y.id ? -1 : x.id > y.id ? 1 : 0
+}
 
 /** The word the interface uses for a thing shown on a display. It is said in one place so that it can be changed in one. */
 export const NOUN = { one: 'page', many: 'pages', One: 'Page', Many: 'Pages' } as const
