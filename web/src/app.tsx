@@ -825,6 +825,11 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
       </main>
     )
 
+  // Nothing that leads anywhere is drawn before this display is known, since it may be locked to
+  // a page: the grid and its pictures would otherwise come up on a locked screen for a moment.
+  // Nor is it drawn at an address a locked display is about to be taken from to its page
+  if (display === undefined) return <Splash />
+  if (lockedTo !== undefined && path !== `/p/${encodeURIComponent(lockedTo)}` && path !== '/settings') return <Splash />
   const slug = safeDecode(/^\/p\/([^/]+)$/.exec(path)?.[1])
   const view = (
     <Guard key={path} shown={slug}>
