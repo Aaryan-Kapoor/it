@@ -923,6 +923,8 @@ describe('a display locked to a page', () => {
     expect((await h.agent.mutation(api.displays.show, { slug: 'review', everywhere: true })).displayIds).toEqual([h.laptop.id])
     // Its own page is shown there when it is asked for by name, and still it is not chosen when none is named
     expect((await h.agent.mutation(api.displays.show, { slug: 'workout', displayId: h.tv.id })).displayIds).toEqual([h.tv.id])
+    // A while after both were paired, the TV is used
+    vi.advanceTimersByTime(10_000)
     await h.tv.as.mutation(api.displays.report, {
       key: h.tv.key,
       epoch: (await h.row(h.tv.id)).epoch,
@@ -937,9 +939,10 @@ describe('a display locked to a page', () => {
     // Used a moment ago and open, it would be the display in use, were it not locked
     expect((await h.seen(h.tv.id)).usedAt).toBe(Date.now())
     for (const slug of ['workout', 'review']) expect((await h.agent.mutation(api.displays.show, { slug })).displayIds).toEqual([h.laptop.id])
-    // A notification is no page: one named for it reaches it, and one named for none does not
+    // A notification is no page, and a lock is nothing to it: one named for it reaches it, and
+    // one named for none goes to it too, since it is the display in use
     expect((await h.agent.mutation(api.notifications.send, { text: 'hi', displayId: h.tv.id })).displayIds).toEqual([h.tv.id])
-    expect((await h.agent.mutation(api.notifications.send, { text: 'hi' })).displayIds).toEqual([h.laptop.id])
+    expect(await h.agent.mutation(api.notifications.send, { text: 'hi' })).toMatchObject({ displayIds: [h.tv.id], chosen: 'open' })
     // create --open and update --open come through the same showing, as the tour does
     expect((await h.row(h.tv.id)).showing?.artifactId).toBe(h.workout)
   })
@@ -1001,6 +1004,21 @@ describe('a display locked to a page', () => {
         (await h.t.query(internal.push._targets, { notificationId: sent.id, now: Date.now() }))?.targets.map((x: { displayId: string }) => x.displayId),
       ).toContain(h.tv.id)
     expect(await h.t.query(internal.push._still, { notificationId: byId.id, displayId: h.tv.id, endpoint: PUSH })).toBe(true)
+    // Sent with no display named, it goes to the display in use, locked or not; a page asked for with none named never does
+    await h.tv.as.mutation(api.displays.report, {
+      key: h.tv.key,
+      epoch: (await h.row(h.tv.id)).epoch,
+      tab: 'e'.repeat(32),
+      sequence: 1,
+      phase: 'none',
+      visible: true,
+      used: true,
+      observedAt: Date.now(),
+      expectedSession: h.tv.session,
+    })
+    expect(await h.agent.mutation(api.notifications.send, { text: 'to the display in use' })).toMatchObject({ displayIds: [h.tv.id], chosen: 'open' })
+    expect((await h.agent.mutation(api.displays.show, { slug: 'review' })).displayIds).toEqual([h.laptop.id])
+    expect((await h.agent.mutation(api.displays.show, { slug: 'workout' })).displayIds).toEqual([h.laptop.id])
     // None of it moves the display off its page, nor ends its lock
     const after = await h.row(h.tv.id)
     expect(after.showing).toEqual(shown)
