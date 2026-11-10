@@ -2305,10 +2305,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * the page for its last few conversations: the most such an It can do.
    */
   const heldBackSaid = async (clicks: Offered[], reason: string | null): Promise<void> => {
-    if (holdBackTaken !== false) {
+    if (holdBackTaken === true) {
       await call('mutation', api.delivery.holdBack, { ids: clicks.map((c) => c.id), why: reason })
       return
     }
+    if (holdBackTaken === undefined) throw new Problem('It has not said yet whether it keeps why a click is held back.', 'unavailable')
     if (reason === null) return
     const conversations = new Map(clicks.map((c) => [keyOf(c.session!.harness, c.session!.id), c.session!]))
     for (const session of conversations.values())
@@ -2365,6 +2366,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (!telling.get(click.id)?.asking) telling.delete(click.id)
       return
     }
+    // Not until It has said at its door which way it is told (`holdBackTaken`): told then
+    if (holdBackTaken === undefined) return
     const t = telling.get(click.id)
     if (t?.reason === reason && (t.asking || t.said || performance.now() < t.next)) return
     const until = click.at + (RETENTION.pendingActionDays + 1) * 86_400_000
@@ -3799,7 +3802,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (door === undefined || closing || over) return
     // Taken as the answer came, after It said its time, so that what is worked out from it is never later than It's own
     if (door.now !== undefined) itAhead = door.now - Date.now()
+    const knew = holdBackTaken !== undefined
     holdBackTaken = door.takes.includes(TAKES.heldBack)
+    // What was held back meanwhile is told now, the way It takes
+    if (!knew) soon(10)
     const takes = door.takes.includes(TAKES.inboxHeld)
     if (takes === heldTaken) return
     heldTaken = takes

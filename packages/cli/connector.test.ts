@@ -1266,6 +1266,17 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(failures()).toHaveLength(2)
   })
 
+  test('while It has not said at its door whether it keeps why a click is held back, nothing is told either way, and the click is still not reopened', async () => {
+    // The door cannot be asked
+    stand.takes = undefined
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered(blocked(1))
+    await new Promise((r) => setTimeout(r, 3000))
+    expect(holds()).toEqual([])
+    expect(failures()).toEqual([])
+    expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+  })
+
   test('a click that goes off the page of the inbox and comes round again keeps its wait before It is asked again', async () => {
     const asked: number[] = []
     stand.answer = (name) => {
