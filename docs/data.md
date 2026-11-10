@@ -93,6 +93,8 @@ Everything that was done after the copy was made is gone once it is back, becaus
 
 Some of what comes back is not quite as it was. A page that was deleted since the upgrade, and earlier versions of a page that were let go since, come back in the list, but their files were removed from `content/`, so they do not open. That includes a page on which ten or more versions were published since, whose version from before the upgrade has been let go. A browser or machine whose pairing you ended since the upgrade is paired again once the copy is back, so end it again. A browser paired since the upgrade, and a machine that joined since, have to be paired or joined again.
 
+A display that was signed out since the upgrade does not open pages once the copy is back. The part of It that serves pages remembers the sign-out for about a day, in `content-data/`, and refuses the display's older sign-out number until then. That record is part of what keeps a page from being opened by a display that was signed out, so leave it in place. To use the display again sooner, forget it on the site's Displays page and pair that browser again, which makes it a new display that has never been signed out.
+
 The newer data is not thrown away by these steps. It is moved into a folder of its own, so that you can go forward to it again with the newer It.
 
 ### Putting the copy back
