@@ -950,11 +950,12 @@ describe('The names the door answers to', () => {
       try {
         for (const [link, a] of Object.entries(os.networkInterfaces()).flatMap(([name, list]) => (list ?? []).map((one) => [name, one] as const))) {
           if (a.internal) continue
-          // An address of one link is reached on the link it is on, by its name, and on Windows by its number
-          const to =
-            a.family === 'IPv6' && /^fe[89ab]/i.test(a.address)
-              ? `${a.address.split('%')[0]}%${process.platform === 'win32' ? (a as { scopeid?: number }).scopeid : link}`
-              : a.address
+          const oneLink = a.family === 'IPv6' && /^fe[89ab]/i.test(a.address)
+          // A machine reaches its own address of one link reliably only on Linux: macOS sends it out on the link, which
+          // for a tunnel such as utun0 never comes back, and Windows does much the same. Elsewhere they are left to listenAt's own test
+          if (oneLink && process.platform !== 'linux') continue
+          // An address of one link is reached on the link it is on
+          const to = oneLink ? `${a.address.split('%')[0]}%${link}` : a.address
           const host = a.family === 'IPv6' ? `[${a.address.split('%')[0]}]` : a.address
           for (const port of [wide.base, contentPort(wide.base)]) {
             const got = await ask(port, { to, host: `${host}:${port}` }).then(
