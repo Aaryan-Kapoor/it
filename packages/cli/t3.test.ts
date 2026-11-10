@@ -19,6 +19,7 @@ import {
   t3Held,
   t3Refusal,
   t3Running,
+  t3RunsNow,
   t3Search,
   t3Server,
   t3ThreadOf,
@@ -503,6 +504,65 @@ describe.skipIf(process.platform === 'win32')('the thread that runs a conversati
     } finally {
       found.close()
     }
+  })
+
+  test('asked by a conversation that runs a command now, is found among the threads that are running, however many quiet threads there are', async () => {
+    const quiet = Array.from({ length: 1200 }, (_, i) => ({
+      id: `quiet-${i}`,
+      projectId: 'site',
+      providerInstanceId: 'claudeAgent',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }))
+    const lively = Array.from({ length: 14 }, (_, i) => ({ id: `lively-${i}`, projectId: 'site', providerInstanceId: 'codex', updatedAt: recently() }))
+    const running = { id: 'running', projectId: 'site', providerInstanceId: 'claudeAgent', activeRunId: 'run-1', updatedAt: '2026-01-01T00:00:00.000Z' }
+    const snapshots = Object.fromEntries(
+      [...quiet, ...lively].map((t) => [
+        t.id,
+        switched(t.id, [{ ...codex, provider: `provider-thread:${t.id}`, nativeId: `other-${t.id}` }], `provider-thread:${t.id}`),
+      ]),
+    )
+    snapshots.running = switched('running', [claude], claude.provider)
+    const found = await server([...quiet, ...lively, running], snapshots)
+    try {
+      expect(await t3RunsNow(found.t3, { harness: 'claude-code', ids: ['claude-conversation'], cwd: '/work/site' })).toEqual({
+        status: 'found',
+        thread: 'running',
+      })
+      // The thread in the middle of a run is read first, being the likeliest, and no quiet one at all
+      expect(found.read[0]).toBe('running')
+      expect(found.read.every((id) => !id.startsWith('quiet-'))).toBe(true)
+      // One that no running thread runs is in none, once every running thread was read, and still no quiet one is
+      found.read.length = 0
+      expect(await t3RunsNow(found.t3, { harness: 'claude-code', ids: ['a-terminal-conversation'], cwd: '/work/site' })).toEqual({ status: 'none' })
+      expect(new Set(found.read)).toEqual(new Set(['running', ...lively.map((t) => t.id)]))
+    } finally {
+      found.close()
+    }
+  })
+
+  test('says it does not know where a running thread could not be read, where more threads are running than it reads, or where T3 Code cannot be asked', async () => {
+    const lively = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ id: `lively-${i}`, projectId: 'site', providerInstanceId: 'codex', updatedAt: recently() }))
+    const of = { harness: 'claude-code', ids: ['claude-conversation'], cwd: '/work/site' }
+    const other = (id: string) => switched(id, [{ ...codex, provider: `provider-thread:${id}`, nativeId: `other-${id}` }], `provider-thread:${id}`)
+    // One of three could not be read: it may be the one
+    const unread = await server(lively(3), { 'lively-0': other('lively-0'), 'lively-2': other('lively-2') })
+    try {
+      expect(await t3RunsNow(unread.t3, of)).toEqual({ status: 'unknown' })
+    } finally {
+      unread.close()
+    }
+    // More running than are read, none of those read being the one
+    const many = lively(30)
+    const crowded = await server(many, Object.fromEntries(many.map((t) => [t.id, other(t.id)])))
+    try {
+      expect(await t3RunsNow(crowded.t3, of)).toEqual({ status: 'unknown' })
+      expect(crowded.read).toHaveLength(24)
+    } finally {
+      crowded.close()
+    }
+    // A server that is not there
+    expect(await t3RunsNow({ origin: 'http://127.0.0.1:1', home: scratch, command: [unread.program] }, of)).toEqual({ status: 'unknown' })
   })
 })
 
