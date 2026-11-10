@@ -375,14 +375,22 @@ describe('what each tab of a display says of itself', () => {
     d = await row(laptop.id)
     expect(d.usedAt).toBe(timely.observedAt)
     expect(d.reports!.map((r) => r.tab)).toEqual([TAB])
-    // A time from a clock that runs ahead is taken as now, never later, and one that says no time is never a use
+    // A time from a clock that runs ahead is taken as now, never later, and is no use, used or not
     vi.advanceTimersByTime(60_000)
-    await laptop.as.mutation(api.displays.report, said(laptop, TAB, 3, true, { observedAt: Date.now() + 3_600_000 }))
-    expect((await row(laptop.id)).reports!.find((r) => r.tab === TAB)!.at).toBe(Date.now())
-    vi.advanceTimersByTime(60_000)
-    await laptop.as.mutation(api.displays.report, said(laptop, TAB, 4, true, { used: true, observedAt: undefined }))
+    await laptop.as.mutation(api.displays.report, said(laptop, TAB, 3, true, { used: true, observedAt: Date.now() + 3_600_000 }))
     d = await row(laptop.id)
+    expect(d.reports!.find((r) => r.tab === TAB)!.at).toBe(Date.now())
     expect(d.usedAt).toBe(timely.observedAt)
+    // Ahead by no more than the clocks' leeway, it is a use, as of now
+    vi.advanceTimersByTime(60_000)
+    await laptop.as.mutation(api.displays.report, said(laptop, TAB, 4, true, { used: true, observedAt: Date.now() + REPORT_SKEW_MS }))
+    expect((await row(laptop.id)).usedAt).toBe(Date.now())
+    // One that says no time is never a use
+    vi.advanceTimersByTime(60_000)
+    const before = (await row(laptop.id)).usedAt
+    await laptop.as.mutation(api.displays.report, said(laptop, TAB, 5, true, { used: true, observedAt: undefined }))
+    d = await row(laptop.id)
+    expect(d.usedAt).toBe(before)
     expect(d.reports!.find((r) => r.tab === TAB)!.at).toBe(Date.now())
   })
 

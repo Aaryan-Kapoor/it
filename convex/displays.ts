@@ -324,7 +324,8 @@ export const REPORT_SKEW_MS = 10_000
  * it, and is kept as of then, never later than now: a report that was held back, as the
  * connection holds a call through an outage and sends it again unchanged, does not say what was
  * so then as what is so now. One that is already too old to stand is not taken, and a use is
- * taken only from one that arrives within `REPORT_SKEW_MS` of when it was made. A report that
+ * taken only from one that arrives within `REPORT_SKEW_MS` of when it was made, and that was not
+ * made more than that ahead of now. A report that
  * says no time, as from a site of before reports said it, is kept as of now and is never taken
  * for a use.
  */
@@ -355,7 +356,11 @@ export const report = mutation({
     // As of when the tab made it, which no clock can make later than now
     const at = Math.min(now, a.observedAt ?? now)
     if (now - at >= REPORT_MS) return { accepted: false, now }
-    const timely = a.observedAt !== undefined && now - a.observedAt <= REPORT_SKEW_MS
+    // Within the leeway of the clocks either way: one made further ahead than that is from a
+    // clock that runs fast, and is kept as of now, but is no use. A report is the browser's own
+    // word, so this keeps a clock that is wrong from saying a use is newer than it was; a paired
+    // browser that meant to could still say it was used when it was not
+    const timely = a.observedAt !== undefined && Math.abs(now - a.observedAt) <= REPORT_SKEW_MS
     const fresh = (d.reports ?? []).filter((r) => r.epoch === d.epoch && now - r.at < REPORT_MS && r.at <= now)
     const before = fresh.find((r) => r.tab === a.tab)
     if (before && a.sequence <= before.sequence) return { accepted: false, now }
