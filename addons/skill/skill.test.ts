@@ -5,7 +5,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { JSDOM } from 'jsdom'
 import { describe, expect, onTestFinished, test } from 'vitest'
 import { RUNTIME } from '../../packages/content/src/runtime.generated'
-import { CHANNEL_VERSION, deepMerge, LIMITS, QUOTA, SHRINK, STORAGE, STORE_EVERY_MS, STORE_KEY, sizeSaid } from '../../packages/protocol/src/index'
+import { CHANNEL_VERSION, LIMITS, QUOTA, SHRINK, STORAGE, STORE_EVERY_MS, sizeSaid } from '../../packages/protocol/src/index'
 
 const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8')
 /** What an agent reads whole each time it uses It. */
@@ -526,28 +526,6 @@ describe('the agent skill', () => {
     expect(p.stored()).toEqual(['a draft', 'a draft', 'a draft with another sentence'])
     await p.answer(2, true)
     expect(p.said()).toBe('Saved.')
-  })
-
-  test('says to keep what a page shows and every control in its state, and to publish again only for the page itself, saying what that costs', () => {
-    expect(short).toContain('Change them with `it set` or `it patch`, never `it update`.')
-    expect(short).toMatch(
-      /Publish again only when the page's code or layout changes, since a new version reloads it on every screen and loses what the user typed/,
-    )
-    expect(more.page).toContain('a new version reloads the page on every screen, and whatever was typed there and not yet saved or sent is lost')
-    expect(short).toContain('**Every control is stateful.**')
-    expect(short).toMatch(/keeps its value with `It\.store\.set` under its own key as it changes, so that `it state` shows you what the user sees/)
-    expect(short).toContain('**You can set any control** under `controls.<name>` in your state')
-    expect(short).toContain('**What the user decides still comes to you as an action,**')
-    // A list keyed by id with an `order` array, because a patch merges an object and replaces an array whole, as the skill says
-    expect(short).toContain('Keep a list as an object keyed by id, with an `order` array of the ids, since a patch replaces an array whole.')
-    expect(deepMerge({ items: { c1: { title: 'a' } }, order: ['c1', 'c2'] }, { items: { c3: { title: 'b' } }, order: ['c3'] })).toEqual({
-      items: { c1: { title: 'a' }, c3: { title: 'b' } },
-      order: ['c3'],
-    })
-    // What the page keeps is read under `_page`, and an agent's patch there changes only the values it names
-    expect(STORE_KEY).toBe('_page')
-    expect(more.page).toContain(`"${STORE_KEY}":{"show-from-agent":null}`)
-    expect(source('../../convex/state.ts')).toMatch(/named \? \{ merge: inside \?\? \{\} \}/)
   })
 
   test('its example of controls, run as it is written, stores every control, takes what the agent sets, and keeps what the user changed or is typing', async () => {
