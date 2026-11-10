@@ -24,6 +24,7 @@ let waitingWhenAsked = true
 let askReply: Promise<{ waiting: boolean }> | null = null
 let doneReply: Promise<null> | null = null
 vi.mock('convex/react', () => ({
+  useAction: () => async () => ({ revoked: true }),
   useConvex: () => ({}),
   useMutation: (fn: unknown) => async () => {
     asked.push(getFunctionName(fn as never))

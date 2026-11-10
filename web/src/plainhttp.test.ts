@@ -41,6 +41,7 @@ vi.mock('convex/react', () => ({
   useConvex: () => client,
   useConvexAuth: () => ({ isLoading: false, isAuthenticated: true }),
   useMutation: (fn: unknown) => (args: unknown) => client.mutation(fn, args),
+  useAction: (fn: unknown) => (args: unknown) => client.action(fn, args),
   // A query answers by its arguments where the stand-in gives it a function, and with the same thing however it is asked otherwise
   useQuery: (fn: unknown, args?: unknown) => {
     if (args === 'skip') return undefined

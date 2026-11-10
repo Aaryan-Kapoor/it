@@ -30,6 +30,7 @@ const client = { mutation: vi.fn(ask), query: vi.fn(ask), action: vi.fn(ask) }
 vi.mock('convex/react', () => ({
   useConvex: () => client,
   useMutation: (fn: unknown) => (args: unknown) => client.mutation(fn, args),
+  useAction: (fn: unknown) => (args: unknown) => client.action(fn, args),
   useQuery: (fn: unknown) => watched[getFunctionName(fn as never)],
 }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

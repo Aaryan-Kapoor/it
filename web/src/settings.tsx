@@ -2,7 +2,8 @@
 // and erasing everything.
 
 import { TAKES } from '@it/protocol'
-import { useConvex, useMutation, useQuery } from 'convex/react'
+import { useAction, useConvex, useMutation, useQuery } from 'convex/react'
+import { ConvexError } from 'convex/values'
 import qrcode from 'qrcode-generator'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { version } from '../package.json'
@@ -14,6 +15,8 @@ import {
   doneLeaving,
   forgetAll,
   type Id,
+  NOT_YET_REVOKED,
+  navigate,
   noteErased,
   refusal,
   renaming as refusedAs,
@@ -40,6 +43,8 @@ interface DisplayRow {
   paired?: boolean
   /** False for a display the person closed to agents. An earlier backend leaves it out. */
   agents?: boolean
+  /** The page the display is locked to, or null. An earlier backend leaves it out. */
+  lockedTo?: { id: string; slug: string; title: string } | null
 }
 
 /**
@@ -54,6 +59,7 @@ function DisplayItem({
   now,
   act,
   along = '',
+  pages,
 }: {
   d: DisplayRow
   here: boolean
@@ -61,11 +67,16 @@ function DisplayItem({
   now: number
   act: (p: Promise<unknown>) => Promise<void>
   along?: string
+  /** The pages a display can be locked to, where the owner is offered that. */
+  pages?: { id: string; title: string; version?: number | null }[]
 }) {
   const convex = useConvex()
   const rename = useMutation(api.displays.rename)
   const forget = useMutation(api.displays.forget)
   const allowAgents = useMutation(api.displays.allowAgents)
+  const lock = useAction(api.displays.lock)
+  const unlock = useMutation(api.displays.unlock)
+  const lockable = useBackendTakes(TAKES.displayLock)
   // Offered only where the backend has the switch: one whose functions are older has none
   const switchable = useBackendTakes(TAKES.agentsSwitch)
   const [name, setName] = useState<string | null>(null)
@@ -116,6 +127,8 @@ function DisplayItem({
           </span>
           <span className="row-sub">
             {here ? 'Open now' : d.paired === false ? 'Shows nothing until its browser is paired again' : `Last open ${ago(d.lastSeenAt, now)}`}
+            {/* Said beside when it was open, and not as another mark beside its name, where there is seldom room for it */}
+            {lockable && d.lockedTo && <span title="It keeps to this page, and agents show no other page here."> · Locked to “{d.lockedTo.title}”</span>}
           </span>
         </span>
       )}
@@ -152,6 +165,32 @@ function DisplayItem({
             />
           </label>
         )}
+        {lockable && owner && pages && d.paired !== false && d.lockedTo !== undefined && (
+          <label className="switch lock-pick" title="Lock this display to a page: it keeps to that page, and agents show no other page there">
+            <span>Locked to</span>
+            <select
+              value={d.lockedTo?.id ?? ''}
+              onChange={(e) =>
+                act(
+                  e.target.value
+                    ? lock({ displayId: d.id as Id<'displays'>, artifactId: e.target.value as Id<'artifacts'> }).then((r) =>
+                        r.revoked ? undefined : Promise.reject(new ConvexError({ code: 'unavailable', message: NOT_YET_REVOKED })),
+                      )
+                    : unlock({ displayId: d.id as Id<'displays'> }),
+                )
+              }
+            >
+              <option value="">No page</option>
+              {pages
+                .filter((p) => p.version !== null || p.id === d.lockedTo?.id)
+                .map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.title}
+                  </option>
+                ))}
+            </select>
+          </label>
+        )}
         {(owner || here) && name === null && (
           <button ref={renaming} type="button" className="link" onClick={() => setName(d.named ? d.name : '')}>
             Rename
@@ -182,6 +221,30 @@ function DisplayItem({
   )
 }
 
+/** What the settings of a display locked to a page say of it: the page, the way back to it, and unlocking it. */
+function LockedHere({
+  display,
+  lockedTo,
+  act,
+}: {
+  display: DisplayRow
+  lockedTo: { slug: string; title: string }
+  act: (p: Promise<unknown>) => Promise<void>
+}) {
+  const unlock = useMutation(api.displays.unlock)
+  return (
+    <p className="notice" role="status">
+      <span>This display is locked to “{lockedTo.title}”: it keeps to that page, and agents show no other page here.</span>
+      <button type="button" onClick={() => navigate(`/p/${encodeURIComponent(lockedTo.slug)}`)}>
+        Back to the page
+      </button>
+      <button type="button" onClick={() => void act(unlock({ displayId: display.id as Id<'displays'> }))}>
+        Unlock
+      </button>
+    </p>
+  )
+}
+
 /** Says what went wrong with the last thing asked, until something asked after it works. */
 function useAct(): [string, (p: Promise<unknown>) => Promise<void>] {
   const [error, setError] = useState('')
@@ -201,6 +264,8 @@ export function Displays({ thisDisplay }: { thisDisplay?: string }) {
   const me = paired?.find((s) => s.mine)?.id
   // And so does forgetting one whose browser signed itself out: what that browser let in stayed then, and goes now
   const left = useQuery(api.sessions.leftBehind, {}) as { display: string; along: Paired['along'] }[] | undefined
+  // The pages a display can be locked to
+  const pages = useQuery(api.artifacts.list, {}) as { id: string; title: string; version?: number | null }[] | undefined
   const alongWith = (display: string) =>
     goesAlong(paired?.find((s) => s.displays.some((d) => d.id === display))?.along ?? left?.find((l) => l.display === display)?.along, me)
   const now = useNow()
@@ -224,7 +289,7 @@ export function Displays({ thisDisplay }: { thisDisplay?: string }) {
       )}
       <ul className="rows panel">
         {displays.map((d) => (
-          <DisplayItem key={d.id} d={d} here={d.id === thisDisplay} owner now={now} act={act} along={alongWith(d.id)} />
+          <DisplayItem key={d.id} d={d} here={d.id === thisDisplay} owner now={now} act={act} along={alongWith(d.id)} pages={pages} />
         ))}
       </ul>
       <Network />
@@ -522,6 +587,8 @@ export function Settings({ user, owner, display, onSignOut }: { user: string; ow
       <header className="list-head">
         <h2>Settings</h2>
       </header>
+      {/* A display locked to a page leads back to it from here, and to nowhere else, and is unlocked here */}
+      {display?.lockedTo && <LockedHere display={display} lockedTo={display.lockedTo} act={act} />}
       {rowError && (
         <p className="error" role="alert">
           {rowError}

@@ -178,6 +178,13 @@ export default defineSchema({
     usedAt: v.optional(v.number()),
     /** Set where the person said that agents may not show pages or send notifications on this display. */
     agentsOff: v.optional(v.boolean()),
+    /**
+     * The page this display is locked to, and when: it keeps to that page, and no agent brings
+     * another up here. Every display of one browser's pairing has the same lock.
+     */
+    lockedTo: v.optional(v.object({ artifactId: v.id('artifacts'), at: v.number() })),
+    /** When the page this display was locked to was deleted, which ended the lock, until the display has said so to whoever is at it. */
+    lockEnded: v.optional(v.number()),
     /** The session of the browser that registered it: forgetting the display ends that session, and that session ending signs the display out. */
     sessionId: v.id('sessions'),
     /** Earlier pairings of this display, whose invitations are ended when it is forgotten. */
@@ -661,8 +668,11 @@ export default defineSchema({
     thenDeleteUser: v.optional(v.id('users')),
     /** The receipt confirmed by the first complete deletion of this page's files. */
     deletionId: v.optional(v.id('deletions')),
+    /** For a revocation: the display it is for, by which the ones still to be confirmed for a display are found. An earlier It left this out. */
+    displayId: v.optional(v.string()),
   })
     .index('by_next', ['nextAt'])
+    .index('by_display', ['displayId'])
     .index('by_user', ['userId'])
     .index('by_user_to_delete', ['thenDeleteUser']),
 

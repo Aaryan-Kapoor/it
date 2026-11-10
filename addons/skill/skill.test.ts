@@ -490,12 +490,22 @@ describe('the agent skill', () => {
     expect(main).toContain("of('not_paired')")
     expect(skill).toContain('If `notShownOn` is there, it lists each other display with a `reason`.')
     // Every reason the skill names is one the backend gives
-    for (const reason of ['not_chosen', 'not_paired', 'agents_off']) {
+    for (const reason of ['not_chosen', 'not_paired', 'agents_off', 'locked']) {
       expect(skill).toContain(`\`${reason}\``)
       expect(source('../../convex/lib/aim.ts')).toContain(`'${reason}'`)
     }
     for (const code of ['agents_off', 'not_paired', 'nowhere']) expect(skill).toContain(`\`${code}\``)
     expect(source('../../convex/notifications.ts')).toContain("notSent: 'nowhere'")
+    // A lock is the person's to undo: an agent is told to ask them, and has no command for it
+    expect(skill).toContain('No command of yours unlocks it')
+    expect(skill).toContain('ask the user to unlock the display')
+    // And what a lock does not do, as the docs say: it is navigation only
+    expect(skill).toContain("A lock only keeps that display on its page: it does not keep anyone at the display from other pages' state or actions.")
+    expect(source('../../docs/screens.md')).toContain('A lock is about navigation and nothing more.')
+    // A lock stops pages, and not notifications
+    expect(skill).toContain('A locked display still gets notifications')
+    expect(source('../../docs/screens.md')).toContain('It still gets notifications. A lock stops agents sending the screen pages, and not notifications')
+    expect(main).not.toMatch(/api\.displays\.(lock|unlock)\b/)
     expect(source('../../convex/displays.ts')).toMatch(/paired: await stillPaired\(ctx, d\)/)
     expect(skill).toContain("Each display has `paired`, which is `false` for one whose browser's pairing was ended")
     // The revision `it state` prints is the one `--if-revision` is held to, and a state that has moved on is refused as a conflict

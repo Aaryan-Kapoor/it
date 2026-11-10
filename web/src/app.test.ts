@@ -33,6 +33,7 @@ vi.mock('convex/react', () => ({
   useConvex: () => client,
   useConvexAuth: () => ({ isLoading: false, isAuthenticated: true }),
   useMutation: (fn: unknown) => (args: unknown) => client.mutation(fn, args),
+  useAction: (fn: unknown) => (args: unknown) => client.action(fn, args),
   useQuery: (fn: unknown) => {
     const said = watched[getFunctionName(fn as never)]
     return typeof said === 'function' ? said() : said
@@ -729,6 +730,163 @@ describe('what each tab says of itself', () => {
     })
     const closed = asked.filter((a) => a.what === 'displays:report').at(-1)!.args as { sequence: number }
     expect(JSON.parse(String(last[1]!.body)).args.sequence).toBe(closed.sequence)
+  })
+})
+
+describe('a display locked to a page', () => {
+  const PAGE = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, updatedAt: Date.now(), agent: 'pi', machine: 'here', run: null, pending: 0 }
+  const locked = { ...DISPLAY, lockedTo: { id: 'page-1', slug: 'plan', title: 'Plan' }, lockEnded: false }
+  beforeEach(() => {
+    answers['displays:register'] = () => ({ ...DISPLAY, takes: ['displays.lock'] })
+    answers['displays:heartbeat'] = () => ({ now: Date.now(), takes: ['displays.lock'] })
+  })
+
+  test('keeps to its page wherever it is opened, but for its settings, and says in the bar above the page that it is locked, and unlocks from there', async () => {
+    cookie = CODES.ownercode00000000001!
+    watched['artifacts:get'] = PAGE
+    watched['displays:mine'] = locked
+    await start('/')
+    expect(location.pathname).toBe('/p/plan')
+    expect(host.querySelector('header .lock-mark')!.textContent).toBe('Locked hereUnlock')
+    // Nothing takes it back to the person's pages while it is locked
+    expect(host.querySelector('.back-btn')).toBeNull()
+    const { navigate } = await import('./lib')
+    await act(async () => navigate('/displays'))
+    expect(location.pathname).toBe('/p/plan')
+    await act(async () => navigate('/settings'))
+    expect(location.pathname).toBe('/settings')
+    await act(async () => navigate('/p/plan'))
+    await act(async () => void host.querySelector<HTMLButtonElement>('header .lock-mark')!.click())
+    expect(asked.find((a) => a.what === 'displays:unlock')!.args).toEqual({ displayId: 'display-1' })
+  })
+
+  test('stays on its page, which is not shown afresh, whatever on the site would take it elsewhere: Escape, the mark in the bar, the browser’s way back or a link to another page', async () => {
+    cookie = CODES.ownercode00000000001!
+    watched['artifacts:get'] = PAGE
+    watched['displays:mine'] = locked
+    answers['mounts:create'] = () => ({ mountId: 'mount-1', version: 1 })
+    answers['mounts:ticket'] = () => ({ ticket: 'ticket-1' })
+    await start('/p/plan')
+    await vi.waitFor(() => expect(host.querySelector('.mount iframe')).not.toBeNull())
+    const frame = host.querySelector('.mount iframe')
+    const view = host.querySelector('main.page-view')
+    const same = () => [location.pathname, host.querySelector('.mount iframe') === frame, host.querySelector('main.page-view') === view]
+    await act(async () => {
+      host.querySelector('header .lock-mark')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await tick()
+    })
+    expect(same()).toEqual(['/p/plan', true, true])
+    expect(host.querySelector('header a.page-nav-mark')).toBeNull()
+    await act(async () => {
+      host.querySelector<HTMLElement>('header .page-nav-mark')!.click()
+      await tick()
+    })
+    expect(same()).toEqual(['/p/plan', true, true])
+    await act(async () => {
+      history.pushState(null, '', '/')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+      await tick()
+    })
+    expect(same()).toEqual(['/p/plan', true, true])
+    const { navigate } = await import('./lib')
+    await act(async () => {
+      navigate('/p/another')
+      await tick()
+    })
+    expect(same()).toEqual(['/p/plan', true, true])
+    expect(names().filter((what) => what === 'mounts:create')).toHaveLength(1)
+  })
+
+  test('a screen that is locked reaches its settings from the bar, unlocks itself or signs itself out there, and is led back to its page and to no other', async () => {
+    cookie = CODES.screencode0000000002!
+    watched['artifacts:get'] = PAGE
+    watched['displays:mine'] = locked
+    await start('/p/plan')
+    const toSettings = () => host.querySelector<HTMLButtonElement>('header button[aria-label="This display’s settings"]')!
+    expect(host.querySelector('header .lock-mark')!.textContent).toBe('Locked hereUnlock')
+    await act(async () => {
+      toSettings().click()
+      await tick()
+    })
+    expect(location.pathname).toBe('/settings')
+    expect(host.textContent).toContain('Paired as a screen')
+    // Settings offers no other part of the site, nor any other page: no sections, no tour, and nothing to find
+    expect([host.querySelector('nav[aria-label="Sections"]'), button('Take the tour')]).toEqual([null, undefined])
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }))
+      await tick()
+    })
+    expect(host.querySelector('.finder-overlay')).toBeNull()
+    const { navigate } = await import('./lib')
+    await act(async () => {
+      navigate('/p/another')
+      await tick()
+    })
+    expect(location.pathname).toBe('/p/plan')
+    await act(async () => {
+      toSettings().click()
+      await tick()
+    })
+    expect(host.textContent).toContain('This display is locked to “Plan”')
+    await press('Back to the page')
+    expect(location.pathname).toBe('/p/plan')
+    await act(async () => {
+      toSettings().click()
+      await tick()
+    })
+    await press('Unlock')
+    expect(asked.find((a) => a.what === 'displays:unlock')!.args).toEqual({ displayId: 'display-1' })
+    await press('Sign out')
+    await vi.waitFor(() => expect(names()).toEqual(expect.arrayContaining(['displays:signOut', '/session/end'])), 10_000)
+  }, 20_000)
+
+  test('opened at its grid while what it is is still on its way, a locked screen never draws the grid or a card’s picture, and comes up on its page', async () => {
+    cookie = CODES.screencode0000000002!
+    watched['artifacts:get'] = PAGE
+    watched['artifacts:list'] = [{ ...PAGE, pinned: false }]
+    // The display's own record has not come yet
+    watched['displays:mine'] = undefined
+    let grid = 0
+    const seen = new MutationObserver(() => {
+      if (document.querySelector('.grid-view, .card')) grid++
+    })
+    seen.observe(document.body, { childList: true, subtree: true })
+    await start('/')
+    expect(document.querySelector('.grid-view')).toBeNull()
+    expect(location.pathname).toBe('/')
+    // It comes, and says the display is locked
+    watched['displays:mine'] = locked
+    const react = await import('react')
+    const { App } = await import('./app')
+    await act(async () => {
+      root.render(react.createElement(App))
+      await tick()
+    })
+    await vi.waitFor(() => expect(location.pathname).toBe('/p/plan'))
+    seen.disconnect()
+    expect(grid).toBe(0)
+    // One showing, the page's own, and no picture of a card
+    expect(names().filter((what) => what === 'mounts:create')).toHaveLength(1)
+    expect(host.querySelector('header .lock-mark')).not.toBeNull()
+  })
+
+  test('a page on a display that is not locked offers to lock the display to it, where the backend names the lock', async () => {
+    cookie = CODES.screencode0000000002!
+    watched['artifacts:get'] = PAGE
+    watched['displays:mine'] = { ...DISPLAY, lockedTo: null, lockEnded: false }
+    answers['displays:lock'] = () => ({ revoked: true })
+    await start('/p/plan')
+    await act(async () => void host.querySelector<HTMLButtonElement>('header button[aria-label="Lock this display to this page"]')!.click())
+    expect(asked.find((a) => a.what === 'displays:lock')!.args).toEqual({ displayId: 'display-1', artifactId: 'page-1' })
+  })
+
+  test('says that its lock ended when the page it was locked to was deleted, until that is read', async () => {
+    cookie = CODES.ownercode00000000001!
+    watched['displays:mine'] = { ...DISPLAY, lockedTo: null, lockEnded: true }
+    await start('/')
+    expect(host.textContent).toContain('The page this display was locked to was deleted, so the display is not locked any more.')
+    await press('OK')
+    expect(names()).toContain('displays:lockEndedSeen')
   })
 })
 

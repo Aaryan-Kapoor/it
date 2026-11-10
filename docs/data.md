@@ -82,6 +82,7 @@ A newer version of It may bring a newer backend program, newer functions, or bot
 | What each tab of a display last said of itself: whether it was visible, which page it showed and its version, and when | Two and a half minutes from when the newest of it was said, and at most sixteen tabs. What a display said last is dropped when it next speaks, or at the hourly cleaning once it has run out, so a display that was closed keeps it for an hour or so at most. Gone when the display is forgotten |
 | When you last used a display: clicked, tapped or typed there | One time per display, written over each time, at most once in five seconds. In the records download. Gone when the display is forgotten |
 | Whether a display is open to agents | Until you change it. In the records download, as `agents`. Gone when the display is forgotten |
+| The page a display is locked to | Until it is unlocked, or that page is deleted, which ends the lock. Gone when the display is forgotten |
 | A publish that was begun and never finished | An hour. Completing it is allowed for thirty minutes |
 | The outcome of a publication | Thirty days from when publishing began, or until its page is deleted. A repeated completion returns that outcome even after the content version has gone |
 | A page deletion receipt, with its title and id | Until seven days after completion, or until you erase everything. Unfinished deletions are kept and retried |

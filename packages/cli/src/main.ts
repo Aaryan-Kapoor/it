@@ -413,14 +413,26 @@ async function canAimEverywhere(a: Args, form: string): Promise<void> {
 const whichDisplay = (target: Where): string => (target.displayId !== undefined ? `The display ${named(target.displayId)}` : named(target.display ?? ''))
 /**
  * What is said where the one display named takes nothing from agents now, alike for a page and a
- * notification: closed to agents, or no longer paired. `link` is the page's, where there is one to give instead.
+ * notification: closed to agents, or no longer paired. And, for a page alone, locked by the user to
+ * another page, which a notification is not kept from. `link` is the page's, where there is one to give instead.
  */
-function notTaken(target: Where, code: 'agents_off' | 'not_paired', what: 'sent' | 'shown', address: { url?: string; urlNote?: string } = {}): Problem {
+function notTaken(
+  target: Where,
+  code: 'agents_off' | 'not_paired' | 'locked',
+  what: 'sent' | 'shown',
+  address: { url?: string; urlNote?: string } = {},
+): Problem {
   const which = whichDisplay(target)
   const nothing = what === 'sent' ? 'Nothing was sent.' : 'It was shown nowhere.'
   // The link as \`it create\` gives it, with why it is not at the place chosen for links where it is not
   const link = address.url ? ` Or give the user its link: ${address.url}${address.urlNote ? ` ${address.urlNote}` : ''}` : ''
   const instead = `Leave out --on and --on-id to ${what === 'sent' ? 'send it to' : 'show it on'} the display in use.${link}`
+  if (code === 'locked')
+    return new Problem(
+      `${which} is locked to another page by the user, and keeps to it. ${nothing}`,
+      'locked',
+      `Only the user can unlock it, on that display or on the site under Displays: if the page belongs there, ask them to, and do not try another way. ${instead}`,
+    )
   return code === 'agents_off'
     ? new Problem(
         `Agents may not use ${which}: the user turned that off for it, on the display itself or on the site under Displays. ${nothing}`,
@@ -520,7 +532,11 @@ async function show(slug: string, a: Args, also: Record<string, unknown> = {}) {
   const shown = await onDisplay(a, (where) => call<Shown & { took?: boolean }>('mutation', api.displays.show, { slug, ...where, ...also }))
   const target = aimedAt(a)
   const reason = shown.notShown?.[0]?.reason
-  if ((target.display !== undefined || target.displayId !== undefined) && !shown.displays.length && (reason === 'agents_off' || reason === 'not_paired'))
+  if (
+    (target.display !== undefined || target.displayId !== undefined) &&
+    !shown.displays.length &&
+    (reason === 'agents_off' || reason === 'not_paired' || reason === 'locked')
+  )
     throw notTaken(target, reason, 'shown', addressOf(shown))
   return shown
 }
@@ -548,6 +564,7 @@ function shownAs(shown: Shown): {
   const of = (reason: string) => notShownOn.filter((d) => d.reason === reason).map((d) => named(d.display))
   const ended = of('not_paired')
   const off = of('agents_off')
+  const kept = of('locked')
   const said: string[] = []
   const where = shown.displays[0]
   if (shown.chosen && where !== undefined)
@@ -568,6 +585,10 @@ function shownAs(shown: Shown): {
     if (off.length)
       said.push(
         `Agents may not use ${andJoined(off)}: the user turned that off for ${off.length === 1 ? 'it' : 'each of them'}, on the display itself or on the site under Displays, and only the user can turn it on again.`,
+      )
+    if (kept.length)
+      said.push(
+        `${andJoined(kept)} ${kept.length === 1 ? 'is' : 'are'} locked to another page by the user, and ${kept.length === 1 ? 'keeps' : 'keep'} to it. Only the user can unlock ${kept.length === 1 ? 'it' : 'them'}, on that display or on the site under Displays: ask them to if the page belongs there, and do not try another way.`,
       )
     if (!shown.displays.length && !notShownOn.length) said.push(noDisplay())
     // Said only where It gave the address, which an It of an earlier version does not
@@ -2921,6 +2942,8 @@ Displays
   it notify "<text>" [--id <id>] [--on "<display>" | --on-id <display-id> | --everywhere] [--sticky] [--button "Label=action"]…
                                  Sent to a display in the same way. With --everywhere, it is for
                                  the displays there now, and not for one paired later.
+                                 A display the person locked to a page shows no other page; only
+                                 they unlock it, on that display or under Displays.
   it displays                    List each display with its name and its id.
 
 What the person did
@@ -3508,7 +3531,10 @@ async function main(argv: string[]): Promise<void> {
       return out(notified(sent))
     }
     case 'displays': {
-      const shown = await call<{ id: string; name: string; paired?: boolean; lastSeenAt?: number; agents?: boolean }[]>('query', api.displays.list)
+      const shown = await call<{ id: string; name: string; paired?: boolean; lastSeenAt?: number; agents?: boolean; lockedTo?: { title: string } | null }[]>(
+        'query',
+        api.displays.list,
+      )
       if (!forPerson(a)) return out(shown)
       if (!shown.length) return tell(['No display is paired. `it site` opens the site in a browser on this machine and pairs that browser.'])
       return tell([
@@ -3516,7 +3542,7 @@ async function main(argv: string[]): Promise<void> {
         ...columns(
           shown.map((d) => [
             `  ${d.name}`,
-            `${d.paired === false ? 'not paired any more' : 'paired'}${d.agents === false ? ', closed to agents' : ''}`,
+            `${d.paired === false ? 'not paired any more' : 'paired'}${d.agents === false ? ', closed to agents' : ''}${d.lockedTo ? `, locked to ${named(d.lockedTo.title)}` : ''}`,
             d.lastSeenAt ? `seen ${ago(d.lastSeenAt)}` : 'never seen',
             d.id,
           ]),

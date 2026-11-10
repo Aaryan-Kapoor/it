@@ -9,6 +9,7 @@ let unavailable = false
 let tourDone = false
 const asked = vi.fn()
 vi.mock('convex/react', () => ({
+  useAction: () => async () => ({ revoked: true }),
   useQuery: (fn: unknown) => {
     asked(getFunctionName(fn as never))
     if (unavailable) throw new Error('Could not find public function for deletions:list')

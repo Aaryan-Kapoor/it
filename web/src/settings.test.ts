@@ -26,6 +26,7 @@ let watched: Record<string, unknown>
 vi.mock('convex/react', () => ({
   useConvex: () => client,
   useMutation: (fn: unknown) => (args: unknown) => client.mutation(fn, args),
+  useAction: (fn: unknown) => (args: unknown) => client.action(fn, args),
   useQuery: (fn: unknown) => watched[getFunctionName(fn as never)],
 }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -288,6 +289,48 @@ describe('the switch that opens a display to agents or closes it', () => {
     expect(switches()).toHaveLength(1)
     await act(async () => switches()[0]!.click())
     expect(calls).toContainEqual({ fn: 'displays:allowAgents', args: { displayId: 'display-1', allowed: false } })
+    learnTakes([])
+  })
+})
+
+describe('locking a display to a page from the Displays page', () => {
+  test('the owner locks a display to one of the pages, and unlocks it, and a locked display says to which page', async () => {
+    const { learnTakes } = await import('./lib')
+    learnTakes(['displays.lock'])
+    watched['displays:list'] = [
+      { ...DISPLAYS[0]!, lockedTo: null },
+      { ...DISPLAYS[1]!, lockedTo: { id: 'page-2', slug: 'board', title: 'Board' } },
+    ]
+    watched['artifacts:list'] = [
+      { id: 'page-1', slug: 'plan', title: 'Plan', version: 1 },
+      { id: 'page-2', slug: 'board', title: 'Board', version: 2 },
+      { id: 'page-3', slug: 'draft', title: 'Draft', version: null },
+    ]
+    answers['displays:lock'] = () => ({ revoked: false })
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    const rows = [...host.querySelectorAll('ul.rows')[0]!.querySelectorAll('li')]
+    const picks = rows.map((li) => li.querySelector<HTMLSelectElement>('label.lock-pick select')!)
+    // A page with nothing published yet is no page to lock to
+    expect(picks.map((one) => [one.value, [...one.options].map((o) => o.textContent)])).toEqual([
+      ['', ['No page', 'Plan', 'Board']],
+      ['page-2', ['No page', 'Plan', 'Board']],
+    ])
+    expect(rows[1]!.querySelector('.row-name')!.textContent).toBe('Kitchen TV')
+    expect(rows[1]!.querySelector('.row-sub')!.textContent).toMatch(/^Last open .+ · Locked to “Board”$/)
+    const choose = (one: HTMLSelectElement, value: string) =>
+      act(async () => {
+        one.value = value
+        one.dispatchEvent(new Event('change', { bubbles: true }))
+      })
+    await choose(picks[0]!, 'page-1')
+    // Locked, with what it had open elsewhere not stopped just yet: said in so many words
+    expect(host.textContent).toContain('A page this display had open elsewhere stops working as soon as It can reach')
+    await choose(picks[1]!, '')
+    expect(calls).toEqual([
+      { fn: 'displays:lock', args: { displayId: 'display-1', artifactId: 'page-1' } },
+      { fn: 'displays:unlock', args: { displayId: 'display-2' } },
+    ])
     learnTakes([])
   })
 })

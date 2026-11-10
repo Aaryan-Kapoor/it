@@ -19,9 +19,10 @@ export type Target = { id: string } | { name: string } | { everywhere: true } | 
 
 /**
  * Why something was not put on a display: its browser's pairing has ended, the person said that
- * agents may not use it, or, where no display was named, another display was chosen.
+ * agents may not use it, it is locked to another page, or, where no display was named, another
+ * display was chosen.
  */
-export type Reason = 'not_paired' | 'agents_off' | 'not_chosen'
+export type Reason = 'not_paired' | 'agents_off' | 'locked' | 'not_chosen'
 
 export interface Aimed {
   /** Every display that was asked for, in the order they were found: for `none` and `everywhere`, every display. */
@@ -154,8 +155,14 @@ async function byId(ctx: Ctx, userId: Id<'users'>, raw: string): Promise<Doc<'di
  * person's. The machine that asked knows what it asked, and reads the displays with `it displays`.
  *
  * `pushed` is for a notification, which reaches a display whose site is closed only as a push.
+ * `page` is the page to be shown. A lock is about pages alone: a display locked to another page
+ * does not show this one, and where no display is named, a locked display is never the one
+ * chosen to show a page, its own page included, since it keeps to the page it has. A
+ * notification has no page, and a lock is nothing to it: a locked display takes one sent to it
+ * by name or id, or to every display, and is the display in use for one sent with none named,
+ * as any other display is.
  */
-export async function aim(ctx: Ctx, userId: Id<'users'>, target: Target, opts: { pushed?: boolean } = {}): Promise<Aimed> {
+export async function aim(ctx: Ctx, userId: Id<'users'>, target: Target, opts: { pushed?: boolean; page?: Id<'artifacts'> } = {}): Promise<Aimed> {
   let asked: Doc<'displays'>[]
   if ('id' in target) {
     const d = await byId(ctx, userId, target.id)
@@ -173,9 +180,11 @@ export async function aim(ctx: Ctx, userId: Id<'users'>, target: Target, opts: {
     } else asked = all
   }
   const why = new Map<Id<'displays'>, Reason | null>()
-  for (const d of asked) why.set(d._id, !(await stillPaired(ctx, d)) ? 'not_paired' : d.agentsOff ? 'agents_off' : null)
+  const none = 'none' in target
+  const locked = (d: Doc<'displays'>) => d.lockedTo !== undefined && opts.page !== undefined && (none || d.lockedTo.artifactId !== opts.page)
+  for (const d of asked) why.set(d._id, !(await stillPaired(ctx, d)) ? 'not_paired' : d.agentsOff ? 'agents_off' : locked(d) ? 'locked' : null)
   const left = (d: Doc<'displays'>, reason: Reason) => ({ display: nameOf(d), displayId: d._id, reason })
-  if (!('none' in target))
+  if (!none)
     return {
       asked,
       to: asked.filter((d) => why.get(d._id) === null),

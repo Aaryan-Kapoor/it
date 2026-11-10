@@ -61,6 +61,7 @@ const askedToRetry = (input: { artifactId: string; expectedSession?: string }) =
   new Promise<{ retried: number }>((answer, refuse) => void retriesAsked.push({ input, answer: () => answer({ retried: 1 }), refuse }))
 const queries: { name: string; args: unknown }[] = []
 vi.mock('convex/react', () => ({
+  useAction: () => async () => ({ revoked: true }),
   useConvex: () => client,
   useMutation: (fn: unknown) =>
     getFunctionName(fn as never) === 'artifacts:stop' ? askedToStop : getFunctionName(fn as never) === 'actions:retry' ? askedToRetry : async () => null,
