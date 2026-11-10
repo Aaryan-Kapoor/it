@@ -1327,6 +1327,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
         ? { displays: ['Desk'], displayIds: ['jh7desk'], notShown: [{ display: 'Laptop', displayId: 'k57laptop', reason: 'not_paired' }], took: false }
         : null,
     )
+    b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.notifyById] })
     try {
       const opened = await run(m, ['open', 'board', '--on-id', 'jh7desk'], b.env)
       expect(opened.code).toBe(0)
@@ -1377,6 +1378,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
             ]
           : null,
     )
+    b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.notifyById] })
     try {
       for (const words of [
         ['open', 'board', '--on-id', 'nope'],
@@ -1391,9 +1393,10 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
-  test('against an It of an earlier version, `--on-id` is refused as such and never asked again by a name or for every display', async () => {
+  test('against an It of an earlier version, `--on-id` is refused before anything is sent or published, and never asked again by a name or for every display', async () => {
     const m = machine()
-    // An earlier It fails a call with an argument it does not know, and says nothing of why
+    // An earlier It fails a call with an argument it does not know, and says nothing of why. It
+    // names no later form at its door, which is its word that it takes none of them
     const b = await backend(m, (asked) =>
       (asked.path === 'displays:show' || asked.path === 'notifications:send') && 'displayId' in asked.args ? SERVER_ERROR : null,
     )
@@ -1401,17 +1404,41 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       for (const words of [
         ['open', 'board', '--on-id', 'jh7desk'],
         ['notify', 'hello', '--on-id', 'jh7desk'],
+        ['create', 'Board', '--html', '<p>hi</p>', '--open', '--on-id', 'jh7desk'],
+        ['update', 'board', '--html', '<p>hi</p>', '--open', '--on-id', 'jh7desk'],
+        ['tour', 'show', 'menu', '--on-id', 'jh7desk'],
       ]) {
         const ran = await run(m, words, b.env)
-        expect([ran.code, error(ran).code]).toEqual([2, 'invalid'])
+        expect([words.join(' '), ran.code, error(ran).code]).toEqual([words.join(' '), 2, 'invalid'])
         expect(error(ran).message).toContain('earlier version')
       }
-      // Asked only with the id, each time, and nothing else
-      expect(b.asked.filter((x) => x.path === 'displays:show' || x.path === 'notifications:send').every((x) => x.args.displayId === 'jh7desk')).toBe(true)
-      // On its word that it takes the form, the failure is said as it is
-      b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.notifyById] })
+      // Nothing was asked of It but whether it takes the form, and nothing was published
+      expect(b.asked).toEqual([])
+      expect(b.uploads).toEqual([])
+      expect(b.config.asked).toBe(5)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('where It cannot say whether it takes `--on-id`, the display is asked for by its id, and a failure is said as it is', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'displays:show' || asked.path === 'notifications:send' ? SERVER_ERROR : null))
+    try {
+      // Its door answers with nothing It would say, as a door that is not It's does
+      b.config.answer = () => ({})
       const ran = await run(m, ['open', 'board', '--on-id', 'jh7desk'], b.env)
       expect([ran.code, error(ran).code, error(ran).message]).toEqual([1, 'error', expect.stringContaining('Server Error')])
+      // Asked by the id alone, however often a failure of that kind is tried again, and never by a name or for every display
+      const shows = b.asked.filter((x) => x.path === 'displays:show').map((x) => x.args)
+      expect(shows.length).toBeGreaterThan(0)
+      for (const args of shows) expect(args).toEqual({ slug: 'board', displayId: 'jh7desk' })
+      // On its word that it takes the form, the failure is said as it is too, and It is not asked anything else
+      b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.notifyById] })
+      b.asked.length = 0
+      const again = await run(m, ['notify', 'hello', '--on-id', 'jh7desk'], b.env)
+      expect([again.code, error(again).code, error(again).message]).toEqual([1, 'error', expect.stringContaining('Server Error')])
+      expect(new Set(b.asked.map((x) => x.path))).toEqual(new Set(['notifications:send']))
     } finally {
       await b.close()
     }
@@ -1420,6 +1447,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
   test('`it notify --on-id` sends to that display by its id', async () => {
     const m = machine()
     const b = await backend(m, (asked) => (asked.path === 'notifications:send' ? { id: 'n1' } : null))
+    b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.notifyById] })
     try {
       const ran = await run(m, ['notify', 'hello', '--on-id', 'jh7desk'], b.env)
       expect(ran.code).toBe(0)

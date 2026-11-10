@@ -333,27 +333,54 @@ function aimedAt(a: Args): { display?: string; displayId?: string } {
   return typeof name === 'string' ? { display: name } : {}
 }
 /**
+ * What the It this machine asks has said of whether it takes a later form of a call, once it
+ * has said it either way. A lookup that could not be made is not kept, so it is made again.
+ */
+const saidTakes = new Map<string, boolean>()
+async function takesForm(form: string): Promise<boolean | undefined> {
+  const known = saidTakes.get(form)
+  if (known !== undefined) return known
+  const said = await backendTakes(form)
+  if (said !== undefined) saidTakes.set(form, said)
+  return said
+}
+const olderForId = () =>
+  new Problem(
+    'The It this machine reaches is of an earlier version, and cannot be asked for a display by its id.',
+    'invalid',
+    'Name the display with --on "<name>" instead, or update It. `it status` says which version it is.',
+  )
+/**
+ * Before a display is asked for by its id, or anything is published to be shown on one: whether
+ * the It this machine asks takes the form. On its word that it does not, the command is refused
+ * there, with nothing sent and nothing published, and it never asks again by a name, since the id
+ * was given to reach that display and no other. Where It could not be asked, that is not taken
+ * for a no: the command goes ahead, and what It then answers is said as it is. True where no
+ * display is named by its id.
+ */
+async function canAimById(a: Args, form: string): Promise<boolean | undefined> {
+  if (aimedAt(a).displayId === undefined) return true
+  const takes = await takesForm(form)
+  if (takes === false) throw olderForId()
+  return takes
+}
+/**
  * Runs something that names a display. The backend says only that there is none of that name
  * or id: which was asked for, and which there are, is said here, where it is the person's own
  * machine saying it.
  *
- * A display named by its id is asked for in a form an older It does not take, and refuses with
- * nothing said of why. Only then is It asked whether it takes the form at all, and on its word
- * that it does not, that is said: the command never asks again by a name, since the id was given
- * to reach that display and no other.
+ * A display named by its id is asked for only once It has said it takes the form (`canAimById`).
+ * Where It could not be asked first, and the call then fails with nothing said of why, It is
+ * asked again, and on its word that it does not take the form, that is said.
  */
 async function onDisplay<T>(a: Args, run: () => Promise<T>, byId: string = TAKES.showById): Promise<T> {
   const target = aimedAt(a)
+  const known = await canAimById(a, byId)
   try {
     return await run()
   } catch (err) {
     if (!(err instanceof Problem)) throw err
-    if (target.displayId !== undefined && err.code === 'error' && (await backendTakes(byId)) === false)
-      throw new Problem(
-        'The It this machine reaches is of an earlier version, and cannot be asked for a display by its id.',
-        'invalid',
-        'Name the display with --on "<name>" instead, or update It. `it status` says which version it is.',
-      )
+    if (target.displayId !== undefined && known === undefined && err.code === 'error' && (await takesForm(byId)) === false) throw olderForId()
     if (err.code !== 'no_such_display') throw err
     const all = await call<{ id: string; name: string }[]>('query', api.displays.list).then(
       (all) => all.map((d) => (target.displayId !== undefined ? `${named(d.name)} (${d.id})` : named(d.name))).join(', '),
@@ -476,6 +503,9 @@ async function create(a: Args) {
   // says so, with `it open` or with --take. `it update` leaves a page with whoever has it,
   // unless told --take.
   aimedAt(a)
+  // Asked before anything is published, so that a page meant for a display It cannot reach by
+  // its id is not published there to no display
+  if (a.flags.open === true) await canAimById(a, TAKES.showById)
   const take = a.flags.take === true
   const page = { slug, title, files: await source(a), agent: text(a, 'agent'), state, shown: a.flags.open === true }
   let done: Awaited<ReturnType<typeof publish>>
@@ -734,6 +764,7 @@ async function tour(a: Args) {
   }
   // The agent's plate on the page carries the name of the agent app that is giving the tour, where that is known
   aimedAt(a)
+  await canAimById(a, TAKES.showById)
   const by = sessionAsked()?.session.harness
   const made = tourPage(name, given, text(a, 'agent') ?? (by && Object.hasOwn(KNOWN, by) ? KNOWN[by as Harness].label : undefined))
   // The page is this conversation's from now on, whoever showed it last. An agent app that does
@@ -757,6 +788,7 @@ async function tour(a: Args) {
 
 async function update(a: Args) {
   aimedAt(a)
+  if (a.flags.open === true) await canAimById(a, TAKES.showById)
   // Written as `it create` is, with the id in `--id` and a title in front of it, it is taken as that:
   // an agent that has just made a page with the one often asks for the other in the same shape
   const named = text(a, 'id')
