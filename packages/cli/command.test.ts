@@ -1708,6 +1708,21 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('a display locked to another page is said to be locked, and the agent is told to ask the user to unlock it', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show' ? { displays: [], displayIds: [], notShown: [{ display: 'Gym', displayId: 'g1', reason: 'locked' }], took: false } : null,
+    )
+    try {
+      const said = printed(await run(m, ['open', 'review', '--on', 'Gym'], b.env))
+      expect(said).toMatchObject({ shownOn: [], notShownOn: [{ display: 'Gym', reason: 'locked' }] })
+      expect(said.hint).toContain('"Gym" is locked to another page by the user')
+      expect(said.hint).toContain('ask them to')
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it notify --on-id` sends to that display by its id', async () => {
     const m = machine()
     const b = await backend(m, (asked) => (asked.path === 'notifications:send' ? { id: 'n1' } : null))

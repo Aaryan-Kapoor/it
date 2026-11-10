@@ -548,6 +548,7 @@ function shownAs(shown: Shown): {
   const of = (reason: string) => notShownOn.filter((d) => d.reason === reason).map((d) => named(d.display))
   const ended = of('not_paired')
   const off = of('agents_off')
+  const kept = of('locked')
   const said: string[] = []
   const where = shown.displays[0]
   if (shown.chosen && where !== undefined)
@@ -568,6 +569,10 @@ function shownAs(shown: Shown): {
     if (off.length)
       said.push(
         `Agents may not use ${andJoined(off)}: the user turned that off for ${off.length === 1 ? 'it' : 'each of them'}, on the display itself or on the site under Displays, and only the user can turn it on again.`,
+      )
+    if (kept.length)
+      said.push(
+        `${andJoined(kept)} ${kept.length === 1 ? 'is' : 'are'} locked to another page by the user, and ${kept.length === 1 ? 'keeps' : 'keep'} to it. Only the user can unlock ${kept.length === 1 ? 'it' : 'them'}, on that display or on the site under Displays: ask them to if the page belongs there, and do not try another way.`,
       )
     if (!shown.displays.length && !notShownOn.length) said.push(noDisplay())
     // Said only where It gave the address, which an It of an earlier version does not
@@ -2921,6 +2926,8 @@ Displays
   it notify "<text>" [--id <id>] [--on "<display>" | --on-id <display-id> | --everywhere] [--sticky] [--button "Label=action"]…
                                  Sent to a display in the same way. With --everywhere, it is for
                                  the displays there now, and not for one paired later.
+                                 A display the person locked to a page shows no other page; only
+                                 they unlock it, on that display or under Displays.
   it displays                    List each display with its name and its id.
 
 What the person did
@@ -3508,7 +3515,10 @@ async function main(argv: string[]): Promise<void> {
       return out(notified(sent))
     }
     case 'displays': {
-      const shown = await call<{ id: string; name: string; paired?: boolean; lastSeenAt?: number; agents?: boolean }[]>('query', api.displays.list)
+      const shown = await call<{ id: string; name: string; paired?: boolean; lastSeenAt?: number; agents?: boolean; lockedTo?: { title: string } | null }[]>(
+        'query',
+        api.displays.list,
+      )
       if (!forPerson(a)) return out(shown)
       if (!shown.length) return tell(['No display is paired. `it site` opens the site in a browser on this machine and pairs that browser.'])
       return tell([
@@ -3516,7 +3526,7 @@ async function main(argv: string[]): Promise<void> {
         ...columns(
           shown.map((d) => [
             `  ${d.name}`,
-            `${d.paired === false ? 'not paired any more' : 'paired'}${d.agents === false ? ', closed to agents' : ''}`,
+            `${d.paired === false ? 'not paired any more' : 'paired'}${d.agents === false ? ', closed to agents' : ''}${d.lockedTo ? `, locked to ${named(d.lockedTo.title)}` : ''}`,
             d.lastSeenAt ? `seen ${ago(d.lastSeenAt)}` : 'never seen',
             d.id,
           ]),
