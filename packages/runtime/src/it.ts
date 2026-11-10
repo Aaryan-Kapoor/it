@@ -618,7 +618,7 @@ function tendWithin(root: ParentNode): void {
     guideForm(el)
   }
 }
-new MutationObserver((changes) => {
+const watcher = new MutationObserver((changes) => {
   for (const change of changes) {
     if (change.type === 'attributes') tend(change.target as Element)
     else
@@ -628,12 +628,14 @@ new MutationObserver((changes) => {
         tendWithin(added as Element)
       }
   }
-}).observe(document, {
+})
+const WATCHED: MutationObserverInit = {
   subtree: true,
   childList: true,
   attributes: true,
   attributeFilter: ['name', 'content', 'referrerpolicy', 'ping', 'href', 'target', 'rel'],
-})
+}
+watcher.observe(document, WATCHED)
 tendWithin(document)
 
 /** Asks the site to open an address in a tab of its own. Sent on the window, so that the browser still counts the person's click when the site opens it. */
@@ -661,10 +663,13 @@ function opensRefused(link: Element, aside = false): boolean {
 const aside = (e: Event) => e.type !== 'click' || (e instanceof MouseEvent && (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey))
 /** Every way a link is followed, and the key that follows the one that has the focus. */
 const FOLLOWING = ['click', 'auxclick', 'contextmenu', 'dragstart', 'keydown']
+/** The link each of those was on, as deep as It has seen it: a shadow root that hides its inside from the window tells It of the link there itself. */
+const followedIn = new WeakMap<Event, Element>()
 /**
  * What It does on the way to a link being followed, before the page's own handlers (`capture`)
  * and again after them, since a script can change a link or activate it before the observer has
- * run.
+ * run. The window hears of every link in the document, and each shadow root a script makes
+ * hears of its own.
  */
 function onTheWay(e: Event, capture: boolean): void {
   const path = e.composedPath()
@@ -673,8 +678,11 @@ function onTheWay(e: Event, capture: boolean): void {
       stopAuditing(el)
       guide(el)
     }
+  // Seen from outside in, so that each listener that sees deeper says which link it was
+  const seen = linkIn(path)
+  if (capture && seen) followedIn.set(e, seen)
   if (e.type === 'keydown') return
-  const link = linkIn(path)
+  const link = followedIn.get(e) ?? seen
   if (!link) return
   if (opensRefused(link, aside(e))) {
     e.preventDefault()
@@ -689,6 +697,16 @@ function onTheWay(e: Event, capture: boolean): void {
   }
 }
 for (const event of FOLLOWING) for (const capture of [true, false]) window.addEventListener(event, (e) => onTheWay(e, capture), capture)
+// A shadow root hides what is in it from the document's observer, and a closed one hides it from
+// the window's listeners as well. So each root a script makes, open or closed, is watched as the
+// document is, and hears of the links followed in it.
+const attachShadow = Element.prototype.attachShadow
+Element.prototype.attachShadow = function (this: Element, init: ShadowRootInit) {
+  const root = attachShadow.call(this, init)
+  watcher.observe(root, WATCHED)
+  for (const event of FOLLOWING) root.addEventListener(event, (e) => onTheWay(e, true), true)
+  return root
+}
 // A form is checked on its way out too, with the button that sent it, which may name its own target
 window.addEventListener(
   'submit',

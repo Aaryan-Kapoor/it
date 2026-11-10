@@ -839,6 +839,34 @@ describe('the script inside a page', () => {
       follow('out', 'dragstart')
       expect([before, after]).toEqual([Array(6).fill(true), Array(6).fill(true)])
     })
+
+    test('a link in a shadow root a script makes, open or closed, is set right as it appears and on its way to a click, and one that would open a window of what the page made, or a mail link, is held as any other', async () => {
+      const p = load()
+      const doc = p.w.document
+      const roots = (['open', 'closed'] as const).map((mode) => {
+        const host = doc.body.appendChild(doc.createElement('div'))
+        const root = host.attachShadow({ mode })
+        root.innerHTML = `<a id="out" href="https://elsewhere.invalid/${mode}">out</a><a id="blob" href="blob:http://content.test/${mode}" target="_blank">blob</a><a id="mail" href="mailto:${mode}@example.com">mail</a><a id="later" href="#here">later</a>`
+        return root
+      })
+      await settled()
+      for (const root of roots)
+        expect([root.mode, root.getElementById('out').getAttribute('target'), root.getElementById('out').getAttribute('rel')]).toEqual([
+          root.mode,
+          '_blank',
+          'noopener noreferrer',
+        ])
+      for (const root of roots) {
+        // Changed by the page and clicked at once, before the root's watcher has run
+        const later = root.getElementById('later')
+        later.setAttribute('href', `https://elsewhere.invalid/later-${root.mode}`)
+        expect([root.mode, click(p, later).seen]).toEqual([root.mode, { target: '_blank', rel: 'noopener noreferrer' }])
+        // Followed as a person follows them, with nothing of the page's in the way
+        const follow = (id: string) => root.getElementById(id).dispatchEvent(new p.w.MouseEvent('click', { bubbles: true, cancelable: true, composed: true }))
+        expect([root.mode, follow('blob'), follow('mail')]).toEqual([root.mode, false, false])
+      }
+      expect(openedFor(p)).toEqual(['mailto:open@example.com', 'mailto:closed@example.com'])
+    })
   })
 
   test('what the page’s own script fails with is said to the site, the first few times, and a picture that did not load is not', async () => {
