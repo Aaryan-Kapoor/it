@@ -7201,7 +7201,7 @@ describe('whether what the person does arrives by itself, as a page’s command 
       const env = { ...b.env, CLAUDE_CODE_SESSION_ID: claude, CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.321' }
       const said = printed(await run(m, ['tour', 'show', 'menu', '--param', 'folder=shop'], env))
       expect(said).toMatchObject({ id: 'tour-menu', asleep: true, arrives: { byItself: false } })
-      expect(said.arrives.next).toContain('type /reload-plugins in this conversation')
+      expect(said.arrives.next).toContain(`word for word: “${reloadLine('2.1.321')}”`)
       expect(said.arrives.next).toContain('end your turn')
       expect(said.arrives.next).toContain('do not run `it wait`')
       // An agent that says which it is to be is taken at its word
@@ -7242,7 +7242,7 @@ describe('whether what the person does arrives by itself, as a page’s command 
     try {
       const old = printed(await run(m, ['tour', 'show', 'menu'], { ...env, CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.280' }))
       expect(old.asleep).toBeUndefined()
-      expect(old.arrives.next).toContain('start a new Claude Code conversation')
+      expect(old.arrives.next).toContain('Start a new Claude Code chat')
     } finally {
       await c.close()
       await b.close()
@@ -7391,7 +7391,7 @@ else if (said === 'plugin install it-bridge@it --scope user') {
     const line = reloadLine('2.1.321')
     // The words are in the step that comes next, and not in a condition
     expect(said.next).toContain(
-      `write the person one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${line}” Then, only once that message is written`,
+      `write them one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${line}”`,
     )
     expect(said.next).not.toContain('Where setup said')
     // And they are the last thing it prints, addressed to the agent
