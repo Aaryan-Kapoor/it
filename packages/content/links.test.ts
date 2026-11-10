@@ -133,4 +133,67 @@ describe.each(BROWSERS)('a link or a form a page follows, in %s', (_name, type) 
       expect(said).toEqual({ opener: false, url: `${away}/s` })
     },
   )
+
+  test.skipIf(!here(type))(
+    'a `<base target>` a link’s own handler puts in, before the link is clicked by script, gives the window it opens no hold on the page',
+    async () => {
+      const said = await opened(
+        `<a id="inner" href="/file.html">a file of the page’s</a><button id="go" type="button">go</button>
+       <script>
+         const link = document.getElementById('inner')
+         link.addEventListener('click', (e) => {
+           document.head.insertAdjacentHTML('beforeend', '<base target="fresh">')
+           e.stopPropagation()
+         })
+         document.getElementById('go').addEventListener('click', () => link.click())
+       </script>`,
+      )
+      expect(said).toEqual({ opener: false, url: `${home}/file.html` })
+    },
+  )
+
+  test.skipIf(!here(type))('a form sent by a button that names a window, whose formdata handler asks for a hold, opens with no hold', async () => {
+    const said = await opened(
+      `<form id="form" target="_self" action="AWAY/d"><button id="go" formtarget="fresh">send</button></form>
+       <script>
+         const form = document.getElementById('form')
+         form.onformdata = () => {
+           form.rel = 'opener'
+         }
+       </script>`,
+    )
+    expect(said).toEqual({ opener: false, url: `${away}/d?` })
+  })
+
+  test.skipIf(!here(type))('a form written into a closed shadow root and sent at once, aimed at a window with a hold, opens with no hold', async () => {
+    const said = await opened(
+      `<div id="host"></div><button id="go" type="button">go</button>
+       <script>
+         document.getElementById('go').addEventListener('click', () => {
+           const root = document.getElementById('host').attachShadow({ mode: 'closed' })
+           root.innerHTML = '<form action="AWAY/r" target="fresh" rel="opener"></form>'
+           root.querySelector('form').requestSubmit()
+         })
+       </script>`,
+    )
+    expect(said).toEqual({ opener: false, url: `${away}/r?` })
+  })
+
+  test.skipIf(!here(type))(
+    'a link given a hold by an attribute name that only turns into `rel` when the browser makes it a string opens with no hold',
+    async () => {
+      const said = await opened(
+        `<a id="inner" href="/named.html" target="fresh">a file of the page’s</a><button id="go" type="button">go</button>
+       <script>
+         const link = document.getElementById('inner')
+         link.addEventListener('click', (e) => {
+           link.setAttribute({ toString: () => 'rel' }, 'opener')
+           e.stopPropagation()
+         })
+         document.getElementById('go').addEventListener('click', () => link.click())
+       </script>`,
+      )
+      expect(said).toEqual({ opener: false, url: `${home}/named.html` })
+    },
+  )
 })
