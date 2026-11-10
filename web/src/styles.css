@@ -1265,17 +1265,28 @@ main:has(.modal-overlay) {
   transform: scale(0.94);
 }
 
+/* The title and the words beside it share a baseline, which is put where the middle of the
+   title's capitals is the middle of the bar, from the cap height of the face the browser sets them
+   in. The row is as tall as the bar, and the strut before the words is the height from the bar's top
+   to that baseline: half the bar and half the capitals. Its foot is its baseline. */
 .page-nav-titlewrap {
   display: flex;
   align-items: baseline;
-  gap: 8px;
   flex: 1;
   min-width: 0;
+  height: var(--nav-h);
+  font-size: 13px;
+}
+.page-nav-titlewrap::before {
+  content: "";
+  flex: none;
+  height: calc(var(--nav-h) / 2 + 0.35em);
+  height: calc(var(--nav-h) / 2 + 0.5cap);
 }
 
 .page-nav-title {
   font-weight: 550;
-  font-size: 13px;
+  font-size: inherit;
   letter-spacing: -0.012em;
   color: var(--fg);
   overflow: hidden;
@@ -1289,6 +1300,7 @@ main:has(.modal-overlay) {
   display: flex;
   align-items: baseline;
   gap: 0;
+  margin-left: 8px;
   font-size: 11.5px;
   color: var(--fg-muted);
   white-space: nowrap;
@@ -1300,9 +1312,10 @@ main:has(.modal-overlay) {
   white-space: nowrap;
 }
 
+/* Set in the line of the words it parts, on the middle of their small letters */
 .page-nav-meta-dot {
-  align-self: center;
-  flex: 0 0 auto;
+  display: inline-block;
+  vertical-align: middle;
   width: 3px;
   height: 3px;
   border-radius: 50%;
@@ -2675,10 +2688,6 @@ span.card-fallback {
   text-decoration: none;
   box-shadow: inset -1px 0 0 var(--line);
   height: 16px;
-}
-.page-nav-meta-part {
-  display: inline-flex;
-  align-items: center;
 }
 .page-view > .status {
   flex: none;
