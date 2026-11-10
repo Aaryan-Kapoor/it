@@ -19,7 +19,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { backendAt } from './src/lib'
 import { asAdmin } from './src/serve/backend'
 import { RELEASE } from './src/serve/config'
-import { onTheInternet, publicAddress, publicAddress6, reachable, rentedFrom } from './src/serve/network'
+import { isPrivate, listenAt, onTheInternet, publicAddress, publicAddress6, reachable, rentedFrom } from './src/serve/network'
 import { bases } from './test-ports'
 
 // ---------- which addresses ----------
@@ -92,11 +92,11 @@ describe('the addresses another device can open the site at', () => {
     },
   )
 
-  test('on a Linux machine with a wire, a tunnel and containers: the home network’s first, then the tunnel’s, then IPv6, and nothing of the containers', () => {
-    const listed = reachable(4700, {
+  test('on a Linux machine with a wire, a tunnel and containers: the home network’s first, then the tunnel’s, then IPv6, and nothing of the containers or of the internet', () => {
+    const interfaces = {
       lo: [
-        { address: '127.0.0.1', family: 'IPv4', internal: true },
-        { address: '::1', family: 'IPv6', internal: true },
+        { address: '127.0.0.1', family: 'IPv4' as const, internal: true },
+        { address: '::1', family: 'IPv6' as const, internal: true },
       ],
       enp3s0: [four('10.0.0.20'), six('2001:db8:100:c690:1111:2222:3333:4444'), six('2001:db8:100:c690::4f1a'), six('fe80::1111:2222:3333:4444')],
       tailscale0: [four('100.101.42.17'), six('fd7a:115c:a1e0::ab12:4843'), six('fe80::5555:6666:777:8888')],
@@ -104,8 +104,10 @@ describe('the addresses another device can open the site at', () => {
       'br-0a1b2c3d4e5f': [four('172.18.0.1')],
       veth9a8b7c6: [six('fe80::1c2d:3eff:fe4f:5a6b')],
       virbr0: [four('192.168.122.1')],
-    })
-    expect(listed).toEqual([
+    }
+    expect(reachable(4700, interfaces)).toEqual(['http://10.0.0.20:4700', 'http://100.101.42.17:4700', 'http://[fd7a:115c:a1e0::ab12:4843]:4700'])
+    // Open to the internet too, the machine's global addresses are given after the home network's and the tunnel's
+    expect(reachable(4700, interfaces, false, () => undefined, true)).toEqual([
       'http://10.0.0.20:4700',
       'http://100.101.42.17:4700',
       'http://[2001:db8:100:c690:1111:2222:3333:4444]:4700',
@@ -180,12 +182,13 @@ describe('the addresses another device can open the site at', () => {
     ])
   })
 
-  test('an address a machine gave itself comes after every other under IPv4, a public one after the home network’s, and each address is given once', () => {
-    const listed = reachable(39500, {
+  test('an address a machine gave itself comes after every other under IPv4, a public one after the home network’s where It answers the internet too and nowhere else, and each address is given once', () => {
+    const interfaces = {
       eth0: [four('169.254.10.20'), four('203.0.113.9'), four('192.168.1.20'), four('192.168.1.20')],
       eth1: [four('172.16.5.5'), four('172.32.0.1')],
-    })
-    expect(listed).toEqual([
+    }
+    expect(reachable(39500, interfaces)).toEqual(['http://192.168.1.20:39500', 'http://172.16.5.5:39500', 'http://169.254.10.20:39500'])
+    expect(reachable(39500, interfaces, false, () => undefined, true)).toEqual([
       'http://192.168.1.20:39500',
       'http://172.16.5.5:39500',
       'http://203.0.113.9:39500',
@@ -197,8 +200,105 @@ describe('the addresses another device can open the site at', () => {
   test('a machine on no network has none, and one with a dozen addresses under IPv6 is given the first few', () => {
     expect(reachable(4700, { lo: [{ address: '127.0.0.1', family: 'IPv4', internal: true }] })).toEqual([])
     expect(reachable(4700, {})).toEqual([])
-    const many = reachable(4700, { eth0: [four('192.168.1.20'), ...Array.from({ length: 12 }, (_, n) => six(`2001:db8::${n + 1}`))] })
-    expect([many.length, many[0], many[1]]).toEqual([8, 'http://192.168.1.20:4700', 'http://[2001:db8::1]:4700'])
+    const many = reachable(4700, { eth0: [four('192.168.1.20'), ...Array.from({ length: 12 }, (_, n) => six(`fd00::${n + 1}`))] })
+    expect([many.length, many[0], many[1]]).toEqual([8, 'http://192.168.1.20:4700', 'http://[fd00::1]:4700'])
+  })
+
+  test('an address is private where only a private network, one link or this machine can have it, under IPv4 and IPv6, however it is written', () => {
+    const near = [
+      '10.0.0.1',
+      '10.255.255.255',
+      '172.16.0.1',
+      '172.31.255.255',
+      '192.168.0.1',
+      '100.64.0.1',
+      '100.127.255.255',
+      '169.254.1.1',
+      '127.0.0.1',
+      '127.8.9.10',
+      '::ffff:10.0.0.1',
+      '::FFFF:192.168.1.5',
+      '::1',
+      '[::1]',
+      'fc00::1',
+      'fdff:ffff::1',
+      'FD7A:115C:A1E0::1',
+      'fe80::1',
+      'fe80::2691:f4ec:5bf2:6b81%enp3s0',
+      'febf:ffff::1',
+      '[fd00::20]',
+    ]
+    for (const address of near) expect([address, isPrivate(address)]).toEqual([address, true])
+    const far = [
+      '8.8.8.8',
+      '203.0.113.9',
+      '1.1.1.1',
+      '9.255.255.255',
+      '11.0.0.0',
+      '172.15.255.255',
+      '172.32.0.0',
+      '192.167.255.255',
+      '192.169.0.0',
+      '100.63.255.255',
+      '100.128.0.0',
+      '169.253.255.255',
+      '169.255.0.0',
+      '0.0.0.0',
+      '255.255.255.255',
+      '::ffff:8.8.8.8',
+      '2001:db8::1',
+      '2601:cb:8100:701::e43f',
+      '2a00:1450:4001:80b::200e',
+      '::',
+      'fc::1',
+      'fd::1',
+      'fbff::1',
+      'fe7f::1',
+      'fec0::1',
+      'ff02::1',
+      '64:ff9b::808:808',
+      '',
+      'localhost',
+      'not an address',
+    ]
+    for (const address of far) expect([address, isPrivate(address)]).toEqual([address, false])
+  })
+
+  test('the door listens at each private address the machine has, and at none of the internet’s, with an address of one link written with its link, by name and on Windows by number', () => {
+    const interfaces = {
+      lo: [
+        { address: '127.0.0.1', family: 'IPv4' as const, internal: true },
+        { address: '::1', family: 'IPv6' as const, internal: true },
+      ],
+      enp3s0: [
+        four('10.0.0.74'),
+        six('2601:cb:8100:701:652d:9e8e:4406:dd97'),
+        six('2601:cb:8100:701::e43f'),
+        { ...six('fe80::2691:f4ec:5bf2:6b81'), scopeid: 2 },
+        six('fd12:3456:789a:1::20'),
+      ],
+      eth1: [four('203.0.113.9'), four('192.168.1.20')],
+      tailscale0: [four('100.109.44.60'), six('fd7a:115c:a1e0::cc01:2c98'), { ...six('fe80::424a:f0c4:8342:7d1e'), scopeid: 16 }],
+      // A bridge's own address under IPv4 is listened at, as every address was; the dozens of links to its containers are not
+      docker0: [four('172.17.0.1'), { ...six('fe80::42:acff:fe11:1'), scopeid: 5 }],
+      veth9a8b7c6: [{ ...six('fe80::1c2d:3eff:fe4f:5a6b'), scopeid: 7 }],
+    }
+    expect(listenAt(interfaces, false)).toEqual(
+      [
+        '10.0.0.74',
+        'fe80::2691:f4ec:5bf2:6b81%enp3s0',
+        'fd12:3456:789a:1::20',
+        '192.168.1.20',
+        '100.109.44.60',
+        'fd7a:115c:a1e0::cc01:2c98',
+        'fe80::424a:f0c4:8342:7d1e%tailscale0',
+        '172.17.0.1',
+      ].sort(),
+    )
+    expect(listenAt(interfaces, true)).toContain('fe80::2691:f4ec:5bf2:6b81%2')
+    expect(listenAt(interfaces, true)).not.toContain('fe80::2691:f4ec:5bf2:6b81%enp3s0')
+    // A machine with only the internet's addresses has nowhere to listen but loopback, which the door listens on whatever the network
+    expect(listenAt({ eth0: [four('203.0.113.9'), six('2001:db8::9')] }, false)).toEqual([])
   })
 
   test('what the system lists for this machine gives addresses that are whole, each with the port, and none of them this machine’s own name for itself', () => {
@@ -230,10 +330,14 @@ const until = async (what: () => boolean | Promise<boolean>, ms = 20_000) => {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 50))) if (await what()) return true
   return false
 }
-/** An address of this machine on a network, where it has one: what another device would open. */
+/** A private address of this machine on a network, where it has one: what another device on the same network would open. */
 const lan = Object.values(os.networkInterfaces())
   .flat()
-  .find((a) => a && !a.internal && a.family === 'IPv4')?.address
+  .find((a) => a && !a.internal && a.family === 'IPv4' && isPrivate(a.address))?.address
+/** An address of the internet's that this machine has, where it has one, which the door answers at only where it answers the internet too. */
+const global6 = Object.values(os.networkInterfaces())
+  .flat()
+  .find((a) => a && !a.internal && a.family === 'IPv6' && !isPrivate(a.address) && /^[23]/.test(a.address))?.address
 /** Whether a test may have the It it started listen on every address this machine has. */
 const mayOpen = Boolean(process.env.CI) || process.env.IT_E2E_NETWORK === '1'
 /** The names of the tests that turn the network on for a running It from beginning to end, and are left out where that was not asked for. */
@@ -349,6 +453,7 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
       on: boolean
       addresses: string[]
       tailnet?: boolean
+      internet?: boolean
     }>
   /** Sets It up, starts its service by hand as `it serve`, and waits until it is all there. */
   async function serving() {
@@ -358,17 +463,22 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
     expect([await until(() => lines().some((line) => /^connector \S+ started/.test(line))), lines().join(' | ')]).toEqual([true, expect.any(String)])
     return service
   }
-  const ON = 'The network is on. Devices on the same network can open It at:'
+  const ON =
+    'The network is on, for anyone on this network. Devices on it can open It, and its pairing screen, at these addresses, and It does not answer the internet:'
+  const INTERNET = 'The network is on, for every address this machine has, the internet’s included. Whoever can reach one can open It at:'
   const OFF = 'The network is off. It answers this machine only.'
   /**
-   * Holds the site's port on another address of this machine than the ones It answers at when
-   * the network is off: one of the machine's own beside its first, or its address on a network.
-   * While it is held, It cannot listen on every address, and stops trying at the first of them,
-   * so nothing of it is opened to a network. Null where the machine has no such address, and on
-   * macOS: there the system lets one program listen on every address while another has the port
-   * on one of them, so nothing held this way is in It's way.
+   * Holds the site's port at the first of this machine's private addresses that It listens at
+   * when the network is on, which It tries first after this machine's own. While it is held, It
+   * cannot listen there, and stops trying, so nothing of it is opened to a network. Null where
+   * the machine has no such address, and on macOS: there the system lets one program listen on
+   * an address while another has the port on every one, so nothing held this way is certain to
+   * be in It's way.
    */
-  const heldBeside = async () => (process.platform === 'darwin' ? null : ((await listening(port, '127.0.0.2')) ?? (lan ? await listening(port, lan) : null)))
+  const heldBeside = async () => {
+    const first = listenAt()[0]
+    return process.platform === 'darwin' || !first ? null : listening(port, first)
+  }
 
   test('where It was never set up it says to run `it setup`, on a machine that only joined an It it says where to turn it, and it takes on, off or nothing', async () => {
     expect(await refused(['network'])).toMatchObject({ exit: 1, code: 'not_set_up' })
@@ -384,7 +494,7 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
     expect(await refused(['network', 'maybe'])).toMatchObject({
       exit: 2,
       code: 'invalid',
-      message: 'It is `it network`, `it network on`, `it network tailscale` or `it network off`.',
+      message: 'It is `it network`, `it network on`, `it network tailscale`, `it network internet` or `it network off`.',
     })
     expect(await refused(['network', 'on', 'now'])).toMatchObject({ exit: 2, code: 'invalid' })
   })
@@ -396,27 +506,39 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
     expect(off).toEqual({ answer: { network: false, addresses: [] }, words: expect.stringContaining(OFF) })
     expect(off.words).toContain(STOPPED)
     const on = await said(['network', 'on'])
-    expect(on.answer).toEqual({ network: true, addresses: reachable(port), ...toTheInternet() })
+    expect(on.answer).toEqual({ network: true, addresses: reachable(port) })
     expect(on.words).toContain(STOPPED)
     expect(settings().network).toBe(true)
     // Asked how it stands, it says what the setting is, and that nothing listens until It starts
     const asked = await said(['network'])
-    expect(asked.answer).toEqual({ network: true, addresses: reachable(port), ...toTheInternet() })
+    expect(asked.answer).toEqual({ network: true, addresses: reachable(port) })
     expect(asked.words).toContain(STOPPED)
     expect((await said(['status'])).answer).toMatchObject({ running: false, network: { on: true, addresses: reachable(port) } })
     if (lan) expect(await answers(lan, port)).toBe(false)
+    // Answering the internet too is a setting of its own, which says so each time it is asked, and goes once the network is turned on again
+    const internet = await said(['network', 'internet'])
+    expect(internet.answer).toEqual({ network: true, internet: true, addresses: reachable(port, undefined, false, () => undefined, true), ...toTheInternet() })
+    expect(internet.words).toContain('Anyone who can reach this machine can open the pairing screen, over plain http')
+    expect(settings()).toMatchObject({ network: true, internet: true })
+    expect((await said(['network'])).answer).toMatchObject({ network: true, internet: true })
+    expect((await said(['network', 'on'])).answer).toEqual({ network: true, addresses: reachable(port) })
+    expect(settings()).not.toHaveProperty('internet')
   }, 120_000)
 
   turningItOn(
-    'a service that starts with the network turned on in its settings listens on every address this machine has',
+    'a service that starts with the network turned on in its settings listens at this machine’s private addresses, and at none of the internet’s',
     async () => {
       expect(await run(['setup', '--none', '--no-service']).ended).toBe(0)
       expect((await said(['network', 'on'])).answer.network).toBe(true)
       run(['serve', '--log', path.join(folder, 'service.log')])
       expect(await until(() => lines().some((line) => /^connector \S+ started/.test(line)))).toBe(true)
-      expect(lines().filter((line) => line.startsWith('door open'))).toEqual([`door open on port ${port} (the network is on: every address this machine has)`])
+      expect(lines().filter((line) => line.startsWith('door open'))).toEqual([
+        `door open on port ${port} (the network is on: this machine’s private addresses only)`,
+      ])
       expect(await told()).toMatchObject({ on: true, addresses: reachable(port) })
       if (lan) expect(await answers(lan, port)).toBe(true)
+      // A request that arrives at an address of the internet's that this machine has is refused by the system
+      if (global6) expect(await answers(global6, port)).toBe(false)
       // Asked about now, nothing is said of It not running
       expect((await said(['network'])).words).not.toContain('not running')
     },
@@ -432,7 +554,7 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
       const backendWas = JSON.parse(readFileSync(path.join(folder, 'backend', 'lock'), 'utf8')).program as number
 
       const on = await said(['network', 'on'])
-      expect(on.answer).toEqual({ network: true, addresses: reachable(port), ...toTheInternet() })
+      expect(on.answer).toEqual({ network: true, addresses: reachable(port) })
       expect(on.words).toContain(ON)
       expect(on.words).not.toContain('not running')
       // The likeliest address is said in words, and every one of them is in what the command answers
@@ -444,13 +566,22 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
         const page = await fetch(`http://${lan}:${port}/`)
         expect([page.status, (await page.text()).includes('<div id="root">')]).toEqual([200, true])
       }
-      expect((await said(['network'])).answer).toEqual({ network: true, addresses: reachable(port), ...toTheInternet() })
+      expect((await said(['network'])).answer).toEqual({ network: true, addresses: reachable(port) })
       expect((await said(['status'])).answer).toMatchObject({ running: true, enrolled: true, network: { on: true, addresses: reachable(port) } })
+      if (global6) expect(await answers(global6, port)).toBe(false)
       // Asked for again as it already is, it is said again and nothing is opened anew
       const opened = () => lines().filter((line) => line.startsWith('door open')).length
       expect(opened()).toBe(2)
       expect((await said(['network', 'on'])).answer.network).toBe(true)
       expect(opened()).toBe(2)
+
+      // Answering the internet too opens the door anew on every address, the internet's among them
+      const internet = await said(['network', 'internet'])
+      expect(internet.answer).toMatchObject({ network: true, internet: true })
+      expect(internet.words).toContain(INTERNET)
+      expect(await told()).toMatchObject({ on: true, internet: true })
+      if (global6) expect(await answers(global6, port)).toBe(true)
+      expect(opened()).toBe(3)
 
       const off = await said(['network', 'off'])
       expect(off.answer).toEqual({ network: false, addresses: [] })
@@ -470,7 +601,9 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
         `door open on port ${port} (the network is off: this machine only)`,
         'connector started',
         'door closed',
-        `door open on port ${port} (the network is on: every address this machine has)`,
+        `door open on port ${port} (the network is on: this machine’s private addresses only)`,
+        'door closed',
+        `door open on port ${port} (the network is on: every address this machine has, the internet’s included)`,
         'door closed',
         `door open on port ${port} (the network is off: this machine only)`,
       ])
