@@ -908,6 +908,36 @@ export function it(home, args, { input, extraEnv = {}, onStderr, onStart, raw = 
   })
 }
 
+/**
+ * `run`, which is `it` unless another is given, held to `ms` milliseconds: past them the program
+ * it started is ended by its own process id, and what was asked fails with the deadline it
+ * missed. With no time left it starts nothing. A script that has only so long for all it does
+ * makes one of these for each program it runs, from what is left of that time.
+ */
+export function within(ms, run = it) {
+  return (home, args, opts = {}) => {
+    if (!(ms > 0)) return Promise.reject(new Error(`it ${args[0]}: no time was left to run it in`))
+    let child
+    let timer
+    const ran = run(home, args, {
+      ...opts,
+      onStart: (started) => {
+        child = started
+        opts.onStart?.(started)
+      },
+    })
+    const missed = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        try {
+          if (child?.pid && child.exitCode === null && child.signalCode === null) process.kill(child.pid, 'SIGKILL')
+        } catch {}
+        reject(new Error(`it ${args[0]}: no answer within ${(ms / 1000).toFixed(1)} s`))
+      }, ms)
+    })
+    return Promise.race([ran, missed]).finally(() => clearTimeout(timer))
+  }
+}
+
 // ---------- a backend program that was left running ----------
 
 /** Whether a program is running, by its number. */

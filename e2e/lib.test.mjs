@@ -30,6 +30,7 @@ import {
   takeOut,
   usageReceiver,
   whyNotInstall,
+  within,
   wrongWithBatch,
   wrongWithUsage,
 } from './lib.mjs'
@@ -545,6 +546,41 @@ describe('asking for what It gives only so often', () => {
     await expect(patiently(refused, { wait: 1 })).rejects.toMatchObject({ code: 'forbidden' })
     expect(await patiently(async () => ({ ok: false, code: 'forbidden' }), { wait: 1 })).toEqual({ ok: false, code: 'forbidden' })
     expect(times).toBe(1)
+  })
+})
+
+describe('a program held to the time a script has left', () => {
+  /** A stand-in for `it` that starts a program and resolves with what it printed when it ends, as `it` does. */
+  const standIn =
+    (code) =>
+    (_home, _args, { onStart } = {}) =>
+      new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'pipe', 'ignore'] })
+        onStart?.(child)
+        let out = ''
+        child.stdout.on('data', (d) => (out += d))
+        child.on('error', reject)
+        child.on('close', (exit) => (exit === 0 ? resolve(out.trim()) : reject(new Error(`exited ${exit}`))))
+      })
+
+  test('is ended by its own process id when it stalls past its time, and what was asked fails with that', async () => {
+    let child
+    const stalled = standIn('setInterval(() => {}, 1e9)')
+    const begun = Date.now()
+    await expect(within(300, stalled)('home', ['actions', '--id', 'p'], { onStart: (c) => (child = c) })).rejects.toThrow('it actions: no answer within 0.3 s')
+    expect(Date.now() - begun).toBeLessThan(3000)
+    await new Promise((resolve) => (child.exitCode === null && child.signalCode === null ? child.once('exit', resolve) : resolve()))
+    expect(child.signalCode).toBe('SIGKILL')
+    expect(() => process.kill(child.pid, 0)).toThrow()
+  })
+
+  test('starts nothing when no time is left, and gives what a program that ends in time printed', async () => {
+    let started = 0
+    const counted = (home, args, opts = {}) => standIn('console.log("done")')(home, args, { ...opts, onStart: () => started++ })
+    await expect(within(0, counted)('home', ['site'])).rejects.toThrow('it site: no time was left to run it in')
+    expect(started).toBe(0)
+    await expect(within(10_000, counted)('home', ['site'])).resolves.toBe('done')
+    expect(started).toBe(1)
   })
 })
 

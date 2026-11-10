@@ -15,10 +15,12 @@
 // The whole check is over within --within seconds, 900 unless it says otherwise. Every request
 // to the driver has a deadline of its own that covers its whole answer (e2e/webdriver.mjs), and
 // none is given more than is left of that time, less what is kept for the end of each try: the
-// screenshot and the session's end are each given a short deadline of their own from that.
+// screenshot and the session's end are each given a short deadline of their own from that. Each
+// run of the command (the page's making, the pairing address, the actions It holds) is held to
+// what is left in the same way, and the command is ended by its process id once that is spent.
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { it, needsStack, sleep } from './lib.mjs'
+import { needsStack, sleep, within } from './lib.mjs'
 import { printCleanly, redact } from './logs.mjs'
 import { ownerAddress } from './site.mjs'
 import { webdriver } from './webdriver.mjs'
@@ -65,6 +67,8 @@ document.getElementById('press').addEventListener('click', () => {
 const ask = webdriver(DRIVER)
 /** A request to the driver, given `ms` or what is left of the check's time, whichever is less. */
 const driver = (method, url, body, ms = 30_000) => ask(method, url, body, { ms: left(ms) })
+/** The command, run as `it` is (e2e/lib.mjs), and ended by its process id once it has had `ms` or what is left of the check's time. */
+const cli = (home, args, opts, ms = 30_000) => within(left(ms))(home, args, opts)
 
 /** One try: a session of its own, paired afresh. Resolves with what it saw, and throws with where it stopped. */
 async function attempt(n) {
@@ -100,7 +104,7 @@ async function attempt(n) {
   }
   try {
     said(`${session.capabilities.browserName} ${session.capabilities.browserVersion} on ${session.capabilities.platformName}`)
-    await driver('POST', s('/url'), { url: await ownerAddress() })
+    await driver('POST', s('/url'), { url: await ownerAddress({ run: cli }) })
     await until('the browser was not shown the site as a paired one', "return !!document.querySelector('header.bar')", 90_000)
     said('paired')
     paired = true
@@ -150,7 +154,7 @@ async function attempt(n) {
     const sent = await until('the page’s action was not answered', "const v = document.body.dataset.sent; return v && v !== 'sending' ? { v } : null", 30_000)
     if (sent.v !== 'yes') throw new Error(`the page’s action was ${sent.v}`)
     said(`pressed by ${pressedBy}, and the action was accepted`)
-    const held = await it(STACK.home, ['actions', '--id', PAGE])
+    const held = await cli(STACK.home, ['actions', '--id', PAGE])
     if (!JSON.stringify(held).includes(shown.word)) throw new Error('It holds no action for the page with the word this press sent')
     said('It holds the action')
     await driver('POST', s('/frame/parent'), {})
@@ -168,7 +172,10 @@ async function attempt(n) {
 }
 
 // The page, made afresh, or put back as it is here where an earlier run left it
-await it(STACK.home, ['create', 'Safari check', '--id', PAGE, '--html', HTML]).catch(() => it(STACK.home, ['update', PAGE, '--html', HTML]))
+// A command that ran out of time is said as such, and not hidden behind an update with none left
+await cli(STACK.home, ['create', 'Safari check', '--id', PAGE, '--html', HTML]).catch((e) =>
+  /no answer within|no time was left/.test(e.message) ? Promise.reject(e) : cli(STACK.home, ['update', PAGE, '--html', HTML]),
+)
 let passed = 0
 const faults = []
 for (let n = 1; n <= TRIES && left(60_000) >= 60_000; n++) {
