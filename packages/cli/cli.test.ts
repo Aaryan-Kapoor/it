@@ -838,10 +838,33 @@ describe('starting Codex to queue a click', () => {
     // In one folder, the program before the script, as Windows takes them
     expect(codexCommand('win32', NPM, ...disk({ [`${NPM}\\codex.exe`]: '', [`${NPM}\\codex.cmd`]: npmShim, [NPM_SCRIPT]: '' }))).toEqual([`${NPM}\\codex.exe`])
   })
-  test('on Windows, a Codex that only a shell could start is not started, and the click waits instead', () => {
-    const PATH = `${NPM};C:\\tools;C:\\Program Files\\nodejs`
-    // No script, no Node, a shim that cannot be read, or no PATH at all; and a program in a later folder is not taken in its place
-    expect(codexCommand('win32', PATH, ...disk({ [`${NPM}\\codex.cmd`]: npmShim, [NODE]: '', 'C:\\tools\\codex.exe': '' }))).toBeNull()
+  test('on Windows, a shim It cannot start safely is passed over for the next Codex on the PATH, as Codex was found before', () => {
+    // An old npm shim whose script is gone, before Codex's own program where its installer puts it
+    const EXE = 'C:\\Users\\a\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe'
+    const PATH = `${NPM};C:\\Users\\a\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin;C:\\Program Files\\nodejs`
+    expect(codexCommand('win32', PATH, ...disk({ [`${NPM}\\codex.cmd`]: npmShim, [NODE]: '', [EXE]: '' }))).toEqual([EXE])
+    // Shims that start something other than Node, or cannot be read, are passed over for a later shim that works; with no Node anywhere neither works
+    const later = `${PNPM}\\codex.CMD`
+    const PATHS = `${NPM};${PNPM};C:\\Program Files\\nodejs`
+    expect(codexCommand('win32', PATHS, ...disk({ [`${NPM}\\codex.cmd`]: npmShim, [NPM_SCRIPT]: '', [later]: pnpmShim, [PNPM_SCRIPT]: '' }))).toBeNull()
+    expect(
+      codexCommand(
+        'win32',
+        PATHS,
+        ...disk({ [`${NPM}\\codex.cmd`]: '@ECHO off\r\ncall something-else %*\r\n', [later]: pnpmShim, [PNPM_SCRIPT]: '', [NODE]: '' }),
+      ),
+    ).toEqual([NODE, PNPM_SCRIPT])
+    const [exists, read] = disk({ [`${NPM}\\codex.cmd`]: npmShim, [NPM_SCRIPT]: '', [later]: pnpmShim, [PNPM_SCRIPT]: '', [NODE]: '' })
+    const unread = (file: string) => {
+      if (file.toLowerCase().startsWith(NPM.toLowerCase())) throw new Error('EACCES')
+      return read(file)
+    }
+    expect(codexCommand('win32', PATHS, exists, unread)).toEqual([NODE, PNPM_SCRIPT])
+  })
+  test('on Windows, where no Codex on the PATH can be started without a shell, nothing is started and the click waits instead', () => {
+    const PATH = `${NPM};C:\\Program Files\\nodejs`
+    // No script, no Node, a shim that cannot be read, or no PATH at all
+    expect(codexCommand('win32', PATH, ...disk({ [`${NPM}\\codex.cmd`]: npmShim, [NODE]: '' }))).toBeNull()
     expect(codexCommand('win32', PATH, ...disk({ [`${NPM}\\codex.cmd`]: npmShim, [NPM_SCRIPT]: '' }))).toBeNull()
     const [exists] = disk({ [`${NPM}\\codex.cmd`]: npmShim, [NPM_SCRIPT]: '', [NODE]: '' })
     expect(

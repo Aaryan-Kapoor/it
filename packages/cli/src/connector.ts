@@ -93,6 +93,7 @@ import {
   WAS_STOPPED,
   WOKEN,
   windowsProgram,
+  windowsPrograms,
 } from './wake'
 import { wakeWhy } from './wake-why'
 
@@ -359,14 +360,16 @@ export const choices = (platform: string, harnesses: string[]) => [
  * The words that start Codex with no shell in between. Elsewhere that is just `codex`. On
  * Windows, Codex installed through npm or pnpm is a .cmd file, which only a shell can start, and
  * a shell would read a page's title as part of the command. So Codex is found as every agent app
- * is there (see `windowsProgram`): the first Codex on the PATH, as Windows itself would take,
- * whether that is Codex's own .exe or a command script, of which what it starts is read out and
- * started directly. Null when nothing is found that can be started so; the click then waits
- * where the person can see it.
+ * is there (see `windowsPrograms`): in the PATH's order, as Windows itself would take it, Codex's
+ * own .exe or a command script, of which what it starts is read out and started directly. A
+ * script that cannot be read so, as an old one whose package is gone, is passed over for the
+ * next Codex on the PATH, which is how Codex was found before. Null when nothing is found that
+ * can be started so; the click then waits where the person can see it.
  */
 export function codexCommand(platform: string, pathVar: string, exists: (file: string) => boolean, read: (file: string) => string): string[] | null {
   if (platform !== 'win32') return ['codex']
-  return windowsProgram('codex', pathVar, exists, read)
+  for (const found of windowsPrograms('codex', pathVar, exists, read)) if (found) return found
+  return null
 }
 /** The words that start Codex with the environment it is given, for a click queued in an open Codex and for a closed conversation reopened alike. */
 export const codexIn = (env: NodeJS.ProcessEnv): string[] | null =>

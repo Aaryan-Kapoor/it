@@ -847,21 +847,27 @@ export const windowsLine = (argv: string[]): string =>
  * there. Null where nothing is found that can be started so.
  */
 export function windowsProgram(name: string, pathVar: string, exists: (file: string) => boolean, read: (file: string) => string): string[] | null {
+  return windowsPrograms(name, pathVar, exists, read).next().value ?? null
+}
+/**
+ * Each program or command script of that name the PATH finds, one for each folder that has one
+ * and in the PATH's order, as `windowsProgram` reads the first: the words that start it, or
+ * null for a script that cannot be started without a shell.
+ */
+export function* windowsPrograms(name: string, pathVar: string, exists: (file: string) => boolean, read: (file: string) => string): Generator<string[] | null> {
   const dirs = pathVar
     .split(';')
     .map((dir) => dir.trim().replace(/^"(.*)"$/, '$1'))
     .filter((dir) => path.win32.isAbsolute(dir))
   for (const dir of dirs) {
-    for (const ext of ['.com', '.exe']) {
-      const program = path.win32.join(dir, `${name}${ext}`)
-      if (exists(program)) return [program]
+    const program = ['.com', '.exe'].map((ext) => path.win32.join(dir, `${name}${ext}`)).find(exists)
+    if (program) {
+      yield [program]
+      continue
     }
-    for (const ext of ['.bat', '.cmd']) {
-      const script = path.win32.join(dir, `${name}${ext}`)
-      if (exists(script)) return throughScript(script, dirs, exists, read)
-    }
+    const script = ['.bat', '.cmd'].map((ext) => path.win32.join(dir, `${name}${ext}`)).find(exists)
+    if (script) yield throughScript(script, dirs, exists, read)
   }
-  return null
 }
 /** What a package manager's command script starts, as words: see `windowsProgram`. */
 function throughScript(script: string, dirs: string[], exists: (file: string) => boolean, read: (file: string) => string): string[] | null {
