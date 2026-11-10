@@ -1320,6 +1320,147 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('`it open --on-id` asks for that display by its id alone, prints the ids it is shown on, and takes no page for a command with no conversation', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show'
+        ? { displays: ['Desk'], displayIds: ['jh7desk'], notShown: [{ display: 'Laptop', displayId: 'k57laptop', reason: 'not_paired' }], took: false }
+        : null,
+    )
+    b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.notifyById] })
+    try {
+      const opened = await run(m, ['open', 'board', '--on-id', 'jh7desk'], b.env)
+      expect(opened.code).toBe(0)
+      expect(printed(opened)).toMatchObject({
+        id: 'board',
+        shownOn: ['Desk'],
+        shownDisplayIds: ['jh7desk'],
+        notShownOn: [{ display: 'Laptop', displayId: 'k57laptop', reason: 'not_paired' }],
+      })
+      expect(b.asked.find((x) => x.path === 'displays:show')!.args).toEqual({ slug: 'board', displayId: 'jh7desk' })
+      expect(b.asked.filter((x) => x.path === 'artifacts:take')).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--on` and `--on-id` together, or either of them empty, are refused before anything is asked or published', async () => {
+    const m = machine()
+    const b = await backend(m, () => null)
+    try {
+      for (const words of [
+        ['open', 'board', '--on', 'Desk', '--on-id', 'jh7desk'],
+        ['open', 'board', '--on-id='],
+        ['open', 'board', '--on=  '],
+        ['notify', 'hello', '--on', 'Desk', '--on-id', 'jh7desk'],
+        ['create', 'Board', '--html', '<p>hi</p>', '--open', '--on', 'Desk', '--on-id', 'jh7desk'],
+        ['update', 'board', '--html', '<p>hi</p>', '--open', '--on-id='],
+      ]) {
+        const ran = await run(m, words, b.env)
+        expect([words.join(' '), ran.code, error(ran).code]).toEqual([words.join(' '), 2, 'invalid'])
+      }
+      expect(b.asked).toEqual([])
+      expect(b.uploads).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('an id no display has is refused as not found, and the hint lists each display with its id', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show' || asked.path === 'notifications:send'
+        ? new Refusal({ code: 'not_found', message: 'No display has that id.', noSuchDisplay: true } as never)
+        : asked.path === 'displays:list'
+          ? [
+              { id: 'jh7desk', name: 'Desk' },
+              { id: 'k57tv', name: 'TV' },
+            ]
+          : null,
+    )
+    b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.notifyById] })
+    try {
+      for (const words of [
+        ['open', 'board', '--on-id', 'nope'],
+        ['notify', 'hello', '--on-id', 'nope'],
+      ]) {
+        const ran = await run(m, words, b.env)
+        expect([ran.code, error(ran).code, error(ran).message]).toEqual([1, 'not_found', 'No display has the id "nope".'])
+        expect(error(ran).hint).toBe('Displays: "Desk" (jh7desk), "TV" (k57tv)')
+      }
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('against an It of an earlier version, `--on-id` is refused before anything is sent or published, and never asked again by a name or for every display', async () => {
+    const m = machine()
+    // An earlier It fails a call with an argument it does not know, and says nothing of why. It
+    // names no later form at its door, which is its word that it takes none of them
+    const b = await backend(m, (asked) =>
+      (asked.path === 'displays:show' || asked.path === 'notifications:send') && 'displayId' in asked.args ? SERVER_ERROR : null,
+    )
+    try {
+      for (const words of [
+        ['open', 'board', '--on-id', 'jh7desk'],
+        ['notify', 'hello', '--on-id', 'jh7desk'],
+        ['create', 'Board', '--html', '<p>hi</p>', '--open', '--on-id', 'jh7desk'],
+        ['update', 'board', '--html', '<p>hi</p>', '--open', '--on-id', 'jh7desk'],
+        ['tour', 'show', 'menu', '--on-id', 'jh7desk'],
+      ]) {
+        const ran = await run(m, words, b.env)
+        expect([words.join(' '), ran.code, error(ran).code]).toEqual([words.join(' '), 2, 'invalid'])
+        expect(error(ran).message).toContain('earlier version')
+      }
+      // Nothing was asked of It but whether it takes the form, and nothing was published
+      expect(b.asked).toEqual([])
+      expect(b.uploads).toEqual([])
+      expect(b.config.asked).toBe(5)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('where It cannot say whether it takes `--on-id`, nothing is sent or published, and the command is refused as offline', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'displays:show' ? { displays: ['Desk'], displayIds: ['jh7desk'], took: false } : { id: 'n1' }))
+    try {
+      // Its door answers with nothing It would say, as a door that is not It's does, while its functions can still be called
+      b.config.answer = () => ({})
+      for (const words of [
+        ['open', 'board', '--on-id', 'jh7desk'],
+        ['notify', 'hello', '--on-id', 'jh7desk'],
+        ['create', 'Board', '--html', '<p>hi</p>', '--open', '--on-id', 'jh7desk'],
+        ['update', 'board', '--html', '<p>hi</p>', '--open', '--on-id', 'jh7desk'],
+        ['tour', 'show', 'menu', '--on-id', 'jh7desk'],
+      ]) {
+        const ran = await run(m, words, b.env)
+        expect([words.join(' '), ran.code === 0, error(ran).code]).toEqual([words.join(' '), false, 'offline'])
+      }
+      expect(b.asked).toEqual([])
+      expect(b.uploads).toEqual([])
+      // Once It says it takes the form, the same command is sent, by the id alone
+      b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.notifyById] })
+      expect((await run(m, ['open', 'board', '--on-id', 'jh7desk'], b.env)).code).toBe(0)
+      expect(b.asked.map((x) => x.args)).toEqual([{ slug: 'board', displayId: 'jh7desk' }])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it notify --on-id` sends to that display by its id', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'notifications:send' ? { id: 'n1' } : null))
+    b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.notifyById] })
+    try {
+      const ran = await run(m, ['notify', 'hello', '--on-id', 'jh7desk'], b.env)
+      expect(ran.code).toBe(0)
+      expect(b.asked.find((x) => x.path === 'notifications:send')!.args).toEqual({ text: 'hello', displayId: 'jh7desk' })
+    } finally {
+      await b.close()
+    }
+  })
+
   test.each([
     ['the machine It runs on', true],
     ['a machine that joined', false],
@@ -1826,7 +1967,12 @@ describe.skipIf(process.platform === 'win32' || !python)('the lists a person ask
         '  board    Tic-tac-toe  Claude Code on the desk  2 h ago',
         '',
       ])
-      expect((await atTerminal(m, ['displays'], b.env)).shown.split('\n')).toEqual(['1 display:', '  Kitchen  paired  seen just now', ''])
+      expect((await atTerminal(m, ['displays'], b.env)).shown.split('\n')).toEqual([
+        '1 display:',
+        '  Kitchen  paired  seen just now  d1',
+        'A display is named with --on "<name>", or by the id beside it with --on-id <id>.',
+        '',
+      ])
       expect((await atTerminal(m, ['whoami'], b.env)).shown.split('\n')).toEqual([
         'It knows this machine as “the desk”.',
         'Connected here: Pi.',

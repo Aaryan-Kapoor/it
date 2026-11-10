@@ -31,6 +31,7 @@ import { askTwice } from './backend'
 import { api, displayKey, type Id, note, refusal } from './lib'
 import { useLiveState } from './live'
 import { type Sent, submit } from './outbox'
+import { reportPage } from './presence'
 
 type Phase = { is: 'loading' } | { is: 'shown' } | { is: 'failed'; why: string }
 const REMOUNT_EVERY_MS = 10_000
@@ -99,6 +100,13 @@ export function Mount({
   const faulted = useRef<number | null>(null)
   const liveState = useLiveState(artifactId)
   const again = useCallback(() => setAttempt((n) => n + 1), [])
+  // What this tab shows, for what the display says of itself: this page's showing and how far it
+  // has got, and nothing once the page is left
+  const mountId = mount?.mountId
+  useEffect(() => {
+    reportPage(mountId === undefined ? 'none' : phase.is, mountId)
+  }, [phase.is, mountId])
+  useEffect(() => () => reportPage('none'), [])
 
   // 1 and 2. a fresh mount for every showing, and its one ticket
   useEffect(() => {

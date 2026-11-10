@@ -358,7 +358,35 @@ export const learnClock = (serverNow: number, trip?: { sent: ClockReading; back:
     return
   }
   skew = trip.back.wall - (serverNow + (trip.back.mono - trip.sent.mono) / 2)
-  clock.learn(serverNow, trip.sent, trip.back)
+  if (clock.learn(serverNow, trip.sent, trip.back)) for (const learned of [...clockLearned]) learned()
+}
+/** What is told each time the backend's clock is learned from a heartbeat. */
+const clockLearned = new Set<() => void>()
+/** Tells `then` each time the backend's clock is learned. Returns what stops it. */
+export const onClockLearned = (then: () => void): (() => void) => {
+  clockLearned.add(then)
+  return () => clockLearned.delete(then)
+}
+let clockAsker: (() => void) | undefined
+/** Sets what asks the backend for its clock at once, which is the display's heartbeat. Returns what unsets it. */
+export const setClockAsker = (ask: () => void): (() => void) => {
+  clockAsker = ask
+  return () => {
+    if (clockAsker === ask) clockAsker = undefined
+  }
+}
+/** Asks the backend for its clock at once, where something asks it: after a sleep, what this browser knew of it is too uncertain. */
+export const askClock = (): void => clockAsker?.()
+/** How far out the backend's time may be for a tab to say by it when it said something of itself (`displays.report`), well within what the backend allows. */
+export const REPORT_CLOCK_MS = 3000
+/**
+ * The backend's time now, where this browser knows it to within `REPORT_CLOCK_MS`. Otherwise
+ * nothing: before the clock is learned, and after the machine slept, when the clock that only
+ * goes forward stood still while the time went on, which shows as the time being that far out.
+ */
+export const reportClock = (): number | undefined => {
+  const n = clock.now()
+  return n && n.within <= REPORT_CLOCK_MS ? n.at : undefined
 }
 export const serverNow = () => Date.now() - skew
 /**
@@ -418,6 +446,8 @@ export interface Refusal {
   message: string
   /** Set when a display's key is refused because the person removed that display. */
   forgotten?: boolean
+  /** Set when a display is given a name that another display already has. */
+  nameTaken?: boolean
 }
 /**
  * Something went wrong that the person is told little or nothing about, and that someone
@@ -441,6 +471,18 @@ export function refusal(err: unknown): Refusal {
     if (data && typeof data === 'object' && 'code' in data) return data as Refusal
   }
   return { code: 'error', message: 'Something went wrong. Try again.' }
+}
+
+/**
+ * Renaming a display, refused with the name in the person's own words where another display
+ * already has it. The backend says that without the name, since a refusal is kept in its own
+ * record of what failed, and the name is the person's.
+ */
+export function renaming<T>(asked: Promise<T>, name: string): Promise<T> {
+  return asked.catch((err) => {
+    if (refusal(err).nameTaken) throw new ConvexError({ code: 'conflict', message: `Another screen is already called ${name.trim()}. Pick another name.` })
+    throw err
+  })
 }
 
 // ---------- time ----------

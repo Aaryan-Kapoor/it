@@ -254,6 +254,21 @@ describe('live previews on this screen', () => {
   })
 })
 
+describe('a name another display has', () => {
+  test('is refused in the person’s own words, with the name they typed', async () => {
+    const { ConvexError } = await import('convex/values')
+    answers['displays:rename'] = () => {
+      throw new ConvexError({ code: 'conflict', message: 'Another screen already has that name. Pick another name.', nameTaken: true })
+    }
+    const { Settings } = await import('./settings')
+    await show(createElement(Settings, { user: 'user-1', owner: false, display: DISPLAYS[0]!, onSignOut: vi.fn() }))
+    await press('Rename')
+    await type(host.querySelector('input[aria-label="Display name"]') as HTMLInputElement, ' Kitchen TV ')
+    await press('Save')
+    expect(host.textContent).toContain('Another screen is already called Kitchen TV. Pick another name.')
+  })
+})
+
 describe('erasing everything', () => {
   test('it is asked of the backend only once the phrase is typed, for the person who confirmed, and then this browser’s session is ended', async () => {
     const asked: string[] = []

@@ -1728,7 +1728,11 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     // Its service is gone and the program hangs, and then the folder is given another name. A
     // program that does not hang ends by itself when its folder is called something else.
     const gone = serve(base, undefined, undefined, { IT_HOME: first })
-    expect(await until(() => healthy(base))).toBe(true)
+    // Started is what the service itself says, once It's functions are loaded and noted beside
+    // the database. The backend's own health answers a moment before that, as soon as the
+    // functions are in: a service killed then has a loading whose end was never learned, and
+    // the next start rightly keeps a copy before loading them again
+    expect(await until(() => gone.out().includes('READY'))).toBe(true)
     const pid = readJson<{ program: number }>(path.join(first, 'backend', 'lock'))!.program
     gone.child.kill('SIGKILL')
     await gone.ended

@@ -4046,7 +4046,15 @@ describe('displays and machines', () => {
     expect(await (await t.fetch('/cli/config')).json()).toEqual({
       protocol: 1,
       issuer: SITE,
-      takes: ['delivery.allWaiting.for', 'actions.madeAt', 'delivery.inboxPage.held', 'mounts.picture'],
+      takes: [
+        'delivery.allWaiting.for',
+        'actions.madeAt',
+        'delivery.inboxPage.held',
+        'mounts.picture',
+        'displays.show.displayId',
+        'notifications.send.displayId',
+        'displays.report',
+      ],
       now: expect.any(Number),
     })
     const key = await aKeyPair()
