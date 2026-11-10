@@ -6,99 +6,91 @@
 <title>A chessboard</title>
 <style>
 /*kit.css*/
-  /* The board is as wide as the card lets it be and as tall as the window lets it be, whichever
-     is less, and the card is cut to the board */
-  :root { --field: #f4f1ea; --b: max(216px, min(464px, 100vw - 96px, 100vh - 372px)); --w: calc(var(--b) + 56px); }
-  @supports (height: 100dvh) { :root { --b: max(216px, min(464px, 100vw - 96px, 100dvh - 372px)); } }
-  @media (max-width: 620px) {
-    :root { --b: max(216px, min(464px, 100vw - 60px, 100vh - 342px)); --w: calc(var(--b) + 36px); }
-    @supports (height: 100dvh) { :root { --b: max(216px, min(464px, 100vw - 60px, 100dvh - 342px)); } }
+  /* The board is as wide as its side of the screen lets it be and as tall as the window lets it
+     be, whichever is less. The person's pieces are white and the agent's are its green. */
+  :root { --b: max(216px, min(56vw, 100vh - 11vh - 196px, 640px)); }
+  @supports (height: 100dvh) { :root { --b: max(216px, min(56vw, 100dvh - 11dvh - 196px, 640px)); } }
+  @media (max-width: 820px) {
+    :root { --b: max(216px, min(100vw - 36px, 100vh - 318px, 560px)); }
+    @supports (height: 100dvh) { :root { --b: max(216px, min(100vw - 36px, 100dvh - 318px, 560px)); } }
   }
   .t-h { transition: opacity .3s; }
   /* While the move is the agent's, the words that say it is yours stand back */
-  .t-card[data-wait="1"] .t-h { opacity: .26; }
-  .t-plate { max-width: calc(100% - 30px); }
-  .t-plate small { overflow: hidden; text-overflow: ellipsis; }
+  .t-wrap[data-wait="1"] .t-h { opacity: .26; }
+  .t-card { gap: 12px; }
 
   /* One square is 1em of the board, so that everything on it is cut to its size */
   .board {
-    position: relative; flex: none; align-self: center; width: var(--b); height: var(--b);
+    position: relative; flex: none; width: var(--b); height: var(--b);
     display: grid; grid-template: repeat(8, 1fr) / repeat(8, 1fr);
-    border-radius: 12px; overflow: hidden; font-size: calc(var(--b) / 8); line-height: 1;
+    border-radius: 10px; overflow: hidden; font-size: calc(var(--b) / 8); line-height: 1;
+    box-shadow: 0 0 0 1px var(--w-line), 0 0 120px -30px rgba(255, 255, 255, .16);
     -webkit-user-select: none; user-select: none; touch-action: manipulation;
     /* Drawn as a layer of its own, which keeps the coloured fringes of sub-pixel text off the pieces */
     will-change: transform;
   }
-  .sq {
+  body.w .sq {
     position: relative; min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0;
     -webkit-appearance: none; appearance: none; font-size: 1em; cursor: default;
-    background: #f3ebdc; color: #b99468;
+    background: #262626; color: #6b6b6b; transition: background .25s;
   }
-  .sq.dk { background: #c9a57c; color: #f3ebdc; }
-  .sq.last { background: #f7dd8a; color: #b48f2f; }
-  .sq.check { background: var(--coral); color: #fff; }
-  .sq.can { cursor: pointer; }
-  @media (hover: hover) { .sq.can:hover { box-shadow: inset 0 0 0 .05em rgba(14, 14, 16, .2); } }
-  .sq.pick, .sq.pick:hover { box-shadow: inset 0 0 0 .065em var(--ink); }
-  .sq:focus-visible { outline: 0; box-shadow: inset 0 0 0 .065em var(--sky); }
-  .sq.pick:focus-visible { box-shadow: inset 0 0 0 .065em var(--sky), inset 0 0 0 .13em var(--ink); }
+  body.w .sq.dk { background: #131313; color: #585858; }
+  .sq { animation: square .5s var(--w-ease) backwards; animation-delay: calc(.45s + var(--i, 0) * 38ms); }
+  @keyframes square { from { opacity: 0; transform: scale(.6); } }
+  /* The move made last: the person's in a lighter grey, the agent's in its green */
+  body.w .sq.last { background: #4a4a4a; color: #a3a3a3; }
+  body.w .board[data-by="b"] .sq.last { background: #17553f; color: #7fe3bf; }
+  body.w .sq.check { background: var(--w-red); color: #fff; }
+  body.w .sq.can { cursor: pointer; }
+  @media (hover: hover) { .sq.can:hover { box-shadow: inset 0 0 0 .04em rgba(255, 255, 255, .35); } }
+  .sq.pick, .sq.pick:hover { box-shadow: inset 0 0 0 .06em #fff; }
+  body.w .sq:focus-visible { outline: 0; border-radius: 0; box-shadow: inset 0 0 0 .06em var(--w-ok); }
+  body.w .sq.pick:focus-visible { box-shadow: inset 0 0 0 .06em var(--w-ok), inset 0 0 0 .12em #fff; }
   /* Where the piece that is picked up may go: a dot on an empty square, a ring round a piece it would take */
   .sq.to::after {
-    content: ""; position: absolute; left: 50%; top: 50%; width: 30%; height: 30%; margin: -15% 0 0 -15%;
-    border-radius: 50%; background: rgba(14, 14, 16, .26); pointer-events: none;
+    content: ""; position: absolute; left: 50%; top: 50%; width: 26%; height: 26%; margin: -13% 0 0 -13%;
+    border-radius: 50%; background: rgba(255, 255, 255, .34); pointer-events: none;
   }
-  .sq.to.cap::after { width: 90%; height: 90%; margin: -45% 0 0 -45%; background: none; box-shadow: inset 0 0 0 .075em rgba(14, 14, 16, .34); }
-  .sq.to:hover::after { background: rgba(14, 14, 16, .42); }
-  .sq.to.cap:hover::after { background: none; box-shadow: inset 0 0 0 .075em rgba(14, 14, 16, .55); }
+  .sq.to.cap::after { width: 88%; height: 88%; margin: -44% 0 0 -44%; background: none; box-shadow: inset 0 0 0 .06em rgba(255, 255, 255, .5); }
+  .sq.to:hover::after { background: rgba(255, 255, 255, .6); }
+  .sq.to.cap:hover::after { background: none; box-shadow: inset 0 0 0 .06em rgba(255, 255, 255, .8); }
   /* The names of the squares, along the left and the bottom, since the moves are said by them */
-  .co { position: absolute; font-size: max(9px, .17em); font-weight: 700; font-style: normal; line-height: 1; pointer-events: none; }
+  .co { position: absolute; font-family: var(--w-mono); font-size: max(8px, .15em); font-style: normal; line-height: 1; pointer-events: none; }
   .co.r { left: 6%; top: 6%; }
   .co.f { right: 7%; bottom: 5%; }
 
-  /* The pieces: the solid figures for both sides, so that the shapes match. Black's are ink;
-     White's are white with a line of ink drawn round them, and read on either colour of square */
+  /* The pieces: the solid figures for both sides, so that the shapes match */
   .pc {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
     font-family: "Noto Sans Symbols 2", "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", "Arial Unicode MS", sans-serif;
-    font-size: .86em; font-weight: 400; line-height: 1; color: #0e0e10; pointer-events: none;
+    font-size: .84em; font-weight: 400; line-height: 1; color: var(--w-ok); pointer-events: none;
+    text-shadow: 0 .03em .05em rgba(0, 0, 0, .6);
   }
-  .pc.w { color: #ffffff; -webkit-text-stroke: .075em #0e0e10; paint-order: stroke fill; }
-  @supports not (-webkit-text-stroke: 1px #000) {
-    .pc.w { text-shadow: 1px 0 #0e0e10, -1px 0 #0e0e10, 0 1px #0e0e10, 0 -1px #0e0e10, 1px 1px #0e0e10, -1px -1px #0e0e10, 1px -1px #0e0e10, -1px 1px #0e0e10; }
-  }
+  .pc.w { color: #ffffff; }
   /* A piece on its way from one square to another, over the board and not in any square */
   .pc.fly { inset: auto; width: 12.5%; height: 12.5%; z-index: 3; }
 
-  .foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; }
-  .hint { margin: 0; font-size: 13.5px; line-height: 1.3; color: var(--ink3); }
-  .new {
-    flex: none; height: 32px; padding: 0 13px; border: 0; border-radius: 10px; cursor: pointer;
-    background: var(--paper); color: var(--ink2); font-size: 13.5px; font-weight: 600; letter-spacing: -.01em;
-  }
-  .new:hover { background: var(--paper2); color: var(--ink); }
-  .new:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
-  /* A window too short for all of it (a phone on its side): nothing is squeezed and nothing is cut off, the page scrolls */
-  @media (max-height: 587px) {
-    .t-wrap { justify-content: flex-start; overflow-y: auto; }
-    .t-card, .t-log { flex: none; max-height: none; }
-  }
-  @media (prefers-reduced-motion: reduce) { .t-h { transition: none; } }
+  .foot { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; width: var(--b); min-height: 30px; }
+  .hint { margin: 0; font-family: var(--w-mono); font-size: 12px; line-height: 1.3; color: var(--w-muted); }
+  .foot .t-btn { flex: none; }
+  @media (prefers-reduced-motion: reduce) { .t-h, .sq { transition: none; animation: none; } }
 </style>
 </head>
-<body>
-  <div class="t-wrap">
-    <div class="t-card">
-      <div class="t-plate" id="t-plate"><i></i><b></b><small></small></div>
+<body class="w">
+  <div class="t-wrap" id="wrap">
+    <div class="t-words">
       <h1 class="t-h" id="head">{{heading}}</h1>
+      <div class="t-log" aria-live="polite">
+        <p class="t-you" id="t-you"><span>you</span><b></b></p>
+        <p class="t-did" id="t-did"><span></span><b></b></p>
+      </div>
+    </div>
+    <div class="t-card">
       <div class="board" id="board" role="group" aria-label="The chessboard. You play White, from the bottom."></div>
       <div class="foot">
         <p class="hint" id="hint"></p>
-        <button class="new" id="new" type="button">New game</button>
+        <button class="t-btn quiet" id="new" type="button">New game</button>
       </div>
-    </div>
-    <div class="t-log" aria-live="polite">
-      <p class="t-you" id="t-you"><span>&larr; you</span><b></b></p>
-      <p class="t-did" id="t-did"><span></span><b></b></p>
     </div>
   </div>
 <!--rail-->
@@ -324,11 +316,12 @@
   // A game of chess. The person plays White from the bottom and the agent plays Black. Each
   // move of the person goes to the agent with the position it left and every move the agent may
   // answer with; the agent answers by setting `reply` in the state to one of those, and the
-  // page plays it on the board. The rules are the engine's, above: nothing here decides a move.
+  // page plays it on the board: the agent's hand goes to its piece and carries it to its
+  // square. The rules are the engine's, above: nothing here decides a move.
   Tour.ready(() => {
     var It = Tour.It, C = Chess;
     var $ = (id) => document.getElementById(id);
-    var card = document.querySelector(".t-card"), boardEl = $("board"), headEl = $("head"), hintEl = $("hint");
+    var card = document.querySelector(".t-card"), wrap = $("wrap"), boardEl = $("board"), headEl = $("head"), hintEl = $("hint");
     var HEADING = String(Tour.P.heading || "") || headEl.textContent.trim() || "Your move.";
     // The solid figures (U+265A to U+265F), each followed by the mark that asks for it as text and not as a picture
     var FIGURE = { k: "\u265A\uFE0E", q: "\u265B\uFE0E", r: "\u265C\uFE0E", b: "\u265D\uFE0E", n: "\u265E\uFE0E", p: "\u265F\uFE0E" };
@@ -374,7 +367,9 @@
       figures[s] = null;
       return el;
     }
-    for (var row = 7; row >= 0; row--) for (var file = 0; file < 8; file++) boardEl.appendChild(square(row * 8 + file));
+    for (var row = 7; row >= 0; row--) for (var file = 0; file < 8; file++) boardEl.appendChild(square(row * 8 + file)).style.setProperty("--i", String((7 - row) + file));
+    // The board is drawn in light: dots of the field run to its edges, and its squares come up from one corner to the other
+    World.outline(boardEl, false).then((release) => setTimeout(release, 500));
     boardEl.addEventListener("keydown", (e) => {
       var step = { ArrowUp: 8, ArrowDown: -8, ArrowLeft: -1, ArrowRight: 1 }[e.key], at = cells.indexOf(document.activeElement);
       if (!step || at < 0) return;
@@ -403,10 +398,13 @@
       }
       headEl.textContent = now.over === "checkmate" ? "Checkmate." : now.over === "stalemate" ? "Stalemate." : HEADING;
       card.setAttribute("data-wait", waiting ? "1" : "0");
+      wrap.setAttribute("data-wait", waiting ? "1" : "0");
+      // Whose move was made last, for the colour it is shown in
+      boardEl.setAttribute("data-by", last ? C.side(last.piece) : "");
       hintEl.textContent = now.over === "checkmate" ? (pos.turn === "b" ? "You won." : Tour.agent + " won.")
         : now.over ? (pos.turn === "b" ? Tour.agent + " has" : "You have") + " no move, so it is a draw."
         : now.check && pos.turn === "w" ? "Your king is in check."
-        : "You play White.";
+        : "You play White. " + Tour.agent + " plays green.";
     }
 
     // A piece drawn over the board, on the square `s`, for as long as it is moving
@@ -419,16 +417,36 @@
     }
     // Slides what now stands on `to` there from `from`. The piece itself is already in its place:
     // only a picture of it travels, so that nothing is left half-way if the board changes meanwhile.
-    function slide(from, to, ms) {
+    // It stays where it started for `lead` first, which is how long the agent's hand takes to reach it.
+    var EASE = "cubic-bezier(.22,1,.36,1)";
+    function slide(from, to, ms, lead) {
       var real = figures[to];
       if (!real || still || !real.animate) return;
       var fly = flying(pos.b[to], to), dx = ((from & 7) - (to & 7)) * 100, dy = ((to >> 3) - (from >> 3)) * 100;
+      var start = "translate(" + dx + "%," + dy + "%)";
       real.style.visibility = "hidden";
-      var a = fly.animate([{ transform: "translate(" + dx + "%," + dy + "%)" }, { transform: "translate(0,0)" }], { duration: ms, easing: "cubic-bezier(.3,.75,.3,1)" });
+      var a = fly.animate([{ transform: start }, { transform: start, offset: lead / (lead + ms), easing: EASE }, { transform: "translate(0,0)" }], { duration: lead + ms });
       a.onfinish = a.oncancel = () => { real.style.visibility = ""; fly.remove(); };
     }
-    // Plays a move on the board: the position, then the picture of it
-    function put(m, ms) {
+    // The middle of a square, on the screen
+    function middle(s) {
+      var r = boardEl.getBoundingClientRect(), q = r.width / 8;
+      return { x: r.left + ((s & 7) + .5) * q, y: r.top + (7 - (s >> 3) + .5) * q };
+    }
+    // The agent's hand goes to its piece, takes it up, and sets it down on its square
+    function carry(from, to, ms, lead) {
+      var a = middle(from), b = middle(to);
+      Tour.hand.move(a.x, a.y, lead).then(() => {
+        Tour.hand.tap();
+        return Tour.hand.move(b.x, b.y, ms);
+      }).then(() => {
+        Tour.hand.tap();
+        World.sound.land();
+      });
+    }
+    // Plays a move on the board: the position, then the picture of it. `lead` is given for a move the agent's hand makes
+    function put(m, ms, lead) {
+      lead = lead || 0;
       var took = m.took ? { piece: m.took, at: m.flag === "ep" ? m.to + (pos.turn === "w" ? -8 : 8) : m.to } : null;
       pos = C.play(pos, m);
       now = C.state(pos);
@@ -438,13 +456,16 @@
       return () => {
         // The piece that was taken fades where it stood, under the one that takes it
         if (took && !still && boardEl.animate) {
-          var ghost = flying(took.piece, took.at), a = ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: ms, easing: "ease-in" });
+          var ghost = flying(took.piece, took.at), a = ghost.animate([{ opacity: 1 }, { opacity: 1, offset: (lead + ms * .7) / (lead + ms) }, { opacity: 0 }], { duration: lead + ms });
+          // The piece that is taken breaks into dots as the one that takes it arrives
           a.onfinish = a.oncancel = () => ghost.remove();
+          setTimeout(() => World.shatter(middle(took.at).x, middle(took.at).y, C.side(took.piece) === "b"), lead + ms * .75);
         }
-        slide(m.from, m.to, ms);
+        slide(m.from, m.to, ms, lead);
         // In castling the rook goes too
-        if (m.flag === "short") slide(m.to + 1, m.to - 1, ms);
-        if (m.flag === "long") slide(m.to - 2, m.to + 1, ms);
+        if (m.flag === "short") slide(m.to + 1, m.to - 1, ms, lead);
+        if (m.flag === "long") slide(m.to - 2, m.to + 1, ms, lead);
+        if (lead) carry(m.from, m.to, ms, lead);
       };
     }
 
@@ -459,7 +480,7 @@
       if (m.promo) text += " and made a " + C.NAME[m.promo];
       return text + (now.over ? ", " + now.over : now.check ? ", check" : "");
     }
-    // The same in a few words, for the plate: "Knight to f6"
+    // The same in a few words, for the hand: "Knight to f6"
     function brief(m) {
       var text = m.flag === "short" ? "castles kingside" : m.flag === "long" ? "castles queenside" : C.NAME[C.kind(m.piece)] + (m.took ? " takes " : " to ") + C.name(m.to);
       if (m.promo) text += ", a new " + C.NAME[m.promo];
@@ -482,7 +503,7 @@
         sent = true;
         early = null;
         // A move that ended the game has no answer to wait for
-        if (now.over) Tour.plate("", false);
+        if (now.over) Tour.quiet("");
         // The agent had answered already: its answer is played now
         if (kept) answer(kept.reply, kept.fresh);
       }, () => {
@@ -494,17 +515,17 @@
       });
       if (now.over === "checkmate") {
         var r = boardEl.getBoundingClientRect();
-        Tour.confetti(r.left + r.width / 2, r.top + r.height / 2);
+        World.burst(r.left + r.width / 2, r.top + r.height / 2);
       }
     }
     // The agent's move
     function theirs(m) {
-      var draw = put(m, 250);
+      var draw = put(m, 460, 380);
       waiting = false;
       pendingId = null;
       render();
       draw();
-      Tour.plate(brief(m), false);
+      Tour.answered(brief(m));
       Tour.say("did", told(m, false));
     }
 
@@ -531,7 +552,7 @@
       var m = C.find(now.legal, move);
       if (m) theirs(m);
       // Not a move it may make: the agent is told so, once for what it set, and the person is shown nothing of it
-      else if (fresh) Tour.act("illegal", { request: pendingId, move: move.slice(0, 40), fen: C.fen(pos), legal: now.legal.map(C.uci) }).catch(() => {});
+      else if (fresh) It.action("illegal", { request: pendingId, move: move.slice(0, 40), fen: C.fen(pos), legal: now.legal.map(C.uci) }).catch(() => {});
     }
     var text = (v) => (v == null ? "" : String(v));
     var revision = () => (typeof It.revision === "number" ? It.revision : -1);
@@ -561,9 +582,11 @@
       render();
       Tour.say("you", "started a new game");
       Tour.say("did", "");
-      Tour.act("reset", {}).then(() => { if (turn === at) Tour.plate("", false); }, () => {});
+      Tour.act("reset", {}).then(() => { if (turn === at) Tour.quiet(""); }, () => {});
     });
 
+    Tour.home(boardEl, 0);
+    addEventListener("resize", () => { if (!last) Tour.home(boardEl, 0); });
     It.onState(heard);
     render();
     heard();

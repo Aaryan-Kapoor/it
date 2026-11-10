@@ -6,107 +6,89 @@
 <title>A drum machine</title>
 <style>
 /*kit.css*/
-  :root { --field: #151518; --log: rgba(255, 255, 255, .12); --w: 640px; --gap: 8px; }
-  .t-card { min-height: 0; }
-  /* The plate says a few words here, and on a narrow screen with a long name it keeps to the card */
-  .t-plate { max-width: calc(100% - 30px); }
-  .t-plate small { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  /* What is on the card scrolls inside it on a screen too short for it. The room around it is for the light on the pads. */
-  .body {
-    display: flex; flex-direction: column; gap: 18px; min-height: 0; margin: -14px; padding: 14px;
-    overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .22) transparent;
-  }
-  .head { display: flex; align-items: center; gap: 14px; min-height: 36px; }
-  .head .t-h { min-width: 0; }
-  .bpm {
-    flex: none; display: inline-flex; align-items: center; height: 28px; padding: 0 11px; border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, .18); color: rgba(255, 255, 255, .7); white-space: nowrap;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; font-weight: 600; letter-spacing: .04em;
-  }
+  :root { --gap: 8px; }
+  .t-card { align-items: stretch; justify-content: center; gap: 22px; }
+  .bpm { margin-top: 16px; font-family: var(--w-mono); font-size: 12px; letter-spacing: .04em; color: var(--w-faint); }
 
-  /* Four drums down, eight steps across, the steps in two fours */
+  /* Four drums down, eight steps across, the steps in two fours, and the name of each drum before its row */
+  .deck { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 16px; width: min(100%, max(320px, calc((100vh - 330px) * 2.1))); margin: 0 auto; }
+  .names { display: grid; grid-template-rows: repeat(4, 1fr); gap: var(--gap); font-family: var(--w-mono); font-size: 11.5px; color: var(--w-faint); }
+  .names span { display: flex; align-items: center; }
   .pads {
-    display: grid; gap: var(--gap); margin: 0 auto; user-select: none; -webkit-user-select: none;
+    display: grid; gap: var(--gap); user-select: none; -webkit-user-select: none;
     grid-template-columns: repeat(4, minmax(0, 1fr)) calc(var(--gap) * .5) repeat(4, minmax(0, 1fr));
-    width: min(100%, max(300px, calc((100vh - 374px) * 2)));
   }
-  .pad {
-    position: relative; min-width: 0; aspect-ratio: 1; padding: 0; border: 0; border-radius: 12px; cursor: pointer;
-    background: var(--off); touch-action: manipulation;
-    transition: background-color .14s, transform .12s cubic-bezier(.3, .7, .4, 1), box-shadow .16s, filter .16s;
+  /* A pad nobody plays is a dark square. The person's hits are white, and the agent's are its green */
+  body.w .pad {
+    position: relative; min-width: 0; aspect-ratio: 1; border-radius: 10px; background: #191919; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .07);
+    touch-action: manipulation;
+    transition: background-color .14s, transform .12s cubic-bezier(.3, .7, .4, 1), box-shadow .16s;
   }
-  .pad[data-r="0"] { --on: #b0416a; --off: #673848; }
-  .pad[data-r="1"] { --on: #b3683e; --off: #6a4335; }
-  .pad[data-r="2"] { --on: #a8c96c; --off: #55603f; }
-  .pad[data-r="3"] { --on: #3f9aa0; --off: #3a585c; }
-  .pad.on { background: var(--on); }
-  @media (hover: hover) { .pad:hover { filter: brightness(1.12); } .pad.on:hover { filter: brightness(1.05); } }
+  /* The four beats of the bar stand out a little from the steps between them */
+  body.w .pad[data-c="0"], body.w .pad[data-c="2"], body.w .pad[data-c="4"], body.w .pad[data-c="6"] { background: #232323; }
+  body.w .pad.mine { background: #ffffff; }
+  body.w .pad.theirs:not(.mine) { background: var(--w-ok); }
+  @media (hover: hover) { .pad:hover:not(.on) { box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .4); } }
   .pad:active { transform: scale(.94); }
-  .pad:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
-  /* The step being played: a soft white light on its four pads, and a pad that sounds jumps */
-  .pad.now { box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .6), 0 0 14px 2px rgba(255, 255, 255, .4); filter: brightness(1.24); }
-  .pad.now.on { transform: scale(1.06); filter: brightness(1.1); }
-  /* A hit of the agent's: the pad lit, and a green dot in its corner. They land one after another. */
-  .pad.theirs { animation: land .5s cubic-bezier(.22, 1, .36, 1) backwards; animation-delay: var(--d, 0ms); }
-  .pad.theirs:not(.mine) { --from: var(--off); }
-  .pad.theirs::after {
+  body.w .pad:focus-visible { outline-offset: 2px; border-radius: 10px; }
+  /* The step being played: a line of light round its four pads, and a pad that sounds jumps */
+  .pad.now { box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .55); }
+  .pad.now.on { transform: scale(1.07); box-shadow: 0 0 22px 2px rgba(255, 255, 255, .45); }
+  .pad.now.theirs:not(.mine) { box-shadow: 0 0 24px 3px rgba(52, 211, 153, .6); }
+  /* A hit of the agent's on a pad the person plays too: the pad stays white, with a green dot in its corner. They land one after another. */
+  .pad.theirs { animation: land .5s var(--w-ease) backwards; animation-delay: var(--d, 0ms); }
+  .pad.theirs.mine::after {
     content: ""; position: absolute; top: clamp(5px, 13%, 9px); right: clamp(5px, 13%, 9px);
     width: clamp(8px, 19%, 12px); aspect-ratio: 1; border-radius: 50%;
-    background: var(--ok); box-shadow: 0 0 0 2.5px #1b1b1f;
-    animation: dot .5s cubic-bezier(.22, 1, .36, 1) backwards; animation-delay: var(--d, 0ms);
+    background: var(--w-ok); box-shadow: 0 0 0 2.5px #fff;
   }
-  @keyframes land { from { background-color: var(--from, var(--on)); transform: scale(.9); } 55% { transform: scale(1.08); } }
-  @keyframes dot { from { transform: scale(0); } 60% { transform: scale(1.4); } }
+  @keyframes land { from { background-color: #191919; transform: scale(.82); } 55% { transform: scale(1.1); } }
 
-  .foot { display: flex; align-items: center; gap: 14px; min-height: 44px; }
+  .foot { display: flex; align-items: baseline; gap: 22px; min-height: 36px; flex-wrap: wrap; }
   .foot [hidden] { display: none; }
-  .play { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-width: 104px; }
-  .play i { flex: none; width: 12px; height: 13px; background: currentColor; clip-path: polygon(8% 0, 100% 50%, 8% 100%); }
-  .play[data-on="1"] i { height: 12px; clip-path: inset(0 round 2px); }
-  .hint, .key { flex: 1; min-width: 0; margin: 0; font-size: 13.5px; line-height: 1.35; color: rgba(255, 255, 255, .5); }
-  .key { display: flex; align-items: center; gap: 8px; color: rgba(255, 255, 255, .8); }
-  .key i { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--ok); }
+  .play { flex: none; display: inline-flex; align-items: center; gap: 9px; min-width: 76px; }
+  .play i { flex: none; width: 11px; height: 12px; background: currentColor; clip-path: polygon(8% 0, 100% 50%, 8% 100%); }
+  .play[data-on="1"] i { height: 11px; clip-path: inset(0 round 2px); }
+  .hint, .key { flex: 1; min-width: 0; margin: 0; font-family: var(--w-mono); font-size: 12px; line-height: 1.35; color: var(--w-faint); }
+  .key { display: flex; align-items: center; gap: 8px; color: var(--w-muted); }
+  .key i { flex: none; width: 10px; height: 10px; border-radius: 3px; background: var(--w-ok); }
   .key span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .t-card.dark .clear {
-    flex: none; height: 38px; padding: 0 15px; border-radius: 12px; background: transparent;
-    border: 1px solid rgba(255, 255, 255, .16); color: rgba(255, 255, 255, .68); font-size: 13.5px; font-weight: 600;
-  }
-  .t-card.dark .clear:hover:not(:disabled) { color: #fff; border-color: rgba(255, 255, 255, .4); }
 
-  @media (max-width: 620px) {
+  @media (max-width: 820px) {
     :root { --gap: 5px; }
-    .t-card { padding: 30px 14px 18px; }
-    .pad { aspect-ratio: 1 / 1.24; border-radius: 9px; }
-    .foot { gap: 10px; }
-    .hint, .key { font-size: 12.5px; }
+    .t-card { justify-content: flex-start; padding-top: 44px; gap: 16px; }
+    .deck { gap: 8px; width: 100%; }
+    .names { font-size: 10px; }
+    .pad { aspect-ratio: 1 / 1.3; border-radius: 8px; }
+    .foot { gap: 12px 16px; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .pad, .pad.theirs, .pad.theirs::after { transition: none; animation: none; }
+    .pad, .pad.theirs { transition: none; animation: none; }
     .pad.now.on, .pad:active { transform: none; }
   }
 </style>
 </head>
-<body class="dark">
+<body class="w">
   <div class="t-wrap">
-    <div class="t-card dark">
-      <div class="t-plate" id="t-plate"><i></i><b></b><small></small></div>
-      <div class="body">
-        <div class="head">
-          <h1 class="t-h">{{heading}}</h1>
-          <span class="bpm">118 BPM</span>
-        </div>
-        <div class="pads" id="pads" role="group" aria-label="Four drums, eight steps each"></div>
-        <div class="foot">
-          <button class="t-btn play" id="play" type="button" data-on="0"><i aria-hidden="true"></i><span>Play</span></button>
-          <p class="hint" id="hint">Each row is a drum. Tap to add a hit.</p>
-          <p class="key" id="key" hidden><i aria-hidden="true"></i><span></span></p>
-          <button class="t-btn clear" id="clear" type="button" disabled>Clear</button>
-        </div>
+    <div class="t-words">
+      <h1 class="t-h">{{heading}}</h1>
+      <p class="bpm">118 BPM · one bar of eight steps</p>
+      <div class="t-log" aria-live="polite">
+        <p class="t-you" id="t-you"><span>you</span><b></b></p>
+        <p class="t-did" id="t-did"><span></span><b></b></p>
       </div>
     </div>
-    <div class="t-log" aria-live="polite">
-      <p class="t-you" id="t-you"><span>&larr; you</span><b></b></p>
-      <p class="t-did" id="t-did"><span></span><b></b></p>
+    <div class="t-card">
+      <div class="deck" id="deck">
+        <div class="names" aria-hidden="true"><span>hat</span><span>clap</span><span>snare</span><span>kick</span></div>
+        <div class="pads" id="pads" role="group" aria-label="Four drums, eight steps each"></div>
+      </div>
+      <div class="foot">
+        <button class="t-btn play" id="play" type="button" data-on="0"><i aria-hidden="true"></i><span>Play</span></button>
+        <p class="hint" id="hint">Each row is a drum. Tap to add a hit.</p>
+        <p class="key" id="key" hidden><i aria-hidden="true"></i><span></span></p>
+        <button class="t-btn quiet" id="clear" type="button" disabled>Clear</button>
+      </div>
     </div>
   </div>
 <!--rail-->
@@ -116,7 +98,8 @@
 <script>
   // A drum machine. The person taps hits onto the pads. A moment after they stop, the page
   // tells the agent the beat, and the agent answers with hits of its own, in `theirs`. Those
-  // are shown on the same pads with a green dot, and are played in the same loop.
+  // are shown on the same pads in green, and are played in the same loop: for the first two
+  // bars the agent's hand taps each of its hits as it is played.
   Tour.ready(() => {
     var It = Tour.It, $ = (id) => document.getElementById(id);
     var ROWS = ["hat", "clap", "snare", "kick"], NAMES = ["Hat", "Clap", "Snare", "Kick"];
@@ -143,7 +126,7 @@
           // Every drum at once is held under the top, so that nothing is ever cut off
           var squeeze = ctx.createDynamicsCompressor(), trim = ctx.createGain();
           out = ctx.createGain();
-          out.gain.value = .8;
+          out.gain.value = World.sound.off() ? 0 : .8;
           trim.gain.value = .8;
           out.connect(squeeze);
           squeeze.connect(trim);
@@ -246,7 +229,33 @@
       lit = c;
       if (c >= 0) pad.forEach((row) => row[c].classList.add("now"));
       padsEl.setAttribute("data-step", c);
+      if (c >= 0) beat(c);
+      if (c >= 0 && follow > 0) { follow--; drum(c); }
     }
+    // Every hit that is played sends a wave through the field from its pad, the agent's in green: the kick the largest, the hat the least
+    var WAVE = [0.3, 0.55, 0.7, 1.1];
+    function beat(c) {
+      for (var r = 0; r < ROWS.length; r++) {
+        if (!mine[r][c] && !theirs[r][c]) continue;
+        var at = pad[r][c].getBoundingClientRect();
+        World.wave(at.left + at.width / 2, at.top + at.height / 2, WAVE[r], theirs[r][c] && !mine[r][c], 1000);
+      }
+    }
+    // The agent's hand at the drums. It taps the hit of its own that is being played, and goes on to the next of them
+    var follow = 0;
+    var hit = (c) => { for (var r = 0; r < ROWS.length; r++) if (theirs[r][c]) return pad[r][c]; return null; };
+    function reach(c) {
+      for (var n = 1; n <= STEPS; n++) {
+        var to = hit((c + n) % STEPS);
+        if (to) return Tour.hand.to(to, "middle", Math.min(260, n * STEP * 800));
+      }
+    }
+    function drum(c) {
+      if (hit(c)) Tour.hand.tap();
+      if (follow > 0) reach(c);
+    }
+    // The world's own switch turns these drums off and on with everything else
+    World.sound.onToggle((quiet) => { if (out) out.gain.value = quiet ? 0 : .8; });
     function start() {
       if (playing) return;
       playing = true;
@@ -347,12 +356,12 @@
       clearTimeout(quietTimer);
       // The agent's hits go from the pads with the person's own, and stay gone until it plays others
       mine = blank(); theirs = blank(); ignoreReplies = true; request = null;
-      sentKey = null; asked = false; waiting = false;
+      sentKey = null; asked = false; waiting = false; follow = 0;
       stop();
       paint();
       Tour.say("you", "cleared the pads");
       Tour.say("did", "");
-      Tour.act("cleared", {}).then(() => Tour.plate("", false), () => {});
+      Tour.act("cleared", {}).then(() => Tour.quiet(""), () => {});
     });
 
     // ── What goes to the agent, and what comes back ──
@@ -364,14 +373,14 @@
       // one is told that the pads are empty, as the button that empties them tells it
       if (!n) {
         if (sentKey === null) return;
-        sentKey = k; waiting = false; asked = false; ignoreReplies = true; request = null;
+        sentKey = k; waiting = false; asked = false; ignoreReplies = true; request = null; follow = 0;
         clearTimeout(quietTimer);
         theirs = blank();
         stop();
         paint();
         Tour.say("you", "took the last hit off");
         Tour.say("did", "");
-        Tour.act("cleared", {}).then(() => Tour.plate("", false), () => { if (sentKey === k) sentKey = null; });
+        Tour.act("cleared", {}).then(() => Tour.quiet(""), () => { if (sentKey === k) sentKey = null; });
         return;
       }
       sentKey = k; asked = true; waiting = true; ignoreReplies = false; sentAt = turn();
@@ -379,8 +388,8 @@
       var sentRequest = request;
       Tour.say("you", "put down " + n + (n === 1 ? " hit" : " hits"));
       clearTimeout(quietTimer);
-      // An agent that never answers is not left looking busy
-      quietTimer = setTimeout(() => Tour.plate(count(theirs) ? "played between yours" : "", false), 60000);
+      // An agent that has not answered in a minute is said no more to be awaited
+      quietTimer = setTimeout(() => Tour.quiet(count(theirs) ? "played between yours" : ""), 60000);
       Tour.act("beat", { request: sentRequest, bpm: BPM, rows: ROWS.slice(), pattern: pattern }).catch(() => {
         if (request !== sentRequest) return;
         clearTimeout(quietTimer);
@@ -430,17 +439,23 @@
         var added = 0;
         waiting = false;
         theirs.forEach((row, r) => row.forEach((on, c) => { if (on && !mine[r][c]) added++; }));
-        Tour.plate("played between yours", false);
+        Tour.answered("played between yours");
+        World.sound.land();
         if (!said) Tour.say("did", added ? "added " + added + (added === 1 ? " hit" : " hits") + " between yours" : "played the same hits as you");
         // It is an answer to a beat the person sent, so it is heard at once
         if (asked && !playing) { audio(); start(); }
+        // The hand goes to the first of its hits, and taps them as they are played for two bars
+        follow = playing ? STEPS * 2 : 0;
+        reach(STEPS - 1);
       }
       if (said) {
         Tour.say("did", note);
-        if (!fresh) Tour.plate(count(theirs) ? "played between yours" : "", false);
+        if (!fresh) Tour.answered(count(theirs) ? "played between yours" : "");
       }
       if (fresh || said) clearTimeout(quietTimer);
     }
+    Tour.home($("deck"), 0);
+    addEventListener("resize", () => { if (!count(theirs)) Tour.home($("deck"), 0); });
     It.onState(hear);
     hear();
   });

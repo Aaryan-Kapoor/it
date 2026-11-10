@@ -5,250 +5,382 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The It tour</title>
 <style>
-  /* The way in: every thing the tour has, as a picture of itself on its own colour. The page
-     behind them is the site's own dark, so that the colours are the things and nothing else is. */
-  :root {
-    --bg: #0a0a0a; --fg: #ffffff; --muted: rgba(255, 255, 255, .62); --faint: rgba(255, 255, 255, .4);
-    --line: rgba(255, 255, 255, .12); --ok: #2fd08a; --ink: #0e0e10;
-  }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; }
-  body {
-    margin: 0; background: var(--bg); color: var(--fg); overflow-y: auto;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased;
-  }
-  button, input { font: inherit; }
-  main { min-height: 100%; display: flex; flex-direction: column; justify-content: center; gap: 26px; width: min(100%, 1040px); margin: 0 auto; padding: 36px 24px 30px; }
-  h1 { margin: 0; font-size: clamp(34px, 5vw, 56px); font-weight: 750; letter-spacing: -.045em; line-height: 1.02; }
-  h1 i { display: inline-block; width: .2em; height: .2em; margin-left: .04em; border-radius: 50%; background: var(--ok); }
-  .sub { margin: 10px 0 0; max-width: 46ch; font-size: 17px; line-height: 1.45; color: var(--muted); }
-  .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-  .thing {
-    position: relative; display: flex; flex-direction: column; padding: 0; border: 0; border-radius: 22px; overflow: hidden; cursor: pointer;
-    text-align: left; color: var(--ink); background: var(--field, #f4f1ea);
-    transition: transform .25s cubic-bezier(.22, 1, .36, 1), box-shadow .25s, opacity .25s;
-  }
-  .thing.dark { color: #fff; }
-  .thing:hover { transform: translateY(-3px); box-shadow: 0 22px 40px -22px rgba(0, 0, 0, .9); }
-  .thing:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
-  .thing svg { display: block; width: 100%; height: auto; aspect-ratio: 220 / 132; }
-  .thing .words { padding: 0 18px 18px; }
-  .thing .name { font-size: 21px; font-weight: 750; letter-spacing: -.03em; }
-  .thing .line { margin-top: 3px; font-size: 14px; line-height: 1.35; opacity: .66; }
-  /* One that has been seen says so, and one that was just picked says it is on its way */
-  .thing .seen {
-    position: absolute; top: 12px; right: 12px; display: none; align-items: center; gap: 6px; height: 26px; padding: 0 10px 0 8px;
-    border-radius: 999px; background: #10231b; color: #fff; font-size: 12px; font-weight: 650;
-  }
-  .thing .seen::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
-  .thing[data-seen="1"] .seen { display: inline-flex; }
-  .grid[data-picked] .thing { opacity: .35; cursor: default; transform: none; box-shadow: none; }
-  .grid[data-picked] .thing[data-on="1"] { opacity: 1; outline: 3px solid #fff; outline-offset: 3px; }
-  .own {
-    display: flex; flex-direction: column; justify-content: center; gap: 12px; padding: 20px; border-radius: 22px;
-    border: 1.5px dashed rgba(255, 255, 255, .22); color: var(--fg);
-  }
-  .own .name { font-size: 21px; font-weight: 750; letter-spacing: -.03em; }
-  .own .line { font-size: 14px; line-height: 1.35; color: var(--muted); }
-  .own form { display: flex; gap: 8px; }
-  .own input {
-    flex: 1; min-width: 0; height: 42px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line);
-    background: rgba(255, 255, 255, .06); color: var(--fg); font-size: 15px;
-  }
-  .own input::placeholder { color: var(--faint); }
-  .own input:focus { outline: none; border-color: rgba(255, 255, 255, .5); }
-  .own button { height: 42px; padding: 0 16px; border: 0; border-radius: 12px; background: #fff; color: var(--ink); font-size: 14.5px; font-weight: 650; cursor: pointer; }
-  .own button:disabled { opacity: .35; cursor: default; }
-  .foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 40px; }
-  .status { display: flex; align-items: center; gap: 9px; font-size: 14px; color: var(--muted); }
-  .status::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: beat .9s ease-in-out infinite; }
-  .status:empty::before { display: none; }
-  @keyframes beat { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.55); opacity: .55; } }
-  /* Beside what the menu says of the agent the button keeps its width, and the words beside it take the lines they need */
-  .enough { flex: none; height: 40px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 14px; font-weight: 600; cursor: pointer; }
-  .enough:hover { color: #fff; border-color: rgba(255, 255, 255, .4); }
-  .enough:disabled { opacity: .4; cursor: default; }
-  @media (max-width: 860px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  @media (max-width: 540px) {
-    .grid { grid-template-columns: minmax(0, 1fr); }
-    main { padding: 26px 14px 22px; justify-content: flex-start; }
-    .foot { flex-wrap: wrap; }
-    .status { flex-basis: 100%; }
-  }
-  @media (prefers-reduced-motion: reduce) { .thing { transition: none; } .status::before { animation: none; } }
+/*world.css*/
+  body.w[data-phase="touch"] { cursor: crosshair; }
+  main { position: fixed; left: 6.5vw; right: 6.5vw; top: 12vh; z-index: 2; pointer-events: none; transition: opacity .45s; }
+  main.away { opacity: 0; }
+  h1 { margin: 0; font-size: clamp(36px, 6.4vw, 88px); line-height: .98; letter-spacing: -.045em; font-weight: 700; max-width: 14ch; min-height: 1em; }
+  #sub { margin: 20px 0 0; font-family: var(--w-mono); font-size: clamp(12px, 1.25vw, 15px); color: var(--w-muted); min-height: 1.5em; max-width: 60ch; }
+  #ask { margin: 26px 0 0; font-size: clamp(18px, 2.1vw, 28px); letter-spacing: -.02em; min-height: 1.4em; max-width: 34ch; }
+  /* A touch, and what the agent leaves where it was */
+  .mark { position: fixed; z-index: 2; pointer-events: none; transition: opacity .6s; }
+  .mark i { position: absolute; width: 22px; height: 22px; margin: -11px; border-radius: 50%; border: 2px solid var(--w-fg); animation: land .5s var(--w-ease); transition: border-color .3s, box-shadow .3s; }
+  .mark i::after { content: ""; position: absolute; inset: 6px; border-radius: 50%; background: var(--w-fg); transition: background .3s; }
+  .mark span { position: absolute; left: 20px; top: -9px; white-space: nowrap; font-family: var(--w-mono); font-size: 11.5px; color: var(--w-muted); }
+  .mark.flip span { left: auto; right: 20px; }
+  .mark.got i { border-color: var(--w-ok); box-shadow: 0 0 0 6px rgba(52, 211, 153, .14); }
+  .mark.got i::after { background: var(--w-ok); }
+  .mark.kept i { border-color: var(--w-amber); }
+  .mark.kept i::after { background: var(--w-amber); }
+  body.w[data-phase="choose"] .mark, body.w[data-phase="picked"] .mark { opacity: .22; }
+  body.w[data-phase="choose"] #w-ink, body.w[data-phase="picked"] #w-ink { opacity: .2; transition: opacity .6s; }
+  @keyframes land { from { transform: scale(2.2); opacity: 0; } }
+  /* What the screen could become */
+  #rows { margin-top: 26px; display: none; pointer-events: auto; max-height: 62vh; overflow-y: auto; padding: 4px 4px 24px 0; }
+  body.w[data-phase="choose"] #rows, body.w[data-phase="picked"] #rows { display: block; }
+  body.w[data-phase="choose"] h1, body.w[data-phase="picked"] h1 { font-size: clamp(30px, 4.6vw, 60px); max-width: 18ch; }
+  body.w[data-phase="choose"] #sub, body.w[data-phase="picked"] #sub, body.w[data-phase="choose"] #ask, body.w[data-phase="picked"] #ask { display: none; }
+  body.w[data-phase="choose"] .mark span, body.w[data-phase="picked"] .mark span { opacity: 0; }
+  .thing { display: block; text-align: left; padding: 8px 0; opacity: 0; transform: translateY(8px); transition: opacity .4s, transform .5s var(--w-ease); }
+  .thing.in { opacity: 1; transform: none; }
+  .thing b { display: inline-block; font-size: clamp(20px, 2.5vw, 34px); letter-spacing: -.03em; font-weight: 650; border-bottom: 2px solid var(--w-ghost); padding-bottom: 2px; transition: border-color .15s, color .15s; }
+  .thing span { display: block; margin-top: 5px; font-family: var(--w-mono); font-size: 12.5px; color: var(--w-faint); }
+  .thing:hover:not(:disabled) b, .thing:focus-visible b, .thing[data-picked] b { border-color: var(--w-ok); color: var(--w-ok); }
+  .thing:disabled { cursor: default; }
+  .thing:disabled:not([data-picked]) { opacity: .3; }
+  #more { display: grid; grid-template-columns: repeat(2, minmax(0, max-content)); gap: 6px 44px; margin-top: 10px; }
+  #more .thing b { font-size: clamp(16px, 1.7vw, 22px); }
+  #own { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 14px; margin-top: 14px; opacity: 0; transition: opacity .4s; }
+  #own.in { opacity: 1; }
+  #own label { font-size: clamp(16px, 1.7vw, 22px); letter-spacing: -.03em; font-weight: 650; }
+  #own input { flex: 1; min-width: 200px; max-width: 420px; background: transparent; border: 0; border-bottom: 2px solid var(--w-ghost); color: var(--w-fg); font: inherit; font-size: 16px; padding: 4px 0; outline: none; user-select: text; -webkit-user-select: text; }
+  #own input:focus { border-color: var(--w-ok); }
+  #enough { margin-top: 18px; font-family: var(--w-mono); font-size: 12px; color: var(--w-faint); text-decoration: underline; text-underline-offset: 3px; opacity: 0; transition: opacity .4s; }
+  #enough.in { opacity: 1; }
+  #enough:hover { color: var(--w-fg); }
+  @media (max-width: 620px) { main { top: 9vh; } #more { grid-template-columns: 1fr; } }
 </style>
 </head>
-<body>
-  <main>
-    <header>
-      <h1>{{heading}}<i></i></h1>
-      <p class="sub">{{subhead}}</p>
-    </header>
-    <div class="grid" id="grid">
-      <button class="thing" type="button" data-choice="whiteboard" style="--field:#f4f1ea">
-        <span class="seen">seen</span>
-        <svg viewBox="0 0 220 132" aria-hidden="true">
-          <rect x="34" y="22" width="152" height="96" rx="14" fill="#fff"/>
-          <path d="M58 52c14-9 22 7 34-1s18-10 30 2" fill="none" stroke="#0e0e10" stroke-width="5" stroke-linecap="round"/>
-          <path d="M58 74h46M58 90h30" fill="none" stroke="#0e0e10" stroke-width="5" stroke-linecap="round"/>
-          <circle cx="146" cy="82" r="19" fill="none" stroke="#1fb877" stroke-width="5"/>
-          <path d="M138 82l6 6 11-13" fill="none" stroke="#1fb877" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <span class="words"><span class="name">A whiteboard</span><br><span class="line">Draw anything. I look at it, and draw back.</span></span>
-      </button>
-      <button class="thing" type="button" data-choice="chess" style="--field:#f4f1ea">
-        <span class="seen">seen</span>
-        <svg viewBox="0 0 220 132" aria-hidden="true">
-          <rect x="54" y="10" width="112" height="112" rx="10" fill="#fff"/>
-          <g transform="translate(62 18)">
-            <rect width="96" height="96" fill="#f3ebdc"/>
-            <path d="M24 0h24v24H24zM72 0h24v24H72zM0 24h24v24H0zM48 24h24v24H48zM24 48h24v24H24zM72 48h24v24H72zM0 72h24v24H0zM48 72h24v24H48z" fill="#c9a57c"/>
-            <rect x="48" y="48" width="24" height="24" fill="#f7dd8a"/>
-            <g font-size="21" text-anchor="middle" fill="#0e0e10">
-              <text x="12" y="20">♜</text><text x="60" y="20">♚</text><text x="36" y="44">♟</text>
-              <text x="60" y="68">♘</text><text x="12" y="92">♙</text><text x="84" y="92">♔</text>
-            </g>
-          </g>
-        </svg>
-        <span class="words"><span class="name">A chessboard</span><br><span class="line">Your move. I answer on the board.</span></span>
-      </button>
-      <button class="thing" type="button" data-choice="checklist" style="--field:#ffd84d">
-        <span class="seen">seen</span>
-        <svg viewBox="0 0 220 132" aria-hidden="true">
-          <rect x="44" y="16" width="132" height="104" rx="14" fill="#fff"/>
-          <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="60" y="34" width="18" height="18" rx="5" fill="#1fb877"/><path d="M64 43l4 4 7-8" stroke="#fff" stroke-width="3"/>
-            <rect x="60" y="60" width="18" height="18" rx="5" fill="#1fb877"/><path d="M64 69l4 4 7-8" stroke="#fff" stroke-width="3"/>
-            <rect x="61.5" y="87.5" width="15" height="15" rx="4" stroke="#c9c4ba" stroke-width="3"/>
-            <path d="M90 43h56M90 69h40" stroke="#c9c4ba" stroke-width="5"/><path d="M90 95h64" stroke="#0e0e10" stroke-width="5"/>
-          </g>
-        </svg>
-        <span class="words"><span class="name">A checklist</span><br><span class="line">Tick things off. I add what you forgot.</span></span>
-      </button>
-      <button class="thing dark" type="button" data-choice="drums" style="--field:#151518">
-        <span class="seen">seen</span>
-        <svg viewBox="0 0 220 132" aria-hidden="true">
-          <rect x="52" y="8" width="116" height="116" rx="14" fill="#1b1b1f"/>
-          <g>
-            <rect x="64" y="20" width="26" height="26" rx="7" fill="#b0416a"/><rect x="97" y="20" width="26" height="26" rx="7" fill="#673848"/><rect x="130" y="20" width="26" height="26" rx="7" fill="#673848"/>
-            <rect x="64" y="53" width="26" height="26" rx="7" fill="#6a4335"/><rect x="97" y="53" width="26" height="26" rx="7" fill="#b3683e"/><rect x="130" y="53" width="26" height="26" rx="7" fill="#6a4335"/>
-            <rect x="64" y="86" width="26" height="26" rx="7" fill="#3f9aa0"/><rect x="97" y="86" width="26" height="26" rx="7" fill="#3a585c"/><rect x="130" y="86" width="26" height="26" rx="7" fill="#a8c96c"/>
-            <circle cx="149" cy="27" r="4" fill="#2fd08a"/><circle cx="116" cy="93" r="4" fill="#2fd08a"/>
-          </g>
-        </svg>
-        <span class="words"><span class="name">A drum machine</span><br><span class="line">Tap out a beat. I play between yours.</span></span>
-      </button>
-      <button class="thing dark" type="button" data-choice="button" style="--field:#2f4bff">
-        <span class="seen">seen</span>
-        <svg viewBox="0 0 220 132" aria-hidden="true">
-          <rect x="58" y="12" width="104" height="108" rx="14" fill="#fff"/>
-          <ellipse cx="110" cy="86" rx="38" ry="14" fill="#e9e4da"/>
-          <ellipse cx="110" cy="76" rx="31" ry="12" fill="#b3200e"/>
-          <ellipse cx="110" cy="62" rx="31" ry="27" fill="#ff3b23"/>
-          <ellipse cx="101" cy="52" rx="12" ry="8" fill="#ff8a78" opacity=".8"/>
-        </svg>
-        <span class="words"><span class="name">A big red button</span><br><span class="line">Press it, and I do the thing.</span></span>
-      </button>
-      <div class="own">
-        <div><div class="name">Or anything else</div><div class="line">Name it, and I make it here.</div></div>
-        <form id="own">
-          <input id="text" type="text" maxlength="200" placeholder="a tip calculator" autocomplete="off" aria-label="Something else to make">
-          <button id="make" type="submit" disabled>Make it</button>
-        </form>
-      </div>
-    </div>
-    <div class="foot">
-      <div class="status" id="status" role="status"></div>
-      <button class="enough" id="enough" type="button">That’s enough for now</button>
+<body class="w" data-phase="arrive">
+  <main id="main">
+    <h1 id="h"></h1>
+    <p id="sub"></p>
+    <p id="ask" aria-live="polite"></p>
+    <div id="rows">
+      <div id="first"></div>
+      <div id="more"></div>
+      <form id="own"><label for="text">Something of your own</label><input id="text" type="text" maxlength="200" placeholder="say what, and press Enter" autocomplete="off"></form>
+      <button id="enough" type="button">That is enough for now</button>
     </div>
   </main>
 <script>
-  /*navigation.js*/
-  // Picking one tells the agent which. The agent marks what has been seen, in the page's
-  // state, so that coming back here shows how far the tour has got.
-  (() => {
-    function init() {
-      var It = window.It || { state: {}, onState: () => () => {}, action: () => Promise.resolve() };
-      var grid = document.getElementById("grid"), status = document.getElementById("status");
-      var things = [].slice.call(grid.querySelectorAll(".thing"));
-      var text = document.getElementById("text"), make = document.getElementById("make"), enough = document.getElementById("enough");
-      var sent = null, slow = 0, attempt = 0;
-      var navigation = window.TourNavigation(It, "menu");
-      var agent = (window.__PARAMS || {}).agent || "Your agent";
-      function lock(on) {
-        on = on || !navigation.ready();
-        things.forEach((t) => { t.disabled = on; });
-        text.disabled = on; make.disabled = on || !text.value.trim(); enough.disabled = on;
-      }
-      function render() {
-        var st = It.state || {};
-        var seen = Array.isArray(st.seen) ? st.seen : [];
-        things.forEach((t) => t.setAttribute("data-seen", seen.indexOf(t.getAttribute("data-choice")) >= 0 ? "1" : "0"));
-        // The agent has shown what was picked, or has come back here: the menu is open again
-        if (st.status !== "picked" && sent && st.status === "open" && st.picked !== sent) { /* waiting for the agent to take it */ }
-        var picked = st.status === "picked" ? String(st.picked || "") : sent;
-        if (picked) {
-          grid.setAttribute("data-picked", picked);
-          things.forEach((t) => t.setAttribute("data-on", t.getAttribute("data-choice") === picked ? "1" : "0"));
-          // Said in a sentence, with whose doing it is: a word and a dot read as nothing happening
-          status.textContent = agent + " is getting it ready. It takes a few seconds.";
-          lock(true);
-        } else {
-          grid.removeAttribute("data-picked");
-          things.forEach((t) => t.setAttribute("data-on", "0"));
-          status.textContent = "";
-          lock(false);
-        }
-      }
-      // An agent that shows what was picked takes the menu off the screen, and one that comes
-      // back to it opens it again. That It took a pick is neither: where the menu is still
-      // waiting a while after, it is the person's again, with a word of why.
-      function unanswered(current) {
-        if (attempt !== current || !sent) return;
-        clearTimeout(slow);
-        slow = setTimeout(() => {
-          if (attempt !== current || !sent) return;
-          sent = null;
-          render();
-          if (!grid.hasAttribute("data-picked")) status.textContent = agent + " has not answered. Pick again, or pick another.";
-        }, 40000);
-      }
-      function pick(choice, more) {
-        clearTimeout(slow);
-        if (!navigation.ready()) return;
-        var current = attempt = navigation.next();
-        sent = choice;
-        render();
-        var data = { choice: choice };
-        if (more) data.text = more;
-        // Something of the person's own is made from nothing, which takes an agent longer than that, and is waited for
-        navigation.send("pick", data, current).then(() => { if (choice !== "other") unanswered(current); }, () => { if (attempt !== current) return; sent = null; render(); status.textContent = ""; });
-      }
-      things.forEach((t) => t.addEventListener("click", () => pick(t.getAttribute("data-choice"))));
-      text.addEventListener("input", () => { make.disabled = !navigation.ready() || !!sent || !text.value.trim(); });
-      document.getElementById("own").addEventListener("submit", (e) => {
-        e.preventDefault();
-        var said = text.value.trim();
-        if (said) pick("other", said);
-      });
-      enough.addEventListener("click", () => {
-        clearTimeout(slow);
-        if (!navigation.ready()) return;
-        var current = attempt = navigation.next();
-        sent = "done";
-        render();
-        status.textContent = agent + " is wrapping up.";
-        navigation.send("done", {}, current).then(() => unanswered(current), () => { if (attempt !== current) return; sent = null; render(); });
-      });
-      navigation.onState((answered) => {
-        // A menu the agent has opened again takes what was sent from it as answered
-        if (answered && (It.state || {}).status === "open") { sent = null; clearTimeout(slow); }
-        render();
-      });
-      render();
+/*navigation.js*/
+</script>
+<script>
+/*world.js*/
+</script>
+<script>
+  // The first page a new person sees, and the page they pick from. The agent has put it up
+  // before they opened the link. They touch the screen three times, the three touches go to
+  // the agent as one action, and the agent answers on the screen: it marks each place, adds a
+  // place of its own, and closes the shape. Then the page asks what the screen is to become,
+  // and the agent builds what is picked. Shown again later in the tour, it goes straight to
+  // what there is to pick from, and says which of them have been seen.
+  //
+  // The large words are made of the field: its dots fly together into them. The hand moves
+  // only on what the page has heard. That It took the touches is heard from
+  // `It.action`. That the agent answered is heard from the page's state, which the agent
+  // writes: `marks` are the places it was given, `mine` is the one it added, `line` is what it
+  // says of the shape, and `doing` is its own word for what it is at while it works. `seen`
+  // is the tour's own note of what has been shown.
+  World.ready(() => {
+    var It = World.It, P = World.P, hand = World.hand, agent = World.agent
+    var $ = (id) => document.getElementById(id)
+    var navigation = window.TourNavigation(It, P.tour_id || null)
+    var asleep = P.asleep === true || P.asleep === 'true'
+    var body = document.body
+    var touched = []      // the places touched here, each as [x, y] from 0 to 1
+    var marks = []        // the marks on the screen, each { at: [x, y], el }
+    var lines = []
+    var sentAt = 0        // when It took the touches, by this browser's clock
+    var shaped = false
+    var chosen = false
+    var busy = Promise.resolve()
+    var phase = (name) => { body.dataset.phase = name }
+    var here = (p) => ({ x: p[0] * innerWidth, y: p[1] * innerHeight })
+    var state = () => It.state || {}
+    var doing = (otherwise) => () => String(state().doing || '') || otherwise
+
+    function mark(p, words, kind) {
+      var el = document.createElement('div'), at = here(p)
+      el.className = `mark${kind ? ` ${kind}` : ''}${at.x > innerWidth - 240 ? ' flip' : ''}`
+      el.style.left = `${at.x}px`
+      el.style.top = `${at.y}px`
+      el.innerHTML = '<i></i><span></span>'
+      el.lastChild.textContent = words || ''
+      body.appendChild(el)
+      var made = { at: p, el: el }
+      marks.push(made)
+      return made
     }
-    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();
-  })();
+    function clear() {
+      marks.forEach((m) => m.el.remove())
+      lines.forEach((l) => l.remove())
+      marks = []
+      lines = []
+    }
+    // The places in the order that goes once round them, so that the lines between them cross nowhere
+    function round(points) {
+      var cx = points.reduce((s, p) => s + p[0], 0) / points.length, cy = points.reduce((s, p) => s + p[1], 0) / points.length
+      return points.slice().sort((a, b) => Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx))
+    }
+    var point = (v) => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number' && n >= 0 && n <= 1)
+
+    // ── Touching ──
+    addEventListener('pointerdown', (e) => {
+      if (body.dataset.phase !== 'touch' || (e.target.closest && e.target.closest('button, input'))) return
+      var p = [Math.round((e.clientX / innerWidth) * 1000) / 1000, Math.round((e.clientY / innerHeight) * 1000) / 1000]
+      World.ripple(e.clientX, e.clientY)
+      touched.push(p)
+      mark(p, String(touched.length), asleep ? 'kept' : '')
+      if (touched.length === 1) $('ask').textContent = 'Again, somewhere else.'
+      if (touched.length === 2) $('ask').textContent = 'Once more.'
+      if (touched.length === 3) send()
+    })
+    function send() {
+      phase('sent')
+      var points = touched.slice()
+      $('ask').textContent = 'Sending them.'
+      It.action("touched", { points: points }).then(
+        async () => {
+          sentAt = Date.now()
+          World.sound.sent()
+          for (var m of marks) await World.pulse(here(m.at), asleep ? 'var(--w-amber)' : undefined)
+          if (shaped) return
+          hand.tap()
+          if (asleep) {
+            $('ask').textContent = `Kept. They reach ${agent} the moment /reload-plugins is typed in its chat.`
+            hand.clock(doing('cannot hear yet, and It keeps them'), sentAt, 'amber')
+          } else {
+            $('ask').textContent = 'Sent. Watch the hand.'
+            hand.clock(doing('has not answered yet'), sentAt)
+          }
+        },
+        () => {
+          if (shaped) return
+          clear()
+          touched = []
+          phase('touch')
+          $('ask').textContent = 'That did not send. Touch the screen again.'
+          hand.say('did not get that')
+        },
+      )
+    }
+
+    // ── The agent's answer: each place marked, one added, and the shape closed ──
+    async function shape(st, quick) {
+      shaped = true
+      phase('shape')
+      var given = st.marks.filter(point).slice(0, 3)
+      // Another display shows the same shape, though the touches were made elsewhere
+      if (!quick && marks.length !== given.length) quick = marks.length === 0 && touched.length === 0
+      var took = sentAt ? `${Math.max(0.1, (Date.now() - sentAt) / 1000).toFixed(1)} s` : ''
+      clear()
+      hand.say('answering', 'live')
+      // The answer has landed: the field is thrown outward from the hand, and the three notes are answered with their chord
+      if (!quick) {
+        World.shock(hand.where().x, hand.where().y, true)
+        World.sound.land()
+      }
+      for (var p of given) {
+        var made = mark(p, `${p[0].toFixed(2)}, ${p[1].toFixed(2)}`, '')
+        if (!quick) await hand.move(here(p).x + 4, here(p).y + 4, 420)
+        made.el.classList.add('got')
+        if (!quick) { hand.tap(); World.sound.step(); await World.wait(140) }
+      }
+      var all = given.slice()
+      if (point(st.mine)) {
+        if (!quick) await hand.move(here(st.mine).x + 4, here(st.mine).y + 4, 620)
+        mark(st.mine, `${agent} added this one`, 'got')
+        all.push(st.mine)
+        if (!quick) { hand.tap(); await World.wait(260) }
+      }
+      var order = round(all)
+      for (var i = 0; i < order.length && order.length > 2; i++) {
+        var a = here(order[i]), b = here(order[(i + 1) % order.length])
+        if (!quick) await hand.move(a.x, a.y, 260)
+        lines.push(World.line(a, b))
+        if (!quick) await hand.move(b.x, b.y, 460)
+      }
+      if (!quick) World.sound.thud()
+      hand.say(took ? `answered in ${took}` : 'answered')
+      var said = String(st.line || '') || 'Every touch reaches me like that, from any screen you own.'
+      if (quick) $('ask').textContent = said
+      else await World.type($('ask'), said, 44)
+      if (!quick) await World.pause(1500)
+      await choose(quick)
+    }
+
+    // ── What the screen is to become ──
+    var THINGS = [
+      ['whiteboard', 'A whiteboard', 'draw, and I draw back'],
+      ['chess', 'A chessboard', 'you are white'],
+      ['drums', 'A drum machine', 'tap a beat, and I play between yours'],
+      ['checklist', 'A checklist', 'tick and add, and I add what you forgot'],
+      ['button', 'One big button', 'what an approval looks like'],
+    ]
+    function thing(choice, title, about) {
+      var b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'thing'
+      b.dataset.choice = choice
+      b.innerHTML = '<b></b><span></span>'
+      b.firstChild.textContent = title
+      b.lastChild.textContent = about
+      b.addEventListener('click', () => pick(choice, '', b))
+      return b
+    }
+    // What has been shown is said beside it, and can be picked again all the same
+    function seen() {
+      var names = Array.isArray(state().seen) ? state().seen : []
+      document.querySelectorAll('.thing').forEach((r) => {
+        var was = names.includes(r.dataset.choice)
+        if (was && !r.dataset.seen) r.lastChild.textContent += ' · seen'
+        if (was) r.dataset.seen = '1'
+      })
+    }
+    async function choose(quick) {
+      if (chosen) return
+      chosen = true
+      phase('choose')
+      $('sub').textContent = ''
+      $('ask').textContent = ''
+      hand.say('writing', 'live')
+      var folder = typeof P.folder === 'string' ? P.folder.slice(0, 60) : ''
+      if (quick) $('h').textContent = 'What should this screen be?'
+      else await World.form($('h'), 'What should this screen be?')
+      if (folder) $('first').appendChild(thing('room', `A control room for ${folder}`, typeof P.about === 'string' && P.about ? P.about.slice(0, 140) : 'what is in this folder, with buttons that do real work'))
+      for (var t of THINGS) $('more').appendChild(thing(t[0], t[1], t[2]))
+      seen()
+      var rows = [...document.querySelectorAll('.thing')]
+      for (var r of rows) {
+        if (!quick && r === rows[0]) await hand.to(r, 'under', 420)
+        r.classList.add('in')
+        if (!quick) await World.wait(70)
+      }
+      $('own').classList.add('in')
+      $('enough').classList.add('in')
+      var top = $('h').getBoundingClientRect()
+      await hand.move(Math.min(innerWidth - 40, top.right + 26), top.top + 12, quick ? 0 : 600)
+      hand.say('')
+      lock()
+    }
+    var attempt = 0, waiting = false, slow = 0, seenAt = ''
+    function lock() {
+      var off = waiting || !navigation.ready()
+      document.querySelectorAll('.thing, #enough, #text').forEach((el) => { el.disabled = off })
+    }
+    var seenNow = () => JSON.stringify(Array.isArray(state().seen) ? state().seen : [])
+    navigation.onState((answered) => {
+      // The tour's note of what has been shown changes when the agent shows something: what was picked here has been answered, and the choices are the person's again
+      if (answered && waiting && seenNow() !== seenAt) {
+        attempt++
+        clearTimeout(slow)
+        waiting = false
+        phase('choose')
+        hand.say('')
+      }
+      lock()
+    })
+    function pick(choice, text, from) {
+      if (waiting || !navigation.ready()) return
+      var current = (attempt = navigation.next())
+      var name = choice === "done" ? "done" : "pick"
+      waiting = true
+      seenAt = seenNow()
+      clearTimeout(slow)
+      phase('picked')
+      document.querySelectorAll('.thing').forEach((r) => r.removeAttribute('data-picked'))
+      if (from && from.classList.contains('thing')) from.dataset.picked = '1'
+      lock()
+      var r = (from || $('own')).getBoundingClientRect()
+      var at = { x: r.left + Math.min(r.width, 60), y: r.top + r.height / 2 }
+      World.ripple(at.x, at.y)
+      var back = (words) => {
+        if (attempt !== current) return
+        waiting = false
+        phase('choose')
+        lock()
+        hand.say(words)
+      }
+      navigation.send(name, choice === 'done' ? {} : Object.assign({ choice: choice }, text ? { text: text } : {}), current).then(
+        async () => {
+          if (attempt !== current) return
+          var since = Date.now()
+          // The agent shows another page in answer, and that takes this one away. Where this
+          // one is still here forty seconds after It took the pick, the choices are the
+          // person's again. Something of their own is made from nothing, which takes an agent
+          // longer than that, and is waited for
+          if (choice !== 'other') slow = setTimeout(() => back('has not answered. Pick again, or say it in its chat'), 40000)
+          World.sound.sent()
+          await World.pulse(at)
+          if (attempt !== current || !waiting) return
+          hand.tap()
+          // What is awaited is another page, and the whole field leans toward the hand while it is
+          hand.clock(doing('has not answered yet'), since, 'live', true)
+        },
+        () => back('did not get that'),
+      )
+    }
+    $('own').addEventListener('submit', (e) => {
+      e.preventDefault()
+      var text = $('text').value.trim()
+      if (text) pick('other', text, null)
+    })
+    $('enough').addEventListener('click', () => pick('done', '', $('enough')))
+
+    // ── As it begins, and whenever the agent writes ──
+    var begun = false
+    function heard() {
+      var st = state()
+      var answered = Array.isArray(st.marks) && st.marks.filter(point).length >= 3
+      if (!begun) {
+        begun = true
+        // Something of the tour has been seen: this is the way back to what there is, and not a first meeting
+        busy = Array.isArray(st.seen) && st.seen.length ? again() : answered ? restore(st) : arrive()
+        return
+      }
+      if (answered && !shaped) busy = busy.then(() => shape(st, false))
+      if (chosen) seen()
+    }
+    async function again() {
+      shaped = true
+      await hand.move(innerWidth * 0.6, innerHeight * 0.2, 0)
+      await choose(true)
+    }
+    async function arrive() {
+      await hand.move(innerWidth + 40, innerHeight * 0.3, 0)
+      await World.wait(350)
+      await hand.move(innerWidth * 0.58, innerHeight * 0.2, 1000)
+      await World.form($('h'), `I’m ${agent}.`)
+      await World.wait(200)
+      await World.type($('sub'), String(P.where || 'the one in your terminal'), 60)
+      await World.wait(300)
+      await hand.move(innerWidth * 0.5, innerHeight * 0.56, 650)
+      if (shaped) return
+      phase('touch')
+      if (asleep) {
+        hand.say('cannot hear this screen yet', 'amber')
+        await World.type($('ask'), `I cannot hear this screen yet. Type /reload-plugins in my chat, then touch it anywhere.`, 44)
+      } else await World.type($('ask'), 'This screen is ours now. Touch it, anywhere.', 44)
+    }
+    // Opened again, or opened on another display, once the agent has answered: shown as it stands
+    async function restore(st) {
+      $('h').textContent = `I’m ${agent}.`
+      await hand.move(innerWidth * 0.58, innerHeight * 0.2, 0)
+      await shape(st, true)
+    }
+    It.onState(heard)
+    // A page whose state is there as its scripts run begins at once, and one shown with nothing to tell it its state begins all the same
+    if (It.revision > 0 || Object.keys(state()).length) heard()
+    else setTimeout(() => { if (!begun) heard() }, 1500)
+    addEventListener('resize', () => {
+      marks.forEach((m) => { var at = here(m.at); m.el.style.left = `${at.x}px`; m.el.style.top = `${at.y}px` })
+      lines.forEach((l) => l.remove())
+      lines = []
+      if (shaped && marks.length > 2) { var order = round(marks.map((m) => m.at)); order.forEach((p, i) => lines.push(World.line(here(p), here(order[(i + 1) % order.length])))) }
+    })
+  })
 </script>
 </body>
 </html>

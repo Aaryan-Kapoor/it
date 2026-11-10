@@ -2,13 +2,29 @@
   "menu": {
     "title": "The It tour",
     "params": {
-      "heading": "It can be anything",
-      "subhead": "Pick one, and I make it here. What you do on it comes back to me."
+      "where": "the one in your terminal",
+      "asleep": false,
+      "folder": "",
+      "about": ""
     },
     "state": {
-      "status": "open",
-      "picked": "",
+      "marks": [],
+      "mine": null,
+      "line": "",
+      "doing": "",
       "seen": []
+    }
+  },
+  "room": {
+    "title": "A control room",
+    "params": {
+      "heading": "A control room",
+      "sub": "What is in this folder, as your agent finds it."
+    },
+    "state": {
+      "tiles": {},
+      "note": "",
+      "doing": ""
     }
   },
   "whiteboard": {
@@ -18,7 +34,8 @@
     },
     "state": {
       "agent_strokes": [],
-      "note": ""
+      "note": "",
+      "doing": ""
     }
   },
   "chess": {
@@ -28,7 +45,8 @@
     },
     "state": {
       "reply": "",
-      "note": ""
+      "note": "",
+      "doing": ""
     }
   },
   "checklist": {
@@ -41,7 +59,8 @@
     },
     "state": {
       "added": [],
-      "note": ""
+      "note": "",
+      "doing": ""
     }
   },
   "drums": {
@@ -51,7 +70,8 @@
     },
     "state": {
       "theirs": [],
-      "note": ""
+      "note": "",
+      "doing": ""
     }
   },
   "button": {
@@ -63,17 +83,18 @@
     },
     "state": {
       "status": "ready",
-      "note": ""
+      "note": "",
+      "doing": ""
     }
   },
   "done": {
     "title": "It can do that",
     "params": {
-      "heading": "It can do that",
-      "subhead": "Three things to take with you."
+      "heading": "That is the tour."
     },
     "state": {
-      "status": "open"
+      "status": "open",
+      "doing": ""
     }
   }
 }

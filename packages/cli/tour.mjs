@@ -1,8 +1,8 @@
 // Packs the tour into the CLI: the guide an agent follows, and the pages it shows as it goes.
 // The pages are whole pages, written here and not by the agent, so that the first things a new
-// person sees are the same for everyone. What all of them share (their look, the agent's plate,
-// the two buttons that go on) is written once, in tour/kit, and set into each page here where
-// the page marks the place for it.
+// person sees are the same for everyone. What all of them share (the world they are held in, the
+// agent's hand, the two buttons that go on) is written once, in tour/kit, and set into each page
+// here where the page marks the place for it. One part of the kit may mark the place for another.
 import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -12,7 +12,14 @@ const from = path.join(here, 'tour')
 const guide = readFileSync(path.join(from, 'TOUR.md'), 'utf8')
 const said = JSON.parse(readFileSync(path.join(from, 'pages.json'), 'utf8'))
 const kit = (name) => readFileSync(path.join(from, 'kit', name), 'utf8').trimEnd()
-const KIT = { '/*kit.css*/': kit('kit.css'), '/*kit.js*/': kit('kit.js'), '<!--rail-->': kit('rail.html'), '/*navigation.js*/': kit('navigation.js') }
+const KIT = {
+  '/*kit.css*/': kit('kit.css'),
+  '/*kit.js*/': kit('kit.js'),
+  '<!--rail-->': kit('rail.html'),
+  '/*navigation.js*/': kit('navigation.js'),
+  '/*world.css*/': kit('world.css'),
+  '/*world.js*/': kit('world.js'),
+}
 const pages = {}
 for (const [name, page] of Object.entries(said)) {
   let html = readFileSync(path.join(from, 'pages', `${name}.html`), 'utf8')

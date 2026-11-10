@@ -117,7 +117,7 @@ export function comparePlaces(a: ActionPlace | null, b: ActionPlace | null): num
 export const NOUN = { one: 'page', many: 'pages', One: 'Page', Many: 'Pages' } as const
 
 /** The built-in tour's fixed page ids and the order in which its examples are shown. */
-export const TOUR = { prefix: 'tour-', menu: 'menu', end: 'done', steps: ['whiteboard', 'chess', 'checklist', 'drums', 'button'] } as const
+export const TOUR = { prefix: 'tour-', menu: 'menu', end: 'done', steps: ['room', 'whiteboard', 'chess', 'checklist', 'drums', 'button'] } as const
 export const TOUR_NAMES: readonly string[] = [TOUR.menu, ...TOUR.steps, TOUR.end]
 
 /** Token audiences. A token made for one is refused everywhere else. */

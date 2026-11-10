@@ -2,17 +2,18 @@
 
 This is for you, the agent. The person on the other end has just installed something they have never used, and does not yet know what it is for. Your job is to show them, on their own screen, and to play along. It is a demonstration and not a test, so read the rules before you run anything: they are the difference between a tour and a test report.
 
-The tour is a menu of things It can be, each a page that is already made, and an ending. The person picks what they want to see, and stops when they have seen enough. Nobody is led through all of it.
+The tour is one dark screen that you and the person share. You are on it as a hand, a pointer that carries your app's name, and the hand moves and speaks only on what the page has really heard from you. It begins with the person touching the screen and you answering on it, goes on to a control room for the folder you are in, has five small things It can be, and an ending. The person picks what they want to see and stops when they have seen enough. Nobody is led through all of it.
 
 ## Rules
 
-1. **Never block.** What each `it tour show` prints says, under `arrives`, whether what the person does on the page arrives in this conversation by itself. Where `arrives.byItself` is `true`, it arrives as a message that begins `[It]`: do not wait at all, since a wait holds your terminal and the person cannot talk to you. Where it is `false` or `"unknown"`, wait for each thing they do: after every page you show and every answer you give, run `it wait --timeout 100` and act on what it prints, which is an action, or `{"timedOut": true}` when nothing has happened yet, and then you run it again. Where `arrives` is not printed at all, It cannot tell which conversation this is, and `it wait` is refused without a page: name the page that is on the screen, as in `it wait --id tour-menu --timeout 100`. If the person says they picked something and nothing reached you, wait in that way from then on, whatever `arrives` said. During the tour, say nothing else of what `arrives.next` says: where it asks the person to type /reload-plugins or to start a new conversation, say that once, after the ending. And do not use `--follow` or put a wait in the background: the command has to end for you to be shown what it printed.
+1. **Never block.** What each `it tour show` prints says, under `arrives`, whether what the person does on the page arrives in this conversation by itself. Where `arrives.byItself` is `true`, it arrives as a message that begins `[It]`: do not wait at all, since a wait holds your terminal and the person cannot talk to you. Where it is `false` or `"unknown"`, wait for each thing they do: after every page you show and every answer you give, run `it wait --timeout 100` and act on what it prints, which is an action, or `{"timedOut": true}` when nothing has happened yet, and then you run it again. Where `arrives` is not printed at all, It cannot tell which conversation this is, and `it wait` is refused without a page: name the page that is on the screen, as in `it wait --id tour-menu --timeout 100`. If the person says they picked something and nothing reached you, wait in that way from then on, whatever `arrives` said. During the tour, say nothing else of what `arrives.next` says: where it asks the person to type /reload-plugins or to start a new conversation, say that once, after the ending, unless the first page has said it for you. And do not use `--follow` or put a wait in the background: the command has to end for you to be shown what it printed.
 2. **Say the quoted lines as they are written.** Each page has a line under **Then say**. Send it as it is. The lines are written to be read out, and improvising here is how a tour turns into the narration of a test plan.
 3. **Show before you speak.** `it tour show` publishes a page and brings it up, in one move. Each page below gives the command and then the line, in that order. In most agent apps your turn ends when you have spoken, so a line said before its page leaves the person reading a sentence and looking at nothing.
 4. **Answer on the page, and say little.** What you do in answer goes into the page's state, with the command its section gives, and the page shows it. In the chat, one short sentence is plenty, and for a move in a game, a few words. Never describe what the page already shows. The person may also type to you in the box above a page: that arrives as an action named `it:message` with their words in `text`, and is answered above the page, with `it say <the page's id> "…"`, since the chat is not where they are looking.
-5. **Never ask a question in the chat, and never go on by yourself.** Every page of the tour has the buttons that go on: **Next**, and **All of them**, which goes back to the menu. You move when one of them arrives, and not before. If they linger, let them.
-6. **Never say "step 3 of 5", "this works", or what you are about to do.** No tables of results and no progress reports. The screen is the report.
-7. **If something fails, say so in one plain line and go on** to another page. A tour that stops at a broken page teaches nothing.
+5. **Say on the page what you are doing.** Every page of the tour has `doing` in its state. Before any step of yours that takes more than a moment, set it to a few plain words of your own, as in `it patch tour-room '{"doing":"reading the folder"}'`, and set it back to `""` in the same patch that carries your answer. The hand says those words and counts the seconds. It says nothing else about you: where you have set nothing, it says only that you have not answered yet.
+6. **Never ask a question in the chat, and never go on by yourself.** Every page of the tour has the buttons that go on: **Next**, and **All of them**, which goes back to the first page. You move when one of them arrives, and not before. If they linger, let them.
+7. **Never say "step 3 of 5", "this works", or what you are about to do.** No tables of results and no progress reports. The screen is the report.
+8. **If something fails, say so in one plain line and go on** to another page. A tour that stops at a broken page teaches nothing.
 
 ## Before you start
 
@@ -24,64 +25,89 @@ If the list is empty, or every display in it has `"paired": false`, the person h
 
 Each page of the tour has a fixed id, `tour-` and its name, so every command below can be run as it is written. Keep the `id` and `version` printed by each `it tour show`: together they identify the showing now on the screen.
 
-## The menu
+## The first page
 
 ```sh
 it tour show menu
 ```
 
-**Then say:** "Here's some of what I can put on your screen. Pick one."
+This page is also the tour's menu, and its id is `tour-menu`. Give it what you know already, and run nothing to find out more: the page comes first.
 
-Three things can arrive from it, and from every other page of the tour:
+```sh
+it tour show menu --param where="the one in your terminal, in ~/code/shop" --param folder="shop" --param about="your tests, your branch, your TODOs"
+```
 
-- **`pick`**, with `choice`: one of `whiteboard`, `chess`, `checklist`, `drums`, `button`, or `other`. Show that page, with `it tour show <choice>`, and follow its section below. `other` means they named something of their own, in `text`: build that, as a page of your own with `it create … --open`, and when they have had a look say "Say 'back to the tour' whenever you want the rest." When they say so, show the menu again.
-- **`next`**, from the **Next** button on a page. Run the command below: it shows the next thing they have not seen and prints its id, and you follow that page's section. When they have seen every one, it shows the ending instead, and prints `tour-done`.
-- **`menu`**, from **All of them**. Show the menu again, with the command above. It remembers what has been seen, and marks it. Say nothing, or "Pick another."
+- `where` is which agent you are to them, in a few words: the app, the terminal or window, the folder. The page writes it under your name.
+- `folder` is the name of the folder you are in. With it the page offers a control room for that folder, first among its choices. `about` is a few words on what that room would hold.
+- `asleep` is for one case. If what `it tour show` printed has `arrives.byItself` as `false`, you are in Claude Code, and `arrives.next` names /reload-plugins, show the page again at once with `--param asleep=true` added to the rest. The page is then amber, tells the person the one line to type, and keeps their touches.
+
+**Then say:** "Look at your screen, and touch it."
+
+The person touches the screen three times, and the three touches arrive as one action, **`touched`**, with `points`: three places, each `[x, y]` from 0 to 1, with the origin at the top left. Answer in one patch. Copy `points` into `marks` as they are. Choose `mine`, a fourth place of your own, so that the four make a shape worth a sentence: a kite, a square, an arrow. Say what the shape is in `line`, in one sentence of your own.
+
+```sh
+it patch tour-menu '{"marks":[[0.63,0.68],[0.85,0.37],[0.47,0.46]],"mine":[0.7,0.2],"line":"A triangle. I gave it a fourth corner, so now it is a kite.","doing":""}'
+```
+
+The page marks each place with your hand, adds yours, closes the shape, and then asks what the screen should be. Say nothing in the chat. Shown again later in the tour, the page goes straight to the choices and marks what has been seen, and then say nothing, or "Pick another."
+
+From its choices comes **`pick`**, with `choice`: `room`, `whiteboard`, `chess`, `checklist`, `drums`, `button`, or `other`. Show that page, with `it tour show <choice>`, and follow its section below. `other` means they named something of their own, in `text`: build that, as a page of your own with `it create … --open`, and when they have had a look say "Say 'back to the tour' whenever you want the rest." When they say so, show the first page again. The page also has **That is enough for now**, which arrives as **`done`**: go to the ending.
+
+Two more things can arrive, from every other page of the tour:
+
+- **`next`**, from the **Next** button. Run the command below: it shows the next thing they have not seen and prints its id, and you follow that page's section. When they have seen every one, it shows the ending instead, and prints `tour-done`.
+- **`menu`**, from **All of them**. Show the first page again, with `it tour show menu` and the same `--param`s.
 
 ```sh
 it tour show next
 ```
 
-The menu also has **That's enough for now**, which arrives as **`done`**: go to the ending.
+Before you act on any of `pick`, `next`, `menu`, `done` or `finish`, apply the rules under "Moving between pages", near the end.
 
-A page gives its buttons back to the person when it is still on the screen forty seconds after one was pressed, and they may press again. So `next` and `menu` carry `from`, the page they were pressed on, and so do `pick`, `done` and `finish`. All five carry `from_version`, the version of that showing, and `attempt`, an increasing number saved before sending so a reload of the same showing continues the count. They also carry `attempt_display`, a random tie-breaker made once per page load and saved with the counter. It stays the same for every action from that load and is never copied from the shared store. Before acting on `pick`, `next`, `menu`, `done` or `finish`, check the showing and attempt with the rules below. If those fields are not shown in the message, run `it action <the action's id>`: its `page` and `version` identify the showing, and its `data` holds the attempt and choice.
+## The control room
 
-The person's latest action on one display wins on every tour page. Across displays, order attempts by the counter first, then by `attempt_display` using JavaScript's string comparison, not locale order. Equal counters therefore have one winner regardless of the order they arrive. This is the tour's rule for simultaneous displays: there is no shared allocation or clock, so it does not claim which simultaneous choice happened last.
-
-Keep `tour.current` as `{ from: <page name>, version: <its version>, attempt: 0, attempt_display: "", choice: null, wanted: null }` for the showing now on the screen, and start with `tour.previous = null`. The previous record is the showing whose action brought up the current page. Keep it after showing a choice, the menu or the ending, or building what they named. A higher attempt pair from that showing replaces its earlier choice even when its page is no longer current. If several actions from one showing are already available, process only the highest `attempt` pair and acknowledge the others without navigating. If chess arrives first and drums later with a higher pair, show drums; if drums arrives first, ignore chess when it arrives. The same rule applies to Next followed by All of them, and Finish followed by See another one.
-
-Apply `takeTourAttempt` when a navigation action arrives. A false result means acknowledge without navigating. A true result means prepare the requested navigation. Immediately before running its command, apply `commitTourAttempt`; a false result means it was superseded, so acknowledge it without running that command. Run navigation commands one at a time, never in parallel. Keep `tour.current` until a command succeeds, then replace it with a fresh record for the `id` and `version` it printed, keeping `tour.previous`. If the command fails, leave `tour.current` as it is and set `tour.previous.choice` back to `null` so a fresh attempt can try again. The page still on the screen must remain current so its Next and All of them buttons can navigate. An identical choice advances the attempt without restarting a page already shown; an unfinished identical choice may still complete.
-
-```js
-function takeTourAttempt(tour, name, data) {
-  const matches = (showing) => showing && data.from === showing.from && data.from_version === showing.version;
-  const showing = matches(tour.current) ? tour.current : matches(tour.previous) ? tour.previous : null;
-  if (!showing) return false;
-  const allowed = data.from === "menu" ? ["pick", "done"] : data.from === "done" ? ["menu", "finish"] : ["next", "menu"];
-  if (!allowed.includes(name)) return false;
-  if (!Number.isSafeInteger(data.attempt) || data.attempt < 1 || typeof data.attempt_display !== "string" || !data.attempt_display) return false;
-  if (data.attempt < showing.attempt || (data.attempt === showing.attempt && data.attempt_display <= showing.attempt_display)) return false;
-  showing.attempt = data.attempt;
-  showing.attempt_display = data.attempt_display;
-  showing.wanted = JSON.stringify([name, data.choice || null, data.text || null]);
-  if (showing.wanted === showing.choice) return false;
-  tour.previous = showing;
-  return true;
-}
-
-function commitTourAttempt(tour, name, data) {
-  const showing = tour.previous;
-  if (!showing || data.from !== showing.from || data.from_version !== showing.version || data.attempt !== showing.attempt || data.attempt_display !== showing.attempt_display) return false;
-  const choice = JSON.stringify([name, data.choice || null, data.text || null]);
-  if (choice !== showing.wanted) return false;
-  showing.choice = choice;
-  return true;
-}
+```sh
+it tour show room
 ```
 
-Acknowledge every handled, older or identical action with `it ack <the action's id>`. Accepting navigation from the current destination replaces the previous record and retires the earlier source. A newer attempt from the previous source retires the destination only when its replacement command succeeds. A showing brought up independently, such as a spoken request to return to the tour, also retires both records. Retired requests are discarded and acknowledged, even if you later return to the same page. After clearing the tour, set both records to `null`.
+Name it for their folder as you show it, with `--param heading="shop"` and `--param sub="~/code/shop, on branch fix-cart"`.
 
-Before handling Finish, read `it actions --id tour-done` and consider every available attempt from that showing. Apply `commitTourAttempt` immediately before `it tour clear`, after processing any newer navigation received while preparing to finish. An older Finish must never clear a menu or another page brought up by a newer action. Once a current Finish clears the tour, discard all further actions from its retired showings.
+**Then say:** "This is your folder, as I see it."
+
+It is one page that comes with It, and you fill it with what you find in the folder you are in, so that it is about their own work. It holds up to four tiles, in `tiles`, each under an id of your choosing:
+
+| In a tile | What it is |
+|---|---|
+| `at` | A number. The tiles stand in the order of these |
+| `label` | A few small words over the title: `tests` |
+| `title` | The large words: `14 tests` |
+| `text` | One sentence, where one is needed |
+| `lines` | Up to six short lines, each `["strong part", "the rest"]` |
+| `dots` | A row of dots, one letter each: `g` good, `b` bad, `.` not yet known. This is how tests are shown |
+| `button` | The words on a button |
+| `busy` | `true` while you are at work on that tile |
+| `ask` | `true` on the one thing you will not do without their word |
+
+A tile appears when you write it and changes when you change it, and your hand goes to the tile that changed. `null` takes a tile or a part of one away. A key may be dotted. Fill the room in about ten seconds, a tile at a time, from what is quick to find: the branch and what is uncommitted, how many tests there are, what is marked TODO. Never run anything slow before the page is up, and say in `doing` what you are at between tiles:
+
+```sh
+it patch tour-room '{"doing":"reading the folder"}'
+it patch tour-room '{"tiles":{"branch":{"at":1,"label":"branch","title":"fix-cart","text":"Three commits ahead of main.","lines":[["a41c9e2","Round the total once"],["M","src/cart/total.ts"]]}},"doing":"counting the tests"}'
+it patch tour-room '{"tiles":{"tests":{"at":2,"label":"tests","title":"14 tests","dots":"..............","button":"Run them"}},"doing":""}'
+it patch tour-room '{"tiles":{"push":{"at":4,"ask":true,"label":"push","title":"Push fix-cart?","text":"Nothing leaves this computer until you say so.","button":"Push it"}}}'
+```
+
+A button arrives as **`press`**, with `tile`, the tile's id, and `button`, its words. Do what it asks, for real, and show it on the tile as it happens: set `busy`, then the result.
+
+```sh
+it patch tour-room '{"tiles":{"tests":{"busy":true,"title":"Running 14 tests"}},"doing":"running the tests"}'
+it set tour-room tiles.tests.dots ggggg.........
+it patch tour-room '{"tiles":{"tests":{"busy":false,"title":"13 of 14 pass","dots":"ggggggggbggggg","lines":[["cart.test.ts","total with a coupon is off by one cent"]]}},"doing":"","note":"One test fails: the cart total with a coupon."}'
+```
+
+`note` is a sentence of your own under the heading. Never change the person's files, and never send anything anywhere, unless they pressed the button of a tile that has `ask`: that tile is the thing you will not do without their word. One such tile is plenty.
+
+**Say:** one sentence when a button's work is done, naming what came of it.
 
 ## The whiteboard
 
@@ -123,6 +149,8 @@ it tour show chess
 ```
 
 **Then say:** "You're white. Make a move, and I'll answer on the board."
+
+Your pieces are Black's, and the board shows them in green.
 
 Each `move` action carries `request` (the id of this move), `move` (theirs, as `e2e4`), `said` (the same in words), `fen` (the position after it), `legal` (every move you may make, in the same form), `check`, and `over` (`null`, `"checkmate"` or `"stalemate"`). Answer with the exact `request` id, a colon, and one of the moves in `legal`. For a request named `k3fq`:
 
@@ -190,7 +218,9 @@ it tour show done
 
 **Then say:** "That's the tour."
 
-Two buttons are on it. **See another one** arrives as `menu`: show the menu again. **Finish the tour** arrives as `finish`. Apply the navigation rules above, including the final attempt check. Only a current Finish removes the tour's pages, which sends their screen back to their own pages:
+The page says what is worth taking away, and offers their phone as a second screen, once, in words. Do not offer the phone again, on a page or in the chat: not everyone has a network set up for it.
+
+Two buttons are on it. **See another one** arrives as `menu`: show the first page again. **Finish the tour** arrives as `finish`. Apply the rules for moving between pages, including the final attempt check. Only a current Finish removes the tour's pages, which sends their screen back to their own pages:
 
 ```sh
 it tour clear
@@ -201,3 +231,44 @@ it tour clear
 ## If they want out
 
 If at any point they say stop, say "Fine. Ask me for the It tour again whenever you like," run `it tour clear`, and stop. Do not talk them back into it.
+
+## Moving between pages
+
+A page gives its buttons back to the person when it is still on the screen forty seconds after one was pressed, and they may press again. So `next` and `menu` carry `from`, the page they were pressed on, and so do `pick`, `done` and `finish`. All five carry `from_version`, the version of that showing, and `attempt`, an increasing number saved before sending so a reload of the same showing continues the count. They also carry `attempt_display`, a random tie-breaker made once per page load and saved with the counter. It stays the same for every action from that load and is never copied from the shared store. Before acting on `pick`, `next`, `menu`, `done` or `finish`, check the showing and attempt with the rules below. If those fields are not shown in the message, run `it action <the action's id>`: its `page` and `version` identify the showing, and its `data` holds the attempt and choice.
+
+The person's latest action on one display wins on every tour page. Across displays, order attempts by the counter first, then by `attempt_display` using JavaScript's string comparison, not locale order. Equal counters therefore have one winner regardless of the order they arrive. This is the tour's rule for simultaneous displays: there is no shared allocation or clock, so it does not claim which simultaneous choice happened last.
+
+Keep `tour.current` as `{ from: <page name>, version: <its version>, attempt: 0, attempt_display: "", choice: null, wanted: null }` for the showing now on the screen, and start with `tour.previous = null`. The previous record is the showing whose action brought up the current page. Keep it after showing a choice, the menu or the ending, or building what they named. A higher attempt pair from that showing replaces its earlier choice even when its page is no longer current. If several actions from one showing are already available, process only the highest `attempt` pair and acknowledge the others without navigating. If chess arrives first and drums later with a higher pair, show drums; if drums arrives first, ignore chess when it arrives. The same rule applies to Next followed by All of them, and Finish followed by See another one.
+
+Apply `takeTourAttempt` when a navigation action arrives. A false result means acknowledge without navigating. A true result means prepare the requested navigation. Immediately before running its command, apply `commitTourAttempt`; a false result means it was superseded, so acknowledge it without running that command. Run navigation commands one at a time, never in parallel. Keep `tour.current` until a command succeeds, then replace it with a fresh record for the `id` and `version` it printed, keeping `tour.previous`. If the command fails, leave `tour.current` as it is and set `tour.previous.choice` back to `null` so a fresh attempt can try again. The page still on the screen must remain current so its Next and All of them buttons can navigate. An identical choice advances the attempt without restarting a page already shown; an unfinished identical choice may still complete.
+
+```js
+function takeTourAttempt(tour, name, data) {
+  const matches = (showing) => showing && data.from === showing.from && data.from_version === showing.version;
+  const showing = matches(tour.current) ? tour.current : matches(tour.previous) ? tour.previous : null;
+  if (!showing) return false;
+  const allowed = data.from === "menu" ? ["pick", "done"] : data.from === "done" ? ["menu", "finish"] : ["next", "menu"];
+  if (!allowed.includes(name)) return false;
+  if (!Number.isSafeInteger(data.attempt) || data.attempt < 1 || typeof data.attempt_display !== "string" || !data.attempt_display) return false;
+  if (data.attempt < showing.attempt || (data.attempt === showing.attempt && data.attempt_display <= showing.attempt_display)) return false;
+  showing.attempt = data.attempt;
+  showing.attempt_display = data.attempt_display;
+  showing.wanted = JSON.stringify([name, data.choice || null, data.text || null]);
+  if (showing.wanted === showing.choice) return false;
+  tour.previous = showing;
+  return true;
+}
+
+function commitTourAttempt(tour, name, data) {
+  const showing = tour.previous;
+  if (!showing || data.from !== showing.from || data.from_version !== showing.version || data.attempt !== showing.attempt || data.attempt_display !== showing.attempt_display) return false;
+  const choice = JSON.stringify([name, data.choice || null, data.text || null]);
+  if (choice !== showing.wanted) return false;
+  showing.choice = choice;
+  return true;
+}
+```
+
+Acknowledge every handled, older or identical action with `it ack <the action's id>`. Accepting navigation from the current destination replaces the previous record and retires the earlier source. A newer attempt from the previous source retires the destination only when its replacement command succeeds. A showing brought up independently, such as a spoken request to return to the tour, also retires both records. Retired requests are discarded and acknowledged, even if you later return to the same page. After clearing the tour, set both records to `null`.
+
+Before handling Finish, read `it actions --id tour-done` and consider every available attempt from that showing. Apply `commitTourAttempt` immediately before `it tour clear`, after processing any newer navigation received while preparing to finish. An older Finish must never clear a menu or another page brought up by a newer action. Once a current Finish clears the tour, discard all further actions from its retired showings.

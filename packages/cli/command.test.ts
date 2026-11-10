@@ -811,7 +811,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
 
   test('`it tour show next` selects from backend-owned progress and delegates resets to publication', async () => {
     const m = machine()
-    let seen: string[] = ['whiteboard']
+    let seen: string[] = ['room', 'whiteboard']
     const b = await backend(m, ({ path: fn, args }) => {
       if (fn === 'tour:seen') return { seen }
       if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
@@ -827,14 +827,15 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
         expect(b.asked.some((x) => x.path === 'state:patch')).toBe(false)
         return b.asked.find((x) => x.path === 'publish:begin')!.args
       }
-      expect(await shown('next')).toMatchObject({ slug: 'tour-chess', tour: 'chess', state: '{"reply":"","note":""}' })
+      expect(await shown('next')).toMatchObject({ slug: 'tour-chess', tour: 'chess', state: '{"reply":"","note":"","doing":""}' })
       expect((await shown('whiteboard')).tour).toBe('whiteboard')
       expect(b.asked.some((x) => x.path === 'tour:seen')).toBe(false)
       expect((await shown('menu')).tour).toBe('menu')
-      seen = ['whiteboard', 'chess', 'checklist', 'drums', 'button']
+      seen = ['room', 'whiteboard', 'chess', 'checklist', 'drums', 'button']
       expect((await shown('next')).slug).toBe('tour-done')
+      // The control room for the person's own folder is the first thing the tour goes on to
       seen = []
-      expect((await shown('next')).slug).toBe('tour-whiteboard')
+      expect((await shown('next')).slug).toBe('tour-room')
     } finally {
       await b.close()
     }

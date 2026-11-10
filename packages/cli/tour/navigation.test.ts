@@ -65,6 +65,8 @@ async function opened(
   randomId?: string | null,
 ) {
   const page = tourPage(name)
+  // The first page is shown as it is when the person has come back to it, with its choices up: that is where they are picked from
+  const starts = { ...JSON.parse(page.state), ...(name === 'menu' ? { seen: ['whiteboard'] } : {}) }
   const sent: { name: string; data: unknown; accept: () => Promise<void>; refuse: () => Promise<void> }[] = []
   const listeners: (() => void)[] = []
   const settled = () => new Promise<void>((done) => setImmediate(done))
@@ -75,9 +77,11 @@ async function opened(
     runScripts: 'dangerously',
     pretendToBeVisual: true,
     beforeParse(w: any) {
+      // The stand-in draws nothing, and says so once for every page if it is asked to
+      w.HTMLCanvasElement.prototype.getContext = () => null
       if (randomId !== undefined) Object.defineProperty(w.crypto, 'randomUUID', { value: randomId === null ? undefined : () => randomId })
       w.It = {
-        state: { ...JSON.parse(page.state), ...(saved && !loading ? { _page: { ...saved } } : {}) },
+        state: { ...starts, ...(saved && !loading ? { _page: { ...saved } } : {}) },
         version,
         revision: loading ? 0 : 1,
         ...(saved && {
@@ -482,7 +486,7 @@ describe('the tour navigation requests', () => {
       await page.advance(SLOW - 1)
       await page.sent[0]![result]()
       expect(page.$('#more').disabled).toBe(true)
-      expect(page.$('#status').textContent).toBe('One moment')
+      expect(page.$('#more').getAttribute('data-picked')).toBe('1')
       await page.advance(1)
       expect(page.$('#more').disabled).toBe(false)
     } finally {
