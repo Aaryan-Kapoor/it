@@ -883,7 +883,7 @@ describe('what records or takes a photo for a page, when the page changes hands 
         await tick()
       })
     }
-    return { heard, ask, handedTo }
+    return { heard, ask, handedTo, page }
   }
   const resultOf = (heard: any[], requestId: string) => heard.find((m) => m.type === 'it:result' && m.requestId === requestId)
 
@@ -1350,5 +1350,348 @@ describe('what records or takes a photo for a page, when the page changes hands 
       Reflect.deleteProperty(document, 'fullscreenElement')
       Reflect.deleteProperty(document, 'exitFullscreen')
     }
+  })
+
+  // The camera live to the page: the site opens it and sends the page each picture it gives
+  describe('the camera, live to the page', () => {
+    /** Whoever waits for the camera's next picture. */
+    let waiting: (() => void) | null = null
+    const kept: [object, string, PropertyDescriptor | undefined][] = []
+    const standIn = (on: object, name: string, value: PropertyDescriptor) => {
+      kept.push([on, name, Object.getOwnPropertyDescriptor(on, name)])
+      Object.defineProperty(on, name, { configurable: true, ...value })
+    }
+    beforeEach(() => {
+      waiting = null
+      vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
+      standIn(HTMLMediaElement.prototype, 'readyState', { get: () => 4 })
+      standIn(HTMLVideoElement.prototype, 'requestVideoFrameCallback', {
+        value(fn: () => void) {
+          waiting = fn
+          return 1
+        },
+      })
+      // A picture is an ImageBitmap in a browser. Here it is something a channel hands over as it does one
+      vi.stubGlobal('createImageBitmap', async () => Object.assign(new ArrayBuffer(8), { width: 640, height: 480, close() {} }))
+    })
+    afterEach(() => {
+      for (const [on, name, was] of kept.splice(0).reverse())
+        if (was) Object.defineProperty(on, name, was)
+        else Reflect.deleteProperty(on, name)
+    })
+    /** The camera gives a picture, and what the site sends of it arrives. */
+    const picture = async () => {
+      const next = waiting
+      waiting = null
+      next?.()
+      await act(() => tick(20))
+    }
+    const frames = (heard: any[]) => heard.filter((m) => m.type === 'it:camera-frame')
+    const states = (heard: any[]) => heard.filter((m) => m.type === 'it:camera-state')
+    const openLive = { type: 'it:camera', requestId: 'c1', camera: 'cam-a', video: { facingMode: 'user' } }
+    /** Where the grants of this browser are kept, as media.ts keeps them. */
+    const GRANTS = 'it.media.alice.a-display-key-000001'
+    const day = 24 * 60 * 60_000
+
+    test('a page that calls for the camera is shown it live once the person allows it in the bar, asked about the camera alone, and is given its pictures', async () => {
+      const { heard, ask } = await shownFor(FIRST, [])
+      const { currentQuestion } = await import('./media')
+      await ask(openLive)
+      expect(resultOf(heard, 'c1')).toBeUndefined()
+      expect(currentQuestion()!.kinds).toEqual(['camera'])
+      await act(async () => currentQuestion()!.answer(true))
+      await arrived(() => !!resultOf(heard, 'c1'))
+      expect(resultOf(heard, 'c1')).toMatchObject({ ok: true })
+      await picture()
+      expect(frames(heard)).toMatchObject([{ camera: 'cam-a', frame: 1 }])
+      expect(frames(heard)[0].picture.byteLength).toBe(8)
+      expect(tracks.map((t) => t.stopped)).toEqual([false])
+    })
+
+    test('a page allowed once on this screen is shown the camera live with nothing more asked, and what it was allowed runs on from now', async () => {
+      const { heard, ask } = await shownFor(FIRST, ['mic', 'camera'])
+      const { currentQuestion, grantsOf } = await import('./media')
+      // Allowed ten days ago, and unused since
+      const before = JSON.parse(localStorage.getItem(GRANTS)!)
+      localStorage.setItem(GRANTS, JSON.stringify(before.map((g: any) => ({ ...g, at: g.at - 10 * day }))))
+      expect(grantsOf('alice')[0]!.used).toBeUndefined()
+      await ask(openLive)
+      expect(currentQuestion()).toBeNull()
+      expect(resultOf(heard, 'c1')).toMatchObject({ ok: true })
+      const [now] = grantsOf('alice')
+      expect(now!.id).toBe(before[0].id)
+      expect(Date.now() - now!.used!).toBeLessThan(5000)
+      // Noted beside the grants, which are left as they were
+      expect(JSON.parse(localStorage.getItem(GRANTS)!)[0].used).toBeUndefined()
+    })
+
+    test('the page is sent a few pictures at a time, and the next once it says it drew one', async () => {
+      const { heard, ask, page } = await shownFor(FIRST, ['camera'])
+      await ask(openLive)
+      for (let n = 0; n < 4; n++) await picture()
+      expect(frames(heard).map((m) => m.frame)).toEqual([1, 2])
+      const port = page.ports()[0]!
+      // Said of another camera, or of a picture it was never sent, it makes no room
+      port.postMessage({ type: 'it:camera-drawn', camera: 'cam-b', frame: 1 })
+      port.postMessage({ type: 'it:camera-drawn', camera: 'cam-a', frame: 9 })
+      await act(() => tick(20))
+      await picture()
+      expect(frames(heard).map((m) => m.frame)).toEqual([1, 2])
+      port.postMessage({ type: 'it:camera-drawn', camera: 'cam-a', frame: 1 })
+      await act(() => tick(20))
+      await picture()
+      expect(frames(heard).map((m) => m.frame)).toEqual([1, 2, 3])
+    })
+
+    test('the live camera ends when another conversation takes the page over, and the page is told why and sent nothing more', async () => {
+      const { heard, ask, handedTo } = await shownFor(FIRST, ['camera'])
+      await ask(openLive)
+      await picture()
+      await handedTo(SECOND)
+      expect(states(heard)).toMatchObject([{ camera: 'cam-a', state: 'ended', why: 'taken_over' }])
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+      await picture()
+      expect(frames(heard)).toHaveLength(1)
+      const { cameraFor } = await import('./media')
+      expect(cameraFor('page1')).toBeUndefined()
+    })
+
+    test('the live camera ends when the person takes back what the page was allowed', async () => {
+      const { heard, ask } = await shownFor(FIRST, ['camera'])
+      await ask(openLive)
+      const { takeBack } = await import('./media')
+      await act(async () => takeBack('alice', 'page1'))
+      expect(states(heard)).toMatchObject([{ state: 'ended', why: 'taken_back' }])
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+    })
+
+    test('the live camera ends when another tab takes back what the page was allowed and allows it again before this tab hears of either', async () => {
+      const { heard, ask } = await shownFor(FIRST, ['camera'])
+      await ask(openLive)
+      const before = localStorage.getItem(GRANTS)
+      const again = JSON.stringify(JSON.parse(before!).map((g: any) => ({ ...g, id: 'a-grant-made-in-another-tab', at: Date.now(), used: Date.now() })))
+      Storage.prototype.setItem.call(localStorage, GRANTS, again)
+      await act(async () => {
+        window.dispatchEvent(new StorageEvent('storage', { key: GRANTS, oldValue: before, newValue: null }))
+        window.dispatchEvent(new StorageEvent('storage', { key: GRANTS, oldValue: null, newValue: again }))
+      })
+      expect(states(heard)).toMatchObject([{ state: 'ended', why: 'taken_back' }])
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+    })
+
+    test('the live camera ends at the next picture once what the page was allowed has gone 30 days unused, and that picture is not sent', async () => {
+      const { heard, ask } = await shownFor(FIRST, ['camera'])
+      await ask(openLive)
+      await picture()
+      // Thirty-one days pass, as far as what is kept goes, the grant's last use among it: nothing tells this tab of it
+      const grants = JSON.parse(localStorage.getItem(GRANTS)!)
+      Storage.prototype.setItem.call(localStorage, GRANTS, JSON.stringify(grants.map((g: any) => ({ ...g, at: g.at - 31 * day }))))
+      const used = `${GRANTS}.used.${grants[0].id}`
+      expect(Number(localStorage.getItem(used))).toBeGreaterThan(0)
+      Storage.prototype.setItem.call(localStorage, used, String(Number(localStorage.getItem(used)) - 31 * day))
+      await picture()
+      expect(frames(heard)).toHaveLength(1)
+      expect(states(heard)).toMatchObject([{ state: 'ended', why: 'taken_back' }])
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+    })
+
+    test('a camera the browser gave after the page changed hands is closed again at once, and the page is told why', async () => {
+      const { heard, ask, handedTo } = await shownFor(FIRST, ['camera'])
+      letThrough = () => {}
+      await ask(openLive)
+      await handedTo(SECOND)
+      letThrough()
+      await arrived(() => !!resultOf(heard, 'c1'))
+      expect(resultOf(heard, 'c1')).toMatchObject({ ok: false, error: expect.stringMatching(/^Another conversation took this page over/) })
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+      await picture()
+      expect(frames(heard)).toEqual([])
+    })
+
+    test('a camera the browser gave after what the page was allowed was taken back is closed again at once', async () => {
+      const { heard, ask } = await shownFor(FIRST, ['camera'])
+      letThrough = () => {}
+      await ask(openLive)
+      const { takeBack } = await import('./media')
+      await act(async () => takeBack('alice', 'page1'))
+      letThrough()
+      await arrived(() => !!resultOf(heard, 'c1'))
+      expect(resultOf(heard, 'c1')).toMatchObject({ ok: false, error: 'The person took back what they had allowed this page.' })
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+    })
+
+    test('while the camera is live a photo and a recording with video are refused, saying the page can take its own picture, and once it is closed they are not', async () => {
+      const { heard, ask } = await shownFor(FIRST, ['mic', 'camera'])
+      await ask(openLive)
+      await ask({ type: 'it:photo', requestId: 'p1' })
+      await ask({ type: 'it:record', requestId: 'r1', audio: true, video: true })
+      for (const id of ['p1', 'r1'])
+        expect(resultOf(heard, id)).toMatchObject({
+          ok: false,
+          error: expect.stringMatching(/^The camera is live to this page just now.*cam\.onframe or cam\.stream/),
+        })
+      await ask({ type: 'it:camera-stop', requestId: 'c2', camera: 'cam-a' })
+      expect(resultOf(heard, 'c2')).toMatchObject({ ok: true })
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+      // Closed as the page asked, and not told of it as of something it did not ask
+      expect(states(heard)).toEqual([])
+      await ask({ type: 'it:record', requestId: 'r2', audio: true, video: true })
+      expect(resultOf(heard, 'r2')).toMatchObject({ ok: true })
+    })
+
+    test('sound is recorded beside the live camera, begun after it, each with its own grant check, and each stopped by itself', async () => {
+      const { heard, ask } = await shownFor(FIRST, ['mic', 'camera'])
+      await ask(openLive)
+      await ask({ type: 'it:record', requestId: 'r1', audio: true, video: false })
+      expect(resultOf(heard, 'r1')).toMatchObject({ ok: true, recording: { mimeType: 'audio/webm' } })
+      const { cameraFor, liveFor } = await import('./media')
+      expect([!!cameraFor('page1'), !!liveFor('page1')]).toEqual([true, true])
+      expect(tracks.map((t) => t.stopped)).toEqual([false, false])
+      // The recording stopped, the camera goes on, and pictures still come
+      await ask({ type: 'it:record-stop', requestId: 'r2', recording: resultOf(heard, 'r1').recording.id, keep: true })
+      expect(resultOf(heard, 'r2')).toMatchObject({ ok: true })
+      expect(tracks.map((t) => t.stopped)).toEqual([false, true])
+      await picture()
+      expect(frames(heard)).toHaveLength(1)
+      expect(states(heard)).toEqual([])
+    })
+
+    test('the camera is shown live beside a recording of sound already under way, and the camera’s end leaves the recording going', async () => {
+      const { heard, ask } = await shownFor(FIRST, ['mic', 'camera'])
+      await ask({ type: 'it:record', requestId: 'r1', audio: true, video: false })
+      await ask(openLive)
+      expect(resultOf(heard, 'c1')).toMatchObject({ ok: true })
+      await ask({ type: 'it:camera-stop', requestId: 'c2', camera: 'cam-a' })
+      const { liveFor } = await import('./media')
+      expect(liveFor('page1')).toBeDefined()
+      expect(tracks.map((t) => t.stopped)).toEqual([false, true])
+      expect(heard.some((m) => m.type === 'it:recording')).toBe(false)
+    })
+
+    test('a recording of sound beside the live camera asks in the bar for the microphone where only the camera is allowed, and both go on under one grant', async () => {
+      const { heard, ask } = await shownFor(FIRST, ['camera'])
+      const { currentQuestion, grantFor } = await import('./media')
+      await ask(openLive)
+      const grant = grantFor('alice', 'page1', FIRST, ['camera'])
+      await ask({ type: 'it:record', requestId: 'r1', audio: true, video: false })
+      expect(currentQuestion()!.kinds).toEqual(['mic'])
+      await act(async () => currentQuestion()!.answer(true))
+      await arrived(() => !!resultOf(heard, 'r1'))
+      expect(resultOf(heard, 'r1')).toMatchObject({ ok: true })
+      expect(grantFor('alice', 'page1', FIRST, ['mic', 'camera'])).toBe(grant)
+      expect(tracks.map((t) => t.stopped)).toEqual([false, false])
+      expect(states(heard)).toEqual([])
+    })
+
+    test('a takeover ends both the live camera and the recording of sound beside it', async () => {
+      const first = await shownFor(FIRST, ['mic', 'camera'])
+      await first.ask(openLive)
+      await first.ask({ type: 'it:record', requestId: 'r1', audio: true, video: false })
+      await first.handedTo(SECOND)
+      await arrived(() => first.heard.some((m) => m.type === 'it:recording'))
+      expect(states(first.heard)).toMatchObject([{ state: 'ended', why: 'taken_over' }])
+      expect(first.heard.find((m) => m.type === 'it:recording')).toMatchObject({ state: 'ended', why: 'taken_over' })
+      expect(tracks.map((t) => t.stopped)).toEqual([true, true])
+    })
+
+    test('a takeback ends both the live camera and the recording of sound beside it', async () => {
+      const { heard, ask } = await shownFor(FIRST, ['mic', 'camera'])
+      await ask(openLive)
+      await ask({ type: 'it:record', requestId: 'r1', audio: true, video: false })
+      const { takeBack } = await import('./media')
+      await act(async () => takeBack('alice', 'page1'))
+      await arrived(() => heard.some((m) => m.type === 'it:recording'))
+      expect(states(heard)).toMatchObject([{ state: 'ended', why: 'taken_back' }])
+      expect(heard.find((m) => m.type === 'it:recording')).toMatchObject({ state: 'ended', why: 'taken_back' })
+      expect(tracks.map((t) => t.stopped)).toEqual([true, true])
+    })
+
+    test('the camera is not shown live while the page records video or has It’s view of the camera open for a photo, and the page is told which', async () => {
+      const { heard, ask } = await shownFor(FIRST, ['mic', 'camera'])
+      await ask({ type: 'it:record', requestId: 'r1', audio: true, video: true })
+      await ask(openLive)
+      expect(resultOf(heard, 'c1')).toMatchObject({ ok: false, error: expect.stringMatching(/^This page is recording from the camera just now/) })
+      await ask({ type: 'it:record-stop', requestId: 'r2', recording: resultOf(heard, 'r1').recording.id, keep: false })
+      await ask({ type: 'it:photo', requestId: 'p1' })
+      await ask({ ...openLive, requestId: 'c2' })
+      expect(resultOf(heard, 'c2')).toMatchObject({ ok: false, error: expect.stringMatching(/view of the camera is open for a photo/) })
+      expect(frames(heard)).toEqual([])
+    })
+
+    test('a frame that fills the screen is put back in its place when the camera opens live, and again if it fills the screen while the camera is live', async () => {
+      let full: Element | null = null
+      // Leaving the screen whole, as a browser does when it is asked to
+      const exit = vi.fn(async () => {
+        full = null
+      })
+      Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => full })
+      Object.defineProperty(document, 'exitFullscreen', { configurable: true, value: exit })
+      try {
+        const { ask } = await shownFor(FIRST, ['camera'])
+        // Already filling the screen when the camera is opened
+        full = host.querySelector('iframe')
+        await ask(openLive)
+        expect(exit).toHaveBeenCalledTimes(1)
+        // And made to fill it again while the camera is live
+        full = host.querySelector('iframe')
+        await act(async () => document.dispatchEvent(new Event('fullscreenchange')))
+        expect(exit).toHaveBeenCalledTimes(2)
+        // Once the camera is closed, the page may fill the screen as it likes
+        await ask({ type: 'it:camera-stop', requestId: 'c2', camera: 'cam-a' })
+        full = host.querySelector('iframe')
+        await act(async () => document.dispatchEvent(new Event('fullscreenchange')))
+        expect(exit).toHaveBeenCalledTimes(2)
+      } finally {
+        Reflect.deleteProperty(document, 'fullscreenElement')
+        Reflect.deleteProperty(document, 'exitFullscreen')
+      }
+    })
+
+    test('a page that loads another of its documents has the camera closed at once, though it had drawn none of what it was sent, and the new document can open it', async () => {
+      const { heard, ask, page } = await shownFor(FIRST, ['camera'])
+      await ask(openLive)
+      await picture()
+      await picture()
+      // Two pictures sent and none drawn: nothing more is sent, so nothing a picture does would close it
+      expect(frames(heard)).toHaveLength(2)
+      await page.fromFrame({ type: 'it:hello', doc: 'doc-2' })
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+      const { cameraFor } = await import('./media')
+      expect(cameraFor('page1')).toBeUndefined()
+      // The new document is let open it
+      const port = page.ports()[1]!
+      const now: any[] = []
+      port.onmessage = (m) => now.push(m.data)
+      port.postMessage({ ...openLive, requestId: 'c2', camera: 'cam-b' })
+      await act(() => tick(60))
+      expect(resultOf(now, 'c2')).toMatchObject({ ok: true })
+      expect(tracks.map((t) => t.stopped)).toEqual([true, false])
+    })
+
+    test('a live camera whose page drew none of what it was sent is ended when what it was allowed lapses, within a second and without another picture', async () => {
+      const { heard, ask } = await shownFor(FIRST, ['camera'])
+      await ask(openLive)
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+      // Opened again under the held clock, so that what checks on it every second is the test's to move
+      await ask({ type: 'it:camera-stop', requestId: 'c0', camera: 'cam-a' })
+      await ask({ ...openLive, requestId: 'c1b' })
+      await picture()
+      await picture()
+      expect(frames(heard)).toHaveLength(2)
+      const grants = JSON.parse(localStorage.getItem(GRANTS)!)
+      Storage.prototype.setItem.call(localStorage, GRANTS, JSON.stringify(grants.map((g: any) => ({ ...g, at: g.at - 31 * day }))))
+      const used = `${GRANTS}.used.${grants[0].id}`
+      Storage.prototype.setItem.call(localStorage, used, String(Number(localStorage.getItem(used)) - 31 * day))
+      await act(async () => vi.advanceTimersByTime(1000))
+      expect(states(heard)).toMatchObject([{ state: 'ended', why: 'taken_back' }])
+      expect(tracks.map((t) => t.stopped)).toEqual([true, true])
+    })
+
+    test('the camera closes when the page is no longer shown', async () => {
+      const { ask } = await shownFor(FIRST, ['camera'])
+      await ask(openLive)
+      await act(async () => root.render(createElement('p')))
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+    })
   })
 })

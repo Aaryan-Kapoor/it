@@ -38,12 +38,15 @@ import {
   type Begun,
   begin,
   browserWillAsk,
+  cameraVideoOf,
   cannotRecord,
   dismissNote,
   grantFor,
   grantsOf,
   kindsOf,
   kindsSaid,
+  type Opened,
+  openCamera,
   shoot,
   specOf,
   usedNow,
@@ -301,6 +304,14 @@ export function Mount({
     }
     /** What the recording under way records, for asking again whether the page may have what it gives. */
     let recordingKinds: MediaKind[] = []
+    // The camera live to the page (media.ts `openCamera`), which is one more thing at a time: held to
+    // the conversation and the grant it was opened under, and each picture checked as it goes
+    let camera: Opened | null = null
+    /** The id the page names its live camera by, and what it was opened under. */
+    let cameraId = ''
+    let cameraBy: Held = { owner: '', grant: '' }
+    const CAMERA_LIVE =
+      'The camera is live to this page just now, so It takes no photo and records no video for it. The page can take its own picture from cam.onframe or cam.stream, or stop the camera first. Sound alone can be recorded beside it.'
     // Another conversation took the page over: whatever records, is asked for or is open for a
     // photo under the one before stops, and what was recorded is thrown away. The person allowed
     // that conversation, and the new one has to be allowed for itself.
@@ -310,6 +321,7 @@ export function Mount({
       if (question && questionBy !== owner) question.cancel()
       if (photo && photoBy !== owner) photo.cancel()
       if (recording && recordingBy.owner !== owner) recording.end('taken_over')
+      if (camera && cameraBy.owner !== owner) camera.end('taken_over')
     }
     /**
      * Leaves the frame in It's own place while the microphone or the camera is asked about, records
@@ -317,7 +329,7 @@ export function Mount({
      * that it records, and has the buttons that stop it and take the photo.
      */
     const inSight = () => {
-      if ((beginning || recording || photo) && document.fullscreenElement && document.fullscreenElement === frame.current)
+      if ((beginning || recording || photo || camera) && document.fullscreenElement && document.fullscreenElement === frame.current)
         void document.exitFullscreen().catch(() => {})
     }
     document.addEventListener('fullscreenchange', inSight)
@@ -392,7 +404,10 @@ export function Mount({
       if (name === 'NotReadableError' || name === 'AbortError') return new Error('The microphone or the camera is in use by something else on this screen.')
       return err instanceof Error ? err : new Error('It could not record.')
     }
-    const onMedia = async (from: MessagePort, message: Extract<PageToSite, { type: 'it:record' | 'it:record-stop' | 'it:photo' }>) => {
+    const onMedia = async (
+      from: MessagePort,
+      message: Extract<PageToSite, { type: 'it:record' | 'it:record-stop' | 'it:photo' | 'it:camera' | 'it:camera-stop' }>,
+    ) => {
       if (message.type === 'it:record-stop') {
         const was = recording
         if (!was || was.id !== message.recording) throw new Error('That recording is not under way.')
@@ -410,13 +425,31 @@ export function Mount({
         if (cannot) throw new Error(cannot)
         return { file }
       }
-      if (beginning || recording || question || photo) throw new Error('This page is using the microphone or the camera already. Stop that first.')
+      if (message.type === 'it:camera-stop') {
+        if (!camera || cameraId !== message.camera) throw new Error('That camera is not open.')
+        camera.stop()
+        camera = null
+        return {}
+      }
+      // One thing at a time, but for sound recorded while the camera is live, which the page can have
+      // beside it: each is begun, allowed, ended and stopped by itself
+      if (message.type === 'it:camera') {
+        if (camera) throw new Error('The camera is live to this page already. Stop it before it is opened again.')
+        if (recording && recordingKinds.includes('camera'))
+          throw new Error('This page is recording from the camera just now. Stop the recording before the camera is shown to it live.')
+        if (photo) throw new Error('It’s view of the camera is open for a photo for this page. Take the photo or close it first.')
+        if (beginning || question) throw new Error('This page is using the microphone or the camera already. Stop that first.')
+      } else {
+        if (camera && (message.type === 'it:photo' || kindsOf(message).includes('camera'))) throw new Error(CAMERA_LIVE)
+        if (beginning || recording || question || photo) throw new Error('This page is using the microphone or the camera already. Stop that first.')
+      }
       // Taken at once, before anything is waited for: a second asking that arrives while the
       // person or the browser is asked about the first is refused, and is not begun beside it
       beginning = true
       // And It's bar is seen, which asks and says what is under way
       inSight()
       try {
+        if (message.type === 'it:camera') return await openLive(from, message)
         return message.type === 'it:photo' ? await takePhoto(message) : await beginRecording(from, message)
       } finally {
         beginning = false
@@ -484,6 +517,50 @@ export function Mount({
       recordingKinds = kindsOf(spec)
       inSight()
       return { recording: { id, mimeType: recording.mimeType } }
+    }
+    const openLive = async (from: MessagePort, message: Extract<PageToSite, { type: 'it:camera' }>) => {
+      const video = cameraVideoOf(message.video)
+      // The page names the camera itself, so that a picture that comes before the answer is one it knows
+      const id = typeof message.camera === 'string' ? message.camera.slice(0, 100) : ''
+      if (!id) throw new Error('A live camera needs an id to be named by.')
+      /** The camera this opens, once it is open: what the end it is told of is compared with. */
+      let mine: Opened | null = null
+      // Allowed as a photo or a recording is, and It's bar says which page the browser asks about, where it asks
+      const { held, got: opened } = await withDevice(['camera'], (h) =>
+        openCamera(video, {
+          id: crypto.getRandomValues(new Uint32Array(2)).join('-'),
+          user,
+          page: artifactId,
+          owner: h.owner,
+          grant: h.grant,
+          title: titled.current,
+          // The camera is the page's only while the document that opened it is shown, the page has
+          // the conversation the person allowed, and what it was allowed under stands: asked as each
+          // picture goes, and every second besides, and not only when the camera was opened
+          still: () => (port.current === from ? whyNot(['camera'], h) : 'not_shown'),
+          picture: (frame, picture) => from.postMessage({ type: 'it:camera-frame', camera: id, frame, picture } satisfies SiteToPage, [picture]),
+          told: (state, why) => {
+            if (state === 'ended' && camera !== null && camera === mine) camera = null
+            if (live && port.current === from) toPage(from, { type: 'it:camera-state', camera: id, state, ...(why ? { why } : {}) })
+          },
+        }),
+      )
+      mine = opened
+      // The page was closed, loaded another document, was taken over, or what it was allowed was
+      // taken back while the browser was asked: the camera is closed again at once
+      const cannot = port.current === from ? mayNotGoOn(['camera'], held) : SAID.not_shown
+      if (cannot) {
+        opened.stop()
+        throw new Error(cannot)
+      }
+      camera = opened
+      cameraId = id
+      cameraBy = held
+      // An open camera is the page using what it was allowed: noted as it opens, and every hour while it is open (media.ts)
+      usedNow(user, artifactId)
+      // And a frame that fills the screen is put back in its place, where It's bar says the camera is live
+      inSight()
+      return {}
     }
     const allowed = () => {
       const now = Date.now()
@@ -558,11 +635,23 @@ export function Mount({
         }
         return
       }
-      if (message.type === 'it:record' || message.type === 'it:record-stop' || message.type === 'it:photo') {
+      if (message.type === 'it:camera-drawn') {
+        // Never answered, and not counted against what the page may send: one comes for each picture
+        if (camera && message.camera === cameraId && typeof message.frame === 'number') camera.drawn(message.frame)
+        return
+      }
+      if (
+        message.type === 'it:record' ||
+        message.type === 'it:record-stop' ||
+        message.type === 'it:photo' ||
+        message.type === 'it:camera' ||
+        message.type === 'it:camera-stop'
+      ) {
         const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 100) : ''
         try {
           // Stopping is never refused for asking too often: a page that cannot stop would go on recording
-          if (message.type !== 'it:record-stop' && !allowed()) throw new Error('This page is sending too much at once. Try again in a moment.')
+          if (message.type !== 'it:record-stop' && message.type !== 'it:camera-stop' && !allowed())
+            throw new Error('This page is sending too much at once. Try again in a moment.')
           toPage(from, { type: 'it:result', requestId, ok: true, ...(await onMedia(from, message)) })
         } catch (err) {
           toPage(from, { type: 'it:result', requestId, ok: false, error: err instanceof Error ? err.message.slice(0, 500) : 'It could not record.' })
@@ -693,6 +782,8 @@ export function Mount({
         photo?.cancel()
         recording?.end('not_shown')
         recording = null
+        // And its camera closes now, and not at a picture that a page which stopped drawing would never be sent
+        camera?.end('not_shown')
         port.current?.close()
         const channel = new MessageChannel()
         port.current = channel.port1
@@ -748,6 +839,8 @@ export function Mount({
       photo?.cancel()
       void recording?.stop(false)
       recording = null
+      camera?.end('not_shown')
+      camera = null
       port.current?.close()
       port.current = null
     }
