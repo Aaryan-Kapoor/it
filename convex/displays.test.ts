@@ -1144,6 +1144,38 @@ describe('a display locked to a page', () => {
     expect((await h.row(h.tv.id)).epoch).toBe(epoch)
   })
 
+  test('a revocation still waiting for a display is found behind any number of other jobs, so a lock that got through first does not say all was revoked', async () => {
+    const h = await locked()
+    const userId = (await h.row(h.tv.id)).userId
+    // A hundred older jobs of another kind, waiting before anything of the lock's
+    await h.t.run(async (ctx) => {
+      for (let n = 0; n < 100; n++)
+        await ctx.db.insert('contentJobs', {
+          op: 'delete',
+          body: JSON.stringify({ prefix: `u/${userId}/x${n}/` }),
+          attempts: 0,
+          nextAt: Date.now() + 3_600_000,
+          createdAt: Date.now(),
+          userId,
+        })
+    })
+    const epoch = (await h.row(h.tv.id)).epoch
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}'))
+      // The content service takes in the first raise, and fails the second
+      if (String(url).endsWith('/control/revoke') && body.epoch > epoch + 1) return new Response(null, { status: 503 })
+      return new Response(JSON.stringify({ epoch: body.epoch }))
+    })
+    // Two locks, as the action makes them: A's transaction, then B's, then A asks for its revocation
+    const a = await h.laptop.as.mutation(internal.displays._lock, { displayId: h.tv.id, artifactId: h.workout })
+    const b = await h.tv.as.mutation(internal.displays._lock, { displayId: h.tv.id, artifactId: h.review })
+    expect((await h.row(h.tv.id)).epoch).toBe(epoch + 2)
+    expect(await h.t.action(internal.content.revokeNow, { jobId: a.jobs[0]! })).toBe(true)
+    // B's revocation, to a higher number, is still to be confirmed: what A says is that not everything was revoked
+    expect(await h.t.query(internal.content._pendingRevokes, { userId: a.userId, displayIds: a.displayIds })).toBe(1)
+    expect(await h.t.action(internal.content.revokeNow, { jobId: b.jobs[0]! })).toBe(false)
+  })
+
   test('two locks to the same page at once each say only what is so, and the display is signed out of what it showed once', async () => {
     for (const down of [true, false]) {
       const h = await locked()
