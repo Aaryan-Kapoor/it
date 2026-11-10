@@ -119,11 +119,6 @@ function DisplayItem({
                 Not paired
               </span>
             )}
-            {lockable && d.lockedTo && (
-              <span className="chip quiet" title="It keeps to this page, and agents show no other page here.">
-                Locked to “{d.lockedTo.title}”
-              </span>
-            )}
             {switchable && d.agents === false && (
               <span className="chip quiet" title="Agents may not show pages or send notifications here.">
                 Closed to agents
@@ -132,6 +127,8 @@ function DisplayItem({
           </span>
           <span className="row-sub">
             {here ? 'Open now' : d.paired === false ? 'Shows nothing until its browser is paired again' : `Last open ${ago(d.lastSeenAt, now)}`}
+            {/* Said beside when it was open, and not as another mark beside its name, where there is seldom room for it */}
+            {lockable && d.lockedTo && <span title="It keeps to this page, and agents show no other page here."> · Locked to “{d.lockedTo.title}”</span>}
           </span>
         </span>
       )}

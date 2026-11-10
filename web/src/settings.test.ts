@@ -316,7 +316,8 @@ describe('locking a display to a page from the Displays page', () => {
       ['', ['No page', 'Plan', 'Board']],
       ['page-2', ['No page', 'Plan', 'Board']],
     ])
-    expect(rows[1]!.querySelector('.row-name')!.textContent).toBe('Kitchen TVLocked to “Board”')
+    expect(rows[1]!.querySelector('.row-name')!.textContent).toBe('Kitchen TV')
+    expect(rows[1]!.querySelector('.row-sub')!.textContent).toMatch(/^Last open .+ · Locked to “Board”$/)
     const choose = (one: HTMLSelectElement, value: string) =>
       act(async () => {
         one.value = value
