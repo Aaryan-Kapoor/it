@@ -69,6 +69,8 @@ const RULES = {
   remove: { perMinute: 120, burst: 60 },
   // A page changing hands because a conversation showed it: as often as pages are shown
   take: { perMinute: 120, burst: 60 },
+  // A machine saying that a turn of a conversation began or ended: twice for each thing done on a page, and a few times more where turns follow one another
+  turn: { perMinute: 240, burst: 120 },
 } as const
 export type Rule = keyof typeof RULES
 

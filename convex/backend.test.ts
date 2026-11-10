@@ -4771,6 +4771,163 @@ describe('displays and machines', () => {
   })
 })
 
+describe('whether a turn of a page’s conversation is running, as its machine says', () => {
+  const turns = (t: T) => t.run((ctx) => ctx.db.query('turns').collect())
+
+  test('a turn said to be running and then to have ended is told to the page of that conversation, with the backend’s own times, in one record', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan', { session: SESSION })
+    await publish(m, 'other', { session: { harness: 'claude-code', id: 'sess-2' } })
+    await publish(m, 'nobodys')
+    const turn = async (slug: string) => (await alice.browser.query(api.artifacts.get, { slug })).turn
+    // Nothing has been said of any conversation
+    expect([await turn('plan'), await turn('other'), await turn('nobodys')]).toEqual([null, null, null])
+    const began = Date.now()
+    await m.as.mutation(api.turns.say, { for: SESSION, running: true })
+    expect(await turn('plan')).toEqual({ since: began, endedAt: null })
+    // Of that conversation alone: a page of another, and one that belongs to none, are told nothing
+    expect([await turn('other'), await turn('nobodys')]).toEqual([null, null])
+    // Said again while it runs, it has been running since it was first said
+    await vi.advanceTimersByTimeAsync(5000)
+    await m.as.mutation(api.turns.say, { for: SESSION, running: true })
+    expect(await turn('plan')).toEqual({ since: began, endedAt: null })
+    await vi.advanceTimersByTimeAsync(20_000)
+    await m.as.mutation(api.turns.say, { for: SESSION, running: false })
+    expect(await turn('plan')).toEqual({ since: began, endedAt: began + 25_000 })
+    // And said again to have ended, it ended when it was first said to
+    await vi.advanceTimersByTimeAsync(1000)
+    await m.as.mutation(api.turns.say, { for: SESSION, running: false })
+    expect(await turn('plan')).toEqual({ since: began, endedAt: began + 25_000 })
+    // The next turn is written in the place of the last: one record for the conversation, however many turns it has
+    await m.as.mutation(api.turns.say, { for: SESSION, running: true })
+    expect(await turn('plan')).toEqual({ since: began + 26_000, endedAt: null })
+    expect((await turns(t)).map((row) => [row.harness, row.sessionId, row.since, row.endedAt])).toEqual([['claude-code', 'sess-1', began + 26_000, undefined]])
+    // A screen that shows the page is told as the owner's browser is
+    const screen = await paired(t, 'alice', 'screen', 'alice-screen-key-001')
+    expect((await screen.browser.query(api.artifacts.get, { slug: 'plan' })).turn).toEqual({ since: began + 26_000, endedAt: null })
+  })
+
+  test('a turn said to have ended that was never said to be running is nothing to keep', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan', { session: SESSION })
+    await m.as.mutation(api.turns.say, { for: SESSION, running: false })
+    expect(await turns(t)).toEqual([])
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'plan' })).turn).toBeNull()
+  })
+
+  test('only a machine says it, and only of its own conversations: a browser is refused, and another person’s machine and another machine of the person’s change nothing', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    await person(t, 'bob')
+    const m = await machineOf(t, 'alice')
+    const desktop = await machineOf(t, 'alice', 'desktop')
+    const bobs = await machineOf(t, 'bob')
+    await publish(m, 'plan', { session: SESSION })
+    const turn = async () => (await alice.browser.query(api.artifacts.get, { slug: 'plan' })).turn
+    expect(await code(alice.browser.mutation(api.turns.say, { for: SESSION, running: true }))).toBe('forbidden')
+    expect(await code(t.mutation(api.turns.say, { for: SESSION, running: true }))).toBe('unauthenticated')
+    // A conversation of the same name on another machine is another conversation
+    await bobs.as.mutation(api.turns.say, { for: SESSION, running: true })
+    await desktop.as.mutation(api.turns.say, { for: SESSION, running: true })
+    expect(await turn()).toBeNull()
+    const began = Date.now()
+    await m.as.mutation(api.turns.say, { for: SESSION, running: true })
+    // And neither of them ends the turn the page's own machine spoke of
+    await vi.advanceTimersByTimeAsync(1000)
+    await bobs.as.mutation(api.turns.say, { for: SESSION, running: false })
+    await desktop.as.mutation(api.turns.say, { for: SESSION, running: false })
+    await desktop.as.mutation(api.turns.say, {})
+    expect(await turn()).toEqual({ since: began, endedAt: null })
+    // What is kept is no longer than a conversation's name may be
+    await m.as.mutation(api.turns.say, { for: { harness: 'h'.repeat(100), id: 's'.repeat(500) }, running: true })
+    expect((await turns(t)).map((row) => [row.harness.length, row.sessionId.length]).sort()).toContainEqual([40, 200])
+  })
+
+  test('a turn that is not known any more is told to nobody: one conversation’s, or all of a machine’s when its connector starts', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const desktop = await machineOf(t, 'alice', 'desktop')
+    const other = { harness: 'codex', id: 'sess-2' }
+    await publish(m, 'plan', { session: SESSION })
+    await publish(m, 'other', { session: other })
+    await publish(desktop, 'elsewhere', { session: SESSION })
+    const turn = async (slug: string) => (await alice.browser.query(api.artifacts.get, { slug })).turn
+    for (const s of [SESSION, other]) await m.as.mutation(api.turns.say, { for: s, running: true })
+    await desktop.as.mutation(api.turns.say, { for: SESSION, running: true })
+    // Its add-on went quiet in the middle of the turn: nothing is known of that one conversation
+    await m.as.mutation(api.turns.say, { for: SESSION })
+    expect([await turn('plan'), (await turn('other'))?.endedAt, (await turn('elsewhere'))?.endedAt]).toEqual([null, null, null])
+    // The machine's connector starts, and knows of none of its turns. Another machine's are as they were
+    await m.as.mutation(api.turns.say, { for: SESSION, running: true })
+    await m.as.mutation(api.turns.say, {})
+    expect([await turn('plan'), await turn('other'), (await turn('elsewhere'))?.endedAt]).toEqual([null, null, null])
+    expect((await turns(t)).map((row) => row.machineId)).toEqual([desktop.id])
+  })
+
+  test('a machine that is revoked takes what it said with it, and so does one that gives up its own access', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const desktop = await machineOf(t, 'alice', 'desktop')
+    const server = await machineOf(t, 'alice', 'server')
+    await publish(m, 'plan', { session: SESSION })
+    await publish(server, 'served', { session: SESSION })
+    for (const machine of [m, desktop, server]) await machine.as.mutation(api.turns.say, { for: SESSION, running: true })
+    // And more of them than one step removes
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 450; n++)
+        await ctx.db.insert('turns', { userId: alice.user as Id<'users'>, machineId: m.id, harness: 'codex', sessionId: `s-${n}`, since: 1, endedAt: 2 })
+    })
+    await alice.browser.mutation(api.machines.revoke, { machineId: m.id as never })
+    await desktop.as.mutation(api.machines.leave, {})
+    await settle(t)
+    expect((await turns(t)).map((row) => row.machineId)).toEqual([server.id])
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'plan' })).turn).toBeNull()
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'served' })).turn).toMatchObject({ endedAt: null })
+  })
+
+  test('a turn that ended is kept for as long as what was handed to its conversation is, and one that is running is kept', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await m.as.mutation(api.turns.say, { for: SESSION, running: true })
+    await m.as.mutation(api.turns.say, { for: { harness: 'codex', id: 'sess-2' }, running: true })
+    await m.as.mutation(api.turns.say, { for: SESSION, running: false })
+    await vi.advanceTimersByTimeAsync(7 * 86_400_000 - 60_000)
+    await t.mutation(internal.retention.sweepRecords, {})
+    expect((await turns(t)).length).toBe(2)
+    await vi.advanceTimersByTimeAsync(120_000)
+    await t.mutation(internal.retention.sweepRecords, {})
+    expect((await turns(t)).map((row) => row.sessionId)).toEqual(['sess-2'])
+  })
+
+  test('a machine is held to a pace in saying it, and what the person downloads holds none of it', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan', { session: SESSION })
+    const said: string[] = []
+    for (let n = 0; n < 121; n++) said.push(await code(m.as.mutation(api.turns.say, { for: SESSION, running: n % 2 === 0 })))
+    dropWhatAFailedCallScheduled()
+    expect([said.slice(0, 120).every((c) => c === 'ok'), said[120]]).toEqual([true, 'rate_limited'])
+    // The download has the machine by its name and its dates, and its pages and what was done on them
+    const start = await alice.browser.mutation(api.account.exportStart, {})
+    const held = [
+      start,
+      await alice.browser.query(api.account.exportMachines, { owner: alice.user, cursor: null }),
+      await alice.browser.query(api.account.exportPage, { artifactId: start.pages[0]! }),
+      await alice.browser.query(api.account.exportActions, { artifactId: start.pages[0]!, cursor: null }),
+    ]
+    expect((await turns(t)).length).toBe(1)
+    expect(JSON.stringify(held)).not.toMatch(/since|endedAt|sess-1/)
+  })
+})
+
 describe('notifications', () => {
   test('a button needs a page, and pressing it is one ordinary click however often it is pressed', async () => {
     const t = backend()
@@ -5156,6 +5313,9 @@ describe('leaving', () => {
     await alice.browser.mutation(api.sessions.inviteScreen, {})
     await t.mutation(internal.bridge.spend, { machineId: m.id, jti: 'a-proof-number-0001', issuedAt: Math.floor(Date.now() / 1000) })
     await t.mutation(internal.bridge.spend, { machineId: bm.id, jti: 'a-proof-number-0002', issuedAt: Math.floor(Date.now() / 1000) })
+    // And a turn of a conversation that each machine said was running
+    await m.as.mutation(api.turns.say, { for: SESSION, running: true })
+    await bm.as.mutation(api.turns.say, { for: SESSION, running: true })
     // And a limit the person reached, which is written down by a job of the backend's
     await alice.browser.mutation(api.account.exportStart, {})
     await alice.browser.mutation(api.account.exportStart, {})
@@ -5182,7 +5342,7 @@ describe('leaving', () => {
     const before = await naming()
     for (const table of ['mounts', 'rateLimits', 'spentProofs', 'actions', 'states', 'notifications', 'invites', 'tallies'])
       expect([table, before[table] ?? 0]).toEqual([table, expect.any(Number)])
-    expect([before.mounts, before.spentProofs, (before.rateLimits ?? 0) > 3]).toEqual([1, 1, true])
+    expect([before.mounts, before.spentProofs, before.turns, (before.rateLimits ?? 0) > 3]).toEqual([1, 1, 1, true])
     await alice.browser.mutation(api.account.requestDeletion, { confirm: 'erase everything', user: alice.user })
     await settle(t)
     // After: nothing, in any table, though no hourly cleaning has run
@@ -5197,6 +5357,7 @@ describe('leaving', () => {
     // Another person's are as they were: their showing would be, and their machine's proof is
     expect((await t.run((ctx) => ctx.db.query('spentProofs').collect())).map((x) => x.key)).toEqual([`${bm.id}:a-proof-number-0002`])
     expect((await t.run((ctx) => ctx.db.query('rateLimits').collect())).some((x) => x.who === bob.user)).toBe(true)
+    expect((await t.run((ctx) => ctx.db.query('turns').collect())).map((x) => x.machineId)).toEqual([bm.id])
     expect(showing.mountId).toMatch(/^[0-9a-f]{32}$/)
   })
 
