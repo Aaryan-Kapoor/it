@@ -221,6 +221,31 @@ jobs:
           sha256sum -c SHA256SUMS
           ./it-linux-x64 --version
           ./it-linux-x64 --help > /dev/null
+      # A program Bun builds reads a .env and a bunfig.toml from the folder it is started in, and
+      # in a folder it may not list it starts with no environment at all, unless it is built not
+      # to (release.mjs). Started in It's own folder, closed to it, as an account kept out of that
+      # folder starts it, it says it is kept out, which it knows only from the IT_HOME it is given.
+      # And started in a project whose bunfig.toml names a script to load first, it runs none.
+      - name: The Linux program keeps its environment, and runs no script of the folder it is in
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          program="$PWD/packages/cli/dist/bin/it-linux-x64"
+          kept="$RUNNER_TEMP/kept-out"
+          mkdir -m 300 "$kept"
+          ended=0
+          said=$(cd "$kept" && IT_HOME="$kept" "$program" serve 2>&1 > /dev/null < /dev/null) || ended=$?
+          chmod 700 "$kept"
+          echo "$said"
+          test "$ended" = 1
+          grep -q '"code":"blocked"' <<< "$said"
+          project="$RUNNER_TEMP/a-project"
+          mkdir "$project"
+          echo 'console.log("loaded from the project")' > "$project/first.js"
+          echo 'preload = ["./first.js"]' > "$project/bunfig.toml"
+          said=$(cd "$project" && "$program" --version)
+          echo "$said"
+          ! grep -q 'loaded from the project' <<< "$said"
       - name: The install script installs it, from a stand-in for the releases on this machine
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node e2e/install.mjs
