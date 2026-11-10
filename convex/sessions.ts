@@ -26,6 +26,7 @@ import { cookieFor } from './lib/cookie'
 import { sha256 } from './lib/hash'
 import { rateLimit, saidSeldom } from './lib/limits'
 import { log } from './lib/log'
+import { forgetTurns } from './turns'
 
 /** How long a code is good for. */
 const CODE_MS = 600_000
@@ -248,6 +249,8 @@ export async function revokeMachine(
   const now = Date.now()
   await ctx.db.patch(m._id, { revoked: true, revokedAt: now })
   await ctx.scheduler.runAfter(0, internal.delivery.orphan, { machineId: m._id })
+  // What it said of its conversations' turns is said by nobody now
+  await forgetTurns(ctx, m._id)
   const sessions = await ctx.db
     .query('sessions')
     .withIndex('by_machine', (q) => q.eq('byMachine', m._id).eq('endedAt', undefined))

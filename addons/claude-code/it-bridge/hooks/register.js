@@ -61,6 +61,9 @@ let connector = null // { socket | port, token }, read from the connector's own 
 let lookedAt = 0
 let throughProxy = null // whether Claude Code would send what is asked of a port on this machine through a proxy, once that has been looked at
 let running = false // a turn is in progress
+let turns = 0 // how many turns of the conversation have begun
+let talks = 0 // how many times another conversation has taken this one's place: /clear does not, and anything else that ends one does
+let starting = false // a click was submitted as a prompt and taken, and the turn it starts has not begun yet
 let session = null // this conversation's id, which /clear changes
 const pending = [] // clicks taken from the connector, not yet handed to Claude
 const given = new Set() // clicks Claude already has, which must never be handed over a second time
@@ -222,7 +225,15 @@ const briefOf = (clicks) => clicks.map((c) => (typeof c.brief === 'string' && c.
  * click started a turn (true) or joined one that was running (false); it is left out when that
  * is not known, as when an earlier report is repeated.
  */
-const report = ($, ids, woke) => void ask($, '/ack', woke === undefined ? { ids } : { ids, woke })
+const report = ($, ids, woke, turnOver) =>
+  void ask($, '/ack', { ids, ...(woke === undefined ? {} : { woke }), turn: working(), ...(turnOver ? { turnOver: true } : {}) })
+/**
+ * Whether the conversation is at work, as the connector is told with everything it is asked
+ * and every receipt: a turn of its own is running, or a click was taken as a prompt a moment
+ * ago and its turn is about to begin. The page the click was made on shows its agent at work
+ * for as long as this says so. It has no part in when a click is handed over.
+ */
+const working = () => running || starting
 
 // Being submitted this moment. Neither new (so not submitted a second time) nor yet Claude's
 // (so not reported): a prompt can still be refused, by one of the person's own hooks say.
@@ -239,6 +250,8 @@ function handOver($) {
   const clicks = pending.splice(0)
   for (const c of clicks) submitting.add(c.id)
   const began = generation
+  const before = turns
+  const talk = talks
   const held = letGo
   const refused = () => {
     for (const c of clicks) submitting.delete(c.id)
@@ -276,6 +289,8 @@ function handOver($) {
       if (result && result.drop !== undefined) return refused()
       submitMisses = 0
       if (began === generation) refusals = 0
+      // Taken, and its turn has not begun: the conversation is at work from here, and not only once the turn says it has begun
+      if (began === generation && before === turns && !running) starting = true
       for (const c of clicks) {
         submitting.delete(c.id)
         given.add(c.id)
@@ -285,6 +300,11 @@ function handOver($) {
         $,
         clicks.map((c) => c.id),
         true,
+        // A short turn can begin and end before it is known here that its prompt was taken: said
+        // as that, so that it is not waited for as one that is still to begin. Also where the
+        // conversation was cleared meanwhile, which is the same conversation going on. Not where
+        // another conversation has taken its place: the turns since then are that one's
+        talk === talks && before !== turns && !running,
       )
     },
     (err) => refused(err),
@@ -373,7 +393,10 @@ async function checkOnce($) {
     // Anything but /clear that changes the id (the person resumed another conversation in this
     // window) is a different conversation: the first one keeps its pages, and what was taken
     // for it is not handed to this one.
-    if (!carriedOn) pending.length = 0
+    if (!carriedOn) {
+      pending.length = 0
+      if (session !== null) talks += 1
+    }
     session = id
   }
   // The connector is told of each change of id, in the order they happened. Nothing is asked
@@ -384,7 +407,7 @@ async function checkOnce($) {
     if (!(await ask($, '/session', { harness: HARNESS, session: move.now, was: move.was }))) return
     if (moves[0] === move) moves.shift()
   }
-  const got = await ask($, `/clicks?harness=${HARNESS}&session=${encodeURIComponent(id)}`)
+  const got = await ask($, `/clicks?harness=${HARNESS}&session=${encodeURIComponent(id)}`, { turn: working() })
   if (!got || !Array.isArray(got.clicks)) return
   // Something was found missing while the connector was answering: nothing is taken for now
   if (!addon().delivery) return lacks($)
@@ -461,6 +484,7 @@ export function register(on) {
       return next(e)
     }
     running = false
+    starting = false
     return next(e)
   })
   on('session.end', async (_$, e, next) => {
@@ -475,7 +499,9 @@ export function register(on) {
     // After a clear it goes on as the same conversation and keeps what was taken for it;
     // after anything else, what was taken is dropped.
     generation += 1
+    starting = false
     if (e?.reason !== 'clear') {
+      talks += 1
       pending.length = 0
       submitting.clear()
       // Another conversation starts with a clean slate: how often the last one refused is its own affair
@@ -490,7 +516,11 @@ export function register(on) {
   on('turn.start', async ($, e, next) => {
     // A clock that could not be set going as the session started is tried again with each turn
     if (!tickFrom($)) void lacks($)
-    if (e?.agentId === undefined) running = true
+    if (e?.agentId === undefined) {
+      running = true
+      turns += 1
+      starting = false
+    }
     return next(e)
   })
   on('turn.complete', async ($, e, next) => {

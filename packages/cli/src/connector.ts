@@ -145,6 +145,8 @@ const RENEW_MS = 10_000 // how often the lease on a held click is extended
 const FRESH_MS = 8_000 // a click this new, in a running Codex turn, is held for the turn's next hook
 const HOOK_HOLD_MS = 60_000 // and this is how long it is held before Codex's queue gets it instead
 const TURN_QUIET_MS = 30 * 60_000 // a turn that has run no hook for this long is taken to be over
+const TURN_SAID_MS = 20_000 // an add-on that says whether a turn is running, and has not said so for this long, is no longer known to have one
+const TURN_BEGINS_MS = 30_000 // how long a conversation that was handed a click, and is to begin a turn for it, is watched for that turn to begin
 const WAIT_MS = 5_000 // an `it wait` that said so this recently is still waiting
 const WAIT_AGAIN_MS = 120_000 // how long after an `it wait` ended its conversation, where it is one never heard from, is taken to be coming to wait again
 const QUEUE_WAITS = [0, 10_000, 60_000, 600_000] // how long before each try at a harness's own queue; after the last, the click is left waiting
@@ -773,6 +775,261 @@ async function connecting(say: (line: string) => void): Promise<void> {
       return false
     }
     return true
+  }
+  /**
+   * What an add-on said of its conversation's turn in as many words, as Claude Code's does with
+   * everything it asks: whether one is running, and when that was last said.
+   */
+  const turnsSaid = new Map<string, { on: boolean; at: number }>()
+  /**
+   * Whether a turn of a conversation is running, as far as this connector is told. What its
+   * add-on said of it in as many words counts first, for as long as that was said lately: an
+   * add-on that says so says it every second, and one that has stopped saying it is closed, or
+   * its machine asleep. Otherwise it is what `turnRunning` makes of an add-on that says when its
+   * conversation is busy. Where neither was ever said it is not known: an agent that takes its
+   * clicks with `it wait` alone, an app whose add-on says nothing of turns, and an add-on from
+   * before they said it, still loaded in a conversation that is open.
+   */
+  const turnKnown = (key: string, now: number): boolean | null => {
+    const said = turnsSaid.get(key)
+    if (said) return now - said.at < TURN_SAID_MS ? said.on : null
+    const s = sessions.get(key)
+    if (s === undefined || s.busyAt === 0) return null
+    // A turn that has run no hook for a long while may be running a command still. Delivery takes
+    // it to be over, so that a click is not kept for a hook that may never come. Nothing is said
+    // of it here: that no hook ran is not the turn saying that it ended
+    if (s.busy && now - s.busyAt >= TURN_QUIET_MS) return null
+    return turnRunning(key, now)
+  }
+  /**
+   * A conversation that was handed something done on a page, watched until the turn that deals
+   * with it is over: It is told when a turn of it is running and when that turn has ended, and
+   * the page shows its agent at work for exactly that long. Nothing is told of a conversation
+   * that was handed nothing, so that what is written is two records' worth for each thing done.
+   *
+   * `names` are the ids its pages know the conversation by, which are the ones It is told under,
+   * and `told` those of them It has been told a running turn of. `owed` says that what was
+   * handed over is to begin a turn of its own, which has not been seen to begin: a click that
+   * started a turn in a conversation that was not working, or one that Codex's queue took behind
+   * the turn that was running (`behind`), whose own turn comes when that one is done. A turn
+   * that is owed is waited for, for `TURN_BEGINS_MS` from when the conversation was last seen
+   * not to be working, before the conversation is let go of. `finished` says that the turn a
+   * click began was over before its receipt came, so that It is told of an ending though it
+   * was never told of the turn.
+   */
+  interface Watched {
+    names: Set<string>
+    told: Set<string>
+    owed: boolean
+    behind: boolean
+    finished: boolean
+    /** Changes whenever a hand-over arrives, a watch merges in or the turn changes, so an older reply cannot end a newer watch. */
+    generation: number
+    idleAt: number | null
+    want: 'running' | 'ended' | 'unknown' | 'wait'
+    /** The watch this one was merged into, where the conversation came to be heard under an id that was watched already. */
+    into?: Watched
+  }
+  /**
+   * The watch that is kept for a conversation, where the one given was merged into another, and
+   * that one into another in its turn. It may be in the middle of being told of a watch when
+   * that watch is merged away, and what It answers is then noted for the one that is kept.
+   */
+  const kept = (w: Watched): Watched => {
+    let now = w
+    while (now.into) now = now.into
+    return now
+  }
+  const watchedTurns = new Map<string, Watched>()
+  /** The conversation each click was handed to, for as long as It has yet to confirm the hand-over. */
+  const handedTo = new Map<string, string>()
+  /** Whether It has been told, since this connector started, that none of this machine's turns is known any more. */
+  let turnsForgotten = false
+  /** Whether the It this machine joined is one from before it took any of this: nothing is told to it then. */
+  let turnsUntaken = false
+  /** Looks at how a watched conversation's turn stands now, and so what It is to be told of it. */
+  const lookAtTurn = (key: string, w: Watched): void => {
+    const running = turnKnown(key, Date.now())
+    if (running) {
+      // Behind a turn that is running, its own is still to come
+      if (!w.behind) w.owed = false
+      w.idleAt = null
+      w.want = 'running'
+      return
+    }
+    // The turn it stood behind is over, and its own is waited for
+    if (running === false) w.behind = false
+    // Its own turn was over before its receipt came: that is known, and nothing is waited for
+    if (w.finished && running === false) {
+      w.owed = false
+      w.want = 'ended'
+      return
+    }
+    // What It was told is taken back at once where it is no longer known
+    if (w.owed && !(running === null && w.told.size)) {
+      w.idleAt ??= steady()
+      if (steady() - w.idleAt < TURN_BEGINS_MS) {
+        w.want = 'wait'
+        return
+      }
+    }
+    w.owed = false
+    w.want = running === null ? 'unknown' : 'ended'
+  }
+  /**
+   * A click was handed to a conversation: its turn is watched from here. `starts` says that the
+   * click begins a turn of its own, as one does that was put into a conversation that was not
+   * working, and as one does that Codex's queue holds until the running turn is done.
+   * `finished` says that this turn has begun and ended already, as a short one can before the
+   * add-on hears that its prompt was taken.
+   */
+  const handedOver = (click: Offered, key: string, starts: boolean, finished = false): void => {
+    if (!click.session || turnsUntaken) return
+    handedTo.set(click.id, key)
+    const w = watchedTurns.get(key) ?? {
+      names: new Set<string>(),
+      told: new Set<string>(),
+      owed: false,
+      behind: false,
+      finished: false,
+      generation: 0,
+      idleAt: null,
+      want: 'wait' as const,
+    }
+    w.generation++
+    w.names.add(click.session.id)
+    if (finished) w.finished = true
+    else if (starts) {
+      w.owed = true
+      // Codex hands over what its queue took only once the turn that is running is done. Claude
+      // Code takes what is put into a running turn in that turn
+      w.behind = key.startsWith('codex:') && turnKnown(key, Date.now()) === true
+      w.idleAt = null
+    }
+    // Kept until its turn is over, is known no more, or did not begin in its time, and never let go of sooner: It would go on saying that it runs
+    watchedTurns.set(key, w)
+    lookAtTurn(key, w)
+    void tellTurns()
+  }
+  /**
+   * A conversation carries on under another id, as one does after /clear: what is watched of
+   * its turn is watched under the id it is heard from now. It is still told under the ids its
+   * pages know it by.
+   */
+  const turnMoved = (was: string, key: string): void => {
+    const said = turnsSaid.get(was)
+    if (said && !turnsSaid.has(key)) turnsSaid.set(key, said)
+    turnsSaid.delete(was)
+    for (const [id, to] of handedTo) if (to === was) handedTo.set(id, key)
+    const w = watchedTurns.get(was)
+    if (!w) return
+    watchedTurns.delete(was)
+    const there = watchedTurns.get(key)
+    if (there) {
+      // Merged names and endings still need reporting, even when both watches already want ended.
+      there.generation++
+      for (const name of w.names) there.names.add(name)
+      for (const name of w.told) there.told.add(name)
+      there.owed ||= w.owed
+      there.behind ||= w.behind
+      there.finished ||= w.finished
+      // It may be in the middle of being told of the one that is let go of here: what it is
+      // told from now on is noted for the one that is kept, so that its ending is told as well
+      w.into = there
+    } else watchedTurns.set(key, w)
+    turnSeen(key)
+  }
+  /** A conversation said how its turn stands: looked at the moment it is said, so that a turn that ends and another that begins at once are seen as two. */
+  const turnSeen = (key: string): void => {
+    const w = watchedTurns.get(key)
+    if (!w) return
+    const before = w.want
+    lookAtTurn(key, w)
+    if (w.want !== before) w.generation++
+    void tellTurns()
+  }
+  let tellingTurns = false
+  /** Whether a pass has come round since It was last told: what waits for a turn to begin is taken back with a pass, and not the moment its last turn ends, since the next one mostly begins at once. */
+  let turnsSettle = false
+  /** Whether something changed while It was being told, so that it is looked at again as soon as that is over and not with the next pass. */
+  let tellTurnsAgain = false
+  /**
+   * Tells It how the turn of each watched conversation stands, where that is not what It was
+   * last told, and lets go of a conversation once its turn is over. That a turn ended is not
+   * told while a hand-over to that conversation has yet to be confirmed to It: It notes both
+   * with its own clock, and the page takes a turn that ended before the hand-over for one that
+   * had nothing to do with it. Tried again with the next pass where It could not be told.
+   */
+  async function tellTurns(): Promise<void> {
+    if (over || turnsUntaken) return
+    if (tellingTurns) {
+      tellTurnsAgain = true
+      return
+    }
+    tellingTurns = true
+    tellTurnsAgain = false
+    const settle = turnsSettle
+    turnsSettle = false
+    try {
+      if (!turnsForgotten) {
+        await call('mutation', api.turns.say, {})
+        turnsForgotten = true
+      }
+      for (const id of handedTo.keys()) if (!toConfirm.has(id)) handedTo.delete(id)
+      for (const [key, w] of watchedTurns) {
+        lookAtTurn(key, w)
+        const harness = key.slice(0, key.indexOf(':'))
+        if (w.want === 'running') {
+          for (const id of w.names) {
+            if (kept(w).told.has(id)) continue
+            await call('mutation', api.turns.say, { for: { harness, id }, running: true })
+            kept(w).told.add(id)
+          }
+          continue
+        }
+        if (w.want === 'wait') {
+          // The turn It was told of is over, and the one that is owed has not begun by the next
+          // pass: nothing is known to be running, so what It was told is taken back, and the
+          // conversation is watched on
+          if (!settle) continue
+          for (const id of [...w.told]) {
+            await call('mutation', api.turns.say, { for: { harness, id } })
+            kept(w).told.delete(id)
+          }
+          continue
+        }
+        // An ending that It was never told the turn of is told all the same, under every id its pages know it by
+        const generation = w.generation
+        const ended = w.want === 'ended' && w.finished
+        if (w.want === 'ended' && (w.told.size || ended) && [...handedTo.values()].includes(key)) continue
+        for (const id of ended ? [...w.names] : [...w.told]) {
+          await call('mutation', api.turns.say, {
+            for: { harness, id },
+            ...(w.want === 'ended' ? { running: false } : {}),
+            ...(ended && !w.told.has(id) ? { untold: true } : {}),
+          })
+          kept(w).told.delete(id)
+        }
+        // A newer hand-over or turn change still needs its own ending told.
+        if (w.generation !== generation) continue
+        // Only this watch's own: one it was merged into meanwhile may have an ending of its own still to tell
+        if (ended) w.finished = false
+        // Something may have been handed to it while It was being told
+        lookAtTurn(key, w)
+        if (watchedTurns.get(key) === w && (w.want === 'ended' || w.want === 'unknown') && !w.told.size) watchedTurns.delete(key)
+      }
+    } catch (err) {
+      // Tried again with the next pass, and not at once
+      tellTurnsAgain = false
+      if (/could not find/i.test(String((err as Error)?.message ?? err))) {
+        turnsUntaken = true
+        watchedTurns.clear()
+        handedTo.clear()
+      } else seldom('turns', `could not tell It how a conversation’s turn stands (${why(err)}); trying again`)
+    } finally {
+      tellingTurns = false
+    }
+    if (tellTurnsAgain) void tellTurns()
   }
   /** How often a click has been tried and has come to nothing, when last, which way, and the last time the person had asked for it to be tried again then. */
   const queueTries = new Map<string, { n: number; at: number; reopening: boolean; retry: number }>()
@@ -1565,6 +1822,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     } finally {
       confirming = false
     }
+    // That a turn ended is told only once the hand-over to its conversation is confirmed, which it may be now
+    if (watchedTurns.size) void tellTurns()
   }
   async function confirmEach(): Promise<void> {
     for (const [id, route] of toConfirm) {
@@ -2816,6 +3075,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
         for (const c of [click, ...withIt]) {
           journal('queued', c.id)
           toConfirm.set(c.id, 'queue')
+          // A conversation It reopened is shown as working by its run, which has ended by now
+          if (!reopening) handedOver(c, follow(key), true)
           // The queue, or the reopening, starts a turn in a conversation that was not working
           counting.set(c.id, { at: c.at, harness, path: 'woke' })
           if (c !== click) {
@@ -3408,6 +3669,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // by the new id and would not be given again until its hold ran out; and what a mark
         // put into it stands for
         for (const h of held.values()) if (h.key === was) h.key = key
+        turnMoved(was, key)
         if (unmarked.delete(was)) unmarked.add(key)
         while (aliases.size > 500) aliases.delete(aliases.keys().next().value!)
         changed = true
@@ -3447,6 +3709,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (body.busy && !reopenedNow.has(follow(key)) && [key, follow(key)].map((k) => stoppedByPerson.delete(k)).some(Boolean)) keepStopped()
       }
       sessions.set(key, s)
+      // An add-on that says in as many words whether a turn of its conversation is running: noted for what the page shows, and for nothing else
+      if (typeof body.turn === 'boolean') turnsSaid.set(key, { on: body.turn, at: Date.now() })
+      if (typeof body.busy === 'boolean' || typeof body.turn === 'boolean') turnSeen(key)
       if (isNew && (harness === 'codex' || harness === 'claude-code')) noteHeard(key)
       // The harness as It knows it, and never as whoever asked spelled it
       if (isNew) say(`${a(agentOf(harness))} conversation is listening (${short(id)})`)
@@ -3658,12 +3923,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // One report is one turn, however many clicks it carried: counted as one waking
       if (woke && ids.length) record('agent.woken', { result: 'resumed', agent: agentOf(held.get(ids[0]!)!.click.session?.harness), why: 'none' })
       for (const clickId of ids) {
-        const click = held.get(clickId)!.click
+        const { click, key } = held.get(clickId)!
         counting.set(clickId, { at: click.at, harness: click.session?.harness, path: woke ? 'woke' : 'heard' })
         if (counting.size > 2000) counting.delete(counting.keys().next().value!)
         held.delete(clickId)
         toConfirm.set(clickId, 'addon')
         journal('acked', clickId)
+        // How its conversation's turn stands at this moment, where the add-on says so with its receipt
+        if (typeof body.turn === 'boolean') turnsSaid.set(key, { on: body.turn, at: Date.now() })
+        // One that joined a running turn begins none of its own. Any other does, as far as is known
+        handedOver(click, key, body.woke !== false, body.turnOver === true)
       }
       void confirmAll()
       return [200, { ok: true, acked: ids.length }]
@@ -4242,6 +4511,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const tick = setInterval(() => {
     void finishRuns()
     void route()
+    turnsSettle = true
+    void tellTurns()
     watch(true)
   }, 1000)
   // Said this often and no less: the site takes a machine that has been quiet for a few of these to be off
@@ -4258,6 +4529,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const beat = setInterval(() => {
     const now = Date.now()
     for (const [k, s] of sessions) if (now - s.seen > 3_600_000) sessions.delete(k)
+    for (const [k, t] of turnsSaid) if (now - t.at > 3_600_000) turnsSaid.delete(k)
     for (const [k, w] of waiters) if (now - (w.endedAt ?? w.seen) > Math.max(60_000, WAIT_AGAIN_MS)) waiters.delete(k)
     // Another connector has the lock, which it could only take by finding no sign that this one lived: this one stops
     if (!holdsLock()) {

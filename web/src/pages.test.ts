@@ -1011,6 +1011,149 @@ describe('the line that moves under a page’s bar', () => {
     await drawnAgain()
     expect(host.querySelector('.page-progress')).toBeNull()
   })
+
+  test('keeps moving for as long as a turn of the page’s conversation runs, whatever the agent has done to the page meanwhile', async () => {
+    await shown()
+    const { inHand } = await import('./pages')
+    const at = NOW - 60_000
+    const handed = [{ at, delivery: 'handed_off', outcome: 'running', handedAt: at + 1000 }]
+    const running = { turn: { since: at + 2000, endedAt: null }, machineSeenAt: NOW - 20_000 }
+    // The agent changed the page three seconds after the click, to show that it heard, and works on
+    expect(inHand(handed, at + 3000, false, NOW, running)).toBe(true)
+    expect(inHand(handed, null, false, NOW, running)).toBe(true)
+    // A turn that was running before the click, which the click joined, is the click's as well
+    expect(inHand(handed, at + 3000, false, NOW, { ...running, turn: { since: at - 60_000, endedAt: null } })).toBe(true)
+    // And however long the turn has run: nothing counts the minutes
+    const longAgo = [{ at: NOW - 45 * 60_000, delivery: 'handed_off', outcome: null, handedAt: NOW - 45 * 60_000 }]
+    expect(inHand(longAgo, NOW - 44 * 60_000, false, NOW, running)).toBe(true)
+    // Not past a stop the person asked for, nor past what the agent itself said became of it
+    expect(inHand([{ ...handed[0]!, route: 'stopped' }], null, false, NOW, running)).toBe(false)
+    expect(inHand(handed, at + 3000, false, NOW, { ...running, stoppedAt: at + 30_000 })).toBe(false)
+    expect(inHand([{ ...handed[0]!, outcome: 'succeeded' }], null, false, NOW, running)).toBe(false)
+    expect(inHand([{ ...handed[0]!, outcome: 'failed' }], null, false, NOW, running)).toBe(false)
+  })
+
+  test('stops when the turn ends, whether or not the page was changed, and not for a turn that ended before the click was handed over', async () => {
+    await shown()
+    const { inHand } = await import('./pages')
+    const at = NOW - 60_000
+    const handed = [{ at, delivery: 'handed_off', outcome: 'running', handedAt: at + 1000 }]
+    const ended = { turn: { since: at + 2000, endedAt: at + 30_000 }, machineSeenAt: NOW }
+    // The agent finished, and never touched the page: by what the page shows alone it would go on for ten minutes
+    expect(inHand(handed, null, false, NOW)).toBe(true)
+    expect(inHand(handed, null, false, NOW, ended)).toBe(false)
+    expect(inHand(handed, at + 3000, false, NOW, ended)).toBe(false)
+    // Ended at the very moment of the hand-over, it is over too
+    expect(inHand(handed, null, false, NOW, { ...ended, turn: { since: at - 5000, endedAt: at + 1000 } })).toBe(false)
+    // The turn before this click ended before the click was handed over: it says nothing of this one
+    const earlier = { ...ended, turn: { since: at - 90_000, endedAt: at - 10_000 } }
+    expect(inHand(handed, null, false, NOW, earlier)).toBe(true)
+    expect(inHand(handed, at + 3000, false, NOW, earlier)).toBe(false)
+    // And one with no time of its hand-over cannot be told to be after it
+    expect(inHand([{ at, delivery: 'handed_off', outcome: 'running' }], null, false, NOW, ended)).toBe(true)
+  })
+
+  test('goes by what the page shows alone, as it does where no turn is known, when its machine says nothing, is not answering, or the click has not been handed over', async () => {
+    await shown()
+    const { inHand } = await import('./pages')
+    const at = NOW - 60_000
+    const handed = [{ at, delivery: 'handed_off', outcome: 'running', handedAt: at + 1000 }]
+    const running = { since: at + 2000, endedAt: null }
+    for (const work of [
+      undefined,
+      {},
+      { turn: null, machineSeenAt: NOW },
+      // Its machine has been quiet for longer than a machine that is there ever is, or said it was stopping
+      { turn: running, machineSeenAt: NOW - 3 * 60_000 },
+      { turn: running, machineSeenAt: null },
+    ]) {
+      // Not changed yet: under way, for ten minutes and no longer. Changed: answered
+      expect(inHand(handed, null, false, NOW, work)).toBe(true)
+      expect(inHand(handed, at + 3000, false, NOW, work)).toBe(false)
+      expect(inHand([{ ...handed[0]!, at: NOW - 11 * 60_000 }], null, false, NOW, work)).toBe(false)
+    }
+    // A turn that runs while the click still waits is not the click's yet: it waits as it would, and not for longer than ten minutes
+    const online = { turn: running, machineSeenAt: NOW }
+    expect(inHand([{ at, delivery: 'pending' }], null, false, NOW, online)).toBe(true)
+    expect(inHand([{ at: NOW - 11 * 60_000, delivery: 'pending' }], null, false, NOW, online)).toBe(false)
+  })
+
+  test('is drawn on the bar while the page’s agent works on after changing the page, with the words that it is working, and no Stop', async () => {
+    recent = [{ at: NOW - 60_000, delivery: 'handed_off', outcome: 'running', handedAt: NOW - 59_000 }]
+    Object.assign(PAGE, { answeredAt: NOW - 55_000, turn: { since: NOW - 58_000, endedAt: null } })
+    try {
+      await shown()
+      expect(host.querySelector('.page-nav .page-progress')).not.toBeNull()
+      expect(allSaid()).toEqual(['Claude Code is working'])
+      expect(stops()).toEqual([])
+      // Before the agent has changed the page, the bar says what it says of anything handed over
+      Object.assign(PAGE, { answeredAt: 0 })
+      await drawnAgain()
+      expect([said(), host.querySelector('.page-progress') !== null]).toEqual(['Your agent has it', true])
+      // The turn ends: the line stops, and with the page changed the bar has nothing to add
+      Object.assign(PAGE, { answeredAt: NOW - 55_000, turn: { since: NOW - 58_000, endedAt: NOW - 1000 } })
+      await drawnAgain()
+      expect([said(), host.querySelector('.page-progress')]).toEqual([null, null])
+    } finally {
+      Object.assign(PAGE, { answeredAt: 0, turn: undefined })
+    }
+  })
+
+  test('a turn that runs for longer than what is settled is said for is still said, and still drawn', async () => {
+    recent = [{ at: NOW - 25 * 60_000, delivery: 'handed_off', outcome: 'running', handedAt: NOW - 25 * 60_000 }]
+    Object.assign(PAGE, { answeredAt: NOW - 24 * 60_000, turn: { since: NOW - 25 * 60_000, endedAt: null } })
+    try {
+      await shown()
+      expect([said(), host.querySelector('.page-progress') !== null]).toEqual(['Claude Code is working', true])
+      // Its machine goes quiet: whether it is still at work is not known, and nothing is said of it
+      Object.assign(PAGE, { machineSeenAt: NOW - 3 * 60_000 })
+      await drawnAgain()
+      expect([said(), host.querySelector('.page-progress')]).toEqual([null, null])
+    } finally {
+      Object.assign(PAGE, { answeredAt: 0, turn: undefined, machineSeenAt: NOW })
+    }
+  })
+
+  test('an agent whose turn ended without the page being changed is said to have finished without changing it, and not to have it still', async () => {
+    recent = [{ at: NOW - 60_000, delivery: 'handed_off', outcome: 'running', handedAt: NOW - 59_000 }]
+    Object.assign(PAGE, { answeredAt: NOW - 5 * 60_000, turn: { since: NOW - 58_000, endedAt: NOW - 20_000 } })
+    try {
+      await shown()
+      expect(allSaid()).toEqual(['Claude Code finished without changing this page'])
+      expect(host.querySelector('.page-progress')).toBeNull()
+      // A page that names no agent app says it of the person's agent
+      Object.assign(PAGE, { agent: null })
+      await drawnAgain()
+      expect(said()).toBe('Your agent finished without changing this page')
+      // A turn that ended before the click was handed over says nothing of the click: the agent has it
+      Object.assign(PAGE, { agent: 'claude-code', turn: { since: NOW - 5 * 60_000, endedAt: NOW - 2 * 60_000 } })
+      await drawnAgain()
+      expect([said(), host.querySelector('.page-progress') !== null]).toEqual(['Your agent has it', true])
+      // And what the agent itself said became of it is said as it was
+      recent = [{ at: NOW - 60_000, delivery: 'handed_off', outcome: 'succeeded', handedAt: NOW - 59_000 }]
+      Object.assign(PAGE, { turn: { since: NOW - 58_000, endedAt: NOW - 20_000 } })
+      await drawnAgain()
+      expect(said()).toBe('Done')
+    } finally {
+      Object.assign(PAGE, { answeredAt: 0, turn: undefined, agent: 'claude-code' })
+    }
+  })
+
+  test('a page whose functions say nothing of a turn says what it says of anything handed over', async () => {
+    functions = 'retained'
+    recent = [{ at: NOW - 60_000, delivery: 'handed_off', outcome: 'running', handedAt: NOW - 59_000 }]
+    Object.assign(PAGE, { answeredAt: NOW - 5 * 60_000 })
+    try {
+      await shown()
+      expect((PAGE as { turn?: unknown }).turn).toBeUndefined()
+      expect([said(), host.querySelector('.page-progress') !== null]).toEqual(['Your agent has it', true])
+      Object.assign(PAGE, { answeredAt: NOW - 30_000 })
+      await drawnAgain()
+      expect([said(), host.querySelector('.page-progress')]).toEqual([null, null])
+    } finally {
+      Object.assign(PAGE, { answeredAt: 0 })
+    }
+  })
 })
 
 test.each([undefined, 'retained', 'current'] as const)('the page uses only arguments supported by %s functions', async (state) => {

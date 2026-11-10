@@ -177,6 +177,13 @@ async function purge(ctx: MutationCtx, userId: Id<'users'>): Promise<boolean> {
     .withIndex('by_user', (q) => q.eq('userId', userId))
     .take(5)
   for (const t of tours) await ctx.db.delete(t._id)
+  // And what their machines said of their conversations' turns
+  const turns = await ctx.db
+    .query('turns')
+    .withIndex('by_user', (q) => q.eq('userId', userId))
+    .take(LIGHT)
+  for (const t of turns) await ctx.db.delete(t._id)
+  if (turns.length === LIGHT) return true
   await forgetCounts(ctx, userId)
   // Only one such job at a time, however often this is run. It is not asked a second time
   // later, as the deleting of one page is: nothing may name the person once their own record
@@ -277,7 +284,7 @@ export const sweepActions = internalMutation({
   },
 })
 
-/** Bookkeeping that has expired: mounts, spent proofs, old notifications, idle rate-limit buckets, forgotten keys, codes, sessions that ended or went unused, revoked machines, and what the tabs of a display said of themselves once all of it has run out. */
+/** Bookkeeping that has expired: mounts, spent proofs, old notifications, idle rate-limit buckets, forgotten keys, turns that ended, codes, sessions that ended or went unused, revoked machines, and what the tabs of a display said of themselves once all of it has run out. */
 export const sweepRecords = internalMutation({
   args: {},
   handler: async (ctx) => {
@@ -336,6 +343,13 @@ export const sweepRecords = internalMutation({
       await ctx.db
         .query('forgotten')
         .withIndex('by_at', (q) => q.lt('at', now - 90 * DAY))
+        .take(LIGHT),
+    )
+    // A turn that ended is kept for as long as what was handed to its conversation can be: the page says by it that the agent finished
+    await drop(
+      await ctx.db
+        .query('turns')
+        .withIndex('by_ended', (q) => q.gt('endedAt', 0).lt('endedAt', now - RETENTION.handledActionDays * DAY))
         .take(LIGHT),
     )
     // A code is good for ten minutes, and its record goes at the next cleaning after that

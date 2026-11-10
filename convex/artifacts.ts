@@ -10,6 +10,7 @@ import { rateLimit } from './lib/limits'
 import { log } from './lib/log'
 import { bump } from './lib/tally'
 import { session } from './schema'
+import { turnOf } from './turns'
 
 export const prefixOf = (userId: Id<'users'>, artifactId: Id<'artifacts'>, n?: number) => `u/${userId}/${artifactId}/${n === undefined ? '' : `${n}/`}`
 
@@ -128,6 +129,9 @@ export const get = query({
       said: a.said ?? null,
       // Whether the page's conversation is running now because It reopened it, which is what can be stopped from here
       run: running(machine, a),
+      // Whether a turn of the page's conversation is running, as its machine says of a conversation
+      // it handed something to: since when, and when it ended. Null where the machine has said nothing of it
+      turn: await turnOf(ctx, machine, a.session),
       // Why it could not be reopened, the last time that was tried and did not work, and when
       wakeFailed: failed(machine, a),
       // And when a person last stopped it, so that the page can say so of what was done before

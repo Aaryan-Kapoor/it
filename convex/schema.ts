@@ -95,6 +95,25 @@ export default defineSchema({
     doneAt: v.optional(v.number()),
   }).index('by_user', ['userId']),
 
+  // Whether the agent a page belongs to is at work: since when a turn of a conversation has
+  // been running, as the machine it runs on said, and when that turn ended. A machine says so
+  // only of a conversation it has handed something done on a page to, and each conversation on
+  // a machine has one record, written again in place. Both times are this backend's own, taken
+  // as it is told. Kept apart from the machine's record, which every page that is open and the
+  // list of machines read: a turn begins and ends far oftener than anything else about a
+  // machine changes, and written there, each would have had all of that asked for again.
+  turns: defineTable({
+    userId: v.id('users'),
+    machineId: v.id('machines'),
+    harness: v.string(),
+    sessionId: v.string(),
+    since: v.number(),
+    endedAt: v.optional(v.number()),
+  })
+    .index('by_conversation', ['machineId', 'harness', 'sessionId'])
+    .index('by_user', ['userId'])
+    .index('by_ended', ['endedAt']),
+
   // A browser that was paired, for as long as it stays paired. What its cookie holds is a
   // secret that is never kept here: only the hash of it, which is what it is found by.
   sessions: defineTable({

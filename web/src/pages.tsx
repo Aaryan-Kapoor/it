@@ -283,7 +283,14 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
   // answered: shown as a line that moves under the bar, which is seen where the few words
   // beside the title are not
   const recent = useQuery(api.actions.forArtifact, page ? { artifactId: page.id as Id<'artifacts'> } : 'skip')
-  const underWay = page ? inHand(recent, page.answeredAt ?? null, page.run !== null && page.run !== undefined, now) : false
+  const underWay = page
+    ? inHand(recent, page.answeredAt ?? null, page.run !== null && page.run !== undefined, now, {
+        // Functions from before they said it, kept while this program's would not load, say nothing of a turn
+        turn: (page as { turn?: Turn | null }).turn ?? null,
+        machineSeenAt: page.machineSeenAt,
+        stoppedAt: page.stoppedAt,
+      })
+    : false
   useEffect(() => {
     if (page) document.title = `${page.title} · It`
     return () => {
@@ -374,6 +381,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
               stoppedAt={page.stoppedAt}
               wakeFailed={page.wakeFailed}
               answeredAt={page.answeredAt ?? null}
+              turn={(page as { turn?: Turn | null }).turn ?? null}
             />
           )}
         </span>
@@ -449,20 +457,61 @@ function RefusedClick({ user, artifactId }: { user: string; artifactId: string }
 
 /** How long after something was done on a page it is still shown as under way, where nothing has come of it. */
 const UNDER_WAY_MS = 10 * 60_000
+
+/** What the machine a page's conversation runs on said of that conversation's turn: since when one has been running, and when it ended. */
+export interface Turn {
+  since: number
+  endedAt: number | null
+}
+/** What a page knows of whether its agent is at work, beside what was done on it: the turn, when its machine was last heard from, and when a person last stopped its agent. */
+export interface Work {
+  turn?: Turn | null
+  machineSeenAt?: number | null
+  stoppedAt?: number | null
+}
+/**
+ * What is known of the agent's turn for something done on a page that was handed to it and that
+ * the agent has not said is done: `running` where a turn of the page's conversation is running
+ * and its machine is there to say so, `ended` where one ended once the click had been handed
+ * over, and nothing where neither is known. A turn that ended before the hand-over had nothing
+ * to do with the click. A machine that has gone quiet says nothing of a turn that it last said
+ * was running. And a turn is not said to be running past a stop the person asked for.
+ */
+export function turnFor(
+  last: { at: number; delivery: string; route?: string | null; outcome?: string | null; handedAt?: number | null },
+  work: Work | undefined,
+  now: number,
+): 'running' | 'ended' | null {
+  const turn = work?.turn
+  if (!turn || last.delivery !== 'handed_off' || last.route === 'stopped') return null
+  if (last.outcome !== null && last.outcome !== undefined && last.outcome !== 'running') return null
+  if (turn.endedAt !== null) return last.handedAt != null && turn.endedAt >= last.handedAt ? 'ended' : null
+  if (work.stoppedAt != null && last.at <= work.stoppedAt) return null
+  return work.machineSeenAt != null && now - work.machineSeenAt < ALIVE.onlineMs ? 'running' : null
+}
 /**
  * Whether the last thing done on a page is still with its agent, or on its way to it: sent and
- * not yet taken, or taken and not yet answered on the page. Not what a stop dropped, nor what
- * its agent said was done or could not be done, nor anything from long ago.
+ * not yet taken, or taken and its agent still at work. Not what a stop dropped, nor what its
+ * agent said was done or could not be done.
+ *
+ * Whether the agent is at work is its machine's to say, where it says: for as long as a turn of
+ * the page's conversation runs, whatever the agent has done to the page meanwhile, and no longer
+ * once that turn has ended. Where nothing is known of a turn, the agent is taken to be at work
+ * until it changes the page, and for ten minutes at most.
  */
 export function inHand(
-  recent: { at: number; delivery: string; route?: string | null; outcome?: string | null }[] | undefined,
+  recent: { at: number; delivery: string; route?: string | null; outcome?: string | null; handedAt?: number | null }[] | undefined,
   answeredAt: number | null,
   running: boolean,
   now: number,
+  work?: Work,
 ): boolean {
   if (running) return true
   const last = recent?.find((a) => a.delivery !== 'handed_off') ?? recent?.[0]
-  if (!last || now - last.at > UNDER_WAY_MS || last.route === 'stopped') return false
+  if (!last || last.route === 'stopped') return false
+  const turn = turnFor(last, work, now)
+  if (turn !== null) return turn === 'running'
+  if (now - last.at > UNDER_WAY_MS) return false
   if (last.delivery !== 'handed_off') return true
   return (last.outcome === null || last.outcome === undefined || last.outcome === 'running') && !(answeredAt !== null && answeredAt > last.at)
 }
@@ -766,6 +815,7 @@ function ActionStatus({
   stoppedAt,
   wakeFailed,
   answeredAt,
+  turn,
 }: {
   artifactId: Id<'artifacts'>
   user: string
@@ -794,6 +844,8 @@ function ActionStatus({
   wakeFailed: { at: number; why: string } | null
   /** When the page's agent last changed the page, by publishing it or writing its state. */
   answeredAt: number | null
+  /** What the page's machine said of the turn of its conversation. Null where it said nothing. */
+  turn: Turn | null
 }) {
   const convex = useConvex()
   const setWake = useMutation(api.machines.wake)
@@ -893,7 +945,9 @@ function ActionStatus({
   // What has been settled is said for ten minutes and then no more. What has not, something
   // still waiting for a machine or for an agent, is said for as long as it waits, with what
   // can be done about it: gone from the bar, it looked done when nothing had come of it.
-  if (now - last.at > 10 * 60_000 && last.delivery === 'handed_off') return null
+  // (An agent that is still at work on it is neither: its turn is said for as long as it runs)
+  const atWork = turnFor(last, { turn, machineSeenAt, stoppedAt }, now)
+  if (now - last.at > 10 * 60_000 && last.delivery === 'handed_off' && atWork !== 'running') return null
   // The agent was stopped after the last thing done here: said as that, whatever became of it.
   // What was waiting then went with the stop, and the next thing done reopens the conversation.
   // (Not of something its agent had already said was done, or could not be done: a stop that
@@ -916,7 +970,13 @@ function ActionStatus({
     // The agent has changed the page since: its answer is on the page, and the bar has nothing to add.
     // Left up, "Your agent has it" read as an agent still at work, minutes after it had answered.
     // (Handed over and not yet said to be done is what `running` means: every click an add-on took is that, until its agent says more)
-    if ((last.outcome === null || last.outcome === 'running') && answeredAt !== null && answeredAt > last.at) return null
+    const changed = answeredAt !== null && answeredAt > last.at
+    // Unless it is still at work, as its machine says: then that is said, since the page looks done and its agent is not
+    if (atWork === 'running' && changed) return <span className="status" data-tone="ok">{`${agent ?? 'Your agent'} is working`}</span>
+    if ((last.outcome === null || last.outcome === 'running') && changed) return null
+    // Its turn ended after it was handed over, and the page is as it was: said as that. Left as
+    // "Your agent has it", it read as an agent still at work on something it had finished with
+    if (atWork === 'ended') return <span className="status">{`${agent ?? 'Your agent'} finished without changing this ${NOUN.one}`}</span>
     // When what became of it cannot be told, the person is told exactly that, so they can decide whether to do it again
     const said =
       last.outcome === 'failed'
