@@ -25,6 +25,7 @@ import {
   newer,
   parseJson,
   QUEUES,
+  RETENTION,
   TAKES,
   WAKE_MOST,
   WAKES,
@@ -2270,22 +2271,32 @@ async function connecting(say: (line: string) => void): Promise<void> {
     return session.harness === 'claude-code' && publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))
   }
   /**
-   * What this machine is telling It, or has just told It, of why a click is held back from
-   * reopening its conversation (`holdBack`), by click: until It offers the click with that said,
-   * which is then the record of it, kept with the click itself. `reason` null takes it away.
-   * While it is being said it is not said again, and where it could not be said it is said again
-   * after a while, longer each time. Only clicks being offered are noted here, and what It keeps
-   * is what stops a click from being told again, also after this connector starts again.
+   * What this machine is telling It, or has told It, of why a click is held back from reopening
+   * its conversation (`holdBack`), by click. `reason` null takes it away. While it is being said
+   * it is not said again, and where it could not be said it is said again after a while, longer
+   * each time. Kept while the click is off the page of the inbox being offered, which pages
+   * through the conversations, so that one that comes round again neither skips its wait nor is
+   * told again: until It offers the click with that said, which is then the record of it, kept
+   * with the click itself; until this machine takes the click; and at most until the click would
+   * be deleted for nobody having taken it (`until`). An It that keeps no reason with a click
+   * never offers one, so there this note is what keeps the click from being told again.
    */
-  const telling = new Map<string, { reason: string | null; asking: boolean; said: boolean; tries: number; next: number }>()
+  const telling = new Map<string, { reason: string | null; asking: boolean; said: boolean; tries: number; next: number; until: number }>()
+  let tellingSwept = 0
+  /** Lets go, once a minute at most, of what is noted of clicks that have been deleted by now, having waited as long as a click may. */
+  const sweepTelling = () => {
+    if (Date.now() - tellingSwept < 60_000) return
+    tellingSwept = Date.now()
+    for (const [id, t] of telling) if (!t.asking && t.until < tellingSwept) telling.delete(id)
+  }
   /** What is to be told in the next batch, by click, and whether one is to go soon. */
   const toTell = new Map<string, { click: Offered; reason: string | null }>()
   let tellingSoon = false
   /**
    * Whether It takes `delivery.holdBack` (`TAKES.heldBack`), as it says at its door. An It of an
    * earlier build does not, and is told as it was before (`heldBackSaid`). Until the door has
-   * answered it is tried, and where it is not taken it fails, and is told again a while later,
-   * by when the door has said.
+   * answered, nothing is told either way: an It that does not have the call would be asked for
+   * it, and one that has it would be told the older way. The clicks are told once it answers.
    */
   let holdBackTaken: boolean | undefined
   /**
@@ -2348,6 +2359,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * yet to offer the click again with it said.
    */
   const tellHeld = (click: Offered, reason: string | null) => {
+    sweepTelling()
     if ((click.heldBack ?? null) === reason) {
       // It has it: what it keeps is the record from here on
       if (!telling.get(click.id)?.asking) telling.delete(click.id)
@@ -2355,7 +2367,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     const t = telling.get(click.id)
     if (t?.reason === reason && (t.asking || t.said || performance.now() < t.next)) return
-    telling.set(click.id, { reason, asking: true, said: false, tries: t?.reason === reason ? t.tries : 0, next: 0 })
+    const until = click.at + (RETENTION.pendingActionDays + 1) * 86_400_000
+    telling.set(click.id, { reason, asking: true, said: false, tries: t?.reason === reason ? t.tries : 0, next: 0, until })
     toTell.set(click.id, { click, reason })
     if (!tellingSoon) {
       tellingSoon = true
@@ -3181,6 +3194,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
           } else if (got) {
             // Under the id the conversation has by now: it may have carried on under another while the claim was being asked for
             held.set(click.id, { click, key: follow(key), claimedAt: at, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
+            // Taken by this machine: whatever was told of why it was held back is done with
+            telling.delete(click.id)
             journal('claimed', click.id)
           }
         } else if (way === 't3') {
@@ -3934,10 +3949,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
         }
         inbox = clicks
         for (const click of clicks) recoveredClicks.delete(click.id)
-        // What is noted of telling It why a click is held back is for clicks being offered. One
-        // that is offered again later is offered with what It keeps of it, which is the record
-        const offeredNow = new Set(clicks.map((c) => c.id))
-        for (const [id, t] of telling) if (!t.asking && !offeredNow.has(id)) telling.delete(id)
         void route()
       },
       (err) => {

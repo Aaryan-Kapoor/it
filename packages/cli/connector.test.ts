@@ -1266,6 +1266,43 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(failures()).toHaveLength(2)
   })
 
+  test('a click that goes off the page of the inbox and comes round again keeps its wait before It is asked again', async () => {
+    const asked: number[] = []
+    stand.answer = (name) => {
+      if (name !== 'delivery:holdBack') return undefined
+      asked.push(performance.now())
+      throw new Error('It did not answer in time, so whether that went through is not known.')
+    }
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered(blocked(1))
+    await until(() => asked.length > 0)
+    // The inbox pages on to other conversations and back, twice, within the wait
+    offered()
+    offered(blocked(1))
+    await new Promise((r) => setTimeout(r, 300))
+    offered()
+    offered(blocked(1))
+    await new Promise((r) => setTimeout(r, 800))
+    expect(asked).toHaveLength(1)
+    await until(() => asked.length > 1, 8000)
+    expect(asked[1]! - asked[0]!).toBeGreaterThanOrEqual(1900)
+  })
+
+  test('an It of an earlier build is told once for each click, also where the inbox pages away from the click and back', async () => {
+    stand.takes = false
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered(blocked(1))
+    await until(() => failures().length > 0)
+    for (let n = 0; n < 3; n++) {
+      offered()
+      await new Promise((r) => setTimeout(r, 200))
+      offered(blocked(1))
+      await new Promise((r) => setTimeout(r, 800))
+    }
+    expect(failures()).toHaveLength(1)
+    expect(holds()).toEqual([])
+  })
+
   test('six hundred held-back clicks are each told of once, fifty at most to a call, and none again while they wait', async () => {
     await reopensFor('claude-code', CLAUDE_ID, { addon: false })
     const many = Array.from({ length: 600 }, (_, i) => blocked(i + 1))
