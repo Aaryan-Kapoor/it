@@ -3190,21 +3190,36 @@ describe('clicks and their delivery', () => {
       ],
     })
     expect(await listening()).toBe('not_loaded')
-    expect(await site()).toEqual([{ harness: 'claude-code', slugs: ['plan'], title: 'Title of plan' }])
+    const seenAt = (await t.run((ctx) => ctx.db.get(m.id)))!.lastSeenAt
+    expect(await site()).toEqual([{ harness: 'claude-code', slugs: ['plan'], title: 'Title of plan', seenAt }])
     expect((await m.as.query(api.machines.me, {})).notLoaded).toBe(2)
     // A page of another conversation is not said to be one of them
     await publish(m, 'other', { session: { harness: 'claude-code', id: 'sess-2' } })
     expect((await alice.browser.query(api.artifacts.get, { slug: 'other' })).listening).toBeNull()
     expect((await site())[0]!.slugs).toEqual(['plan'])
-    // Another person is told nothing of it, and nobody but the machine can say it
+    // Another person is told nothing of it, nor is a screen of the person's own, and nobody but the machine can say it
     const bob = await person(t, 'bob')
     expect(await bob.browser.query(api.artifacts.notLoaded, {})).toEqual([])
+    const screen = await paired(t, 'alice', 'screen', displayKey('screen'))
+    expect(await screen.browser.query(api.artifacts.notLoaded, {})).toEqual([])
     expect(await code(alice.browser.mutation(api.machines.notLoaded, { conversations: [] }))).toBe('forbidden')
     // A machine that says it is stopping says nothing of it any more, until it is heard from again
     await m.as.mutation(api.machines.stopping, {})
     expect(await listening()).toBeNull()
     expect(await site()).toEqual([])
     expect((await m.as.query(api.machines.me, {})).notLoaded).toBe(0)
+    await m.as.mutation(api.machines.report, {
+      harnesses: [
+        { id: 'claude-code', addon: 'connected' },
+        { id: 'codex', addon: 'connected' },
+      ],
+      connectorVersion: '0.1.36',
+    })
+    expect(await listening()).toBe('not_loaded')
+    // A machine that has gone quiet without saying it was stopping, as one does that lost its power, says nothing of it either
+    await vi.advanceTimersByTimeAsync(ALIVE.onlineMs + 1000)
+    expect(await listening()).toBeNull()
+    expect(await site()).toEqual([])
     await m.as.mutation(api.machines.report, {
       harnesses: [
         { id: 'claude-code', addon: 'connected' },

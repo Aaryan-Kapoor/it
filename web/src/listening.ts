@@ -15,7 +15,16 @@ export interface NotLoaded {
   slugs: string[]
   /** The title of its page that changed last, by which the person tells which conversation it is. */
   title: string
+  /** When the machine it is open on was last heard from, by It's clock. */
+  seenAt: number
 }
+
+/**
+ * Those whose machine has been heard from lately, by It's clock as the site knows it: a machine
+ * that went quiet without saying it was stopping says nothing of them any more, and the site
+ * lets them go by itself, since It is not asked again while nothing changes.
+ */
+export const standing = (conversations: readonly NotLoaded[], now: number, within: number): NotLoaded[] => conversations.filter((c) => now - c.seenAt < within)
 
 /** What the notice says, on a page whose conversation has not loaded the add-on, or elsewhere on the site, of those that have not. */
 export function reloadWords(conversations: readonly NotLoaded[], slug?: string): string | null {

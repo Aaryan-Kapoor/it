@@ -71,12 +71,15 @@ export const list = query({
 export const notLoaded = query({
   args: {},
   handler: async (ctx) => {
-    const { user } = await requireCaller(ctx)
+    const caller = await requireCaller(ctx)
+    // The owner's browsers alone are asked to do this, and a screen is told of none
+    if (caller.kind !== 'browser' || caller.session.role !== 'owner') return []
+    const { user } = caller
     const machines = await ctx.db
       .query('machines')
       .withIndex('by_user', (q) => q.eq('userId', user._id).eq('revoked', false))
       .take(QUOTA.machines)
-    const found: { harness: string; slugs: string[]; title: string }[] = []
+    const found: { harness: string; slugs: string[]; title: string; seenAt: number }[] = []
     for (const machine of machines)
       for (const c of machine.notLoaded ?? []) {
         if (!addonNotLoaded(machine, { harness: c.harness, id: c.sessionId })) continue
@@ -88,7 +91,8 @@ export const notLoaded = query({
         ).filter((a) => a.machineId === machine._id)
         if (!pages.length) continue
         pages.sort((x, y) => y.updatedAt - x.updatedAt)
-        found.push({ harness: c.harness, slugs: pages.map((a) => a.slug), title: pages[0]!.title })
+        // With when its machine was last heard from, for the site to let it go once the machine is quiet
+        found.push({ harness: c.harness, slugs: pages.map((a) => a.slug), title: pages[0]!.title, seenAt: machine.lastSeenAt })
       }
     return found
   },

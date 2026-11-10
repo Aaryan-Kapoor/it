@@ -390,6 +390,9 @@ describe('what is said of an agent app on a machine', () => {
       { ...desk, connectorVersion: '0.1.1', latest: '0.1.1', ...claude, upgrade: { at: Date.now() - 7 * 3_600_000, state: 'done', version: '0.1.1' } },
     ])
     expect(said()).toEqual([])
+    // A newer release out meanwhile is offered at once, and the update that is over is not said in its place
+    await showing([{ ...desk, connectorVersion: '0.1.1', latest: '0.1.2', ...claude, upgrade: { at: Date.now(), state: 'done', version: '0.1.1' } }])
+    expect(said()).toEqual(['It 0.1.2 is out. This machine runs 0.1.1. Update'])
     // On Windows the same: a machine whose service an It from before 0.1.35 registered says this too, and `it setup` is what starts It again there
     await showing([
       { ...desk, connectorVersion: '0.1.1' },

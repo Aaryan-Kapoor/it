@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
-import { openClaude } from './src/claude-open'
+import { openClaude, ranFor, sameProcess } from './src/claude-open'
 
 const folders: string[] = []
 afterEach(() => {
@@ -31,9 +31,9 @@ const session = (pid: number, more: Record<string, unknown> = {}) => ({
   entrypoint: 'cli',
   ...more,
 })
-// Processes 1 to 6 are running, each begun at the moment its file says
+// Processes 1 to 6 are running, and each is the Claude Code that wrote its file where its file says the moment it began
 const alive = (pid: number) => pid >= 1 && pid <= 6
-const started = (pid: number) => `start-${pid}`
+const started = (pid: number, note: { procStart?: unknown }) => note.procStart === `start-${pid}`
 
 describe('the Claude Code conversations open at a person’s keyboard', () => {
   test('are those of a running Claude Code that a person types to', () => {
@@ -49,11 +49,24 @@ describe('the Claude Code conversations open at a person’s keyboard', () => {
     expect(openClaude([folder], alive, started).map((c) => c.id)).toEqual([id(3)])
   })
 
-  test('are not those whose Claude Code has ended, or whose process number is another program’s by now', () => {
+  test('are not those whose Claude Code has ended, or whose process number is another program’s by now, or that cannot be checked', () => {
     const folder = folderWith([session(7), session(1, { procStart: 'another-start' }), session(2)])
     expect(openClaude([folder], alive, started).map((c) => c.id)).toEqual([id(2)])
-    // Where the system does not say when a process began, a running one is taken at its word
-    expect(openClaude([folder], alive, () => undefined).map((c) => c.id)).toEqual([id(1), id(2)])
+    // Where it cannot be told that the running process is the Claude Code that wrote the note, it is passed over
+    expect(openClaude([folder], alive, () => false)).toEqual([])
+  })
+
+  test('a process is the Claude Code that wrote its note only where it began no later than the session did, as `ps` says it', () => {
+    expect(ranFor('  05:03\n')).toBe(303_000)
+    expect(ranFor('1:02:03')).toBe(3_723_000)
+    expect(ranFor('2-01:02:03')).toBe(2 * 86_400_000 + 3_723_000)
+    expect(ranFor('not a time')).toBeUndefined()
+    if (process.platform === 'win32') return
+    // This test's own process began before now, and after a moment long ago: a note from long ago is another program's
+    expect(sameProcess(process.pid, { startedAt: Date.now() })).toBe(true)
+    expect(sameProcess(process.pid, { startedAt: 1_000 })).toBe(false)
+    // And a process that is not running is nobody's
+    expect(sameProcess(2 ** 22 + 7, { startedAt: Date.now() })).toBe(false)
   })
 
   test('pass over a file that is not as Claude Code writes one, and a folder that has none', () => {

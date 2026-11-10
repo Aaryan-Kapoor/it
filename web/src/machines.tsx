@@ -206,12 +206,6 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
   // Claude Code has It's add-on there: its conversations that were open have not loaded the new one
   const claude = m.harnesses.some((h) => h.id === 'claude-code' && (h.addon === 'connected' || h.addon === 'needs_approval'))
   const reload = claude ? ' Type /reload-plugins in any Claude Code chat that was already open there, so that it loads It’s new add-on.' : ''
-  if (state === 'done' && now - (m.upgrade?.at ?? 0) < DONE_SAID_MS)
-    return (
-      <p className="panel-note newer" data-tone={claude ? 'wait' : undefined}>
-        It {m.upgrade?.version ?? m.connectorVersion} is running on {m.name}.{reload}
-      </p>
-    )
   if (state === 'installed')
     return (
       <p className="panel-note newer" data-tone="wait">
@@ -226,6 +220,13 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
       </p>
     )
   const behind = !m.runsIt && newer(host, m.connectorVersion)
+  // An update the site asked for is over: said for a few hours, with what is left to do there, unless something newer waits already
+  if (state === 'done' && now - (m.upgrade?.at ?? 0) < DONE_SAID_MS && !out && !behind)
+    return (
+      <p className="panel-note newer" data-tone={claude ? 'wait' : undefined}>
+        It {m.upgrade?.version ?? m.connectorVersion} is running on {m.name}.{reload}
+      </p>
+    )
   const mismatch = behind ? `This machine runs It ${m.connectorVersion}. The machine It runs on uses ${host}. ` : ''
   if (!out || (behind && newer(host, out)))
     return behind ? (
