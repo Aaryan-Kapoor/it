@@ -502,6 +502,9 @@ describe('the agent skill', () => {
     // And what a lock does not do, as the docs say: it is navigation only
     expect(skill).toContain("A lock only keeps that display on its page: it does not keep anyone at the display from other pages' state or actions.")
     expect(source('../../docs/screens.md')).toContain('A lock is about navigation and nothing more.')
+    // A lock stops pages, and not notifications
+    expect(skill).toContain('A locked display still gets notifications')
+    expect(source('../../docs/screens.md')).toContain('It still gets notifications. A lock stops agents sending the screen pages, and not notifications')
     expect(main).not.toMatch(/api\.displays\.(lock|unlock)\b/)
     expect(source('../../convex/displays.ts')).toMatch(/paired: await stillPaired\(ctx, d\)/)
     expect(skill).toContain("Each display has `paired`, which is `false` for one whose browser's pairing was ended")
