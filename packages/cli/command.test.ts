@@ -4225,7 +4225,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       /--no-setup joins and\s+connects no agent app/,
       /With --json,\s+wherever a program reads what they print, and for an agent,\s+they\s+print\s+JSON/,
       /^ {2}it site \[--no-open\] {2,}\S/m,
-      /^ {2}it network \[on \| off \| tailscale\]$/m,
+      /^ {2}it network \[on \| off \| tailscale \| internet\]$/m,
       /^ {2}it status {2,}\S/m,
       /^ {2}it whoami {2,}\S/m,
       /^ {2}it logout \[--force\] {2,}\S/m,
@@ -4483,7 +4483,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
             NOT_RUNNING,
             `Its site is at ${SITE} while it runs.`,
             'This machine is enrolled as “the desk”.',
-            'The network is off, so It answers this machine only. `it network on` lets your other devices on the same network reach it.',
+            'The network is off, so It answers this machine only. `it network tailscale` lets your own devices reach it over your tailnet, and `it network on` lets anyone on this network reach it.',
             'No agent app was found on this machine.',
             NOT_REGISTERED,
             expect.stringMatching(/^This is It \d+\.\d+\.\d+\.$/),
@@ -4640,11 +4640,13 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     // Nothing is running here, and each of these says so: the setting is all there is until It starts
     expect((await atTerminal(m, ['network'])).shown).toBe(`The network is off. It answers this machine only.\n${STOPPED}\n`)
     const said = (await atTerminal(m, ['network', 'on'])).shown.split('\n')
-    // On a machine the internet can reach, which the one this runs on may be, that is said as well, in a line of its own before the last
-    const INTERNET = /^This machine .*, so It can be reached from the internet, over plain http: /
-    const on = said.filter((line) => !INTERNET.test(line))
-    expect(said.length - on.length).toBeLessThanOrEqual(1)
-    expect(on[0]).toMatch(/^The network is on[.,] /)
+    // Where there is an address to open, the tailnet is said to be the way for a phone, in a line of its own before the last; the internet is never said to reach It
+    const PHONE =
+      /^On shared Wi-Fi, such as a venue’s or a café’s, anyone on it can open It’s pairing screen, .* For a phone, `it network tailscale` is better: /
+    const on = said.filter((line) => !PHONE.test(line))
+    expect(said.length - on.length).toBe(said.some((line) => /^ {2}http/.test(line)) ? 1 : 0)
+    expect(said.join('\n')).not.toContain('reached from the internet')
+    expect(on[0]).toMatch(/^The network is on, for anyone on this network[.,] /)
     expect(on.at(-2)).toBe(STOPPED)
     // Whatever stands between the two is an address, on a line of its own
     for (const line of on.slice(1, -2)) expect(line).toMatch(/^ {2}http:\/\/\S+:21000$/)

@@ -2982,7 +2982,8 @@ async function main(argv: string[]): Promise<void> {
       const url = `${site}/pair#${code}`
       // Where the network is on, the same code pairs a browser on another device, at each address this machine is reached by
       // As the network stands, and not only as the settings ask for it: an address the door could not listen at is no address to give
-      const elsewhereToo = (await networkAsItStands(true)).addresses.map((address) => `${address}/pair#${code}`)
+      const stands = await networkAsItStands(true)
+      const elsewhereToo = stands.addresses.map((address) => `${address}/pair#${code}`)
       const opening = !a.flags['no-open'] && openBrowser(url)
       if (!forPerson(a)) return out({ url, ...(elsewhereToo.length ? { urls: elsewhereToo } : {}) })
       if (opening) return tell(['It’s site is opening in your browser, and this link pairs it:', `  ${url}`])
@@ -2990,8 +2991,8 @@ async function main(argv: string[]): Promise<void> {
       // it was asked not to. The address to open is then the one another device can reach,
       // with the one for this machine after it.
       const there = elsewhereToo
-      const near = readConfig()
-      const onNetwork = there.length > 0 && near?.network === true && near.tailnet !== true
+      // Over the network the machine is on, whoever else is on it can open the same screen
+      const onNetwork = there.length > 0 && stands.tailnet !== true
       return tell([
         there.length ? 'Open this on the screen you want to pair:' : `Open this in a browser${existsSync(settingsFile()) ? ' on this machine' : ''}:`,
         `  ${there[0] ?? url}`,
@@ -2999,7 +3000,6 @@ async function main(argv: string[]): Promise<void> {
         ...there.slice(1).map((other) => `  or ${other}`),
         ...(there.length ? [`  or, on this machine, ${url}`] : []),
         'It pairs one browser, once, within ten minutes.',
-        // Over the network the machine is on, whoever else is on it can open the same screen
         onNetwork ? PHONE_ON_NETWORK.join(' ') : undefined,
         !there.length && existsSync(settingsFile())
           ? 'No other device can open that: `it network tailscale` or `it network on` lets one, and this then prints an address for it.'
