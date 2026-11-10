@@ -2558,6 +2558,10 @@ input[role="switch"]:disabled {
 .notice > span {
   flex: 1 1 260px;
 }
+/* A notice in a page of rows, such as a display's settings, lines up with the rows under it */
+.list-view > .notice {
+  margin: 0;
+}
 
 /* ══ The site, which scrolls under its bar ══ */
 
