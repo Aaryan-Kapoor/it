@@ -1305,18 +1305,6 @@ describe('the file of rules that lets `it` out of Codex’s sandbox', () => {
     expect(codexRuleLetsItOut(folderOf('codex'))).toBe(false)
   })
 
-  test('holds the one rule that lets `it` out, and asks first of the commands that change It itself', () => {
-    const rules = CODEX_RULES.split('\n').filter((line) => line && !line.startsWith('#'))
-    expect(rules[0]).toBe(CODEX_RULE)
-    expect(rules.slice(1).every((line) => line.startsWith('prefix_rule(pattern=["it", ') && line.includes('decision="prompt"'))).toBe(true)
-    for (const word of ['setup', 'uninstall', 'upgrade', 'login', 'logout', 'serve', 'install', 'clear', 'on', 'off', 'tailscale'])
-      expect(rules.slice(1).join('\n')).toContain(`"${word}"`)
-    // Nothing in it lets anything but `it` out, and nothing is let out unasked but by the one rule
-    expect(rules.filter((line) => line.includes('"allow"'))).toEqual([CODEX_RULE])
-    expect(rules.every((line) => line.startsWith('prefix_rule(pattern=["it"'))).toBe(true)
-    expect(CODEX_RULES.endsWith('\n')).toBe(true)
-  })
-
   test('where Codex is told to keep its settings elsewhere, it goes there, and is taken out from there', async () => {
     const elsewhere = path.join(tmp, 'settings-of-codex')
     vi.stubEnv('CODEX_HOME', elsewhere)
@@ -1380,29 +1368,59 @@ describe('the file of rules that lets `it` out of Codex’s sandbox', () => {
     expect(existsSync(stampFile('codex'))).toBe(false)
   })
 
-  test('an upgrade brings the file It wrote up to date, where the rule has changed since, and puts it in where an earlier It wrote none', async () => {
+  // The rules are no part of the add-on's version, so each of these is with the version unchanged:
+  // an It whose rules alone differ from the last one's has the same add-on, and must still write them
+  const asIfWritten = (text: string | null) => {
+    const rules = rulesIn(folderOf('codex'))
+    const record = noted('codex')
+    const others = record.installs[0]!.files!.filter((f) => f.path !== rules)
+    if (text === null) rmSync(rules, { force: true })
+    else writeFileSync(rules, text)
+    record.installs[0]!.files = text === null ? others : [...others, { path: rules, sha256: sha(text) }]
+    put(stampFile('codex'), JSON.stringify(record))
+    expect(noted('codex').installs[0]).toMatchObject({ version: ADDONS.codex!.version, build: ADDONS.codex!.build })
+  }
+  test.each([
+    ['rules as an earlier It wrote them', `${CODEX_RULE}\n`],
+    ['rules Codex will not load', 'prefix_rule(pattern=["it"], decision="alow")\n'],
+  ])('with the add-on’s version unchanged, a file of It’s that holds %s is brought up to date, and Codex is to be started again', async (_, earlier) => {
     const rules = rulesIn(folderOf('codex'))
     await connect('codex', () => {})
-    // As an earlier It left it: the rule as it was then, noted as It's
-    const earlier = `${CODEX_RULE}\n`
-    writeFileSync(rules, earlier)
-    const record = noted('codex')
-    Object.assign(record.installs[0]!, { version: 'previous-version', build: 'an-earlier-build' })
-    record.installs[0]!.files = record.installs[0]!.files!.map((f) => (f.path === rules ? { path: rules, sha256: sha(earlier) } : f))
-    put(stampFile('codex'), JSON.stringify(record))
+    asIfWritten(earlier)
     expect(await refresh(() => {})).toEqual([{ id: 'codex', did: 'installed', restart: true }])
     expect(read(rules)).toBe(CODEX_RULES)
     expect(files()).toContainEqual({ path: rules, sha256: sha(CODEX_RULES) })
     expect(existsSync(`${rules}.it-recovery`)).toBe(false)
-    // An It from before this file noted only the skill, and wrote no rules: an upgrade writes them
-    rmSync(rules)
-    const before = noted('codex')
-    Object.assign(before.installs[0]!, { version: 'previous-version', build: 'an-earlier-build' })
-    before.installs[0]!.files = before.installs[0]!.files!.filter((f) => f.path !== rules)
-    put(stampFile('codex'), JSON.stringify(before))
-    await refresh(() => {})
+    expect(noted('codex').installs[0]).toMatchObject({ version: ADDONS.codex!.version, build: ADDONS.codex!.build })
+    // And once it is as this It would have it, there is nothing to do
+    expect(await refresh(() => {})).toEqual([])
+    const { said, say } = lines()
+    await connect('codex', say)
+    expect(said).toEqual([])
+  })
+  test('with the add-on’s version unchanged, an installation that an It from before noted only the skill for is given the rules, and Codex is to be started again', async () => {
+    const rules = rulesIn(folderOf('codex'))
+    await connect('codex', () => {})
+    asIfWritten(null)
+    expect(await refresh(() => {})).toEqual([{ id: 'codex', did: 'installed', restart: true }])
     expect(read(rules)).toBe(CODEX_RULES)
     expect(files()).toContainEqual({ path: rules, sha256: sha(CODEX_RULES) })
+  })
+  test('with the add-on’s version unchanged, a file of the person’s is no reason to put anything in again', async () => {
+    const rules = rulesIn(folderOf('codex'))
+    put(rules, 'prefix_rule(pattern=["it", "status"], decision="allow")\n')
+    await connect('codex', () => {})
+    expect(files().map((f) => f.path)).toEqual([skillIn(folderOf('codex'))])
+    ran = []
+    expect(await refresh(() => {})).toEqual([])
+    expect(commands('codex').filter((words) => /\b(?:add|install|update|remove)\b/.test(words))).toEqual([])
+    // Nor is one of It's that the person has changed since
+    rmSync(rules)
+    await refresh(() => {})
+    expect(read(rules)).toBe(CODEX_RULES)
+    writeFileSync(rules, `${CODEX_RULES}# mine\n`)
+    expect(await refresh(() => {})).toEqual([])
+    expect(read(rules)).toBe(`${CODEX_RULES}# mine\n`)
   })
 
   test.skipIf(process.platform === 'win32')('is never written through a link that leads out of Codex’s folder', async () => {
