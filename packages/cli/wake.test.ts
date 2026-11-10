@@ -21,7 +21,8 @@ import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { conversationFolder, conversationsFile, noteConversation } from './src/publish'
+import { claudeAddonHere } from './src/lib'
+import { conversationFolder, conversationsFile, noteConversation, publishedWithoutAddon } from './src/publish'
 import {
   Budget,
   bootId,
@@ -1023,6 +1024,29 @@ describe('the folder a conversation was held in', () => {
     expect(kept.length).toBe(300)
     expect(new Set(kept)).toEqual(new Set(Array.from({ length: 300 }, (_, n) => `claude-code:session-${n + 5}`)))
     expect(conversationFolder({ harness: 'claude-code', id: 'session-304' })).toBe(folder)
+  })
+
+  test('says whether the conversation published without It’s add-on running in it, until it publishes with the add-on', async () => {
+    const folder = path.join(scratch, 'held here')
+    mkdirSync(folder)
+    await noteConversation(session, folder, undefined, false)
+    expect(publishedWithoutAddon(session)).toBe(true)
+    // A note made without knowing, as the connector makes one for an add-on that says its folder, keeps it
+    await noteConversation(session, path.join(scratch), undefined)
+    expect(publishedWithoutAddon(session)).toBe(true)
+    expect(conversationFolder(session)).toBe(scratch)
+    await noteConversation(session, folder, undefined, true)
+    expect(publishedWithoutAddon(session)).toBe(false)
+    expect(JSON.parse(readFileSync(conversationsFile(), 'utf8'))['claude-code:session-1']).not.toHaveProperty('addon')
+    expect(publishedWithoutAddon({ harness: 'claude-code', id: 'never-noted' })).toBe(false)
+  })
+
+  test('whether It’s add-on runs in a Claude Code conversation is told by what the add-on sets for its commands', () => {
+    expect(claudeAddonHere({})).toBeUndefined()
+    expect(claudeAddonHere({ CODEX_THREAD_ID: 'thread-1' })).toBeUndefined()
+    expect(claudeAddonHere({ CLAUDE_CODE_SESSION_ID: 'session-1' })).toBe(false)
+    expect(claudeAddonHere({ CLAUDE_CODE_SESSION_ID: 'session-1', IT_HARNESS: 'codex', IT_SESSION: 'thread-1' })).toBe(false)
+    expect(claudeAddonHere({ CLAUDE_CODE_SESSION_ID: 'session-1', IT_HARNESS: 'claude-code', IT_SESSION: 'session-1' })).toBe(true)
   })
 
   test('a note that is not as It wrote it says nothing', () => {

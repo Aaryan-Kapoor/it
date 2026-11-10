@@ -235,7 +235,7 @@ vi.mock('./src/lib', async (original) => {
   }
 })
 
-import { type ConnectorInfo, infoFile, local, mac, runConnector, wayOf } from './src/connector'
+import { type ConnectorInfo, infoFile, local, mac, NOT_LOADED, runConnector, wayOf } from './src/connector'
 import { DeliveryRecovery, eraseDeliveryRecovery } from './src/delivery-recovery'
 import * as files from './src/lib'
 import { readJson } from './src/lib'
@@ -1169,6 +1169,30 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     await until(() => stand.recorded.some((r) => r.name === 'agent.woken'))
     expect(stand.recorded.find((r) => r.name === 'agent.woken')!.properties).toEqual({ result: 'declined', agent: 'codex', why: 'no_folder' })
   })
+
+  test.each([false, true])(
+    'a Claude Code conversation that published its page without It’s add-on, and cannot be reopened, has its page say how to load the add-on, unless the add-on was heard from it: heard %s',
+    async (heard) => {
+      const id = '11111111-2222-4333-8444-555555555555'
+      await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }, (home) => {
+        writeFileSync(
+          path.join(home, 'conversations.json'),
+          JSON.stringify({ [`claude-code:${id}`]: { cwd: path.join(home, 'gone'), at: Date.now(), addon: false } }),
+        )
+        if (heard) writeFileSync(path.join(home, 'heard.json'), JSON.stringify({ [`claude-code:${id}`]: 1 }))
+      })
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
+      offered({ ...click(1), session: { harness: 'claude-code', id } })
+      await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'))
+      expect(stand.calls.find((c) => c.name === 'machines:wakeFailed')!.args).toEqual({
+        for: { harness: 'claude-code', id },
+        why: heard ? 'the folder its conversation was held in is not known on this machine, or is gone' : NOT_LOADED,
+      })
+      // What is counted is still the word for why the reopening failed
+      await until(() => stand.recorded.some((r) => r.name === 'agent.woken'))
+      expect(stand.recorded.find((r) => r.name === 'agent.woken')!.properties).toEqual({ result: 'declined', agent: 'claude-code', why: 'no_folder' })
+    },
+  )
 
   /** A click on the page of the conversation thread-1, made a moment after click(n) would be. */
   const onFirst = (n: number) => ({ ...click(n), session: { harness: 'codex', id: 'thread-1' } })

@@ -1814,6 +1814,18 @@ export function sessionAsked(
   return as(nearest, true)
 }
 
+/**
+ * Whether It's add-on runs in the Claude Code conversation this command was started from.
+ * Claude Code says which conversation a command is run in with CLAUDE_CODE_SESSION_ID, and
+ * It's add-on, once it runs there, sets IT_HARNESS and IT_SESSION for the conversation's
+ * commands, as the first thing it does when it asks the connector for clicks. Undefined where
+ * the command was not started from a Claude Code conversation.
+ */
+export function claudeAddonHere(e: NodeJS.ProcessEnv = process.env): boolean | undefined {
+  if (!e.CLAUDE_CODE_SESSION_ID) return undefined
+  return e.IT_HARNESS === 'claude-code' && Boolean(e.IT_SESSION)
+}
+
 /** The agent session a command is running inside, as `sessionAsked` finds it. */
 export function currentSession(
   e: NodeJS.ProcessEnv = process.env,

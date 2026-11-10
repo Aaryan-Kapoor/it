@@ -66,7 +66,7 @@ import {
 } from './lib'
 import { incompatible } from './login'
 import { profileEnvironment, readProfile } from './profiles'
-import { conversationFolder, conversationProfile, noteConversation } from './publish'
+import { conversationFolder, conversationProfile, noteConversation, publishedWithoutAddon } from './publish'
 import { alone, lockHeld } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
@@ -546,6 +546,13 @@ async function unfit(): Promise<Problem | null | undefined> {
  * nothing is said to have been stopped or cut off, and what it was for is given back as it was.
  */
 const NOT_STARTED = '\u0000 not started'
+/**
+ * What the page says, after "Couldn't wake Claude Code:", for a conversation that has not
+ * loaded It's add-on. It goes to the page as it is, and is kept short: the backend keeps 300
+ * characters of it.
+ */
+export const NOT_LOADED =
+  'its conversation has not loaded It’s add-on, as happens when it was already open when It was installed. Type /reload-plugins in that conversation, or open it again, and what you did reaches it'
 /** Whether this machine joined an It that runs on another computer. */
 const joined = (): boolean => typeof readJson<{ at?: unknown }>(inHome('machine.json'))?.at === 'string'
 /** What stands in the way of handing anything over before a machine that joined has first asked whether the two fit: nothing is known yet. */
@@ -2142,7 +2149,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * own app speaking to them, and goes to the page alone: never into the log.
    */
   const notReopened = (session: { harness: string; id: string }, why: string) => {
-    const words = saidLast.get(follow(keyOf(session.harness, session.id)))
+    const key = keyOf(session.harness, session.id)
+    // A Claude Code conversation that published its page while It's add-on did not run in it, and
+    // has not been heard from since, has not loaded the add-on: it was already open when the
+    // add-on was installed. However its reopening failed, what lets it hear the page is to load
+    // the add-on, and the page says how in place of why the reopening failed
+    if (session.harness === 'claude-code' && publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))) {
+      void call('mutation', api.machines.wakeFailed, { for: session, why: NOT_LOADED }).catch(() => {})
+      return
+    }
+    const words = saidLast.get(follow(key))
     void call('mutation', api.machines.wakeFailed, { for: session, why: words ? `${why}, and its last words were: ${words}` : why }).catch(() => {})
   }
   /** Whether anybody was at the page for any click that is waiting for a click's conversation. One such, and the conversation is reopened as for a person, whatever else waits in front of it. */
