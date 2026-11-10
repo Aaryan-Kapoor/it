@@ -944,8 +944,39 @@ describe('a display locked to a page', () => {
     expect((await h.row(h.tv.id)).showing?.artifactId).toBe(h.workout)
   })
 
-  // Needs `picture` on `mounts.create`, which #362 brings: see the TODO in convex/mounts.ts
-  test.todo('a picture is refused on a locked display, for its own page too')
+  test('a picture is refused on a locked display, for its own page too, and one asked for before the lock gets no ticket', async () => {
+    const h = await locked()
+    const picture = (on: { as: any; key: string }, artifactId: Id<'artifacts'>) =>
+      on.as.mutation(api.mounts.create, { artifactId, displayKey: on.key, picture: true })
+    // Asked for while it was not locked: a picture of the page it is then locked to
+    const before = await picture(h.tv, h.workout)
+    await h.laptop.as.action(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })
+    expect(await refused(picture(h.tv, h.review))).toMatchObject({ code: 'forbidden', locked: true })
+    expect(await refused(picture(h.tv, h.workout))).toMatchObject({ code: 'forbidden', locked: true })
+    expect(await code(ticketOf(h.tv, before.mountId))).toBe('conflict')
+    // A picture of the locked page under the display's number now, however it came to be, is given no ticket either
+    const row = await h.row(h.tv.id)
+    await h.t.run((ctx) =>
+      ctx.db.insert('mounts', {
+        userId: row.userId,
+        displayId: row._id,
+        artifactId: h.workout,
+        version: 1,
+        mountId: 'a'.repeat(32),
+        createdAt: Date.now(),
+        ticketGiven: false,
+        epoch: row.epoch,
+        picture: true,
+      }),
+    )
+    expect(await code(ticketOf(h.tv, 'a'.repeat(32)))).toBe('conflict')
+    // The page it is locked to is opened there all the same, and another display shows its pictures
+    expect(await code(mountOn(h.tv, h.workout))).toBe('ok')
+    expect(await code(picture(h.laptop, h.review))).toBe('ok')
+    // Unlocked, it shows pictures again
+    await h.tv.as.mutation(api.displays.unlock, { displayId: h.tv.id })
+    expect(await code(picture(h.tv, h.review))).toBe('ok')
+  })
 
   test('a screen is let open no other page there, whatever site asks, while the owner’s browser elsewhere still opens any', async () => {
     const h = await locked()
