@@ -158,6 +158,6 @@ On macOS and Linux uninstall checks all the bash files in the table, `~/.zshrc`,
 
 When uninstall changes a profile or Codex's settings, it keeps the original until the change is confirmed, then deletes it. Copied add-on originals whose bytes still match It's record are also deleted after a successful replacement or removal, including leftovers found during uninstall. Failed changes and personal edits remain available for recovery. See [Recovery originals](data.md#recovery-originals) for their names, the limit of 20 unresolved copies per file, and how to restore or remove them.
 
-It also clears what Codex and Claude Code keep of an add-on after it is removed: their copy of it, and Codex's note that you trusted its hooks. The conversations you held are yours and are left as they are, with the messages that begin `[It]` in them.
+It also clears what Codex and Claude Code keep of an add-on after it is removed: their copy of it, and Codex's note that you trusted its hooks. The rules file `it.rules` that setup wrote in Codex's `rules` folder is taken out with Codex's add-on, unless you changed it, in which case it is yours and stays. The conversations you held are yours and are left as they are, with the messages that begin `[It]` in them.
 
 The site's settings can also erase everything It holds and leave It installed, which [What It keeps](data.md#erasing-everything) describes.
