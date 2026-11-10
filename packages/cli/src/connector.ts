@@ -776,7 +776,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const said = turnsSaid.get(key)
     if (said) return now - said.at < TURN_SAID_MS ? said.on : null
     const s = sessions.get(key)
-    return s === undefined || s.busyAt === 0 ? null : turnRunning(key, now)
+    if (s === undefined || s.busyAt === 0) return null
+    // A turn that has run no hook for a long while may be running a command still. Delivery takes
+    // it to be over, so that a click is not kept for a hook that may never come. Nothing is said
+    // of it here: that no hook ran is not the turn saying that it ended
+    if (s.busy && now - s.busyAt >= TURN_QUIET_MS) return null
+    return turnRunning(key, now)
   }
   /**
    * A conversation that was handed something done on a page, watched until the turn that deals
@@ -790,13 +795,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * started a turn in a conversation that was not working, or one that Codex's queue took behind
    * the turn that was running (`behind`), whose own turn comes when that one is done. A turn
    * that is owed is waited for, for `TURN_BEGINS_MS` from when the conversation was last seen
-   * not to be working, before the conversation is let go of.
+   * not to be working, before the conversation is let go of. `finished` says that the turn a
+   * click began was over before its receipt came, so that It is told of an ending though it
+   * was never told of the turn.
    */
   interface Watched {
     names: Set<string>
     told: Set<string>
     owed: boolean
     behind: boolean
+    finished: boolean
     idleAt: number | null
     want: 'running' | 'ended' | 'unknown' | 'wait'
   }
@@ -819,6 +827,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     // The turn it stood behind is over, and its own is waited for
     if (running === false) w.behind = false
+    // Its own turn was over before its receipt came: that is known, and nothing is waited for
+    if (w.finished && running === false) {
+      w.owed = false
+      w.want = 'ended'
+      return
+    }
     // What It was told is taken back at once where it is no longer known
     if (w.owed && !(running === null && w.told.size)) {
       w.idleAt ??= steady()
@@ -834,13 +848,24 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * A click was handed to a conversation: its turn is watched from here. `starts` says that the
    * click begins a turn of its own, as one does that was put into a conversation that was not
    * working, and as one does that Codex's queue holds until the running turn is done.
+   * `finished` says that this turn has begun and ended already, as a short one can before the
+   * add-on hears that its prompt was taken.
    */
-  const handedOver = (click: Offered, key: string, starts: boolean): void => {
+  const handedOver = (click: Offered, key: string, starts: boolean, finished = false): void => {
     if (!click.session || turnsUntaken) return
     handedTo.set(click.id, key)
-    const w = watchedTurns.get(key) ?? { names: new Set<string>(), told: new Set<string>(), owed: false, behind: false, idleAt: null, want: 'wait' as const }
+    const w = watchedTurns.get(key) ?? {
+      names: new Set<string>(),
+      told: new Set<string>(),
+      owed: false,
+      behind: false,
+      finished: false,
+      idleAt: null,
+      want: 'wait' as const,
+    }
     w.names.add(click.session.id)
-    if (starts) {
+    if (finished) w.finished = true
+    else if (starts) {
       w.owed = true
       // Codex hands over what its queue took only once the turn that is running is done. Claude
       // Code takes what is put into a running turn in that turn
@@ -852,6 +877,29 @@ async function connecting(say: (line: string) => void): Promise<void> {
     lookAtTurn(key, w)
     void tellTurns()
   }
+  /**
+   * A conversation carries on under another id, as one does after /clear: what is watched of
+   * its turn is watched under the id it is heard from now. It is still told under the ids its
+   * pages know it by.
+   */
+  const turnMoved = (was: string, key: string): void => {
+    const said = turnsSaid.get(was)
+    if (said && !turnsSaid.has(key)) turnsSaid.set(key, said)
+    turnsSaid.delete(was)
+    for (const [id, to] of handedTo) if (to === was) handedTo.set(id, key)
+    const w = watchedTurns.get(was)
+    if (!w) return
+    watchedTurns.delete(was)
+    const there = watchedTurns.get(key)
+    if (there) {
+      for (const name of w.names) there.names.add(name)
+      for (const name of w.told) there.told.add(name)
+      there.owed ||= w.owed
+      there.behind ||= w.behind
+      there.finished ||= w.finished
+    } else watchedTurns.set(key, w)
+    turnSeen(key)
+  }
   /** A conversation said how its turn stands: looked at the moment it is said, so that a turn that ends and another that begins at once are seen as two. */
   const turnSeen = (key: string): void => {
     const w = watchedTurns.get(key)
@@ -860,6 +908,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     void tellTurns()
   }
   let tellingTurns = false
+  /** Whether a pass has come round since It was last told: what waits for a turn to begin is taken back with a pass, and not the moment its last turn ends, since the next one mostly begins at once. */
+  let turnsSettle = false
   /** Whether something changed while It was being told, so that it is looked at again as soon as that is over and not with the next pass. */
   let tellTurnsAgain = false
   /**
@@ -877,6 +927,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     tellingTurns = true
     tellTurnsAgain = false
+    const settle = turnsSettle
+    turnsSettle = false
     try {
       if (!turnsForgotten) {
         await call('mutation', api.turns.say, {})
@@ -894,12 +946,29 @@ async function connecting(say: (line: string) => void): Promise<void> {
           }
           continue
         }
-        if (w.want === 'wait') continue
-        if (w.want === 'ended' && w.told.size && [...handedTo.values()].includes(key)) continue
-        for (const id of [...w.told]) {
-          await call('mutation', api.turns.say, { for: { harness, id }, ...(w.want === 'ended' ? { running: false } : {}) })
+        if (w.want === 'wait') {
+          // The turn It was told of is over, and the one that is owed has not begun by the next
+          // pass: nothing is known to be running, so what It was told is taken back, and the
+          // conversation is watched on
+          if (!settle) continue
+          for (const id of [...w.told]) {
+            await call('mutation', api.turns.say, { for: { harness, id } })
+            w.told.delete(id)
+          }
+          continue
+        }
+        // An ending that It was never told the turn of is told all the same, under every id its pages know it by
+        const ended = w.want === 'ended' && w.finished
+        if (w.want === 'ended' && (w.told.size || ended) && [...handedTo.values()].includes(key)) continue
+        for (const id of ended ? [...w.names] : [...w.told]) {
+          await call('mutation', api.turns.say, {
+            for: { harness, id },
+            ...(w.want === 'ended' ? { running: false } : {}),
+            ...(ended && !w.told.has(id) ? { untold: true } : {}),
+          })
           w.told.delete(id)
         }
+        if (ended) w.finished = false
         // Something may have been handed to it while It was being told
         lookAtTurn(key, w)
         if (watchedTurns.get(key) === w && (w.want === 'ended' || w.want === 'unknown') && !w.told.size) watchedTurns.delete(key)
@@ -3397,6 +3466,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // by the new id and would not be given again until its hold ran out; and what a mark
         // put into it stands for
         for (const h of held.values()) if (h.key === was) h.key = key
+        turnMoved(was, key)
         if (unmarked.delete(was)) unmarked.add(key)
         while (aliases.size > 500) aliases.delete(aliases.keys().next().value!)
         changed = true
@@ -3659,7 +3729,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // How its conversation's turn stands at this moment, where the add-on says so with its receipt
         if (typeof body.turn === 'boolean') turnsSaid.set(key, { on: body.turn, at: Date.now() })
         // One that joined a running turn begins none of its own. Any other does, as far as is known
-        handedOver(click, key, body.woke !== false)
+        handedOver(click, key, body.woke !== false, body.turnOver === true)
       }
       void confirmAll()
       return [200, { ok: true, acked: ids.length }]
@@ -4231,6 +4301,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const tick = setInterval(() => {
     void finishRuns()
     void route()
+    turnsSettle = true
     void tellTurns()
     watch(true)
   }, 1000)

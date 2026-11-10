@@ -1198,6 +1198,19 @@ describe('what the add-on says of whether its conversation is at work', () => {
     await host.settle()
     await host.tick()
     expect([saidWithReceipts(), saidWithClicks().at(-1)]).toEqual([[false], false])
+    // And the receipt says that the turn is over, so that the connector does not wait for it to begin
+    expect(asked.filter((a) => a.path === '/ack').at(-1)?.body).toMatchObject({ woke: true, turn: false, turnOver: true })
+  })
+
+  test('a prompt that is taken while its turn is running, or before it begins, is not said to be over', async () => {
+    const host = await start()
+    offered = [{ id: 'click-1', text: 'one' }]
+    await host.tick()
+    await host.fire('turn.start')
+    host.submits[0]!.settle()
+    await host.settle()
+    expect(asked.filter((a) => a.path === '/ack').at(-1)?.body).toMatchObject({ woke: true, turn: true })
+    expect(asked.filter((a) => a.path === '/ack').at(-1)?.body).not.toHaveProperty('turnOver')
   })
 
   test('a prompt that was refused starts nothing, and the conversation is not said to be at work', async () => {

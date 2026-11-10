@@ -224,7 +224,8 @@ const briefOf = (clicks) => clicks.map((c) => (typeof c.brief === 'string' && c.
  * click started a turn (true) or joined one that was running (false); it is left out when that
  * is not known, as when an earlier report is repeated.
  */
-const report = ($, ids, woke) => void ask($, '/ack', { ids, ...(woke === undefined ? {} : { woke }), turn: working() })
+const report = ($, ids, woke, turnOver) =>
+  void ask($, '/ack', { ids, ...(woke === undefined ? {} : { woke }), turn: working(), ...(turnOver ? { turnOver: true } : {}) })
 /**
  * Whether the conversation is at work, as the connector is told with everything it is asked
  * and every receipt: a turn of its own is running, or a click was taken as a prompt a moment
@@ -297,6 +298,9 @@ function handOver($) {
         $,
         clicks.map((c) => c.id),
         true,
+        // A short turn can begin and end before it is known here that its prompt was taken: said
+        // as that, so that it is not waited for as one that is still to begin
+        began === generation && before !== turns && !running,
       )
     },
     (err) => refused(err),

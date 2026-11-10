@@ -5781,6 +5781,96 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     expect(told().length).toBe(3)
   })
 
+  test('a click that Codex’s queue took behind a turn, whose own turn has not begun a pass after that turn ended, is no longer said to be at work, and is said to be again once it begins', async () => {
+    standIn()
+    await start('socket', APPS)
+    const codex = { harness: 'codex', id: 'thread-1' }
+    const busy = (on: boolean) => local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: on } })
+    await busy(true)
+    await busy(false)
+    offered(click(1, codex))
+    await until(() => stand.codex.length === 1)
+    await busy(true)
+    stand.codex[0]!.end()
+    await until(() => told().length === 2)
+    // The turn it stood behind ends, and Codex does not begin the next: what It was told is taken back, and nothing says the turn of the click ended
+    await busy(false)
+    await pass(2)
+    expect(told().length).toBe(3)
+    expect(told()[2]).toEqual({ for: codex })
+    // Its own turn begins after all, and is told from its beginning to its end
+    await busy(true)
+    await until(() => told().length === 4)
+    await busy(false)
+    await until(() => told().length === 5)
+    expect(told().slice(3)).toEqual([
+      { for: codex, running: true },
+      { for: codex, running: false },
+    ])
+  })
+
+  test('a Codex turn that runs no hook for a long while is not said to have ended: what It was told of it is taken back as no longer known', async () => {
+    await start('socket', APPS)
+    const codex = { harness: 'codex', id: 'thread-1' }
+    const hook = (pathname: string, busy: boolean) =>
+      local<{ clicks?: { id: string }[] }>(pathname, { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy } })
+    await hook('/session', true)
+    offered(click(1, codex))
+    await until(async () => ((await hook('/clicks?harness=codex&session=thread-1', true))?.clicks ?? []).length === 1)
+    expect(await local('/ack', { method: 'POST', body: { ids: ['click-1'], woke: false } })).toEqual({ ok: true, acked: 1 })
+    await until(() => told().length === 2)
+    // One command of the turn runs for longer than a turn is taken to be running for with no hook
+    const began = Date.now()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(began + 31 * 60_000)
+      await until(() => told().length === 3)
+      expect(told()[2]).toEqual({ for: codex })
+      expect(told().some((said) => said.running === false)).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 30_000)
+
+  test('a turn that began and ended before its receipt came is told to It as ended, once the hand-over is confirmed, though It was never told that it ran', async () => {
+    standIn()
+    await start('socket', APPS)
+    await asks(false)
+    await handed(1, { woke: true, turn: false, turnOver: true }, false)
+    await until(() => told().length === 2)
+    expect(told()).toEqual([{}, { ...ENDED, untold: true }])
+    const order = stand.calls.map((c) => (c.name === 'delivery:handedOff' ? 'handed' : c.name === 'turns:say' && c.args.running === false ? 'ended' : ''))
+    expect(order.indexOf('handed')).toBeGreaterThan(-1)
+    expect(order.indexOf('handed')).toBeLessThan(order.indexOf('ended'))
+    // And the conversation is watched no more
+    for (const turn of [true, false]) {
+      await asks(turn)
+      await pass()
+    }
+    expect(told().length).toBe(2)
+  })
+
+  test('a conversation that carries on under another id after /clear is watched under the new one, and its turn’s end is told under the id its page knows', async () => {
+    standIn()
+    await start('socket', APPS)
+    await asks(false)
+    await handed(1, { woke: true, turn: true }, false)
+    await until(() => told().length === 2)
+    expect(told()[1]).toEqual(RUNNING)
+    // /clear: the add-on says the id it carries on under, and says everything after that under it
+    expect(await local('/session', { method: 'POST', body: { harness: 'claude-code', session: 'sess-after-clear', was: CLAUDE.id } })).toMatchObject({
+      ok: true,
+    })
+    for (let n = 0; n < 3; n++) {
+      await asks(true, 'sess-after-clear')
+      await pass()
+    }
+    expect(told().length).toBe(2)
+    await asks(false, 'sess-after-clear')
+    await until(() => told().length === 3)
+    expect(told()[2]).toEqual(ENDED)
+  })
+
   test('an It from before it took any of this is told nothing more once it has said so', async () => {
     standIn()
     stand.answer = (name) => (name === 'turns:say' ? Promise.reject(new Error('Could not find public function for turns:say')) : undefined)
