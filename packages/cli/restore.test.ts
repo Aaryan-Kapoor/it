@@ -711,31 +711,55 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
     // fails too, the person is told where each folder is. `mv` is a stand-in that refuses to move
     // the folders it is told to, and is the real one otherwise
     const real_mv = spawnSync('sh', ['-c', 'command -v mv'], { encoding: 'utf8' }).stdout.trim()
-    const refusingMv = (name: string, refused: string) => {
+    /** A stand-in for `mv` that does what `refused` says, a shell `case` on what it is asked to move, and is the real one otherwise. */
+    const standInMv = (name: string, refused: string) => {
       const dir = path.join(scratch, name)
       mkdirSync(dir, { recursive: true })
-      writeFileSync(path.join(dir, 'mv'), `#!/bin/sh\ncase "$1" in ${refused}) echo "mv: cannot move $1" >&2; exit 1 ;; esac\nexec '${real_mv}' "$@"\n`, {
-        mode: 0o755,
-      })
+      writeFileSync(path.join(dir, 'mv'), `#!/bin/sh\ncase "$1" in\n${refused}\nesac\nexec '${real_mv}' "$@"\n`, { mode: 0o755 })
       return dir
     }
-    const keptStays = refusingMv('mv-kept', '*-after-upgrade')
-    const bothStay = refusingMv('mv-both', '*-after-upgrade | *-replaced')
+    const refuse = (pattern: string) => `${pattern}) echo "mv: cannot move $1" >&2; exit 1 ;;`
+    // The kept folder fails to move, as a folder with a file held open in it does
+    const keptStays = standInMv('mv-kept', refuse('*-after-upgrade'))
+    // And It's folder then fails to move back too
+    const bothStay = standInMv('mv-both', refuse('*-after-upgrade | *-replaced'))
+    // The kept folder is moved only in part, as Windows does a folder that has a file held open in it: something is left where It's folder was
+    const partly = standInMv('mv-partly', '*-after-upgrade) mkdir "$2"; echo "mv: moved only a part of $1" >&2; exit 1 ;;')
     for (const shell of SHELLS) {
       const home = cloned((home) => cpSync(folder, `${home}-after-upgrade`, { recursive: true }))
       const asItIs = tree(home)
+      const kept = tree(`${home}-after-upgrade`)
+      // It's folder itself cannot be moved aside: nothing is changed
+      const held = pasted(documented('-replaced'), home, undefined, 0, scratch, shell, standInMv(`mv-live-${SHELLS.indexOf(shell)}`, refuse(`'${home}'`)))
+      expect([shell, held.code, held.out, held.asked]).toEqual([shell, 1, '', 'service uninstall\n'])
+      expect(held.err).toBe(
+        `mv: cannot move ${home}\nIt's folder could not be moved aside, so nothing in it was changed. Close whatever has a file open in ${home}, and run these lines again.\n${SETUP}`,
+      )
+      expect([tree(home), existsSync(`${home}-replaced`), tree(`${home}-after-upgrade`)]).toEqual([asItIs, false, kept])
+      // The kept folder cannot be moved into place: It's folder is moved back
       const back = pasted(documented('-replaced'), home, undefined, 0, scratch, shell, keptStays)
       expect([shell, back.code, back.out, back.asked]).toEqual([shell, 1, '', 'service uninstall\n'])
       expect(back.err).toBe(
         `mv: cannot move ${home}-after-upgrade\nThe kept folder could not be moved into place, so It's folder was moved back and nothing in it was changed. Close whatever has a file open in ${home}-after-upgrade, and run these lines again.\n${SETUP}`,
       )
-      expect([tree(home), existsSync(`${home}-replaced`), existsSync(`${home}-after-upgrade`)]).toEqual([asItIs, false, true])
+      expect([tree(home), existsSync(`${home}-replaced`), tree(`${home}-after-upgrade`)]).toEqual([asItIs, false, kept])
+      // The kept folder is moved only in part: It's folder is not moved back into what was left, and the person is told where each is
+      const part = pasted(documented('-replaced'), home, undefined, 0, scratch, shell, partly)
+      expect([shell, part.code, part.out]).toEqual([shell, 1, ''])
+      expect(part.err).toBe(
+        `mv: moved only a part of ${home}-after-upgrade\nThe kept folder could not be moved into place, and something is now at ${home}, so It's folder was left at ${home}-replaced and the kept folder at ${home}-after-upgrade. Look at what is at ${home} before you move anything.\n${SETUP}`,
+      )
+      expect([readdirSync(home), tree(`${home}-replaced`), tree(`${home}-after-upgrade`)]).toEqual([[], asItIs, kept])
+      // As the person does, having looked
+      rmSync(home, { recursive: true })
+      renameSync(`${home}-replaced`, home)
+      // Neither can be moved: the person is told where each folder is, and how to move It's folder back
       const stuck = pasted(documented('-replaced'), home, undefined, 0, scratch, shell, bothStay)
       expect([shell, stuck.code, stuck.out]).toEqual([shell, 1, ''])
       expect(stuck.err).toBe(
-        `mv: cannot move ${home}-after-upgrade\nmv: cannot move ${home}-replaced\nThe kept folder could not be moved into place, and It's folder could not be moved back either. It's folder is now ${home}-replaced, and the kept folder is still ${home}-after-upgrade. Move ${home}-replaced back to ${home} yourself before anything else.\n${SETUP}`,
+        `mv: cannot move ${home}-after-upgrade\nmv: cannot move ${home}-replaced\nThe kept folder could not be moved into place, and It's folder could not be moved back either. It's folder is now ${home}-replaced, and the kept folder is still ${home}-after-upgrade. Once nothing has a file open in it, move It's folder back with: mv "${home}-replaced" "${home}"\n${SETUP}`,
       )
-      expect([existsSync(home), tree(`${home}-replaced`), existsSync(`${home}-after-upgrade`)]).toEqual([false, asItIs, true])
+      expect([existsSync(home), tree(`${home}-replaced`), tree(`${home}-after-upgrade`)]).toEqual([false, asItIs, kept])
     }
   }, 600_000)
 
