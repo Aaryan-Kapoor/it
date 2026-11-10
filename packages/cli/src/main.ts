@@ -473,7 +473,8 @@ async function onDisplay<T extends object>(
     const said = target.displayId !== undefined ? `No display has the id ${named(target.displayId)}.` : `No display is called ${named(target.display ?? '')}.`
     // "all" is the name of a display like any other: every display is asked for in its own way
     const every = target.display?.trim().toLowerCase() === 'all' ? ' To ask every display, use --everywhere in place of --on.' : ''
-    throw new Problem(said, 'not_found', `${all ? `Displays: ${all}` : noDisplay()}${every}`)
+    // The list of displays ends a sentence of its own where another follows it
+    throw new Problem(said, 'not_found', `${all ? `Displays: ${all}${every ? '.' : ''}` : noDisplay()}${every}`)
   }
 }
 /**

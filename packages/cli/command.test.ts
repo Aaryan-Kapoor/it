@@ -1585,7 +1585,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(b.asked.find((x) => x.path === 'notifications:send')!.args).toEqual({ text: 'hi', everywhere: true })
       const named = await run(m, ['open', 'board', '--on', 'all'], b.env)
       expect([named.code, error(named).code]).toEqual([1, 'not_found'])
-      expect(error(named).hint).toContain('use --everywhere in place of --on')
+      expect(error(named).hint).toBe('Displays: "Desk". To ask every display, use --everywhere in place of --on.')
       for (const words of [
         ['open', 'board', '--everywhere', '--on', 'Desk'],
         ['notify', 'hi', '--everywhere', '--on-id', 'd'],
