@@ -65,6 +65,8 @@ const siteTouched = () => {
 for (const kind of ['pointerdown', 'pointerup', 'mouseup', 'touchend', 'click', 'keydown', 'keyup']) window.addEventListener(kind, siteTouched, true)
 /** How long a page has to load and say hello. */
 const READY_MS = 20_000
+/** How soon after the browser refuses to show another site in a page's frame the frame loads what it shows instead: the browser's error page. */
+const REFUSED_LOAD_MS = 2000
 /**
  * Where pages are shown from: the port after the site's own, on the machine the site itself was
  * reached at and by the same name, so that a page is reached wherever the site is.
@@ -225,20 +227,23 @@ export function Mount({
       storeTokens -= 1
       return 0
     }
+    /** Shows the page again, but not in a loop: one shown again so soon after the last time is shown again when that while has passed. */
+    const showAgain = () => {
+      const remount = () => {
+        lastRemount.current = Date.now()
+        again()
+      }
+      const wait = Math.min(lastRemount.current + REMOUNT_EVERY_MS - Date.now(), REMOUNT_EVERY_MS)
+      if (wait < 0) remount()
+      else later ??= setTimeout(remount, wait)
+    }
     const fromPage = async (from: MessagePort, message: PageToSite) => {
       if (!message || typeof message !== 'object') return
       if (message.type === 'it:lapsed') {
-        // The page's showing is over. Show it again, but not in a loop: one that is over so
-        // soon after the last was begun is shown again when that while has passed. It is not
-        // let go by, since a document says that its showing is over only once, and the page
-        // would stay as it is with nothing under it to load from.
-        const remount = () => {
-          lastRemount.current = Date.now()
-          again()
-        }
-        const wait = Math.min(lastRemount.current + REMOUNT_EVERY_MS - Date.now(), REMOUNT_EVERY_MS)
-        if (wait < 0) remount()
-        else later ??= setTimeout(remount, wait)
+        // The page's showing is over. Show it again. It is not let go by, since a document says
+        // that its showing is over only once, and the page would stay as it is with nothing
+        // under it to load from.
+        showAgain()
         return
       }
       if (message.type === 'it:fault') {
@@ -404,12 +409,33 @@ export function Mount({
       }
     }
     window.addEventListener('message', onMessage)
+    // The page's frame taken to another site by a way the script in the page cannot see, such as
+    // a link inside a closed shadow root that the page's own markup declares. The browser refuses
+    // it, since the frame may show only the pages' port, and in Chromium leaves its error page in
+    // the frame, which loads in place of the page. The browser tells the site which site it
+    // refused and not the address, so what was asked for cannot be opened from here. The page is
+    // shown again instead, rather than left as an error page.
+    let refusedAt = Number.NEGATIVE_INFINITY
+    const refused = (e: Event) => {
+      if ((e as SecurityPolicyViolationEvent).effectiveDirective === 'frame-src') refusedAt = Date.now()
+    }
+    const framed = frame.current
+    const loaded = () => {
+      // A refusal goes with the load that comes of it, and with no later one
+      const was = refusedAt
+      refusedAt = Number.NEGATIVE_INFINITY
+      if (ready && Date.now() - was < REFUSED_LOAD_MS) showAgain()
+    }
+    document.addEventListener('securitypolicyviolation', refused)
+    framed?.addEventListener('load', loaded)
     return () => {
       live = false
       clearTimeout(timer)
       clearTimeout(later)
       clearInterval(looking)
       window.removeEventListener('message', onMessage)
+      document.removeEventListener('securitypolicyviolation', refused)
+      framed?.removeEventListener('load', loaded)
       port.current?.close()
       port.current = null
     }

@@ -310,6 +310,36 @@ describe('where a page is shown', () => {
     expect(asked('mounts:create').length).toBe(3)
   })
 
+  test('a page whose frame was taken to another site, which the browser refused and left its error page in place of, is shown again', async () => {
+    const page = await show()
+    /** The browser saying that the site's policy refused something, as it says it to the site's document. */
+    const refuses = (directive: string) =>
+      act(async () => {
+        document.dispatchEvent(Object.assign(new Event('securitypolicyviolation'), { effectiveDirective: directive }))
+        await tick()
+      })
+    const loads = () =>
+      act(async () => {
+        page.frame.dispatchEvent(new Event('load'))
+        await tick()
+      })
+    // Before the page's own script has said hello, the frame is still loading the page
+    await refuses('frame-src')
+    await loads()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    // Another of the page's own documents loading, and something else of the site's refused, are neither
+    await loads()
+    await refuses('img-src')
+    await loads()
+    expect(asked('mounts:create').length).toBe(1)
+    // The frame refused another site, and loads the error page in its place: the page is shown again
+    await refuses('frame-src')
+    await loads()
+    await act(() => tick(50))
+    expect(asked('mounts:create').length).toBe(2)
+    expect(host.querySelector('iframe')?.getAttribute('src')).toBe(`${PAGES}/open/ticket-for-mount-2`)
+  })
+
   test('a frame whose page never says hello is given up on, and the site tries again by itself with a new mount', async () => {
     vi.useFakeTimers()
     const { Mount } = await import('./mount')
