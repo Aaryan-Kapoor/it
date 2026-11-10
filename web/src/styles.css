@@ -1271,7 +1271,8 @@ main:has(.modal-overlay) {
    to that baseline: half the bar and half the capitals. Its foot is its baseline. A face that
    does not say how tall its capitals are is given its ascent for them, which would put the words
    well below the middle, so the half is never taken as more than 0.38em: no face the bar is set
-   in has capitals taller than three quarters of its size. */
+   in has capitals taller than three quarters of its size. A browser that has no cap unit is
+   given 0.35em, about half the capitals of each face in the bar's list. */
 .page-nav-titlewrap {
   display: flex;
   align-items: baseline;
@@ -1284,7 +1285,11 @@ main:has(.modal-overlay) {
   content: "";
   flex: none;
   height: calc(var(--nav-h) / 2 + 0.35em);
-  height: calc(var(--nav-h) / 2 + min(0.5cap, 0.38em));
+}
+@supports (height: 1cap) {
+  .page-nav-titlewrap::before {
+    height: calc(var(--nav-h) / 2 + min(0.5cap, 0.38em));
+  }
 }
 
 .page-nav-title {
