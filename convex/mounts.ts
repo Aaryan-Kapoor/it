@@ -40,6 +40,11 @@ export const create = mutation({
     const artifact = await ownArtifact(ctx, user._id, artifactId)
     if (artifact.currentVersion === undefined) fail('not_found', 'That page has nothing published yet.')
     const display = shownOn ?? (await displayByKey(ctx, c, displayKey))
+    // A display locked to a page shows that page and no other, whatever site asks
+    if (display.lockedTo && display.lockedTo.artifactId !== artifactId) {
+      log('mount.refused', { userId: user._id, displayId: display._id, reason: 'locked' }, 'warn')
+      fail('forbidden', 'This display is locked to another page.', { locked: true })
+    }
     // An id nobody has used before, for every showing, always
     const mountId = hex(crypto.getRandomValues(new Uint8Array(16)))
     await ctx.db.insert('mounts', {
@@ -92,6 +97,11 @@ export const _take = internalMutation({
     // sign-out gets nothing after it
     if (m.epoch !== display.epoch) {
       log('ticket.not_given', { userId: user._id, displayId: display._id, reason: 'signed_out_since' }, 'warn')
+      fail('conflict', 'No ticket is available for that.')
+    }
+    // Locked since this mount was made, to another page: what was asked for before the lock gets nothing after it
+    if (display.lockedTo && display.lockedTo.artifactId !== m.artifactId) {
+      log('ticket.not_given', { userId: user._id, displayId: display._id, reason: 'locked' }, 'warn')
       fail('conflict', 'No ticket is available for that.')
     }
     const artifact = await ctx.db.get(m.artifactId)
