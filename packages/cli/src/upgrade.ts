@@ -7,7 +7,9 @@
 // names instead.
 //
 // Learning of a newer version sends nothing about this installation: one plain request for
-// `latest.json`, with no id and nothing of what It holds. The service makes it every half hour until
+// `latest.json`, with no id and nothing of what It holds. An upgrade then fetches every file
+// from the release of the version `latest.json` named, by its tag, so that it installs exactly
+// that version even where a newer one is published while it runs. The service makes it every half hour until
 // that is turned off (`it updates off`).
 //
 // An upgrade trusts what an install trusts and no more: the place it downloads from, over
@@ -64,16 +66,21 @@ export function keepBase(): void {
   } catch {}
 }
 
-/** One file of the newest release, whole and in memory, or the reason it could not be had. */
-async function file(name: string, most: number, signal?: AbortSignal, progress?: (got: number, of: number | undefined) => void): Promise<Buffer> {
+/**
+ * One file of a release, whole and in memory, or the reason it could not be had: of the release
+ * whose tag is `tag`, or of the newest where no tag is given.
+ */
+async function file(name: string, most: number, signal?: AbortSignal, progress?: (got: number, of: number | undefined) => void, tag?: string): Promise<Buffer> {
   const { base, plain } = releases()
-  const url = `${base}/latest/download/${name}`
+  const url = tag ? `${base}/download/${tag}/${name}` : `${base}/latest/download/${name}`
+  // Where a release is named, it is the version this upgrade is for, which may no longer be the newest
+  const which = tag ? `It ${tag.replace(/^v/, '')}` : 'The newest release of It'
   const unreachable = () =>
     new Problem(
-      `The newest release of It could not be fetched (${name}).`,
+      `${which} could not be fetched (${name}).`,
       'offline',
       base !== INSTALL.releases
-        ? `It is fetched from ${base}, where this It was installed from. Check that a release is there, then try again.`
+        ? `It is fetched from ${base}, where this It was installed from. Check that ${tag ? `the release ${tag}` : 'a release'} is there, then try again.`
         : 'Check that this machine is online, then try again.',
     )
   const tooLarge = () => new Problem(`What was fetched as ${name} is larger than any release of It holds, so none of it was kept.`, 'checksum')
@@ -324,20 +331,24 @@ export async function fetchNewer(
     fetching.catch((err) => {
       if (!limit.aborted || opts.signal?.aborted) throw err
       throw new Problem(
-        `The newest release of It had not been fetched after ${Math.round(allowed / 60_000)} minutes, so it was given up and nothing was changed.`,
+        `It ${to} had not been fetched after ${Math.round(allowed / 60_000)} minutes, so it was given up and nothing was changed.`,
         'offline',
         'Try again. On a connection too slow for that, run the line It was installed with again: it waits for as long as the download takes.',
       )
     })
+  // Every file comes from the release of the version that was announced, by its tag, and not
+  // from whichever release is the newest by the time each is asked for: a release published in
+  // the middle would otherwise give this one's checksums or program for another version's.
   // The checksums first: what is fetched after them is held to them
+  const tag = `v${to}`
   const sums = new Map<string, string>()
-  for (const line of (await fetchedInTime(file('SHA256SUMS', TEXT_MOST, signal))).toString('utf8').split(/\r?\n/)) {
+  for (const line of (await fetchedInTime(file('SHA256SUMS', TEXT_MOST, signal, undefined, tag))).toString('utf8').split(/\r?\n/)) {
     const m = /^([0-9a-f]{64}) [ *](.+)$/.exec(line.trim())
     if (m) sums.set(m[2]!, m[1]!)
   }
   const checked = async (of: string, most: number, progress?: (got: number, total: number | undefined) => void): Promise<Buffer> => {
     const want = sums.get(of)
-    const bytes = want ? await fetchedInTime(file(of, most, signal, progress)) : null
+    const bytes = want ? await fetchedInTime(file(of, most, signal, progress, tag)) : null
     if (!bytes || createHash('sha256').update(bytes).digest('hex') !== want)
       throw new Problem(
         `What was fetched as ${of} is not the file its release says it is, so nothing was changed.`,
