@@ -63,6 +63,8 @@ export const TAKES = {
    * that does not name this as it told them before, as why the conversation could not be woken.
    */
   heldBack: 'delivery.holdBack',
+  /** Locking a display to a page, from a paired browser: the site offers it only where it is named. */
+  displayLock: 'displays.lock',
 } as const
 
 /**
