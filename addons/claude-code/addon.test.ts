@@ -353,6 +353,35 @@ describe('the Claude Code add-on', () => {
     expect(acks()).toEqual([])
   })
 
+  test('a submission refused after the connector stopped offering its click, its hold having run out, does not put that click back for a tool call to hand over', async () => {
+    const host = await start()
+    offered = [{ id: 'click-1', text: 'A click' }]
+    await host.tick()
+    await host.settle()
+    expect(host.submits.map((sub) => sub.text)).toEqual(['A click'])
+    // The connector's hold on it runs out while the prompt is under way, and it offers it no more
+    offered = []
+    await host.tick()
+    await host.settle()
+    // The prompt is refused now: a tool call before the next check hands over nothing
+    host.submits[0]!.refuse()
+    await host.settle()
+    const result = (await host.fire('tool.call', {}, {})) as { context?: unknown }
+    expect(result.context).toBeUndefined()
+    expect(acks()).toEqual([])
+  })
+
+  test('a refused submission whose click is still offered is put back and handed over as before', async () => {
+    const host = await start()
+    offered = [{ id: 'click-1', text: 'A click' }]
+    await host.tick()
+    await host.settle()
+    host.submits[0]!.refuse()
+    await host.settle()
+    const result = (await host.fire('tool.call', {}, {})) as { context?: string[] }
+    expect(result.context).toEqual(['A click'])
+  })
+
   test('a clock that could not be set going as the session started, for whatever reason, is said, and is set going with the next turn', async () => {
     vi.resetModules()
     const { register } = await import('./it-bridge/hooks/register.js')

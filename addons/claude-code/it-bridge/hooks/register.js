@@ -40,6 +40,10 @@ let submitAgainAt = 0
 // then, and is refused afterwards, does not put its clicks back: the connector may have given
 // them elsewhere by then.
 let letGo = 0
+// The clicks the connector offered in its last answer, which are the ones still this add-on's to
+// give. A submission refused after the connector stopped offering one of its clicks, its hold
+// on it having run out, puts that one back no more than `letGo` lets it.
+let offeredNow = new Set()
 // What Claude is told of It as a part of its own instructions, which this add-on adds: when a
 // page is the answer. The skill says how, and Claude reads it only once it has decided to use
 // It. The same words as every add-on that says them, kept in It's protocol as `WHEN`.
@@ -245,7 +249,7 @@ function handOver($) {
     if (began !== generation || held !== letGo) return
     refusals += 1
     refusedAt = Date.now()
-    pending.unshift(...clicks)
+    pending.unshift(...clicks.filter((c) => offeredNow.has(c.id)))
   }
   // As the person's own message, in a few words. Claude Code shows a prompt submitted that way
   // as it is; one submitted any other way it wraps in several lines of its own, each time.
@@ -394,6 +398,7 @@ async function checkOnce($) {
   // What the connector no longer offers is no longer this add-on's to give: its lease may have
   // run out and something else may have delivered it
   const offered = new Set(got.clicks.map((c) => c.id))
+  offeredNow = offered
   for (let i = pending.length - 1; i >= 0; i--) if (!offered.has(pending[i].id)) pending.splice(i, 1)
   const again = got.clicks.filter((c) => given.has(c.id))
   // Offered something Claude already has: the earlier report of it was lost, so it is sent again
