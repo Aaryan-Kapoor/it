@@ -46,6 +46,7 @@ export const VALUED = new Set([
   'param',
   'save',
   'number',
+  'after',
 ])
 export interface Args {
   _: string[]
@@ -68,7 +69,7 @@ export const OPTIONS: Record<string, readonly string[]> = {
   notify: ['id', 'on', 'on-id', 'sticky', 'button'],
   displays: [],
   wait: ['id', 'follow', 'timeout'],
-  actions: ['id', 'all'],
+  actions: ['id', 'all', 'follow', 'after'],
   action: ['save', 'number'],
   ack: ['failed'],
   setup: ['all', 'only', 'none', 'name', 'no-service', 'yes', 'refresh'],
