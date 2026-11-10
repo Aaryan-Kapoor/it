@@ -41,11 +41,7 @@ A page is shown in a sandbox with no cookies and no storage that lasts, cannot f
 
 ## Keep the page in its state
 
-- **What a page shows that can change comes from state:** lists, cards, options, labels, numbers and statuses. Change them with `it set` or `it patch`, never `it update`. Publish again only when the page's code or layout changes, since a new version reloads it on every screen and loses what the user typed and had not yet saved or sent.
-- **One change should be one small patch.** Keep a list as an object keyed by id, with an `order` array of the ids, since a patch replaces an array whole.
-- **Every control is stateful.** Each field, choice, toggle, slider, tab, filter, sort order, selection, view or step keeps its value with `It.store.set` under its own key as it changes, so that `it state` shows you what the user sees and has chosen before they send anything.
-- **You can set any control** under `controls.<name>` in your state, and whichever of you changed it last wins. `it help page` has the pattern.
-- **What the user decides still comes to you as an action,** and your answer goes back into the state.
+Everything a page shows that can change, and every control on it, lives in its state. Then you change what it shows with `it set` or `it patch`, and `it state` tells you what the user sees and has chosen. Publish again only when the page's files change: a new version reloads it on every screen and loses what was typed and not yet saved. Each control keeps its value with `It.store`, where you can set it too. What the user decides still comes to you as an action. `it help page` has the pattern.
 
 ## Whether what they do arrives by itself
 
