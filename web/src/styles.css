@@ -3266,6 +3266,10 @@ form.row-main {
 .pair-other select {
   width: 100%;
 }
+/* Who else can open the pairing screen, below the code, apart from it */
+.pairing .pair-phone {
+  margin: 20px 0 0;
+}
 
 /* ══ Narrow screens ══ */
 
