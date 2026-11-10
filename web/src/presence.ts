@@ -1,7 +1,7 @@
 // What a tab of a display says of itself, so that It knows which display the person is using:
-// whether the site is visible in this tab, and whether the person used it a moment ago. An
-// agent's page goes to that display when the agent names none. Nothing of what the person did
-// is said: only that they did something, at most once in ten seconds.
+// whether the site is visible in this tab, whether the person used it a moment ago, and the page
+// it shows. An agent's page goes to that display when the agent names none. Nothing of what the
+// person did is said: only that they did something, at most once in ten seconds.
 
 /** How often a tab whose site is visible says so. */
 export const VISIBLE_EVERY_MS = 60_000
@@ -13,11 +13,31 @@ export const USED_EVERY_MS = 10_000
 /** How often the site looks whether the browser says the person has just acted, which covers what they do inside a page's frame. */
 const LOOK_EVERY_MS = 2000
 
+/** Where the page a tab shows has got to: none shown, loading, shown, or failed to show. */
+export type PagePhase = 'none' | 'loading' | 'shown' | 'failed'
+
+/**
+ * The page this tab shows, as its showing (the mount it made) and how far it has got. Said by the
+ * view that shows one page whole, and by nothing else: a card's picture on the grid is no page
+ * shown. A page in a frame has no way to set it.
+ */
+let page: { phase: PagePhase; mountId?: string } = { phase: 'none' }
+const pageChanged = new Set<() => void>()
+export function reportPage(phase: PagePhase, mountId?: string): void {
+  const next = phase === 'none' || mountId === undefined ? { phase: 'none' as const } : { phase, mountId }
+  if (next.phase === page.phase && next.mountId === page.mountId) return
+  page = next
+  for (const changed of pageChanged) changed()
+}
+
 export interface Report {
   /** This tab's own id, made afresh each time the site is loaded. */
   tab: string
   /** Counted up by one with each report of this tab, so that one that arrives late is not taken for the newest. */
   sequence: number
+  phase: PagePhase
+  /** The showing of the page this tab shows, where it shows one. */
+  mountId?: string
   visible: boolean
   /** That the person clicked, tapped, typed or scrolled here within the last ten seconds. */
   used?: true
@@ -28,7 +48,8 @@ export const tabId = (): string => Array.from(crypto.getRandomValues(new Uint8Ar
 
 /**
  * Says what `send` is to send, whenever there is something to say: every minute while the site is
- * visible, at once when it is hidden or shown again, once more when the tab is closed, and when
+ * visible, at once when it is hidden or shown again or the page it shows changes, once more when
+ * the tab is closed, and when
  * the person uses it, at once where that was last said ten seconds ago or more and otherwise once
  * those ten seconds are up. Returns what stops it.
  *
@@ -68,7 +89,8 @@ export function startReports(
     if (!takes()) return null
     const shown = !closing && visible()
     const used = shown && usedAt > saidUseOf && now() - usedAt < USED_EVERY_MS
-    return { tab, sequence: ++sequence, visible: shown, ...(used ? { used: true as const } : {}) }
+    const what = closing ? { phase: 'none' as const } : page
+    return { tab, sequence: ++sequence, ...what, visible: shown, ...(used ? { used: true as const } : {}) }
   }
   const tell = () => {
     if (stopped) return
@@ -129,6 +151,7 @@ export function startReports(
   win.addEventListener('pagehide', closing)
   win.addEventListener('pageshow', tell)
   win.addEventListener('online', tell)
+  pageChanged.add(tell)
   const beat = win.setInterval(() => visible() && tell(), VISIBLE_EVERY_MS)
   const looking = win.setInterval(look, LOOK_EVERY_MS)
   tell()
@@ -141,6 +164,7 @@ export function startReports(
     win.removeEventListener('pagehide', closing)
     win.removeEventListener('pageshow', tell)
     win.removeEventListener('online', tell)
+    pageChanged.delete(tell)
     win.clearInterval(beat)
     win.clearInterval(looking)
     win.clearTimeout(later)

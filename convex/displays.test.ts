@@ -228,6 +228,7 @@ describe('what each tab of a display says of itself', () => {
     epoch: 0,
     tab,
     sequence,
+    phase: 'none' as const,
     visible,
     expectedSession: b.session,
     ...extra,
@@ -329,6 +330,44 @@ describe('what each tab of a display says of itself', () => {
     vi.advanceTimersByTime(4000)
     await laptop.as.mutation(api.displays.report, said(laptop, TAB, 4, true, { used: true }))
     expect((await row(laptop.id)).usedAt).toBe(Date.now())
+  })
+
+  test('names only a showing this display made, since its last sign-out, and a page shown only once its ticket was given', async () => {
+    const t = convexTest(schema, modules)
+    const { browser, page, row } = await household(t)
+    const laptop = await browser('owner', key(1))
+    const tv = await browser('screen', key(2))
+    const plan = await page('plan')
+    const mount = (on: { as: typeof laptop.as; key: string }) =>
+      on.as.mutation(api.mounts.create, { artifactId: plan, displayKey: on.key }).then((m) => m.mountId)
+    const mine = await mount(laptop)
+    const theirs = await mount(tv)
+    // Loading, before its ticket: the page and its version are kept beside what the tab said
+    expect(await laptop.as.mutation(api.displays.report, said(laptop, TAB, 1, true, { phase: 'loading', mountId: mine }))).toMatchObject({ accepted: true })
+    expect((await row(laptop.id)).reports![0]).toMatchObject({ phase: 'loading', artifactId: plan, version: 1 })
+    // Shown is said only of a showing whose ticket was given
+    expect(await code(laptop.as.mutation(api.displays.report, said(laptop, TAB, 2, true, { phase: 'shown', mountId: mine })))).toBe('not_found')
+    await t.run(async (ctx) => {
+      const m = (await ctx.db.query('mounts').collect()).find((x) => x.mountId === mine)!
+      await ctx.db.patch(m._id, { ticketGiven: true })
+    })
+    expect(await code(laptop.as.mutation(api.displays.report, said(laptop, TAB, 3, true, { phase: 'shown', mountId: mine })))).toBe('ok')
+    // Another display's showing, one that is no showing, and another person's are each no showing of this display
+    expect(await code(laptop.as.mutation(api.displays.report, said(laptop, TAB, 4, true, { phase: 'loading', mountId: theirs })))).toBe('not_found')
+    expect(await code(laptop.as.mutation(api.displays.report, said(laptop, TAB, 4, true, { phase: 'loading', mountId: 'f'.repeat(32) })))).toBe('not_found')
+    const other = await household(t, 'someone-else')
+    const elsewhere = await other.browser('owner', key(3))
+    const foreign = await elsewhere.as.mutation(api.mounts.create, { artifactId: await other.page('plan'), displayKey: elsewhere.key })
+    expect(await code(laptop.as.mutation(api.displays.report, said(laptop, TAB, 4, true, { phase: 'loading', mountId: foreign.mountId })))).toBe('not_found')
+    // A showing made before a sign-out is no showing after it
+    await t.run((ctx) => ctx.db.patch(laptop.id, { epoch: 1 }))
+    expect(await code(laptop.as.mutation(api.displays.report, { ...said(laptop, TAB, 5, true, { phase: 'loading', mountId: mine }), epoch: 1 }))).toBe(
+      'not_found',
+    )
+    // Showing nothing names no showing, and a page names its showing
+    expect(await code(laptop.as.mutation(api.displays.report, { ...said(laptop, TAB, 5, true, { mountId: mine }), epoch: 1 }))).toBe('invalid')
+    expect(await code(laptop.as.mutation(api.displays.report, { ...said(laptop, TAB, 5, true, { phase: 'shown' }), epoch: 1 }))).toBe('invalid')
+    expect((await row(laptop.id)).reports![0]).toMatchObject({ phase: 'shown', sequence: 3 })
   })
 
   test('is held to a pace per display, so that one display cannot use up another’s', async () => {

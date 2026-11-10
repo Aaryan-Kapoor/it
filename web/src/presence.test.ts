@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import { type Report, startReports, USED_EVERY_MS, VISIBLE_EVERY_MS } from './presence'
+import { type Report, reportPage, startReports, USED_EVERY_MS, VISIBLE_EVERY_MS } from './presence'
 
 let stop: (() => void) | undefined
 let shown: 'visible' | 'hidden'
@@ -9,6 +9,7 @@ beforeEach(() => {
   vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => shown)
 })
 afterEach(() => {
+  reportPage('none')
   stop?.()
   stop = undefined
   vi.useRealTimers()
@@ -40,7 +41,7 @@ const click = () => window.dispatchEvent(new Event('pointerdown'))
 
 test('a tab says it is visible at once and every minute, that it is hidden once, and counts each report up', async () => {
   const sent = reporter()
-  expect(sent).toEqual([{ tab: expect.stringMatching(/^[0-9a-f]{32}$/), sequence: 1, visible: true }])
+  expect(sent).toEqual([{ tab: expect.stringMatching(/^[0-9a-f]{32}$/), sequence: 1, phase: 'none', visible: true }])
   await vi.advanceTimersByTimeAsync(VISIBLE_EVERY_MS)
   expect(sent).toHaveLength(2)
   hide()
@@ -151,4 +152,33 @@ test('a reporter started afresh is a new tab, and a page in a frame cannot say a
   stop?.()
   const second = reporter()
   expect(second[0]!.tab).not.toBe(first[0]!.tab)
+})
+
+test('the page a tab shows is said with each report as it changes, and a tab that closes shows none', async () => {
+  const sent = reporter()
+  reportPage('loading', 'mount-1')
+  await vi.advanceTimersByTimeAsync(0)
+  reportPage('shown', 'mount-1')
+  await vi.advanceTimersByTimeAsync(0)
+  // Said again as it is, nothing has changed and nothing is sent
+  reportPage('shown', 'mount-1')
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.map((r) => [r.phase, r.mountId])).toEqual([
+    ['none', undefined],
+    ['loading', 'mount-1'],
+    ['shown', 'mount-1'],
+  ])
+  // Every minute's report says it too
+  await vi.advanceTimersByTimeAsync(VISIBLE_EVERY_MS)
+  expect(sent.at(-1)).toMatchObject({ phase: 'shown', mountId: 'mount-1' })
+  window.dispatchEvent(new Event('pagehide'))
+  expect(sent.at(-1)).toEqual(expect.objectContaining({ phase: 'none', visible: false }))
+  expect(sent.at(-1)).not.toHaveProperty('mountId')
+  // A page that is left shows none, and a phase with no showing is no page
+  reportPage('none')
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.at(-1)).toMatchObject({ phase: 'none' })
+  reportPage('shown')
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.at(-1)).not.toHaveProperty('mountId')
 })

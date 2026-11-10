@@ -259,7 +259,7 @@ async function refuseTakenName(ctx: MutationCtx, d: Doc<'displays'>, name: strin
     .withIndex('by_user', (q) => q.eq('userId', d.userId))
     .take(QUOTA.displays)
   if (all.some((other) => other._id !== d._id && nameOf(other).toLowerCase() === wanted))
-    fail('conflict', 'Another display already has that name. Choose another.', { nameTaken: true })
+    fail('conflict', 'Another screen already has that name. Pick another name.', { nameTaken: true })
 }
 
 export const rename = mutation({
@@ -300,15 +300,18 @@ export const REPORT_MS = 150_000
 const TABS = 16
 
 /**
- * What one tab of a display says of itself: whether it is visible, and whether the person used
- * it a moment ago. Only the display's own browser says it, under the pairing and the sign-out
- * number it said it under: a report that waited out a sign-out or a new pairing is refused, and
- * one older than what the tab last said is ignored. Kept per tab, so that one window in the back
- * does not hide another of the same browser that is in front of the person. Each tab says this
- * every minute while it is visible, and once when it is hidden.
+ * What one tab of a display says of itself: whether it is visible, whether the person used it a
+ * moment ago, and what it shows. Only the display's own browser says it, under the pairing and
+ * the sign-out number it said it under: a report that waited out a sign-out or a new pairing is
+ * refused, and one older than what the tab last said is ignored. Kept per tab, so that one window
+ * in the back does not hide another of the same browser that is in front of the person. Each tab
+ * says this every minute while it is visible, once when it is hidden, and whenever what it shows
+ * changes.
  *
+ * What it shows is a showing (`mountId`) that this display made itself, under its sign-out number
+ * now: `loading`, `shown` once its ticket was given, or `failed`, and `none` with no showing.
  * Nothing of what the person did is kept, only when: `usedAt`, written at most once in five
- * seconds. The browser's word, and never proof of what is on the glass.
+ * seconds. All of it is the browser's word, and never proof of what is on the glass.
  */
 export const report = mutation({
   args: {
@@ -316,7 +319,9 @@ export const report = mutation({
     epoch: v.number(),
     tab: v.string(),
     sequence: v.number(),
+    phase: v.union(v.literal('none'), v.literal('loading'), v.literal('shown'), v.literal('failed')),
     visible: v.boolean(),
+    mountId: v.optional(v.string()),
     used: v.optional(v.boolean()),
     expectedSession: v.string(),
   },
@@ -326,19 +331,33 @@ export const report = mutation({
     // The owner's browser may act for every display, but says how it is only of its own
     if (d.sessionId !== c.session._id) fail('not_found', 'This display is not registered.')
     if (!TAB.test(a.tab) || !Number.isSafeInteger(a.sequence) || a.sequence < 1) fail('invalid', 'That is not what a tab says of itself.')
+    if (a.phase === 'none' && a.mountId !== undefined) fail('invalid', 'A tab that shows nothing names no showing.')
+    if (a.phase !== 'none' && a.mountId === undefined) fail('invalid', 'A tab that shows a page names its showing.')
     const now = Date.now()
     if (a.epoch !== d.epoch) return { accepted: false, now }
     const fresh = (d.reports ?? []).filter((r) => r.epoch === d.epoch && now - r.at < REPORT_MS && r.at <= now)
     const before = fresh.find((r) => r.tab === a.tab)
     if (before && a.sequence <= before.sequence) return { accepted: false, now }
     await rateLimit(ctx, 'reportDisplay', d._id)
+    let page: { artifactId: Id<'artifacts'>; version: number } | undefined
+    if (a.mountId !== undefined) {
+      const mountId = a.mountId
+      const m = await ctx.db
+        .query('mounts')
+        .withIndex('by_mount', (q) => q.eq('mountId', mountId))
+        .unique()
+      // A showing of this display's own, made since its last sign-out, and shown only once its ticket was given
+      if (!m || m.userId !== c.user._id || m.displayId !== d._id || m.epoch !== d.epoch || (a.phase === 'shown' && !m.ticketGiven))
+        fail('not_found', 'No such showing on this display.')
+      page = { artifactId: m.artifactId, version: m.version }
+    }
     // Never one refused for want of room: the tabs that spoke longest ago make way
     const others = fresh
       .filter((r) => r.tab !== a.tab)
       .sort((x, y) => y.at - x.at)
       .slice(0, TABS - 1)
     const change: Partial<Doc<'displays'>> = {
-      reports: [...others, { tab: a.tab, sequence: a.sequence, at: now, epoch: d.epoch, visible: a.visible }],
+      reports: [...others, { tab: a.tab, sequence: a.sequence, at: now, epoch: d.epoch, phase: a.phase, visible: a.visible, ...page }],
     }
     if (a.visible && a.used && now - (d.usedAt ?? 0) > 5000) change.usedAt = now
     await ctx.db.patch(d._id, change)

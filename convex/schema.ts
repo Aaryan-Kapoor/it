@@ -136,10 +136,10 @@ export default defineSchema({
     showing: v.optional(v.object({ artifactId: v.id('artifacts'), at: v.number() })),
     push: v.optional(v.object({ endpoint: v.string(), p256dh: v.string(), auth: v.string() })),
     /**
-     * What each tab of it last said of itself (`displays.report`): whether it was visible, by the
-     * backend's clock. At most sixteen, and only of the sign-out number they were said under. The
-     * shape is the one earlier local builds of It wrote, which also kept what each tab showed
-     * (`phase`, `artifactId`, `version`), so that a database of theirs loads.
+     * What each tab of it last said of itself (`displays.report`), by the backend's clock: whether
+     * it was visible, and what it showed, as a showing of this display's own and its page's
+     * version. At most sixteen, and only of the sign-out number they were said under. The shape is
+     * the one earlier local builds of It wrote, so that a database of theirs loads.
      */
     reports: v.optional(
       v.array(
@@ -148,8 +148,8 @@ export default defineSchema({
           sequence: v.number(),
           at: v.number(),
           epoch: v.number(),
+          phase: v.union(v.literal('none'), v.literal('loading'), v.literal('shown'), v.literal('failed')),
           visible: v.boolean(),
-          phase: v.optional(v.union(v.literal('none'), v.literal('loading'), v.literal('shown'), v.literal('failed'))),
           artifactId: v.optional(v.id('artifacts')),
           version: v.optional(v.number()),
         }),
