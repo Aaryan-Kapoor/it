@@ -498,33 +498,176 @@ function quieten(el: Element): void {
 function quietenWithin(root: ParentNode): void {
   for (const el of root.querySelectorAll('meta[name], [referrerpolicy], a[ping], area[ping]')) quieten(el)
 }
+
+// Where a link leads. The page's frame may show only the pages' port, so a link that would load
+// another site in it turns the page into the browser's error page. A link to another site opens
+// in a tab of its own instead, whatever target the page gave it, unless it names a frame inside
+// the page. A link within the page, or to another of its own files, stays as the page wrote it.
+//
+// A window the page opens leaves the sandbox, so every way out is made to leave no hold either
+// way: the window has no opener, the page is given no handle on it, and no referrer is sent. On
+// localhost and over https the browser cuts the opener by itself, since the site sends
+// `Cross-Origin-Opener-Policy`; on plain http only this does. A window of a kind that would hold
+// what the page made, `javascript:`, `data:` or `blob:`, is not opened at all.
+//
+// Like the referrer rules above, this is done as links appear and again on the way to a click,
+// and a document the page makes inside itself is not watched.
+
+/** Where this page's own files are, taken before anything of the page's own can name another. */
+const home = new URL(window.location.href).origin
+const XLINK = 'http://www.w3.org/1999/xlink'
+/** The kinds of address a window is never opened to. */
+const REFUSED = new Set(['javascript:', 'data:', 'blob:'])
+const isLink = (el: Element) => el.localName === 'a' || el.localName === 'area'
+/** An address as the page means it: read against where it says its addresses begin, or `null` where it is none. */
+function addressOf(said: string | null | undefined): URL | null {
+  if (said === null || said === undefined) return null
+  try {
+    return new URL(said, document.baseURI)
+  } catch {
+    return null
+  }
+}
+/** Where a link leads, or `null` where it names nowhere. */
+const leadsTo = (el: Element) => addressOf(el.getAttribute('href') ?? el.getAttributeNS(XLINK, 'href'))
+/** Whether an address is another site's: one on the web that is not where this page's own files are. */
+const elsewhere = (to: URL) => (to.protocol === 'http:' || to.protocol === 'https:') && to.origin !== home
+/** The targets that name the frame a link is in, or one around it: `_parent` and `_top` are refused to a page, which cannot move the tab it is shown in. */
+const IN_PLACE = new Set(['', '_self', '_parent', '_top'])
+/** Whether a target opens a new window: `_blank`, or any name that is not a keyword and no frame inside the page, `_new` among them. */
+function opensAWindow(target: string): boolean {
+  const said = target.trim()
+  if (said.toLowerCase() === '_blank') return true
+  return !IN_PLACE.has(said.toLowerCase()) && !namesAFrame(said)
+}
+/** Whether a target names a frame inside the page, which the page means a link to be followed in. */
+function namesAFrame(target: string): boolean {
+  if (IN_PLACE.has(target.toLowerCase()) || target.toLowerCase() === '_blank') return false
+  for (const frame of document.querySelectorAll('iframe[name], frame[name], object[name], embed[name]')) if (frame.getAttribute('name') === target) return true
+  return false
+}
+/** Gives a link or a form `noopener` and `noreferrer`, and takes `opener` away: the window it opens and the page have no hold on each other. */
+function withNoHold(el: Element, opens: boolean): void {
+  const said = el.getAttribute('rel')
+  if (said === null && !opens) return
+  const words = (said ?? '').split(/\s+/).filter(Boolean)
+  const kept = words.filter((word) => word.toLowerCase() !== 'opener')
+  if (opens) for (const word of ['noopener', 'noreferrer']) if (!kept.some((w) => w.toLowerCase() === word)) kept.push(word)
+  if (kept.length !== words.length || kept.some((word, n) => word !== words[n])) el.setAttribute('rel', kept.join(' '))
+}
+/** What It does to a link: one to another site opens in a tab of its own, and one that opens a window leaves no hold. */
+function guide(el: Element): void {
+  if (!isLink(el)) return
+  const to = leadsTo(el)
+  const target = el.getAttribute('target') ?? ''
+  if (to && elsewhere(to) && !namesAFrame(target.trim()) && target.trim().toLowerCase() !== '_blank') el.setAttribute('target', '_blank')
+  withNoHold(el, opensAWindow(el.getAttribute('target') ?? ''))
+}
+/** What It does to a form: one whose answer opens in a window of its own leaves no hold. */
+function guideForm(form: Element, submitter?: Element | null): void {
+  if (form.localName !== 'form') return
+  const target = submitter?.hasAttribute('formtarget') ? (submitter.getAttribute('formtarget') ?? '') : (form.getAttribute('target') ?? '')
+  withNoHold(form, opensAWindow(target))
+}
+/** Everything It does to an element of the page as it appears or changes. */
+function tend(el: Element): void {
+  quieten(el)
+  guide(el)
+  guideForm(el)
+}
+function tendWithin(root: ParentNode): void {
+  quietenWithin(root)
+  for (const el of root.querySelectorAll('a, area, form')) {
+    guide(el)
+    guideForm(el)
+  }
+}
 new MutationObserver((changes) => {
   for (const change of changes) {
-    if (change.type === 'attributes') quieten(change.target as Element)
+    if (change.type === 'attributes') tend(change.target as Element)
     else
       for (const added of change.addedNodes) {
         if (added.nodeType !== Node.ELEMENT_NODE) continue
-        quieten(added as Element)
-        quietenWithin(added as Element)
+        tend(added as Element)
+        tendWithin(added as Element)
       }
   }
-}).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['name', 'content', 'referrerpolicy', 'ping'] })
-quietenWithin(document)
+}).observe(document, {
+  subtree: true,
+  childList: true,
+  attributes: true,
+  attributeFilter: ['name', 'content', 'referrerpolicy', 'ping', 'href', 'target', 'rel'],
+})
+tendWithin(document)
+
+/** The link a click or a key followed, which is the nearest one around what was clicked. */
+const linkIn = (path: EventTarget[]) => path.find((el): el is Element => el instanceof Element && isLink(el))
+/** Whether a link, followed now, would open a window of a kind that is never opened. */
+function opensRefused(link: Element): boolean {
+  const to = leadsTo(link)
+  if (!to || !REFUSED.has(to.protocol) || link.hasAttribute('download')) return false
+  const target = (link.getAttribute('target') ?? '').trim()
+  // Followed in the frame, `javascript:` runs the page's own script, as it does on any page. A
+  // refused `_top` or `_parent` is counted with the windows, since WebKit opens one for it
+  return target.toLowerCase() !== '' && target.toLowerCase() !== '_self' && !namesAFrame(target)
+}
 // A script can activate a link before the observer runs. Check it on the way to its handlers
-// and again after them, including a link followed with the middle button.
-for (const event of ['click', 'auxclick'])
+// and again after them, including a link followed with the middle button or from the keyboard.
+for (const event of ['click', 'auxclick', 'keydown'])
   for (const capture of [true, false])
     window.addEventListener(
       event,
       (e) => {
-        for (const el of e.composedPath()) if (el instanceof Element) stopAuditing(el)
+        for (const el of e.composedPath())
+          if (el instanceof Element) {
+            stopAuditing(el)
+            guide(el)
+          }
+        // After the page's own handlers, which may have taken the click for themselves
+        if (capture || e.type !== 'click' || e.defaultPrevented) return
+        const link = linkIn(e.composedPath())
+        if (link && opensRefused(link)) e.preventDefault()
       },
       capture,
     )
+// A form is checked on its way out too, with the button that sent it, which may name its own target
+window.addEventListener(
+  'submit',
+  (e) => {
+    if (e.target instanceof Element) guideForm(e.target, (e as SubmitEvent).submitter)
+  },
+  true,
+)
+// A link or a form the page made and never put in the document is activated with no event
+// reaching the window: it is checked here instead, on its way
+const clickElement = HTMLElement.prototype.click
+HTMLElement.prototype.click = function (this: HTMLElement) {
+  if (!this.isConnected) {
+    guide(this)
+    if (isLink(this) && opensRefused(this)) return
+  }
+  return clickElement.call(this)
+}
+const submitForm = HTMLFormElement.prototype.submit
+HTMLFormElement.prototype.submit = function (this: HTMLFormElement) {
+  guideForm(this)
+  return submitForm.call(this)
+}
+
 const openWindow = window.open
-window.open = function (this: Window, ...given: Parameters<typeof window.open>) {
+window.open = function (this: Window, url?: string | URL, target?: string, features?: string) {
   quietenWithin(document)
-  return openWindow.apply(this, given)
+  const said = url === undefined || url === null ? '' : String(url)
+  const to = said === '' ? null : addressOf(said)
+  if (to && REFUSED.has(to.protocol)) return null
+  const named = target === undefined || target === null ? '' : String(target)
+  // A frame inside the page is the page's own to follow a link in, as it asked
+  if (namesAFrame(named.trim())) return openWindow.call(this, url, target, features)
+  // One to another site opens in a tab of its own, as a link to one does
+  const where = to && elsewhere(to) ? '_blank' : named || '_blank'
+  // What is said last of a feature is what is taken
+  const asked = features === undefined || features === null ? '' : String(features)
+  return openWindow.call(this, url, where, `${asked}${asked.trim() ? ',' : ''}noopener,noreferrer`)
 }
 
 // What the page's own script fails with is said to the site, which says it above the page. The

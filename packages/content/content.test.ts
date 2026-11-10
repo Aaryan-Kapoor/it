@@ -71,7 +71,7 @@ const BASE = 27300
 const PAGES = BASE + 1
 const SITE = `http://localhost:${BASE}`
 /** What a page may do, word for word: a change to it is a change to what keeps pages apart. */
-const SANDBOX = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock'
+const SANDBOX = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock'
 /** The policy on an answer to a request sent to `localhost`. */
 const POLICY = `${SANDBOX}; frame-ancestors ${SITE}`
 /** What a browser says it will take when it opens a document. */
@@ -305,15 +305,16 @@ afterEach(() => void vi.useRealTimers())
 
 /**
  * What every answer from the pages' port must carry, whatever it is an answer to: the sandbox,
- * with nothing in it that would give a page the origin of its address or let it out of its
- * frame; no cookie; and what lets a sandboxed page read and embed its own files.
+ * with nothing in it that would give a page the origin of its address or let it move the tab it
+ * is shown in, and with the windows it opens let out as ordinary tabs; no cookie; and what lets
+ * a sandboxed page read and embed its own files.
  */
 function expectConfined(kind: string, r: { headers: Headers }, policy = POLICY): void {
   const said = r.headers.get('content-security-policy') ?? ''
   expect([kind, said]).toEqual([kind, policy])
   expect([kind, said.startsWith(`${SANDBOX};`)]).toEqual([kind, true])
-  for (const word of ['allow-same-origin', 'allow-top-navigation', 'allow-popups-to-escape-sandbox'])
-    expect([kind, word, said.includes(word)]).toEqual([kind, word, false])
+  for (const word of ['allow-same-origin', 'allow-top-navigation']) expect([kind, word, said.includes(word)]).toEqual([kind, word, false])
+  expect([kind, said.split(';')[0]!.split(' ').includes('allow-popups-to-escape-sandbox')]).toEqual([kind, true])
   expect([kind, r.headers.getSetCookie(), r.headers.has('set-cookie')]).toEqual([kind, [], false])
   expect([
     kind,
@@ -3435,7 +3436,7 @@ describe.each(BROWSERS)('a page as %s shows it', (_name, type) => {
                 return route.fulfill({
                   status: 200,
                   contentType: 'text/html',
-                  body: `<iframe id="page" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock" referrerpolicy="no-referrer" src="${OWN}${at}/v/1/${file}"></iframe>`,
+                  body: `<iframe id="page" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock" referrerpolicy="no-referrer" src="${OWN}${at}/v/1/${file}"></iframe>`,
                 })
               if (url.origin !== OWN) return route.fulfill({ status: 404, body: '' })
               const r = await show(`${url.pathname}${url.search}`, { host: HOST, headers })
@@ -3513,7 +3514,7 @@ describe.each(BROWSERS)('a page as %s shows it', (_name, type) => {
               return route.fulfill({
                 status: 200,
                 contentType: 'text/html',
-                body: `<iframe id="page" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock" referrerpolicy="no-referrer" src="${OWN}${at}/v/1/${file}"></iframe>`,
+                body: `<iframe id="page" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock" referrerpolicy="no-referrer" src="${OWN}${at}/v/1/${file}"></iframe>`,
               })
             if (url.origin !== OWN) return route.fulfill({ status: 404, body: '' })
             const r = await show(`${url.pathname}${url.search}`, { host: HOST, headers: route.request().headers() })

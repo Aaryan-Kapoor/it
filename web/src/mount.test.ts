@@ -177,12 +177,13 @@ describe('where a page is shown', () => {
     expect(page.frame.getAttribute('referrerpolicy')).toBe('no-referrer')
   })
 
-  test('the frame is a sandbox: a page is given no origin, cannot move the tab, and what it opens is held to the same', async () => {
+  test('the frame is a sandbox: a page is given no origin and cannot move the tab, and a window it opens is an ordinary tab', async () => {
     const page = await show()
     // Word for word what the content service says on everything it sends
-    expect(page.frame.getAttribute('sandbox')).toBe('allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock')
-    for (const word of ['allow-same-origin', 'allow-top-navigation', 'allow-popups-to-escape-sandbox'])
-      expect(page.frame.getAttribute('sandbox')).not.toContain(word)
+    expect(page.frame.getAttribute('sandbox')).toBe(
+      'allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock',
+    )
+    for (const word of ['allow-same-origin', 'allow-top-navigation']) expect(page.frame.getAttribute('sandbox')).not.toContain(word)
   })
 
   test('a message is the page’s only if it came from the frame’s own window, whatever origin it names', async () => {

@@ -420,7 +420,8 @@ export function Mount({
           title={title}
           src={mount.address}
           // The same words the content service says on everything it sends: a page never has the
-          // origin of its address, can never move this tab, and what it opens is held to the same
+          // origin of its address and can never move this tab, and a window it opens is an
+          // ordinary tab, which the script in the page opens with no hold either way
           sandbox={SANDBOX}
           // A page may not take the keyboard by itself, where the browser lets that be said
           allow="fullscreen; clipboard-write; autoplay; focus-without-user-activation 'none'"

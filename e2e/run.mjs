@@ -765,8 +765,8 @@ const saidTo = (port, bytes, ms = 2500) =>
     socket.on('data', (piece) => pieces.push(piece))
     for (const ending of ['end', 'close', 'error']) socket.on(ending, done)
   })
-/** What a page's frame is allowed, and nothing else: its scripts, its forms, its dialogs, windows it opens, downloads, and holding the pointer. */
-const PAGE_MAY = ['allow-scripts', 'allow-forms', 'allow-modals', 'allow-popups', 'allow-downloads', 'allow-pointer-lock']
+/** What a page's frame is allowed, and nothing else: its scripts, its forms, its dialogs, windows it opens, which leave the sandbox as ordinary tabs, downloads, and holding the pointer. */
+const PAGE_MAY = ['allow-scripts', 'allow-forms', 'allow-modals', 'allow-popups', 'allow-popups-to-escape-sandbox', 'allow-downloads', 'allow-pointer-lock']
 /** The whole policy every answer from where pages are shown carries, for a site reached at this address: the box a page is kept in, and that only that site may frame it. */
 const pagesPolicy = (site) => ({ sandbox: PAGE_MAY, 'frame-ancestors': [site] })
 /** The whole policy every answer of the site carries, for a site reached at this address whose pages are shown at that one. */

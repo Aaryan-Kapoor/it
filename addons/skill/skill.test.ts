@@ -382,16 +382,21 @@ describe('the agent skill', () => {
   })
 
   test('tells an agent what a page cannot do in the sandbox it is shown in, and where a page keeps things', () => {
-    // What the sandbox is: the words the pages' port and the site's frame both say, with nothing that would give a page an origin
+    // What the sandbox is: the words the pages' port and the site's frame both say, with nothing
+    // that would give a page an origin, and windows that leave it as ordinary tabs
     const protocol = source('../../packages/protocol/src/index.ts')
     const sandbox = /export const SANDBOX = '([^']+)'/.exec(protocol)![1]!
-    expect(sandbox.split(' ')).toEqual(expect.arrayContaining(['allow-scripts', 'allow-popups']))
-    for (const word of ['allow-same-origin', 'allow-top-navigation', 'allow-popups-to-escape-sandbox']) expect(sandbox).not.toContain(word)
+    expect(sandbox.split(' ')).toEqual(expect.arrayContaining(['allow-scripts', 'allow-popups', 'allow-popups-to-escape-sandbox']))
+    for (const word of ['allow-same-origin', 'allow-top-navigation']) expect(sandbox).not.toContain(word)
     expect(skill).toContain('It has no cookies.')
     expect(skill).toContain('There is no IndexedDB, no `caches` and no service worker.')
     expect(skill).toContain('A worker starts only from a `blob:` address.')
     expect(skill).toContain('It cannot frame its own files.')
-    expect(skill).toContain('Whatever it opens is held to the same.')
+    // A link out opens a tab of its own with no hold either way, which the in-page script sees to
+    expect(skill).toContain('A link to another site opens in a new tab.')
+    expect(skill).toContain('so `window.open` returns `null`: do not take that for a blocked window. No referrer is sent.')
+    expect(skill).toContain("a tab of the page's own files is sandboxed as the page is")
+    expect(source('../../packages/runtime/src/it.ts')).toContain('noopener,noreferrer')
     // The in-page script stands in for the two kinds of storage, for as long as the document is open and not after
     const runtime = source('../../packages/runtime/src/it.ts')
     expect(runtime).toMatch(/for \(const name of \['localStorage', 'sessionStorage'\] as const\)/)

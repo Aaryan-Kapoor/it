@@ -177,9 +177,16 @@ export function policyHost(name: string): string {
  * the frame it shows a page in. A page runs scripts, sends forms, opens dialogs and windows,
  * starts downloads and takes the pointer. It is never given the origin of the address it came
  * from, so it shares nothing with the site, with another page, or with an earlier document of
- * itself; it cannot move the tab it is shown in; and a window it opens is held to the same.
+ * itself, and it cannot move the tab it is shown in.
+ *
+ * A window it opens leaves the sandbox, as an ordinary tab of whatever it opens: held to the
+ * page's sandbox, a site that sends `Cross-Origin-Opener-Policy` would refuse to load in it, and
+ * every other would load with no origin of its own. The script in the page opens each window so
+ * that neither it nor the page has a hold on the other, and so that it is told nothing of where
+ * the page is. A window of the page's own files is sandboxed all the same, by what the pages'
+ * port says on everything it sends.
  */
-export const SANDBOX = 'allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock'
+export const SANDBOX = 'allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock'
 
 /** Sizes as It counts them, in units of 1,024. */
 const KB = 1024
