@@ -722,4 +722,45 @@ describe('where an agent’s notification goes', () => {
     await laptop.as.mutation(api.displays.allowAgents, { displayId: laptop.id, allowed: false })
     expect(await h.t.query(internal.push._still, { notificationId: sent.id, displayId: laptop.id, endpoint: PUSH('laptop') })).toBe(false)
   })
+
+  test('a push is not sent to a display closed to agents while its push was being signed, after the look before it', async () => {
+    const h = await household()
+    const laptop = await h.browser('owner', key(1))
+    await laptop.as.mutation(api.push.subscribe, { key: laptop.key, endpoint: PUSH('laptop'), p256dh: 'p', auth: 'a' })
+    const sent = await h.agent.mutation(api.notifications.send, { text: 'hi' })
+    // Its own two looks, at once and a few minutes on, are over before anything here
+    await h.t.finishAllScheduledFunctions(vi.runAllTimers)
+    // The service on this machine, which passes a push on, and says the push service took it
+    const pushed: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (String(url).endsWith('/internal/push')) pushed.push(JSON.parse(String(init.body)).subscription.endpoint)
+        return new Response(JSON.stringify({ status: 201 }))
+      }),
+    )
+    // Asked now, the push would go: the display is closed and takes notifications
+    expect(await h.t.query(internal.push._still, { notificationId: sent.id, displayId: laptop.id, endpoint: PUSH('laptop') })).toBe(true)
+    // The person closes the display to agents while the push is being signed, which is after
+    // the push was chosen and after the display was last looked at in an order that looked first
+    await h.t.run(async (ctx) => {
+      for (const k of await ctx.db.query('signingKeys').collect()) await ctx.db.delete(k._id)
+    })
+    const making = crypto.subtle.generateKey.bind(crypto.subtle)
+    let closed = false
+    vi.spyOn(crypto.subtle, 'generateKey').mockImplementation((async (...args: Parameters<typeof making>) => {
+      if (!closed) {
+        closed = true
+        await laptop.as.mutation(api.displays.allowAgents, { displayId: laptop.id, allowed: false })
+      }
+      return making(...args)
+    }) as typeof crypto.subtle.generateKey)
+    expect(await h.t.action(internal.push.deliver, { notificationId: sent.id })).toBe(0)
+    expect(closed).toBe(true)
+    expect(pushed).toEqual([])
+    // Open to agents again, it is pushed as before
+    await laptop.as.mutation(api.displays.allowAgents, { displayId: laptop.id, allowed: true })
+    expect(await h.t.action(internal.push.deliver, { notificationId: sent.id })).toBe(1)
+    expect(pushed).toEqual([PUSH('laptop')])
+  })
 })

@@ -149,10 +149,16 @@ export const _pushed = internalMutation({
   },
 })
 
-/** Asks the service for one thing. The token names that thing and, where something is sent, the exact body. */
-async function service(ctx: ActionCtx, op: 'send' | 'key', body?: string): Promise<Response> {
+/**
+ * Asks the service for one thing. The token names that thing and, where something is sent, the
+ * exact body. `ready` is asked once the token is made, which reads the signing key and may take a
+ * while, and as the last thing before the request goes: where it says no, nothing is asked, and
+ * this answers null.
+ */
+async function service(ctx: ActionCtx, op: 'send' | 'key', body?: string, ready?: () => Promise<boolean>): Promise<Response | null> {
   const claims = body === undefined ? {} : { h: await sha256(body) }
   const token = await mint(ctx, AUDIENCE.push, op, claims, 60)
+  if (ready && !(await ready())) return null
   return fetch(`${door()}/internal/push${op === 'key' ? '/key' : ''}`, {
     method: body === undefined ? 'GET' : 'POST',
     headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
@@ -167,7 +173,7 @@ export const publicKey = action({
   handler: async (ctx): Promise<string> => {
     await overClashes(() => ctx.runMutation(internal.push._gate, {}))
     try {
-      const r = await service(ctx, 'key')
+      const r = (await service(ctx, 'key'))!
       const said = r.ok ? ((await r.json()) as { key?: unknown } | null) : null
       if (typeof said?.key === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(said.key)) return said.key
       log('push.no_key', { status: r.status }, 'error')
@@ -192,10 +198,13 @@ export const deliver = internalAction({
         gone.push({ displayId: t.displayId, endpoint: t.push.endpoint })
         continue
       }
-      // Looked at again just before each send, since the one before may have taken a while: a
-      // display that was forgotten or signed out in the meantime, or a notification that was
-      // seen, is not sent to.
-      if (!(await ctx.runQuery(internal.push._still, { notificationId, displayId: t.displayId, endpoint: t.push.endpoint }))) continue
+      // Looked at again as the very last thing before each send, once the token for it is made:
+      // the send before may have taken a while, and so may reading the signing key. A display
+      // that was forgotten, signed out or closed to agents in the meantime, or a notification
+      // that was seen, is not sent to. What can still slip through is a change that commits after
+      // this look and before the service on this machine has passed the push on, which is the
+      // time a request on this machine takes; once it has, the push is the push service's.
+      const still = () => ctx.runQuery(internal.push._still, { notificationId, displayId: t.displayId, endpoint: t.push.endpoint })
       // What the push service itself answered, as the service on this machine passes it on
       let status: number
       try {
@@ -208,7 +217,9 @@ export const deliver = internalAction({
             payload: JSON.stringify({ title: 'It', body: job.body.slice(0, 180), url: job.url, id: job.id }),
             ttl: 3600,
           }),
+          still,
         )
+        if (!r) continue
         const said = r.ok ? ((await r.json().catch(() => null)) as { status?: unknown } | null) : null
         if (typeof said?.status !== 'number') {
           // The service could not try at all, or answered something else: nothing is learned about the subscription
