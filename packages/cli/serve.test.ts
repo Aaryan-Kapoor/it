@@ -1140,7 +1140,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
    * and nothing else: no agent app of whoever runs the tests is found, and the backend program
    * finds the one thing a function of It's may ask it for.
    */
-  const run = (args: string[], env: Record<string, string> = {}, elsewhere?: string, runtime = process.execPath) => {
+  const run = (args: string[], env: Record<string, string> = {}, elsewhere?: string, runtime = process.execPath, from?: string) => {
     const commands = path.join(scratch, 'commands')
     if (!existsSync(commands)) {
       mkdirSync(commands)
@@ -1149,7 +1149,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     // `elsewhere` is another machine's folder: a command run there is told that folder and
     // nothing of where It is, which port it counts from or which backend program it runs
     const child = spawn(runtime, [it, ...args], {
-      cwd: elsewhere ?? folder,
+      cwd: from ?? elsewhere ?? folder,
       env: {
         // These fixtures use the same folder for HOME and IT_HOME. Bun must keep its
         // compilation cache elsewhere so the first setup still receives an empty folder.
@@ -1229,7 +1229,11 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
       const codexHome = path.join(os.tmpdir(), 'PrivatePerson', 'private-codex')
       chmodSync(folder, 0o300)
       try {
-        const ran = run(['serve'], { CODEX_THREAD_ID: 'a-thread', CODEX_HOME: codexHome })
+        // Run from a folder it may list, as Codex runs a command from the person's project. In
+        // one it may not, Bun starts a script with no environment at all, and no setting of
+        // its own keeps it from that. The standalone programs are built not to (release.mjs),
+        // and CI starts the Linux one in It's own folder, closed to it, to see that.
+        const ran = run(['serve'], { CODEX_THREAD_ID: 'a-thread', CODEX_HOME: codexHome }, undefined, process.execPath, scratch)
         expect(await ran.ended).toBe(1)
         expect(ran.err()).not.toContain('PrivatePerson')
         expect(ran.err()).not.toContain(folder)
