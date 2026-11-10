@@ -1735,9 +1735,16 @@ export async function startDoor(config: ServiceConfig, backend: Backend, say: (l
     if (closed) await stopAll(here)
     else spots.set(address, here)
   }
-  const missed = (address: string, err: unknown) => {
+  /**
+   * Why an address could not be listened at: that the machine cannot have it just now, or the
+   * system's code. Which it is is asked of the address itself, on a port the system picks, and
+   * not read from the failure: Bun's own server and its node:http say that a port is in use where
+   * the address is one the machine does not have.
+   */
+  const whyNot = async (address: string, err: unknown): Promise<string> => ((await hasAddress(address)) ? codeOf(err) : 'address_unavailable')
+  const missed = (address: string, code: string) => {
     // Said by its code alone: an address on the person's network is never written down
-    if (!failing.has(address)) say(`door: could not listen at one of this machine’s addresses (${codeOf(err)}); trying again`)
+    if (!failing.has(address)) say(`door: could not listen at one of this machine’s addresses (${code}); trying again`)
     failing.add(address)
   }
   try {
@@ -1749,13 +1756,14 @@ export async function startDoor(config: ServiceConfig, backend: Backend, say: (l
           }),
         )
     // Another program that has It's port at one of these addresses keeps It off the network, as
-    // it does where It listens on every address. An address the system will not have listened
-    // at just now, as one that is still being checked on the network is, is tried again later
+    // it does where It listens on every address. An address the machine cannot have just now, as
+    // one that is still being checked on the network cannot, is tried again later
     if (near)
       for (const address of listenAt())
-        await listenHere(address).catch((err) => {
-          if (codeOf(err) === 'EADDRINUSE') throw cannotListen(config.port, err)
-          missed(address, err)
+        await listenHere(address).catch(async (err) => {
+          const code = await whyNot(address, err)
+          if (code !== 'address_unavailable') throw cannotListen(config.port, err)
+          missed(address, code)
         })
   } catch (err) {
     // What was opened before the port that could not be had is closed again
@@ -1794,7 +1802,7 @@ export async function startDoor(config: ServiceConfig, backend: Backend, say: (l
           await listenHere(address)
           failing.delete(address)
         } catch (err) {
-          missed(address, err)
+          missed(address, await whyNot(address, err))
         }
       }
     },
