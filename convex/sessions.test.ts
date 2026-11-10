@@ -321,9 +321,9 @@ describe('what ending a session ends', () => {
   test('nothing is pushed to a display whose session has ended, whatever subscription its record still holds', async () => {
     const h = await household()
     const [first] = h.ids
-    const note = await h.machine.mutation(api.notifications.send, { text: 'Are you there?' })
+    const note = await h.machine.mutation(api.notifications.send, { text: 'Are you there?', everywhere: true })
     await vi.advanceTimersByTimeAsync(200_000)
-    const asked = () => h.t.query(internal.push._targets, { notificationId: note.id })
+    const asked = () => h.t.query(internal.push._targets, { notificationId: note.id, now: Date.now() })
     expect((await asked())?.targets.map((x) => x.displayId).sort()).toEqual([...h.ids, h.untouched.id].sort())
     // The session ends, and its record of the subscription is put back as if the ending had missed it
     await endOf(h.t, h.screen)
@@ -385,7 +385,7 @@ describe('a display whose browser’s pairing has ended', () => {
       took: false,
     })
     // Asked onto every display: it is shown on the ones that are paired, and that one is named as left out
-    expect(await machine.mutation(api.displays.show, { slug: 'plan' })).toEqual({
+    expect(await machine.mutation(api.displays.show, { slug: 'plan', everywhere: true })).toEqual({
       displays: ['Laptop'],
       displayIds: [expect.any(String)],
       notShown: [{ display: 'Kitchen', displayId: expect.any(String), reason: 'not_paired' }],

@@ -4069,6 +4069,9 @@ describe('displays and machines', () => {
         'notifications.send.displayId',
         'displays.report',
         'delivery.waitingPage',
+        'displays.show.everywhere',
+        'notifications.send.everywhere',
+        'displays.allowAgents',
       ],
       now: expect.any(Number),
     })
@@ -4861,7 +4864,7 @@ describe('notifications', () => {
     await alice.browser.mutation(api.push.subscribe, { key: displayKey('alice'), endpoint: PUSH('alive'), p256dh: 'p', auth: 'a' })
     await alice.browser.mutation(api.push.subscribe, { key: 'alice-phone-key-0001', endpoint: PUSH('gone'), p256dh: 'p', auth: 'a' })
     await vi.advanceTimersByTimeAsync(200_000)
-    const later = await m.as.mutation(api.notifications.send, { text: 'later' })
+    const later = await m.as.mutation(api.notifications.send, { text: 'later', everywhere: true })
     expect(await t.action(internal.push.deliver, { notificationId: later.id })).toBe(1)
     // The second look, a few minutes on, does not push it a second time
     expect(await t.action(internal.push.deliver, { notificationId: later.id })).toBe(0)
@@ -6486,7 +6489,7 @@ describe('cases at the edges', () => {
     const oldest = notices[0]!
     const still = (notificationId: typeof oldest) => t.query(internal.push._still, { notificationId, displayId: alice.display.id, endpoint: PUSH('phone') })
     for (const notificationId of [oldest, newest]) {
-      expect((await t.query(internal.push._targets, { notificationId }))?.url).toBe('/p/dead')
+      expect((await t.query(internal.push._targets, { notificationId, now: Date.now() }))?.url).toBe('/p/dead')
       expect(await still(notificationId)).toBe(true)
     }
     await alice.browser.mutation(api.artifacts.remove, { artifactId: dead.artifactId })
@@ -6494,13 +6497,13 @@ describe('cases at the edges', () => {
     expect((await t.run((ctx) => ctx.db.get(oldest)))?.dismissedAt).toBeUndefined()
     expect((await t.run((ctx) => ctx.db.get(newest)))?.dismissedAt).toBe(Date.now())
     for (const notificationId of [oldest, newest]) {
-      expect(await t.query(internal.push._targets, { notificationId })).toBeNull()
+      expect(await t.query(internal.push._targets, { notificationId, now: Date.now() })).toBeNull()
       expect(await still(notificationId)).toBe(false)
       expect(await t.action(internal.push.deliver, { notificationId })).toBe(0)
     }
     expect(sender.asked).toHaveLength(0)
     const independent = await m.as.mutation(api.notifications.send, { text: 'Still useful' })
-    expect((await t.query(internal.push._targets, { notificationId: independent.id }))?.url).toBe('/')
+    expect((await t.query(internal.push._targets, { notificationId: independent.id, now: Date.now() }))?.url).toBe('/')
     expect(await still(independent.id)).toBe(true)
     await settle(t)
     expect(await t.run((ctx) => ctx.db.get(oldest))).toBeNull()
@@ -6522,7 +6525,7 @@ describe('cases at the edges', () => {
         await ctx.db.insert('notifications', { userId, artifactId: p.artifactId, text: 'Newer', sticky: false, createdAt: Date.now() + i + 1 })
       return n
     })
-    expect((await t.query(internal.push._targets, { notificationId }))?.targets).toHaveLength(2)
+    expect((await t.query(internal.push._targets, { notificationId, now: Date.now() }))?.targets).toHaveLength(2)
     sender.whileSending = async () => {
       await alice.browser.mutation(api.artifacts.remove, { artifactId: p.artifactId })
     }
@@ -6801,7 +6804,7 @@ describe('cases at the edges', () => {
     await vi.advanceTimersByTimeAsync(200_000)
     const n = await m.as.mutation(api.notifications.send, { text: 'private' })
     await alice.browser.mutation(api.account.requestDeletion, { confirm: 'erase everything', user: alice.user })
-    expect(await t.query(internal.push._targets, { notificationId: n.id })).toBeNull()
+    expect(await t.query(internal.push._targets, { notificationId: n.id, now: Date.now() })).toBeNull()
     expect(await t.query(internal.push._still, { notificationId: n.id, displayId: alice.display.id, endpoint: PUSH('alive') })).toBe(false)
     expect(await t.action(internal.push.deliver, { notificationId: n.id })).toBe(0)
     expect(sender.asked).toHaveLength(0)
