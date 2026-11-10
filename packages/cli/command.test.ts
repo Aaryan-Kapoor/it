@@ -1199,7 +1199,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       const refused = await run(m, ['tour', 'show', 'chess'], b.env)
       expect([refused.code, refused.out, error(refused).code]).toEqual([1, '', 'conflict'])
       expect(b.asked.map((x) => x.path)).toEqual(['publish:begin', 'publish:finish', 'publish:abandon'])
-      expect(b.asked[0]!.args).toMatchObject({ slug: 'tour-chess', tour: 'chess', state: '{"reply":"","note":""}' })
+      expect(b.asked[0]!.args).toMatchObject({ slug: 'tour-chess', tour: 'chess', state: '{"reply":"","note":"","doing":""}' })
     } finally {
       await b.close()
     }
