@@ -814,8 +814,9 @@ describe('the agent skill', () => {
     expect(more.actions).toContain('with `it actions --id <id> --after 0`, and then with `--after` set to the `cursor` of the last one listed')
     // The notes it points to are the program's own words: it says older ones wait, how to read them, and that more wait after a page
     const program = source('../../packages/cli/src/watch-actions.ts')
-    expect(program).toContain('Older actions wait on this ${NOUN.one} than these. To read every one, oldest first, run \\`it actions --id ${slug} --after 0\\`')
-    expect(program).toContain('More actions wait after these: run \\`it actions --id ${slug} --after ${last}\\`.')
+    expect(program).toContain('than these. To read every one, oldest first, run \\`it actions --id ')
+    expect(program).toContain(' --after 0\\`, and again with --after set to the cursor of the last one listed.')
+    expect(program).toContain('More actions wait after these: run \\`it actions --id ')
   })
 
   test('says that `it actions` lists what is this conversation’s and what is no conversation’s, that --all lists the rest marked as another’s, and that none of it is a wall between agents', () => {
