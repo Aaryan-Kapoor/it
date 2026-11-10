@@ -21,6 +21,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import shims from './fixtures/windows-shims.json'
 import { claudeAddonHere } from './src/lib'
 import { conversationFolder, conversationsFile, noteConversation, publishedWithoutAddon } from './src/publish'
 import {
@@ -1461,8 +1462,8 @@ describe('a reopened run on Windows, as it is put to the system', () => {
         [NODE]: '',
       }))
       expect(windowsProgram('opencode', 'C:\\npm;C:\\Program Files\\nodejs', exists, read)).toEqual([NODE, 'C:\\npm\\node_modules\\opencode-ai\\bin\\opencode'])
-      // pnpm's, which names the script from a folder beside its own
-      const pnpm = `@SETLOCAL\r\n@IF NOT DEFINED NODE_PATH (\r\n  @SET "NODE_PATH=C:\\pnpm\\global\\5\\node_modules"\r\n)\r\n@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe"  "%~dp0\\..\\pnpm\\global\\5\\node_modules\\pi\\dist\\cli.js" %*\r\n) ELSE (\r\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n  node  "%~dp0\\..\\pnpm\\global\\5\\node_modules\\pi\\dist\\cli.js" %*\r\n)\r\n`
+      // pnpm's, as pnpm 8 and 9 write it, which names the script from a folder beside its own
+      const pnpm = `@SETLOCAL\r\n@IF NOT DEFINED NODE_PATH (\r\n  @SET "NODE_PATH=C:\\pnpm\\global\\5\\node_modules"\r\n) ELSE (\r\n  @SET "NODE_PATH=C:\\pnpm\\global\\5\\node_modules;%NODE_PATH%"\r\n)\r\n@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe"  "%~dp0\\..\\pnpm\\global\\5\\node_modules\\pi\\dist\\cli.js" %*\r\n) ELSE (\r\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n  node  "%~dp0\\..\\pnpm\\global\\5\\node_modules\\pi\\dist\\cli.js" %*\r\n)\r\n`
       ;({ exists, read } = disk({
         'C:\\Users\\a\\AppData\\Local\\bin\\pi.CMD': pnpm,
         'C:\\Users\\a\\AppData\\Local\\pnpm\\global\\5\\node_modules\\pi\\dist\\cli.js': '',
@@ -1478,37 +1479,97 @@ describe('a reopened run on Windows, as it is put to the system', () => {
       expect(windowsProgram('claude', 'C:\\npm', exists, read)).toEqual(['C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe'])
     })
 
-    test('only the lines npm, pnpm and yarn write are read out of a command script, and a remark is passed over as cmd.exe passes it', () => {
-      const pi = 'node_modules\\pi\\cli.js'
+    test('each command script that npm 6, 7 and 10, pnpm 8 and 9 and Yarn 1 write is read for what it starts, as they wrote it', () => {
+      const { targets, scripts } = shims
+      const files = (more: Record<string, string>) => ({
+        ...Object.fromEntries(Object.values(targets).map((t) => [`C:\\npm\\${t}`, ''])),
+        'C:\\npm\\node.exe': '',
+        ...more,
+      })
+      let seen = 0
+      for (const [by, written] of Object.entries(scripts)) {
+        for (const [app, script] of Object.entries(written)) {
+          const { exists, read } = disk(files({ [`C:\\npm\\${app}.cmd`]: script }))
+          const target = `C:\\npm\\${targets[app as keyof typeof targets]}`
+          const started = app === 'hermes-python' ? null : app === 'claude-native' ? [target] : ['C:\\npm\\node.exe', target]
+          expect([by, app, windowsProgram(app, 'C:\\npm', exists, read)]).toEqual([by, app, started])
+          seen++
+        }
+      }
+      expect(seen).toBe(35)
+      // pnpm's without the folders for Node's packages, which it leaves out where it has none to name, and each with lines ended as Windows ends them or not, in another case, and spaced otherwise
+      const pnpm = scripts['pnpm 8.15.9 and 9.15.9 (@zkochan/cmd-shim 6.0.0, with nodePath)']
+      const without = (script: string) => script.replace(/@IF NOT DEFINED NODE_PATH \(\r\n[^)]*\) ELSE \(\r\n[^)]*\)\r\n/, '')
+      const codex = `C:\\npm\\${targets.codex}`
+      for (const script of [
+        without(pnpm.codex),
+        pnpm.codex.replaceAll('\r\n', '\n'),
+        pnpm.codex.toUpperCase().replace(targets.codex.toUpperCase(), targets.codex),
+        pnpm.codex.replaceAll('\r\n', '\r\n\r\n    ').replaceAll('  ', ' \t '),
+      ]) {
+        expect(without(pnpm.codex)).not.toContain('NODE_PATH')
+        const { exists, read } = disk(files({ 'C:\\npm\\codex.cmd': script }))
+        expect(windowsProgram('codex', 'C:\\npm', exists, read)).toEqual(['C:\\npm\\node.exe', codex])
+      }
+      const { exists, read } = disk(files({ 'C:\\npm\\claude.cmd': without(pnpm['claude-native']) }))
+      expect(windowsProgram('claude', 'C:\\npm', exists, read)).toEqual([`C:\\npm\\${targets['claude-native']}`])
+    })
+
+    test('a command script that is not wholly one of theirs, or names its file anywhere but from its own folder, is read for nothing', () => {
       const PATH = 'C:\\npm;C:\\Program Files\\nodejs'
-      const starts = (script: string, more: Record<string, string> = {}) => {
-        const { exists, read } = disk({
-          'C:\\npm\\pi.cmd': script,
-          [`C:\\npm\\${pi}`]: '',
-          'C:\\npm\\cli.py': '',
-          'C:\\npm\\unrelated.exe': '',
-          [NODE]: '',
-          ...more,
-        })
+      const files = {
+        'C:\\npm\\node.exe': '',
+        'C:\\npm\\cli.js': '',
+        'C:\\npm\\cli.py': '',
+        'C:\\npm\\unrelated.exe': '',
+        'C:\\elsewhere\\unrelated.exe': '',
+        'C:\\npm\\!evil!.exe': '',
+        'C:\\npm\\real.exe': '',
+        '\\\\server\\share\\unrelated.exe': '',
+        [NODE]: '',
+      }
+      const starts = (script: string) => {
+        const { exists, read } = disk({ ...files, 'C:\\npm\\pi.cmd': script })
         return windowsProgram('pi', PATH, exists, read)
       }
-      // A remark that names Node, before a line that starts something else: not a script for Node
-      expect(starts('@ECHO off\r\n@rem node is no longer used\r\npython "%~dp0\\cli.py" %*\r\n')).toBeNull()
-      // A remark that looks like a line handing the words on, after a script for Node: the remark starts nothing
-      expect(starts(`${npmScript(pi)}@rem "%~dp0\\unrelated.exe" %*\r\n`)).toEqual([NODE, `C:\\npm\\${pi}`])
-      expect(starts(`${npmScript(pi)}REM "%~dp0\\unrelated.exe" %*\r\n:: "%~dp0\\unrelated.exe" %*\r\n`)).toEqual([NODE, `C:\\npm\\${pi}`])
-      // npm's older script, which pnpm and yarn write too, with Node beside it or by its name
-      const older = `@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe"  "%~dp0\\${pi}" %*\r\n) ELSE (\r\n  @SETLOCAL\r\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n  node  "%~dp0\\${pi}" %*\r\n)`
-      expect(starts(older)).toEqual([NODE, `C:\\npm\\${pi}`])
-      // pnpm's for a program, which it starts with an @
-      expect(starts('@"%~dp0\\unrelated.exe"   %*\r\n')).toEqual(['C:\\npm\\unrelated.exe'])
-      // A line of any other kind that hands the words on, two files, a program for Node, or npm's _prog set to something else: none is read
-      expect(starts(`${npmScript(pi)}"%~dp0\\unrelated.exe" %*\r\n`)).toBeNull()
-      expect(starts(`${npmScript(pi)}call something-else %*\r\n`)).toBeNull()
-      expect(starts('@ECHO off\r\nnode  "%~dp0\\unrelated.exe" %*\r\n')).toBeNull()
-      expect(starts('@ECHO off\r\nnode --some-flag "%~dp0\\node_modules\\pi\\cli.js" %*\r\n')).toBeNull()
-      expect(starts('@ECHO off\r\n"%~dp0\\cli.py" %*\r\n')).toBeNull()
-      expect(starts(npmScript(pi).replace('SET "_prog=node"', 'SET "_prog=/bin/sh"'))).toBeNull()
+      const npm = npmScript('cli.js')
+      const yarn = (target: string) => `@"%~dp0\\${target}"   %*\r\n`
+      // Each of them as it is, to show what the rest are changed from
+      expect(starts(npm)).toEqual(['C:\\npm\\node.exe', 'C:\\npm\\cli.js'])
+      expect(starts(yarn('unrelated.exe'))).toEqual(['C:\\npm\\unrelated.exe'])
+      for (const [what, script] of <[string, string][]>[
+        // What was found to get past the reading of a script line by line
+        ['a remark that names Node, before a line that starts Python', '@rem node\r\npython "%~dp0\\cli.py" %*'],
+        ['a remark that names another file, after a line for Node', 'node "%~dp0\\cli.js" %*\r\n@rem "%~dp0\\unrelated.exe" %*'],
+        ['npm’s, with a remark after it', `${npm}@rem "%~dp0\\unrelated.exe" %*\r\n`],
+        ['npm’s, with _prog set again without quotes', npm.replace(')\r\n\r\nendLocal', ')\r\nSET _prog=python\r\nendLocal')],
+        ['npm’s, with _prog set again before something else', npm.replace('SET "_prog=node"', 'SET "_prog=python" & rem changed')],
+        ['_prog set again without quotes', 'SET "_prog=node"\r\nSET _prog=python\r\n"%_prog%" "%~dp0\\cli.py" %*'],
+        ['_prog set again before something else', 'SET "_prog=node"\r\nSET "_prog=python" & rem changed\r\n"%_prog%" "%~dp0\\cli.py" %*'],
+        ['dp0 set to another folder', 'SET dp0=C:\\elsewhere\r\n"%dp0%\\unrelated.exe" %*'],
+        ['npm’s, with dp0 set to another folder', npmScript('unrelated.exe').replace('SET dp0=%~dp0', 'SET dp0=C:\\elsewhere')],
+        ['a file from the top of the drive', yarn('\\elsewhere\\unrelated.exe')],
+        ['a file on another drive', yarn('C:\\elsewhere\\unrelated.exe')],
+        ['a file on a share', yarn('\\\\server\\share\\unrelated.exe')],
+        ['a file named by a variable', yarn('%EVIL%\\unrelated.exe')],
+        ['a file named by a variable filled in late', `@SETLOCAL EnableDelayedExpansion\r\n@SET evil=real\r\n${yarn('!evil!.exe')}`],
+        ['a file named by a variable filled in late, in a script of theirs', yarn('!evil!.exe')],
+        ...['&', '&&', '|', '||'].map((op) => [`two commands joined by ${op}`, `node "%~dp0\\cli.js" ${op} "%~dp0\\unrelated.exe" %*`]),
+        ['a quote escaped', 'node "%~dp0\\cli.js^" & "%~dp0\\unrelated.exe" %*'],
+        ['words for Node', npm.replace('"%_prog%"  "%dp0%', '"%_prog%" --flag "%dp0%')],
+        ['a line of theirs alone, without the rest', 'NoDe.ExE "%~DP0\\CLI.JS" %*'],
+        // And what their own tools write and It does not start
+        ['npm’s for Python', npm.replaceAll('node.exe', 'python.exe').replace('SET "_prog=node"', 'SET "_prog=python"')],
+        ['pnpm’s with a Node of its own named', '@SETLOCAL\r\n@"C:\\Program Files\\nodejs\\node.exe"  "%~dp0\\cli.js" %*\r\n'],
+        ['pnpm’s with folders put before the PATH', `@SETLOCAL\r\n@SET "PATH=C:\\elsewhere:%PATH%"\r\n${yarn('unrelated.exe')}`],
+        [
+          'pnpm’s with folders for Node that name a variable',
+          `@SETLOCAL\r\n@IF NOT DEFINED NODE_PATH (\r\n  @SET "NODE_PATH=%EVIL%"\r\n) ELSE (\r\n  @SET "NODE_PATH=%EVIL%;%NODE_PATH%"\r\n)\r\n${yarn('unrelated.exe')}`,
+        ],
+        ['a script for Node named as a program', yarn('cli.js')],
+        ['a program named as a script for Node', npmScript('unrelated.exe')],
+      ])
+        expect([what, starts(script)]).toEqual([what, null])
     })
 
     test('a command script whose program is not there, that starts something other than Node, or that cannot be read, starts nothing, and a later folder is not looked in for another', () => {

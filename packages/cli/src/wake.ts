@@ -877,9 +877,9 @@ function throughScript(script: string, dirs: string[], exists: (file: string) =>
   } catch {
     return null
   }
-  const here = path.win32.dirname(script)
   const said = shimTarget(text)
   if (!said) return null
+  const here = path.win32.dirname(script)
   const target = path.win32.resolve(here, said.file)
   if (!exists(target)) return null
   const program = /\.(com|exe)$/i.test(target)
@@ -889,50 +889,78 @@ function throughScript(script: string, dirs: string[], exists: (file: string) =>
   return node ? [node, target] : null
 }
 
-/** A file named from the script's own folder, as these scripts name it, in quotes: its name from that folder is caught. */
-const SHIM_FILE = String.raw`"%(?:~dp0|dp0%)\\?([^"%*\r\n]+)"`
-/** What hands the words on in npm's newer scripts, before the program they start. */
-const NPM_HANDOFF = String.raw`endLocal & goto #_undefined_# 2>NUL \|\| title %COMSPEC% & `
-/** Node, as these scripts name it: beside the script, by its name, or as npm's `_prog`, which it sets to one of those. */
-const SHIM_NODE = String.raw`("%(?:~dp0|dp0%)\\?node\.exe"|node(?:\.exe)?|"%_prog%")`
-/** A line that starts Node with a file and the words the script was given. */
-const THROUGH_NODE = new RegExp(String.raw`^@?(?:${NPM_HANDOFF})?${SHIM_NODE}\s+${SHIM_FILE}\s+%\*$`, 'i')
-/** A line that starts a file itself with the words the script was given. */
-const ITSELF = new RegExp(String.raw`^@?${SHIM_FILE}\s+%\*$`, 'i')
-/** Node, as npm sets `_prog` to it. */
-const NODE_PROG = /^(?:%(?:~dp0|dp0%)\\?node\.exe|node)$/i
+/** Where a template has the file the script starts, named from the script's own folder. */
+const T = '<T>'
+/** Where pnpm's template has the folders it gives Node to look for packages in. */
+const P = '<P>'
+const NPM_NODE = ['IF EXIST "%dp0%\\node.exe" (', 'SET "_prog=%dp0%\\node.exe"', ') ELSE (', 'SET "_prog=node"', 'SET PATHEXT=%PATHEXT:;.JS;=;%', ')']
+const NPM6_HEAD = ['@ECHO off', 'SETLOCAL', 'CALL :find_dp0']
+const NPM6_FOOT = ['ENDLOCAL', 'EXIT /b %errorlevel%', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b']
+const NPM7_HEAD = ['@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0']
+const PNPM_NODE_PATH = ['@IF NOT DEFINED NODE_PATH (', `@SET "NODE_PATH=${P}"`, ') ELSE (', `@SET "NODE_PATH=${P};%NODE_PATH%"`, ')']
+const ZKOCHAN_NODE = ['@IF EXIST "%~dp0\\node.exe" (', `"%~dp0\\node.exe" "%~dp0\\${T}" %*`, ') ELSE (']
+/**
+ * The command scripts It reads, each the whole of what a package manager writes for a package
+ * whose command is a script for Node, or a program: npm 6 (cmd-shim 3), npm 7 and later
+ * (cmd-shim 4 to 7, which write the same), pnpm 8 and 9 (@zkochan/cmd-shim 6), with the
+ * folders for Node's packages that it names or without them, and Yarn 1 (@zkochan/cmd-shim 3).
+ * They are as those write them, line for line, with nothing in them that the package's own
+ * first line would have added: words for Node, or settings.
+ */
+const SHIMS: { node: boolean; lines: RegExp }[] = (<{ node: boolean; lines: string[] }[]>[
+  { node: true, lines: [...NPM6_HEAD, ...NPM_NODE, `"%_prog%" "%dp0%\\${T}" %*`, ...NPM6_FOOT] },
+  { node: false, lines: [...NPM6_HEAD, `"%dp0%\\${T}" %*`, ...NPM6_FOOT] },
+  { node: true, lines: [...NPM7_HEAD, ...NPM_NODE, `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\${T}" %*`] },
+  { node: false, lines: [...NPM7_HEAD, `"%dp0%\\${T}" %*`] },
+  ...[[], PNPM_NODE_PATH].flatMap((nodePath) => [
+    { node: true, lines: ['@SETLOCAL', ...nodePath, ...ZKOCHAN_NODE, '@SET PATHEXT=%PATHEXT:;.JS;=;%', `node "%~dp0\\${T}" %*`, ')'] },
+    { node: false, lines: ['@SETLOCAL', ...nodePath, `@"%~dp0\\${T}" %*`] },
+  ]),
+  { node: true, lines: [...ZKOCHAN_NODE, '@SETLOCAL', '@SET PATHEXT=%PATHEXT:;.JS;=;%', `node "%~dp0\\${T}" %*`, ')'] },
+  { node: false, lines: [`@"%~dp0\\${T}" %*`] },
+]).map(({ node, lines }) => ({ node, lines: templateOf(lines) }))
+/**
+ * A template as what matches the whole of a script: the same lines in the same order, each with
+ * the same words whatever their case, and with any run of spaces where it has one. The file it
+ * starts is caught as it is written, and judged after; where a template names it twice, it is
+ * the same file both times. The folders for Node are let through without a quote, a variable or
+ * a mark cmd.exe may fill in.
+ */
+function templateOf(lines: string[]): RegExp {
+  let seen = ''
+  const body = lines
+    .map((line) => line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ +/g, '[ \\t]+'))
+    .join('\\n')
+    .replace(/<([TP])>/g, (_, mark: string) => {
+      const name = mark.toLowerCase()
+      if (seen.includes(name)) return `\\k<${name}>`
+      seen += name
+      return name === 't' ? '(?<t>[^"\\r\\n]+)' : '(?<p>[^"%!\\r\\n]+)'
+    })
+  return new RegExp(`^${body}$`, 'i')
+}
 
 /**
- * The file a command script that npm, pnpm or yarn wrote hands the words it was given on to,
- * and whether it hands them to Node with it. Only the lines these write are read: a line that
- * starts Node, beside the script or by its name, with a file named from the script's own folder,
- * or one that starts such a file itself, each ending with the words it was given (`%*`). A
- * remark (`rem`, `::`) is passed over as cmd.exe passes it over. Any other line that hands the
- * words on, lines that hand them to different files, or npm's `_prog` set to anything but Node,
- * make it a script of another kind, and nothing is read out of it.
+ * The file a command script that npm, pnpm or Yarn wrote hands the words it was given on to,
+ * named from the script's own folder, and whether it hands them to Node with it. The script is
+ * read only where the whole of it is one of those package managers' own (SHIMS): any other line,
+ * or one of theirs changed, makes it a script of another kind. Lines are compared without the
+ * spaces around them, lines with nothing in them, or case. And the file must be named from the
+ * script's folder, and nowhere else: not with a drive or from the top of one, and with no
+ * variable in it that cmd.exe would fill in (`%`, or `!` where it fills those in too).
  */
 function shimTarget(text: string): { file: string; node: boolean } | null {
   const lines = text
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter((line) => line && !/^@?(?:rem(?:\s|$)|::)/i.test(line))
-  const progs = lines.flatMap((line) => /^@?set\s+"_prog=([^"]*)"$/i.exec(line)?.[1] ?? [])
-  const found: { file: string; node: boolean }[] = []
-  for (const line of lines) {
-    if (!line.includes('%*')) continue
-    const node = THROUGH_NODE.exec(line)
-    if (node) {
-      if (/%_prog%/i.test(node[1]!) && !(progs.length && progs.every((prog) => NODE_PROG.test(prog)))) return null
-      found.push({ file: node[2]!, node: true })
-      continue
-    }
-    const itself = ITSELF.exec(line)
-    if (!itself) return null
-    found.push({ file: itself[1]!, node: false })
+    .filter(Boolean)
+    .join('\n')
+  for (const shim of SHIMS) {
+    const file = shim.lines.exec(lines)?.groups?.t
+    if (file === undefined) continue
+    return /[%!:]/.test(file) || /^[\\/]/.test(file) ? null : { file, node: shim.node }
   }
-  const [first] = found
-  if (!first || found.some((f) => f.node !== first.node || f.file.toLowerCase() !== first.file.toLowerCase())) return null
-  return first
+  return null
 }
 
 /**
