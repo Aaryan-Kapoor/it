@@ -1,0 +1,95 @@
+// What `it create`, `it update`, `it tour show` and `it status` say to an agent of whether what
+// the person does on its pages arrives in its conversation by itself, and what to do about it.
+import { describe, expect, test } from 'vitest'
+import { arrives, claudeRunning, loadAddon, RELOAD_PLUGINS_SINCE, tooOldToReload } from './src/arrives'
+import type { Route } from './src/connector'
+
+const claude = { harness: 'claude-code', id: '11111111-2222-4333-8444-555555555555' }
+const route = (r: Partial<Route> = {}): Route => ({ connected: true, listening: false, runtime: 'inactive', thread: 'none', ...r })
+
+describe('whether what the person does arrives by itself', () => {
+  test('through the conversation’s own add-on, where it is listening: the agent ends its turn and does not wait', () => {
+    const said = arrives({ session: claude, addonHere: true, route: route({ listening: true, runtime: 'active' }), slug: 'plan' })
+    expect(said).toMatchObject({ byItself: true, via: 'addon' })
+    expect(said.next).toMatch(/^End your turn\./)
+    expect(said.next).toContain('Do not run `it wait`')
+    expect(arrives({ session: { harness: 'codex', id: 'thread-1' }, addonHere: undefined, route: route({ listening: true }) })).toMatchObject({
+      byItself: true,
+      via: 'addon',
+    })
+  })
+
+  test('through its thread of T3 Code where one holds it, though its add-on is not running there', () => {
+    const said = arrives({ session: claude, addonHere: false, route: route({ thread: 'held' }), slug: 'plan' })
+    expect(said).toMatchObject({ byItself: true, via: 't3' })
+    expect(said.next).toContain('through its thread of T3 Code')
+    expect(said.next).not.toContain('/reload-plugins')
+  })
+
+  test('not at all in a Claude Code conversation that has not loaded the add-on: the agent waits, and asks the person to reload its plugins', () => {
+    const said = arrives({ session: claude, addonHere: false, claude: '2.1.321', route: route(), slug: 'plan' })
+    expect(said.byItself).toBe(false)
+    expect(said.via).toBeUndefined()
+    expect(said.next).toContain('type /reload-plugins in this conversation once your reply has ended')
+    expect(said.next).toContain('`it wait --id plan --timeout 100`')
+  })
+
+  test('in a Claude Code too old to load the add-on that way, the person is asked to start a new conversation', () => {
+    const said = arrives({ session: claude, addonHere: false, claude: '2.1.280', route: route(), slug: 'plan' })
+    expect(said.byItself).toBe(false)
+    expect(said.next).toContain('start a new Claude Code conversation')
+    expect(said.next).not.toContain('/reload-plugins')
+  })
+
+  test('not at all where the app’s add-on is not connected here, or the add-on it loaded cannot take clicks from this It', () => {
+    expect(arrives({ session: claude, addonHere: false, route: route({ connected: false }) })).toMatchObject({ byItself: false })
+    expect(arrives({ session: claude, addonHere: false, route: route({ connected: false }) }).next).not.toContain('/reload-plugins')
+    const incompatible = arrives({ session: claude, addonHere: true, route: route({ runtime: 'incompatible' }) })
+    expect(incompatible.byItself).toBe(false)
+    expect(incompatible.next).toContain('`it status`')
+  })
+
+  test('is said to be unknown, with the agent told to wait, wherever It cannot tell', () => {
+    for (const said of [
+      // No conversation is known
+      arrives({ session: undefined, addonHere: undefined, route: null }),
+      // The connector could not be asked
+      arrives({ session: claude, addonHere: true, route: null }),
+      // T3 Code has not said whether a thread holds it
+      arrives({ session: claude, addonHere: false, route: route({ thread: 'unknown' }) }),
+      // Hermes's add-on is listening, and Hermes lets it speak in some places only
+      arrives({ session: { harness: 'hermes', id: '20261108_120000_abcd' }, addonHere: undefined, route: route({ listening: true }) }),
+      // The add-on runs in this conversation and has not been heard from
+      arrives({ session: claude, addonHere: true, route: route() }),
+      // Another app whose add-on has not been heard from
+      arrives({ session: { harness: 'codex', id: 'thread-1' }, addonHere: undefined, route: route() }),
+    ]) {
+      expect(said.byItself).toBe('unknown')
+      expect(said.via).toBeUndefined()
+      expect(said.next).toContain('`it wait')
+    }
+  })
+
+  test('says which page to wait on where there is one, and asks for no page where there is none', () => {
+    expect(arrives({ session: claude, addonHere: false, route: route(), slug: 'plan' }).next).toContain('--id plan')
+    expect(arrives({ session: claude, addonHere: false, route: route() }).next).not.toContain('--id')
+  })
+})
+
+describe('the Claude Code a command runs inside', () => {
+  test('is the version Claude Code names its own program by, where it does', () => {
+    expect(claudeRunning({ CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.321' })).toBe('2.1.321')
+    expect(claudeRunning({ CLAUDE_CODE_EXECPATH: 'C:\\Users\\someone\\.local\\share\\claude\\versions\\2.1.300\\claude.exe' })).toBe('2.1.300')
+    expect(claudeRunning({ CLAUDE_CODE_EXECPATH: '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js' })).toBeUndefined()
+    expect(claudeRunning({})).toBeUndefined()
+  })
+
+  test('is too old to load the add-on with /reload-plugins only before the oldest Claude Code It installs into', () => {
+    expect(RELOAD_PLUGINS_SINCE).toBe('2.1.287')
+    expect(tooOldToReload('2.1.286')).toBe(true)
+    expect(tooOldToReload('2.1.287')).toBe(false)
+    expect(tooOldToReload(undefined)).toBe(false)
+    expect(loadAddon('2.1.286')).toContain('start a new Claude Code conversation')
+    expect(loadAddon(undefined)).toContain('/reload-plugins')
+  })
+})

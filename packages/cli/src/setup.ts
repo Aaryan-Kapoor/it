@@ -140,7 +140,7 @@ function run(bin: string, args: string[], timeoutMs = 60_000, env: NodeJS.Proces
 }
 
 const semver = (s: string) => /(\d+)\.(\d+)\.(\d+)/.exec(s)?.slice(1).map(Number)
-function older(have: string, need: string): boolean {
+export function older(have: string, need: string): boolean {
   const a = semver(have)
   const b = semver(need)
   if (!a || !b) return false

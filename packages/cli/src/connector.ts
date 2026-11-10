@@ -1068,7 +1068,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       const s = sessions.get(k)
       return s !== undefined && now - s.seen < LIVE_MS
     })
-    const answer = { connected: chosen(harness), listening, runtime: runtimes.status(harness).state }
+    const answer = { connected: connected(harness), listening, runtime: runtimes.status(harness).state }
     if (harness !== 'claude-code' && harness !== 'codex') return { ...answer, thread: 'none' }
     if (notedThread(key) !== undefined) return { ...answer, thread: 'held' }
     if (t3ThreadsHeld()) return { ...answer, thread: 'unknown' }

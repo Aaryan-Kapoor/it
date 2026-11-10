@@ -39,7 +39,8 @@ import {
 } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
-import { choices, conversationIds, local, refusedFor } from './connector'
+import { type Arrives, arrives, claudeRunning } from './arrives'
+import { choices, conversationIds, local, type Route, refusedFor } from './connector'
 import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
 import * as flow from './flow'
@@ -56,6 +57,7 @@ import {
   basePort,
   call,
   changeWhole,
+  claudeAddonHere,
   direct,
   doorRefusal,
   elsewhere,
@@ -500,7 +502,30 @@ function anothers(slug: string, theirs: Made | null): Problem {
  * exists by now whatever becomes of showing it, so it is always said, with what went wrong
  * beside it: an agent told only "no such display" would publish the same page a second time.
  */
+/**
+ * Whether what the person does on this conversation's pages arrives here by itself, by which
+ * way, and what the agent is to do about it, as `arrives` says it: the connector says whether
+ * the conversation's add-on is listening and whether a thread of T3 Code holds it. Given with
+ * every page an agent publishes or shows, where `slug` is that page, and by `it status`. Nothing
+ * where no conversation is known and a person ran the command, or where `known` asks for a
+ * conversation and none is.
+ */
+async function arrivalHere(a: Args, slug?: string, known = false): Promise<Arrives | undefined> {
+  const session = sessionAsked()?.session
+  if (!session && (known || forPerson(a))) return undefined
+  const asked = session
+    ? await local<Partial<Route>>(`/route?harness=${encodeURIComponent(session.harness)}&session=${encodeURIComponent(session.id)}`, { timeoutMs: 5000 })
+    : null
+  // An answer that is not one is no answer: a connector from before it answered this says nothing of it
+  const route =
+    asked && typeof asked.connected === 'boolean' && typeof asked.listening === 'boolean' && ['held', 'none', 'unknown'].includes(asked.thread as string)
+      ? (asked as Route)
+      : null
+  return arrives({ session, addonHere: session?.harness === 'claude-code' ? claudeAddonHere() : undefined, claude: claudeRunning(), route, slug })
+}
+
 async function published(done: { slug: string; version: number; url: string; note?: string; urlNote?: string }, a: Args, fresh = false): Promise<void> {
+  const arrival = await arrivalHere(a, done.slug)
   const result = {
     id: done.slug,
     version: done.version,
@@ -512,6 +537,8 @@ async function published(done: { slug: string; version: number; url: string; not
     // happens to be open: the agent is told, each time, to put its address in the chat. Said
     // by the command and not left to the skill, which an agent has read once and long ago
     ...(fresh ? { tell: `Give the user this url in the chat, in one short line that says what is on the ${NOUN.one}.` } : {}),
+    // Whether what the person does on it comes back here by itself, and so whether to end the turn or to wait
+    ...(arrival ? { arrives: arrival } : {}),
   }
   if (!a.flags.open) return out(result)
   try {
@@ -2293,7 +2320,12 @@ async function status(a: Args) {
     ...(newerOut ? { update: { latest: newerOut, how: 'Run `it upgrade`.' } } : {}),
     ...(hint && !blocked ? { hint } : {}),
   }
-  if (!forPerson(a)) return out(stands)
+  if (!forPerson(a)) {
+    // Asked from a conversation: whether what is done on its pages arrives there by itself, which
+    // the add-ons' state above cannot say of it, since a thread of T3 Code takes it as well
+    const arrival = running && !blocked ? await arrivalHere(a, undefined, true) : undefined
+    return out(arrival ? { ...stands, arrives: arrival } : stands)
+  }
   // To a person: what is wrong and what to do about it first, then whether It is running and
   // where its site is, whether this machine is enrolled, the network, the agent apps, and
   // whether It starts by itself
