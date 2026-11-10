@@ -41,6 +41,12 @@ describe('whether what the person does arrives by itself', () => {
     expect(said.next).not.toContain('/reload-plugins')
   })
 
+  test('not at all where the app is not connected here, though a thread of T3 Code holds the conversation or its add-on was heard from a moment ago, since the connector hands a disconnected app nothing', () => {
+    expect(arrives({ session: claude, addonHere: false, route: route({ connected: false, thread: 'held' }) })).toMatchObject({ byItself: false })
+    expect(arrives({ session: claude, addonHere: true, route: route({ connected: false, listening: true }) })).toMatchObject({ byItself: false })
+    expect(arrives({ session: claude, addonHere: true, route: route({ connected: false, listening: true }) }).next).toContain('`it wait')
+  })
+
   test('not at all where the app’s add-on is not connected here, or the add-on it loaded cannot take clicks from this It', () => {
     expect(arrives({ session: claude, addonHere: false, route: route({ connected: false }) })).toMatchObject({ byItself: false })
     expect(arrives({ session: claude, addonHere: false, route: route({ connected: false }) }).next).not.toContain('/reload-plugins')

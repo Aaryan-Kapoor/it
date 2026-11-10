@@ -82,6 +82,8 @@ export function arrives(f: Facts): Arrives {
     )
   const { harness } = f.session
   const app = harness in KNOWN ? KNOWN[harness as keyof typeof KNOWN].label : 'this agent app'
+  // An app the person has not connected here is handed nothing by the connector, through its add-on or a thread of T3 Code alike
+  if (!f.route.connected) return not(`It’s add-on for ${app} is not connected on this machine, so nothing the person does arrives here by itself.`)
   if (f.route.listening) {
     // Hermes lets its add-on speak only in some of the places it runs, and the add-on cannot say which this is
     if (harness === 'hermes')
@@ -97,7 +99,6 @@ export function arrives(f: Facts): Arrives {
     return unknown(
       'T3 Code is running here and has not said whether one of its threads holds this conversation, so It cannot tell whether what the person does arrives here through it.',
     )
-  if (!f.route.connected) return not(`It’s add-on for ${app} is not connected on this machine, so nothing the person does arrives here by itself.`)
   if (f.route.runtime === 'incompatible')
     return not(
       `The add-on that ${app} has loaded cannot take clicks from this It, so nothing the person does arrives here by itself. \`it status\` says what to do about it.`,
