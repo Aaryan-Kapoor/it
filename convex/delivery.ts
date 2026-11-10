@@ -943,7 +943,7 @@ const HOLD_MOST = 50
  * The machine says why it will not start the conversation of some of the clicks it is to
  * deliver, so that their page says so for as long as they wait (`heldBack`), or with `why`
  * null that it no longer holds them back. Said again, it changes nothing. A click that is no
- * longer this machine's to deliver, or no longer waits, is left as it is. Answers with the clicks
+ * longer this machine's to deliver, or no longer waits (taken, or handed over), is left as it is. Answers with the clicks
  * it is done with, which is all of those asked about that are the person's.
  */
 export const holdBack = mutation({
@@ -956,7 +956,9 @@ export const holdBack = mutation({
       const x = await ctx.db.get(id)
       if (!x || x.userId !== user._id) continue
       done.push(id)
-      if (x.delivery === 'handed_off' || x.machineId !== machine._id) continue
+      // Only while it waits for this machine: one an agent or a machine has taken is on its way, and
+      // a word that arrives late leaves it as it is, to be said again should it come back
+      if (x.delivery !== 'pending' || x.machineId !== machine._id) continue
       const next = why === null ? undefined : { by: machine._id, why: why.slice(0, 300) }
       if (x.heldBack?.by !== next?.by || x.heldBack?.why !== next?.why) await ctx.db.patch(id, { heldBack: next })
     }

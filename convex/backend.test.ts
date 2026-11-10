@@ -2460,6 +2460,13 @@ describe('clicks and their delivery', () => {
     await m.as.mutation(api.delivery.holdBack, { ids: [actionId], why: WHY })
     expect(await m.as.mutation(api.delivery.claim, { ids: [actionId] })).toEqual([actionId])
     expect(await onPage()).toBeNull()
+    // A word that arrives late, while it is taken, changes nothing of what is kept with it: neither another reason nor none
+    const kept = async () => (await t.run((ctx) => ctx.db.get(actionId as never)))!
+    const leased = await kept()
+    expect(leased).toMatchObject({ delivery: 'leased', heldBack: { by: m.id, why: WHY } })
+    expect(await m.as.mutation(api.delivery.holdBack, { ids: [actionId], why: 'another reason' })).toEqual([actionId])
+    expect(await m.as.mutation(api.delivery.holdBack, { ids: [actionId], why: null })).toEqual([actionId])
+    expect(await kept()).toEqual(leased)
     await m.as.mutation(api.delivery.handedOff, { id: actionId, route: 'addon' })
     expect(await onPage()).toBeNull()
     // Nor is anything held back once it has been handed over
