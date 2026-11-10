@@ -1587,17 +1587,24 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const OPEN_CACHE_MS = 2000
   let openChecked = -Infinity
   let openFound: OpenClaude[] = []
-  const openNow = (): OpenClaude[] => {
-    if (performance.now() - openChecked >= OPEN_CACHE_MS) {
-      openFound = openClaude(claudeFolders())
-      openChecked = performance.now()
-    }
-    return openFound
+  let openAsking: Promise<OpenClaude[]> | undefined
+  const openNow = (): Promise<OpenClaude[]> => {
+    if (openAsking) return openAsking
+    if (performance.now() - openChecked < OPEN_CACHE_MS) return Promise.resolve(openFound)
+    openAsking = openClaude(claudeFolders())
+      .catch(() => [])
+      .then((found) => {
+        openFound = found
+        openChecked = performance.now()
+        openAsking = undefined
+        return found
+      })
+    return openAsking
   }
-  const notLoadedNow = (open: () => OpenClaude[] = openNow): { harness: string; sessionId: string; since: number }[] => {
+  const notLoadedNow = (open: readonly OpenClaude[]): { harness: string; sessionId: string; since: number }[] => {
     const now = Date.now()
     if (!connected('claude-code') || now - connectorBegan < NOT_HEARD_MS) return []
-    return open()
+    return open
       .filter((c) => now - c.startedAt >= NOT_HEARD_MS)
       .filter((c) => {
         const key = keyOf('claude-code', c.id)
@@ -1613,11 +1620,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   const reportNotLoaded = async (): Promise<void> => {
     if (over || notLoadedAsking) return
-    const list = notLoadedNow()
-    const said = JSON.stringify(list)
-    if (said === notLoadedSaid) return
     notLoadedAsking = true
     try {
+      const open = connected('claude-code') && Date.now() - connectorBegan >= NOT_HEARD_MS ? await openNow() : []
+      if (over) return
+      const list = notLoadedNow(open)
+      const said = JSON.stringify(list)
+      if (said === notLoadedSaid) return
       await call('mutation', api.machines.notLoaded, { conversations: list })
       notLoadedSaid = said
       say(`${list.length} open Claude Code conversation${list.length === 1 ? ' has' : 's have'} not loaded It’s add-on`)
@@ -2575,14 +2584,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * it ended badly, which is often the only word there is of why. That line is the person's
    * own app speaking to them, and goes to the page alone: never into the log.
    */
-  const notReopened = (session: { harness: string; id: string }, why: string) => {
+  const notReopened = async (session: { harness: string; id: string }, why: string) => {
     const words = saidLast.get(follow(keyOf(session.harness, session.id)))
     const said = words ? `${why}, and its last words were: ${words}` : why
     // Why its reopening failed is said all the same, since the conversation may be gone for good,
     // and after it what lets it hear the page where it is still open. A conversation known to be
     // open without the add-on is not reopened at all (`keptShut`), so this is said only of one
     // whose reopening was under way before It knew
-    void call('mutation', api.machines.wakeFailed, { for: session, why: unloaded(session) ? notLoadedToo(said) : said }).catch(() => {})
+    const open = session.harness === 'claude-code' ? await openNow() : []
+    void call('mutation', api.machines.wakeFailed, { for: session, why: unloaded(session, open) ? notLoadedToo(said) : said }).catch(() => {})
   }
   /**
    * Whether a Claude Code conversation is open without It's add-on, as far as this machine
@@ -2592,7 +2602,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * heard from by an older add-on. Only Claude Code's own notes and processes count: Codex, Pi, OpenCode
    * and Hermes are never taken to be.
    */
-  const unloaded = (session: { harness: string; id: string }, open: () => OpenClaude[] = openNow): boolean => {
+  const unloaded = (session: { harness: string; id: string }, open: readonly OpenClaude[]): boolean => {
     const key = keyOf(session.harness, session.id)
     return (
       session.harness === 'claude-code' &&
@@ -2737,7 +2747,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * types /reload-plugins in it, which its page says for as long as it waits, as why it was not
    * woken. One no longer kept from it has that taken away from its page.
    */
-  const keptShut = (click: Offered, open: () => OpenClaude[] = openNow): boolean => {
+  const keptShut = (click: Offered, open: readonly OpenClaude[]): boolean => {
     if (!unloaded(click.session!, open)) {
       if (click.heldBack !== undefined) tellHeld(click, null)
       return false
@@ -3163,7 +3173,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const forThread = t3 !== undefined && t3Only(key)
         // Why, as one of a few fixed words made from the refusal: its own words stay on this machine
         record('agent.woken', { result: n >= QUEUE_WAITS.length && !forThread ? 'failed' : 'declined', agent: agentOf(harness), why: wakeWhy(refused ?? '') })
-        if (reopening) notReopened(click.session!, refused)
+        if (reopening) await notReopened(click.session!, refused)
         // T3 Code could not take it, and is not asked again for a while (see `t3For`). A conversation that may go
         // other ways goes as any other meanwhile, which is tried at once; one held in a thread waits for it
         if (t3) {
@@ -3307,12 +3317,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
   async function route(): Promise<void> {
     if (routing || closing || unfitting || recovery.erased) return
     routing = true
-    // Even a pass that outlasts the cache window reads the process table at most once.
-    let openSnapshot: OpenClaude[] | undefined
-    const openThisPass = (): OpenClaude[] => {
-      openSnapshot ??= openNow()
-      return openSnapshot
-    }
     try {
       // Discovery outlives the click that started it, including a completed fallback delivery.
       for (const [key, session] of t3Pending) if (connected(session.harness)) t3For(key, session)
@@ -3392,7 +3396,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         }
         if (!comingBack.size) givingBack = 'done'
       }
-      const now = Date.now()
+      let now = Date.now()
       // Telling It what was handed over is done beside this, never ahead of it: a slow answer
       // there must not hold up renewing leases or taking new clicks
       void confirmAll()
@@ -3481,6 +3485,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
         return Math.max(now - click.at, here - firstSeen.get(click.id)!)
       }
       const offeredHere = new Map([...inbox, ...recoveredClicks.values()].map((c) => [c.id, c]))
+      // Await one shared snapshot before deciding routes. HTTP requests continue to be served;
+      // all session, ownership and wake checks below use the state after discovery completes.
+      const openThisPass =
+        connected('claude-code') &&
+        Date.now() - connectorBegan >= NOT_HEARD_MS &&
+        [...offeredHere.values()].some((c) => c.session?.harness === 'claude-code' && wakes('claude-code', c.at))
+          ? await openNow()
+          : []
+      if (closing || unfitting || recovery.erased) return
+      now = Date.now()
+
       for (const id of t3Waits.keys()) if (!offeredHere.has(id)) t3Waits.delete(id)
       // Before anything is decided about any of them: a click the person asked to have tried
       // again may be one that a click behind it would otherwise wait for, or go with

@@ -4,7 +4,7 @@
 // session it is and what started it, and removes the file when it ends. A file left by one that
 // did not end cleanly names a process that is gone, or one that is another program by now, and
 // is passed over.
-import { spawnSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -56,10 +56,19 @@ export function ranFor(etime: string): number | undefined {
   return (((Number(d) * 24 + Number(h)) * 60 + Number(min!)) * 60 + Number(sec!)) * 1000
 }
 
+/** Runs only the discovery child, with a deadline that kills that child's PID, never a process group. */
+function processOutput(file: string, args: string[], timeout: number): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile(file, args, { encoding: 'utf8', timeout, killSignal: 'SIGKILL', windowsHide: true, maxBuffer: 64 * 1024 }, (err, out) => {
+      resolve(err ? undefined : out)
+    })
+  })
+}
+
 /** When a process began, by this machine's clock, as `ps` says how long it has run, to the second. */
-function beganAt(pid: number): number | undefined {
-  const r = spawnSync('ps', ['-o', 'etime=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000, windowsHide: true })
-  const ran = r.status === 0 ? ranFor(r.stdout) : undefined
+async function beganAt(pid: number): Promise<number | undefined> {
+  const out = await processOutput('ps', ['-o', 'etime=', '-p', String(pid)], 2000)
+  const ran = out === undefined ? undefined : ranFor(out)
   return ran === undefined ? undefined : Date.now() - ran
 }
 
@@ -67,16 +76,16 @@ function beganAt(pid: number): number | undefined {
 const SLACK_MS = 5_000
 
 /** Claude processes and their starts, read together as the backend reads Windows process identity. */
-function windowsStarts(): Map<number, number> {
+async function windowsStarts(): Promise<Map<number, number>> {
   const found = new Map<number, number>()
   const script = "Get-Process -Name claude -ErrorAction SilentlyContinue | ForEach-Object { try { '{0} {1}' -f $_.Id, $_.StartTime.ToFileTimeUtc() } catch {} }"
-  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
-    encoding: 'utf8',
-    timeout: 5000,
-    windowsHide: true,
-  })
-  if (r.status !== 0) return found
-  for (const line of r.stdout.split(/\r?\n/)) {
+  const out = await processOutput(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    5000,
+  )
+  if (out === undefined) return found
+  for (const line of out.split(/\r?\n/)) {
     const m = /^(\d+) (\d+)$/.exec(line.trim())
     if (!m) continue
     // FILETIME counts 100ns ticks since 1601. Divide before converting to preserve milliseconds.
@@ -93,14 +102,14 @@ function windowsStarts(): Map<number, number> {
  * later than the note's session did, as a process given the number afterwards cannot have. On
  * Windows its program is Claude Code's and began no later than the session did. A note that cannot be checked is passed over.
  */
-export function sameProcess(pid: number, note: { procStart?: unknown; startedAt: number }, windows?: ReadonlyMap<number, number>): boolean {
+export async function sameProcess(pid: number, note: { procStart?: unknown; startedAt: number }, windows?: ReadonlyMap<number, number>): Promise<boolean> {
   if (process.platform === 'linux' && typeof note.procStart === 'string') return startOf(pid) === note.procStart
   if (process.platform === 'linux' || process.platform === 'darwin') {
-    const began = beganAt(pid)
+    const began = await beganAt(pid)
     return began !== undefined && began <= note.startedAt + SLACK_MS
   }
   if (process.platform === 'win32') {
-    const began = (windows ?? windowsStarts()).get(pid)
+    const began = (windows ?? (await windowsStarts())).get(pid)
     return began !== undefined && began <= note.startedAt + SLACK_MS
   }
   return false
@@ -112,19 +121,19 @@ export function sameProcess(pid: number, note: { procStart?: unknown; startedAt:
  * itself to reopen a conversation, has no prompt for a person to type `/reload-plugins` at, and
  * neither has a Claude Code that T3 Code runs, whose clicks reach it through T3 Code's own thread.
  */
-export function openClaude(
+export async function openClaude(
   folders: readonly string[],
   alive: (pid: number) => boolean = running,
-  same: (pid: number, note: { procStart?: unknown; startedAt: number }) => boolean = sameProcess,
-): OpenClaude[] {
+  same: (pid: number, note: { procStart?: unknown; startedAt: number }) => boolean | Promise<boolean> = sameProcess,
+): Promise<OpenClaude[]> {
   const open = new Map<string, OpenClaude>()
   // One fresh snapshot per scan, and only if there is a valid live note to check.
-  let windows: Map<number, number> | undefined
+  let windows: Promise<Map<number, number>> | undefined
   const check =
     process.platform === 'win32' && same === sameProcess
-      ? (pid: number, note: { procStart?: unknown; startedAt: number }) => {
+      ? async (pid: number, note: { procStart?: unknown; startedAt: number }) => {
           windows ??= windowsStarts()
-          return sameProcess(pid, note, windows)
+          return sameProcess(pid, note, await windows)
         }
       : same
   for (const folder of new Set(folders)) {
@@ -145,7 +154,7 @@ export function openClaude(
         const pid = Number(name.slice(0, -5))
         if (s.pid !== pid || typeof s.sessionId !== 'string' || !UUID.test(s.sessionId) || typeof s.startedAt !== 'number') continue
         if (s.kind !== 'interactive' || s.entrypoint === 't3-code') continue
-        if (!alive(pid) || !check(pid, { procStart: s.procStart, startedAt: s.startedAt })) continue
+        if (!alive(pid) || !(await check(pid, { procStart: s.procStart, startedAt: s.startedAt }))) continue
         const id = s.sessionId.toLowerCase()
         const was = open.get(id)
         if (!was || was.startedAt < s.startedAt) open.set(id, { id, startedAt: s.startedAt })

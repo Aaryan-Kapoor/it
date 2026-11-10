@@ -28,6 +28,8 @@ const stand = vi.hoisted(() => ({
   /** The folders Claude Code keeps its settings in where It's add-on was put. */
   claudeFolders: [] as string[],
   claudeScans: 0,
+  claudeRealProcesses: false,
+  scan: null as null | { started: () => void; completed: () => void; delay: number },
   /** Every call the connector made to the backend. */
   calls: [] as { name: string; args: any }[],
   /** Every event the connector recorded for usage reporting, with its properties. */
@@ -172,7 +174,24 @@ vi.mock('node:child_process', async (original) => {
   const real = await original<typeof import('node:child_process')>()
   return {
     ...real,
-    execFile: (bin: string, args: string[], options: { env?: NodeJS.ProcessEnv }, done: (err: unknown) => void) => {
+    spawnSync: (...args: Parameters<typeof real.spawnSync>) => {
+      const scan = stand.scan
+      if (!scan || (args[0] !== 'ps' && args[0] !== 'powershell.exe')) return real.spawnSync(...args)
+      scan.started()
+      const result = real.spawnSync(process.execPath, ['-e', `setTimeout(() => console.log('00:00'), ${scan.delay})`], { encoding: 'utf8', timeout: 2500 })
+      scan.completed()
+      return result
+    },
+    execFile: (bin: string, args: string[], options: { env?: NodeJS.ProcessEnv }, done: (err: unknown, out?: string, stderr?: string) => void) => {
+      const scan = stand.scan
+      if (scan && (bin === 'ps' || bin === 'powershell.exe')) {
+        scan.started()
+        return real.execFile(process.execPath, ['-e', `setTimeout(() => console.log('00:00'), ${scan.delay})`], options, (err, out, stderr) => {
+          scan.completed()
+          done(err, out, stderr)
+        })
+      }
+      if (bin === 'ps') return real.execFile(bin, args, options, done)
       // Windows PowerShell, through which a reopened run's job is asked after and ended on Windows, is run as it is, and
       // so are the system's own programs that keep a record It writes to the person there
       if (/(^|[\\/])(powershell|icacls|whoami)\.exe$/i.test(bin)) return (real.execFile as (...a: unknown[]) => unknown)(bin, args, options, done)
@@ -208,6 +227,7 @@ vi.mock('./src/claude-open', async (original) => {
     ...real,
     openClaude: (folders: readonly string[]) => {
       stand.claudeScans++
+      if (stand.claudeRealProcesses) return real.openClaude(folders, () => true)
       return real.openClaude(
         folders,
         () => true,
@@ -387,6 +407,8 @@ afterEach(async () => {
   stand.reconciled.length = 0
   stand.claudeFolders.length = 0
   stand.claudeScans = 0
+  stand.claudeRealProcesses = false
+  stand.scan = null
   said.length = 0
   stand.codex.length = 0
   stand.closed.clear()
@@ -6637,6 +6659,55 @@ describe('how what is done on a conversation’s pages would reach it, as the co
     offered({ ...click(2), session: { harness: 'codex', id: 'thread-1' } })
     await until(() => stand.t3.sent.some((m) => m.text.includes('click-2')))
     expect(stand.t3.sent.every((m) => m.thread === 't3-thread-a')).toBe(true)
+  })
+
+  test('a slow process scan leaves local requests responsive and shares its in-flight result with the banner', async () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-claude-'))
+    made.push(folder)
+    mkdirSync(path.join(folder, 'sessions'))
+    writeFileSync(
+      path.join(folder, 'sessions', '1.json'),
+      JSON.stringify({ pid: 1, sessionId: claude, startedAt: Date.now() - 60_000, kind: 'interactive', entrypoint: 'cli' }),
+    )
+    stand.claudeFolders.push(folder)
+    stand.claudeRealProcesses = true
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+    const real = Date.now
+    const ahead = vi.spyOn(Date, 'now').mockImplementation(() => real() + 60_000)
+    let completed = false
+    let started = false
+    let began = 0
+    let health: Promise<unknown> | undefined
+    const checking = () => {
+      started = true
+      began = performance.now()
+      health = new Promise((resolve) => setTimeout(() => void local('/health').then(resolve), 50))
+    }
+    stand.scan = {
+      started: checking,
+      completed: () => {
+        completed = true
+      },
+      delay: 1800,
+    }
+    try {
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: real() - 60_000 }] })
+      offered({ ...click(1), session: { harness: 'claude-code', id: claude } })
+      await until(() => started)
+      expect(await health).not.toBeNull()
+      expect(performance.now() - began).toBeLessThan(1500)
+      expect(started).toBe(true)
+      expect(completed).toBe(false)
+      // Another local request triggers banner discovery while routing is still awaiting its scan.
+      await local('/session', { method: 'POST', body: { harness: 'claude-code', session: '22222222-2222-4333-8444-555555555555' } })
+      expect(stand.claudeScans).toBe(1)
+      expect(completed).toBe(false)
+      await until(() => completed, 4000)
+      expect(stand.claudeScans).toBe(1)
+    } finally {
+      if (started) await until(() => completed, 4000)
+      ahead.mockRestore()
+    }
   })
 
   test('a hundred clicks share one process scan, and a later routing pass refreshes it', async () => {
