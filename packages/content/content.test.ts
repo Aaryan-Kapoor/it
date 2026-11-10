@@ -2614,6 +2614,36 @@ describe('large files', () => {
     }
   })
 
+  test('a disk whose answer cannot be right, as Bun’s on an Intel Mac is (oven-sh/bun#31133), is taken to have room, and that it could not say is written down', async () => {
+    const real = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).statfs
+    // It leaves more of the disk free than any disk has: whatever free space an answer came to, the write would be refused for it
+    const own = make({ keepFree: Number.MAX_SAFE_INTEGER })
+    const files = [entry('index.html', 'x')]
+    // What Bun 1.3.11 gives on an Intel Mac, with 111 GB free: macOS's own fields, each a place
+    // further on, and a block size of 0. Then a block size and free blocks that are no number.
+    const answers = [
+      { type: 0, bsize: 0, blocks: 4096, bfree: 1048576, bavail: 85112822, files: 27933598, ffree: 27933598 },
+      { bavail: 85112822 },
+      { bavail: Number.NaN, bsize: 4096 },
+      { bavail: 85112822, bsize: -4096 },
+    ]
+    const before = written().length
+    try {
+      for (const [n, answer] of answers.entries()) {
+        vi.mocked(fsp.statfs).mockImplementation((async () => answer) as unknown as typeof real)
+        const prefix = filmPrefix(`unsure-${n}`)
+        expect((await control('stage', { prefix, files }, undefined, { on: own.content })).status, JSON.stringify(answer)).toBe(200)
+        expect((await upload('index.html', 'x', { prefix, on: own.content })).status, JSON.stringify(answer)).toBe(200)
+      }
+      const since = written().slice(before)
+      expect(since.some((e) => e.event === 'disk.unknown' && e.kind === 'statfs_shape')).toBe(true)
+      expect(since.some((e) => e.event === 'disk.full')).toBe(false)
+    } finally {
+      vi.mocked(fsp.statfs).mockImplementation(real)
+      await own.content.close()
+    }
+  })
+
   test('a file arriving in parts that is declared again, for a fresh grant, is asked room only for what is still to come of it', async () => {
     // A disk with room for the file and the 2 GB It leaves free, and a little more: as each part
     // arrives, it has that much less
