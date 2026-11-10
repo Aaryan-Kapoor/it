@@ -45,7 +45,7 @@ Everything a page shows that can change, and every control on it, lives in its s
 
 ## Whether what they do arrives by itself
 
-It does where It's add-on is in your harness and its connector runs: `it status` shows your harness in `harnesses` with `"addon": "connected"` or `"outdated"`, and `connector` with `"ok": true`. Both are needed, and neither is proof that a message will reach this conversation. If it will not arrive by itself, or you cannot tell, or you once ended a turn expecting a message and none came, wait for it: `it wait --id deploy-plan --timeout 100` blocks until the user acts on that page and prints the action. When the time is up it prints `{"timedOut": true}`: nothing was lost and nothing has happened yet, so run it again. `it help waiting` says the rest, `"needs_approval"`, `--follow` and Hermes among it.
+`it create`, `it update` and `it tour show` print `arrives` for this conversation: whether what the user does on the page arrives here by itself (`byItself`), how (`via`: `addon`, or `t3` for its thread of T3 Code), and what to do (`next`). Do what `next` says: where `byItself` is `true`, end your turn and do not wait. Otherwise, or where `arrives` is missing, wait: `it wait --id deploy-plan --timeout 100` blocks until the user acts on that page and prints the action. When the time is up it prints `{"timedOut": true}`: nothing has happened yet, so run it again. If you once ended a turn expecting a message and none came, wait from then on. `it help waiting` says the rest, /reload-plugins and Hermes too.
 
 ## Reading what arrives
 
