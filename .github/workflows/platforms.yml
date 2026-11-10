@@ -112,6 +112,13 @@ jobs:
           chmod +x "$RUNNER_TEMP/it-programs/$PROGRAM"
           IT_HOME="$RUNNER_TEMP/it-version-home" "$RUNNER_TEMP/it-programs/$PROGRAM" --version
           echo "IT_BIN=$RUNNER_TEMP/it-programs/$PROGRAM" >> "$GITHUB_ENV"
+      # It refuses to write a page where that would leave less than 2 GB free on the disk it keeps
+      # its files on, so how much room the runner has is said before It is started
+      - name: Room on the disk It keeps its files on
+        run: |
+          df -k "$RUNNER_TEMP"
+          node -e "const s = require('node:fs').statfsSync(process.env.RUNNER_TEMP); console.log('node', s.bavail * s.bsize, JSON.stringify(s))"
+          npx -y bun@1.3.11 -e "const s = require('node:fs').statfsSync(process.env.RUNNER_TEMP); console.log('bun', Number(s.bavail) * Number(s.bsize), JSON.stringify(s, (k, v) => typeof v === 'bigint' ? String(v) : v))" || true
       # The stack goes on running behind the steps that follow, as in the main workflow
       - name: Start It
         id: stack
