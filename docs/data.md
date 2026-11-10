@@ -66,9 +66,78 @@ A newer version of It may bring a newer backend program, newer functions, or bot
 - **Functions that do not fit the data are not forced onto it.** If what the database holds does not fit the functions of the newer version, It keeps the functions that were loaded before and goes on serving with them, and everything you had is still there. Only the functions are the earlier version's. The site, the `it` command and the rest of the service are the newer version's, and where the two do not fit each other, something on the site or a command may fail. `it status` says so before anything else, and its JSON has it under `database` as `behind` and in its `hint`. The version of It that those functions came with starts on the data again and puts the two in step, as long as the newer It did not also bring a newer backend program: where it did, that program has run on the data, and the older It is refused as the next point but one says.
 - **A newer backend program is fetched before it is started.** A version of It that runs a newer release of the backend program fetches it the first time it starts, so that start has to reach the program's releases, or the place `IT_BACKEND_RELEASES` names. Where it cannot, It does not start: `offline`.
 - **Functions that stay are held to their port.** What a backend believes of its own address is fixed with its functions. So where the newer functions could not be loaded and It was also given another port than the one the functions in the database were loaded for, it stops: `port_changed`. Put the port back with `IT_PORT`, and it says which.
-- **An older It does not start on data that is a newer one's.** The data is a newer It's once that It's functions are in it, or once a newer backend program has run on it, and from then an older It refuses it with `backend_older` and names the version to install. A loading of a newer It's functions that was cut short counts as done, since it may have been. To go back to the older It, put back the copy from before the newer one changed the database. A copy holds the database and not the files of your pages, which are kept beside it and are not copied: a page that was deleted, or versions of one that were let go, since the copy was made come back in the list with their files gone.
+- **An older It does not start on data that is a newer one's.** The data is a newer It's once that It's functions are in it, or once a newer backend program has run on it, and from then an older It refuses it with `backend_older` and names the version to install. A loading of a newer It's functions that was cut short counts as done, since it may have been. The way on is a newer It still. As a last resort, the copy from before the newer one changed the database can be put back, and [Going back to an older It](#going-back-to-an-older-it) says how and what is lost.
 - **A copy made soon after everything was erased does not last.** A copy of the database that It makes before the backend program has run for about two and a half hours since everything was erased still holds what was erased, as the database's own file does for that long. It removes such a copy once that time is over, whether or not a later copy exists, so the way back that copy gave lasts only until then. The time is counted while the backend program runs, which is the only time it clears anything out of its file, and erasing everything again starts it again.
 - **A newer It that changes nothing in the database leaves no copy.** A copy is made before a newer backend program and before other functions. A newer version of It that brings neither makes none, since it changes nothing there. The data is that newer It's all the same, so the older It refuses it, and for that case there is no copy to put back: the way on is the newer It.
+
+## Going back to an older It
+
+When a newer It does not work with your data, the way on is a release newer still. Install the newest one, with the install command or `it upgrade`, and say what went wrong at the project's issues: a fix is made in a newer release, which then runs on the data as it stands, with nothing lost. Going back to the older It is a last resort, for when no newer release helps and you cannot wait for one. It works by putting back the copy that the newer It kept before it changed anything, and it loses everything that was done since that copy was made.
+
+### What a copy holds
+
+Each copy is a folder in `~/.it/backend/`, or in `backend/` in the folder `IT_HOME` names, whose name begins with `before-`. It holds everything the backend needs to be as it was, taken together while nothing had the database open:
+
+- `db.sqlite3`, and `db.sqlite3-wal` and `db.sqlite3-shm` where they were there, which are the database: your pages, their state and the record of what was done on them, actions, displays, paired browsers and machines, and the rest of It's records.
+- `storage/`, the files the backend program keeps for that database.
+- `data.json`, which is what It notes of the database. It says which version of It's functions are in it, under `functionsOf`, and which release of the backend program last ran on it. This is what lets the older It start on the copy, because it says that the data is that older It's.
+- `copy.json`, which says which copy this is and when it was made, under `made`, in milliseconds since 1970. It belongs to the copy and is not put back.
+
+A copy does not hold the files of your pages, which are in `content/`, nor the records of the part of It that serves them, in `content-data/`, nor It's settings in `service.json` and this machine's identity. Those stay where they are, and the older It goes on with them.
+
+It keeps the two copies made last. To choose between them, open `data.json` inside each: the copy whose `functionsOf` is the version you want to go back to is the one to put back, and that is the version to install.
+
+### What is lost
+
+Everything that was done after the copy was made is gone once it is back, because the database is the one from before the upgrade. That is every page published, every version published, every change to a page's state, every click and answer, every display or machine paired, every name changed and every setting changed on the site, from the moment the newer It first started until you stopped it. It cannot be brought across, since only the newer It reads the newer data.
+
+Some of what comes back is not quite as it was. A page that was deleted since the upgrade, and earlier versions of a page that were let go since, come back in the list, but their files were removed from `content/`, so they do not open. That includes a page on which ten or more versions were published since, whose version from before the upgrade has been let go. A browser or machine whose pairing you ended since the upgrade is paired again once the copy is back, so end it again. A browser paired since the upgrade, and a machine that joined since, have to be paired or joined again.
+
+The newer data is not thrown away by these steps. It is moved into a folder of its own, so that you can go forward to it again with the newer It.
+
+### Putting the copy back
+
+These steps are the same on Linux and macOS. Where It's folder is not `~/.it`, use the folder `IT_HOME` names instead.
+
+1. Stop It and keep it from starting again by itself, with `it service uninstall`. Where you started it yourself with `it serve`, stop that with Ctrl-C. `it service status` says whether It is still running, and the next step must wait until it is not.
+2. Move the newer data aside and put the copy in its place. Put the name of the copy's folder after `copy=` in these commands, and run them in a terminal:
+
+   ```sh
+   cd ~/.it/backend
+   copy=before-...
+   mkdir after-upgrade
+   mv db.sqlite3* data.json storage after-upgrade/
+   cp -p "$copy"/db.sqlite3* "$copy"/data.json .
+   cp -Rp "$copy"/storage .
+   ```
+
+   If `mkdir` says that `after-upgrade` is there already, give the folder another name in the three lines that use it. The copy itself is left as it is, so the steps can be tried again.
+3. Install the older version, naming its release, as `v0.1.36` is named here:
+
+   ```sh
+   curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/download/v0.1.36/install.sh | IT_VERSION=v0.1.36 sh
+   ```
+
+   Run at a terminal, the script goes on into `it setup`, which registers the background service again and starts it. Where it does not, run `it setup` yourself.
+
+On Windows the steps are the same, in PowerShell:
+
+```powershell
+it service uninstall
+cd ~\.it\backend
+$copy = 'before-...'
+New-Item -ItemType Directory after-upgrade
+Move-Item db.sqlite3*, data.json, storage after-upgrade
+Copy-Item "$copy\db.sqlite3*", "$copy\data.json" .
+Copy-Item "$copy\storage" . -Recurse
+$env:IT_VERSION = 'v0.1.36'; irm https://github.com/Aaryan-Kapoor/it/releases/download/v0.1.36/install.ps1 | iex
+```
+
+Once the older It is running, `it status` says that the database is at the older version, with nothing under `behind`, and your pages are there as they were before the upgrade. The newer It had removed the older release of the backend program, so the older It fetches it again the first time it starts, and that start has to reach GitHub or the place `IT_BACKEND_RELEASES` names. The older It goes on telling you that the newer version is out. Installing that same version again changes the data again in the same way, so wait for a release that fixes what went wrong, or turn the reminder off with `it updates off`.
+
+To go forward again instead, stop It in the same way, move the files in `after-upgrade` back into `~/.it/backend/` in place of the ones there, and install the newer It. When you no longer need the newer data, delete the `after-upgrade` folder yourself. It never removes a folder it did not make.
+
+The steps on Linux are tested together: a test of It's own keeps a copy as an upgrade does, loads newer functions with a field the older ones do not know and writes data that uses it, runs the commands above, and then starts the older It on the copy and opens the page that was there. The steps on macOS and Windows, and installing an older release from GitHub, are not run by that test.
 
 ## How long things are kept
 
