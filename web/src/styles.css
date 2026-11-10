@@ -4109,3 +4109,21 @@ fieldset.media-bar {
     animation: none;
   }
 }
+/* On a phone, the camera's chip and a recording's beside it would push It's bar onto a second row and the page down with it: the mark steps aside, both Stops show only their square, and the camera's chip says just "Live". Each keeps its own label for whoever hears the screen read */
+@media (max-width: 520px) {
+  .page-nav:has(.media-cam):has(.media-rec) .page-nav-mark {
+    display: none;
+  }
+  .page-nav:has(.media-cam):has(.media-rec) :is(.media-rec-stop, .media-cam-stop) {
+    gap: 0;
+    padding: 0 7px;
+    font-size: 0;
+  }
+  .page-nav:has(.media-cam):has(.media-rec) .media-cam-what {
+    font-size: 0;
+  }
+  .page-nav:has(.media-cam):has(.media-rec) .media-cam-what::after {
+    content: "Live";
+    font-size: 12px;
+  }
+}
