@@ -536,7 +536,7 @@ describe('the script inside a page', () => {
       return { followed, seen: seen[0] }
     }
 
-    test('a link to another site opens in a tab of its own with no hold either way, and a link within the page or to its own files stays as the page wrote it', async () => {
+    test('a link to another site opens in a tab of its own with no hold either way, and a link within the page or to its own files goes where the page aims it, with no hold either', async () => {
       const p = load(
         [
           '<a id="plain" href="https://elsewhere.invalid/a">plain</a>',
@@ -562,8 +562,8 @@ describe('the script inside a page', () => {
       for (const id of ['plain', 'self', 'top', 'named', 'port', 'area', 'drawn']) expect([id, said(id)]).toEqual([id, OUT])
       expect(said('opener')).toEqual(['_blank', 'External noopener noreferrer'])
       for (const id of ['fragment', 'own', 'whole', 'inside', 'mail', 'none'])
-        expect([id, said(id)]).toEqual([id, [doc.getElementById(id).getAttribute('target'), null]])
-      expect(said('inside')).toEqual(['inside', null])
+        expect([id, said(id)]).toEqual([id, [doc.getElementById(id).getAttribute('target'), 'noopener noreferrer']])
+      expect(said('inside')).toEqual(['inside', 'noopener noreferrer'])
       expect(said('ownTab')).toEqual(['_blank', 'noopener noreferrer'])
       // Added later, and changed later by the page's own script
       doc.body.insertAdjacentHTML('beforeend', '<div><a id="later" href="https://elsewhere.invalid/later">later</a></div>')
@@ -683,12 +683,16 @@ describe('the script inside a page', () => {
       expect(openedFor(p)).toEqual([])
     })
 
-    test('a form whose answer opens in a window of its own leaves no hold either way, as it appears and on its way out', async () => {
+    test('a form leaves no hold either way, wherever its answer opens, as it appears and on its way out', async () => {
       const p = load(
         '<form id="out" target="_blank" action="https://elsewhere.invalid/"></form><form id="opener" target="_blank" rel="opener"></form><form id="here"><button id="send" formtarget="_blank">send</button></form>',
       )
       const doc = p.w.document
-      expect(['out', 'opener', 'here'].map((id) => doc.getElementById(id).getAttribute('rel'))).toEqual(['noopener noreferrer', 'noopener noreferrer', null])
+      expect(['out', 'opener', 'here'].map((id) => doc.getElementById(id).getAttribute('rel'))).toEqual([
+        'noopener noreferrer',
+        'noopener noreferrer',
+        'noopener noreferrer',
+      ])
       // Sent by a button that names a window of its own
       const here = doc.getElementById('here')
       let relWhenSent: string | null = 'not sent'
@@ -755,7 +759,7 @@ describe('the script inside a page', () => {
       for (const id of ['embed', 'picture', 'global']) expect([id, said(id)]).toEqual([id, ['_blank', 'noopener noreferrer']])
       // Its own file opens in a window by that name, with no hold either way
       expect(said('own')).toEqual(['help', 'noopener noreferrer'])
-      expect(said('inside')).toEqual(['inside', null])
+      expect(said('inside')).toEqual(['inside', 'noopener noreferrer'])
       // And a window the page's script opens at such a name is held to the same
       p.w.open('other.html', 'help')
       p.w.open('https://elsewhere.invalid/e', 'picture')
@@ -784,15 +788,15 @@ describe('the script inside a page', () => {
       doc.getElementById('d').setAttribute('href', 'other.html')
       await settled()
       expect(['a', 'b', 'd'].map(said)).toEqual([
-        [null, null],
-        ['_self', 'author'],
+        [null, 'noopener noreferrer'],
+        ['_self', 'author noopener noreferrer'],
         ['_blank', 'external noopener noreferrer'],
       ])
-      expect(click(p, doc.getElementById('a')).seen).toEqual({ target: null, rel: null })
+      expect(click(p, doc.getElementById('a')).seen).toEqual({ target: null, rel: 'noopener noreferrer' })
       // Changed and clicked at once, before the document's watcher has run
       const c = doc.getElementById('c')
       c.setAttribute('href', '#top')
-      expect(click(p, c).seen).toEqual({ target: null, rel: null })
+      expect(click(p, c).seen).toEqual({ target: null, rel: 'noopener noreferrer' })
       // And sent out again once it leads to another site once more
       c.setAttribute('href', 'https://elsewhere.invalid/again')
       expect(click(p, c).seen).toEqual({ target: '_blank', rel: 'noopener noreferrer' })
@@ -866,15 +870,15 @@ describe('the script inside a page', () => {
       const doc = p.w.document
       const said = (id: string) => [doc.getElementById(id).getAttribute('target'), doc.getElementById(id).getAttribute('rel')]
       for (const id of ['index', 'lookalike', 'old']) expect([id, said(id)]).toEqual([id, ['_blank', 'noopener noreferrer']])
-      expect(said('new')).toEqual(['after', null])
-      expect(said('inside')).toEqual(['inside', null])
+      expect(said('new')).toEqual(['after', 'noopener noreferrer'])
+      expect(said('inside')).toEqual(['inside', 'noopener noreferrer'])
       // A frame in a closed shadow root a script made is found by its name too, as a browser finds it
       const root = doc.body.appendChild(doc.createElement('div')).attachShadow({ mode: 'closed' })
       root.innerHTML = '<iframe name="shadowed"></iframe>'
       root.querySelector('iframe').contentWindow.name = 'shadowed'
       doc.body.insertAdjacentHTML('beforeend', '<a id="shadowed" href="https://elsewhere.invalid/f" target="shadowed">in a shadow root</a>')
       await settled()
-      expect(said('shadowed')).toEqual(['shadowed', null])
+      expect(said('shadowed')).toEqual(['shadowed', 'noopener noreferrer'])
       // A window the page's script asks for by such a name is opened with no hold, so the page is
       // given no handle on it, and nothing of a window of its own, such as its functions, to use
       p.w.open('', '0')
@@ -917,8 +921,8 @@ describe('the script inside a page', () => {
       expect(said('spaced')).toEqual(['_blank', 'noopener noreferrer'])
       expect(said('self')).toEqual(['_blank', 'noopener noreferrer'])
       expect(said('local')).toEqual([' inside ', 'noopener noreferrer'])
-      expect(said('inside')).toEqual(['inside', null])
-      expect(said('SELF')).toEqual(['_SELF', null])
+      expect(said('inside')).toEqual(['inside', 'noopener noreferrer'])
+      expect(said('SELF')).toEqual(['_SELF', 'noopener noreferrer'])
       p.w.open('', ' inside ')
       doc.open('', ' inside ', '')
       p.w.open('', 'inside')
@@ -943,7 +947,7 @@ describe('the script inside a page', () => {
       const said = (id: string) => [doc.getElementById(id).getAttribute('target'), doc.getElementById(id).getAttribute('rel')]
       expect(said('out')).toEqual(['_blank', 'noopener noreferrer'])
       expect(said('file')).toEqual([null, 'noopener noreferrer'])
-      expect(said('here')).toEqual(['', null])
+      expect(said('here')).toEqual(['', 'noopener noreferrer'])
       expect(said('form')).toEqual([null, 'noopener noreferrer'])
       // A base that a script adds, or whose target it changes, sets the page's links right at once
       const q = load('<a id="file" href="other.html">a file of the page’s</a><form id="form"></form>')
@@ -1031,6 +1035,29 @@ describe('the script inside a page', () => {
       form.setAttribute('rel', '')
       el('send').click()
       expect(seen.button).toBe('noopener noreferrer')
+    })
+
+    test('a form in a shadow root a script made, filled and sent at once, and an attribute named by something that only turns into its name, are set right before the browser has them', () => {
+      const p = load('<div id="host"></div><a id="link" href="other.html" target="fresh">a file of the page’s</a>')
+      const doc = p.w.document
+      const seen: Record<string, unknown> = {}
+      // A form written into a closed root and sent before any observer has run: the root hears it go
+      const root = doc.getElementById('host').attachShadow({ mode: 'closed' })
+      root.innerHTML = '<form action="https://elsewhere.invalid/f" target="fresh" rel="opener"></form>'
+      const form = root.querySelector('form')
+      form.addEventListener('submit', (e: any) => {
+        seen.form = form.getAttribute('rel')
+        e.preventDefault()
+      })
+      form.requestSubmit()
+      // A name that turns into `rel` only when the browser makes it a string
+      const link = doc.getElementById('link')
+      link.setAttribute({ toString: () => 'rel' }, 'opener')
+      seen.link = link.getAttribute('rel')
+      // And a `<base>` put in or taken out by a handler changes nothing: every link already leaves no hold
+      doc.head.insertAdjacentHTML('beforeend', '<base target="other">')
+      seen.base = link.getAttribute('rel')
+      expect(seen).toEqual({ form: 'noopener noreferrer', link: 'noopener noreferrer', base: 'noopener noreferrer' })
     })
 
     test('a link in a closed shadow root that a handler of the page’s changes is set right again after the handler, where the window cannot see it and where the event goes no further than the root', async () => {

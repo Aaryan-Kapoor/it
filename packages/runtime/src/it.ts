@@ -541,24 +541,15 @@ const leadsTo = (el: Element) => addressOf(el.getAttribute('href') ?? el.getAttr
 const elsewhere = (to: URL) => (to.protocol === 'http:' || to.protocol === 'https:') && to.origin !== home
 /** The targets that name the frame a link is in, or one around it: `_parent` and `_top` are refused to a page, which cannot move the tab it is shown in. */
 const IN_PLACE = new Set(['', '_self', '_parent', '_top'])
-/** Whether a target opens a new window: `_blank`, or any name that is not a keyword and no frame inside the page, `_new` among them. */
-function opensAWindow(target: string): boolean {
-  if (target.toLowerCase() === '_blank') return true
-  return !IN_PLACE.has(target.toLowerCase()) && !namesAFrame(target)
-}
 /**
- * The target a link or a form is followed in, as the browser takes it: the button's own, the
- * element's own, or else the page's `<base target>`, as it is written. The browser trims nothing
- * from a name, and compares the keywords alone without regard to case: ` inside ` is no frame's
- * name `inside`, and ` _self ` is a name, not `_self`. A name with a line break and a `<` in it is
- * taken as `_blank`, as the browser takes it.
+ * The target a link or a form is followed in, as the browser takes it: its own, or else the page's
+ * `<base target>`, as it is written. The browser trims nothing from a name, and compares the
+ * keywords alone without regard to case: ` inside ` is no frame's name `inside`, and ` _self ` is
+ * a name, not `_self`. A name with a line break and a `<` in it is taken as `_blank`, as the
+ * browser takes it.
  */
-function targetOf(el: Element, submitter?: Element | null): string {
-  const said = submitter?.hasAttribute('formtarget')
-    ? submitter.getAttribute('formtarget')
-    : el.hasAttribute('target')
-      ? el.getAttribute('target')
-      : document.querySelector('base[target]')?.getAttribute('target')
+function targetOf(el: Element): string {
+  const said = el.hasAttribute('target') ? el.getAttribute('target') : document.querySelector('base[target]')?.getAttribute('target')
   const target = said ?? ''
   return /[\t\n\r]/.test(target) && target.includes('<') ? '_blank' : target
 }
@@ -614,19 +605,25 @@ function namesAFrame(target: string): boolean {
 /** The browser's own ways of writing an attribute, which It writes by: the page's are wrapped below, to set right what the page writes. */
 const setAttr = Element.prototype.setAttribute
 const removeAttr = Element.prototype.removeAttribute
-/** Gives a link or a form `noopener` and `noreferrer`, and takes `opener` away: the window it opens and the page have no hold on each other. */
-function withNoHold(el: Element, opens: boolean): void {
+/**
+ * Gives a link or a form `noopener` and `noreferrer`, and takes `opener` away: any window it
+ * opens and the page have no hold on each other. Every link and form has them, whatever its
+ * target, so that no reckoning of which target opens a window, from its own, its button's or the
+ * page's `<base>`, as they are now or as a handler makes them, can leave one with a hold. They
+ * change nothing where a link or a form is followed in place or in a frame of the page's, which
+ * the browser follows as before.
+ */
+function withNoHold(el: Element): void {
   const said = el.getAttribute('rel')
-  if (said === null && !opens) return
   const words = (said ?? '').split(/\s+/).filter(Boolean)
   const kept = words.filter((word) => word.toLowerCase() !== 'opener')
-  if (opens) for (const word of ['noopener', 'noreferrer']) if (!kept.some((w) => w.toLowerCase() === word)) kept.push(word)
-  if (kept.length !== words.length || kept.some((word, n) => word !== words[n])) setAttr.call(el, 'rel', kept.join(' '))
+  for (const word of ['noopener', 'noreferrer']) if (!kept.some((w) => w.toLowerCase() === word)) kept.push(word)
+  if (said === null || kept.length !== words.length || kept.some((word, n) => word !== words[n])) setAttr.call(el, 'rel', kept.join(' '))
 }
 /** What a link's own target and rel were before It sent it to a tab of its own, to be put back once it leads to another site no longer. */
 const pageSaid = new WeakMap<Element, { target: string | null; rel: string | null }>()
 const put = (el: Element, name: string, value: string | null) => (value === null ? removeAttr.call(el, name) : setAttr.call(el, name, value))
-/** What It does to a link: one to another site opens in a tab of its own, and one that opens a window leaves no hold. */
+/** What It does to a link: one to another site opens in a tab of its own, and none leaves a hold. */
 function guide(el: Element): void {
   if (!isLink(el)) return
   const to = leadsTo(el)
@@ -645,12 +642,12 @@ function guide(el: Element): void {
       put(el, 'rel', said.rel)
     }
   }
-  withNoHold(el, opensAWindow(targetOf(el)))
+  withNoHold(el)
 }
-/** What It does to a form: one whose answer opens in a window of its own leaves no hold. */
-function guideForm(form: Element, submitter?: Element | null): void {
+/** What It does to a form: wherever its answer opens, it leaves no hold. */
+function guideForm(form: Element): void {
   if (form.localName !== 'form') return
-  withNoHold(form, opensAWindow(targetOf(form, submitter)))
+  withNoHold(form)
 }
 /** Everything It does to an element of the page as it appears or changes. */
 function tend(el: Element): void {
@@ -706,7 +703,7 @@ function tendNow(el: unknown): void {
       }
     } else if (el.localName === 'button' || el.localName === 'input') {
       const form = (el as HTMLButtonElement).form
-      if (form) guideForm(form, el)
+      if (form) guideForm(form)
     } else tend(el)
   } finally {
     tendingNow = false
@@ -715,11 +712,23 @@ function tendNow(el: unknown): void {
 type Given = unknown[]
 /** What a browser's prototype holds, read by name. */
 type Loose = any
-/** Wraps a method so that the element it wrote to is tended as it returns, where it wrote something It looks after. */
-function afterCalling(owner: Loose, name: string, elementOf: (self: Loose, given: Given) => unknown, wrote: (self: Loose, given: Given) => boolean): void {
+/**
+ * Wraps a method so that the element it wrote to is tended as it returns, where it wrote something
+ * It looks after. The attribute name it was given, at `named`, is made a string once, before the
+ * browser's own method has it, so that what It reads is what the browser wrote: a name that says
+ * one thing to It and another to the browser cannot pass by.
+ */
+function afterCalling(
+  owner: Loose,
+  name: string,
+  elementOf: (self: Loose, given: Given) => unknown,
+  wrote: (self: Loose, given: Given) => boolean,
+  named?: number,
+): void {
   const native = owner?.[name]
   if (typeof native !== 'function') return
   owner[name] = function (this: unknown, ...given: Given) {
+    if (named !== undefined && given.length > named) given[named] = `${given[named]}`
     const out = native.apply(this, given)
     if (wrote(this, given)) tendNow(elementOf(this, given))
     return out
@@ -755,11 +764,11 @@ function noteOwner(owner: Loose, name: string): void {
 }
 const itself = (it: unknown) => it
 const E = Element.prototype
-afterCalling(E, 'setAttribute', itself, (_, given) => looksAfter(given[0]))
-afterCalling(E, 'setAttributeNS', itself, (_, given) => looksAfter(given[1]))
-afterCalling(E, 'removeAttribute', itself, (_, given) => looksAfter(given[0]))
-afterCalling(E, 'removeAttributeNS', itself, (_, given) => looksAfter(given[1]))
-afterCalling(E, 'toggleAttribute', itself, (_, given) => looksAfter(given[0]))
+afterCalling(E, 'setAttribute', itself, (_, given) => looksAfter(given[0]), 0)
+afterCalling(E, 'setAttributeNS', itself, (_, given) => looksAfter(given[1]), 1)
+afterCalling(E, 'removeAttribute', itself, (_, given) => looksAfter(given[0]), 0)
+afterCalling(E, 'removeAttributeNS', itself, (_, given) => looksAfter(given[1]), 1)
+afterCalling(E, 'toggleAttribute', itself, (_, given) => looksAfter(given[0]), 0)
 for (const name of ['setAttributeNode', 'setAttributeNodeNS', 'removeAttributeNode'])
   afterCalling(E, name, itself, (_, given) => looksAfter((given[0] as Attr | null)?.name))
 // An attribute node written by itself, or put in or taken out of an element's attributes
@@ -771,8 +780,8 @@ noteOwner(E, 'attributes')
 const MAP = typeof NamedNodeMap === 'function' ? NamedNodeMap.prototype : undefined
 const mapOwner = (it: object) => ownersOf.get(it)
 for (const name of ['setNamedItem', 'setNamedItemNS']) afterCalling(MAP, name, mapOwner, (_, given) => looksAfter((given[0] as Attr | null)?.name))
-afterCalling(MAP, 'removeNamedItem', mapOwner, (_, given) => looksAfter(given[0]))
-afterCalling(MAP, 'removeNamedItemNS', mapOwner, (_, given) => looksAfter(given[1]))
+afterCalling(MAP, 'removeNamedItem', mapOwner, (_, given) => looksAfter(given[0]), 0)
+afterCalling(MAP, 'removeNamedItemNS', mapOwner, (_, given) => looksAfter(given[1]), 1)
 // The properties that reflect them
 const LINKS = ['target', 'rel', 'href', 'protocol', 'username', 'password', 'host', 'hostname', 'port', 'pathname', 'search', 'hash', 'referrerPolicy', 'ping']
 const REFLECTING: [string, string[]][] = [
@@ -861,6 +870,17 @@ for (const event of FOLLOWING) for (const capture of [true, false]) window.addEv
 // A shadow root hides what is in it from the document's observer, and a closed one hides it from
 // the window's listeners as well. So each root a script makes, open or closed, is watched as the
 // document is, and hears of the links followed in it.
+/**
+ * A form is checked on its way out too, and again once every handler of the submit event has
+ * run, as its data is gathered, just before the browser reads its target and rel. Neither event
+ * leaves a shadow root, so each root a script makes hears them for its own forms, as the window
+ * does for the document's.
+ */
+const FORMS = ['submit', 'formdata']
+const onItsWayOut = (e: Event) => {
+  if (e.target instanceof Element) guideForm(e.target)
+}
+for (const event of FORMS) window.addEventListener(event, onItsWayOut, true)
 const attachShadow = Element.prototype.attachShadow
 Element.prototype.attachShadow = function (this: Element, init: ShadowRootInit) {
   const root = attachShadow.call(this, init)
@@ -872,28 +892,9 @@ Element.prototype.attachShadow = function (this: Element, init: ShadowRootInit) 
     root.addEventListener(event, (e) => onTheWay(e, true), true)
     root.addEventListener(event, (e) => onTheWay(e, false, false))
   }
+  for (const event of FORMS) root.addEventListener(event, onItsWayOut, true)
   return root
 }
-// A form is checked on its way out too, with the button that sent it, which may name its own target,
-// and again once every handler of the submit event has run, just before the browser reads its
-// target and rel: as the form's data is gathered, which a page's handler there cannot keep from It
-const submittedBy = new WeakMap<Element, Element | null>()
-window.addEventListener(
-  'submit',
-  (e) => {
-    if (!(e.target instanceof Element)) return
-    submittedBy.set(e.target, (e as SubmitEvent).submitter)
-    guideForm(e.target, (e as SubmitEvent).submitter)
-  },
-  true,
-)
-window.addEventListener(
-  'formdata',
-  (e) => {
-    if (e.target instanceof Element) guideForm(e.target, submittedBy.get(e.target))
-  },
-  true,
-)
 // A link or a form the page made and never put in the document is activated with no event
 // reaching the window: it is checked here instead, on its way
 const clickElement = HTMLElement.prototype.click

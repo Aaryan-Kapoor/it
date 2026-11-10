@@ -1884,8 +1884,8 @@ try {
     return said
   }, out)
   check(
-    'a link aimed at a frame of another site’s in the page is followed there by the name the frame goes by now, and aimed at any other name, a number or a name the page made to lead to a frame, opens a tab of its own with no hold either way',
-    JSON.stringify(aimedAt.kept) === JSON.stringify(['out-frame', null]) &&
+    'a link aimed at a frame of another site’s in the page is followed there by the name the frame goes by now, with no hold as every link has, and aimed at any other name, a number or a name the page made to lead to a frame, opens a tab of its own with no hold either way',
+    JSON.stringify(aimedAt.kept) === JSON.stringify(['out-frame', 'noopener noreferrer']) &&
       ['renamed, by the name it was given', 'renamed, by the name it took', 'unnamed, by its number'].every(
         (kind) => JSON.stringify(aimedAt[kind]) === JSON.stringify(['_blank', 'noopener noreferrer']),
       ),
