@@ -170,7 +170,7 @@ const FAILURES = ['backend_program', 'backend_silent', 'backend_exited', 'port_t
 export const failureOf = (code: string | undefined): (typeof FAILURES)[number] =>
   (FAILURES as readonly string[]).includes(code ?? '') ? (code as (typeof FAILURES)[number]) : 'other'
 
-const TOUR_PAGES = ['menu', 'whiteboard', 'chess', 'checklist', 'drums', 'button', 'done'] as const
+const TOUR_PAGES = ['menu', 'room', 'whiteboard', 'chess', 'checklist', 'drums', 'button', 'done'] as const
 export type TourPage = (typeof TOUR_PAGES)[number]
 
 /**
@@ -233,7 +233,7 @@ export const ALLOWED = {
   'notification.sent': { agent: AGENTS, buttons: EITHER, sticky: EITHER, page: EITHER, to: ['one', 'all'] },
   'notification.ended': { how: ['answered', 'dismissed'], pushed: EITHER },
   'tour.shown': { page: TOUR_PAGES, agent: AGENTS },
-  'tour.ended': { seen: ['0', '1', '2', '3', '4', '5'] },
+  'tour.ended': { seen: ['0', '1', '2', '3', '4', '5', '6'] },
   'upgrade.done': { from: VERSION_SHAPE, to: VERSION_SHAPE, by: ['command', 'site'], result: ['ok', 'failed'] },
   'service.failed': { what: FAILURES },
   'installation.removed': { age: AGES },
