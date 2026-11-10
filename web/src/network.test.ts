@@ -117,6 +117,18 @@ describe('adding a display, in the browser on the machine It runs on', () => {
     expect(host.querySelector('.pairing')!.textContent).not.toContain('localhost')
     // With one address there is nothing to choose
     expect(host.querySelector('select')).toBeNull()
+    // Over the network the machine is on, the person is told who else can open this, and that the tailnet is the way for a phone
+    expect(text('.pair-phone')).toBe(
+      'Anyone on this network can open It’s pairing screen, and on shared Wi-Fi, such as a venue’s, that is everyone there. Shared Wi-Fi also often keeps devices from reaching each other, and then the address does not open at all. For a phone, choose “My tailnet only”.',
+    )
+  })
+
+  test('kept to the tailnet, the pairing screen says nothing of who else is on the network, since nobody else can open it', async () => {
+    watched['network:get'] = { on: true, tailnet: true, addresses: ['http://studio.tail1234.ts.net:4700'] }
+    await displays()
+    await press('Add a display')
+    expect(text('.pair-address')).toBe(`http://studio.tail1234.ts.net:4700/pair#${CODE}`)
+    expect(host.querySelector('.pair-phone')).toBeNull()
   })
 
   test('with the network off, it says to run `it network on` and gives no address, and the address appears by itself once the network is on', async () => {
@@ -726,18 +738,39 @@ describe('the network as a switch', () => {
     expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
   })
 
-  test('on a machine the internet reaches, turning it on is asked about first, with why, and nothing is done on a no', async () => {
+  test('the three choices say who each lets in, and the tailnet is offered as the one for a phone', async () => {
+    watched['network:get'] = stands({ canTailnet: true })
+    await panel()
+    const shown = [...host.querySelectorAll('.net-way')].map((way) => [way.querySelector('b')!.textContent, way.querySelector('small')!.textContent])
+    expect(shown).toEqual([
+      ['This computer only', 'Nothing but the machine It runs on can open It.'],
+      [
+        'Anyone on this network',
+        'Any device on the same Wi-Fi or wired network can open It and its pairing screen, over plain http. On shared Wi-Fi that is everyone there. Not the internet.',
+      ],
+      ['My tailnet only', 'Only your own devices that are signed in to Tailscale, wherever they are. The choice for a phone.'],
+    ])
+  })
+
+  test('on a machine the internet reaches, "on" is still the network the machine is on, and is turned on with nothing asked first', async () => {
     watched['network:get'] = stands({ exposed: 'has a public address (203.0.113.7)' })
     const asking = vi.fn((_: string) => false)
     vi.stubGlobal('confirm', asking)
     await panel()
-    expect(host.textContent).toContain('Every network this machine is on, the internet included')
+    expect(host.textContent).toContain('Anyone on this network')
+    expect(host.textContent).not.toContain('the internet included')
     await pick(1)
-    expect(asking.mock.calls[0]![0]).toContain(
-      'This machine has a public address (203.0.113.7). With the network on, It answers the internet, over plain http.',
+    expect(asking).not.toHaveBeenCalled()
+    expect(asked).toEqual([{ to: 'on' }])
+  })
+
+  test('where It answers the internet too, which only the command turns on, that is said above the three, none of them is shown chosen, and choosing one asks for it', async () => {
+    watched['network:get'] = stands({ on: true, internet: true, addresses: [LAN], exposed: 'has a public address (203.0.113.7)' })
+    await panel()
+    expect(ways().map((w) => w.checked)).toEqual([false, false, false])
+    expect(said()).toBe(
+      'It answers the internet too, over plain http, because it network internet was run on the machine It runs on, and that machine has a public address (203.0.113.7). Choosing one of these stops that.',
     )
-    expect(calls).toEqual([])
-    asking.mockReturnValue(true)
     await pick(1)
     expect(asked).toEqual([{ to: 'on' }])
   })
@@ -843,18 +876,18 @@ describe('where the links agents give are', () => {
     expect(host.querySelector('.net-said')).toBeNull()
   })
 
-  test('on for every network, the name on the tailnet and the address on the network are both offered, and on a machine the internet reaches the address is not called a home network’s', async () => {
+  test('on for the network the machine is on, the name on the tailnet and the address on the network are both offered, the address as this network’s whatever the machine', async () => {
     watched['network:get'] = stands({ on: true, addresses: [LAN], links: { local: HERE, tailnet: NAMED, network: LAN } })
     await panel()
     expect(offered()).toEqual([
       ['This computer', HERE],
       ['My tailnet', NAMED],
-      ['My home network', LAN],
+      ['This network', LAN],
     ])
     await networkIs(stands({ on: true, addresses: [LAN], exposed: 'has a public address (203.0.113.7)', links: { local: HERE, network: LAN } }) as never)
     expect(offered()).toEqual([
       ['This computer', HERE],
-      ['Its address on the network', LAN],
+      ['This network', LAN],
     ])
   })
 
@@ -882,7 +915,7 @@ describe('where the links agents give are', () => {
     await panel()
     expect(offered()).toEqual([
       ['This computer', HERE],
-      ['My home network', null],
+      ['This network', null],
     ])
     await act(async () => places()[0]!.click())
     expect(calls).toEqual(['network:link'])

@@ -63,7 +63,7 @@ export function OtherAddresses({ where }: { where: Where }) {
   )
 }
 
-/** The three ways the network can be: off, on for every network the machine is on, or on for the person's tailnet alone. */
+/** The three ways the network can be asked to be here: off, on for anyone on the network the machine is on, or on for the person's tailnet alone. */
 export type Way = 'off' | 'on' | 'tailscale'
 /** How the door stands, as the backend tells the owner's browser, with what was asked of it here and what became of that. */
 interface Stands {
@@ -72,7 +72,9 @@ interface Stands {
   tailnet?: boolean
   /** Whether the machine It runs on is on a tailnet. Null while its service has not said, as one of an earlier It never does. */
   canTailnet?: boolean | null
-  /** Why "on" would mean the internet on that machine, in words that finish "This machine …", where it would. */
+  /** Whether It answers every address the machine has, the internet's included, which only `it network internet` on that machine turns on. */
+  internet?: boolean
+  /** Why the internet reaches that machine, in words that finish "This machine …", where it does. */
   exposed?: string | null
   /** What was asked and is not yet answered. When it was asked is the name it goes by. */
   asked?: { to: Way; at: number } | null
@@ -121,7 +123,8 @@ export function useNetwork() {
   const last = useRef(0)
   /** Why what was last asked here did not come about, in a sentence, until something else is asked. */
   const [failed, setFailed] = useState('')
-  const way: Way | undefined = said === undefined ? undefined : !said.on ? 'off' : said.tailnet ? 'tailscale' : 'on'
+  // Answering the internet too is none of the three, and none of them is shown chosen while it is so
+  const way: Way | 'internet' | undefined = said === undefined ? undefined : !said.on ? 'off' : said.tailnet ? 'tailscale' : said.internet ? 'internet' : 'on'
   useEffect(() => {
     if (!mine || mine.id === null || !said) return
     const answered = said.answered
@@ -145,10 +148,7 @@ export function useNetwork() {
   const ask = useCallback(
     (to: Way) => {
       if (!said || waiting) return
-      // What "on" means on a machine the internet reaches is said before it is done, and so is
-      // what a browser that came over the network loses with the way it came by
-      if (to === 'on' && said.exposed && !confirm(`This machine ${said.exposed}. With the network on, It answers the internet, over plain http. Turn it on?`))
-        return
+      // What a browser that came over the network loses with the way it came by is said before it is done
       if (to !== 'on' && said.on && !onThatMachine()) {
         const loses =
           to === 'off'
@@ -181,6 +181,8 @@ export function useNetwork() {
     offered: said !== undefined && said.canTailnet !== null && said.canTailnet !== undefined,
     canTailnet: said?.canTailnet === true,
     exposed: said?.exposed ?? null,
+    /** Whether It answers the internet too, which the command on the machine It runs on turned on. */
+    internet: said?.on === true && said.internet === true,
     addresses: said?.on ? said.addresses : [],
     /** What is being turned to, while the service has not yet said what became of it. */
     turning: mine ? mine.to : null,
@@ -195,9 +197,25 @@ export function useNetwork() {
 const WAYS: Way[] = ['off', 'on', 'tailscale']
 
 /**
+ * What a person adding a phone over the network the machine is on is told: who else can open
+ * the same pairing screen, that shared Wi-Fi often keeps devices from reaching each other, and
+ * that the tailnet is the way for a phone.
+ */
+export const PHONE_ON_NETWORK =
+  'Anyone on this network can open It’s pairing screen, and on shared Wi-Fi, such as a venue’s, that is everyone there. Shared Wi-Fi also often keeps devices from reaching each other, and then the address does not open at all. For a phone, choose “My tailnet only”.'
+
+/** That, where It answers the network the machine is on or the internet, and nothing where it is kept to the machine or the tailnet. */
+export function PhoneNote({ className = 'modal-sub' }: { className?: string }) {
+  const net = useNetwork()
+  if (net.way !== 'on' && net.way !== 'internet') return null
+  return <p className={`${className} pair-phone`}>{PHONE_ON_NETWORK}</p>
+}
+
+/**
  * The network as three ways to choose from, with what each lets in said under it, and what
- * became of the last choosing. Turned on, It speaks plain http to whatever can reach it, which
- * is why none of the three is chosen by a single press where the machine is one the internet reaches.
+ * became of the last choosing. Turned on, It speaks plain http to whatever can reach it. Where
+ * It answers the internet too, which only the command turns on, that is said above the three,
+ * and none of them is shown chosen.
  */
 export function NetworkSwitch() {
   const net = useNetwork()
@@ -208,17 +226,25 @@ export function NetworkSwitch() {
   if (net.way === undefined) return null
   const label: Record<Way, string> = {
     off: 'This computer only',
-    on: net.exposed ? 'Every network this machine is on, the internet included' : 'My home network',
+    on: 'Anyone on this network',
     tailscale: 'My tailnet only',
   }
   const hint: Record<Way, string> = {
     off: 'Nothing but the machine It runs on can open It.',
-    on: net.exposed ? `This machine ${net.exposed}. It answers over plain http.` : 'Other devices on the same network can open It, over plain http.',
-    tailscale: net.canTailnet ? 'Only your own devices that are signed in to Tailscale.' : 'Tailscale was not found on the machine It runs on.',
+    on: 'Any device on the same Wi-Fi or wired network can open It and its pairing screen, over plain http. On shared Wi-Fi that is everyone there. Not the internet.',
+    tailscale: net.canTailnet
+      ? 'Only your own devices that are signed in to Tailscale, wherever they are. The choice for a phone.'
+      : 'Tailscale was not found on the machine It runs on.',
   }
   const shown = net.turning ?? net.way
   return (
     <div className="net">
+      {net.internet && net.turning === null && (
+        <p className="net-said error" role="status">
+          It answers the internet too, over plain http, because <code>it network internet</code> was run on the machine It runs on
+          {net.exposed ? `, and that machine ${net.exposed}` : ''}. Choosing one of these stops that.
+        </p>
+      )}
       <fieldset className="net-ways" disabled={net.turning !== null}>
         <legend className="sr-only">Who can reach It</legend>
         {WAYS.map((to) => (
@@ -322,12 +348,12 @@ export function LinkChoice() {
   const label: Record<LinkWay, string> = {
     local: 'This computer',
     tailnet: 'My tailnet',
-    network: said.exposed ? 'Its address on the network' : 'My home network',
+    network: 'This network',
   }
   const hint: Record<LinkWay, string> = {
     local: 'Opens only on the machine It runs on. An agent on a machine that joined gives the address that machine reaches It at.',
     tailnet: 'Opens on your own devices that are signed in to Tailscale.',
-    network: said.exposed ? 'Opens wherever that address can be reached from.' : 'Opens on other devices on the same network.',
+    network: said.internet ? 'Opens wherever that address can be reached from.' : 'Opens on other devices on the same network.',
   }
   return (
     <div className="net">
