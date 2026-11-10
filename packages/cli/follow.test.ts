@@ -52,7 +52,7 @@ function machine() {
 }
 
 /** An action waiting on the page, as the backend gives it, its place being its number. */
-const action = (n: number, payload = JSON.stringify({ n })) => ({
+const action = (n: number, payload = JSON.stringify({ n }), page = 'pg1') => ({
   id: `a${n}`,
   artifact: 'board',
   title: 'Board',
@@ -61,10 +61,11 @@ const action = (n: number, payload = JSON.stringify({ n })) => ({
   at: 1_000 + n,
   attended: true,
   session: null,
-  cursor: String(1_000 + n),
+  cursor: `${page}.${1_000 + n}`,
 })
 type Action = ReturnType<typeof action>
-const placeOf = (cursor: string) => Number(cursor)
+/** Where a cursor stands on its page: `<page>.<place>`, or 0 for the start of whatever page there is. */
+const placeOf = (cursor: string) => (cursor === '0' ? 0 : Number(cursor.split('.')[1]))
 
 /** A token as the backend makes one: a JWT, which the live client reads to know when to fetch the next. */
 function jwt(n: number, lifetime: number) {
@@ -159,6 +160,8 @@ type Answer = { value: unknown } | { error: string; data?: unknown }
  */
 async function backend(options: { takes?: string[] | null; lifetime?: number } = {}) {
   const pending: Action[] = []
+  /** The record of the page under the id `board`: another once the page is deleted and made again. */
+  const state = { page: 'pg1' }
   const said = { mutations: [] as string[], calls: [] as Query[], tokens: 0, authenticated: [] as string[], connections: 0 }
   /** What a function answers, by its name; `waitingPage` and `waiting` read what is pending, as the backend does. */
   const answers: Record<string, (args: any) => Answer> = {
@@ -168,10 +171,17 @@ async function backend(options: { takes?: string[] | null; lifetime?: number } =
       if (after === undefined) {
         const newest = pending.slice(-50)
         const left = pending.length - newest.length
-        return { value: { actions: newest, from: left ? pending[left - 1]!.cursor : '0', more: false, earlier: left > 0 } }
+        return { value: { actions: newest, from: left ? pending[left - 1]!.cursor : `${state.page}.0`, more: false, earlier: left > 0 } }
       }
+      // A cursor of the page as it was before it was deleted and made again is refused, as the backend refuses it
+      if (after !== '0' && after.split('.')[0] !== state.page)
+        return {
+          error: 'refused',
+          data: { code: 'conflict', staleCursor: true, message: 'That cursor is of a page that was deleted. Start again without --after.' },
+        }
       const later = pending.filter((x) => placeOf(x.cursor) > placeOf(after))
-      return { value: { actions: later.slice(0, 50), from: after, more: later.length > 50, earlier: false } }
+      const from = after === '0' ? `${state.page}.0` : after
+      return { value: { actions: later.slice(0, 50), from, more: later.length > 50, earlier: false } }
     },
   }
   const sockets = new Set<ReturnType<typeof live>>()
@@ -266,6 +276,12 @@ async function backend(options: { takes?: string[] | null; lifetime?: number } =
   return {
     url,
     pending,
+    state,
+    /** Deletes the page and makes another under its id: another record, whose actions are numbered afresh. */
+    recreate: () => {
+      pending.length = 0
+      state.page = 'pg2'
+    },
     said,
     answers,
     sockets,
@@ -337,7 +353,7 @@ describe.skipIf(process.platform === 'win32')('following the actions on a page, 
       const f = started(m, ['actions', '--id', 'board', '--follow'], b.env)
       await until('the fifty waiting to be printed', () => f.lines.length === 50)
       expect(f.lines.map((l) => l.id)).toEqual(ids(1, 50))
-      expect(f.lines[0]).toMatchObject({ id: 'a1', page: 'board', action: 'press', data: { n: 1 }, cursor: '1001' })
+      expect(f.lines[0]).toMatchObject({ id: 'a1', page: 'board', action: 'press', data: { n: 1 }, cursor: 'pg1.1001' })
       // A 51st, with the fifty older ones still waiting
       b.pending.push(action(51))
       b.changed()
@@ -402,7 +418,7 @@ describe.skipIf(process.platform === 'win32')('following the actions on a page, 
     const b = await backend()
     try {
       for (let n = 1; n <= 5; n++) b.pending.push(action(n))
-      const f = started(m, ['actions', '--id', 'board', '--follow', '--after', '1003'], b.env)
+      const f = started(m, ['actions', '--id', 'board', '--follow', '--after', 'pg1.1003'], b.env)
       await until('those after the cursor', () => f.lines.length === 2)
       expect(f.lines.map((l) => l.id)).toEqual(['a4', 'a5'])
       f.child.kill('SIGTERM')
@@ -412,6 +428,52 @@ describe.skipIf(process.platform === 'win32')('following the actions on a page, 
         expect(ran.code).toBe(2)
         expect(lastError(ran.err).code).toBe('invalid')
       }
+    } finally {
+      await b.close()
+    }
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('a page deleted and made again under its id', () => {
+  test('a saved cursor of the old page is refused, with how to start again, and never read as a place on the new one', async () => {
+    const m = machine()
+    const b = await backend()
+    try {
+      for (let n = 1; n <= 3; n++) b.pending.push(action(n))
+      const saved = (JSON.parse((await run(m, ['actions', '--id', 'board'], b.env)).out) as { cursor: string }[]).at(-1)!.cursor
+      b.recreate()
+      b.pending.push(action(1, undefined, 'pg2'))
+      for (const args of [
+        ['--after', saved],
+        ['--follow', '--after', saved],
+      ]) {
+        const ran = await run(m, ['actions', '--id', 'board', ...args], b.env)
+        expect(ran.code).toBe(1)
+        expect(ran.out).toBe('')
+        expect(lastError(ran.err)).toMatchObject({ code: 'conflict', message: expect.stringContaining('Start again without --after.') })
+      }
+      // Started again without it, the new page's actions are there
+      const fresh = await run(m, ['actions', '--id', 'board'], b.env)
+      expect(JSON.parse(fresh.out).map((x: { cursor: string }) => x.cursor)).toEqual(['pg2.1001'])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a follower of the page ends with an error when it is made again, as it does when the page is deleted', async () => {
+    const m = machine()
+    const b = await backend()
+    try {
+      b.pending.push(action(1))
+      const f = started(m, ['actions', '--id', 'board', '--follow'], b.env)
+      await until('the first', () => f.lines.length === 1)
+      b.recreate()
+      b.pending.push(action(1, undefined, 'pg2'))
+      b.changed()
+      expect(await f.exited).toBe(1)
+      expect(lastError(f.err())).toMatchObject({ code: 'conflict', message: expect.stringContaining('Start again without --after.') })
+      // Nothing of the new page was printed as though it came after the old one's
+      expect(f.lines.map((l) => l.cursor)).toEqual(['pg1.1001'])
     } finally {
       await b.close()
     }

@@ -69,11 +69,11 @@ const action = (n: number, over: Record<string, unknown> = {}) => ({
   at: 1_000 + n,
   attended: true,
   session: null,
-  cursor: String(1_000 + n),
+  cursor: `pg1.${1_000 + n}`,
   ...over,
 })
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => action(from + i))
-const page = (actions: ReturnType<typeof action>[], more = false, from = '0', earlier = false) => ({ actions, more, from, earlier })
+const page = (actions: ReturnType<typeof action>[], more = false, from = 'pg1.0', earlier = false) => ({ actions, more, from, earlier })
 /** What an older backend answers a function it does not have: why is kept to itself. */
 const unexplained = () => new Problem('[Request ID: 5f3c] Server Error', 'error')
 const flush = async () => {
@@ -84,7 +84,13 @@ const live = () => stand.watches.filter((w) => !w.removed)
 let signals: Record<string, Set<(...args: any[]) => void>>
 beforeEach(() => {
   signals = Object.fromEntries((['SIGINT', 'SIGTERM'] as const).map((s) => [s, new Set(process.listeners(s))]))
-  stand.answer = (name) => (name === 'delivery:waitingPage' ? page([]) : name === 'artifacts:get' ? { slug: 'board' } : null)
+  // As the backend answers: the place these begin after, always of the page's record
+  stand.answer = (name, args) =>
+    name === 'delivery:waitingPage'
+      ? page([], false, args.after && args.after !== '0' ? args.after : 'pg1.0')
+      : name === 'artifacts:get'
+        ? { slug: 'board' }
+        : null
 })
 afterEach(() => {
   for (const signal of ['SIGINT', 'SIGTERM'] as const)
@@ -112,7 +118,7 @@ describe('following the actions on a page', () => {
   test('each action is printed once, however often It says it is waiting, and nothing is ever claimed or answered', async () => {
     const { ended } = follow()
     await flush()
-    expect(live().map((w) => [w.name, w.args])).toEqual([['delivery:waitingPage', { slug: 'board', after: '0' }]])
+    expect(live().map((w) => [w.name, w.args])).toEqual([['delivery:waitingPage', { slug: 'board', after: 'pg1.0' }]])
     const [w] = live()
     w!.update(page(range(1, 3)))
     w!.update(page(range(1, 3)))
@@ -120,7 +126,7 @@ describe('following the actions on a page', () => {
     await flush()
     expect(stand.lines.map((l) => l.id)).toEqual(['a1', 'a2', 'a3', 'a4'])
     // One line each, as an agent is printed an action, with its place
-    expect(stand.lines[0]).toMatchObject({ id: 'a1', page: 'board', action: 'press', data: { n: 1 }, cursor: '1001' })
+    expect(stand.lines[0]).toMatchObject({ id: 'a1', page: 'board', action: 'press', data: { n: 1 }, cursor: 'pg1.1001' })
     stop()
     expect(await ended).toBeNull()
     // Only reads: the page, and the first page of its actions
@@ -142,14 +148,14 @@ describe('following the actions on a page', () => {
     live()[0]!.update(page(range(1, 50), true))
     await flush()
     // So the watch moves on past them, and is told the new one there
-    expect(live().map((w) => w.args)).toEqual([{ slug: 'board', after: '1050' }])
+    expect(live().map((w) => w.args)).toEqual([{ slug: 'board', after: 'pg1.1050' }])
     live()[0]!.update(page([action(51)]))
     await flush()
     expect(stand.lines.map((l) => l.id)).toEqual(range(1, 51).map((a) => a.id))
     // And so on past the next fifty, however many wait
     live()[0]!.update(page(range(51, 100), true))
     await flush()
-    expect(live().map((w) => w.args)).toEqual([{ slug: 'board', after: '1100' }])
+    expect(live().map((w) => w.args)).toEqual([{ slug: 'board', after: 'pg1.1100' }])
     live()[0]!.update(page(range(101, 102)))
     await flush()
     expect(stand.lines.map((l) => l.id)).toEqual(range(1, 102).map((a) => a.id))
@@ -159,19 +165,19 @@ describe('following the actions on a page', () => {
   })
 
   test('it begins with the newest that wait, from the place It says is before them', async () => {
-    stand.answer = (name) => (name === 'delivery:waitingPage' ? page(range(151, 200), false, '1150', true) : null)
+    stand.answer = (name) => (name === 'delivery:waitingPage' ? page(range(151, 200), false, 'pg1.1150', true) : null)
     const { ended } = follow()
     await flush()
-    expect(live()[0]!.args).toEqual({ slug: 'board', after: '1150' })
+    expect(live()[0]!.args).toEqual({ slug: 'board', after: 'pg1.1150' })
     stop()
     expect(await ended).toBeNull()
   })
 
   test('given a cursor, it begins after it, so a watch started again misses nothing', async () => {
-    const { ended } = follow('1020')
+    const { ended } = follow('pg1.1020')
     await flush()
-    expect(stand.calls.find((c) => c.name === 'delivery:waitingPage')!.args).toEqual({ slug: 'board', after: '1020' })
-    expect(live()[0]!.args).toEqual({ slug: 'board', after: '1020' })
+    expect(stand.calls.find((c) => c.name === 'delivery:waitingPage')!.args).toEqual({ slug: 'board', after: 'pg1.1020' })
+    expect(live()[0]!.args).toEqual({ slug: 'board', after: 'pg1.1020' })
     live()[0]!.update(page(range(21, 22)))
     await flush()
     expect(stand.lines.map((l) => l.id)).toEqual(['a21', 'a22'])
@@ -187,7 +193,7 @@ describe('following the actions on a page', () => {
     // Before the watch is replaced, the old one says more again, from a later moment
     first.update(page(range(3, 52), true))
     await flush()
-    expect(live().map((w) => w.args)).toEqual([{ slug: 'board', after: '1050' }])
+    expect(live().map((w) => w.args)).toEqual([{ slug: 'board', after: 'pg1.1050' }])
     expect(stand.lines.map((l) => l.id)).toEqual(range(1, 52).map((a) => a.id))
     stop()
     expect(await ended).toBeNull()
@@ -239,6 +245,46 @@ describe('following the actions on a page', () => {
     expect((await ended)?.code).toBe('output_failed')
   })
 
+  test('a page deleted and made again under its id ends the watch, as a deleted page does, and says to start again', async () => {
+    // It refuses the watch, the page having become another record
+    let { ended } = follow()
+    await flush()
+    live()[0]!.update(page(range(1, 2)))
+    await flush()
+    live()[0]!.fail(
+      new ConvexError(
+        JSON.stringify({ code: 'conflict', staleCursor: true, message: 'That cursor is of a page that was deleted. Start again without --after.' }),
+      ),
+    )
+    let err = await ended
+    expect(err?.code).toBe('conflict')
+    expect(err?.message).toMatch(/Start again without --after/)
+    expect(stand.lines.map((l) => l.id)).toEqual(['a1', 'a2'])
+    // Or an action of another record comes, however it came: nothing of it is printed
+    stand.watches.length = stand.lines.length = 0
+    ;({ ended } = follow())
+    await flush()
+    live()[0]!.update(page([action(1), { ...action(2), cursor: 'pg2.1' }]))
+    err = await ended
+    expect(err?.code).toBe('conflict')
+    expect(err?.message).toMatch(/deleted, and another made under its id\. Start again without --after/)
+    expect(stand.lines.map((l) => l.id)).toEqual(['a1'])
+    // Where the page is deleted and not made again, it ends with what It said of that
+    stand.watches.length = 0
+    ;({ ended } = follow())
+    await flush()
+    live()[0]!.fail(new ConvexError(JSON.stringify({ code: 'not_found', message: 'No such page.' })))
+    expect((await ended)?.code).toBe('not_found')
+  })
+
+  test('a watch begun after a cursor begins where It says, which names the page, so a stale cursor is refused before anything is watched', async () => {
+    stand.answer = (name) =>
+      name === 'delivery:waitingPage' ? new Problem('That cursor is of a page that was deleted. Start again without --after.', 'conflict') : null
+    const { ended } = follow('pg0.12')
+    expect((await ended)?.code).toBe('conflict')
+    expect(stand.watches).toEqual([])
+  })
+
   test('a page that is not there is said at once, and nothing is watched', async () => {
     stand.answer = (name) => (name === 'artifacts:get' ? new Problem('No such page.', 'not_found') : null)
     const { ended } = follow()
@@ -261,7 +307,7 @@ describe('following the actions on a page', () => {
     expect(await ended).toBeNull()
     expect(stand.calls.map((c) => c.name)).not.toContain('delivery:waitingPage')
     // With a cursor there is nothing to fall back on
-    ;({ ended } = follow('1001'))
+    ;({ ended } = follow('pg1.1001'))
     expect((await ended)?.code).toBe('invalid')
     expect(stand.calls.map((c) => c.name)).not.toContain('delivery:waitingPage')
   })
@@ -285,13 +331,13 @@ describe('following the actions on a page', () => {
       live()[0]!.update(page(range(1, 50), true))
       await vi.advanceTimersByTimeAsync(1000)
       // Not moved on, and the watch there was goes on
-      expect(live().map((w) => w.args)).toEqual([{ slug: 'board', after: '0' }])
+      expect(live().map((w) => w.args)).toEqual([{ slug: 'board', after: 'pg1.0' }])
       await vi.advanceTimersByTimeAsync(5000)
-      expect(live().map((w) => w.args)).toEqual([{ slug: 'board', after: '0' }])
+      expect(live().map((w) => w.args)).toEqual([{ slug: 'board', after: 'pg1.0' }])
       // It answers again, and the watch moves on at the next asking
       stand.takes = true
       await vi.advanceTimersByTimeAsync(10_000)
-      expect(live().map((w) => w.args)).toEqual([{ slug: 'board', after: '1050' }])
+      expect(live().map((w) => w.args)).toEqual([{ slug: 'board', after: 'pg1.1050' }])
       live()[0]!.update(page([action(51)]))
       await flush()
       expect(stand.lines.map((l) => l.id)).toEqual(range(1, 51).map((a) => a.id))
@@ -333,19 +379,19 @@ describe('following the actions on a page', () => {
 
 describe('listing the actions on a page', () => {
   test('the newest are listed, with where to read older ones', async () => {
-    stand.answer = (name) => (name === 'delivery:waitingPage' ? page(range(151, 200), false, '1150', true) : null)
+    stand.answer = (name) => (name === 'delivery:waitingPage' ? page(range(151, 200), false, 'pg1.1150', true) : null)
     const { list, notes } = await listActions('board')
     expect(list.map((x) => x.id)).toEqual(range(151, 200).map((a) => a.id))
-    expect(list[0]).toMatchObject({ cursor: '1151' })
+    expect(list[0]).toMatchObject({ cursor: 'pg1.1151' })
     expect(notes).toEqual([expect.stringContaining('it actions --id board --after 0')])
     expect(stand.calls).toEqual([{ kind: 'query', name: 'delivery:waitingPage', args: { slug: 'board' } }])
   })
 
   test('after a cursor, the ones that came after it, with how to go on', async () => {
-    stand.answer = (name, args) => (name === 'delivery:waitingPage' && args.after === '1010' ? page(range(11, 60), true, '1010') : null)
-    const { list, notes } = await listActions('board', '1010')
+    stand.answer = (name, args) => (name === 'delivery:waitingPage' && args.after === 'pg1.1010' ? page(range(11, 60), true, 'pg1.1010') : null)
+    const { list, notes } = await listActions('board', 'pg1.1010')
     expect(list.map((x) => x.id)).toEqual(range(11, 60).map((a) => a.id))
-    expect(notes).toEqual(['More actions wait after these: run `it actions --id board --after 1060`.'])
+    expect(notes).toEqual(['More actions wait after these: run `it actions --id board --after pg1.1060`.'])
   })
 
   test('what is printed stays within 256 KB however much the actions carried, keeping the newest, or the first after a cursor', async () => {
