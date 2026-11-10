@@ -95,26 +95,37 @@ Some of what comes back is not quite as it was. A page that was deleted since th
 
 A display that was signed out since the upgrade does not open pages once the copy is back. The part of It that serves pages remembers the sign-out for about a day, in `content-data/`, and refuses the display's older sign-out number until then. That record is part of what keeps a page from being opened by a display that was signed out, so leave it in place. To use the display again sooner, forget it on the site's Displays page and pair that browser again, which makes it a new display that has never been signed out.
 
-The newer data is not thrown away. Before the copy is put back, the whole of It's folder is copied aside as it stands, to `~/.it-after-upgrade`, so that you can go forward to it again with the newer It.
+The newer data is not thrown away. Before the copy is put back, the whole of It's folder is copied aside as it stands, into a folder beside it whose name ends in `-after-upgrade`, so that you can go forward to it again with the newer It.
 
 ### Putting the copy back
 
-These steps are the same on Linux and macOS. Where It's folder is not `~/.it`, use the folder `IT_HOME` names instead, in the commands as well. The disk needs room for a second copy of the whole folder, files of pages included.
+The lines below work on It's folder: the one `IT_HOME` names, where that is set in the terminal you paste them into, and `~/.it` otherwise. If your It keeps its folder somewhere else and `IT_HOME` is not set in that terminal, set it there first, as in `export IT_HOME="/path/to/its/folder"` on Linux and macOS, or `$env:IT_HOME = 'D:\path\to\its\folder'` in PowerShell. Where It's folder is a link to another folder, the lines work on the folder it leads to, and keep the copy beside that one. The disk needs room for a second copy of the whole folder, files of pages included.
+
+On Linux and macOS:
 
 1. Where you started It yourself with `it serve`, stop that with Ctrl-C.
-2. Put the name of the copy's folder after `copy=` in these lines, and paste them into a terminal that runs bash or zsh. In fish, type `sh` first. They stop the background service and keep it from starting again by itself, copy It's folder to `~/.it-after-upgrade`, and then put the copy in place of the database. They stop at the first command that fails, and they change nothing where `~/.it-after-upgrade` is there already or It is still running.
+2. Put the name of the copy's folder after `copy=` in these lines, and paste them into a terminal that runs bash or zsh. In fish, type `sh` first. They stop the background service and keep it from starting again by itself, copy It's folder aside, and then put the copy in place of the database. They stop at the first command that fails. They change nothing where the copy is not there, It is still running, the folder kept aside is there already, or a part of It's folder that matters is a link, since a copy of a link would not hold what it leads to.
 
    ```sh
    (
      set -e
      it service uninstall
-     cd ~/.it/backend
+     live=$(cd -P "${IT_HOME:-$HOME/.it}" && pwd -P)
+     saved="$live-after-upgrade"
      copy=before-...
-     if [ ! -f "$copy/data.json" ]; then echo "There is no copy named $copy here, so nothing was changed." >&2; exit 1; fi
+     cd "$live/backend"
+     if [ ! -f "$copy/data.json" ]; then echo "There is no copy named $copy in $live/backend, so nothing was changed." >&2; exit 1; fi
      if [ -e lock ]; then echo "It is still running, so nothing was changed. Stop it, and run these lines again." >&2; exit 1; fi
-     if [ -e ~/.it-after-upgrade ]; then echo "~/.it-after-upgrade is there already, so nothing was changed." >&2; exit 1; fi
-     cp -Rp ~/.it ~/.it-after-upgrade
-     echo "It's folder as it was is kept in ~/.it-after-upgrade."
+     if [ -e "$saved" ] || [ -L "$saved" ]; then echo "$saved is there already, so nothing was changed." >&2; exit 1; fi
+     for part in "$live/backend" "$live/content" "$live/content-data" db.sqlite3 data.json storage; do
+       if [ -L "$part" ]; then echo "$part is a link, so a copy of It's folder would not hold what it leads to, and nothing was changed." >&2; exit 1; fi
+     done
+     echo "Copying It's folder to $saved."
+     rm -rf "$saved.part"
+     cp -Rp "$live" "$saved.part"
+     mv "$saved.part" "$saved"
+     if [ "$saved/backend/data.json" -ef "$live/backend/data.json" ]; then echo "$saved is not a copy of its own, so nothing more was changed." >&2; exit 1; fi
+     echo "It's folder as it was is kept in $saved."
      rm -rf db.sqlite3* data.json storage
      cp -p "$copy"/db.sqlite3* "$copy"/data.json .
      cp -Rp "$copy"/storage .
@@ -122,7 +133,11 @@ These steps are the same on Linux and macOS. Where It's folder is not `~/.it`, u
    )
    ```
 
-   The last thing they say is "The copy is in place." Where they stop before that, nothing after the command that failed has run, and the line above says why. If they stopped before saying that It's folder is kept in `~/.it-after-upgrade`, It's folder is as it was: delete whatever `~/.it-after-upgrade` they left, and run them again. If they stopped after saying so, put It's folder back as it was before you run them again, with `mv ~/.it ~/.it-failed && mv ~/.it-after-upgrade ~/.it`, and delete `~/.it-failed` once It runs again. If It ended without tidying up after itself, the lines say that it is still running when it is not. Then start it once with `it serve`, stop it with Ctrl-C, and run them again.
+   The last thing they say is "The copy is in place." Where they stop before that, nothing after the command that failed has run, and the line just above says why.
+
+   - If they stopped before saying that It's folder as it was is kept, It's folder has not been changed. Put right what the message says, and run the lines again. A copy that was cut short, in a folder whose name ends in `-after-upgrade.part`, is removed by the next run.
+   - If they stopped after saying so, put the kept folder back first, with the lines in [Putting the kept folder back](#putting-the-kept-folder-back). Then run these lines again.
+   - If It ended without tidying up after itself, the lines say that it is still running when it is not. Start it once with `it serve`, stop it with Ctrl-C, and run them again.
 3. Install the older version, naming its release, as `v0.1.36` is named here:
 
    ```sh
@@ -131,56 +146,130 @@ These steps are the same on Linux and macOS. Where It's folder is not `~/.it`, u
 
    Run at a terminal, the script goes on into `it setup`, which registers the background service again and starts it. Where it does not, run `it setup` yourself.
 
-On Windows the steps are the same, in PowerShell. Paste the block whole: the braces make it stop at the first error, where separate lines would go on past it.
+On Windows, in PowerShell, which may be Windows PowerShell 5.1:
 
-```powershell
-& {
-  $ErrorActionPreference = 'Stop'
-  $copy = 'before-...'
-  $folder = Join-Path $HOME '.it'
-  $backend = Join-Path $folder 'backend'
-  it service uninstall
-  if ($LASTEXITCODE -ne 0) { throw 'The background service could not be stopped, so nothing was changed.' }
-  if (-not (Test-Path (Join-Path $backend "$copy\data.json"))) { throw "There is no copy named $copy in $backend, so nothing was changed." }
-  if (Test-Path (Join-Path $backend 'lock')) { throw 'It is still running, so nothing was changed. Stop it, and run this again.' }
-  if (Test-Path "$folder-after-upgrade") { throw "$folder-after-upgrade is there already, so nothing was changed." }
-  Copy-Item $folder "$folder-after-upgrade" -Recurse -Force
-  "It's folder as it was is kept in $folder-after-upgrade."
-  Set-Location $backend
-  Remove-Item db.sqlite3*, data.json, storage -Recurse -Force
-  Copy-Item "$copy\db.sqlite3*", "$copy\data.json" . -Force
-  Copy-Item "$copy\storage" . -Recurse -Force
-  'The copy is in place.'
-}
-$env:IT_VERSION = 'v0.1.36'; irm https://github.com/Aaryan-Kapoor/it/releases/download/v0.1.36/install.ps1 | iex
-```
+1. Where you started It yourself with `it serve`, stop that with Ctrl-C.
+2. Put the name of the copy's folder between the quotes after `$copy =`, and paste the whole block at once. The braces make it stop at the first error, where separate lines would go on past it. It does what the lines for Linux and macOS do, and stops and changes nothing in the same cases.
 
-What to do where the block stops partway is the same as above, with `~\.it-after-upgrade` in place of `~/.it-after-upgrade`, and `Rename-Item` in place of `mv`.
+   ```powershell
+   & {
+     $ErrorActionPreference = 'Stop'
+     $copy = 'before-...'
+     function Get-RealPath($path) {
+       $item = Get-Item -LiteralPath $path -Force
+       while ($item.LinkType) {
+         $path = [IO.Path]::GetFullPath([IO.Path]::Combine((Split-Path -Parent $item.FullName), @($item.Target)[0]))
+         $item = Get-Item -LiteralPath $path -Force
+       }
+       $item.FullName
+     }
+     Set-Location $env:TEMP
+     it service uninstall
+     if ($LASTEXITCODE -ne 0) { throw 'The background service could not be stopped, so nothing was changed.' }
+     $folder = if ($env:IT_HOME) { $env:IT_HOME } else { Join-Path $HOME '.it' }
+     $live = Get-RealPath $folder
+     $saved = "$live-after-upgrade"
+     $backend = Join-Path $live 'backend'
+     $from = Join-Path $backend $copy
+     if (-not (Test-Path -LiteralPath (Join-Path $from 'data.json'))) { throw "There is no copy named $copy in $backend, so nothing was changed." }
+     if (Test-Path -LiteralPath (Join-Path $backend 'lock')) { throw 'It is still running, so nothing was changed. Stop it, and run this again.' }
+     if (Test-Path -LiteralPath $saved) { throw "$saved is there already, so nothing was changed." }
+     foreach ($part in 'backend', 'content', 'content-data', 'backend\db.sqlite3', 'backend\data.json', 'backend\storage') {
+       $at = Join-Path $live $part
+       if ((Test-Path -LiteralPath $at) -and (Get-Item -LiteralPath $at -Force).LinkType) { throw "$at is a link, so a copy of It's folder would not hold what it leads to, and nothing was changed." }
+     }
+     "Copying It's folder to $saved."
+     if (Test-Path -LiteralPath "$saved.part") { Remove-Item -LiteralPath "$saved.part" -Recurse -Force }
+     Copy-Item -LiteralPath $live -Destination "$saved.part" -Recurse -Force
+     Move-Item -LiteralPath "$saved.part" -Destination $saved
+     if ((Get-RealPath (Join-Path $saved 'backend')) -eq (Get-RealPath $backend)) { throw "$saved is not a copy of its own, so nothing more was changed." }
+     "It's folder as it was is kept in $saved."
+     Get-ChildItem -LiteralPath $backend -Filter 'db.sqlite3*' | Remove-Item -Force
+     Remove-Item -LiteralPath (Join-Path $backend 'data.json'), (Join-Path $backend 'storage') -Recurse -Force
+     Get-ChildItem -LiteralPath $from -Filter 'db.sqlite3*' | Copy-Item -Destination $backend
+     Copy-Item -LiteralPath (Join-Path $from 'data.json') -Destination $backend
+     Copy-Item -LiteralPath (Join-Path $from 'storage') -Destination $backend -Recurse
+     'The copy is in place.'
+   }
+   ```
+
+   Where it stops before saying "The copy is in place.", do as the three points for Linux and macOS say, with the PowerShell block in [Putting the kept folder back](#putting-the-kept-folder-back).
+3. Install the older version, naming its release, as `v0.1.36` is named here:
+
+   ```powershell
+   $env:IT_VERSION = 'v0.1.36'; irm https://github.com/Aaryan-Kapoor/it/releases/download/v0.1.36/install.ps1 | iex
+   ```
 
 Once the older It is running, `it status` says that the database is at the older version, with nothing under `behind`, and your pages are there as they were before the upgrade. Where the newer It brought a newer backend program, it removed the older one, so the older It fetches its own again the first time it starts, and that start has to reach GitHub or the place `IT_BACKEND_RELEASES` names. The older It goes on telling you that the newer version is out. Installing that same version again changes the data again in the same way, so wait for a release that fixes what went wrong, or turn the reminder off with `it updates off`.
 
-### Going forward again
+### Putting the kept folder back
 
-To go forward to the newer data instead, put the whole folder you kept back in the place of It's folder, and start the newer It from it. Everything that was published, changed or deleted while you were on the older It is lost when you do, because the folder comes back whole, with the newer It's database and the files of its pages together. Putting back only the database would not do: a page published again on the older It can have written its files where the newer database expects others, and the newer It would then show the older bytes under the newer version.
+These lines put the folder that was kept aside back in the place of It's folder, whole. They are how you go forward to the newer data again, and how you undo the steps above where they stopped partway. The folder they replace is not deleted: it is moved beside the kept one, under a name that ends in `-replaced`.
 
-Stop It with Ctrl-C where you started it with `it serve`, and paste these lines in the same way:
+Going forward this way loses everything that was published, changed or deleted while you were on the older It, because the folder comes back whole, with the newer It's database and the files of its pages together. Putting back only the database would not do: a page published again on the older It can have written its files where the newer database expects others, and the newer It would then show the older bytes under the newer version.
+
+On Linux and macOS, stop It with Ctrl-C where you started it with `it serve`, and paste these lines in the same way as the ones above:
 
 ```sh
 (
   set -e
   it service uninstall
-  if [ ! -d ~/.it-after-upgrade ]; then echo "There is no ~/.it-after-upgrade to go forward to, so nothing was changed." >&2; exit 1; fi
-  if [ -e ~/.it/backend/lock ]; then echo "It is still running, so nothing was changed. Stop it, and run these lines again." >&2; exit 1; fi
-  if [ -e ~/.it-rolled-back ]; then echo "~/.it-rolled-back is there already, so nothing was changed." >&2; exit 1; fi
-  mv ~/.it ~/.it-rolled-back
-  mv ~/.it-after-upgrade ~/.it
-  echo "It's folder is as it was before you went back."
+  live=$(cd -P "${IT_HOME:-$HOME/.it}" && pwd -P)
+  saved="$live-after-upgrade"
+  if [ ! -d "$saved" ] || [ -L "$saved" ]; then echo "There is no folder $saved to put back, so nothing was changed." >&2; exit 1; fi
+  if [ -e "$live/backend/lock" ]; then echo "It is still running, so nothing was changed. Stop it, and run these lines again." >&2; exit 1; fi
+  if [ -e "$live-replaced" ] || [ -L "$live-replaced" ]; then echo "$live-replaced is there already, so nothing was changed." >&2; exit 1; fi
+  cd /
+  mv "$live" "$live-replaced"
+  mv "$saved" "$live"
+  echo "It's folder is the one that was kept, and the one it replaced is in $live-replaced."
 )
 ```
 
-Then run `~/.it/bin/it setup`, which is the newer It, and it starts the background service again. On Windows, use `Move-Item` in place of `mv` and `~\.it\bin\it.exe setup`. The folder from the older It is kept in `~/.it-rolled-back`, and when you no longer need it, or when you no longer need `~/.it-after-upgrade` after going back, delete it yourself. It never removes a folder it did not make.
+On Windows, stop It with Ctrl-C where you started it with `it serve`, and paste this block whole:
 
-The steps on Linux are tested as they are written here, by a test of It's own. It keeps a copy as an upgrade does, loads newer functions with fields the older ones do not know and writes data that uses them, and runs the lines above unchanged, once to put the copy back and again to see that a second run refuses and changes nothing. It then starts the older It on the copy, opens the page that was there, pairs again a display that was signed out since the upgrade, and goes forward again to find the newer pages as they were. It also picks between two copies by the rule above. The steps on macOS and Windows, and installing an older release from GitHub, are not run by that test.
+```powershell
+& {
+  $ErrorActionPreference = 'Stop'
+  function Get-RealPath($path) {
+    $item = Get-Item -LiteralPath $path -Force
+    while ($item.LinkType) {
+      $path = [IO.Path]::GetFullPath([IO.Path]::Combine((Split-Path -Parent $item.FullName), @($item.Target)[0]))
+      $item = Get-Item -LiteralPath $path -Force
+    }
+    $item.FullName
+  }
+  Set-Location $env:TEMP
+  it service uninstall
+  if ($LASTEXITCODE -ne 0) { throw 'The background service could not be stopped, so nothing was changed.' }
+  $folder = if ($env:IT_HOME) { $env:IT_HOME } else { Join-Path $HOME '.it' }
+  $live = Get-RealPath $folder
+  $saved = "$live-after-upgrade"
+  $replaced = "$live-replaced"
+  if (-not (Test-Path -LiteralPath $saved -PathType Container) -or (Get-Item -LiteralPath $saved -Force).LinkType) { throw "There is no folder $saved to put back, so nothing was changed." }
+  if (Test-Path -LiteralPath (Join-Path $live 'backend\lock')) { throw 'It is still running, so nothing was changed. Stop it, and run this again.' }
+  if (Test-Path -LiteralPath $replaced) { throw "$replaced is there already, so nothing was changed." }
+  Move-Item -LiteralPath $live -Destination $replaced
+  Move-Item -LiteralPath $saved -Destination $live
+  "It's folder is the one that was kept, and the one it replaced is in $replaced."
+}
+```
+
+To go forward, start the newer It from the folder that is back, which registers the background service again. On Linux and macOS:
+
+```sh
+"${IT_HOME:-$HOME/.it}/bin/it" setup
+```
+
+On Windows:
+
+```powershell
+& (Join-Path $(if ($env:IT_HOME) { $env:IT_HOME } else { Join-Path $HOME '.it' }) 'bin\it.exe') setup
+```
+
+When you no longer need the folder whose name ends in `-replaced`, or the one whose name ends in `-after-upgrade` once you have settled on the older It, delete it yourself. It never removes a folder it did not make.
+
+The steps on Linux are tested as they are written here, by a test of It's own. It keeps a copy as an upgrade does, loads newer functions with fields the older ones do not know and writes data that uses them, and runs the lines above unchanged: once where the background service cannot be stopped, once where It's folder cannot be copied whole, once to put the copy back, once more to see that a second run refuses and changes nothing, and once where It's folder is reached through a link in a folder with a space in its name. It then starts the older It on the copy, opens the page that was there, pairs again a display that was signed out since the upgrade, and puts the kept folder back to find the newer pages as they were. It also picks between two copies by the rule above, and sees the lines refuse a folder whose pages are a link. The steps on macOS and Windows, and installing an older release from GitHub, are not run by that test.
 
 ## How long things are kept
 
