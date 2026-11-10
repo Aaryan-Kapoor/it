@@ -93,6 +93,7 @@ import {
   WAS_STOPPED,
   WOKEN,
   windowsProgram,
+  windowsPrograms,
 } from './wake'
 import { wakeWhy } from './wake-why'
 
@@ -357,27 +358,22 @@ export const choices = (platform: string, harnesses: string[]) => [
 
 /**
  * The words that start Codex with no shell in between. Elsewhere that is just `codex`. On
- * Windows, Codex installed through npm is a .cmd file, which only a shell can start, and a
- * shell would read a page's title as part of the command. So the program behind the .cmd file
- * is started directly: Codex's own .exe when there is one, or Node with Codex's script.
- * Null when neither is found; the click then waits where the person can see it.
+ * Windows, Codex installed through npm or pnpm is a .cmd file, which only a shell can start, and
+ * a shell would read a page's title as part of the command. So Codex is found as every agent app
+ * is there (see `windowsPrograms`): in the PATH's order, as Windows itself would take it, Codex's
+ * own .exe or a command script, of which what it starts is read out and started directly. A
+ * script that cannot be read so, as an old one whose package is gone, is passed over for the
+ * next Codex on the PATH, which is how Codex was found before. Null when nothing is found that
+ * can be started so; the click then waits where the person can see it.
  */
-export function codexCommand(platform: string, pathVar: string, exists: (file: string) => boolean): string[] | null {
+export function codexCommand(platform: string, pathVar: string, exists: (file: string) => boolean, read: (file: string) => string): string[] | null {
   if (platform !== 'win32') return ['codex']
-  // Only folders named in full, as `windowsProgram` looks in: a folder named from wherever this program happens to be is no place to start Codex from
-  const dirs = pathVar
-    .split(';')
-    .map((d) => d.trim().replace(/^"(.*)"$/, '$1'))
-    .filter((d) => path.win32.isAbsolute(d))
-  const find = (name: string) => dirs.map((d) => path.win32.join(d, name)).find(exists)
-  const exe = find('codex.exe')
-  if (exe) return [exe]
-  const cmd = find('codex.cmd')
-  const node = find('node.exe')
-  if (!cmd || !node) return null
-  const script = path.win32.join(path.win32.dirname(cmd), 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
-  return exists(script) ? [node, script] : null
+  for (const found of windowsPrograms('codex', pathVar, exists, read)) if (found) return found
+  return null
 }
+/** The words that start Codex with the environment it is given, for a click queued in an open Codex and for a closed conversation reopened alike. */
+export const codexIn = (env: NodeJS.ProcessEnv): string[] | null =>
+  codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync, (f) => readFileSync(f, 'utf8'))
 
 /**
  * Bytes as the text they are, or null when they are not UTF-8. Read loosely, a byte that is no
@@ -416,7 +412,7 @@ export function wayOf(of: { inT3: () => boolean; codexOpen: () => boolean; reope
 export function codexQueue(thread: string, text: string, env: NodeJS.ProcessEnv = harnessEnv()): Promise<string | null> {
   // A thread id is letters, digits and dashes. Anything else is not one, and is never put on a command line.
   if (!/^[A-Za-z0-9_-]{1,200}$/.test(thread)) return Promise.resolve('its conversation id is not one Codex would have made')
-  const codex = codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync)
+  const codex = codexIn(env)
   if (!codex) return Promise.resolve('Codex was not found')
   // No shell, ever: the text holds a page's title and what a person typed into it
   return new Promise((resolve) => {
@@ -2027,7 +2023,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const env = profileEnvironment(now.harness, conversationProfile(now) ?? conversationProfile(session), harnessEnv())
     if (typeof env === 'string') return env
     const how = carrying(now.harness, now.id, text, {
-      codex: codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync),
+      codex: codexIn(env),
       // On Windows an app is started by where its program is, which its name alone does not say there
       ...(process.platform === 'win32' && now.harness !== 'codex'
         ? { start: windowsProgram(PROGRAM[now.harness] ?? now.harness, env.PATH ?? env.Path ?? '', existsSync, (f) => readFileSync(f, 'utf8')) }

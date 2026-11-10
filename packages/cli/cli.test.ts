@@ -75,6 +75,7 @@ import {
   windowsScript,
   writeDefinition,
 } from './src/service'
+import { carrying } from './src/wake'
 
 describe('a line the service says over and over', () => {
   const MINUTE = 60_000
@@ -774,27 +775,127 @@ describe('naming the project a page belongs to', () => {
 })
 
 describe('starting Codex to queue a click', () => {
-  const having =
-    (...files: string[]) =>
-    (f: string) =>
-      files.includes(f)
+  /** A person's disk as a map of files, read as Windows reads names: with no case. */
+  const disk = (files: Record<string, string>) => {
+    const kept = new Map(Object.entries(files).map(([file, text]) => [file.toLowerCase(), text]))
+    return [
+      (file: string) => kept.has(file.toLowerCase()),
+      (file: string) => {
+        const text = kept.get(file.toLowerCase())
+        if (text === undefined) throw Object.assign(new Error('no such file'), { code: 'ENOENT' })
+        return text
+      },
+    ] as const
+  }
+  const NODE = 'C:\\Program Files\\nodejs\\node.exe'
+  const NPM = 'C:\\Users\\a\\AppData\\Roaming\\npm'
+  const NPM_SCRIPT = `${NPM}\\node_modules\\@openai\\codex\\bin\\codex.js`
+  // As npm writes it for Codex
+  const npmShim = `@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n`
+  // As pnpm writes it in PNPM_HOME for a global Codex, naming the script from the store beside it
+  const PNPM = 'C:\\Users\\a\\AppData\\Local\\pnpm'
+  const PNPM_SCRIPT = `${PNPM}\\global\\5\\node_modules\\@openai\\codex\\bin\\codex.js`
+  const pnpmShim = `@SETLOCAL\r\n@IF NOT DEFINED NODE_PATH (\r\n  @SET "NODE_PATH=${PNPM}\\global\\5\\node_modules"\r\n) ELSE (\r\n  @SET "NODE_PATH=${PNPM}\\global\\5\\node_modules;%NODE_PATH%"\r\n)\r\n@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe"  "%~dp0\\global\\5\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n) ELSE (\r\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n  node  "%~dp0\\global\\5\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n)\r\n`
+
   test('anywhere but Windows it is the plain command', () => {
-    expect(codexCommand('linux', '/usr/bin', () => false)).toEqual(['codex'])
+    expect(
+      codexCommand(
+        'linux',
+        '/usr/bin',
+        () => false,
+        () => '',
+      ),
+    ).toEqual(['codex'])
   })
-  test('on Windows it is the program itself, never the .cmd file a shell would have to start', () => {
-    const PATH = 'C:\\tools;C:\\Users\\a\\AppData\\Roaming\\npm;C:\\Program Files\\nodejs'
-    const cmd = 'C:\\Users\\a\\AppData\\Roaming\\npm\\codex.cmd'
-    const script = 'C:\\Users\\a\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js'
-    const node = 'C:\\Program Files\\nodejs\\node.exe'
-    expect(codexCommand('win32', PATH, having('C:\\tools\\codex.exe', cmd, script, node))).toEqual(['C:\\tools\\codex.exe'])
-    expect(codexCommand('win32', PATH, having(cmd, script, node))).toEqual([node, script])
-    // Nothing that can be started without a shell: the click waits instead
-    expect(codexCommand('win32', PATH, having(cmd, script))).toBeNull()
-    expect(codexCommand('win32', PATH, having(cmd, node))).toBeNull()
-    expect(codexCommand('win32', '', having(cmd, script, node))).toBeNull()
+  test('on Windows, Codex installed through npm is started by Node with its script, never by the .cmd file a shell would have to start', () => {
+    const PATH = `${NPM};C:\\Program Files\\nodejs`
+    expect(codexCommand('win32', PATH, ...disk({ [`${NPM}\\codex.cmd`]: npmShim, [NPM_SCRIPT]: '', [NODE]: '' }))).toEqual([NODE, NPM_SCRIPT])
+    // The Node beside the script before the one on the PATH, as the script itself would take
+    expect(codexCommand('win32', PATH, ...disk({ [`${NPM}\\codex.cmd`]: npmShim, [NPM_SCRIPT]: '', [`${NPM}\\node.exe`]: '', [NODE]: '' }))).toEqual([
+      `${NPM}\\node.exe`,
+      NPM_SCRIPT,
+    ])
+  })
+  test('on Windows, Codex installed through pnpm is started by Node with the script the shim names in pnpm’s store', () => {
+    const PATH = `${PNPM};C:\\Program Files\\nodejs`
+    // The script beside the shim, where npm would have put it, is not what pnpm's shim starts
+    const [exists, read] = disk({ [`${PNPM}\\codex.CMD`]: pnpmShim, [PNPM_SCRIPT]: '', [NODE]: '' })
+    expect(exists(`${PNPM}\\node_modules\\@openai\\codex\\bin\\codex.js`)).toBe(false)
+    expect(codexCommand('win32', PATH, exists, read)).toEqual([NODE, PNPM_SCRIPT])
+  })
+  test('on Windows it is the first Codex on the PATH, a shim before a program in a later folder and a program before a shim in a later folder', () => {
+    const files = {
+      'C:\\tools\\codex.exe': '',
+      [`${PNPM}\\codex.CMD`]: pnpmShim,
+      [PNPM_SCRIPT]: '',
+      [`${NPM}\\codex.cmd`]: npmShim,
+      [NPM_SCRIPT]: '',
+      [NODE]: '',
+    }
+    expect(codexCommand('win32', `${PNPM};C:\\tools;C:\\Program Files\\nodejs`, ...disk(files))).toEqual([NODE, PNPM_SCRIPT])
+    expect(codexCommand('win32', `${NPM};C:\\tools;C:\\Program Files\\nodejs`, ...disk(files))).toEqual([NODE, NPM_SCRIPT])
+    expect(codexCommand('win32', `C:\\tools;${PNPM};C:\\Program Files\\nodejs`, ...disk(files))).toEqual(['C:\\tools\\codex.exe'])
+    // In one folder, the program before the script, as Windows takes them
+    expect(codexCommand('win32', NPM, ...disk({ [`${NPM}\\codex.exe`]: '', [`${NPM}\\codex.cmd`]: npmShim, [NPM_SCRIPT]: '' }))).toEqual([`${NPM}\\codex.exe`])
+  })
+  test('on Windows, a shim It cannot start safely is passed over for the next Codex on the PATH, as Codex was found before', () => {
+    // An old npm shim whose script is gone, before Codex's own program where its installer puts it
+    const EXE = 'C:\\Users\\a\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe'
+    const PATH = `${NPM};C:\\Users\\a\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin;C:\\Program Files\\nodejs`
+    expect(codexCommand('win32', PATH, ...disk({ [`${NPM}\\codex.cmd`]: npmShim, [NODE]: '', [EXE]: '' }))).toEqual([EXE])
+    // Shims that start something other than Node, or cannot be read, are passed over for a later shim that works; with no Node anywhere neither works
+    const later = `${PNPM}\\codex.CMD`
+    const PATHS = `${NPM};${PNPM};C:\\Program Files\\nodejs`
+    expect(codexCommand('win32', PATHS, ...disk({ [`${NPM}\\codex.cmd`]: npmShim, [NPM_SCRIPT]: '', [later]: pnpmShim, [PNPM_SCRIPT]: '' }))).toBeNull()
+    expect(
+      codexCommand(
+        'win32',
+        PATHS,
+        ...disk({ [`${NPM}\\codex.cmd`]: '@ECHO off\r\ncall something-else %*\r\n', [later]: pnpmShim, [PNPM_SCRIPT]: '', [NODE]: '' }),
+      ),
+    ).toEqual([NODE, PNPM_SCRIPT])
+    const [exists, read] = disk({ [`${NPM}\\codex.cmd`]: npmShim, [NPM_SCRIPT]: '', [later]: pnpmShim, [PNPM_SCRIPT]: '', [NODE]: '' })
+    const unread = (file: string) => {
+      if (file.toLowerCase().startsWith(NPM.toLowerCase())) throw new Error('EACCES')
+      return read(file)
+    }
+    expect(codexCommand('win32', PATHS, exists, unread)).toEqual([NODE, PNPM_SCRIPT])
+  })
+  test('on Windows, a shim that is not wholly one npm or pnpm wrote is passed over for the Codex after it, and what it names is not started', () => {
+    const EXE = 'C:\\tools\\codex.exe'
+    const PATH = `${NPM};C:\\tools;C:\\Program Files\\nodejs`
+    const files = { [NPM_SCRIPT]: '', [`${NPM}\\cli.py`]: '', [`${NPM}\\unrelated.exe`]: '', 'C:\\elsewhere\\unrelated.exe': '', [EXE]: '', [NODE]: '' }
+    for (const shim of [
+      // A remark that names Node, before a line that starts Python
+      '@ECHO off\r\n@rem node is no longer used\r\npython "%~dp0\\cli.py" %*\r\n',
+      // npm's, with a remark after it that looks like a line handing the words on
+      `${npmShim}@rem "%~dp0\\unrelated.exe" %*\r\n`,
+      // npm's, with Node changed for Python, or its folder for another
+      npmShim.replace('SET "_prog=node"', 'SET "_prog=python" & rem changed'),
+      npmShim.replace('SET dp0=%~dp0', 'SET dp0=C:\\elsewhere'),
+    ])
+      expect(codexCommand('win32', PATH, ...disk({ ...files, [`${NPM}\\codex.cmd`]: shim }))).toEqual([EXE])
+  })
+  test('on Windows, where no Codex on the PATH can be started without a shell, nothing is started and the click waits instead', () => {
+    const PATH = `${NPM};C:\\Program Files\\nodejs`
+    // No script, no Node, a shim that cannot be read, or no PATH at all
+    expect(codexCommand('win32', PATH, ...disk({ [`${NPM}\\codex.cmd`]: npmShim, [NODE]: '' }))).toBeNull()
+    expect(codexCommand('win32', PATH, ...disk({ [`${NPM}\\codex.cmd`]: npmShim, [NPM_SCRIPT]: '' }))).toBeNull()
+    const [exists] = disk({ [`${NPM}\\codex.cmd`]: npmShim, [NPM_SCRIPT]: '', [NODE]: '' })
+    expect(
+      codexCommand('win32', PATH, exists, () => {
+        throw new Error('EACCES')
+      }),
+    ).toBeNull()
+    expect(codexCommand('win32', '', ...disk({ [`${NPM}\\codex.cmd`]: npmShim, [NPM_SCRIPT]: '', [NODE]: '' }))).toBeNull()
     // A folder named from wherever this program is, and not in full, is not looked in, and a folder in quotes is
-    expect(codexCommand('win32', '.;bin', having('codex.exe', 'bin\\codex.exe'))).toBeNull()
-    expect(codexCommand('win32', '"C:\\tools"', having('C:\\tools\\codex.exe'))).toEqual(['C:\\tools\\codex.exe'])
+    expect(codexCommand('win32', '.;bin', ...disk({ 'codex.exe': '', 'bin\\codex.exe': '' }))).toBeNull()
+    expect(codexCommand('win32', '"C:\\tools"', ...disk({ 'C:\\tools\\codex.exe': '' }))).toEqual(['C:\\tools\\codex.exe'])
+  })
+  test('a closed conversation is reopened with the Codex the PATH gives, as a queued click is', () => {
+    const codex = codexCommand('win32', `${PNPM};C:\\Program Files\\nodejs`, ...disk({ [`${PNPM}\\codex.CMD`]: pnpmShim, [PNPM_SCRIPT]: '', [NODE]: '' }))
+    const how = carrying('codex', 'a-thread', 'clicked', { codex, itHome: 'C:\\Users\\a\\.it', platform: 'win32' })
+    expect(typeof how === 'string' ? how : how.argv.slice(0, 4)).toEqual([NODE, PNPM_SCRIPT, 'exec', 'resume'])
   })
 })
 
