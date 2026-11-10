@@ -85,7 +85,7 @@ Each copy is a folder in `~/.it/backend/`, or in `backend/` in the folder `IT_HO
 
 A copy does not hold the files of your pages, which are in `content/`, nor the records of the part of It that serves them, in `content-data/`, nor It's settings in `service.json` and this machine's identity. Those stay where they are, and the older It goes on with them.
 
-It keeps the two copies made last. To choose between them, open `data.json` inside each: the copy whose `functionsOf` is the version you want to go back to is the one to put back, and that is the version to install.
+It keeps the two copies made last. To choose between them, open `data.json` inside each and look at `it`, which is the version of It that last ran on that data, and with it the release of the backend program that version runs. The copy to put back is the one whose `it` is the version you want to go back to, and that exact version is the one to install. Going by `functionsOf` alone is not enough. A newer It whose functions the data refused runs its own backend program on the data all the same, while `functionsOf` still names the older version. A later copy can then say `functionsOf` is the older version while its `it` is the newer one, and the older It refuses that copy with `backend_older`. Where the copy's `data.json` has `loading` or `unsettled` in it, that is a loading of functions the same version began and never saw the end of, and it loads them again when it starts.
 
 ### What is lost
 
