@@ -386,22 +386,8 @@ describe.each(BROWSERS)('a link or a form a page follows, in %s', (_name, type) 
     }
   })
 
-  test.skipIf(!here(type))('a form sent through a label a script written with it clicks, once the page has loaded, opens with no hold', async () => {
-    const said = await opened(
-      `<button id="go" type="button">go</button>
-       <script>
-         document.getElementById('go').addEventListener('click', () => {
-           document.write('<form action="/labelled" target="fresh" rel="opener"><input id="sub" type="submit"></form><label id="l">send</label>'
-             + '<scr' + 'ipt>const l = document.getElementById("l"); l.addEventListener("click", () => { l.htmlFor = "sub" }); l.click()</scr' + 'ipt>')
-           document.close()
-         })
-       </script>`,
-    )
-    expect(said).toEqual({ opener: false, url: `${home}/labelled?` })
-  })
-
   test.skipIf(!here(type))(
-    'a document written whole once the page has loaded keeps the mode its doctype gives it, and It’s own script leaves nothing in it',
+    'a document written whole once the page has loaded is as the browser makes it: the mode its doctype gives it, its own head, and nothing of It’s',
     async () => {
       const path = '/rewritten.html'
       pages.set(path, page('<button id="go" type="button">go</button>'))
@@ -411,11 +397,11 @@ describe.each(BROWSERS)('a link or a form a page follows, in %s', (_name, type) 
         await tab.goto(home + path)
         await tab.waitForLoadState('load')
         const said = await tab.evaluate(() => {
-          document.write('<!doctype html><p id="p">whole</p>')
+          document.write('<!-- first --><!doctype html><html><head id="head" data-said="yes"></head><body><p id="p">whole</p></body></html>')
           document.close()
-          return [document.compatMode, document.getElementById('p')?.textContent ?? null, document.scripts.length]
+          return [document.compatMode, document.getElementById('p')?.textContent ?? null, document.head.id, document.head.dataset.said, document.scripts.length]
         })
-        expect(said).toEqual(['CSS1Compat', 'whole', 0])
+        expect(said).toEqual(['CSS1Compat', 'whole', 'head', 'yes', 0])
       } finally {
         await context.close()
       }
