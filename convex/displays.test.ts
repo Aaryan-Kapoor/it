@@ -1036,10 +1036,54 @@ describe('a display locked to a page', () => {
     await h.t.finishAllScheduledFunctions(vi.runAllTimers)
     expect(asked.length).toBeGreaterThan(1)
     expect(await h.t.run((ctx) => ctx.db.query('contentJobs').collect())).toEqual([])
-    // Locked again to the same page, nothing is to be told and nothing waits
+    // Locked again to the same page, nothing it shows is ended and its number is not raised: the
+    // content service is asked only to confirm the number it has now
     asked.length = 0
+    const epoch = (await h.row(h.tv.id)).epoch
     expect(await h.tv.as.action(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })).toEqual({ revoked: true })
-    expect(asked).toEqual([])
+    expect(asked).toEqual([epoch])
+    expect((await h.row(h.tv.id)).epoch).toBe(epoch)
+  })
+
+  test('locked again to the same page while its revocation has not got through, the lock does not say that it has', async () => {
+    const h = await locked()
+    await mountOn(h.tv, h.review)
+    let down = true
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body ?? '{}'))
+      if (String(url).endsWith('/control/revoke') && down) return new Response(null, { status: 503 })
+      return new Response(JSON.stringify({ epoch: body.epoch }))
+    })
+    expect(await h.laptop.as.action(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })).toEqual({ revoked: false })
+    const epoch = (await h.row(h.tv.id)).epoch
+    // Asked again, to the same page, with the content service still down: not true
+    expect(await h.laptop.as.action(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })).toEqual({ revoked: false })
+    expect((await h.row(h.tv.id)).epoch).toBe(epoch)
+    // The content service is back: asked again, it is so, and nothing is left to ask of it
+    down = false
+    expect(await h.laptop.as.action(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })).toEqual({ revoked: true })
+    expect(await h.t.run((ctx) => ctx.db.query('contentJobs').collect())).toEqual([])
+    expect((await h.row(h.tv.id)).epoch).toBe(epoch)
+  })
+
+  test('two locks to the same page at once each say only what is so, and the display is signed out of what it showed once', async () => {
+    for (const down of [true, false]) {
+      const h = await locked()
+      await mountOn(h.tv, h.review)
+      const epoch = (await h.row(h.tv.id)).epoch
+      vi.mocked(fetch).mockImplementation(async (url, init) => {
+        const body = JSON.parse(String((init as RequestInit).body ?? '{}'))
+        if (String(url).endsWith('/control/revoke') && down) return new Response(null, { status: 503 })
+        return new Response(JSON.stringify({ epoch: body.epoch }))
+      })
+      const both = await Promise.all([
+        h.laptop.as.action(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout }),
+        h.tv.as.action(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout }),
+      ])
+      expect(both).toEqual(down ? [{ revoked: false }, { revoked: false }] : [{ revoked: true }, { revoked: true }])
+      expect((await h.row(h.tv.id)).epoch).toBe(epoch + 1)
+      if (!down) expect(await h.t.run((ctx) => ctx.db.query('contentJobs').collect())).toEqual([])
+    }
   })
 
   test('every display of one browser’s pairing is under one lock: registered before, registered after, unlocked together', async () => {
