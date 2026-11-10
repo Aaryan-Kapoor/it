@@ -936,20 +936,6 @@ function reachWithin(within: Node): void {
   const walk = document.createTreeWalker(within, NodeFilter.SHOW_ELEMENT)
   for (let el = walk.nextNode() as Element | null; el; el = walk.nextNode() as Element | null) if (el.shadowRoot) reach(el.shadowRoot)
 }
-// A copy of a host whose root may be copied, made or brought from another document, has a root of
-// its own that no script attached: it is reached as it is made, before the page can fill or follow it
-const cloneNode = Node.prototype.cloneNode
-Node.prototype.cloneNode = function (this: Node, ...given: [boolean?]) {
-  const copy = cloneNode.apply(this, given)
-  reachWithin(copy)
-  return copy
-}
-const importNode = Document.prototype.importNode
-Document.prototype.importNode = function (this: Document, ...given: Parameters<Document['importNode']>) {
-  const copy = importNode.apply(this, given)
-  reachWithin(copy)
-  return copy
-} as Document['importNode']
 const attachShadow = Element.prototype.attachShadow
 Element.prototype.attachShadow = function (this: Element, init: ShadowRootInit) {
   const root = attachShadow.call(this, init)
@@ -977,9 +963,45 @@ if (typeof parseUnsafe === 'function')
   }
 // A link or a form the page made and never put in the document is activated with no event
 // reaching the window: it is checked here instead, on its way
+/**
+ * What a script makes follow a link or send a form, by a click it sends, `click()`,
+ * `requestSubmit()` or `submit()`, is set right first: from the element up through every root it
+ * is in, each root is reached, so that it hears what follows, and each link and form on the way,
+ * and the form of a button, is given what It gives them. So nothing a script follows depends on It
+ * having reached the root it was made in, however that root came about, nor on the window's
+ * listeners being there at that moment, as they are not while a document is being written again.
+ */
+function beforeFollowing(target: unknown): void {
+  for (let node = target instanceof Node ? target : null; node; ) {
+    if (node instanceof ShadowRoot) {
+      reach(node)
+      node = node.host
+      continue
+    }
+    if (node instanceof Element) {
+      guide(node)
+      guideForm(node)
+      const form = (node as HTMLButtonElement).form
+      if (form instanceof Element) guideForm(form)
+    }
+    node = node.parentNode
+  }
+}
+const dispatch = EventTarget.prototype.dispatchEvent
+EventTarget.prototype.dispatchEvent = function (this: EventTarget, event: Event) {
+  if (event?.type === 'click') beforeFollowing(this)
+  return dispatch.call(this, event)
+}
+const requestSubmit = HTMLFormElement.prototype.requestSubmit
+if (typeof requestSubmit === 'function')
+  HTMLFormElement.prototype.requestSubmit = function (this: HTMLFormElement, ...given: [HTMLElement?]) {
+    beforeFollowing(this)
+    if (given[0]) beforeFollowing(given[0])
+    return requestSubmit.apply(this, given)
+  }
 const clickElement = HTMLElement.prototype.click
 HTMLElement.prototype.click = function (this: HTMLElement) {
-  guide(this)
+  beforeFollowing(this)
   if (!this.isConnected) {
     if (isLink(this)) {
       const to = leadsTo(this)
@@ -991,7 +1013,7 @@ HTMLElement.prototype.click = function (this: HTMLElement) {
 }
 const submitForm = HTMLFormElement.prototype.submit
 HTMLFormElement.prototype.submit = function (this: HTMLFormElement) {
-  guideForm(this)
+  beforeFollowing(this)
   return submitForm.call(this)
 }
 
@@ -1026,20 +1048,18 @@ Document.prototype.open = function (this: Document, ...given: unknown[]) {
   listen()
   return out
 } as typeof Document.prototype.open
-// Writing to a document once it has been parsed opens it again first, which takes every listener
-// away. It is opened here instead, and the listeners put back, before anything written is parsed
-// or any script in it runs; and what was written, roots declared in it too, is set right as the
-// writing returns, before anything of the page's can follow it
+// Writing to a document once it has been parsed may open it again first, which takes every
+// listener away: they are put back as the writing returns, and what was written, roots declared
+// in it too, is set right then, as it is after any writing to a document other than the page's,
+// which the page's observer does not watch. Meanwhile what a script written in it follows is set
+// right as it is followed (beforeFollowing). The browser's own writing is left as it is, writes it
+// ignores included
 for (const name of ['write', 'writeln'] as const) {
   const native = Document.prototype[name]
   Document.prototype[name] = function (this: Document, ...given: string[]) {
-    const reopens = this.readyState !== 'loading'
-    if (reopens) {
-      openDocument.call(this)
-      listen()
-    }
+    const parsed = this.readyState !== 'loading'
     const out = native.apply(this, given)
-    if (reopens) {
+    if (parsed || this !== document) {
       listen()
       tendWithin(this)
       reachWithin(this)
