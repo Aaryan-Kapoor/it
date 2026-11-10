@@ -24,6 +24,8 @@ A records download starts only from the site in a browser paired as yours. Its l
 
 A browser paired with `it site` may do everything. A screen paired from the Displays page may open every page and answer on any of them, be named, take and answer notifications, and sign itself out. Each page also tells it whether that page's owning app is connected and supports queued clicks. It may not delete a page, list or change your machines or other displays, make a code, download the records or erase them.
 
+A display closed to agents, with its "Open to agents" switch, is one no agent brings a page up on or sends a notification to. An agent cannot change that switch, which only a paired browser has: yours for any display, and a screen for itself. The switch is about what agents put on a screen and nothing more. A page that is already open there stays open, and its agent still hears what is done on it and can change it, as on any screen.
+
 ### Every pairing can be seen and ended
 
 Each code, and the browser or the machine that comes of it, records what asked for it. The Displays page lists every browser that is paired, whether or not it ever showed a display, with what asked for its code and when it was last used. Any of them can be ended there, and all but the one you are reading on can be ended at once.
