@@ -91,8 +91,7 @@ export interface Facts {
 export const notLoadedHere = (f: Facts): boolean =>
   f.session?.harness === 'claude-code' &&
   f.addonHere === false &&
-  f.route !== null &&
-  f.route.connected &&
+  f.route?.connected === true &&
   !f.route.listening &&
   f.route.thread === 'none' &&
   f.route.runtime !== 'incompatible'
