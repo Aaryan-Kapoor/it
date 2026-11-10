@@ -986,10 +986,10 @@ export type PageToSite =
   /** A photo, which the person takes in It's own view of the camera. Answered with the photo as a file. */
   | { type: 'it:photo'; requestId: string; facing?: unknown }
   /**
-   * Open the camera live, for a page that asked for the camera when it was published. The site
-   * opens it and sends the page each picture it gives, as `it:camera-frame`, under the id the
-   * page names it by here. The site takes no more of `video` than plain sizes and which way the
-   * camera faces. Answered once the camera is open.
+   * Open the camera live. This call is the page's asking, as `it:record` is. The site opens it
+   * and sends the page each picture it gives, as `it:camera-frame`, under the id the page names
+   * it by here. The site takes no more of `video` than plain sizes and which way the camera
+   * faces. Answered once the camera is open.
    */
   | { type: 'it:camera'; requestId: string; camera: string; video: unknown }
   /** Close the live camera. */
