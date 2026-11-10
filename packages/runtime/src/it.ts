@@ -1054,11 +1054,29 @@ Document.prototype.open = function (this: Document, ...given: unknown[]) {
 // which the page's observer does not watch. Meanwhile what a script written in it follows is set
 // right as it is followed (beforeFollowing). The browser's own writing is left as it is, writes it
 // ignores included
+/**
+ * A name for It's own hook on the window, made for this page, by which a document written again
+ * puts back what hears links and forms before anything else written in it is parsed or runs.
+ * Calling it does nothing but that.
+ */
+const RELISTEN = `__it_${Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, '0')).join('')}`
+Object.defineProperty(window, RELISTEN, { value: () => listen() })
+const RELISTENING = `<script>window[${JSON.stringify(RELISTEN)}]();document.currentScript.remove()<\/script>`
+/** What is written, with It's script put first, after a doctype where it begins with one, so that the document keeps the mode the doctype gives it. */
+function relistening(given: unknown[]): string {
+  const said = given.map((part) => `${part}`).join('')
+  const doctype = /^\s*<!doctype[^>]*>/i.exec(said)
+  return doctype ? said.slice(0, doctype[0].length) + RELISTENING + said.slice(doctype[0].length) : RELISTENING + said
+}
 for (const name of ['write', 'writeln'] as const) {
   const native = Document.prototype[name]
   Document.prototype[name] = function (this: Document, ...given: string[]) {
     const parsed = this.readyState !== 'loading'
-    const out = native.apply(this, given)
+    // Writing to the page's document once it has been parsed opens it again, which takes every
+    // listener away before anything written is parsed: a script put first in what is written puts
+    // them back before anything else in it runs. Where the browser ignores the writing, as for a
+    // deferred script's, it ignores that too
+    const out = native.apply(this, this === document && parsed ? [relistening(given)] : given)
     if (parsed || this !== document) {
       listen()
       tendWithin(this)
