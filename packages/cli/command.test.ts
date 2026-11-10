@@ -1708,16 +1708,45 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
-  test('a display locked to another page is said to be locked, and the agent is told to ask the user to unlock it', async () => {
+  test('a page sent to a display named that is locked to another page is refused as one closed to agents is, and the agent is told to ask the user', async () => {
     const m = machine()
     const b = await backend(m, (asked) =>
-      asked.path === 'displays:show' ? { displays: [], displayIds: [], notShown: [{ display: 'Gym', displayId: 'g1', reason: 'locked' }], took: false } : null,
+      asked.path === 'publish:begin'
+        ? { artifactId: 'artifact-1', slug: 'review', version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+        : asked.path === 'publish:finish'
+          ? { slug: 'review', version: 1, url: 'https://site.example/p/review' }
+          : asked.path === 'displays:show' && asked.args.everywhere
+            ? { displays: ['Desk'], displayIds: ['d1'], notShown: [{ display: 'Gym', displayId: 'g1', reason: 'locked' }], took: false }
+            : asked.path === 'displays:show'
+              ? {
+                  displays: [],
+                  displayIds: [],
+                  notShown: [{ display: 'Gym', displayId: 'g1', reason: 'locked' }],
+                  took: false,
+                  url: 'http://127.0.0.1:39000/p/review',
+                }
+              : null,
     )
+    b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.showEverywhere] })
     try {
-      const said = printed(await run(m, ['open', 'review', '--on', 'Gym'], b.env))
-      expect(said).toMatchObject({ shownOn: [], notShownOn: [{ display: 'Gym', reason: 'locked' }] })
-      expect(said.hint).toContain('"Gym" is locked to another page by the user')
-      expect(said.hint).toContain('ask them to')
+      for (const target of [
+        ['--on', 'Gym'],
+        ['--on-id', 'g1'],
+      ]) {
+        const refused = await run(m, ['open', 'review', ...target], b.env)
+        expect([refused.code, error(refused).code]).toEqual([1, 'locked'])
+        expect(error(refused).message).toContain('is locked to another page by the user, and keeps to it. It was shown nowhere.')
+        expect(error(refused).hint).toContain('if the page belongs there, ask them to, and do not try another way')
+        expect(error(refused).hint).toMatch(/give the user its link: http:\/\/127\.0\.0\.1:\d+\/p\/review$/)
+      }
+      // With --open, the page is published and only showing it is said to have failed, with a code that is not 0
+      const created = await run(m, ['create', 'Review', '--html', '<p>hi</p>', '--open', '--on', 'Gym'], b.env)
+      expect(created.code).toBe(1)
+      expect(printed(created).notShown).toMatchObject({ code: 'locked' })
+      // Asked of every display, it is shown on the others, and the locked one is said in the hint
+      const everywhere = await run(m, ['open', 'review', '--everywhere'], b.env)
+      expect([everywhere.code, printed(everywhere).shownOn]).toEqual([0, ['Desk']])
+      expect(printed(everywhere).hint).toContain('"Gym" is locked to another page by the user')
     } finally {
       await b.close()
     }
