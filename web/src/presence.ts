@@ -58,7 +58,26 @@ export interface ReportClock {
   ask: () => void
   learned: (then: () => void) => () => void
 }
-const backendClock: ReportClock = { at: reportClock, ask: askClock, learned: onClockLearned }
+export const backendClock: ReportClock = { at: reportClock, ask: askClock, learned: onClockLearned }
+
+/**
+ * Sends a report as the last thing a tab does, as a call of its own that the browser keeps going
+ * after the tab is closed (\`keepalive\`), to the backend's address for calling a function, which
+ * the site's own address passes on. The connection the site keeps open seldom gets a report out
+ * before a closing tab is gone, and a tab that is closed would then be taken for open until what it
+ * said last ran out. Nothing is sent without the token this browser holds now.
+ */
+export function lastWord(report: Report, about: { key: string; epoch: number; expectedSession: string }, token: string | null): void {
+  if (!token) return
+  try {
+    void fetch('/api/mutation', {
+      method: 'POST',
+      keepalive: true,
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ path: 'displays:report', args: { ...about, ...report }, format: 'json' }),
+    }).catch(() => {})
+  } catch {}
+}
 
 /** 16 random bytes, in hex: made with `getRandomValues`, which a site reached over plain http has too, and `randomUUID` not. */
 export const tabId = (): string => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('')
@@ -93,7 +112,7 @@ export const tabId = (): string => Array.from(crypto.getRandomValues(new Uint8Ar
 export function startReports(
   send: (report: Report) => Promise<unknown>,
   takes: () => boolean,
-  at: { document: Document; window: Window; now: () => number; wall?: () => number; clock?: ReportClock } = {
+  at: { document: Document; window: Window; now: () => number; wall?: () => number; clock?: ReportClock; last?: (report: Report) => void } = {
     document,
     window,
     now: () => performance.now(),
@@ -200,7 +219,11 @@ export function startReports(
   const closing = () => {
     if (stopped) return
     const r = report(true)
-    if (r) void send(r).catch(() => {})
+    if (!r) return
+    void send(r).catch(() => {})
+    // The connection seldom gets it out before the tab is gone: it goes the way a closing tab's
+    // last word does as well. Where both arrive, the second is the same report, and is ignored
+    at.last?.(r)
   }
   const kinds = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const
   for (const kind of kinds) win.addEventListener(kind, used, { capture: true, passive: true })

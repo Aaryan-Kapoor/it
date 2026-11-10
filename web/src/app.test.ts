@@ -709,6 +709,26 @@ describe('what each tab says of itself', () => {
     })
     // and the next, once it is learned, says when it was made
     expect(reports[1]).toMatchObject({ sequence: 2, visible: true, observedAt: expect.any(Number) })
+    // A tab that is closed says so the way that outlasts it, as well as on the connection
+    await act(async () => void window.dispatchEvent(new Event('pagehide')))
+    const last = vi.mocked(fetch).mock.calls.find(([path]) => path === '/api/mutation')!
+    expect(last[1]).toMatchObject({ method: 'POST', keepalive: true, headers: { authorization: 'Bearer a-token' } })
+    expect(JSON.parse(String(last[1]!.body))).toEqual({
+      path: 'displays:report',
+      args: {
+        key: expect.any(String),
+        epoch: 0,
+        expectedSession: expect.any(String),
+        tab: reports[0]!.tab,
+        sequence: expect.any(Number),
+        phase: 'none',
+        visible: false,
+        observedAt: expect.any(Number),
+      },
+      format: 'json',
+    })
+    const closed = asked.filter((a) => a.what === 'displays:report').at(-1)!.args as { sequence: number }
+    expect(JSON.parse(String(last[1]!.body)).args.sequence).toBe(closed.sequence)
   })
 })
 

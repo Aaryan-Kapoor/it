@@ -221,6 +221,8 @@ async function unpairedFrom(): Promise<void> {
  */
 export const EARLY_MS = 60_000
 let kept: { token: string; until: number } | null = null
+/** The token this browser holds now, while it is still good, for a call made by itself as the tab is closed. */
+export const heldToken = (): string | null => (kept && kept.until > Date.now() ? kept.token : null)
 // Moved on by every sign-out and every pairing. An answer that was asked for before either,
 // and arrives after, is about the session that was here before, and is dropped.
 let era = 0
