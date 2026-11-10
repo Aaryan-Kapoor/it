@@ -66,23 +66,42 @@ function beganAt(pid: number): number | undefined {
 /** How much later than its process a Claude Code may say its session began, as the two clocks are read: a few seconds. */
 const SLACK_MS = 5_000
 
+/** Claude processes and their starts, read together as the backend reads Windows process identity. */
+function windowsStarts(): Map<number, number> {
+  const found = new Map<number, number>()
+  const script = "Get-Process -Name claude -ErrorAction SilentlyContinue | ForEach-Object { try { '{0} {1}' -f $_.Id, $_.StartTime.ToFileTimeUtc() } catch {} }"
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+    encoding: 'utf8',
+    timeout: 5000,
+    windowsHide: true,
+  })
+  if (r.status !== 0) return found
+  for (const line of r.stdout.split(/\r?\n/)) {
+    const m = /^(\d+) (\d+)$/.exec(line.trim())
+    if (!m) continue
+    // FILETIME counts 100ns ticks since 1601. Divide before converting to preserve milliseconds.
+    const began = Number(BigInt(m[2]!) / 10_000n - 11_644_473_600_000n)
+    if (Number.isSafeInteger(began) && began > 0) found.set(Number(m[1]), began)
+  }
+  return found
+}
+
 /**
  * Whether the running process a note names is the Claude Code that wrote it, and not another
  * program that has been given its number since that Claude Code ended without taking its note
  * away. On Linux the moment it began is the one the note says, exactly. On macOS it began no
  * later than the note's session did, as a process given the number afterwards cannot have. On
- * Windows its program is Claude Code's. A note that cannot be checked is passed over.
+ * Windows its program is Claude Code's and began no later than the session did. A note that cannot be checked is passed over.
  */
-export function sameProcess(pid: number, note: { procStart?: unknown; startedAt: number }): boolean {
+export function sameProcess(pid: number, note: { procStart?: unknown; startedAt: number }, windows?: ReadonlyMap<number, number>): boolean {
   if (process.platform === 'linux' && typeof note.procStart === 'string') return startOf(pid) === note.procStart
   if (process.platform === 'linux' || process.platform === 'darwin') {
     const began = beganAt(pid)
     return began !== undefined && began <= note.startedAt + SLACK_MS
   }
   if (process.platform === 'win32') {
-    const r = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', timeout: 5000, windowsHide: true })
-    const image = r.status === 0 ? /^"([^"]+)"/.exec(r.stdout.trim())?.[1] : undefined
-    return image !== undefined && /^claude(\.exe)?$/i.test(image)
+    const began = (windows ?? windowsStarts()).get(pid)
+    return began !== undefined && began <= note.startedAt + SLACK_MS
   }
   return false
 }
@@ -99,6 +118,15 @@ export function openClaude(
   same: (pid: number, note: { procStart?: unknown; startedAt: number }) => boolean = sameProcess,
 ): OpenClaude[] {
   const open = new Map<string, OpenClaude>()
+  // One fresh snapshot per scan, and only if there is a valid live note to check.
+  let windows: Map<number, number> | undefined
+  const check =
+    process.platform === 'win32' && same === sameProcess
+      ? (pid: number, note: { procStart?: unknown; startedAt: number }) => {
+          windows ??= windowsStarts()
+          return sameProcess(pid, note, windows)
+        }
+      : same
   for (const folder of new Set(folders)) {
     const dir = path.join(folder, 'sessions')
     let names: string[]
@@ -117,7 +145,7 @@ export function openClaude(
         const pid = Number(name.slice(0, -5))
         if (s.pid !== pid || typeof s.sessionId !== 'string' || !UUID.test(s.sessionId) || typeof s.startedAt !== 'number') continue
         if (s.kind !== 'interactive' || s.entrypoint === 't3-code') continue
-        if (!alive(pid) || !same(pid, { procStart: s.procStart, startedAt: s.startedAt })) continue
+        if (!alive(pid) || !check(pid, { procStart: s.procStart, startedAt: s.startedAt })) continue
         const id = s.sessionId.toLowerCase()
         const was = open.get(id)
         if (!was || was.startedAt < s.startedAt) open.set(id, { id, startedAt: s.startedAt })

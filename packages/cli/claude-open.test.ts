@@ -1,6 +1,8 @@
 // Which Claude Code conversations are open at a person's keyboard, as Claude Code keeps note of
 // them in its folder's `sessions`: the ones the site asks the person to load It's add-on in.
+import childProcess from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
@@ -67,6 +69,38 @@ describe('the Claude Code conversations open at a person’s keyboard', () => {
     expect(sameProcess(process.pid, { startedAt: 1_000 })).toBe(false)
     // And a process that is not running is nobody's
     expect(sameProcess(2 ** 22 + 7, { startedAt: Date.now() })).toBe(false)
+  })
+
+  test('Windows rejects a reused Claude PID and unreadable starts, and checks all notes in one batch', () => {
+    const platform = process.platform
+    const spawn = childProcess.spawnSync
+    let calls = 0
+    let readable = true
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      childProcess.spawnSync = new Proxy(spawn, {
+        apply(_target, _self, [file]) {
+          calls++
+          // The old image-only check accepts both, even though PID 1 now holds another Claude.
+          const stdout = file === 'tasklist' ? '"claude.exe","1"' : readable ? '1 116444736100000000\n2 116444736010000000\n' : '1 unreadable\n'
+          return { status: 0, stdout, stderr: '' }
+        },
+      })
+      syncBuiltinESMExports()
+      const folder = folderWith([session(1), session(2)])
+      expect(openClaude([folder], alive)).toEqual([{ id: id(2), startedAt: 1_002 }])
+      expect(calls).toBe(1)
+      // The same identity rule applies when called directly, even on Windows hosts.
+      expect(sameProcess(1, { startedAt: 1_001 })).toBe(false)
+      expect(sameProcess(2, { startedAt: 1_002 })).toBe(true)
+      readable = false
+      expect(openClaude([folder], alive)).toEqual([])
+      expect(sameProcess(1, { startedAt: 1_001 })).toBe(false)
+    } finally {
+      Object.defineProperty(process, 'platform', { value: platform })
+      childProcess.spawnSync = spawn
+      syncBuiltinESMExports()
+    }
   })
 
   test('pass over a file that is not as Claude Code writes one, and a folder that has none', () => {
