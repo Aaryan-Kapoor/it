@@ -1845,6 +1845,66 @@ try {
       linkedTo.every((left) => left.referer === null),
     JSON.stringify({ handle, scripted: Boolean(scripted), linkedTo }),
   )
+  // A plain link inside a closed shadow root, which hides what is in it from the rest of the
+  // page: one a script made, and one declared in markup, which no script of the page's is given.
+  // Neither can be reached by a locator, so each is clicked where it is drawn.
+  await linking.evaluate((out) => {
+    const made = document.createElement('div')
+    made.id = 'closed-made'
+    document.body.append(made)
+    made.attachShadow({ mode: 'closed' }).innerHTML = `<a href="${out}/closed" style="display:block;padding:12px">inside a closed root</a>`
+    const declared = document.createElement('div')
+    declared.id = 'closed-declared'
+    document.body.append(declared)
+    declared.setHTMLUnsafe(`<template shadowrootmode="closed"><a href="${out}/declared" style="display:block;padding:12px">declared closed</a></template>`)
+  }, out)
+  /** Clicks where something in the page is drawn, as a person would. */
+  const clickOn = async (selector) => {
+    const box = await page.frameLocator('.mount iframe').locator(selector).boundingBox()
+    await page.mouse.click(box.x + 20, box.y + box.height / 2)
+  }
+  const closedOpened = one.context.waitForEvent('page', { timeout: 15_000 }).catch(() => null)
+  await clickOn('#closed-made')
+  const closedTab = await closedOpened
+  await closedTab?.waitForLoadState('load').catch(() => {})
+  const closedSeen = closedTab
+    ? await closedTab.evaluate(() => ({ at: location.href, opener: window.opener !== null })).catch((err) => ({ unread: String(err.message).split('\n')[0] }))
+    : null
+  await closedTab?.close()
+  const closedAfter = await linking.evaluate(() => document.getElementById('links-out') !== null).catch(() => false)
+  check(
+    'a plain link inside a closed shadow root that a script made opens in an ordinary tab of its own with no opener, and the page stays as it was',
+    closedSeen?.at === `${out}/closed` && closedSeen.opener === false && closedAfter === true && SHOWING.test(frameOf(page).url()),
+    JSON.stringify({ closedSeen, closedAfter }),
+  )
+  // The one declared in markup takes the frame itself to the other site. The site's policy
+  // refuses it, and the browser says so in the site's console
+  const shownBefore = frameOf(page).url()
+  const declaredOpened = one.context.waitForEvent('page', { timeout: 5000 }).catch(() => null)
+  const backAgain = await provoking(
+    one,
+    [
+      {
+        says: againstPolicy(`Framing '${out}/'`, `frame-src ${pages}`),
+        because: 'a link inside a closed shadow root declared in markup took the page’s frame to another site',
+      },
+    ],
+    async () => {
+      await clickOn('#closed-declared')
+      return until(async () => {
+        const now = shownFrame(page)
+        if (!now || now.url() === shownBefore || !SHOWING.test(now.url())) return undefined
+        return (await now.evaluate(() => typeof window.It?.action === 'function').catch(() => false)) ? now.url() : undefined
+      }, 20_000)
+    },
+  )
+  const declaredTab = await declaredOpened
+  await declaredTab?.close()
+  check(
+    'a plain link inside a closed shadow root declared in markup, which no script in the page can see, does not leave the page as an error page: the page is shown again',
+    Boolean(backAgain),
+    JSON.stringify({ backAgain: Boolean(backAgain), openedATab: Boolean(declaredTab) }),
+  )
   linked.closeAllConnections()
   await new Promise((resolve) => linked.close(resolve))
 
