@@ -142,6 +142,22 @@ jobs:
         if: ${{ !cancelled() }}
         # Fetching a browser fails on a runner now and then, before anything of It has run: it is tried three times
         run: for n in 1 2 3; do npx playwright install --with-deps chromium firefox && exit 0; sleep 20; done; exit 1
+      # The Claude Code add-on loaded by a real Claude Code, headless and with no account
+      # (addons/claude-code/loads.test.ts): the oldest that It's add-on is installed into, and
+      # the newest there is when the job runs, so that a Claude Code that refuses the add-on
+      # is seen the day it comes out. Each is Claude Code's own program for Linux, from npm.
+      - name: Fetch the oldest and the newest Claude Code, for the add-on to be loaded by
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: |
+          set -euo pipefail
+          bins=""
+          for version in 2.1.287 "$(npm view @anthropic-ai/claude-code version)"; do
+            folder="$RUNNER_TEMP/claude-code-$version"
+            mkdir -p "$folder"
+            (cd "$folder" && npm pack --silent "@anthropic-ai/claude-code-linux-x64@$version" >/dev/null && tar xzf ./*.tgz)
+            bins="$bins${bins:+:}$folder/package/claude"
+          done
+          echo "IT_CLAUDE_BINS=$bins" >> "$GITHUB_ENV"
       # The tests are run whatever became of the steps before them, so that a system where
       # one fails still says which tests pass there. The job fails with it all the same.
       # Where the first run left no backend program, the tests that start it skip themselves,

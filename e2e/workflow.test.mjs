@@ -157,6 +157,24 @@ describe('what the jobs are held to running', () => {
     expect(steps('test')[said]).toMatch(/if: \$\{\{ !cancelled\(\) && env\.IT_BACKEND_BIN == '' \}\}\n\s+run: echo "::warning::/)
   })
 
+  test('on Linux the unit tests come by the oldest Claude Code It installs its add-on into and the newest there is, before they run, so that the add-on is loaded in both', () => {
+    const fetched = stepWith('test', 'IT_CLAUDE_BINS=')
+    expect(fetched).toBeGreaterThan(-1)
+    expect(stepWith('test', 'run: npm test')).toBeGreaterThan(fetched)
+    const step = steps('test')[fetched]
+    expect(step).toMatch(/if: \$\{\{ !cancelled\(\) && runner\.os == 'Linux' \}\}/)
+    expect(step).not.toMatch(/continue-on-error/)
+    // The oldest is the one setup says it installs into, and the newest is asked of npm when the job runs
+    const setup = readFileSync(path.join(root, 'packages', 'cli', 'src', 'setup.ts'), 'utf8')
+    const oldest = /'claude-code': \{[^}]*min: '([\d.]+)'/.exec(setup)?.[1]
+    expect(oldest).toBeDefined()
+    expect(scriptOf(step)).toContain(`for version in ${oldest} "$(npm view @anthropic-ai/claude-code version)"`)
+    expect(scriptOf(step)).toMatch(/npm pack --silent "@anthropic-ai\/claude-code-linux-x64@\$version"/)
+    expect(scriptOf(step)).toMatch(/echo "IT_CLAUDE_BINS=\$bins" >> "\$GITHUB_ENV"/)
+    // And the test that loads the add-on is the one that reads it
+    expect(readFileSync(path.join(root, 'addons', 'claude-code', 'loads.test.ts'), 'utf8')).toContain('process.env.IT_CLAUDE_BINS')
+  })
+
   test('both browsers that pages are run in are installed before the unit tests, on every system, so that those tests are not skipped', () => {
     const install = stepWith('test', 'npx playwright install')
     expect(install).toBeGreaterThan(-1)

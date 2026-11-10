@@ -21,6 +21,8 @@ let offered: Click[]
 let asked: { path: string; body: any }[]
 /** What the stand-in connector says the marks put into the conversation stand for. Given once, as the connector gives it. */
 let behind: string[] = []
+/** While set, the stand-in connector answers an asking for clicks only once this has settled. */
+let clicksHeld: Promise<void> | null = null
 
 function fakeConnector(socket: string): Promise<http.Server> {
   const s = http.createServer((req, res) => {
@@ -44,7 +46,9 @@ function fakeConnector(socket: string): Promise<http.Server> {
             marked = { ok: true }
           } else marked = { ok: true, marks: behind.map((_, i) => `mark-${i}`), texts: behind }
         }
-        res.end(JSON.stringify(marked ?? (req.url?.startsWith('/clicks') ? { clicks: offered } : { ok: true })))
+        const answer = () => res.end(JSON.stringify(marked ?? (req.url?.startsWith('/clicks') ? { clicks: offered } : { ok: true })))
+        if (clicksHeld && req.url?.startsWith('/clicks')) void clicksHeld.then(answer)
+        else answer()
       })
   })
   return new Promise((resolve) => s.listen(socket, () => resolve(s)))
@@ -188,6 +192,7 @@ beforeEach(async () => {
   writeFileSync(path.join(home, 'connector.json'), JSON.stringify({ socket: path.join(home, 'connector.sock'), token: 'a'.repeat(48) }))
 })
 afterEach(async () => {
+  clicksHeld = null
   await new Promise((r) => server.close(r))
   rmSync(home, { recursive: true, force: true })
 })
@@ -224,28 +229,183 @@ describe('the Claude Code add-on', () => {
     expect(describeClick({ ...fault, payload: null })).toContain('an error it gave no words for')
   })
 
-  test('keeps reporting when the submission API was missing as the session started', async () => {
-    vi.resetModules()
-    const { register } = await import('./it-bridge/hooks/register.js')
-    const host = fakeHost()
-    delete (host.$.prompt as { submit?: unknown }).submit
-    register(host.on)
-    await host.fire('session.start')
-    await host.tick()
-    await host.tick()
-    expect(asked.filter((a) => a.path === '/addon')).toHaveLength(3)
-    expect(host.submits).toEqual([])
-    expect(acks()).toEqual([])
-  })
-
-  test('reports a missing submission API without taking a click', async () => {
+  test('a Claude Code with no way to submit a prompt is found out at the first click, which is never reported as given, and from then on the connector is told and asked for no clicks', async () => {
     const host = await start()
     delete (host.$.prompt as { submit?: unknown }).submit
     offered = [{ id: 'click-missing', text: 'A click' }]
     await host.tick()
-    expect(asked.find((a) => a.path === '/addon')?.body).toMatchObject({ harness: 'claude-code', addon: { api: 1, delivery: false } })
+    await host.settle()
+    await host.tick()
+    expect(asked.filter((a) => a.path === '/addon').at(-1)?.body).toMatchObject({
+      harness: 'claude-code',
+      addon: { api: 1, delivery: false, missing: ['submit'] },
+    })
+    const askedForClicks = asked.filter((a) => a.path.startsWith('/clicks')).length
+    await host.tick()
+    expect(asked.filter((a) => a.path.startsWith('/clicks'))).toHaveLength(askedForClicks)
+    expect(asked.filter((a) => a.path === '/addon').length).toBeGreaterThan(1)
     expect(host.submits).toEqual([])
     expect(acks()).toEqual([])
+  })
+
+  test('a Claude Code with no clock is found out as the session starts, and the connector is told', async () => {
+    vi.resetModules()
+    const { register } = await import('./it-bridge/hooks/register.js')
+    const host = fakeHost()
+    delete (host.$.clock as { every?: unknown }).every
+    register(host.on)
+    await host.fire('session.start')
+    expect(asked.find((a) => a.path === '/addon')?.body).toMatchObject({ harness: 'claude-code', addon: { api: 1, delivery: false, missing: ['clock'] } })
+    expect(asked.some((a) => a.path.startsWith('/clicks'))).toBe(false)
+  })
+
+  test('a Claude Code that does not say which conversation this is is found out at the first check, and the connector is told', async () => {
+    const host = await start()
+    delete (host.$.session as { id?: unknown }).id
+    await host.tick()
+    expect(asked.find((a) => a.path === '/addon')?.body).toMatchObject({ harness: 'claude-code', addon: { api: 1, delivery: false, missing: ['session'] } })
+    expect(asked.some((a) => a.path.startsWith('/clicks'))).toBe(false)
+    expect([host.env.IT_HARNESS, host.env.IT_SESSION]).toEqual([undefined, undefined])
+  })
+
+  test('a TypeError from inside the call for the conversation’s id is not taken for good: the next check whose call works asks for clicks again', async () => {
+    const host = await start()
+    const real = host.$.session.id
+    let once = true
+    host.$.session.id = async () => {
+      if (!once) return real()
+      once = false
+      throw new TypeError('something inside Claude Code')
+    }
+    await host.tick()
+    expect(asked.at(-1)).toMatchObject({ path: '/addon', body: { addon: { delivery: false, missing: ['session'] } } })
+    await host.tick()
+    expect(asked.filter((a) => a.path.startsWith('/clicks')).at(-1)?.body).toMatchObject({ addon: { delivery: true, missing: [] } })
+  })
+
+  test('clicks that could not be submitted for want of a way to are let go of at once, so that no later tool call hands over one the connector has given elsewhere, and a prompt is tried again after a while', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const host = await start()
+      const real = host.$.prompt.submit
+      let once = true
+      host.$.prompt.submit = (...args: Parameters<typeof real>) => {
+        if (!once) return real(...args)
+        once = false
+        throw new TypeError('something inside Claude Code')
+      }
+      offered = [{ id: 'click-1', text: 'A click' }]
+      await host.tick()
+      await host.settle()
+      expect(host.submits).toEqual([])
+      // The connector's hold runs out and it gives the click elsewhere: a tool call of this conversation hands over nothing
+      offered = []
+      const result = (await host.fire('tool.call', {}, {})) as { context?: unknown }
+      expect(result.context).toBeUndefined()
+      expect(acks()).toEqual([])
+      await host.tick()
+      expect(asked.at(-1)).toMatchObject({ path: '/addon', body: { addon: { delivery: false, missing: ['submit'] } } })
+      // A few seconds on, it is asked for clicks again, and the next one is submitted
+      vi.setSystemTime(Date.now() + 5_000)
+      offered = [{ id: 'click-2', text: 'Another click' }]
+      await host.tick()
+      expect(host.submits.map((sub) => sub.text)).toEqual(['Another click'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('a submission refused after the add-on let go of what it held does not put its clicks back, so that a tool call while the connector is next asked hands over nothing', async () => {
+    const host = await start()
+    offered = [{ id: 'click-1', text: 'A click' }]
+    await host.tick()
+    await host.settle()
+    // A prompt for it is under way
+    expect(host.submits.map((sub) => sub.text)).toEqual(['A click'])
+    // The conversation's id fails as a call to something that is not there fails: the add-on lets go of what it holds
+    const real = host.$.session.id
+    host.$.session.id = async () => {
+      throw new TypeError('something inside Claude Code')
+    }
+    await host.tick()
+    expect(asked.at(-1)?.path).toBe('/addon')
+    // The prompt that was under way is refused now
+    host.submits[0]!.refuse()
+    await host.settle()
+    // The connector has given the click elsewhere meanwhile. The id works again, and while the connector is asked, a tool call hands over nothing
+    host.$.session.id = real
+    offered = []
+    let release!: () => void
+    clicksHeld = new Promise((r) => {
+      release = r
+    })
+    try {
+      const asking = host.tick()
+      await until(() => asked.filter((a) => a.path.startsWith('/clicks')).length === 2, 'the connector is asked for clicks again')
+      const result = (await host.fire('tool.call', {}, {})) as { context?: unknown }
+      expect(result.context).toBeUndefined()
+      release()
+      await asking
+    } finally {
+      clicksHeld = null
+      release?.()
+    }
+    expect(acks()).toEqual([])
+  })
+
+  test('a submission refused after the connector stopped offering its click, its hold having run out, does not put that click back for a tool call to hand over', async () => {
+    const host = await start()
+    offered = [{ id: 'click-1', text: 'A click' }]
+    await host.tick()
+    await host.settle()
+    expect(host.submits.map((sub) => sub.text)).toEqual(['A click'])
+    // The connector's hold on it runs out while the prompt is under way, and it offers it no more
+    offered = []
+    await host.tick()
+    await host.settle()
+    // The prompt is refused now: a tool call before the next check hands over nothing
+    host.submits[0]!.refuse()
+    await host.settle()
+    const result = (await host.fire('tool.call', {}, {})) as { context?: unknown }
+    expect(result.context).toBeUndefined()
+    expect(acks()).toEqual([])
+  })
+
+  test('a refused submission whose click is still offered is put back and handed over as before', async () => {
+    const host = await start()
+    offered = [{ id: 'click-1', text: 'A click' }]
+    await host.tick()
+    await host.settle()
+    host.submits[0]!.refuse()
+    await host.settle()
+    const result = (await host.fire('tool.call', {}, {})) as { context?: string[] }
+    expect(result.context).toEqual(['A click'])
+  })
+
+  test('a clock that could not be set going as the session started, for whatever reason, is said, and is set going with the next turn', async () => {
+    vi.resetModules()
+    const { register } = await import('./it-bridge/hooks/register.js')
+    const host = fakeHost()
+    const real = host.$.clock.every
+    let once = true
+    host.$.clock.every = (...args: Parameters<typeof real>) => {
+      if (!once) return real(...args)
+      once = false
+      throw new Error('not now')
+    }
+    register(host.on)
+    await host.fire('session.start')
+    expect(asked.find((a) => a.path === '/addon')?.body).toMatchObject({ addon: { delivery: false, missing: ['clock'] } })
+    await host.fire('turn.start', {})
+    await host.tick()
+    expect(asked.filter((a) => a.path.startsWith('/clicks')).at(-1)?.body).toMatchObject({ addon: { delivery: true, missing: [] } })
+  })
+
+  test('a Claude Code that has all of it says so with every asking, and names nothing as missing', async () => {
+    const host = await start()
+    await host.tick()
+    expect(asked.find((a) => a.path.startsWith('/clicks'))?.body).toMatchObject({ addon: { api: 1, delivery: true, missing: [] } })
+    expect(asked.some((a) => a.path === '/addon')).toBe(false)
   })
 
   test('an idle conversation is given a click as a turn, in the connector’s own words, and only then is it reported', async () => {
