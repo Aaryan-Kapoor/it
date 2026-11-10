@@ -269,6 +269,7 @@ On Linux and macOS, stop It with Ctrl-C where you started it with `it serve`, an
   if [ ! -d "$saved" ] || [ -L "$saved" ]; then echo "There is no folder $saved to put back, so nothing was changed." >&2; exit 1; fi
   if [ -e "$live-replaced" ] || [ -L "$live-replaced" ]; then echo "$live-replaced is there already, so nothing was changed." >&2; exit 1; fi
   disk() { stat -c %d "$1" 2>/dev/null || stat -f %d "$1"; }
+  quoted() { printf "'"; printf '%s' "$1" | sed "s/'/'\\\\''/g"; printf "'"; }
   for folder in "$live" "$saved"; do
     if [ "$(disk "$folder")" != "$(disk "$(dirname "$live")")" ]; then echo "$folder is on a disk of its own, apart from the folder it is in, so it cannot be moved whole, and nothing was changed. Move the folders yourself." >&2; exit 1; fi
   done
@@ -280,7 +281,7 @@ On Linux and macOS, stop It with Ctrl-C where you started it with `it serve`, an
   if ! mv "$saved" "$live"; then
     if [ -e "$live" ] || [ -L "$live" ]; then echo "The kept folder could not be moved into place, and something is now at $live, so It's folder was left at $live-replaced and the kept folder at $saved. Look at what is at $live before you move anything." >&2
     elif mv "$live-replaced" "$live"; then echo "The kept folder could not be moved into place, so It's folder was moved back and nothing in it was changed. Close whatever has a file open in $saved, and run these lines again." >&2
-    else echo "The kept folder could not be moved into place, and It's folder could not be moved back either. It's folder is now $live-replaced, and the kept folder is still $saved. Once nothing has a file open in it, move It's folder back with: mv \"$live-replaced\" \"$live\"" >&2; fi
+    else printf '%s\n' "The kept folder could not be moved into place, and It's folder could not be moved back either. It's folder is now $live-replaced, and the kept folder is still $saved. Once nothing has a file open in it, move It's folder back with: mv $(quoted "$live-replaced") $(quoted "$live")" >&2; fi
     exit 1
   fi
   echo "It's folder is the one that was kept, and the one it replaced is in $live-replaced."
@@ -327,7 +328,10 @@ On Windows, stop It with Ctrl-C where you started it with `it serve`, and paste 
       } catch {
         $why = $_.Exception.Message
         if (Get-Entry $live) { throw "The kept folder could not be moved into place ($why), and something is now at $live, so It's folder was left at $replaced and the kept folder at $saved. Look at what is at $live before you move anything." }
-        try { [IO.Directory]::Move($replaced, $live) } catch { throw "The kept folder could not be moved into place ($why), and It's folder could not be moved back either. It's folder is now $replaced, and the kept folder is still $saved. Once nothing has a file open in it, move It's folder back with: [IO.Directory]::Move('$replaced', '$live')" }
+        try { [IO.Directory]::Move($replaced, $live) } catch {
+          $back = "[IO.Directory]::Move('{0}', '{1}')" -f $replaced.Replace("'", "''"), $live.Replace("'", "''")
+          throw "The kept folder could not be moved into place ($why), and It's folder could not be moved back either. It's folder is now $replaced, and the kept folder is still $saved. Once nothing has a file open in it, move It's folder back with: $back"
+        }
         throw "The kept folder could not be moved into place ($why), so It's folder was moved back and nothing in it was changed. Close whatever has a file open in $saved, and run this again."
       }
       "It's folder is the one that was kept, and the one it replaced is in $replaced."
