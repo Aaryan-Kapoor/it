@@ -235,7 +235,7 @@ vi.mock('./src/lib', async (original) => {
   }
 })
 
-import { type ConnectorInfo, infoFile, local, mac, NOT_LOADED, type Route, runConnector, wayOf } from './src/connector'
+import { type ConnectorInfo, infoFile, local, mac, NOT_LOADED, notLoadedToo, type Route, runConnector, wayOf } from './src/connector'
 import { DeliveryRecovery, eraseDeliveryRecovery } from './src/delivery-recovery'
 import * as files from './src/lib'
 import { readJson } from './src/lib'
@@ -1186,13 +1186,24 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'))
       expect(stand.calls.find((c) => c.name === 'machines:wakeFailed')!.args).toEqual({
         for: { harness: 'claude-code', id },
-        why: heard ? 'the folder its conversation was held in is not known on this machine, or is gone' : NOT_LOADED,
+        // Why it could not be reopened is said either way, and for one that has not loaded the add-on, what lets it hear the page after it
+        why: heard
+          ? 'the folder its conversation was held in is not known on this machine, or is gone'
+          : `the folder its conversation was held in is not known on this machine, or is gone. ${NOT_LOADED}`,
       })
       // What is counted is still the word for why the reopening failed
       await until(() => stand.recorded.some((r) => r.name === 'agent.woken'))
       expect(stand.recorded.find((r) => r.name === 'agent.woken')!.properties).toEqual({ result: 'declined', agent: 'claude-code', why: 'no_folder' })
     },
   )
+
+  test('a reason too long to fit beside the advice to load the add-on is cut short, so that the advice is never what the backend cuts off', () => {
+    const said = notLoadedToo(`Claude Code exited with 1, and its last words were: ${'x'.repeat(400)}`)
+    expect(said.length).toBeLessThanOrEqual(300)
+    expect(said.endsWith(NOT_LOADED)).toBe(true)
+    expect(said).toMatch(/^Claude Code exited with 1, and its last words were: x+…\. /)
+    expect(notLoadedToo('it is being reopened already')).toBe(`it is being reopened already. ${NOT_LOADED}`)
+  })
 
   /** A click on the page of the conversation thread-1, made a moment after click(n) would be. */
   const onFirst = (n: number) => ({ ...click(n), session: { harness: 'codex', id: 'thread-1' } })

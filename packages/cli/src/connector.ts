@@ -547,11 +547,6 @@ async function unfit(): Promise<Problem | null | undefined> {
  */
 const NOT_STARTED = '\u0000 not started'
 /**
- * What the page says, after "Couldn't wake Claude Code:", for a conversation that has not
- * loaded It's add-on. It goes to the page as it is, and is kept short: the backend keeps 300
- * characters of it.
- */
-/**
  * How what is done on a conversation's pages would reach it, as the connector answers at
  * `/route`: whether its app is connected here, whether its add-on is listening, how the add-on
  * last spoke for that app, and whether a thread of T3 Code holds it.
@@ -562,8 +557,19 @@ export interface Route {
   runtime: AddonRuntime['state']
   thread: 'held' | 'none' | 'unknown'
 }
+/**
+ * What the page says after why a Claude Code conversation could not be reopened, where that
+ * conversation has not loaded It's add-on either: what lets it hear the page, where it is still
+ * open. The backend keeps 300 characters of what the page says, so the reason before it is cut
+ * short where the two would not fit together (`notLoadedToo`).
+ */
 export const NOT_LOADED =
-  'its conversation has not loaded It’s add-on, as happens when it was already open when It was installed. Type /reload-plugins in that conversation, or open it again, and what you did reaches it'
+  'Its conversation has not loaded It’s add-on either, as when it was open before It was installed: if it is still open, type /reload-plugins in it, and what you did reaches it'
+/** Why a conversation could not be reopened, and then that it has not loaded It's add-on, together in what the backend keeps. */
+export const notLoadedToo = (why: string): string => {
+  const room = 300 - NOT_LOADED.length - 2
+  return `${why.length > room ? `${why.slice(0, room - 1)}…` : why}. ${NOT_LOADED}`
+}
 /** Whether this machine joined an It that runs on another computer. */
 const joined = (): boolean => typeof readJson<{ at?: unknown }>(inHome('machine.json'))?.at === 'string'
 /** What stands in the way of handing anything over before a machine that joined has first asked whether the two fit: nothing is known yet. */
@@ -2199,16 +2205,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
    */
   const notReopened = (session: { harness: string; id: string }, why: string) => {
     const key = keyOf(session.harness, session.id)
-    // A Claude Code conversation that published its page while It's add-on did not run in it, and
-    // has not been heard from since, has not loaded the add-on: it was already open when the
-    // add-on was installed. However its reopening failed, what lets it hear the page is to load
-    // the add-on, and the page says how in place of why the reopening failed
-    if (session.harness === 'claude-code' && publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))) {
-      void call('mutation', api.machines.wakeFailed, { for: session, why: NOT_LOADED }).catch(() => {})
-      return
-    }
     const words = saidLast.get(follow(key))
-    void call('mutation', api.machines.wakeFailed, { for: session, why: words ? `${why}, and its last words were: ${words}` : why }).catch(() => {})
+    const said = words ? `${why}, and its last words were: ${words}` : why
+    // A Claude Code conversation that published its page while It's add-on did not run in it, and
+    // has not been heard from since, has not loaded the add-on, as one that was already open when
+    // the add-on was installed has not. Why its reopening failed is said all the same, since the
+    // conversation may be gone for good, and after it what lets it hear the page where it is still open
+    const unloaded =
+      session.harness === 'claude-code' && publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))
+    void call('mutation', api.machines.wakeFailed, { for: session, why: unloaded ? notLoadedToo(said) : said }).catch(() => {})
   }
   /** Whether anybody was at the page for any click that is waiting for a click's conversation. One such, and the conversation is reopened as for a person, whatever else waits in front of it. */
   const someoneThere = (click: Offered, offered = inbox) =>
