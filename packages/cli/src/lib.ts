@@ -535,7 +535,8 @@ export const backendAt = (port: number): Backend => ({
  * are there and could not be read are not It not being set up: a command run as another account
  * than the person's finds It's folder closed to it, and is told that instead.
  */
-export const notSetUp = () => (keptFromHome() ? keptOut() : new Problem('It has not been set up on this machine, so run `it setup` first.', 'not_set_up'))
+export const notSetUp = () => (keptFromHome() ? keptOut() : new Problem(NOT_SET_UP, 'not_set_up'))
+export const NOT_SET_UP = 'It has not been set up on this machine, so run `it setup` first.'
 /**
  * Where the backend is. On the machine It runs on, that is two ports of this machine. On a
  * machine that joined an It running on another, it is the address it joined at. IT_URL names

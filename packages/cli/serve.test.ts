@@ -4,7 +4,7 @@
 // remote: a small server on this machine stands in for the release the program is fetched from.
 import { type ChildProcess, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
@@ -1221,6 +1221,29 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     expect(JSON.stringify(said)).not.toContain('it serve')
     expect(existsSync(path.join(folder, 'backend'))).toBe(false)
   })
+
+  test.skipIf(process.getuid?.() === 0)(
+    '`it serve` in Codex’s sandbox, as an account kept out of It’s folder, says so with no terminal, and names none of the person’s folders',
+    async () => {
+      // Codex's rules file is named from CODEX_HOME in what an agent in its sandbox is told to pass on
+      const codexHome = path.join(os.tmpdir(), 'PrivatePerson', 'private-codex')
+      chmodSync(folder, 0o300)
+      try {
+        const ran = run(['serve'], { CODEX_THREAD_ID: 'a-thread', CODEX_HOME: codexHome })
+        expect(await ran.ended).toBe(1)
+        expect(ran.err()).not.toContain('PrivatePerson')
+        expect(ran.err()).not.toContain(folder)
+        expect(JSON.parse(ran.err().trim().split('\n').pop()!).error).toEqual({
+          code: 'blocked',
+          message:
+            'It could not be asked from here: this command runs as an account that may not read It’s folder, as Codex’s sandbox on Windows runs commands. It may well be running.',
+          hint: 'Run `it` outside that sandbox, as the account It runs as. Do not start It again.',
+        })
+      } finally {
+        chmodSync(folder, 0o700)
+      }
+    },
+  )
 
   test('a supervised start where It was never set up stops, and the service’s status says to run `it setup`', async () => {
     expect(await well(run(['serve', '--supervised', '--log', path.join(folder, 'service.log')]))).toBe(0)
