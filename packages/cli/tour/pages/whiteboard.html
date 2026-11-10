@@ -224,7 +224,9 @@
 
     function lines(value) {
       if (typeof value === "string") { try { value = JSON.parse(value); } catch (err) { return []; } }
-      return Array.isArray(value) ? value.filter((s) => s && Array.isArray(s.points)) : [];
+      // Only a place that is two numbers is drawn: one that is anything else would be traced for ever
+      var place = (p) => Array.isArray(p) && typeof p[0] === "number" && typeof p[1] === "number" && isFinite(p[0]) && isFinite(p[1]);
+      return Array.isArray(value) ? value.filter((s) => s && Array.isArray(s.points)).map((s) => Object.assign({}, s, { points: s.points.filter(place) })) : [];
     }
     // Draws the agent's lines from the one numbered `first` on, each from its start to its end, with the hand at the tip
     function trace(first) {
@@ -252,7 +254,7 @@
               run.tip = [pts[at][0] + (next[0] - pts[at][0]) * part, pts[at][1] + (next[1] - pts[at][1]) * part];
               redraw();
               Tour.hand.move(on(run.tip)[0], on(run.tip)[1], 0);
-              if (gone >= long) done(); else World.soon(step);
+              if (!(gone < long)) done(); else World.soon(step);
             });
           });
           World.sound.step();

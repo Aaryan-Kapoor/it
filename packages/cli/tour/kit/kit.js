@@ -42,6 +42,8 @@ window.Tour = (() => {
    */
   function answered(said) {
     var landed = pending > 0
+    // Whatever was asked up to now is answered, also where It has yet to say that it took it
+    heard = asks
     quiet(said)
     if (landed) World.shock(hand.where().x, hand.where().y, true)
   }
@@ -93,11 +95,19 @@ window.Tour = (() => {
       if (pending) hand.tap()
     })
   }
-  /** Tells the agent something was done. The hand hears of it when It has taken it, and not before. */
+  // How many things the agent was told of, and how many of them the page has heard an answer after
+  var asks = 0,
+    heard = 0
+  /**
+   * Tells the agent something was done. The hand hears of it when It has taken it, and not
+   * before. Where the agent's answer came first, as it can when It is slow to say that it took
+   * what was done, the hand is left saying what the agent did.
+   */
   function act(name, data) {
+    var mine = ++asks
     return It.action(name, data || {}).then(
       (result) => {
-        taken()
+        if (heard < mine) taken()
         return result
       },
       () => {

@@ -107,7 +107,7 @@
     var $ = (id) => document.getElementById(id);
     var room = $("room"), none = $("none"), stage = $("stage");
     var MOST = 4;
-    var shown = {};       // each tile on the page, by its id: { el, was, pressed }
+    var shown = Object.create(null);       // each tile on the page, by its id: { el, was, pressed }
     var work = Promise.resolve();
     var opened = false;   // whether the state the page opened with has been shown: tiles that were there then are simply there
     var words = (v, most) => (typeof v === "string" || typeof v === "number" ? String(v).replace(/\s+/g, " ").trim().slice(0, most) : "");

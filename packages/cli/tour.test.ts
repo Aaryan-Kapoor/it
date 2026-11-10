@@ -628,6 +628,68 @@ describe('the drum machine', () => {
   })
 })
 
+describe('what the hand says of an answer', () => {
+  test('an answer that comes before It has said that it took what was done is not undone when It then says so', async () => {
+    const page = await opened('button')
+    page.$('#big').click()
+    expect(page.sent.at(-1)).toMatchObject({ name: 'press' })
+    // The agent's answer is heard first, and then It's word that the press was taken
+    await page.set({ status: 'done', note: 'shipped it' })
+    const answered = page.hand()
+    expect(answered[1]).not.toBe('live')
+    await page.sent.at(-1)!.accept()
+    await page.advance(2000)
+    expect(page.hand()).toEqual(answered)
+    expect(page.hand()[0]).not.toContain('has not answered yet')
+    page.close()
+  })
+
+  test('something done after an answer is unanswered again once It has taken it', async () => {
+    const page = await opened('checklist')
+    page.all('.item input, .item button, li button')[0]?.click()
+    if (!page.sent.length) return page.close()
+    await page.sent.at(-1)!.accept()
+    expect(page.hand()).toEqual(['Your agent · has not answered yet', 'live'])
+    page.close()
+  })
+})
+
+describe('what a page does with a state that is not as the guide gives it', () => {
+  test('the whiteboard draws only the places of a line that are two numbers, and stops tracing a line that has none to go along', async () => {
+    const page = await opened('whiteboard')
+    await page.set({
+      agent_strokes: [
+        {
+          points: [
+            [0, 0],
+            ['bad', 1],
+            [0.5, Number.NaN],
+            [0.4, 0.4],
+          ],
+          width: 4,
+        },
+        { points: [['x', 'y']] },
+      ],
+    })
+    // Whatever it draws, it comes to rest: nothing is left asking for another frame for ever
+    for (let i = 0; i < 40; i++) await page.advance(200)
+    const before = page.w.__frames ?? 0
+    for (let i = 0; i < 20; i++) await page.advance(200)
+    expect(page.w.__frames ?? 0).toBe(before)
+    page.close()
+  })
+
+  test('the control room takes a tile under any id, one that every object has among them', async () => {
+    const page = await opened('room')
+    await page.set({
+      tiles: { toString: { at: 1, label: 'odd', title: 'A tile named toString' }, constructor: { at: 2, label: 'odd', title: 'And one named constructor' } },
+    })
+    for (let i = 0; i < 20; i++) await page.advance(300)
+    expect(page.all('.tile .title').map((el: any) => el.textContent)).toEqual(expect.arrayContaining(['A tile named toString', 'And one named constructor']))
+    page.close()
+  })
+})
+
 describe('the ways on', () => {
   const SLOW = 40_000
 
