@@ -185,51 +185,65 @@ On Windows, in PowerShell, which may be Windows PowerShell 5.1:
        }
        $item.FullName
      }
-     $folder = if ($env:IT_HOME) { [IO.Path]::GetFullPath([IO.Path]::Combine((Get-Location -PSProvider FileSystem).ProviderPath, $env:IT_HOME)) } else { Join-Path $HOME '.it' }
-     if ($env:IT_HOME) { $env:IT_HOME = $folder }
-     Set-Location $env:TEMP
-     $live = Get-RealPath $folder
-     $saved = "$live-after-upgrade"
-     $backend = Join-Path $live 'backend'
-     $from = Join-Path $backend $copy
-     if (-not (Test-Path -LiteralPath (Join-Path $from 'data.json'))) { throw "There is no copy named $copy in $backend, so nothing was changed." }
-     $name = Split-Path -Leaf $saved
-     $left = @(Get-ChildItem -LiteralPath (Split-Path -Parent $live) -Force | Where-Object { $_.Name -eq $name -or $_.Name -like "$name.part.*" })
-     if ($left.Count -gt 0) { throw "$($left[0].FullName) is there already, so nothing was changed. Look at what is in it, remove it yourself if you do not need it, and run this again." }
-     $entries = @()
-     foreach ($at in (Join-Path $live 'backend'), (Join-Path $live 'content'), (Join-Path $live 'content-data'), $from, (Join-Path $backend 'data.json'), (Join-Path $backend 'storage'), (Join-Path $from 'data.json'), (Join-Path $from 'storage')) {
-       if (Test-Path -LiteralPath $at) { $entries += Get-Item -LiteralPath $at -Force }
+     function Get-Entry($path) {
+       Get-ChildItem -LiteralPath (Split-Path -Parent $path) -Force | Where-Object { $_.Name -eq (Split-Path -Leaf $path) }
      }
-     $entries += @(Get-ChildItem -LiteralPath $backend -Filter 'db.sqlite3*' -Force) + @(Get-ChildItem -LiteralPath $from -Filter 'db.sqlite3*' -Force)
-     foreach ($entry in $entries) {
-       if ($entry.LinkType) { throw "$($entry.FullName) is a link, so a copy would not hold what it leads to, and nothing was changed." }
+     function Test-Link($entry) {
+       ([bool]$entry.LinkType) -or (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
      }
-     it service uninstall
-     if ($LASTEXITCODE -ne 0) { throw 'The background service could not be stopped, so nothing was changed.' }
-     if (Test-Path -LiteralPath (Join-Path $backend 'lock')) { throw 'It is still running, so nothing was changed. Stop it, and run this again.' }
-     $part = "$saved.part." + [guid]::NewGuid().ToString('N')
-     New-Item -ItemType Directory -Path $part | Out-Null
-     "Copying It's folder to $part."
-     Get-ChildItem -LiteralPath $live -Force | Copy-Item -Destination $part -Recurse -Force
-     foreach ($file in @(Get-ChildItem -LiteralPath $backend -Filter 'db.sqlite3*' -Force | ForEach-Object { $_.Name }) + 'data.json') {
-       $copied = Join-Path (Join-Path $part 'backend') $file
-       if (-not (Test-Path -LiteralPath $copied -PathType Leaf) -or (Get-Item -LiteralPath $copied -Force).LinkType) { throw "$part is not a whole copy of its own, so nothing in It's folder was changed. Remove it yourself." }
+     $given = $env:IT_HOME
+     $folder = if ($given) { [IO.Path]::GetFullPath([IO.Path]::Combine((Get-Location -PSProvider FileSystem).ProviderPath, $given)) } else { Join-Path $HOME '.it' }
+     Push-Location $env:TEMP
+     try {
+       if ($given) { $env:IT_HOME = $folder }
+       $live = Get-RealPath $folder
+       $saved = "$live-after-upgrade"
+       $backend = Join-Path $live 'backend'
+       $from = Join-Path $backend $copy
+       if (-not (Test-Path -LiteralPath (Join-Path $from 'data.json') -PathType Leaf)) { throw "There is no copy named $copy in $backend, so nothing was changed." }
+       $name = Split-Path -Leaf $saved
+       $left = @(Get-ChildItem -LiteralPath (Split-Path -Parent $live) -Force | Where-Object { $_.Name -eq $name -or $_.Name -like "$name.part.*" })
+       if ($left.Count -gt 0) { throw "$($left[0].FullName) is there already, so nothing was changed. Look at what is in it, remove it yourself if you do not need it, and run this again." }
+       $watched = @(Get-ChildItem -LiteralPath $live -Force | Where-Object { $_.Name -in 'backend', 'content', 'content-data' })
+       $watched += @(Get-ChildItem -LiteralPath $backend -Force | Where-Object { $_.Name -like 'db.sqlite3*' -or $_.Name -in 'data.json', 'storage', $copy })
+       $watched += @(Get-ChildItem -LiteralPath $from -Force | Where-Object { $_.Name -like 'db.sqlite3*' -or $_.Name -in 'data.json', 'storage' })
+       foreach ($entry in $watched) {
+         if (Test-Link $entry) { throw "$($entry.FullName) is a link, so a copy would not hold what it leads to, and nothing was changed." }
+       }
+       it service uninstall
+       if ($LASTEXITCODE -ne 0) { throw 'The background service could not be stopped, so nothing was changed.' }
+       try {
+         if (Get-Entry (Join-Path $backend 'lock')) { throw 'It is still running, so nothing in its folder was changed. Stop it, and run this again.' }
+         $part = "$saved.part." + [guid]::NewGuid().ToString('N')
+         New-Item -ItemType Directory -Path $part | Out-Null
+         "Copying It's folder to $part."
+         Get-ChildItem -LiteralPath $live -Force | Copy-Item -Destination $part -Recurse -Force
+         foreach ($file in @(Get-ChildItem -LiteralPath $backend -Force | Where-Object { $_.Name -like 'db.sqlite3*' -or $_.Name -eq 'data.json' } | ForEach-Object { $_.Name })) {
+           $copied = Get-Entry (Join-Path (Join-Path $part 'backend') $file)
+           if (-not $copied -or $copied.PSIsContainer -or (Test-Link $copied)) { throw "$part is not a whole copy of its own, so nothing in It's folder was changed. Remove it yourself." }
+         }
+         Move-Item -LiteralPath $part -Destination $saved
+         "It's folder as it was is kept in $saved."
+         $aside = Join-Path $backend ('replaced.' + [guid]::NewGuid().ToString('N'))
+         New-Item -ItemType Directory -Path $aside | Out-Null
+         foreach ($item in @(Get-ChildItem -LiteralPath $backend -Force | Where-Object { $_.Name -like 'db.sqlite3*' -or $_.Name -in 'data.json', 'storage' })) {
+           Move-Item -LiteralPath $item.FullName -Destination $aside
+         }
+         "What the copy replaced is in $aside."
+         Get-ChildItem -LiteralPath $from -Force | Where-Object { $_.Name -like 'db.sqlite3*' -or $_.Name -eq 'data.json' } | Copy-Item -Destination $backend
+         Copy-Item -LiteralPath (Join-Path $from 'storage') -Destination $backend -Recurse
+         'The copy is in place.'
+       } catch {
+         throw "$($_.Exception.Message) The background service is stopped and not registered. Once the folder is as you want it, run it setup to start it again."
+       }
+     } finally {
+       $env:IT_HOME = $given
+       Pop-Location
      }
-     Move-Item -LiteralPath $part -Destination $saved
-     "It's folder as it was is kept in $saved."
-     $aside = Join-Path $backend ('replaced.' + [guid]::NewGuid().ToString('N'))
-     New-Item -ItemType Directory -Path $aside | Out-Null
-     $moving = @(Get-ChildItem -LiteralPath $backend -Filter 'db.sqlite3*' -Force) + @(Get-Item -LiteralPath (Join-Path $backend 'data.json'), (Join-Path $backend 'storage') -Force)
-     foreach ($item in $moving) { Move-Item -LiteralPath $item.FullName -Destination $aside }
-     "What the copy replaced is in $aside."
-     Get-ChildItem -LiteralPath $from -Filter 'db.sqlite3*' -Force | Copy-Item -Destination $backend
-     Copy-Item -LiteralPath (Join-Path $from 'data.json') -Destination $backend
-     Copy-Item -LiteralPath (Join-Path $from 'storage') -Destination $backend -Recurse
-     'The copy is in place.'
    }
    ```
 
-   Where it stops before saying "The copy is in place.", do as the three points for Linux and macOS say, with the PowerShell block in [Putting the kept folder back](#putting-the-kept-folder-back).
+   Where it stops before saying "The copy is in place.", do as the points for Linux and macOS say, with the PowerShell block in [Putting the kept folder back](#putting-the-kept-folder-back). The block leaves the PowerShell window as it found it, in the same folder and with `IT_HOME` as it was.
 3. Install the older version, naming its release, as `v0.1.36` is named here:
 
    ```powershell
@@ -280,20 +294,43 @@ On Windows, stop It with Ctrl-C where you started it with `it serve`, and paste 
     }
     $item.FullName
   }
-  $folder = if ($env:IT_HOME) { [IO.Path]::GetFullPath([IO.Path]::Combine((Get-Location -PSProvider FileSystem).ProviderPath, $env:IT_HOME)) } else { Join-Path $HOME '.it' }
-  if ($env:IT_HOME) { $env:IT_HOME = $folder }
-  Set-Location $env:TEMP
-  it service uninstall
-  if ($LASTEXITCODE -ne 0) { throw 'The background service could not be stopped, so nothing was changed.' }
-  $live = Get-RealPath $folder
-  $saved = "$live-after-upgrade"
-  $replaced = "$live-replaced"
-  if (-not (Test-Path -LiteralPath $saved -PathType Container) -or (Get-Item -LiteralPath $saved -Force).LinkType) { throw "There is no folder $saved to put back, so nothing was changed." }
-  if (Test-Path -LiteralPath (Join-Path $live 'backend\lock')) { throw 'It is still running, so nothing was changed. Stop it, and run this again.' }
-  if (Test-Path -LiteralPath $replaced) { throw "$replaced is there already, so nothing was changed." }
-  Move-Item -LiteralPath $live -Destination $replaced
-  Move-Item -LiteralPath $saved -Destination $live
-  "It's folder is the one that was kept, and the one it replaced is in $replaced."
+  function Get-Entry($path) {
+    Get-ChildItem -LiteralPath (Split-Path -Parent $path) -Force | Where-Object { $_.Name -eq (Split-Path -Leaf $path) }
+  }
+  function Test-Link($entry) {
+    ([bool]$entry.LinkType) -or (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+  }
+  $given = $env:IT_HOME
+  $folder = if ($given) { [IO.Path]::GetFullPath([IO.Path]::Combine((Get-Location -PSProvider FileSystem).ProviderPath, $given)) } else { Join-Path $HOME '.it' }
+  Push-Location $env:TEMP
+  try {
+    if ($given) { $env:IT_HOME = $folder }
+    $live = Get-RealPath $folder
+    $saved = "$live-after-upgrade"
+    $replaced = "$live-replaced"
+    $kept = Get-Entry $saved
+    if (-not $kept -or -not $kept.PSIsContainer -or (Test-Link $kept)) { throw "There is no folder $saved to put back, so nothing was changed." }
+    if (Get-Entry $replaced) { throw "$replaced is there already, so nothing was changed." }
+    it service uninstall
+    if ($LASTEXITCODE -ne 0) { throw 'The background service could not be stopped, so nothing was changed.' }
+    try {
+      if (Get-Entry (Join-Path $live 'backend\lock')) { throw 'It is still running, so nothing in its folder was changed. Stop it, and run this again.' }
+      Move-Item -LiteralPath $live -Destination $replaced
+      try {
+        Move-Item -LiteralPath $saved -Destination $live
+      } catch {
+        $why = $_.Exception.Message
+        try { Move-Item -LiteralPath $replaced -Destination $live } catch { throw "The kept folder could not be moved into place ($why), and It's folder could not be moved back either. It's folder is now $replaced, and the kept folder is still $saved. Move $replaced back to $live yourself before anything else." }
+        throw "The kept folder could not be moved into place ($why), so It's folder was moved back and nothing in it was changed. Close whatever has a file open in $saved, and run this again."
+      }
+      "It's folder is the one that was kept, and the one it replaced is in $replaced."
+    } catch {
+      throw "$($_.Exception.Message) The background service is stopped and not registered. Once the folder is as you want it, run it setup to start it again."
+    }
+  } finally {
+    $env:IT_HOME = $given
+    Pop-Location
+  }
 }
 ```
 
