@@ -38,7 +38,8 @@ const serve = (answer: (url: string) => string) =>
     const server = http.createServer((req, res) => {
       if (req.url === '/runtime.js') return res.writeHead(200, { 'content-type': 'text/javascript' }).end(RUNTIME)
       if (req.url === '/keep') return res.writeHead(204).end()
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(answer(req.url ?? '/'))
+      const type = req.url?.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8'
+      res.writeHead(200, { 'content-type': type }).end(answer(req.url ?? '/'))
     })
     server.listen(0, '127.0.0.1', () => resolve({ server, origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }))
   })
@@ -328,5 +329,60 @@ describe.each(BROWSERS)('a link or a form a page follows, in %s', (_name, type) 
        </script>`,
     )
     expect(said).toEqual({ opener: false, url: `${home}/reopened` })
+  })
+
+  test.skipIf(!here(type))(
+    'a form in an open root written into the document with a script that sends it, while the writing goes on, opens with no hold',
+    async () => {
+      const said = await opened(
+        `<button id="go" type="button">go</button>
+       <script>
+         document.getElementById('go').addEventListener('click', () => {
+           document.write('<div id="host"><template shadowrootmode="open"><form id="f" action="/written-form" target="fresh" rel="opener"></form></template></div>'
+             + '<scr' + 'ipt>document.getElementById("host").shadowRoot.getElementById("f").requestSubmit()</scr' + 'ipt>')
+           document.close()
+         })
+       </script>`,
+      )
+      expect(said).toEqual({ opener: false, url: `${home}/written-form?` })
+    },
+  )
+
+  test.skipIf(!here(type))(
+    'a form in an open root written into a document of its own, brought into the page and sent at once, opens with no hold',
+    async () => {
+      const said = await opened(
+        `<button id="go" type="button">go</button>
+       <script>
+         document.getElementById('go').addEventListener('click', () => {
+           const other = Document.parseHTMLUnsafe('')
+           other.open()
+           other.write('<div id="host"><template shadowrootmode="open"><form id="f" action="/other-form" target="fresh" rel="opener"></form></template></div>')
+           const host = other.getElementById('host')
+           document.body.append(host)
+           host.shadowRoot.getElementById('f').requestSubmit()
+         })
+       </script>`,
+      )
+      expect(said).toEqual({ opener: false, url: `${home}/other-form?` })
+    },
+  )
+
+  test.skipIf(!here(type))('a deferred script that writes to the page once it is parsed leaves the page as it was, as the browser does', async () => {
+    pages.set('/defer-write.js', "document.write('<p id=written>written</p>')")
+    const path = '/defer-page.html'
+    pages.set(path, page('<p id="kept">kept</p><script defer src="/defer-write.js"></script>'))
+    const context = await browser.newContext()
+    try {
+      const tab = await context.newPage()
+      await tab.goto(home + path)
+      await tab.waitForLoadState('load')
+      await tab.waitForTimeout(200)
+      expect(await tab.evaluate(() => [document.getElementById('kept')?.textContent ?? null, document.getElementById('written'), document.readyState])).toEqual(
+        ['kept', null, 'complete'],
+      )
+    } finally {
+      await context.close()
+    }
   })
 })
