@@ -415,10 +415,12 @@ const whichDisplay = (target: Where): string => (target.displayId !== undefined 
  * What is said where the one display named takes nothing from agents now, alike for a page and a
  * notification: closed to agents, or no longer paired. `link` is the page's, where there is one to give instead.
  */
-function notTaken(target: Where, code: 'agents_off' | 'not_paired', what: 'sent' | 'shown', link?: string): Problem {
+function notTaken(target: Where, code: 'agents_off' | 'not_paired', what: 'sent' | 'shown', address: { url?: string; urlNote?: string } = {}): Problem {
   const which = whichDisplay(target)
   const nothing = what === 'sent' ? 'Nothing was sent.' : 'It was shown nowhere.'
-  const instead = `Leave out --on and --on-id to ${what === 'sent' ? 'send it to' : 'show it on'} the display in use.${link ? ` Or give the user its link: ${link}` : ''}`
+  // The link as \`it create\` gives it, with why it is not at the place chosen for links where it is not
+  const link = address.url ? ` Or give the user its link: ${address.url}${address.urlNote ? ` ${address.urlNote}` : ''}` : ''
+  const instead = `Leave out --on and --on-id to ${what === 'sent' ? 'send it to' : 'show it on'} the display in use.${link}`
   return code === 'agents_off'
     ? new Problem(
         `Agents may not use ${which}: the user turned that off for it, on the display itself or on the site under Displays. ${nothing}`,
@@ -519,7 +521,7 @@ async function show(slug: string, a: Args, also: Record<string, unknown> = {}) {
   const target = aimedAt(a)
   const reason = shown.notShown?.[0]?.reason
   if ((target.display !== undefined || target.displayId !== undefined) && !shown.displays.length && (reason === 'agents_off' || reason === 'not_paired'))
-    throw notTaken(target, reason, 'shown', addressOf(shown).url)
+    throw notTaken(target, reason, 'shown', addressOf(shown))
   return shown
 }
 /** What is said where `--everywhere` was asked of an It of an earlier version, of a page or of a notification. */

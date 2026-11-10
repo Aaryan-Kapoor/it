@@ -1519,6 +1519,36 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('a refused `it open` gives the link with why it is not at the place chosen for links, by name and by id', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show'
+        ? {
+            displays: [],
+            displayIds: [],
+            notShown: [{ display: 'TV', displayId: 'k57tv', reason: 'agents_off' }],
+            took: false,
+            url: 'http://127.0.0.1:39000/p/board',
+            unlinked: { to: 'tailnet', why: 'off' },
+          }
+        : null,
+    )
+    b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.notifyById] })
+    try {
+      for (const target of [
+        ['--on', 'TV'],
+        ['--on-id', 'k57tv'],
+      ]) {
+        const refused = await run(m, ['open', 'board', ...target], b.env)
+        expect([target[0], refused.code, error(refused).code]).toEqual([target[0], 1, 'agents_off'])
+        expect(error(refused).hint).toMatch(/Or give the user its link: http:\/\/127\.0\.0\.1:\d+\/p\/board Links are set to be at /)
+        expect(error(refused).hint).toContain('this url is the one this machine reaches It by. Tell the user that when you give it.')
+      }
+    } finally {
+      await b.close()
+    }
+  })
+
   test('a page sent to a display named that takes nothing now is refused as a notification is, with the same code, words and exit, and shown somewhere it is answered', async () => {
     const m = machine()
     let reason = 'agents_off'
