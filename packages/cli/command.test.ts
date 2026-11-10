@@ -1479,6 +1479,42 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('`it open` gives the page’s link where no display brought it up or it went to a display whose site is closed, as `it create` gives it', async () => {
+    const m = machine()
+    let answer: Record<string, unknown> = {}
+    const b = await backend(m, (asked) => (asked.path === 'displays:show' ? answer : null))
+    try {
+      // Sent to the display used last, whose site is closed: the person needs the link
+      answer = { displays: ['Desk'], displayIds: ['jh7desk'], notShown: [], took: false, chosen: 'last_used', url: 'http://127.0.0.1:39000/p/board' }
+      let said = printed(await run(m, ['open', 'board'], b.env))
+      expect(said.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/p\/board$/)
+      expect(said.hint).toContain('give them `url` in the chat')
+      // At the place the owner chose for links, where It is reached there
+      answer = { ...answer, link: 'http://studio.tail1234.ts.net:21000/p/board' }
+      said = printed(await run(m, ['open', 'board'], b.env))
+      expect(said.url).toBe('http://studio.tail1234.ts.net:21000/p/board')
+      expect(said).not.toHaveProperty('urlNote')
+      // Where it cannot be there, this machine's address, with why
+      answer = { ...answer, link: undefined, unlinked: { to: 'tailnet', why: 'off' } }
+      said = printed(await run(m, ['open', 'board'], b.env))
+      expect(said.url).toMatch(/\/p\/board$/)
+      expect(String(said.urlNote)).toContain('this url is the one this machine reaches It by')
+      // Shown on no display at all
+      answer = {
+        displays: [],
+        displayIds: [],
+        notShown: [{ display: 'TV', displayId: 'k57tv', reason: 'not_paired' }],
+        took: false,
+        url: 'http://127.0.0.1:39000/p/board',
+      }
+      said = printed(await run(m, ['open', 'board', '--on', 'TV'], b.env))
+      expect(said.url).toMatch(/\/p\/board$/)
+      expect(said.hint).toContain('give the user `url` in the chat')
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`--everywhere` asks every display in so many words, `--on all` is the name "all", and neither goes with --on or --on-id', async () => {
     const m = machine()
     const b = await backend(m, (asked) =>

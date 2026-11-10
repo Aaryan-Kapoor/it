@@ -4,6 +4,7 @@ import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { action, internalMutation, type MutationCtx, mutation, query } from './_generated/server'
 import { takePage } from './artifacts'
+import { site } from './config'
 import { revokeLater } from './content'
 import { aim, nameOf, seenOf, stillPaired, targetOf } from './lib/aim'
 import {
@@ -23,6 +24,7 @@ import { fail } from './lib/errors'
 import { quota, rateLimit } from './lib/limits'
 import { log } from './lib/log'
 import { mint } from './lib/signing'
+import { linkNow } from './network'
 import { session } from './schema'
 import { endSession, signOutDisplay } from './sessions'
 
@@ -566,12 +568,18 @@ export const show = mutation({
     // A page changes owner only if at least one requested display can show it. All display
     // changes and ownership changes commit together, including the rate-limit checks.
     const took = mine && aimed.to.length ? (await takePage(ctx, artifact, machine, mine, agent)).took : false
+    // The page's address, as a publish gives it: the site's on this computer, and the link at
+    // the place the owner chose for links where It can be reached there. An agent gives it to the
+    // person where no display brought the page up, or where it went to one they may not be at
+    const at = await linkNow(ctx)
     return {
       displays: aimed.to.map(nameOf),
       displayIds: aimed.to.map((d) => d._id),
       notShown: aimed.notShown,
       took,
       ...(aimed.chosen ? { chosen: aimed.chosen } : {}),
+      url: `${site()}/p/${artifact.slug}`,
+      ...(at && 'at' in at ? { link: `${at.at}/p/${artifact.slug}` } : at ? { unlinked: at.unlinked } : {}),
     }
   },
 })

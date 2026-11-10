@@ -379,6 +379,7 @@ describe('a display whose browser’s pairing has ended', () => {
     await owner.browser.mutation(api.sessions.end, { session: screen.session as never })
     // Asked onto that display by name
     expect(await machine.mutation(api.displays.show, { slug: 'plan', display: 'Kitchen' })).toEqual({
+      url: expect.any(String),
       displays: [],
       displayIds: [],
       notShown: [{ display: 'Kitchen', displayId: expect.any(String), reason: 'not_paired' }],
@@ -386,6 +387,7 @@ describe('a display whose browser’s pairing has ended', () => {
     })
     // Asked onto every display: it is shown on the ones that are paired, and that one is named as left out
     expect(await machine.mutation(api.displays.show, { slug: 'plan', everywhere: true })).toEqual({
+      url: expect.any(String),
       displays: ['Laptop'],
       displayIds: [expect.any(String)],
       notShown: [{ display: 'Kitchen', displayId: expect.any(String), reason: 'not_paired' }],
@@ -397,6 +399,7 @@ describe('a display whose browser’s pairing has ended', () => {
     // Paired again, it is asked onto as any display is
     await register(await screenOf(t, owner), KEY)
     expect(await machine.mutation(api.displays.show, { slug: 'plan', display: 'kitchen' })).toEqual({
+      url: expect.any(String),
       displays: ['Kitchen'],
       displayIds: [expect.any(String)],
       notShown: [],

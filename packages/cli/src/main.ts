@@ -91,6 +91,7 @@ import {
   shutIn,
   siteAddress,
   textOf,
+  throughDoor,
   VERSION,
   why,
   windowsPathCommand,
@@ -104,7 +105,7 @@ import { joinedBefore, login, runsItsOwn } from './login'
 import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
 import { failure, foldRepeats, forPerson } from './output'
 import { keepToOwner } from './owner'
-import { gather, noteConversation, publish } from './publish'
+import { gather, noteConversation, publish, unlinkedNote } from './publish'
 import { alone, asAdmin, nothingLeft, standing, startBackend } from './serve/backend'
 import { noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
@@ -485,6 +486,17 @@ interface Shown {
   notShown?: { display: string; displayId?: string; reason: string }[]
   chosen?: 'open' | 'last_used'
   older?: true
+  /** The page's address, as a publish gives it: the site's on this computer, the link at the place chosen for links, or why it cannot be there. An It of an earlier version leaves them out. */
+  url?: string
+  link?: string
+  unlinked?: { to: string; why: string }
+}
+/** The page's address to give the person, as `it create` gives it: `url`, and `urlNote` where it is not at the place chosen for links. */
+function addressOf(shown: Shown): { url?: string; urlNote?: string } {
+  const link = typeof shown.link === 'string' && /^http:\/\/[^/?#]+\/p\//.test(shown.link) ? shown.link : undefined
+  const url = link ?? (typeof shown.url === 'string' ? throughDoor(shown.url) : undefined)
+  if (!url) return {}
+  return { url, ...(shown.unlinked && !link ? { urlNote: unlinkedNote(shown.unlinked) } : {}) }
 }
 async function show(slug: string, a: Args, also: Record<string, unknown> = {}) {
   return onDisplay(a, (where) => call<Shown & { took?: boolean }>('mutation', api.displays.show, { slug, ...where, ...also }))
@@ -519,7 +531,7 @@ function shownAs(shown: Shown): {
     said.push(
       shown.chosen === 'open'
         ? `No display was named, so it is shown on ${named(where)} alone: of the displays with It’s site open, that is the one used most recently.`
-        : `No display was named and none has It’s site open now, so it was sent to ${named(where)} alone, the display used most recently. A display whose site is closed does not bring a page up by itself, so the user needs the link.`,
+        : `No display was named and none has It’s site open now, so it was sent to ${named(where)} alone, the display used most recently. A display whose site is closed does not bring a page up by itself, so the user needs the link: give them \`url\` in the chat.`,
       ELSEWHERE,
     )
   else {
@@ -535,6 +547,7 @@ function shownAs(shown: Shown): {
         `Agents may not use ${andJoined(off)}: the user turned that off for ${off.length === 1 ? 'it' : 'each of them'}, on the display itself or on the site under Displays, and only the user can turn it on again.`,
       )
     if (!shown.displays.length && !notShownOn.length) said.push(noDisplay())
+    if (!shown.displays.length) said.push('No display brought it up, so give the user `url` in the chat to open it.')
   }
   return {
     shownOn: shown.displays,
@@ -3337,6 +3350,7 @@ async function main(argv: string[]): Promise<void> {
       const taken = `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.`
       return out({
         id: slug,
+        ...addressOf(result),
         ...shown,
         ...(took ? { note: taken } : {}),
         ...(guessed ? { session: guessed } : {}),

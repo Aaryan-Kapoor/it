@@ -119,6 +119,7 @@ describe('a display named by its id', () => {
     const tv = await browser('screen', key(2))
     await page('plan')
     expect(await agent.mutation(api.displays.show, { slug: 'plan', displayId: tv.id })).toEqual({
+      url: expect.any(String),
       displays: ['Chrome on Linux 2'],
       displayIds: [tv.id],
       notShown: [],
@@ -126,6 +127,27 @@ describe('a display named by its id', () => {
     })
     expect((await row(tv.id)).showing).toBeDefined()
     expect((await row(laptop.id)).showing).toBeUndefined()
+  })
+
+  test('the answer gives the page’s address, and its link where the owner chose a place for links, as a publish does', async () => {
+    const { t, agent, browser, page } = await household()
+    await browser('owner', key(1))
+    await page('plan')
+    const plain = await agent.mutation(api.displays.show, { slug: 'plan' })
+    // The site's own address on this computer, with the page's id
+    expect(plain.url).toMatch(/^http:\/\/[^/]+\/p\/plan$/)
+    expect(plain).not.toHaveProperty('link')
+    // Links at the machine's name on the tailnet, where It answers to it
+    await t.run((ctx) => ctx.db.insert('network', { on: true, wanted: true, addresses: [], tailnetName: 'studio.tail1234.ts.net', link: 'tailnet' }))
+    const linked = (await agent.mutation(api.displays.show, { slug: 'plan' })) as { link?: string; unlinked?: unknown }
+    expect(linked.link).toBe('http://studio.tail1234.ts.net:39000/p/plan')
+    // And where It cannot be reached there, which place was chosen and why not
+    await t.run(async (ctx) => {
+      const row = (await ctx.db.query('network').first())!
+      await ctx.db.patch(row._id, { on: false })
+    })
+    const unlinked = (await agent.mutation(api.displays.show, { slug: 'plan' })) as { link?: string; unlinked?: unknown }
+    expect([unlinked.link, unlinked.unlinked]).toEqual([undefined, { to: 'tailnet', why: 'off' }])
   })
 
   test('an id that is no display, a malformed one, and another person’s are each refused as no such display, never as an error', async () => {
@@ -168,6 +190,7 @@ describe('a display named by its id', () => {
     await page('plan')
     await t.run((ctx) => ctx.db.patch(tv.session as Id<'sessions'>, { endedAt: Date.now() }))
     expect(await agent.mutation(api.displays.show, { slug: 'plan', displayId: tv.id })).toEqual({
+      url: expect.any(String),
       displays: [],
       displayIds: [],
       notShown: [{ display: 'Chrome on Linux 2', displayId: tv.id, reason: 'not_paired' }],

@@ -274,14 +274,16 @@ export const link = mutation({
  */
 export const linkFor = internalQuery({
   args: {},
-  handler: async (ctx): Promise<{ at: string } | { unlinked: { to: 'tailnet' | 'network'; why: Unlinked } } | null> => {
-    const row = await ctx.db.query('network').first()
-    const to = row?.link
-    if (!to) return null
-    const why = unlinkable(row, to)
-    return why ? { unlinked: { to, why } } : { at: linkable(row)[to]! }
-  },
+  handler: (ctx) => linkNow(ctx),
 })
+/** The same, read in any function that reads the database: `displays.show` gives the page's link with this too. */
+export async function linkNow(ctx: QueryCtx): Promise<{ at: string } | { unlinked: { to: 'tailnet' | 'network'; why: Unlinked } } | null> {
+  const row = await ctx.db.query('network').first()
+  const to = row?.link
+  if (!to) return null
+  const why = unlinkable(row, to)
+  return why ? { unlinked: { to, why } } : { at: linkable(row)[to]! }
+}
 
 /**
  * What the service says of itself on the computer It runs on, for the owner's settings: the
