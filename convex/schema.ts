@@ -668,8 +668,11 @@ export default defineSchema({
     thenDeleteUser: v.optional(v.id('users')),
     /** The receipt confirmed by the first complete deletion of this page's files. */
     deletionId: v.optional(v.id('deletions')),
+    /** For a revocation: the display it is for, by which the ones still to be confirmed for a display are found. An earlier It left this out. */
+    displayId: v.optional(v.string()),
   })
     .index('by_next', ['nextAt'])
+    .index('by_display', ['displayId'])
     .index('by_user', ['userId'])
     .index('by_user_to_delete', ['thenDeleteUser']),
 

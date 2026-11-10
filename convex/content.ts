@@ -102,7 +102,7 @@ async function enqueue(
   /** Whose display or files it is about. */
   userId: Id<'users'>,
   body: unknown,
-  opts: { thenDeleteUser?: Id<'users'>; inMs?: number; deletionId?: Id<'deletions'> } = {},
+  opts: { thenDeleteUser?: Id<'users'>; inMs?: number; deletionId?: Id<'deletions'>; displayId?: string } = {},
 ): Promise<Id<'contentJobs'>> {
   const now = Date.now()
   const wait = opts.inMs ?? 0
@@ -115,13 +115,14 @@ async function enqueue(
     userId,
     thenDeleteUser: opts.thenDeleteUser,
     deletionId: opts.deletionId,
+    ...(opts.displayId === undefined ? {} : { displayId: opts.displayId }),
   })
   await ctx.scheduler.runAfter(wait, internal.content.run, { jobId })
   return jobId
 }
 /** Showings opened for a display before `epoch` are over, and tickets made for it before then open nothing. Answers with the job, for a caller that wants to know when the content service has confirmed. */
 export const revokeLater = (ctx: MutationCtx, args: { userId: Id<'users'>; displayId: string; epoch: number }, opts: { inMs?: number } = {}) =>
-  enqueue(ctx, 'revoke', args.userId, args, opts)
+  enqueue(ctx, 'revoke', args.userId, args, { ...opts, displayId: args.displayId })
 /** How long after something is deleted an upload that was already under way could still land. */
 const GRANT_TAIL_MS = PUBLICATION.grantTailMs
 /**
@@ -149,16 +150,26 @@ const revokeOf = (job: { op: string; body: string }): { displayId: string; epoch
   const said = JSON.parse(job.body) as { displayId?: unknown; epoch?: unknown }
   return typeof said.displayId === 'string' && typeof said.epoch === 'number' ? { displayId: said.displayId, epoch: said.epoch } : null
 }
-/** The revocations not yet confirmed for any of these displays of a person's. */
+/**
+ * The revocations not yet confirmed for any of these displays of a person's, read by display, so
+ * that no number of other jobs stands in front of them. A display has few: one per lock or
+ * sign-out still being tried, and a confirmed one settles every lower one. One an earlier It
+ * queued names no display here, and is for a number no higher than the display has now, which
+ * a lock confirms for itself before it says anything was revoked.
+ */
 export async function pendingRevokes(ctx: QueryCtx | MutationCtx, userId: Id<'users'>, displayIds: string[]) {
-  const jobs = await ctx.db
-    .query('contentJobs')
-    .withIndex('by_user', (q) => q.eq('userId', userId))
-    .take(BATCH)
-  return jobs.flatMap((job) => {
-    const r = revokeOf(job)
-    return r && displayIds.includes(r.displayId) ? [{ job, ...r }] : []
-  })
+  const out = []
+  for (const displayId of displayIds) {
+    const jobs = await ctx.db
+      .query('contentJobs')
+      .withIndex('by_display', (q) => q.eq('displayId', displayId))
+      .take(BATCH)
+    for (const job of jobs) {
+      const r = revokeOf(job)
+      if (r && job.userId === userId && r.displayId === displayId) out.push({ job, ...r })
+    }
+  }
+  return out
 }
 /** How many revocations are not yet confirmed for these displays: none, once the content service has taken in what each one's number now is. */
 export const _pendingRevokes = internalQuery({
