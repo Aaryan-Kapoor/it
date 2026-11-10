@@ -21,6 +21,8 @@ let offered: Click[]
 let asked: { path: string; body: any }[]
 /** What the stand-in connector says the marks put into the conversation stand for. Given once, as the connector gives it. */
 let behind: string[] = []
+/** While set, the stand-in connector answers an asking for clicks only once this has settled. */
+let clicksHeld: Promise<void> | null = null
 
 function fakeConnector(socket: string): Promise<http.Server> {
   const s = http.createServer((req, res) => {
@@ -44,7 +46,9 @@ function fakeConnector(socket: string): Promise<http.Server> {
             marked = { ok: true }
           } else marked = { ok: true, marks: behind.map((_, i) => `mark-${i}`), texts: behind }
         }
-        res.end(JSON.stringify(marked ?? (req.url?.startsWith('/clicks') ? { clicks: offered } : { ok: true })))
+        const answer = () => res.end(JSON.stringify(marked ?? (req.url?.startsWith('/clicks') ? { clicks: offered } : { ok: true })))
+        if (clicksHeld && req.url?.startsWith('/clicks')) void clicksHeld.then(answer)
+        else answer()
       })
   })
   return new Promise((resolve) => s.listen(socket, () => resolve(s)))
@@ -188,6 +192,7 @@ beforeEach(async () => {
   writeFileSync(path.join(home, 'connector.json'), JSON.stringify({ socket: path.join(home, 'connector.sock'), token: 'a'.repeat(48) }))
 })
 afterEach(async () => {
+  clicksHeld = null
   await new Promise((r) => server.close(r))
   rmSync(home, { recursive: true, force: true })
 })
@@ -308,6 +313,44 @@ describe('the Claude Code add-on', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  test('a submission refused after the add-on let go of what it held does not put its clicks back, so that a tool call while the connector is next asked hands over nothing', async () => {
+    const host = await start()
+    offered = [{ id: 'click-1', text: 'A click' }]
+    await host.tick()
+    await host.settle()
+    // A prompt for it is under way
+    expect(host.submits.map((sub) => sub.text)).toEqual(['A click'])
+    // The conversation's id fails as a call to something that is not there fails: the add-on lets go of what it holds
+    const real = host.$.session.id
+    host.$.session.id = async () => {
+      throw new TypeError('something inside Claude Code')
+    }
+    await host.tick()
+    expect(asked.at(-1)?.path).toBe('/addon')
+    // The prompt that was under way is refused now
+    host.submits[0]!.refuse()
+    await host.settle()
+    // The connector has given the click elsewhere meanwhile. The id works again, and while the connector is asked, a tool call hands over nothing
+    host.$.session.id = real
+    offered = []
+    let release!: () => void
+    clicksHeld = new Promise((r) => {
+      release = r
+    })
+    try {
+      const asking = host.tick()
+      await until(() => asked.filter((a) => a.path.startsWith('/clicks')).length === 2, 'the connector is asked for clicks again')
+      const result = (await host.fire('tool.call', {}, {})) as { context?: unknown }
+      expect(result.context).toBeUndefined()
+      release()
+      await asking
+    } finally {
+      clicksHeld = null
+      release?.()
+    }
+    expect(acks()).toEqual([])
   })
 
   test('a clock that could not be set going as the session started, for whatever reason, is said, and is set going with the next turn', async () => {

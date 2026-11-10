@@ -36,6 +36,10 @@ const addon = () => ({ api: 1, version: ADDON_VERSION, delivery: lacking.size ==
 const SUBMIT_AGAIN = [5_000, 30_000, 120_000, 600_000]
 let submitMisses = 0
 let submitAgainAt = 0
+// Counted each time this add-on lets go of the clicks it holds. A submission that was under way
+// then, and is refused afterwards, does not put its clicks back: the connector may have given
+// them elsewhere by then.
+let letGo = 0
 // What Claude is told of It as a part of its own instructions, which this add-on adds: when a
 // page is the answer. The skill says how, and Claude reads it only once it has decided to use
 // It. The same words as every add-on that says them, kept in It's protocol as `WHEN`.
@@ -231,12 +235,14 @@ function handOver($) {
   const clicks = pending.splice(0)
   for (const c of clicks) submitting.add(c.id)
   const began = generation
+  const held = letGo
   const refused = () => {
     for (const c of clicks) submitting.delete(c.id)
     // Only for the conversation they were taken for. If another has taken its place since,
     // they are not this one's to hand over, and its refusal says nothing about how soon the
-    // new conversation may be tried.
-    if (began !== generation) return
+    // new conversation may be tried. Nor once this add-on has let go of what it held since
+    // they went off (see `letGo`).
+    if (began !== generation || held !== letGo) return
     refusals += 1
     refusedAt = Date.now()
     pending.unshift(...clicks)
@@ -253,6 +259,7 @@ function handOver($) {
     // back from the connector once a prompt can be submitted. Kept here while the connector is
     // asked for none, one could be handed over long after the connector had given it elsewhere.
     for (const c of clicks) submitting.delete(c.id)
+    letGo += 1
     pending.length = 0
     lacking.add('submit')
     submitAgainAt = Date.now() + SUBMIT_AGAIN[Math.min(submitMisses, SUBMIT_AGAIN.length - 1)]
@@ -286,6 +293,7 @@ function handOver($) {
  * once its hold on it runs out, and one kept here could be handed over after that.
  */
 async function lacks($) {
+  letGo += 1
   pending.length = 0
   await ask($, '/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
 }
