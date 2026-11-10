@@ -935,7 +935,7 @@ describe('a display locked to a page', () => {
       expectedSession: h.tv.session,
     })
     // Used a moment ago and open, it would be the display in use, were it not locked
-    expect((await h.row(h.tv.id)).usedAt).toBe(Date.now())
+    expect((await h.seen(h.tv.id)).usedAt).toBe(Date.now())
     for (const slug of ['workout', 'review']) expect((await h.agent.mutation(api.displays.show, { slug })).displayIds).toEqual([h.laptop.id])
     // A notification is no page: one named for it reaches it, and one named for none does not
     expect((await h.agent.mutation(api.notifications.send, { text: 'hi', displayId: h.tv.id })).displayIds).toEqual([h.tv.id])
