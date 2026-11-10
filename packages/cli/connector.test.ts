@@ -685,7 +685,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     attended: true,
     session: { harness: 'codex', id: `thread-${n}` },
   })
-  const offered = (...clicks: (ReturnType<typeof click> & { retriedAt?: number })[]) => stand.watching.get('delivery:inboxPage')!(clicks)
+  const offered = (...clicks: (ReturnType<typeof click> & { retriedAt?: number; heldBack?: string })[]) => stand.watching.get('delivery:inboxPage')!(clicks)
   // The connector tells that a run it reopened has ended by looking at every process on the
   // machine, and a process of the same person's that began after the run and cannot be read
   // may be a command the run started and let go of. While one is there the run is not known to
@@ -1202,25 +1202,112 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
   const GONE = 'the folder its conversation was held in is not known on this machine, or is gone'
   const CLAUDE_ID = '11111111-2222-4333-8444-555555555555'
 
-  test('a Claude Code conversation that published its page without It’s add-on, and has not been heard from since, is never reopened, and its page says to type /reload-plugins, once for each click', async () => {
+  const holds = () => stand.calls.filter((c) => c.name === 'delivery:holdBack')
+  const heldIds = () => holds().flatMap((c) => c.args.ids as string[])
+  const blocked = (n: number, more: Record<string, unknown> = {}) => ({ ...click(n), session: { harness: 'claude-code', id: CLAUDE_ID }, ...more })
+
+  test('a Claude Code conversation that published its page without It’s add-on, and has not been heard from since, is never reopened, and why is kept with each click for its page, said once', async () => {
     await reopensFor('claude-code', CLAUDE_ID, { addon: false })
-    offered({ ...click(1), session: { harness: 'claude-code', id: CLAUDE_ID } })
-    await until(() => failures().length > 0)
-    expect(failures()[0]!.args).toEqual({ for: { harness: 'claude-code', id: CLAUDE_ID }, why: OPEN_WITHOUT_ADDON })
+    offered(blocked(1))
+    await until(() => holds().length > 0)
+    expect(holds()[0]!.args).toEqual({ ids: ['click-1'], why: OPEN_WITHOUT_ADDON })
     expect(OPEN_WITHOUT_ADDON).toContain('type /reload-plugins in it')
     expect(OPEN_WITHOUT_ADDON.length).toBeLessThanOrEqual(300)
-    expect(said.some((line) => line.includes('is open without It’s add-on, so it is not reopened'))).toBe(true)
-    // Looked at again pass after pass, the click is still not reopened for, and the page is not told again
+    await until(() => said.some((line) => line.includes('is open without It’s add-on, so it is not reopened')))
+    // Looked at again pass after pass, the click is still not reopened for, and It is not told again
     await new Promise((r) => setTimeout(r, 2500))
-    expect(failures()).toHaveLength(1)
+    expect(holds()).toHaveLength(1)
     expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+    expect(failures()).toEqual([])
     expect(said.some((line) => line.includes('the reopening of its conversation'))).toBe(false)
     // Nothing was tried, so no waking is counted
     expect(stand.recorded.some((r) => r.name === 'agent.woken')).toBe(false)
-    // A later click is told of in its turn, since the page says why only of a failure after its last click
-    offered({ ...click(2), session: { harness: 'claude-code', id: CLAUDE_ID } })
+    // Offered again with that kept, it is not told again; a later click is told of in its turn
+    offered(blocked(1, { heldBack: OPEN_WITHOUT_ADDON }), blocked(2))
+    await until(() => holds().length > 1)
+    expect(holds()[1]!.args).toEqual({ ids: ['click-2'], why: OPEN_WITHOUT_ADDON })
+    offered(blocked(1, { heldBack: OPEN_WITHOUT_ADDON }), blocked(2, { heldBack: OPEN_WITHOUT_ADDON }))
+    await new Promise((r) => setTimeout(r, 2500))
+    expect(holds()).toHaveLength(2)
+  })
+
+  test('where It could not be told why a click is held back, it is told again a while later, until it has it', async () => {
+    let refused = 0
+    stand.answer = (name) => {
+      if (name === 'delivery:holdBack' && refused++ === 0) throw new Error('It did not answer in time, so whether that went through is not known.')
+      return undefined
+    }
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered(blocked(1))
+    await until(() => holds().length > 1, 10_000)
+    expect(holds().map((c) => c.args)).toEqual([
+      { ids: ['click-1'], why: OPEN_WITHOUT_ADDON },
+      { ids: ['click-1'], why: OPEN_WITHOUT_ADDON },
+    ])
+    expect(said.some((line) => line.includes('could not tell It why a click waits'))).toBe(true)
+    // Told once it was taken, and not again while it is being offered
+    await new Promise((r) => setTimeout(r, 4500))
+    expect(holds()).toHaveLength(2)
+    expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+  })
+
+  test('an It that does not keep why a click is held back is told it as why its conversation could not be woken, once for each click', async () => {
+    // It names none of the later forms of a call at its door, as an It of an earlier build does
+    stand.takes = false
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered(blocked(1))
+    await until(() => failures().length > 0)
+    expect(failures()[0]!.args).toEqual({ for: { harness: 'claude-code', id: CLAUDE_ID }, why: OPEN_WITHOUT_ADDON })
+    offered(blocked(1), blocked(2))
     await until(() => failures().length > 1)
-    expect(failures()[1]!.args).toEqual({ for: { harness: 'claude-code', id: CLAUDE_ID }, why: OPEN_WITHOUT_ADDON })
+    await new Promise((r) => setTimeout(r, 2500))
+    // Never asked what it does not take, and told once for each click
+    expect(holds()).toEqual([])
+    expect(failures()).toHaveLength(2)
+  })
+
+  test('six hundred held-back clicks are each told of once, fifty at most to a call, and none again while they wait', async () => {
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    const many = Array.from({ length: 600 }, (_, i) => blocked(i + 1))
+    offered(...many)
+    await until(() => heldIds().length >= 600, 20_000)
+    expect(new Set(heldIds()).size).toBe(600)
+    expect(holds().every((c) => c.args.ids.length <= 50 && c.args.why === OPEN_WITHOUT_ADDON)).toBe(true)
+    await new Promise((r) => setTimeout(r, 3000))
+    expect(heldIds()).toHaveLength(600)
+    // Offered a page at a time, as It offers them, with what It keeps of each: nothing is told again
+    for (let i = 0; i < 600; i += 100) offered(...many.slice(i, i + 100).map((c) => ({ ...c, heldBack: OPEN_WITHOUT_ADDON })))
+    offered(...many.map((c) => ({ ...c, heldBack: OPEN_WITHOUT_ADDON })))
+    await new Promise((r) => setTimeout(r, 2500))
+    expect(heldIds()).toHaveLength(600)
+    expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+  })
+
+  test('started again, the connector knows from what It keeps with the click that its page has been told, and tells it nothing again', async () => {
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered(blocked(1))
+    await until(() => holds().length > 0)
+    const before = home
+    await stop?.()
+    stop = null
+    stand.calls.length = 0
+    stand.watching.clear()
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }, () => {}, before)
+    stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
+    offered(blocked(1, { heldBack: OPEN_WITHOUT_ADDON }))
+    await new Promise((r) => setTimeout(r, 3000))
+    expect(holds()).toEqual([])
+    expect(failures()).toEqual([])
+    expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+  })
+
+  test('a click whose conversation is no longer kept from reopening has why it was taken off its page, and is reopened', async () => {
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false }, true)
+    offered(blocked(1, { heldBack: OPEN_WITHOUT_ADDON }))
+    await until(() => holds().length > 0)
+    expect(holds()[0]!.args).toEqual({ ids: ['click-1'], why: null })
+    await until(() => failures().length > 0)
+    expect(failures()[0]!.args.why).toBe(GONE)
   })
 
   test.each([

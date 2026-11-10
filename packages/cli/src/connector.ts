@@ -584,6 +584,10 @@ export const NOT_LOADED =
  */
 export const OPEN_WITHOUT_ADDON =
   'its conversation is open without It’s add-on, as when it was open before It was installed, so It did not start a second copy of it: type /reload-plugins in it, or open it again if you closed it, and what you did reaches it'
+/** How many held-back clicks one call tells It of, which takes no more (`delivery.holdBack`). */
+const HOLD_AT_ONCE = 50
+/** The longest a connector waits before it tries again to tell It why a click is held back. */
+const TELL_AGAIN_MOST_MS = 5 * 60_000
 /** Why a conversation could not be reopened, and then that it has not loaded It's add-on, together in what the backend keeps. */
 export const notLoadedToo = (why: string): string => {
   const room = 300 - NOT_LOADED.length - 2
@@ -2265,26 +2269,112 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const key = keyOf(session.harness, session.id)
     return session.harness === 'claude-code' && publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))
   }
-  /** The clicks whose page has been told that their conversation is open without It's add-on, and so was not reopened: each is told once. */
-  const toldShut = new Set<string>()
+  /**
+   * What this machine is telling It, or has just told It, of why a click is held back from
+   * reopening its conversation (`holdBack`), by click: until It offers the click with that said,
+   * which is then the record of it, kept with the click itself. `reason` null takes it away.
+   * While it is being said it is not said again, and where it could not be said it is said again
+   * after a while, longer each time. Only clicks being offered are noted here, and what It keeps
+   * is what stops a click from being told again, also after this connector starts again.
+   */
+  const telling = new Map<string, { reason: string | null; asking: boolean; said: boolean; tries: number; next: number }>()
+  /** What is to be told in the next batch, by click, and whether one is to go soon. */
+  const toTell = new Map<string, { click: Offered; reason: string | null }>()
+  let tellingSoon = false
+  /**
+   * Whether It takes `delivery.holdBack` (`TAKES.heldBack`), as it says at its door. An It of an
+   * earlier build does not, and is told as it was before (`heldBackSaid`). Until the door has
+   * answered it is tried, and where it is not taken it fails, and is told again a while later,
+   * by when the door has said.
+   */
+  let holdBackTaken: boolean | undefined
+  /**
+   * Says to It, for clicks held back for the same reason, why. An It that does not keep that
+   * with its clicks is told it as why their conversations could not be woken, which it says on
+   * the page for its last few conversations: the most such an It can do.
+   */
+  const heldBackSaid = async (clicks: Offered[], reason: string | null): Promise<void> => {
+    if (holdBackTaken !== false) {
+      await call('mutation', api.delivery.holdBack, { ids: clicks.map((c) => c.id), why: reason })
+      return
+    }
+    if (reason === null) return
+    const conversations = new Map(clicks.map((c) => [keyOf(c.session!.harness, c.session!.id), c.session!]))
+    for (const session of conversations.values())
+      await call('mutation', api.machines.wakeFailed, { for: { harness: session.harness, id: session.id }, why: reason })
+  }
+  /** Sends what is to be told, as few calls as it takes, each click marked told only once It has said it has it. */
+  const tellNow = () => {
+    tellingSoon = false
+    const byReason = new Map<string | null, Offered[]>()
+    for (const { click, reason } of toTell.values()) byReason.set(reason, [...(byReason.get(reason) ?? []), click])
+    toTell.clear()
+    for (const [reason, clicks] of byReason)
+      for (let i = 0; i < clicks.length; i += HOLD_AT_ONCE) {
+        const some = clicks.slice(i, i + HOLD_AT_ONCE)
+        void heldBackSaid(some, reason).then(
+          () => {
+            for (const c of some) {
+              const t = telling.get(c.id)
+              if (t?.reason === reason) Object.assign(t, { asking: false, said: true })
+            }
+            const first = some[0]!.session!
+            if (reason !== null)
+              seldom(
+                `shut:${keyOf(first.harness, first.id)}`,
+                `${a(first.harness)} conversation (${short(keyOf(first.harness, first.id))}) is open without It’s add-on, so it is not reopened; its page says to type /reload-plugins in it`,
+              )
+          },
+          (err) => {
+            let wait = 0
+            for (const c of some) {
+              const t = telling.get(c.id)
+              if (t?.reason !== reason) continue
+              wait = Math.min(TELL_AGAIN_MOST_MS, 2_000 * 2 ** t.tries)
+              Object.assign(t, { asking: false, tries: t.tries + 1, next: performance.now() + wait })
+            }
+            seldom(
+              'hold-back',
+              `could not tell It why ${some.length === 1 ? 'a click waits' : `${some.length} clicks wait`} (${why(err)}); told again in a while`,
+            )
+            if (wait) soon(wait + 10)
+          },
+        )
+      }
+  }
+  /**
+   * Has It say on a click's page why its machine holds it back, or with `reason` null that it no
+   * longer does, unless It says so already, or is being told, or was told a moment ago and has
+   * yet to offer the click again with it said.
+   */
+  const tellHeld = (click: Offered, reason: string | null) => {
+    if ((click.heldBack ?? null) === reason) {
+      // It has it: what it keeps is the record from here on
+      if (!telling.get(click.id)?.asking) telling.delete(click.id)
+      return
+    }
+    const t = telling.get(click.id)
+    if (t?.reason === reason && (t.asking || t.said || performance.now() < t.next)) return
+    telling.set(click.id, { reason, asking: true, said: false, tries: t?.reason === reason ? t.tries : 0, next: 0 })
+    toTell.set(click.id, { click, reason })
+    if (!tellingSoon) {
+      tellingSoon = true
+      queueMicrotask(tellNow)
+    }
+  }
   /**
    * Whether a click is kept from reopening its conversation, because the conversation is open
    * without It's add-on (`unloaded`). Reopened, it would run as a second copy of the one the
    * person has open. The click waits instead, and reaches the conversation as soon as the person
-   * types /reload-plugins in it, which the page says, once for each click, as why it was not woken.
+   * types /reload-plugins in it, which its page says for as long as it waits, as why it was not
+   * woken. One no longer kept from it has that taken away from its page.
    */
   const keptShut = (click: Offered): boolean => {
-    const session = click.session!
-    if (!unloaded(session)) return false
-    if (!toldShut.has(click.id)) {
-      if (toldShut.size > 500) toldShut.delete(toldShut.values().next().value!)
-      toldShut.add(click.id)
-      seldom(
-        `shut:${keyOf(session.harness, session.id)}`,
-        `${a(session.harness)} conversation (${short(keyOf(session.harness, session.id))}) is open without It’s add-on, so it is not reopened; its page says to type /reload-plugins in it`,
-      )
-      void call('mutation', api.machines.wakeFailed, { for: session, why: OPEN_WITHOUT_ADDON }).catch(() => {})
+    if (!unloaded(click.session!)) {
+      if (click.heldBack !== undefined) tellHeld(click, null)
+      return false
     }
+    tellHeld(click, OPEN_WITHOUT_ADDON)
     return true
   }
   /** Whether anybody was at the page for any click that is waiting for a click's conversation. One such, and the conversation is reopened as for a person, whatever else waits in front of it. */
@@ -3694,6 +3784,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (door === undefined || closing || over) return
     // Taken as the answer came, after It said its time, so that what is worked out from it is never later than It's own
     if (door.now !== undefined) itAhead = door.now - Date.now()
+    holdBackTaken = door.takes.includes(TAKES.heldBack)
     const takes = door.takes.includes(TAKES.inboxHeld)
     if (takes === heldTaken) return
     heldTaken = takes
@@ -3843,6 +3934,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
         }
         inbox = clicks
         for (const click of clicks) recoveredClicks.delete(click.id)
+        // What is noted of telling It why a click is held back is for clicks being offered. One
+        // that is offered again later is offered with what It keeps of it, which is the record
+        const offeredNow = new Set(clicks.map((c) => c.id))
+        for (const [id, t] of telling) if (!t.asking && !offeredNow.has(id)) telling.delete(id)
         void route()
       },
       (err) => {
