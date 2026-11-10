@@ -558,12 +558,24 @@ async function showing(it: Service, request: Request, asked: Asked, bare: Bare, 
  * Whether so many more bytes can be written to the disk the files are kept on and leave it with
  * as much free as It keeps. A disk that cannot say how much is free is taken to have room, and
  * that it could not say is written down: It refuses nothing it cannot tell is too much.
+ *
+ * An answer that cannot be right says nothing either: a block size that is no positive number,
+ * free blocks that are no number, or free space that comes to none. Bun before the fix for
+ * oven-sh/bun#31133 reads the answer on an Intel Mac in another layout than macOS writes it,
+ * with a block size of 0, so that every disk there would be taken for a full one and every
+ * write refused.
  */
 async function room(it: Service, bytes: number): Promise<boolean> {
   if (bytes <= 0) return true
   try {
     const disk = await statfs(it.settings.dir)
-    return Number(disk.bavail) * Number(disk.bsize) - bytes >= it.keepFree
+    const [blocks, size] = [Number(disk.bavail), Number(disk.bsize)]
+    const free = blocks * size
+    if (!Number.isFinite(blocks) || !Number.isFinite(size) || size <= 0 || !Number.isFinite(free)) {
+      it.log.seldom('disk.unknown', 'statfs_shape', { kind: 'statfs_shape' }, 'warn')
+      return true
+    }
+    return free - bytes >= it.keepFree
   } catch (err) {
     it.log.seldom('disk.unknown', kind(err), { kind: kind(err) }, 'warn')
     return true
