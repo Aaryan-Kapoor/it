@@ -57,6 +57,7 @@ import { Grid, PageView, wasShown } from './pages'
 import { hasPending, watchPending } from './pending'
 import { backendClock, lastWord, startReports } from './presence'
 import { dropPushHere, mendPush, pushSupport, turnOffPush, turnOnPush } from './push'
+import { ReloadNotice } from './reload'
 import { ServiceNotice } from './service'
 import { codeSeen, current, signOut as endSession, heldToken, pair, pairAsScreen, recheck, useSession } from './session'
 import { Displays, Settings } from './settings'
@@ -861,6 +862,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
     <>
       <ServiceNotice />
       {display?.lockEnded && <LockEnded onSeen={() => void convex.mutation(api.displays.lockEndedSeen, { key }).catch(() => {})} />}
+      <ReloadNotice slug={slug ?? undefined} />
       <GivenUp user={user} />
       {code === 'owner' && <CodeForAnotherScreen />}
       {code === 'screen' && <ScreenOffered onDecline={codeSeen} />}

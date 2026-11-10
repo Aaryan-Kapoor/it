@@ -33,6 +33,7 @@ import {
 } from '@it/protocol'
 import { ADDON_API, type AddonRuntime, AddonRuntimes } from './addon-runtime'
 import { ADDONS } from './addons.generated'
+import { openClaude } from './claude-open'
 import {
   DeliveryRecovery,
   eraseDeliveryRecovery,
@@ -70,7 +71,7 @@ import { profileEnvironment, readProfile } from './profiles'
 import { conversationFolder, conversationProfile, noteConversation, publishedWithoutAddon } from './publish'
 import { alone, lockHeld } from './serve/backend'
 import * as service from './service'
-import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
+import { claudeFolders, detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
 import {
   type T3,
   T3_HELD_MOST,
@@ -1563,6 +1564,55 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (!over) writePrivate(heardFile(), Object.fromEntries([...heardBefore].map((k) => [k, 1])))
     } catch {
       // Not kept: it is heard from again soon enough
+    }
+  }
+  /**
+   * The Claude Code conversations open at a person's keyboard on this machine, as Claude Code
+   * keeps note of them, whose add-on this connector does not hear. It's add-on asks the
+   * connector for clicks every second for as long as its conversation is open, so one that is
+   * open and has not been heard from for a while has not loaded it: it was already open when the
+   * add-on was installed, or when an It whose add-on that Claude Code does not load was replaced.
+   * Typing /reload-plugins in it loads the add-on. A conversation that has just begun, or that
+   * this connector has only just started beside, is given time to be heard first, and one that a
+   * thread of T3 Code holds is not counted: what is done on its pages reaches it through T3 Code.
+   * It goes to It whenever it changes, for the site to say so.
+   */
+  const NOT_HEARD_MS = 30_000
+  const NOT_LOADED_MOST = 40
+  const connectorBegan = Date.now()
+  let notLoadedSaid: string | undefined
+  let notLoadedAsking = false
+  const notLoadedNow = (): { harness: string; sessionId: string; since: number }[] => {
+    const now = Date.now()
+    if (!connected('claude-code') || now - connectorBegan < NOT_HEARD_MS) return []
+    return openClaude(claudeFolders())
+      .filter((c) => now - c.startedAt >= NOT_HEARD_MS)
+      .filter((c) => {
+        const key = keyOf('claude-code', c.id)
+        const heard = [key, follow(key)].some((k) => {
+          const s = sessions.get(k)
+          return s !== undefined && now - s.seen < NOT_HEARD_MS
+        })
+        return !heard && notedThread(key) === undefined
+      })
+      .sort((x, y) => y.startedAt - x.startedAt)
+      .slice(0, NOT_LOADED_MOST)
+      .map((c) => ({ harness: 'claude-code', sessionId: c.id, since: c.startedAt }))
+  }
+  const reportNotLoaded = async (): Promise<void> => {
+    if (over || notLoadedAsking) return
+    const list = notLoadedNow()
+    const said = JSON.stringify(list)
+    if (said === notLoadedSaid) return
+    notLoadedAsking = true
+    try {
+      await call('mutation', api.machines.notLoaded, { conversations: list })
+      notLoadedSaid = said
+      say(`${list.length} open Claude Code conversation${list.length === 1 ? ' has' : 's have'} not loaded It’s add-on`)
+    } catch {
+      // Said again at the next look
+    } finally {
+      notLoadedAsking = false
     }
   }
   /**
@@ -3713,6 +3763,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (typeof body.turn === 'boolean') turnsSaid.set(key, { on: body.turn, at: Date.now() })
       if (typeof body.busy === 'boolean' || typeof body.turn === 'boolean') turnSeen(key)
       if (isNew && (harness === 'codex' || harness === 'claude-code')) noteHeard(key)
+      // A conversation that had not loaded the add-on and is heard from now has: the site is told at once
+      if (isNew && harness === 'claude-code') void reportNotLoaded()
       // The harness as It knows it, and never as whoever asked spelled it
       if (isNew) say(`${a(agentOf(harness))} conversation is listening (${short(id)})`)
       if (changed && typeof body.was === 'string') say(`${a(agentOf(harness))} conversation carries on under a new id (${short(body.was)} is now ${short(id)})`)
@@ -4515,6 +4567,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     void tellTurns()
     watch(true)
   }, 1000)
+  // Which open Claude Code conversations have not loaded It's add-on, looked at every few seconds
+  const looksOpen = setInterval(() => void reportNotLoaded(), 5_000)
   // Said this often and no less: the site takes a machine that has been quiet for a few of these to be off
   const alive = setInterval(() => void report(), ALIVE.everyMs)
   // Whether this machine still fits the It it joined is asked for as long as this runs: that
@@ -4564,6 +4618,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       })
   })
   clearInterval(tick)
+  clearInterval(looksOpen)
   clearInterval(beat)
   clearInterval(alive)
   clearTimeout(firstLook)

@@ -3175,6 +3175,52 @@ describe('clicks and their delivery', () => {
     },
   )
 
+  test('a conversation that its machine says has not loaded It’s add-on is said so on its page and on the site, by its pages alone, until the machine says otherwise', async () => {
+    const { t, alice, m } = await setup()
+    const listening = async () => (await alice.browser.query(api.artifacts.get, { slug: 'plan' })).listening
+    const site = () => alice.browser.query(api.artifacts.notLoaded, {})
+    expect(await listening()).toBeNull()
+    expect(await site()).toEqual([])
+    // Only Claude Code's are kept, and one that has no pages is said nowhere on the site
+    await m.as.mutation(api.machines.notLoaded, {
+      conversations: [
+        { harness: 'claude-code', sessionId: 'sess-1', since: 1 },
+        { harness: 'claude-code', sessionId: 'no-pages', since: 2 },
+        { harness: 'codex', sessionId: 'sess-1', since: 3 },
+      ],
+    })
+    expect(await listening()).toBe('not_loaded')
+    expect(await site()).toEqual([{ harness: 'claude-code', slugs: ['plan'], title: 'Title of plan' }])
+    expect((await m.as.query(api.machines.me, {})).notLoaded).toBe(2)
+    // A page of another conversation is not said to be one of them
+    await publish(m, 'other', { session: { harness: 'claude-code', id: 'sess-2' } })
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'other' })).listening).toBeNull()
+    expect((await site())[0]!.slugs).toEqual(['plan'])
+    // Another person is told nothing of it, and nobody but the machine can say it
+    const bob = await person(t, 'bob')
+    expect(await bob.browser.query(api.artifacts.notLoaded, {})).toEqual([])
+    expect(await code(alice.browser.mutation(api.machines.notLoaded, { conversations: [] }))).toBe('forbidden')
+    // A machine that says it is stopping says nothing of it any more, until it is heard from again
+    await m.as.mutation(api.machines.stopping, {})
+    expect(await listening()).toBeNull()
+    expect(await site()).toEqual([])
+    expect((await m.as.query(api.machines.me, {})).notLoaded).toBe(0)
+    await m.as.mutation(api.machines.report, {
+      harnesses: [
+        { id: 'claude-code', addon: 'connected' },
+        { id: 'codex', addon: 'connected' },
+      ],
+      connectorVersion: '0.1.36',
+    })
+    expect(await listening()).toBe('not_loaded')
+    // And once the add-on is heard from there, the machine says so, and it is gone
+    await m.as.mutation(api.machines.notLoaded, { conversations: [{ harness: 'claude-code', sessionId: 'no-pages', since: 2 }] })
+    expect(await listening()).toBeNull()
+    expect(await site()).toEqual([])
+    await m.as.mutation(api.machines.notLoaded, { conversations: [] })
+    expect((await t.run((ctx) => ctx.db.get(m.id)))!.notLoaded).toBeUndefined()
+  })
+
   test('a reopened conversation is said to be running for as long as its machine says so, and anyone who can use the page can stop it: what was waiting by then goes with the stop', async () => {
     const { t, alice, m, p, click } = await setup()
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
@@ -4749,10 +4795,14 @@ describe('displays and machines', () => {
     await host.as.mutation(api.machines.upgrading, { state: 'failed', why: 'x'.repeat(1000) })
     expect((await onSite(host.id)).upgrade).toMatchObject({ state: 'failed', why: 'x'.repeat(300) })
     expect(await code(ask(host.id))).toBe('ok')
-    // The connector that starts as the newer version reports it, and the asking is over
+    // The connector that starts as the newer version reports it, and the asking is over: kept as
+    // done, with the version, for the site to say what is left to do there, and gone at the next move
     await report(host, '0.1.1', '0.1.1')
-    expect(await onSite(host.id)).toMatchObject({ connectorVersion: '0.1.1', upgrade: null })
+    expect(await onSite(host.id)).toMatchObject({ connectorVersion: '0.1.1', upgrade: { state: 'done', version: '0.1.1' } })
     expect(await code(ask(host.id))).toBe('conflict')
+    await report(host, '0.1.2', '0.1.2')
+    expect((await onSite(host.id)).upgrade).toBeNull()
+    await report(host, '0.1.1', '0.1.1')
     // And now that the machine It runs on is there, the one that joined can be brought to it
     expect(await code(ask(laptop.id))).toBe('ok')
     expect((await onSite(laptop.id)).upgrade).toMatchObject({ state: 'asked', version: '0.1.1' })

@@ -255,7 +255,7 @@ export default defineSchema({
     upgrade: v.optional(
       v.object({
         at: v.number(),
-        state: v.union(v.literal('asked'), v.literal('working'), v.literal('restarting'), v.literal('failed'), v.literal('installed')),
+        state: v.union(v.literal('asked'), v.literal('working'), v.literal('restarting'), v.literal('failed'), v.literal('installed'), v.literal('done')),
         why: v.optional(v.string()),
         version: v.optional(v.string()),
       }),
@@ -279,6 +279,13 @@ export default defineSchema({
     ),
     /** The last few conversations a person stopped, and when: what was waiting for one by then is not reopened for. */
     stops: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number() }))),
+    /**
+     * The Claude Code conversations open at a person's keyboard on this machine whose add-on its
+     * connector does not hear, as one that was already open when the add-on was installed or
+     * updated has not loaded it: each by its id, with when it was opened, and nothing of whose
+     * or what it is. Its connector says so whenever that changes.
+     */
+    notLoaded: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), since: v.number() }))),
     /** The last few conversations that could not be reopened, when, and why in the connector's own words: never what a command printed. */
     fails: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), why: v.string() }))),
     /** When it was last written down that this machine, revoked, asked for a token: said once an hour and not each time. */

@@ -31,6 +31,7 @@ import path from 'node:path'
 import { CODEX_MIN_VERSION, HARNESSES, type Harness, newer as newerVersion } from '@it/protocol'
 import type { AddonRuntime } from './addon-runtime'
 import { ADDONS, LICENSE } from './addons.generated'
+import { claudeDefaultFolder } from './claude-open'
 import { CODEX_RULES, CODEX_RULES_REL, codexConfig } from './codex-settings'
 import { harnessEnv, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
 import { checkHardLinks, keepOriginal, putAbsent, removeOriginal, removeOwnOriginals, restoreAbsent, withoutFileWait } from './preserve'
@@ -199,6 +200,21 @@ function installations(id: string): Installation[] {
   // something was installed. Where, and which files, it does not say.
   return existsSync(stampFile(id)) ? [{ version: 'installing', at: 0 }] : []
 }
+/**
+ * The folders Claude Code keeps its settings in where It's add-on was put: the one
+ * `CLAUDE_CONFIG_DIR` named when it was, or Claude Code's own where nothing named another. Its
+ * conversations that run from those folders are the ones that load the add-on.
+ */
+export function claudeFolders(): string[] {
+  return [
+    ...new Set(
+      installations('claude-code')
+        .filter((i) => i.version !== 'installing')
+        .map((i) => i.env?.CLAUDE_CONFIG_DIR || claudeDefaultFolder()),
+    ),
+  ]
+}
+
 /** A damaged record cannot grant ownership or prove that every installation has gone. */
 function unreadInstallations(id: Harness): string | undefined {
   if (reached(stampFile(id)) === 'none') return undefined
