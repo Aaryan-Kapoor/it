@@ -3715,6 +3715,63 @@ describe('showing a page', () => {
     expect(rows.every((r) => r.ticketGiven)).toBe(true)
   })
 
+  test('a card’s preview is counted against the display it is on: one display using all of it refuses neither another display’s previews nor a page opened on itself', async () => {
+    const { t, alice, p, show } = await showing()
+    const tv = await paired(t, 'alice', 'screen', 'alice-tv-display-key-01')
+    const preview = (b: typeof alice, key: string) => () => b.browser.mutation(api.mounts.create, { artifactId: p.artifactId, displayKey: key, picture: true })
+    const onLaptop = preview(alice, displayKey('alice'))
+    const onTv = preview(tv as typeof alice, 'alice-tv-display-key-01')
+    const previews = []
+    for (let i = 0; i < 121; i++) previews.push(await code(onTv))
+    // A hundred and twenty at once on the television, and then no more for the moment
+    expect([previews.filter((r) => r === 'ok').length, previews.at(-1)]).toEqual([120, 'rate_limited'])
+    // The laptop's grid has its own
+    expect(await code(onLaptop)).toBe('ok')
+    // And a page opens as often as ever, on the television itself as well
+    const openOnTv = () => tv.browser.mutation(api.mounts.create, { artifactId: p.artifactId, displayKey: 'alice-tv-display-key-01' })
+    expect([await code(openOnTv), await code(show)]).toEqual(['ok', 'ok'])
+    // The television's previews come back at four a second
+    await vi.advanceTimersByTimeAsync(1000)
+    const again = []
+    for (let i = 0; i < 5; i++) again.push(await code(onTv))
+    expect(again).toEqual(['ok', 'ok', 'ok', 'ok', 'rate_limited'])
+  })
+
+  test('opening pages until the limit leaves a display’s previews untouched', async () => {
+    const { alice, p, show } = await showing()
+    const opened = []
+    for (let i = 0; i < 61; i++) opened.push(await code(show))
+    expect([opened.filter((r) => r === 'ok').length, opened.at(-1)]).toEqual([60, 'rate_limited'])
+    expect(await code(alice.browser.mutation(api.mounts.create, { artifactId: p.artifactId, displayKey: displayKey('alice'), picture: true }))).toBe('ok')
+  })
+
+  test('a preview is marked as one on its showing, and is not noted as a page shown, while opening the page is', async () => {
+    const { t, alice, p, show } = await showing()
+    await t.mutation(internal.network.report, { on: false, wanted: false, addresses: [], usage: true })
+    const preview = await alice.browser.mutation(api.mounts.create, { artifactId: p.artifactId, displayKey: displayKey('alice'), picture: true })
+    const opened = await show()
+    const rows = await t.run((ctx) => ctx.db.query('mounts').collect())
+    expect(rows.map((r) => [r.mountId, r.picture])).toEqual([
+      [preview.mountId, true],
+      [opened.mountId, undefined],
+    ])
+    const notes = await t.run((ctx) => ctx.db.query('counted').collect())
+    expect(notes.map((n) => [n.name, JSON.parse(n.properties)])).toEqual([['page.shown', { screen: 'computer', by: 'person' }]])
+  })
+
+  test('a preview is asked for on a display of the caller’s own, and on no other', async () => {
+    const { t, p } = await showing()
+    const bob = await person(t, 'bob')
+    expect(await code(bob.browser.mutation(api.mounts.create, { artifactId: p.artifactId, displayKey: displayKey('alice'), picture: true }))).toBe('not_found')
+  })
+
+  test('the backend names previews among the later forms of a call it takes, to the site and at its door', async () => {
+    const { t, alice } = await showing()
+    const beat = await alice.browser.mutation(api.displays.heartbeat, { key: displayKey('alice') })
+    expect((beat as { takes?: string[] }).takes).toContain('mounts.picture')
+    expect(((await (await t.fetch('/cli/config')).json()) as { takes: string[] }).takes).toContain('mounts.picture')
+  })
+
   test('the cleanup removes a showing’s record once it is a day old, and not before', async () => {
     const { t, show, open } = await showing()
     const old = await show()
@@ -3989,7 +4046,7 @@ describe('displays and machines', () => {
     expect(await (await t.fetch('/cli/config')).json()).toEqual({
       protocol: 1,
       issuer: SITE,
-      takes: ['delivery.allWaiting.for', 'actions.madeAt', 'delivery.inboxPage.held'],
+      takes: ['delivery.allWaiting.for', 'actions.madeAt', 'delivery.inboxPage.held', 'mounts.picture'],
       now: expect.any(Number),
     })
     const key = await aKeyPair()

@@ -29,6 +29,12 @@ const RULES = {
   storeSetPage: { perMinute: 3600, burst: 600 },
   storeSet: { perMinute: 7200, burst: 1200 },
   mount: { perMinute: 120, burst: 60 },
+  /**
+   * Cards' live previews on the grid, each a showing too, kept by display and not by person: one
+   * screen's grid, opened again and again, then never uses up what another screen's grid needs,
+   * nor what opening a page needs, which counts under `mount`.
+   */
+  picture: { perMinute: 240, burst: 120 },
   publish: { perMinute: 60, burst: 30 },
   finish: { perMinute: 60, burst: 30 },
   patchState: { perMinute: 600, burst: 200 },

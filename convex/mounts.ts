@@ -23,14 +23,23 @@ const TICKET_MS = 120_000
 const ASKED_MS = 60_000
 
 export const create = mutation({
-  args: { artifactId: v.id('artifacts'), displayKey: v.string() },
-  handler: async (ctx, { artifactId, displayKey }) => {
+  // `picture`: the showing is a card's live preview on the grid, and not the page opened. The
+  // site sends it only where `TAKES.pictures` is named, so a call without it is today's call
+  args: { artifactId: v.id('artifacts'), displayKey: v.string(), picture: v.optional(v.boolean()) },
+  handler: async (ctx, { artifactId, displayKey, picture }) => {
     const c = await requireBrowser(ctx)
     const { user } = c
-    await rateLimit(ctx, 'mount', user._id)
+    // Opening a page is counted against the person, as it always was. A preview is counted
+    // against the display it is on, under a limit of its own, so that one screen's grid stands
+    // in the way of neither another screen's grid nor of any page being opened
+    if (!picture) await rateLimit(ctx, 'mount', user._id)
+    const shownOn = picture ? await displayByKey(ctx, c, displayKey) : null
+    if (shownOn) await rateLimit(ctx, 'picture', shownOn._id)
+    // A display locked to a page shows no grid, and so no previews. When the lock lands (the
+    // display work's PR 6), a preview on a locked display is refused here, whoever asks
     const artifact = await ownArtifact(ctx, user._id, artifactId)
     if (artifact.currentVersion === undefined) fail('not_found', 'That page has nothing published yet.')
-    const display = await displayByKey(ctx, c, displayKey)
+    const display = shownOn ?? (await displayByKey(ctx, c, displayKey))
     // An id nobody has used before, for every showing, always
     const mountId = hex(crypto.getRandomValues(new Uint8Array(16)))
     await ctx.db.insert('mounts', {
@@ -42,10 +51,12 @@ export const create = mutation({
       createdAt: Date.now(),
       ticketGiven: false,
       epoch: display.epoch,
+      ...(picture ? { picture: true as const } : {}),
     })
-    // Counted: that a page was shown, on what kind of screen, and whether an agent had just asked this display for it or the person opened it
+    // Counted: that a page was shown, on what kind of screen, and whether an agent had just asked
+    // this display for it or the person opened it. A card's preview on the grid is no page shown
     const asked = display.showing?.artifactId === artifactId && Date.now() - display.showing.at < ASKED_MS
-    await counted(ctx, 'page.shown', { screen: display.screen ?? 'computer', by: asked ? 'agent' : 'person' })
+    if (!picture) await counted(ctx, 'page.shown', { screen: display.screen ?? 'computer', by: asked ? 'agent' : 'person' })
     return { mountId, version: artifact.currentVersion }
   },
 })

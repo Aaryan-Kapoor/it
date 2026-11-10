@@ -129,7 +129,7 @@ async function purge(ctx: MutationCtx, userId: Id<'users'>): Promise<boolean> {
       .withIndex('by_user', (q: any) => q.eq('userId', userId))
       .take(LIGHT)
     for (const r of rows) {
-      if (table === 'machines' || table === 'sessions') await forgetCounts(ctx, r._id)
+      if (table === 'machines' || table === 'sessions' || table === 'displays') await forgetCounts(ctx, r._id)
       if (table === 'machines') {
         const proofs = await ctx.db
           .query('spentProofs')

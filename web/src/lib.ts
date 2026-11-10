@@ -372,13 +372,26 @@ export const backendNow = (): { at: number; within: number } | undefined => cloc
 // this display's registering or heartbeat. A backend whose functions are older than this site,
 // as when loading new ones failed, names fewer or none, and refuses a call in a form it does not
 // take: the site sends such a form only where the backend has named it since the site was opened.
+// What depends on it is told when that changes, both ways: a form named later is used from then
+// on, and one no longer named, as when It went back to older functions, is no longer sent.
 let takes: readonly string[] = []
+const takesWatchers = new Set<() => void>()
 /** Learns what the backend takes from an answer that names it. One that names nothing, as an older backend's does, takes nothing. */
 export const learnTakes = (said: unknown) => {
-  takes = Array.isArray(said) ? said.filter((t): t is string => typeof t === 'string') : []
+  const now = Array.isArray(said) ? said.filter((t): t is string => typeof t === 'string') : []
+  const changed = now.length !== takes.length || now.some((t) => !takes.includes(t))
+  takes = now
+  if (changed) for (const fn of takesWatchers) fn()
 }
 /** Whether the backend has named that form of a call as one it takes. */
 export const backendTakes = (form: string): boolean => takes.includes(form)
+/** Calls `fn` each time what the backend takes changes. Gives back what stops that. */
+export const watchTakes = (fn: () => void): (() => void) => {
+  takesWatchers.add(fn)
+  return () => void takesWatchers.delete(fn)
+}
+/** Whether the backend takes that form of a call, as a component sees it: drawn again when that changes. */
+export const useBackendTakes = (form: string): boolean => useSyncExternalStore(watchTakes, () => backendTakes(form))
 
 // ---------- the address bar ----------
 

@@ -21,6 +21,13 @@ export const TAKES = {
   madeAt: 'actions.madeAt',
   /** The inbox asked for the conversations held in threads of T3 Code, each with since when, and nothing made before that read for them. */
   inboxHeld: 'delivery.inboxPage.held',
+  /**
+   * A card's live preview on the grid, asked for as such (`picture` on `mounts.create`): it is
+   * counted against the display it is on, apart from opening a page, and is not a page shown. The
+   * site shows more than nine at once only where the backend names this, and sends the argument
+   * only then, since an older backend refuses the whole call.
+   */
+  pictures: 'mounts.picture',
 } as const
 
 /** The word the interface uses for a thing shown on a display. It is said in one place so that it can be changed in one. */

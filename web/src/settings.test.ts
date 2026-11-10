@@ -214,6 +214,46 @@ describe('what each kind of session is offered', () => {
   })
 })
 
+describe('live previews on this screen', () => {
+  const mine = DISPLAYS[0]!
+  const select = () => host.querySelector('select[aria-label="Live previews on this screen"]') as HTMLSelectElement
+  const choose = (value: string) =>
+    act(async () => {
+      select().value = value
+      select().dispatchEvent(new Event('change', { bubbles: true }))
+    })
+
+  test.each([true, false])('are offered with the four choices, sixteen at first, and kept in this browser (owner: %s)', async (owner) => {
+    const { Settings } = await import('./settings')
+    await show(createElement(Settings, { user: 'user-1', owner, display: mine, onSignOut: () => {} }))
+    expect([...select().options].map((o) => [o.value, o.textContent])).toEqual([
+      ['all', 'All on screen'],
+      ['nine', 'Nine'],
+      ['sixteen', '16'],
+      ['none', 'Pictures only'],
+    ])
+    expect(select().value).toBe('sixteen')
+    for (const value of ['all', 'nine', 'none', 'sixteen']) {
+      await choose(value)
+      expect([select().value, localStorage.getItem('it.previews')]).toEqual([value, value])
+    }
+    // Nothing of it is the backend's
+    expect(calls).toEqual([])
+  })
+
+  test('say when the backend is older and at most nine are shown, and stop saying so once it names previews', async () => {
+    vi.resetModules()
+    const { learnTakes } = await import('./lib')
+    learnTakes([])
+    const { Settings } = await import('./settings')
+    await show(createElement(Settings, { user: 'user-1', owner: false, display: mine, onSignOut: () => {} }))
+    expect(host.textContent).toContain('at most nine do')
+    await act(async () => learnTakes(['mounts.picture']))
+    expect(host.textContent).not.toContain('at most nine do')
+    learnTakes([])
+  })
+})
+
 describe('erasing everything', () => {
   test('it is asked of the backend only once the phrase is typed, for the person who confirmed, and then this browser’s session is ended', async () => {
     const asked: string[] = []

@@ -1,17 +1,20 @@
 // The person's displays, and what It holds for them: adding a display, taking the records out,
 // and erasing everything.
+
+import { TAKES } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import qrcode from 'qrcode-generator'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { version } from '../package.json'
 import { About } from './about'
 import { Dialog } from './dialog'
-import { ago, api, doneLeaving, forgetAll, type Id, noteErased, refusal, serverNow, startLeaving, useNow, useOpener } from './lib'
+import { ago, api, doneLeaving, forgetAll, type Id, noteErased, refusal, serverNow, startLeaving, useBackendTakes, useNow, useOpener } from './lib'
 import { LinkChoice, NetworkSwitch, NoAddress, OtherAddresses, useNetwork, useWhere } from './network'
 import { thisPairing } from './outbox'
 import { goesAlong, type Paired, PairedBrowsers } from './paired'
 import { pushSupport, turnOffPush, turnOnPush } from './push'
 import { current, signOut as endSession, recheck, spaced } from './session'
+import { choosePreviews, PREVIEW_CHOICES, type PreviewChoice, usePreviewChoice } from './slots'
 
 interface DisplayRow {
   id: string
@@ -354,6 +357,42 @@ function Qr({ text }: { text: string }) {
   )
 }
 
+/**
+ * How many cards on the grid show their page running, on this screen. It is the screen's own
+ * setting, kept in this browser: a television and a laptop of the same person differ in what
+ * they can bear.
+ */
+function LivePreviews() {
+  const choice = usePreviewChoice()
+  const named = useBackendTakes(TAKES.pictures)
+  return (
+    <li className="row">
+      <span className="row-main">
+        <span className="row-name">Live previews</span>
+        <span className="row-sub">
+          {named
+            ? 'How many cards on this screen show their page running. The rest show a picture. Each live preview takes some of this device’s memory.'
+            : 'How many cards on this screen show their page running. It’s backend functions are older, so at most nine do.'}
+        </span>
+      </span>
+      <span className="row-actions">
+        <select
+          className="grid-sort"
+          aria-label="Live previews on this screen"
+          value={choice}
+          onChange={(e) => choosePreviews(e.target.value as PreviewChoice)}
+        >
+          {PREVIEW_CHOICES.map((c) => (
+            <option key={c.value} value={c.value}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+      </span>
+    </li>
+  )
+}
+
 /** What the person types to confirm, which is also the word the backend asks for with a request of that weight. */
 const PHRASE = 'erase everything'
 
@@ -454,6 +493,7 @@ export function Settings({ user, owner, display, onSignOut }: { user: string; ow
         <h3>This browser</h3>
         <ul className="rows panel">
           {display && <DisplayItem d={display} here owner={false} now={now} act={act} />}
+          <LivePreviews />
           <li className="row">
             <span className="row-main">
               <span className="row-name">{owner ? 'Paired as yours' : 'Paired as a screen'}</span>

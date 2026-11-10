@@ -466,6 +466,8 @@ export default defineSchema({
     ticketGiven: v.boolean(),
     /** The display's revocation number when the mount was made. A sign-out since then leaves the mount with no ticket to give. */
     epoch: v.number(),
+    /** A card's live preview on the grid, and not the page opened. It goes with the daily cleanup like every other mount. */
+    picture: v.optional(v.literal(true)),
   })
     .index('by_mount', ['mountId'])
     .index('by_created', ['createdAt'])
