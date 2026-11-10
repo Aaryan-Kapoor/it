@@ -1039,6 +1039,16 @@ function ActionStatus({
       )}
     </>
   )
+  // Its machine will not start its conversation for it, and says why, with what to do: as for a
+  // Claude Code conversation that is open without It's add-on, which a reopening would run a
+  // second copy of. Said for as long as it waits there, since the reason is kept with the click
+  // itself. (Backends from before they kept one say none)
+  if (last.delivery === 'pending' && last.heldBack)
+    return (
+      <span className="status" data-tone="bad">
+        {`Couldn’t wake ${agent ?? 'your agent'}${waiting > 1 ? ` (${waiting})` : ''}: ${last.heldBack}`}
+      </span>
+    )
   // Set aside by its machine after tries that came to nothing. Nothing tries it again until its
   // conversation is heard from, and it is deleted a month after it was done if that never
   // happens, so both are said: left as "Waiting", it looked as if It were still at it.
