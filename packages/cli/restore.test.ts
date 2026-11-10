@@ -47,6 +47,7 @@ import { backendAt, VERSION } from './src/lib'
 import { asAdmin } from './src/serve/backend'
 import { RELEASE } from './src/serve/config'
 import { bases } from './test-ports'
+import { zsh } from './test-zsh'
 
 delete process.env.XDG_CONFIG_HOME
 
@@ -194,6 +195,7 @@ beforeEach(async () => {
   folder = mkdtempSync(path.join(os.tmpdir(), 'it-restore-'))
   real = realpathSync(folder)
   beside = [folder, `${real}-after-upgrade`, `${real}-replaced`]
+  pasteIn = 'sh'
   process.env.IT_PORT = String(await ports.next())
 }, 120_000)
 
@@ -320,14 +322,21 @@ function documented(marker: string): string {
  * It's folder `home`. The copy's name is put where they say `copy=before-...`, and nothing else
  * of them is changed. `it` is the stand-in, which ends as `ends` says.
  */
-function pasted(lines: string, home: string, copy?: string, ends = 0, cwd = scratch) {
+/**
+ * The shells the lines are pasted into: sh, which is dash on Debian and Ubuntu, bash, and zsh,
+ * which is macOS's own, where this machine has it or IT_TEST_ZSH names one. The shell a test
+ * pastes into unless it says otherwise is `pasteIn`.
+ */
+const SHELLS = ['sh', 'bash', ...(zsh ? [zsh] : [])]
+let pasteIn = 'sh'
+function pasted(lines: string, home: string, copy?: string, ends = 0, cwd = scratch, shell = pasteIn) {
   let script = lines
   if (copy !== undefined) {
     expect(script).toMatch(/^ *copy=before-\.\.\.$/m)
     script = script.replace(/^( *)copy=before-\.\.\.$/m, `$1copy=${copy}`)
   }
   const asked = path.join(scratch, `asked-${Math.random().toString(36).slice(2)}`)
-  const ran = spawnSync('sh', ['-c', script], {
+  const ran = spawnSync(shell, ['-c', script], {
     env: { PATH: `${stub}:${process.env.PATH}`, HOME: scratch, IT_HOME: home, STUB_ASKED: asked, STUB_ENDS: String(ends) },
     cwd,
     encoding: 'utf8',
@@ -337,12 +346,17 @@ function pasted(lines: string, home: string, copy?: string, ends = 0, cwd = scra
 
 describe.skipIf(!program || windows)('going back to an older It by putting back the copy from before the upgrade', () => {
   test.each([
-    ['newer functions, with a display signed out since', false, true],
-    ['newer functions and a newer backend program, where It’s folder is reached through a link in a folder with a space in its name', true, false],
+    ['newer functions, with a display signed out since, its lines pasted into sh', false, true],
+    [
+      `newer functions and a newer backend program, where It’s folder is reached through a link in a folder with a space in its name, its lines pasted into ${zsh ? 'zsh' : 'bash, for want of zsh'}`,
+      true,
+      false,
+    ],
   ])(
     'after an It with %s has changed the data, the documented lines put the copy back, the older It starts on it with its page and state as they were, and the documented lines put the kept folder back again',
     async (_, programToo, signedOut) => {
       const newer = programToo ? newerBoth : newerFunctions
+      if (programToo) pasteIn = zsh ?? 'bash'
       const port = Number(process.env.IT_PORT)
       const door = `http://127.0.0.1:${port}`
       const pages = `http://127.0.0.1:${port + 1}`
@@ -506,9 +520,15 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
       // Run as they are written, they stop the service, keep the whole folder as it was, and put the copy back
       const put = pasted(back, home, copy)
       expect([put.code, put.err, put.asked]).toEqual([0, '', 'service uninstall\n'])
-      const [copying, kept, done] = put.out.split('\n')
+      const [copying, kept, aside, done] = put.out.split('\n')
       expect(copying).toMatch(new RegExp(`^Copying It's folder to ${saved.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.part\\.\\w{6}\\.$`))
       expect([kept, done]).toEqual([`It's folder as it was is kept in ${saved}.`, 'The copy is in place.'])
+      // What the copy replaced is not deleted: it is moved into a folder of the lines' own, beside it
+      const replaced = /^What the copy replaced is in (.*)\.$/.exec(aside!)?.[1]
+      expect(path.dirname(replaced!)).toBe(path.join(real, 'backend'))
+      expect(path.basename(replaced!)).toMatch(/^replaced\.\w{6}$/)
+      expect(readdirSync(replaced!)).toEqual(expect.arrayContaining(['data.json', 'db.sqlite3', 'storage']))
+      expect(json(path.join(replaced!, 'data.json'))).toMatchObject({ it: NEWER, functionsOf: NEWER })
       expect(lstatSync(saved).isDirectory()).toBe(true)
       expect(tree(saved)).toEqual(asItWas)
       expect(staged(real)).toEqual([])
@@ -518,8 +538,7 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
       // A second run refuses, and changes nothing anywhere
       const restored = tree(folder)
       const again = pasted(back, home, copy)
-      expect(again.code).toBe(1)
-      expect(again.out).toBe('')
+      expect([again.code, again.out, again.asked]).toEqual([1, '', ''])
       expect(again.err).toBe(
         `${saved} is there already, so nothing was changed. Look at what is in it, remove it yourself if you do not need it, and run these lines again.\n`,
       )
@@ -607,12 +626,18 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
     expect(chosen).toEqual([`before-${NEWER_RELEASE}-functions-${refusing.hash.slice(0, 12)}`])
     expect(noted[`before-functions-${newest.hash.slice(0, 12)}`]).toMatchObject({ it: NEWER, release: NEWER_RELEASE })
     // Each is put back in a copy of the folder, as the page says, and the older It is started on it: it runs on the one chosen, and refuses the other
-    for (const copy of kept) {
+    // The chosen one is put back in every shell the lines may be pasted into, the other in sh
+    const tries = [
+      ...SHELLS.map((shell) => [chosen[0]!, shell] as const),
+      ...kept.filter((copy) => !chosen.includes(copy)).map((copy) => [copy, 'sh'] as const),
+    ]
+    for (const [copy, shell] of tries) {
       const home = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'it-restore-choice-')))
       beside.push(home, `${home}-after-upgrade`)
       cpSync(folder, home, { recursive: true })
       // Told It's folder by a relative IT_HOME, which is taken from where the lines are pasted
-      expect(pasted(documented('copy='), path.basename(home), copy, 0, path.dirname(home))).toMatchObject({ code: 0, err: '' })
+      const put = pasted(documented('copy='), path.basename(home), copy, 0, path.dirname(home), shell)
+      expect([shell, put.code, put.err, put.out.split('\n').at(-2)]).toEqual([shell, 0, '', 'The copy is in place.'])
       expect(existsSync(`${home}-after-upgrade`)).toBe(true)
       const tried = serve(older, 'tried.log', home)
       if (chosen.includes(copy)) {
@@ -641,16 +666,19 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
         },
       ],
     ]
-    for (const [name, link] of links) {
+    for (const [[name, link], shell] of links.flatMap((one) => SHELLS.map((shell) => [one, shell] as const))) {
       const linked = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'it-restore-linked-')))
       beside.push(linked, `${linked}-after-upgrade`, `${linked}-elsewhere`)
       cpSync(folder, linked, { recursive: true })
       link(linked)
       const unlinked = tree(linked)
-      const refused = pasted(documented('copy='), linked, kept[0])
-      expect([name, refused.code, refused.out]).toEqual([name, 1, ''])
+      const refused = pasted(documented('copy='), linked, kept[0], 0, scratch, shell)
+      expect([name, shell, refused.code, refused.out, refused.asked]).toEqual([name, shell, 1, '', ''])
       expect(refused.err).toBe(`${path.join(linked, 'backend', name)} is a link, so a copy would not hold what it leads to, and nothing was changed.\n`)
       expect([tree(linked), existsSync(`${linked}-after-upgrade`), staged(linked)]).toEqual([unlinked, false, []])
     }
   }, 600_000)
+
+  // Where this machine has no zsh, the lines are not pasted into it, and that is said here
+  test.skipIf(Boolean(zsh))('the documented lines pasted into zsh (not run: no zsh on this machine, and IT_TEST_ZSH names none)', () => {})
 })
