@@ -23,7 +23,7 @@ import {
   useNow,
   useOpener,
 } from './lib'
-import { LinkChoice, NetworkSwitch, NoAddress, OtherAddresses, useNetwork, useWhere } from './network'
+import { LinkChoice, NetworkSwitch, NoAddress, OtherAddresses, PhoneNote, useNetwork, useWhere } from './network'
 import { thisPairing } from './outbox'
 import { goesAlong, type Paired, PairedBrowsers } from './paired'
 import { pushSupport, turnOffPush, turnOnPush } from './push'
@@ -236,8 +236,8 @@ export function Displays({ thisDisplay }: { thisDisplay?: string }) {
 }
 
 /**
- * Who can reach It, for the owner to choose here: this computer only, the networks its machine
- * is on, or the person's tailnet alone. Until now that was a command at a terminal, which
+ * Who can reach It, for the owner to choose here: this computer only, anyone on the network its
+ * machine is on, or the person's tailnet alone. Until now that was a command at a terminal, which
  * someone adding a phone had to go and find. Left out where the service says too little of
  * itself to offer it, as one of an earlier It does.
  */
@@ -257,6 +257,7 @@ function Network() {
             {net.addresses.length > 1 ? `, or at one of ${net.addresses.length - 1} more that “Add a display” lists.` : '.'}
           </p>
         )}
+        <PhoneNote className="panel-said" />
       </div>
     </section>
   )
@@ -341,6 +342,7 @@ function AddDisplay({ onClose }: { onClose: () => void }) {
             Or open <span className="mono">{where.address}</span> and type
           </p>
           <p className="mono pair-code">{spaced(made.code)}</p>
+          <PhoneNote />
         </>
       ) : (
         <>

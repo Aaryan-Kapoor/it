@@ -3723,6 +3723,22 @@ try {
         there && byAnotherName.status === 421 && reachedWhenOn === 'the site, the pages',
         `there: ${there}; by another name: ${byAnotherName.status}; reached: ${reachedWhenOn || 'nothing'}`,
       )
+      // At an address of the internet's that this machine has, as a public IPv6 address is, nothing of It takes a connection
+      const internets = onANetwork.filter(
+        (host) =>
+          /^[23][0-9a-f]{3}:/i.test(host) ||
+          (/^\d+\.\d+\.\d+\.\d+$/.test(host) &&
+            !/^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(host)),
+      )
+      const atTheInternets = []
+      for (const host of internets) for (const port of [STACK.port, pagesPort]) if (await takesAConnection(host, port)) atTheInternets.push(port)
+      if (!internets.length) console.log('  skip  that It takes no connection at an address of the internet’s: this machine has none')
+      else
+        check(
+          'and at none of the machine’s addresses of the internet’s, where a request is refused before It hears of it',
+          atTheInternets.length === 0,
+          `of ${internets.length} such address(es), taken at: ${atTheInternets.length ? atTheInternets.join(', ') : 'none'}`,
+        )
       check(
         'and whoever reaches it there without a code has no session, is answered by no function, and is not paired by a wrong code',
         withoutACode.session === 401 && /"unauthenticated"/.test(withoutACode.call) && withoutACode.wrongCode === 401,

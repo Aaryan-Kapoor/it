@@ -102,11 +102,13 @@ describe('where another device is told to open It', () => {
     expect(reachable(4700, { lo: HERE.lo, eth0: HERE.eth0 }, true, () => undefined)).toEqual([])
   })
 
-  test('open to every network, the home network’s address still comes first and the tailnet’s after it, and the name is not asked for', () => {
+  test('on for the network the machine is on, the home network’s address still comes first and the tailnet’s after it, an address of the internet’s is left out, and the name is not asked for', () => {
     const named = () => {
       throw new Error('asked')
     }
-    expect(reachable(4700, HERE, false, named)).toEqual([
+    expect(reachable(4700, HERE, false, named)).toEqual(['http://192.168.1.20:4700', 'http://100.101.42.17:4700', 'http://[fd7a:115c:a1e0::ab12:4843]:4700'])
+    // Open to the internet too, it is given among them
+    expect(reachable(4700, HERE, false, named, true)).toEqual([
       'http://192.168.1.20:4700',
       'http://100.101.42.17:4700',
       'http://[2001:db8:100:c690::4f1a]:4700',

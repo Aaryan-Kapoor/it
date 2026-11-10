@@ -63,7 +63,7 @@ Before downloading the backend, setup checks the agent apps. If every app It can
 3. It registers It as a background service for your user, and starts it.
 4. It enrols this machine as the one your agents run on.
 5. It lists the agent apps it found on this machine, for you to tick the ones to connect, and installs It's add-on into each.
-6. It asks how you will reach It: from this computer only, from your home network, or over Tailscale. [Screens](screens.md#the-network) says what each lets in.
+6. It asks who can reach It: this computer only, anyone on this network, or your tailnet only, which is the choice for a phone. [Screens](screens.md#the-network) says what each lets in.
 7. It pairs your first screen. On your own computer it opens the site in your browser. Over SSH, or on a machine with no screen, it prints the address for another device to open, with a QR code of it, and waits until a browser has paired or you press Enter.
 8. It says what is left for you to do, if anything is, and the one sentence to say to your agent: "Give me the It tour."
 
@@ -96,7 +96,7 @@ If It crashes after starting, it is started again. Temporary failures to start h
 ```
 It is running on this machine, and its site is at http://localhost:4700.
 This machine is enrolled as “studio”.
-The network is off, so It answers this machine only. `it network on` lets your other devices on the same network reach it.
+The network is off, so It answers this machine only. `it network tailscale` lets your own devices reach it over your tailnet, and `it network on` lets anyone on this network reach it.
 Claude Code is connected.
 Codex is not connected.
 Run `it setup` to choose which agent apps are connected.

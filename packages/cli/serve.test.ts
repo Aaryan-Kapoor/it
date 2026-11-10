@@ -211,6 +211,11 @@ describe('what the service tells the backend of how it stands', () => {
     expect([open.on, open.tailnet, open.addresses.every((address) => address.endsWith(':21000'))]).toEqual([true, false, true])
     // A door kept to the tailnet says so, and one that is shut is never said to be kept to it
     expect(standsAs({ network: true, tailnet: true }, true, 21000).tailnet).toBe(true)
+    // Answering the internet too is said only of a door that is open and not kept to the tailnet
+    expect(standsAs({ network: true, internet: true }, true, 21000).internet).toBe(true)
+    expect(standsAs({ network: true }, true, 21000)).not.toHaveProperty('internet')
+    expect(standsAs({ network: false, internet: true }, true, 21000)).not.toHaveProperty('internet')
+    expect(standsAs({ network: true, tailnet: true, internet: true }, true, 21000)).not.toHaveProperty('internet')
     expect(standsAs({ network: false, tailnet: true }, false, 21000).tailnet).toBe(false)
   })
 
@@ -287,6 +292,11 @@ describe('what the service tells the backend of how it stands', () => {
     expect(opensAnew(on, off, false)).toBe(true)
     expect(opensAnew(tailnet, on, false)).toBe(true)
     expect(opensAnew(off, tailnet, false)).toBe(true)
+    // And to or from answering the internet too, which `it network internet` turns on and `it network on` off again
+    const internet = { network: true, tailnet: false, internet: true }
+    expect(opensAnew(internet, on, false)).toBe(true)
+    expect(opensAnew(on, internet, false)).toBe(true)
+    expect(opensAnew(internet, internet, false)).toBe(false)
     // Asked for on the site: tried, though "on" is what the settings said already and what was last tried
     expect(opensAnew(on, on, true)).toBe(true)
     expect(opensAnew(off, off, true)).toBe(true)

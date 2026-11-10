@@ -35,9 +35,11 @@ Another port is another address for the site. A browser that was paired stays pa
 
 | Port | What listens there | Who can reach it |
 |---|---|---|
-| 4700 | The site, pairing, the browser's live connection, uploads from the `it` command, and everything a machine that joined asks | This machine only. Every device on the network once the network is on |
+| 4700 | The site, pairing, the browser's live connection, uploads from the `it` command, and everything a machine that joined asks | This machine only. With `it network on`, anyone on the network the machine is on, at its private addresses. With `it network tailscale`, your tailnet. With `it network internet`, anyone who can reach the machine |
 | 4701 | The pages being shown | The same |
 | 4740 | The backend program, for calls to its functions | This machine only, always |
 | 4741 | The backend program, for its HTTP routes | This machine only, always |
+
+With `it network on`, the site's port and the pages' port are listened on at the machine's private addresses alone, and at none of the internet's. Those are the addresses of a home or office network (`10.0.0.0/8`, `172.16.0.0/12` and `192.168.0.0/16`), the range carriers and tailnets use (`100.64.0.0/10`), an address a device gives itself (`169.254.0.0/16`), and under IPv6 a private network's own addresses (`fc00::/7`) and an address of one link (`fe80::/10`). A device that asks at a public IPv4 address of the machine, or at one of its IPv6 addresses of the internet's, is refused by the system before It hears of it, and It answers only a device whose own address is a private one. So a machine with a public IPv6 address, as many at home have, is not reachable from the internet with the network on. Everyone on the same network still is, which on shared Wi-Fi is everyone there: [Phones and shared Wi-Fi](screens.md#phones-and-shared-wi-fi) says what to do about that. The machine's addresses change as it moves between networks, and It follows them within a second or two without closing what is open. Only `it network internet` listens on every address the machine has and answers whoever reaches one.
 
 On Linux and macOS the connector takes its add-ons' requests on a socket in `~/.it` that only your user can open. Windows has no such socket, so there it listens on a port of the machine itself, which the system picks. Either way a request must show that it knows a token kept in `connector.json`.

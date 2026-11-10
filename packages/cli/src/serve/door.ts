@@ -34,6 +34,7 @@ import { direct, inHome, Problem } from '../lib'
 import type { Backend } from './backend'
 import { doorKey, type ServiceConfig, storageAsked } from './config'
 import { recordExports } from './export'
+import { isPrivate, listenAt } from './network'
 import { createPush, type Push } from './push'
 import { answerSite, BUILT, hostOf, type Site, spelled } from './site'
 import { inTailnet, isLoopback, tailnetName } from './tailnet'
@@ -225,7 +226,8 @@ function placeOf(address: string): { name: string; port: number; rest: string } 
 
 /**
  * The names this machine answers to. Its own three always. When the network is on, every
- * address it has on its networks, its host name, and that name as a home network looks it up.
+ * private address it has on its networks (every address at all, where it answers the internet
+ * too), its host name, and that name as a home network looks it up.
  * A machine's addresses change as it moves between networks, so they are read again when the
  * last reading is a few seconds old. Kept to the tailnet, the names are the machine's addresses
  * there, its host name, and its name on the tailnet. That name is one of the machine's with
@@ -233,7 +235,7 @@ function placeOf(address: string): { name: string; port: number; rest: string } 
  * screen was given while the door was kept to the tailnet, and a door opened wider since still
  * answers to it. Who may ask is another matter, held to by the caller's address.
  */
-function knownNames(network: boolean, tailnet = false): (name: string) => boolean {
+function knownNames(network: boolean, tailnet = false, internet = false): (name: string) => boolean {
   const own = new Set(['localhost', '127.0.0.1', '[::1]'])
   let others = new Set<string>()
   let readAt = 0
@@ -247,6 +249,8 @@ function knownNames(network: boolean, tailnet = false): (name: string) => boolea
         for (const a of addresses ?? []) {
           // Kept to the tailnet, the machine answers to its addresses there and to no other it has
           if (tailnet && !inTailnet(a.address)) continue
+          // And on for the network it is on, to its private addresses, where alone it listens
+          if (!tailnet && !internet && !isPrivate(a.address)) continue
           others.add(a.family === 'IPv6' ? spelled(`[${a.address.split('%')[0]}]`) : a.address)
         }
       const host = os.hostname().toLowerCase()
@@ -381,10 +385,17 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
   const content = parts.content ?? makeContent(config, backend, say, parts.erased)
   const push = parts.push ?? createPush({ backendSite: site, refused: noted })
   const files = parts.site ?? BUILT
-  const known = knownNames(config.network, config.tailnet === true)
+  const internet = config.network && config.tailnet !== true && config.internet === true
+  const known = knownNames(config.network, config.tailnet === true, internet)
   // Kept to the tailnet, a caller is answered only from an address of the tailnet, or from this
-  // machine itself: a device on another network this machine is on gets nothing, whatever name it asks for
-  const answered = (address: string) => !config.tailnet || isLoopback(address) || inTailnet(address)
+  // machine itself: a device on another network this machine is on gets nothing, whatever name it
+  // asks for. On for the network the machine is on, a caller is answered only from a private
+  // address (`isPrivate`), so that one on the internet gets nothing even where something forwards
+  // it to one of the machine's private addresses, as a router told to forward a port does, or as
+  // a rented server's provider does for the public address the server never sees. Only where It
+  // answers the internet too is every caller answered.
+  const answered = (address: string) =>
+    config.tailnet === true ? isLoopback(address) || inTailnet(address) : !config.network || internet || isPrivate(address)
   const now = parts.now ?? Date.now
   const exports = recordExports(site, api, itself, now)
 
@@ -1649,57 +1660,151 @@ const hasAddress = (address: string) =>
     tried.listen({ port: 0, host: address, ipv6Only: address.includes(':') }, () => tried.close(() => resolve(true)))
   })
 
+/** The system's own word for why something could not be listened on, where it gave one, and else a word of the door's. */
+const codeOf = (err: unknown): string => {
+  const code = (err as { code?: unknown } | null)?.code
+  return typeof code === 'string' && /^[A-Z_]+$/.test(code) ? code : 'unknown'
+}
+
+/** What `startDoor` gives back: the door's own stop, and what keeps it listening where the machine's addresses are. */
+export interface OpenDoor {
+  stop(): Promise<void>
+  /**
+   * With the network on for the network the machine is on, listens at each private address the
+   * machine has come to have since the door was opened or last looked, and no longer at one it
+   * has lost, leaving every other connection as it is. One that cannot be listened on is tried
+   * again at the next look. Elsewhere it does nothing.
+   */
+  refresh(): Promise<void>
+}
+
 /**
- * Opens the door: the base port and the one after it, on this machine only, or on every address
- * it has when the network is on. Both families of address are listened on, each by itself, so
- * that a caller's address is always the one it has. A machine without IPv6 is listened on
- * without it.
+ * Opens the door: the base port and the one after it, on this machine only, or on the network
+ * as the settings say. Both families of address are listened on, each by itself, so that a
+ * caller's address is always the one it has. A machine without IPv6 is listened on without it.
+ *
+ * On for the network the machine is on, the door listens on this machine's own loopback
+ * addresses and at each of its private addresses (`listenAt`), each by itself, and at none of
+ * the internet's: a device that asks at one of those is refused by the system, and never
+ * reaches the door. The machine's addresses change as it moves between networks, which
+ * `refresh` follows. Kept to the tailnet, or open to the internet too, it listens on every
+ * address, and the tailnet's door holds callers to the tailnet by their address.
  *
  * Inside the standalone program node:http cannot be told to listen on IPv6 alone, and on every
- * address of that family it takes callers of both. So with the network on the pages' port is
- * listened on once there, and a caller's IPv4 address arrives written as an IPv6 one, which is
- * read back as what it is.
+ * address of that family it takes callers of both. So where the door listens on every address
+ * the pages' port is listened on once there, and a caller's IPv4 address arrives written as an
+ * IPv6 one, which is read back as what it is.
  */
-export async function startDoor(
-  config: ServiceConfig,
-  backend: Backend,
-  say: (line: string) => void,
-  parts: DoorParts = {},
-): Promise<{ stop(): Promise<void> }> {
+export async function startDoor(config: ServiceConfig, backend: Backend, say: (line: string) => void, parts: DoorParts = {}): Promise<OpenDoor> {
   const door = makeDoor(config, backend, say, parts)
   const api = new URL(backend.api)
-  const [four, six] = config.network ? ['0.0.0.0', '::'] : ['127.0.0.1', '::1']
+  const patience = parts.patience ?? PATIENCE_MS
+  const wide = config.network && (config.tailnet === true || config.internet === true)
+  const near = config.network && !wide
+  const [four, six] = wide ? ['0.0.0.0', '::'] : ['127.0.0.1', '::1']
   const both = await hasAddress(six)
   const addresses = both ? [four, six] : [four]
   const ports: { port: number; listen: Listen; addresses: string[] }[] = [
     { port: config.port, listen: standalone ? listenBun : listenNode, addresses },
-    { port: contentPort(config.port), listen: listenNode, addresses: standalone && config.network && both ? [six] : addresses },
+    { port: contentPort(config.port), listen: listenNode, addresses: standalone && wide && both ? [six] : addresses },
   ]
   const open: Listening[] = []
+  /** On for the network the machine is on, what listens at each of its private addresses, on both ports. */
+  const spots = new Map<string, Listening[]>()
+  /** The private addresses that could not be listened at when last tried, which is said once for each until it can. */
+  const failing = new Set<string>()
+  let closed = false
+  const stopAll = (listening: Listening[]) => Promise.all(listening.map((one) => one.stop().catch(() => {})))
   const close = async () => {
-    await Promise.all(open.map((listening) => listening.stop().catch(() => {})))
+    closed = true
+    const all = [...open, ...[...spots.values()].flat()]
+    spots.clear()
+    await stopAll(all)
     await door.close().catch(() => {})
+  }
+  /** Listens at one of the machine's private addresses on both ports, or at neither: what was opened there is closed again where the other cannot be had. */
+  const listenHere = async (address: string) => {
+    const here: Listening[] = []
+    try {
+      for (const { port, listen } of ports) here.push(await listen(address, port, door, api, patience))
+    } catch (err) {
+      await stopAll(here)
+      throw err
+    }
+    // A door that was closed meanwhile keeps nothing it opened
+    if (closed) await stopAll(here)
+    else spots.set(address, here)
+  }
+  /**
+   * Why an address could not be listened at: that the machine cannot have it just now, or the
+   * system's code. Which it is is asked of the address itself, on a port the system picks, and
+   * not read from the failure: Bun's own server and its node:http say that a port is in use where
+   * the address is one the machine does not have.
+   */
+  const whyNot = async (address: string, err: unknown): Promise<string> => ((await hasAddress(address)) ? codeOf(err) : 'address_unavailable')
+  const missed = (address: string, code: string) => {
+    // Said by its code alone: an address on the person's network is never written down
+    if (!failing.has(address)) say(`door: could not listen at one of this machine’s addresses (${code}); trying again`)
+    failing.add(address)
   }
   try {
     for (const { port, listen, addresses } of ports)
       for (const address of addresses)
         open.push(
-          await listen(address, port, door, api, parts.patience ?? PATIENCE_MS).catch((err) => {
+          await listen(address, port, door, api, patience).catch((err) => {
             throw cannotListen(port, err)
           }),
         )
+    // Another program that has It's port at one of these addresses keeps It off the network, as
+    // it does where It listens on every address. An address the machine cannot have just now, as
+    // one that is still being checked on the network cannot, is tried again later
+    if (near)
+      for (const address of listenAt())
+        await listenHere(address).catch(async (err) => {
+          const code = await whyNot(address, err)
+          if (code !== 'address_unavailable') throw cannotListen(config.port, err)
+          missed(address, code)
+        })
   } catch (err) {
     // What was opened before the port that could not be had is closed again
     await close()
     throw err
   }
   say(
-    `door open on port ${config.port} (${!config.network ? 'the network is off: this machine only' : config.tailnet ? 'the network is on: this machine’s tailnet only' : 'the network is on: every address this machine has'})`,
+    `door open on port ${config.port} (${
+      !config.network
+        ? 'the network is off: this machine only'
+        : config.tailnet
+          ? 'the network is on: this machine’s tailnet only'
+          : wide
+            ? 'the network is on: every address this machine has, the internet’s included'
+            : 'the network is on: this machine’s private addresses only'
+    })`,
   )
   return {
     async stop() {
       await close()
       say('door closed')
+    },
+    async refresh() {
+      if (!near || closed) return
+      const wanted = new Set(listenAt())
+      for (const [address, here] of [...spots])
+        if (!wanted.has(address)) {
+          spots.delete(address)
+          await stopAll(here)
+        }
+      for (const address of [...failing]) if (!wanted.has(address)) failing.delete(address)
+      for (const address of wanted) {
+        if (closed) return
+        if (spots.has(address)) continue
+        try {
+          await listenHere(address)
+          failing.delete(address)
+        } catch (err) {
+          missed(address, await whyNot(address, err))
+        }
+      }
     },
   }
 }

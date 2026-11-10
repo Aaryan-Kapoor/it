@@ -2042,7 +2042,8 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
 })
 
 describe('a network change taken by the running service', () => {
-  async function changing(answer: (read: number, network: boolean) => unknown, initialTailnet = true) {
+  const TAILNET_ONLY = "{tailscale0:[{address:'100.64.0.1',family:'IPv4',internal:false}]}"
+  async function changing(answer: (read: number, network: boolean) => unknown, initialTailnet = true, interfaces = TAILNET_ONLY, initialNetwork = true) {
     const m = machine(true, true)
     const held = await holdBase(58_000, 10)
     const settings = () => JSON.parse(readFileSync(path.join(m.it, 'service.json'), 'utf8')) as { network: boolean }
@@ -2050,7 +2051,7 @@ describe('a network change taken by the running service', () => {
       path.join(m.it, 'service.json'),
       JSON.stringify({
         port: held.base,
-        network: true,
+        network: initialNetwork,
         tailnet: initialTailnet,
         instanceSecret: 'a'.repeat(64),
         adminKey: 'it-000000000000|made-up',
@@ -2078,12 +2079,13 @@ describe('a network change taken by the running service', () => {
     // Only the network's polling waits move this clock, so requests still take their usual time.
     writeFileSync(
       clock,
-      "import os from 'node:os'; os.networkInterfaces = () => ({tailscale0:[{address:'100.64.0.1',family:'IPv4',internal:false}]}); let offset = 0; const now = Date.now; Date.now = () => now() + offset; const later = setTimeout; globalThis.setTimeout = (run, ms, ...args) => later(() => { if (ms === 200) offset += 5000; run(...args) }, ms === 200 || ms === 2500 ? 1 : ms)\n",
+      `import os from 'node:os'; os.networkInterfaces = () => (${interfaces}); let offset = 0; const now = Date.now; Date.now = () => now() + offset; const later = setTimeout; globalThis.setTimeout = (run, ms, ...args) => later(() => { if (ms === 200) offset += 5000; run(...args) }, ms === 200 || ms === 2500 ? 1 : ms)\n`,
     )
     return {
       settings,
       reads: () => reads,
       run: (to = 'on') => run(m, ['network', to], {}, process.execPath, ['--import', pathToFileURL(clock).href]),
+      ask: () => run(m, ['network'], {}, process.execPath, ['--import', pathToFileURL(clock).href]),
       close: async () => {
         await Promise.all(servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))))
         await held.release()
@@ -2092,7 +2094,7 @@ describe('a network change taken by the running service', () => {
   }
 
   test('looks again until the service reports the requested policy, though networking was on already', async () => {
-    const door = await changing((read) => ({ on: true, wanted: true, tailnet: read < 4 }))
+    const door = await changing((read) => ({ on: true, wanted: true, tailnet: read < 4, internet: false }))
     try {
       const ran = await door.run()
       expect([ran.code, printed(ran).network, door.reads()]).toEqual([0, true, 4])
@@ -2117,6 +2119,157 @@ describe('a network change taken by the running service', () => {
       const ran = await door.run()
       expect(ran.code).toBe(1)
       expect([ran.code, ran.out, error(ran).code, door.settings().network]).toEqual([1, '', 'cannot_listen', false])
+    } finally {
+      await door.close()
+    }
+  })
+
+  test('does not take the network on from a service of an earlier It, which says nothing of the internet and listens on every address, and says to start It again', async () => {
+    // What the service before this one reported: on, wanted, and not kept to the tailnet
+    const door = await changing(() => ({ on: true, wanted: true, tailnet: false }))
+    try {
+      const ran = await door.run()
+      expect([ran.code, ran.out, error(ran).code, door.settings().network]).toEqual([1, '', 'not_confirmed', true])
+      expect(error(ran).hint).toContain('The service that is running is of an earlier It')
+      // Asked how it stands, it says the same, and does not say that It keeps the internet out
+      const asked = await door.ask()
+      expect(asked.code).toBe(0)
+      expect(asked.err).toContain('The service that is running is of an earlier It')
+      expect(asked.err).not.toContain('does not answer the internet')
+      // Kept to the tailnet, which an earlier It did as this one does, it is taken
+      const tailnet = await changing(() => ({ on: true, wanted: true, tailnet: true }))
+      try {
+        expect((await tailnet.run('tailscale')).code).toBe(0)
+      } finally {
+        await tailnet.close()
+      }
+      // And so is answering the internet too, which such a service already does: it is not told that starting again keeps It to private addresses
+      const internet = await changing(() => ({ on: true, wanted: true, tailnet: false }))
+      try {
+        const ran = await internet.run('internet')
+        expect([ran.code, printed(ran)]).toMatchObject([0, { network: true, internet: true }])
+        expect(ran.err).not.toContain('The service that is running is of an earlier It')
+      } finally {
+        await internet.close()
+      }
+    } finally {
+      await door.close()
+    }
+  })
+
+  test('an earlier service whose functions say no policy at all is not said to keep the internet out', async () => {
+    const door = await changing(() => ({ on: true, wanted: true }))
+    try {
+      // Turned on, the change is not confirmed, since nothing says which policy was applied
+      expect(error(await door.run()).code).toBe('not_confirmed')
+      const asked = await door.ask()
+      expect(asked.code).toBe(0)
+      expect(asked.err).toContain('The service that is running is of an earlier It')
+      expect(asked.err).not.toContain('does not answer the internet')
+    } finally {
+      await door.close()
+    }
+  })
+
+  test('says that It does not answer the internet where the running service confirms it keeps the internet out', async () => {
+    const door = await changing(() => ({ on: true, wanted: true, tailnet: false, internet: false }), false)
+    try {
+      const asked = await door.ask()
+      expect(asked.code).toBe(0)
+      expect(asked.err).toContain('It does not answer the internet')
+      expect(asked.err).not.toContain('has not confirmed')
+      expect(printed(asked).confirmed).toBeUndefined()
+    } finally {
+      await door.close()
+    }
+  })
+
+  for (const report of ['unavailable', 'answering the internet'])
+    test(`does not say that It keeps the internet out where the running service's policy is ${report}`, async () => {
+      const door = await changing(
+        () =>
+          report === 'unavailable'
+            ? new Refusal({ code: 'unavailable', message: 'The report is not available.' })
+            : { on: true, wanted: true, tailnet: false, internet: true },
+        false,
+      )
+      try {
+        const asked = await door.ask()
+        expect(asked.code).toBe(0)
+        expect(asked.err).not.toContain('does not answer the internet')
+        expect(asked.err).toContain('has not confirmed that it applied this setting')
+        expect(printed(asked).confirmed).toBe(false)
+      } finally {
+        await door.close()
+      }
+    })
+
+  test('says the tailnet and off settings as done where the running service confirms them', async () => {
+    const tailnet = await changing(() => ({ on: true, wanted: true, tailnet: true, internet: false }))
+    try {
+      const asked = await tailnet.ask()
+      expect([asked.code, printed(asked).tailnet, printed(asked).confirmed]).toEqual([0, true, undefined])
+      expect(asked.err).toContain('The network is on, for your tailnet only.')
+      expect(asked.err).not.toContain('has not confirmed')
+    } finally {
+      await tailnet.close()
+    }
+    const off = await changing(() => ({ on: false, wanted: false }), false, TAILNET_ONLY, false)
+    try {
+      const asked = await off.ask()
+      expect([asked.code, printed(asked).network, printed(asked).confirmed]).toEqual([0, false, undefined])
+      expect(asked.err).toContain('The network is off. It answers this machine only.')
+    } finally {
+      await off.close()
+    }
+  })
+
+  for (const report of ['unavailable', 'answering the internet'])
+    test(`does not say that It is kept to the tailnet where the running service's policy is ${report}`, async () => {
+      const door = await changing(() =>
+        report === 'unavailable'
+          ? new Refusal({ code: 'unavailable', message: 'The report is not available.' })
+          : { on: true, wanted: true, tailnet: false, internet: true },
+      )
+      try {
+        const asked = await door.ask()
+        expect([asked.code, printed(asked).confirmed]).toEqual([0, false])
+        expect(asked.err).not.toContain('for your tailnet only')
+        expect(asked.err).toContain('has not confirmed that it applied this setting')
+      } finally {
+        await door.close()
+      }
+    })
+
+  for (const report of ['unavailable', 'still on'])
+    test(`does not say that It answers this machine only where the running service's door is ${report}`, async () => {
+      const door = await changing(
+        () =>
+          report === 'unavailable'
+            ? new Refusal({ code: 'unavailable', message: 'The report is not available.' })
+            : { on: true, wanted: true, tailnet: false, internet: true },
+        false,
+        TAILNET_ONLY,
+        false,
+      )
+      try {
+        const asked = await door.ask()
+        expect([asked.code, printed(asked).network, printed(asked).confirmed]).toEqual([0, false, false])
+        expect(asked.err).not.toContain('It answers this machine only')
+        expect(asked.err).toContain('has not confirmed that it applied this setting')
+      } finally {
+        await door.close()
+      }
+    })
+
+  test('a machine with no private address while an earlier service runs is not said to keep the internet out', async () => {
+    const door = await changing(() => ({ on: true, wanted: true, tailnet: false }), false, "{eth0:[{address:'203.0.113.5',family:'IPv4',internal:false}]}")
+    try {
+      const asked = await door.ask()
+      expect(asked.code).toBe(0)
+      expect(asked.err).toContain('this machine has no private address on a network just now')
+      expect(asked.err).toContain('The service that is running is of an earlier It')
+      expect(asked.err).not.toContain('does not answer the internet')
     } finally {
       await door.close()
     }
@@ -4691,7 +4844,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       /--no-setup joins and\s+connects no agent app/,
       /With --json,\s+wherever a program reads what they print, and for an agent,\s+they\s+print\s+JSON/,
       /^ {2}it site \[--no-open\] {2,}\S/m,
-      /^ {2}it network \[on \| off \| tailscale\]$/m,
+      /^ {2}it network \[on \| off \| tailscale \| internet\]$/m,
       /^ {2}it status {2,}\S/m,
       /^ {2}it whoami {2,}\S/m,
       /^ {2}it logout \[--force\] {2,}\S/m,
@@ -4949,7 +5102,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
             NOT_RUNNING,
             `Its site is at ${SITE} while it runs.`,
             'This machine is enrolled as “the desk”.',
-            'The network is off, so It answers this machine only. `it network on` lets your other devices on the same network reach it.',
+            'The network is off, so It answers this machine only. `it network tailscale` lets your own devices reach it over your tailnet, and `it network on` lets anyone on this network reach it.',
             'No agent app was found on this machine.',
             NOT_REGISTERED,
             expect.stringMatching(/^This is It \d+\.\d+\.\d+\.$/),
@@ -5106,11 +5259,13 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     // Nothing is running here, and each of these says so: the setting is all there is until It starts
     expect((await atTerminal(m, ['network'])).shown).toBe(`The network is off. It answers this machine only.\n${STOPPED}\n`)
     const said = (await atTerminal(m, ['network', 'on'])).shown.split('\n')
-    // On a machine the internet can reach, which the one this runs on may be, that is said as well, in a line of its own before the last
-    const INTERNET = /^This machine .*, so It can be reached from the internet, over plain http: /
-    const on = said.filter((line) => !INTERNET.test(line))
-    expect(said.length - on.length).toBeLessThanOrEqual(1)
-    expect(on[0]).toMatch(/^The network is on[.,] /)
+    // Where there is an address to open, the tailnet is said to be the way for a phone, in a line of its own before the last; the internet is never said to reach It
+    const PHONE =
+      /^On shared Wi-Fi, such as a venue’s or a café’s, anyone on it can open It’s pairing screen, .* For a phone, `it network tailscale` is better: /
+    const on = said.filter((line) => !PHONE.test(line))
+    expect(said.length - on.length).toBe(said.some((line) => /^ {2}http/.test(line)) ? 1 : 0)
+    expect(said.join('\n')).not.toContain('reached from the internet')
+    expect(on[0]).toMatch(/^The network is on, for anyone on this network[.,] /)
     expect(on.at(-2)).toBe(STOPPED)
     // Whatever stands between the two is an address, on a line of its own
     for (const line of on.slice(1, -2)) expect(line).toMatch(/^ {2}http:\/\/\S+:21000$/)

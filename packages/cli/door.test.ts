@@ -22,6 +22,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vite
 import { Problem } from './src/lib'
 import { doorKey } from './src/serve/config'
 import { type Arrival, type DoorParts, makeContent, makeDoor, startDoor } from './src/serve/door'
+import { BRIDGE, isPrivate } from './src/serve/network'
 import { answerSite, type Site } from './src/serve/site'
 import { forgetTailnetName, tailnetName } from './src/serve/tailnet'
 
@@ -592,7 +593,14 @@ afterAll(async () => {
 // ---------- doors ----------
 
 let backend: Backend
-const config = (port: number, network = false): ServiceConfig => ({ port, network, instanceSecret: 'x', adminKey: 'x', sessionSecret: 'x' })
+const config = (port: number, network = false, more: Partial<ServiceConfig> = {}): ServiceConfig => ({
+  port,
+  network,
+  instanceSecret: 'x',
+  adminKey: 'x',
+  sessionSecret: 'x',
+  ...more,
+})
 const parts = (more: DoorParts = {}): DoorParts => ({ content: contentStandIn, site: siteStandIn, push: pushStandIn, ...more })
 
 interface Opened {
@@ -605,12 +613,12 @@ interface Opened {
  * a range that the system never hands out by itself, and another base is tried when one of the
  * two turns out to be taken.
  */
-async function open(network = false, more: DoorParts = {}, behind: Backend = backend): Promise<Opened> {
+async function open(network = false, more: DoorParts = {}, behind: Backend = backend, settings: Partial<ServiceConfig> = {}): Promise<Opened> {
   for (let tries = 0; ; tries++) {
     const base = 20_000 + Math.floor(Math.random() * 9_000)
     const said: string[] = []
     try {
-      const door = await startDoor(config(base, network), behind, (line) => said.push(line), parts(more))
+      const door = await startDoor(config(base, network, settings), behind, (line) => said.push(line), parts(more))
       return { base, said, stop: () => door.stop() }
     } catch (err) {
       if (!(err instanceof Problem) || err.code !== 'port_taken' || tries > 20) throw err
@@ -906,17 +914,155 @@ describe('The names the door answers to', () => {
   })
 
   // Left out where a test may not turn the network on: see `mayOpen`
-  test.skipIf(!mayOpen)('With the network on, the door answers to this machine’s host name and to its addresses, and still to no other name', async () => {
-    const wide = await open(true)
-    try {
+  test.skipIf(!mayOpen)(
+    'With the network on, the door answers to this machine’s host name and to its private addresses, and still to no other name',
+    async () => {
       const names = [os.hostname(), ...(os.hostname().includes('.') ? [] : [`${os.hostname()}.local`])]
-      for (const a of Object.values(os.networkInterfaces()).flat()) if (a && !a.internal) names.push(a.family === 'IPv6' ? `[${a.address}]` : a.address)
-      for (const name of names) expect([name, (await ask(wide.base, { host: `${name}:${wide.base}` })).status]).toEqual([name, 200])
-      expect((await ask(wide.base, { host: `localhost:${wide.base}` })).status).toBe(200)
-      expect((await ask(wide.base, { host: `evil.example:${wide.base}` })).status).toBe(421)
-      expect(wide.said[0]).toContain('the network is on')
+      const theirs: string[] = []
+      for (const a of Object.values(os.networkInterfaces()).flat())
+        if (a && !a.internal) (isPrivate(a.address) ? names : theirs).push(a.family === 'IPv6' ? `[${a.address}]` : a.address)
+      const wide = await open(true)
+      try {
+        for (const name of names) expect([name, (await ask(wide.base, { host: `${name}:${wide.base}` })).status]).toEqual([name, 200])
+        // An address of the internet's that this machine has is no name of its own here, whatever the caller
+        for (const name of theirs) expect([name, (await ask(wide.base, { host: `${name}:${wide.base}` })).status]).toEqual([name, 421])
+        expect((await ask(wide.base, { host: `localhost:${wide.base}` })).status).toBe(200)
+        expect((await ask(wide.base, { host: `evil.example:${wide.base}` })).status).toBe(421)
+        expect(wide.said[0]).toContain('the network is on: this machine’s private addresses only')
+      } finally {
+        await wide.stop()
+      }
+      // Open to the internet too, it answers to those as well
+      const internet = await open(true, {}, backend, { internet: true })
+      try {
+        for (const name of [...names, ...theirs]) expect([name, (await ask(internet.base, { host: `${name}:${internet.base}` })).status]).toEqual([name, 200])
+        expect(internet.said[0]).toContain('the network is on: every address this machine has, the internet’s included')
+      } finally {
+        await internet.stop()
+      }
+    },
+  )
+
+  test.skipIf(!mayOpen)(
+    'With the network on, the door listens at this machine’s private addresses and at none of the internet’s, which refuse the connection before anything is asked, on both ports',
+    async () => {
+      const wide = await open(true)
+      try {
+        for (const [link, a] of Object.entries(os.networkInterfaces()).flatMap(([name, list]) => (list ?? []).map((one) => [name, one] as const))) {
+          if (a.internal) continue
+          const oneLink = a.family === 'IPv6' && /^fe[89ab]/i.test(a.address)
+          // A machine reaches its own address of one link reliably only on Linux: macOS sends it out on the link, which
+          // for a tunnel such as utun0 never comes back, and Windows does much the same. Elsewhere they are left to listenAt's own test
+          if (oneLink && process.platform !== 'linux') continue
+          // An address of one link is reached on the link it is on
+          const to = oneLink ? `${a.address.split('%')[0]}%${link}` : a.address
+          const host = a.family === 'IPv6' ? `[${a.address.split('%')[0]}]` : a.address
+          for (const port of [wide.base, contentPort(wide.base)]) {
+            const got = await ask(port, { to, host: `${host}:${port}` }).then(
+              (answer) => answer.status,
+              (err: NodeJS.ErrnoException) => err.code,
+            )
+            // Bridges to this machine's containers carry no address of one link that is listened at
+            if (isPrivate(a.address)) {
+              if (!/^fe[89ab]/i.test(a.address) || !BRIDGE.test(link)) expect([to, port, got]).toEqual([to, port, expect.any(Number)])
+            } else expect([to, port, got]).toEqual([to, port, 'ECONNREFUSED'])
+          }
+        }
+      } finally {
+        await wide.stop()
+      }
+    },
+    // On Windows a connection that is refused is tried again for a second or two before it is given up
+    60_000,
+  )
+})
+
+describe('Where the door listens, as the machine moves between networks', () => {
+  /** A private address under IPv4 that this machine has on a network, where it has one. */
+  const lan = Object.values(os.networkInterfaces())
+    .flat()
+    .find((a) => a && !a.internal && a.family === 'IPv4' && isPrivate(a.address))?.address
+  const reaches = (to: string, port: number) =>
+    ask(port, { to, host: `${to}:${port}` }).then(
+      (answer) => answer.status,
+      (err: NodeJS.ErrnoException) => err.code,
+    )
+
+  test.skipIf(!mayOpen || !lan)(
+    'On for the network the machine is on, the door begins to listen at a private address the machine comes to have, and stops at one it loses, while what is open stays open',
+    async () => {
+      const real = os.networkInterfaces()
+      const alone = { lo: real.lo ?? real.lo0 ?? [] }
+      const listed = vi.spyOn(os, 'networkInterfaces').mockReturnValue(alone)
+      const said: string[] = []
+      let opened: Awaited<ReturnType<typeof startDoor>> | undefined
+      let base = 0
+      try {
+        for (let tries = 0; !opened; tries++) {
+          base = 20_000 + Math.floor(Math.random() * 9_000)
+          opened = await startDoor(config(base, true), backend, (line) => said.push(line), parts()).catch((err) => {
+            if (!(err instanceof Problem) || err.code !== 'port_taken' || tries > 20) throw err
+            return undefined
+          })
+        }
+        // On no network at all, the door listens on the machine itself
+        expect(await reaches(lan!, base)).toBe('ECONNREFUSED')
+        expect(await reaches('127.0.0.1', base)).toBe(200)
+        // A connection that is open while the door looks again stays open
+        const held = net.connect(base, '127.0.0.1')
+        await new Promise((resolve) => held.once('connect', resolve))
+        let cut = false
+        held.once('close', () => {
+          cut = true
+        })
+        // The machine joins a network: at the next look the door listens there, on both ports
+        listed.mockReturnValue(real)
+        await opened.refresh()
+        expect(await reaches(lan!, base)).toBe(200)
+        expect(await reaches(lan!, contentPort(base))).toEqual(expect.any(Number))
+        // And leaves it: at the next look it listens there no more
+        listed.mockReturnValue(alone)
+        await opened.refresh()
+        expect(await reaches(lan!, base)).toBe('ECONNREFUSED')
+        expect(await reaches(lan!, contentPort(base))).toBe('ECONNREFUSED')
+        expect(cut).toBe(false)
+        held.destroy()
+        // Nothing of the address is written down
+        expect(said.join('\n')).not.toContain(lan!)
+      } finally {
+        listed.mockRestore()
+        await opened?.stop()
+      }
+    },
+    60_000,
+  )
+
+  test('An address that cannot be listened at is said once, by its code alone, and tried again at each look until it can be', async () => {
+    // An address the machine does not have, as one that is still being checked on the network is not yet had
+    const listed = vi.spyOn(os, 'networkInterfaces').mockReturnValue({
+      eth9: [{ address: '10.255.254.253', family: 'IPv4', internal: false, netmask: '255.0.0.0', mac: '00:00:00:00:00:09', cidr: '10.255.254.253/8' }],
+    })
+    const said: string[] = []
+    let opened: Awaited<ReturnType<typeof startDoor>> | undefined
+    try {
+      for (let tries = 0; !opened; tries++) {
+        const base = 20_000 + Math.floor(Math.random() * 9_000)
+        opened = await startDoor(config(base, true), backend, (line) => said.push(line), parts()).catch((err) => {
+          if (!(err instanceof Problem) || err.code !== 'port_taken' || tries > 20) throw err
+          return undefined
+        })
+      }
+      await opened.refresh()
+      await opened.refresh()
+      const missed = said.filter((line) => line.startsWith('door: could not listen at'))
+      // Under Bun, whose server says a port is in use where the address is not had, as under Node
+      expect(missed).toEqual(['door: could not listen at one of this machine’s addresses (address_unavailable); trying again'])
+      expect(said.join('\n')).not.toContain('10.255.254.253')
+      // The door is open all the same, on the machine itself
+      expect(said.filter((line) => line.startsWith('door open'))).toEqual([expect.stringContaining('the network is on: this machine’s private addresses only')])
     } finally {
-      await wide.stop()
+      listed.mockRestore()
+      await opened?.stop()
     }
   })
 })
@@ -3113,7 +3259,7 @@ describe('The site', () => {
       const names = ['localhost', '127.0.0.1', '[::1]', '[0:0:0:0:0:0:0:1]']
       if (mayOpen) names.push(os.hostname().toLowerCase())
       for (const a of Object.values(os.networkInterfaces()).flat())
-        if (mayOpen && a && !a.internal) names.push(a.family === 'IPv6' ? `[${a.address.split('%')[0]}]` : a.address)
+        if (mayOpen && a && !a.internal && isPrivate(a.address)) names.push(a.family === 'IPv6' ? `[${a.address.split('%')[0]}]` : a.address)
       for (const name of names) {
         for (const pathname of ['/', '/displays', '/assets/app-1a2b3c4d.js', '/sw.js', '/missing.png']) {
           const answer = await ask(wide.base, { host: `${name}:${wide.base}`, path: pathname, headers: [['Accept', 'text/html']] })
@@ -3207,7 +3353,7 @@ describe('The site', () => {
     try {
       const names = mayOpen ? [os.hostname()] : []
       for (const a of Object.values(os.networkInterfaces()).flat())
-        if (mayOpen && a && !a.internal) names.push(a.family === 'IPv6' ? `[${a.address}]` : a.address)
+        if (mayOpen && a && !a.internal && isPrivate(a.address)) names.push(a.family === 'IPv6' ? `[${a.address}]` : a.address)
       for (const name of names) {
         for (const pathname of ['/', '/assets/app-1a2b3c4d.js', '/missing.png']) {
           const answer = await ask(wide.base, { host: `${name}:${wide.base}`, path: pathname })
@@ -3557,9 +3703,64 @@ describe('Kept to the tailnet', () => {
     expect(await asked(tailnet, '100.101.42.17', contentPort(door.base))).not.toBe(421)
   })
 
-  test('Open to every network, the same callers are answered', async () => {
-    const open = config(door.base, true)
-    for (const anyone of ['192.168.1.50', '100.101.42.17', '2001:db8:100:c690::4f1a']) expect(await asked(open, anyone), anyone).not.toBe(421)
+  test('On for the network the machine is on, the door answers callers from private addresses and from this machine, and none from an address of the internet’s', async () => {
+    const near = config(door.base, true)
+    const answered = [
+      '127.0.0.1',
+      '::1',
+      // Private networks under IPv4: the home network's three ranges, carriers' and tailnets' range, and an address a device gave itself
+      '192.168.1.50',
+      '10.0.0.20',
+      '172.16.0.1',
+      '172.31.255.254',
+      '100.101.42.17',
+      '100.64.0.9',
+      '169.254.10.20',
+      // Under IPv6: a private network's own, a tailnet's among them, and an address of one link, with or without its link
+      'fd00::51',
+      'fc12:3456::1',
+      'fd7a:115c:a1e0::ab12:4843',
+      'fe80::1c3f:7d2a:9b10:44aa',
+      'fe80::1c3f:7d2a:9b10:44aa%en0',
+      'febf::1',
+      // An address under IPv4 written as IPv6, as a door that takes both families hands it over
+      '::ffff:192.168.1.50',
+    ]
+    for (const caller of answered) expect([caller, await asked(near, caller)]).not.toEqual([caller, 421])
+    const refused = [
+      // Public addresses under IPv4, and ranges that only look near the private ones
+      '203.0.113.9',
+      '8.8.8.8',
+      '172.32.0.1',
+      '172.15.255.255',
+      '100.128.0.1',
+      '100.63.255.255',
+      '192.169.0.1',
+      '169.255.0.1',
+      // Global addresses under IPv6, the kind a router may not stop, and ones that only begin like a private one
+      '2001:db8:100:c690::4f1a',
+      '2601:cb:8100:701::e43f',
+      'fc::1',
+      'fe7f::1',
+      'fec0::1',
+      'ff02::1',
+      '::ffff:8.8.8.8',
+      // Nothing at all, or what cannot be read as an address
+      '',
+      'nonsense',
+    ]
+    for (const caller of refused) expect([caller, await asked(near, caller)]).toEqual([caller, 421])
+    // The pages' port is held to the same
+    expect(await asked(near, '2001:db8:100:c690::4f1a', contentPort(door.base))).toBe(421)
+    expect(await asked(near, '192.168.1.50', contentPort(door.base))).not.toBe(421)
+  })
+
+  test('Open to the internet too, every caller is answered, unless the door is kept to the tailnet', async () => {
+    const internet = config(door.base, true, { internet: true })
+    for (const anyone of ['192.168.1.50', '100.101.42.17', '2001:db8:100:c690::4f1a', '203.0.113.9'])
+      expect([anyone, await asked(internet, anyone)]).not.toEqual([anyone, 421])
+    // Kept to the tailnet, the tailnet goes before the internet
+    expect(await asked(config(door.base, true, { internet: true, tailnet: true }), '203.0.113.9')).toBe(421)
   })
 
   test('Opened to every network after it was kept to the tailnet, the door still answers to the name the machine has there, which is the address its screens were given', async () => {

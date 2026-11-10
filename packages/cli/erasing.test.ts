@@ -51,7 +51,7 @@ vi.mock('./src/serve/door', () => ({
     stand.erased = erased
     return { close: async () => {} }
   },
-  startDoor: async () => ({ stop: async () => {} }),
+  startDoor: async () => ({ stop: async () => {}, refresh: async () => {} }),
 }))
 vi.mock('./src/connector', async (original) => ({
   ...(await original<typeof import('./src/connector')>()),

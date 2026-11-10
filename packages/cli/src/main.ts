@@ -621,7 +621,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   status: [0, 'status'],
   setup: [0, 'setup [--all | --only a,b | --none] [--name <name>] [--no-service]'],
   site: [0, 'site [--no-open]'],
-  network: [1, 'network [on | off | tailscale]'],
+  network: [1, 'network [on | off | tailscale | internet]'],
   serve: [0, 'serve [--log <file>]'],
   service: [1, 'service install | uninstall | status | logs'],
   skill: [0, 'skill'],
@@ -1976,34 +1976,29 @@ async function settingUpLed(a: Args, begunAlready = false) {
       const tail = tailnetAddresses()
       const home = reachable(config.port)[0]
       // Run from another computer, the likeliest wish is to reach It from there, and that is what
-      // is offered first: over the tailnet where there is one, and else over the home network.
-      // Not on a machine with a public address, such as a rented server: there "the network"
-      // is the internet, over plain http, and nobody is to open It to that by pressing Enter.
+      // is offered first: over the tailnet where there is one, and else over the network the
+      // machine is on. Not on a machine with a public address, such as a rented server: the
+      // network there is its provider's, and whoever set It up there reaches it from elsewhere.
       const open = onTheInternet()
       const start = config.network ? (config.tailnet ? 2 : 1) : fromAfar() ? (tail.length ? 2 : open ? 0 : 1) : 0
       const reach = await flow.pick<'off' | 'on' | 'tailscale'>(
-        'How will you reach It?',
+        'Who can reach It?',
         [
-          { value: 'off', label: 'From this computer only', hint: `localhost:${config.port}` },
-          open
-            ? { value: 'on', label: 'From any network, the internet included', hint: `this machine ${open.why}, and It answers over plain http` }
-            : { value: 'on', label: 'From my home network', hint: home ? new URL(home).host : undefined },
-          { value: 'tailscale', label: 'Over Tailscale', hint: tailnetName() ?? tail[0], no: tail.length ? undefined : 'not found on this machine' },
+          { value: 'off', label: 'This computer only', hint: `localhost:${config.port}` },
+          { value: 'on', label: 'Anyone on this network', hint: home ? new URL(home).host : undefined },
+          {
+            value: 'tailscale',
+            label: 'My tailnet only',
+            hint: `${tailnetName() ?? tail[0]}, the choice for a phone`,
+            no: tail.length ? undefined : 'Tailscale not found on this machine',
+          },
         ],
         start,
       )
       const net = flow.step('Network', 'opening')
       try {
         await turnNetwork(config, true, reach !== 'off', reach === 'tailscale')
-        net.done(
-          reach === 'off'
-            ? 'this computer only'
-            : reach === 'tailscale'
-              ? 'your tailnet only'
-              : open
-                ? 'every network this machine is on, the internet included'
-                : 'your home network',
-        )
+        net.done(reach === 'off' ? 'this computer only' : reach === 'tailscale' ? 'your tailnet only' : 'anyone on this network')
       } catch (err) {
         net.warn('this computer only')
         left.push(err instanceof Problem ? inWords(err) : String(err))
@@ -2029,6 +2024,11 @@ async function settingUpLed(a: Args, begunAlready = false) {
           flow.line()
           for (const row of flow.qr(there[0]!)) flow.line(`  ${row}`)
           for (const other of there.slice(1, 3)) flow.line(`  ${flow.dim(`or ${other}`)}`)
+          // Over the network the machine is on, whoever else is on it can open the same screen
+          if (reach === 'on') {
+            flow.line()
+            for (const row of PHONE_ON_NETWORK) flow.line(`  ${flow.dim(row)}`)
+          }
         }
         flow.line()
         const screen = flow.step('First screen', 'waiting for a browser to pair · enter to skip')
@@ -2338,16 +2338,20 @@ async function settingUp(a: Args, joined: boolean) {
 const TAKEN_MS = 20_000
 
 /** Whether the network is on in this machine's settings, and where another device then reaches It. Off, with no address, on a machine that only joined an It. */
-function networkNow(): { on: boolean; addresses: string[]; tailnet?: true; unable?: true } {
+function networkNow(): { on: boolean; addresses: string[]; tailnet?: true; internet?: true; unable?: true } {
   try {
     const config = elsewhere() ? null : readConfig()
     const on = config?.network ?? false
+    const tailnet = on && config?.tailnet === true
+    const internet = on && !tailnet && config?.internet === true
     // Kept to the tailnet, the door answers at this machine's addresses there and at no other:
-    // an address on the home network would be one that nothing opens
+    // an address on the home network would be one that nothing opens. On for the network the
+    // machine is on, it answers at none of the internet's addresses either
     return {
       on,
-      addresses: on && config ? reachable(config.port, undefined, config.tailnet === true) : [],
-      ...(on && config?.tailnet === true ? { tailnet: true } : {}),
+      addresses: on && config ? reachable(config.port, undefined, tailnet, tailnetName, internet) : [],
+      ...(tailnet ? { tailnet: true } : {}),
+      ...(internet ? { internet: true } : {}),
     }
   } catch {
     // Settings that cannot be read say nothing of the network, and `it status` still says the rest
@@ -2378,17 +2382,31 @@ async function networkAsItStands(running: boolean): Promise<ReturnType<typeof ne
  * asks as the service itself does, with the key in It's settings, so that it needs nothing of
  * this machine's enrolment.
  */
-async function doorStands(config: { port: number; adminKey: string }): Promise<{ on: boolean; wanted: boolean; tailnet?: boolean } | undefined> {
+async function doorStands(config: {
+  port: number
+  adminKey: string
+}): Promise<{ on: boolean; wanted: boolean; tailnet?: boolean; internet?: boolean } | undefined> {
   const said = (await asAdmin({ api: backendAt(config.port).api, adminKey: config.adminKey }, 'network:current', {}).catch(() => undefined)) as
-    | { on?: unknown; wanted?: unknown; tailnet?: unknown }
+    | { on?: unknown; wanted?: unknown; tailnet?: unknown; internet?: unknown }
     | undefined
   return typeof said?.on === 'boolean' && typeof said.wanted === 'boolean'
-    ? { on: said.on, wanted: said.wanted, ...(typeof said.tailnet === 'boolean' ? { tailnet: said.tailnet } : {}) }
+    ? {
+        on: said.on,
+        wanted: said.wanted,
+        ...(typeof said.tailnet === 'boolean' ? { tailnet: said.tailnet } : {}),
+        ...(typeof said.internet === 'boolean' ? { internet: said.internet } : {}),
+      }
     : undefined
 }
 
+/** Whom the door answers once it is on: the network the machine is on, the tailnet alone, or every address the machine has. */
+type Reach = 'near' | 'tailnet' | 'internet'
+/** Whether the service says its door answers others in a way other than the one asked for. A service whose functions do not say which way does not differ. */
+const otherReach = (stands: { tailnet?: boolean; internet?: boolean }, reach: Reach): boolean =>
+  (stands.tailnet !== undefined && stands.tailnet !== (reach === 'tailnet')) || (stands.internet !== undefined && stands.internet !== (reach === 'internet'))
+
 /**
- * Writes whether the network is to be on, and for the tailnet alone, and waits until the service
+ * Writes whether the network is to be on, and whom it answers then, and waits until the service
  * that is running has done as the setting says. With no service running the setting is all
  * there is, and it takes effect when one starts. Where the service could not listen on the
  * network, the network is left off and that is the problem said.
@@ -2398,20 +2416,20 @@ async function turnNetwork(
   running: boolean,
   on: boolean,
   tailnet: boolean,
+  internet = false,
 ): Promise<void> {
+  const reach: Reach = tailnet ? 'tailnet' : internet ? 'internet' : 'near'
   /**
    * Waits until the running service has looked at a setting and said so, and gives how its
    * door then stands. Nothing when no service is running to be waited for.
    */
-  const taken = async (setting: boolean, policy?: boolean) => {
+  const taken = async (setting: boolean, policy?: Reach) => {
     if (!running) return undefined
     const until = Date.now() + TAKEN_MS
     let stands = await doorStands(config)
     while (
       stands !== undefined &&
-      (stands.wanted !== setting ||
-        (!setting && stands.on) ||
-        (setting && stands.on && policy !== undefined && stands.tailnet !== undefined && stands.tailnet !== policy)) &&
+      (stands.wanted !== setting || (!setting && stands.on) || (setting && stands.on && policy !== undefined && otherReach(stands, policy))) &&
       Date.now() < until
     ) {
       await new Promise((resolve) => setTimeout(resolve, 200))
@@ -2426,10 +2444,10 @@ async function turnNetwork(
     noteNetwork(false)
     stands = await taken(false)
   }
-  noteNetwork(on, tailnet)
+  noteNetwork(on, tailnet, internet)
   // The service that is running takes it by itself. With none running there is nothing to wait for.
-  stands = await taken(on, tailnet)
-  if (stands !== undefined && (stands.wanted !== on || (!on && stands.on) || (on && stands.on && stands.tailnet !== undefined && stands.tailnet !== tailnet)))
+  stands = await taken(on, reach)
+  if (stands !== undefined && (stands.wanted !== on || (!on && stands.on) || (on && stands.on && otherReach(stands, reach))))
     throw new Problem(
       `The network is turned ${on ? 'on' : 'off'} in It’s settings, and the service that is running has not taken that.`,
       'not_taken',
@@ -2445,35 +2463,64 @@ async function turnNetwork(
       'Another program may have one of the ports It listens on, on one of those addresses. `it service logs` says what the service met.',
     )
   }
-  if (running && (stands === undefined || (on && stands.tailnet === undefined)))
+  // A service of an earlier It says nothing of the internet, and with the network on it listens on every address the
+  // machine has, the internet's among them: on for the network the machine is on is not taken until a service says so.
+  // Kept to the tailnet, or open to the internet too, such a service already does what was asked
+  const earlier = stands !== undefined && stands.tailnet !== undefined && stands.internet === undefined
+  if (running && (stands === undefined || (on && (stands.tailnet === undefined || (!tailnet && !internet && earlier)))))
     throw new Problem(
       'The network setting was saved, but It could not confirm that the service applied it.',
       'not_confirmed',
       stands === undefined
         ? 'The service could not be asked how its door stands. Check `it service logs` and try again.'
-        : 'The backend functions do not report the applied network policy. Run `it status` on this machine to check whether older functions are still running.',
+        : stands.tailnet !== undefined
+          ? EARLIER
+          : 'The backend functions do not report the applied network policy. Run `it status` on this machine to check whether older functions are still running.',
     )
 }
+
+/** What is said where the service that is running is of an It from before the network on was kept to private addresses. */
+const EARLIER =
+  'The service that is running is of an earlier It, which with the network on listens on every address this machine has, the internet’s among them. Stop It and start it again, and the network is then kept to this machine’s private addresses.'
+
+/** What is said where the service that is running has not said that it does as the network setting asks. */
+const UNCONFIRMED =
+  'The service that is running has not confirmed that it applied this setting, so It may answer more than the setting says. `it service logs` says what the service met, and stopping It and starting it again applies the setting afresh.'
 
 /** What is said where the tailnet is asked for on a machine that is on none. */
 const noTailnet = () =>
   new Problem(
     'This machine is on no tailnet, so there is none to keep It to.',
     'no_tailnet',
-    'Install Tailscale on this machine and sign in to it, and run this again. `it network on` opens It to every network this machine is on instead.',
+    'Install Tailscale on this machine and sign in to it, and run this again. `it network on` lets anyone on the network this machine is on reach It instead.',
   )
 
 /**
- * `it network on` and `it network off` say whether It answers the person's other devices, and
- * `it network tailscale` that it answers them on their tailnet alone. `it network` says which it
- * is. The setting is written and the running service opens its door anew by itself, within a
- * second or two: the command waits until the service has done as the setting says, and says so
- * if it could not.
+ * What a person is told wherever they are given an address on the network the machine is on to
+ * open on a phone: who else can open it there, that venues' Wi-Fi often keeps devices apart, and
+ * that the tailnet is the better way for a phone. Written as rows that fit a terminal.
+ */
+const PHONE_ON_NETWORK = [
+  'Anyone on this network can open this pairing screen, and on shared Wi-Fi that is',
+  'everyone there. Shared Wi-Fi also often keeps devices from reaching each other, and',
+  'then the address does not open at all. For a phone, `it network tailscale` is better.',
+]
+/** The same, said in sentences, after the addresses `it network` gives. */
+const PHONE_SAID =
+  'On shared Wi-Fi, such as a venue’s or a café’s, anyone on it can open It’s pairing screen, and such networks often keep devices from reaching each other, so that the address does not open at all. For a phone, `it network tailscale` is better: only your own devices that are signed in to Tailscale can reach It, wherever they are.'
+
+/**
+ * `it network on` lets anyone on the network this machine is on reach It, at its private
+ * addresses alone, `it network tailscale` keeps it to the person's tailnet, and `it network
+ * off` to this machine. `it network internet` opens it at every address the machine has, the
+ * internet's among them, which nothing else does. `it network` says which it is. The setting is
+ * written and the running service opens its door anew by itself, within a second or two: the
+ * command waits until the service has done as the setting says, and says so if it could not.
  */
 async function network(a: Args) {
   const to = a._[0]
-  if (to !== undefined && to !== 'on' && to !== 'off' && to !== 'tailscale')
-    throw new Problem('It is `it network`, `it network on`, `it network tailscale` or `it network off`.', 'invalid')
+  if (to !== undefined && to !== 'on' && to !== 'off' && to !== 'tailscale' && to !== 'internet')
+    throw new Problem('It is `it network`, `it network on`, `it network tailscale`, `it network internet` or `it network off`.', 'invalid')
   if (!existsSync(settingsFile()) || elsewhere()) {
     if (enrolledHere() && elsewhere())
       throw new Problem(
@@ -2486,46 +2533,88 @@ async function network(a: Args) {
   const config = readConfig()!
   const on = to === undefined ? config.network : to !== 'off'
   const tailnet = on && (to === undefined ? config.tailnet === true : to === 'tailscale')
+  const internet = on && !tailnet && (to === undefined ? config.internet === true : to === 'internet')
   if (to === 'tailscale' && !tailnetAddresses().length) throw noTailnet()
   // Whether a service is running, to take the setting or to be asked how its door stands, is
   // whether It's door answers. What the backend was last told of the door does not say: the
   // backend program may be running by itself, with what a service told it before it stopped.
   const running = await runs()
-  if (to !== undefined) await turnNetwork(config, running, on, tailnet)
+  if (to !== undefined) await turnNetwork(config, running, on, tailnet, internet)
   // Asked only how things stand: a service that was to listen on the network and could not is said as it is
-  if (to === undefined && on && running) {
+  let earlier = false
+  // What the setting asks is said as done only where that is known: with no service running nothing listens, a change
+  // just made was confirmed by the service, and asked how things stand, the running service must say it does as asked
+  let confirmed = to !== undefined || !running
+  if (to === undefined && running) {
     const stands = await doorStands(config)
-    if (stands?.wanted && !stands.on) {
-      const could =
-        'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'
-      if (forPerson(a)) return tell([could])
-      say(could)
-      return out({ network: false, addresses: [] })
+    if (on) {
+      // And one of an earlier It, open on every address, is not said to keep It from the internet
+      // Whether its functions say which policy it applied or not: only a service of this It says it keeps the internet out
+      earlier = !tailnet && !internet && stands?.on === true && stands.internet === undefined
+      if (stands?.wanted && !stands.on) {
+        const could =
+          'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'
+        if (forPerson(a)) return tell([could])
+        say(could)
+        return out({ network: false, addresses: [] })
+      }
     }
+    // Off, the door answers this machine alone. Kept to the tailnet, an earlier It did as this one does, and says so. On for the
+    // network the machine is on, only a service of this It says it keeps the internet out. Open to the internet, nothing is promised
+    confirmed =
+      stands !== undefined &&
+      (!on ? !stands.on : tailnet ? stands.on && stands.tailnet === true && stands.internet !== true : internet || (stands.on && stands.internet === false))
   }
-  const addresses = on ? reachable(config.port, undefined, tailnet) : []
+  const addresses = on ? reachable(config.port, undefined, tailnet, tailnetName, internet) : []
   const said = !on
-    ? 'The network is off. It answers this machine only.'
+    ? confirmed
+      ? 'The network is off. It answers this machine only.'
+      : 'The network is turned off in It’s settings.'
     : addresses.length === 0
       ? tailnet
-        ? 'The network is on, for your tailnet only, but this machine has no address there just now.'
-        : 'The network is on, but this machine has no address on a network just now.'
+        ? confirmed
+          ? 'The network is on, for your tailnet only, but this machine has no address there just now.'
+          : 'The network is set to your tailnet only, but this machine has no address there just now.'
+        : internet
+          ? 'The network is on, for every address this machine has, but it has no address on a network just now.'
+          : !confirmed
+            ? 'The network is on, for anyone on this network, but this machine has no private address on a network just now.'
+            : 'The network is on, for anyone on this network, but this machine has no private address on a network just now. It does not answer the internet.'
       : tailnet
-        ? 'The network is on, for your tailnet only. Your devices on it can open It at:'
-        : 'The network is on. Devices on the same network can open It at:'
+        ? confirmed
+          ? 'The network is on, for your tailnet only. Your devices that are signed in to Tailscale can open It at:'
+          : 'The network is set to your tailnet only. Your devices that are signed in to Tailscale can open It at:'
+        : internet
+          ? 'The network is on, for every address this machine has, the internet’s included. Whoever can reach one can open It at:'
+          : !confirmed
+            ? 'The network is on, for anyone on this network. Devices on it can open It, and its pairing screen, at these addresses:'
+            : 'The network is on, for anyone on this network. Devices on it can open It, and its pairing screen, at these addresses, and It does not answer the internet:'
   // With no service running the setting is all there is: nothing listens anywhere until It starts
   const later = running ? undefined : 'It is not running on this machine at the moment, so this takes effect when it starts.'
-  // Open to every network, on a machine that the internet can reach: said in so many words, each time it is asked
-  const open = on && !tailnet ? onTheInternet() : undefined
-  const toAll = open
-    ? `This machine ${open.why}, so It can be reached from the internet, over plain http: anyone can open the pairing screen, and what your paired devices send can be read on the way. \`it network tailscale\` keeps It to your tailnet, and \`it network off\` to this machine.`
+  // Open to the internet too: said in so many words each time it is asked, and how the internet reaches this machine where that can be told
+  const open = internet ? onTheInternet() : undefined
+  const toAll = internet
+    ? `${open ? `This machine ${open.why}. ` : ''}Anyone who can reach this machine can open the pairing screen, over plain http, and what your paired devices send can be read on the way. \`it network on\` keeps It to the network this machine is on, \`it network tailscale\` to your tailnet, and \`it network off\` to this machine.`
     : undefined
+  // On for the network the machine is on, with somewhere to open It: the tailnet is the way for a phone
+  const phone = on && !tailnet && !internet && addresses.length ? PHONE_SAID : undefined
   // To a person the sentence is what is printed, with the addresses under it. Anywhere else it is said beside the JSON
-  if (forPerson(a)) return tell([said, ...addresses.map((address) => `  ${address}`), toAll, later])
+  const stale = earlier ? EARLIER : !internet && !confirmed ? UNCONFIRMED : undefined
+  if (forPerson(a)) return tell([said, ...addresses.map((address) => `  ${address}`), stale, toAll, phone, later])
   say(addresses.length ? `${said} ${addresses.join(', ')}` : said)
+  if (stale) say(stale)
   if (toAll) say(toAll)
+  if (phone) say(phone)
   if (later) say(later)
-  return out({ network: on, ...(tailnet ? { tailnet: true } : {}), addresses, ...(open ? { public: open.address ?? true } : {}) })
+  return out({
+    network: on,
+    ...(tailnet ? { tailnet: true } : {}),
+    ...(internet ? { internet: true } : {}),
+    addresses,
+    ...(open ? { public: open.address ?? true } : {}),
+    // Said only where the running service has not confirmed that it does as the setting says
+    ...(confirmed ? {} : { confirmed: false }),
+  })
 }
 
 /**
@@ -2634,12 +2723,14 @@ async function status(a: Args) {
       : network.unable
         ? 'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'
         : !network.on
-          ? 'The network is off, so It answers this machine only. `it network on` lets your other devices on the same network reach it.'
+          ? 'The network is off, so It answers this machine only. `it network tailscale` lets your own devices reach it over your tailnet, and `it network on` lets anyone on this network reach it.'
           : first === undefined
             ? 'The network is on, and this machine has no address on a network just now.'
             : network.tailnet
               ? `The network is on, for your tailnet only. Your devices on it open the site at ${first}.${others.length ? ` This machine’s other addresses there are ${others.join(' and ')}.` : ''}`
-              : `The network is on. Other devices on the same network open the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`,
+              : network.internet
+                ? `The network is on, for every address this machine has, the internet’s included. Whoever can reach one opens the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`
+                : `The network is on, for anyone on this network. Devices on it open the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`,
     ...appsSaid(stands.harnesses),
     ...(stands.harnesses.some((h) => 'proxied' in h) ? [PROXIED] : []),
     ...serviceSaid(stands.background, stands.connector, running && enrolled),
@@ -2857,10 +2948,12 @@ This machine
                                  every app it would otherwise ask about.
   it site [--no-open]            Open It's site in a browser on this machine, and pair that browser.
                                  --no-open only prints the address.
-  it network [on | off | tailscale]
-                                 Say whether It answers your other devices, or turn that on or
-                                 off. With tailscale it answers your tailnet alone. It answers
-                                 this machine only until it is turned on.
+  it network [on | off | tailscale | internet]
+                                 Say who can reach It, or change it. It answers this machine
+                                 only until it is turned on. on: anyone on this network, which
+                                 on shared Wi-Fi is everyone there. tailscale: your tailnet
+                                 only, the choice for a phone. internet: every address this
+                                 machine has, the internet's too, over plain http.
   it status                      Say whether It is running, where its site is, and what is connected.
   it whoami                      Say what It knows this machine as.
   it serve [--log <file>]        Run It here yourself, in this terminal, as the background
@@ -3217,7 +3310,8 @@ async function main(argv: string[]): Promise<void> {
       const url = `${site}/pair#${code}`
       // Where the network is on, the same code pairs a browser on another device, at each address this machine is reached by
       // As the network stands, and not only as the settings ask for it: an address the door could not listen at is no address to give
-      const elsewhereToo = (await networkAsItStands(true)).addresses.map((address) => `${address}/pair#${code}`)
+      const stands = await networkAsItStands(true)
+      const elsewhereToo = stands.addresses.map((address) => `${address}/pair#${code}`)
       const opening = !a.flags['no-open'] && openBrowser(url)
       if (!forPerson(a)) return out({ url, ...(elsewhereToo.length ? { urls: elsewhereToo } : {}) })
       if (opening) return tell(['It’s site is opening in your browser, and this link pairs it:', `  ${url}`])
@@ -3225,6 +3319,8 @@ async function main(argv: string[]): Promise<void> {
       // it was asked not to. The address to open is then the one another device can reach,
       // with the one for this machine after it.
       const there = elsewhereToo
+      // Over the network the machine is on, whoever else is on it can open the same screen
+      const onNetwork = there.length > 0 && stands.tailnet !== true
       return tell([
         there.length ? 'Open this on the screen you want to pair:' : `Open this in a browser${existsSync(settingsFile()) ? ' on this machine' : ''}:`,
         `  ${there[0] ?? url}`,
@@ -3232,6 +3328,7 @@ async function main(argv: string[]): Promise<void> {
         ...there.slice(1).map((other) => `  or ${other}`),
         ...(there.length ? [`  or, on this machine, ${url}`] : []),
         'It pairs one browser, once, within ten minutes.',
+        onNetwork ? PHONE_ON_NETWORK.join(' ') : undefined,
         !there.length && existsSync(settingsFile())
           ? 'No other device can open that: `it network tailscale` or `it network on` lets one, and this then prints an address for it.'
           : undefined,

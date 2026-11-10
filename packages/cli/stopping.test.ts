@@ -50,6 +50,7 @@ vi.mock('./src/serve/door', () => ({
     stop: async () => {
       stand.doorClosed = true
     },
+    refresh: async () => {},
   }),
 }))
 
