@@ -846,9 +846,9 @@ async function published(
   tour = false,
   updated = false,
   /** What is said of how things arrive, where whoever published the page has worked that out already, and what else to say beside it. */
-  said?: { arrives: Arrives; beside: Record<string, unknown> },
+  worked?: { arrives: Arrives; beside: Record<string, unknown> },
 ): Promise<void> {
-  const arrival = said?.arrives ?? (await arrivalHere(done.slug, tour))
+  const arrival = worked?.arrives ?? (await arrivalHere(done.slug, tour))
   const result = {
     id: done.slug,
     version: done.version,
@@ -862,7 +862,7 @@ async function published(
     ...(fresh ? { tell: `Give the user this url in the chat, in one short line that says what is on the ${NOUN.one}.` } : {}),
     // Whether what the person does on it comes back here by itself, and so whether to end the turn or to wait
     ...(arrival ? { arrives: arrival } : {}),
-    ...said?.beside,
+    ...worked?.beside,
   }
   let said: Record<string, unknown> & { hint?: string }
   if (!a.flags.open)
