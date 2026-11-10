@@ -805,6 +805,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     owed: boolean
     behind: boolean
     finished: boolean
+    /** Changes whenever a hand-over arrives or the turn changes, so an older reply cannot end a newer watch. */
+    generation: number
     idleAt: number | null
     want: 'running' | 'ended' | 'unknown' | 'wait'
     /** The watch this one was merged into, where the conversation came to be heard under an id that was watched already. */
@@ -872,9 +874,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
       owed: false,
       behind: false,
       finished: false,
+      generation: 0,
       idleAt: null,
       want: 'wait' as const,
     }
+    w.generation++
     w.names.add(click.session.id)
     if (finished) w.finished = true
     else if (starts) {
@@ -919,7 +923,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const turnSeen = (key: string): void => {
     const w = watchedTurns.get(key)
     if (!w) return
+    const before = w.want
     lookAtTurn(key, w)
+    if (w.want !== before) w.generation++
     void tellTurns()
   }
   let tellingTurns = false
@@ -973,6 +979,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           continue
         }
         // An ending that It was never told the turn of is told all the same, under every id its pages know it by
+        const generation = w.generation
         const ended = w.want === 'ended' && w.finished
         if (w.want === 'ended' && (w.told.size || ended) && [...handedTo.values()].includes(key)) continue
         for (const id of ended ? [...w.names] : [...w.told]) {
@@ -983,6 +990,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
           })
           kept(w).told.delete(id)
         }
+        // A newer hand-over or turn change still needs its own ending told.
+        if (w.generation !== generation) continue
         // Only this watch's own: one it was merged into meanwhile may have an ending of its own still to tell
         if (ended) w.finished = false
         // Something may have been handed to it while It was being told

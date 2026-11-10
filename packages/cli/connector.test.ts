@@ -5850,6 +5850,38 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     expect(told().length).toBe(2)
   })
 
+  test('a newer short turn in the same conversation is reported after an older ending awaiting its reply', async () => {
+    standIn()
+    await start('socket', APPS)
+    await asks(false)
+    let release!: () => void
+    let entered!: () => void
+    const waiting = new Promise<void>((done) => (entered = done))
+    const reply = new Promise<null>((done) => (release = () => done(null)))
+    let endings = 0
+    stand.answer = (name, args) => {
+      if (name !== 'turns:say' || args.running !== false) return undefined
+      if (++endings !== 1) return undefined
+      entered()
+      return reply
+    }
+    await handed(1, { woke: true, turn: false, turnOver: true }, false)
+    await waiting
+    // The first ending cannot finish until this second short turn has been handed over.
+    await handed(2, { woke: true, turn: false, turnOver: true }, false)
+    await settled()
+    expect(endings).toBe(1)
+    release()
+    await settled()
+    await pass()
+    expect(told()).toEqual([{}, { ...ENDED, untold: true }, { ...ENDED, untold: true }])
+    // A later turn with no click must not be reported: the watch has ended cleanly.
+    await asks(true)
+    await asks(false)
+    await pass()
+    expect(endings).toBe(2)
+  })
+
   test('a conversation that carries on under another id after /clear is watched under the new one, and its turn’s end is told under the id its page knows', async () => {
     standIn()
     await start('socket', APPS)
