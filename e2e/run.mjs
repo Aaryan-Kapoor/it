@@ -1788,6 +1788,40 @@ try {
   await it(A, ['patch', slug, '{"進捗":{"$step":3}}'])
   check('state may use keys in any alphabet', (await it(A, ['state', slug])).state.進捗?.$step === 3)
 
+  // The bar above the page is centred on one line, from the face the browser sets it in: the
+  // logo, the buttons, and the middle of the title's capitals on the bar's middle, and each part
+  // of the words beside the title on the title's own baseline (issue #20)
+  const centred = await page.evaluate(() => {
+    const middle = (r) => r.top + r.height / 2
+    const baselineOf = (el) => {
+      const probe = document.createElement('span')
+      probe.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline'
+      el.append(probe)
+      const at = probe.getBoundingClientRect().top
+      probe.remove()
+      return at
+    }
+    const title = document.querySelector('.page-nav-title')
+    const style = getComputedStyle(title)
+    const pen = document.createElement('canvas').getContext('2d')
+    pen.font = `${style.fontSize} ${style.fontFamily}`
+    const bar = middle(document.querySelector('.page-nav').getBoundingClientRect())
+    const baseline = baselineOf(title)
+    return {
+      title: baseline - pen.measureText('H').actualBoundingBoxAscent / 2 - bar,
+      parts: [...document.querySelectorAll('.page-nav-meta-part')].map((part) => baselineOf(part) - baseline),
+      others: [...document.querySelectorAll('.page-nav-mark, .back-btn, .page-nav-actions > *')].map((e) => middle(e.getBoundingClientRect()) - bar),
+    }
+  })
+  check(
+    'the page bar is centred: the title’s capitals and its controls on the bar’s middle, and the words beside the title on its baseline',
+    Math.abs(centred.title) <= 0.75 &&
+      centred.parts.length >= 2 &&
+      centred.parts.every((d) => Math.abs(d) <= 0.25) &&
+      centred.others.every((d) => Math.abs(d) <= 0.5),
+    JSON.stringify(centred),
+  )
+
   // ------------------------------------------------------------------
   section('Clicks')
   // Before anyone has touched the page, its own script sends an action
