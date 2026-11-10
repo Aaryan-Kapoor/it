@@ -880,10 +880,14 @@ const FORMS = ['submit', 'formdata']
 const onItsWayOut = (e: Event) => {
   if (e.target instanceof Element) guideForm(e.target)
 }
+/** Whatever the page's own markup declares, once it is all parsed. */
+const reachAll = () => reachWithin(document)
 /**
- * What the window hears of links and forms, and what the document's observer watches. Opening
- * the document again, as `document.open` does, and `document.write` once the page has loaded,
- * takes every listener away from the window and the document: so they are put back each time.
+ * What the window hears of links and forms, what each root It reached hears, and what the
+ * observer watches. Opening a document again, as `document.open` does, and `document.write` once
+ * the page has loaded, takes every listener away from the window and from everything in that
+ * document, its roots too: so they are all put back each time, and putting back one that is there
+ * already does nothing.
  */
 function listen(): void {
   for (const event of FOLLOWING) {
@@ -891,7 +895,12 @@ function listen(): void {
     window.addEventListener(event, followedAfter)
   }
   for (const event of FORMS) window.addEventListener(event, onItsWayOut, true)
+  document.addEventListener('DOMContentLoaded', reachAll)
   watcher.observe(document, WATCHED)
+  for (const ref of shadowRoots) {
+    const root = ref.deref()
+    if (root) hearIn(root)
+  }
 }
 listen()
 /**
@@ -907,21 +916,40 @@ const reached = new WeakSet<ShadowRoot>()
 function reach(root: ShadowRoot): void {
   if (reached.has(root)) return
   reached.add(root)
-  watcher.observe(root, WATCHED)
   shadowRoots.push(new WeakRef(root))
+  hearIn(root)
+  tendWithin(root)
+  reachWithin(root)
+}
+/** What a root hears and how it is watched: put again wherever opening a document took it away. */
+function hearIn(root: ShadowRoot): void {
+  watcher.observe(root, WATCHED)
   for (const event of FOLLOWING) {
     root.addEventListener(event, followedBefore, true)
     root.addEventListener(event, followedAfterInRoot)
   }
   for (const event of FORMS) root.addEventListener(event, onItsWayOut, true)
-  tendWithin(root)
-  reachWithin(root)
 }
-/** Reaches every open root declared within, and within those. */
-function reachWithin(within: ParentNode): void {
+/** Reaches every open root declared within, and within those, walking the elements once. */
+function reachWithin(within: Node): void {
   if (within instanceof Element && within.shadowRoot) reach(within.shadowRoot)
-  for (const el of within.querySelectorAll('*')) if (el.shadowRoot) reach(el.shadowRoot)
+  const walk = document.createTreeWalker(within, NodeFilter.SHOW_ELEMENT)
+  for (let el = walk.nextNode() as Element | null; el; el = walk.nextNode() as Element | null) if (el.shadowRoot) reach(el.shadowRoot)
 }
+// A copy of a host whose root may be copied, made or brought from another document, has a root of
+// its own that no script attached: it is reached as it is made, before the page can fill or follow it
+const cloneNode = Node.prototype.cloneNode
+Node.prototype.cloneNode = function (this: Node, ...given: [boolean?]) {
+  const copy = cloneNode.apply(this, given)
+  reachWithin(copy)
+  return copy
+}
+const importNode = Document.prototype.importNode
+Document.prototype.importNode = function (this: Document, ...given: Parameters<Document['importNode']>) {
+  const copy = importNode.apply(this, given)
+  reachWithin(copy)
+  return copy
+} as Document['importNode']
 const attachShadow = Element.prototype.attachShadow
 Element.prototype.attachShadow = function (this: Element, init: ShadowRootInit) {
   const root = attachShadow.call(this, init)
@@ -947,8 +975,6 @@ if (typeof parseUnsafe === 'function')
     reachWithin(parsed)
     return parsed
   }
-// And whatever the page's own markup declares, once it is all parsed
-document.addEventListener('DOMContentLoaded', () => reachWithin(document))
 // A link or a form the page made and never put in the document is activated with no event
 // reaching the window: it is checked here instead, on its way
 const clickElement = HTMLElement.prototype.click
@@ -996,22 +1022,27 @@ const openDocument = Document.prototype.open as (...given: unknown[]) => unknown
 Document.prototype.open = function (this: Document, ...given: unknown[]) {
   if (given.length > 2) return openOut.call(window, given[0] as string | URL, given[1] as string, given[2] as string)
   const out = openDocument.apply(this, given)
-  if (this === document) listen()
+  // Any document opened again, the page's or one a host was moved into, has lost its listeners
+  listen()
   return out
 } as typeof Document.prototype.open
-// Writing to the document once it has loaded opens it again first, which takes the window's and
-// the document's listeners away: they are put back as the writing returns, and what was written is
-// set right then, before anything of the page's can follow it
+// Writing to a document once it has been parsed opens it again first, which takes every listener
+// away. It is opened here instead, and the listeners put back, before anything written is parsed
+// or any script in it runs; and what was written, roots declared in it too, is set right as the
+// writing returns, before anything of the page's can follow it
 for (const name of ['write', 'writeln'] as const) {
   const native = Document.prototype[name]
   Document.prototype[name] = function (this: Document, ...given: string[]) {
-    const out = native.apply(this, given)
-    if (this === document) {
+    const reopens = this.readyState !== 'loading'
+    if (reopens) {
+      openDocument.call(this)
       listen()
-      if (document.readyState !== 'loading') {
-        tendWithin(document)
-        reachWithin(document)
-      }
+    }
+    const out = native.apply(this, given)
+    if (reopens) {
+      listen()
+      tendWithin(this)
+      reachWithin(this)
     }
     return out
   }
