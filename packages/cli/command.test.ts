@@ -886,6 +886,8 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(given.out).toContain('1. **Wait for each thing they do.**')
       expect(given.out).toContain('run `it wait --timeout 100` and act on what it prints')
       expect(given.out).not.toContain('1. **Never block.**')
+      // It keeps the one exception to waiting: the first page that cannot be heard yet, where the agent ends its turn
+      expect(given.out).toContain('The one exception to waiting is the first page where showing it printed `"asleep": true`')
       expect(given.out).not.toContain('Where what they do does arrive by itself, do not wait at all')
       // And the tour as anyone else is given it still has the rule that is replaced here
       expect((await run(m, ['tour'], env)).out).toContain('1. **Never block.**')
