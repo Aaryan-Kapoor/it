@@ -764,6 +764,37 @@ describe('the script inside a page', () => {
         ['https://elsewhere.invalid/f', 'inside', undefined],
       ])
     })
+
+    test('a link that led to another site and leads within the page now, or to one of its files, is followed as the page wrote it', async () => {
+      const p = load(
+        '<a id="a" href="https://elsewhere.invalid/a">a</a><a id="b" href="https://elsewhere.invalid/b" target="_self" rel="author">b</a><a id="c" href="https://elsewhere.invalid/c">c</a><a id="d" href="https://elsewhere.invalid/d" target="_blank" rel="external">d</a>',
+      )
+      const doc = p.w.document
+      const said = (id: string) => [doc.getElementById(id).getAttribute('target'), doc.getElementById(id).getAttribute('rel')]
+      expect(['a', 'b', 'c'].map(said)).toEqual([
+        ['_blank', 'noopener noreferrer'],
+        ['_blank', 'author noopener noreferrer'],
+        ['_blank', 'noopener noreferrer'],
+      ])
+      doc.getElementById('a').setAttribute('href', '#end')
+      doc.getElementById('b').setAttribute('href', 'other.html')
+      // The page's own `_blank` is the page's, and stays
+      doc.getElementById('d').setAttribute('href', 'other.html')
+      await settled()
+      expect(['a', 'b', 'd'].map(said)).toEqual([
+        [null, null],
+        ['_self', 'author'],
+        ['_blank', 'external noopener noreferrer'],
+      ])
+      expect(click(p, doc.getElementById('a')).seen).toEqual({ target: null, rel: null })
+      // Changed and clicked at once, before the document's watcher has run
+      const c = doc.getElementById('c')
+      c.setAttribute('href', '#top')
+      expect(click(p, c).seen).toEqual({ target: null, rel: null })
+      // And sent out again once it leads to another site once more
+      c.setAttribute('href', 'https://elsewhere.invalid/again')
+      expect(click(p, c).seen).toEqual({ target: '_blank', rel: 'noopener noreferrer' })
+    })
   })
 
   test('what the page’s own script fails with is said to the site, the first few times, and a picture that did not load is not', async () => {

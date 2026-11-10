@@ -575,12 +575,28 @@ function withNoHold(el: Element, opens: boolean): void {
   if (opens) for (const word of ['noopener', 'noreferrer']) if (!kept.some((w) => w.toLowerCase() === word)) kept.push(word)
   if (kept.length !== words.length || kept.some((word, n) => word !== words[n])) el.setAttribute('rel', kept.join(' '))
 }
+/** What a link's own target and rel were before It sent it to a tab of its own, to be put back once it leads to another site no longer. */
+const pageSaid = new WeakMap<Element, { target: string | null; rel: string | null }>()
+const put = (el: Element, name: string, value: string | null) => (value === null ? el.removeAttribute(name) : el.setAttribute(name, value))
 /** What It does to a link: one to another site opens in a tab of its own, and one that opens a window leaves no hold. */
 function guide(el: Element): void {
   if (!isLink(el)) return
   const to = leadsTo(el)
-  const target = el.getAttribute('target') ?? ''
-  if (to && elsewhere(to) && !namesAFrame(target.trim()) && target.trim().toLowerCase() !== '_blank') el.setAttribute('target', '_blank')
+  const target = (el.getAttribute('target') ?? '').trim()
+  if (to && elsewhere(to)) {
+    if (target.toLowerCase() !== '_blank' && !namesAFrame(target)) {
+      pageSaid.set(el, { target: el.getAttribute('target'), rel: pageSaid.get(el)?.rel ?? el.getAttribute('rel') })
+      el.setAttribute('target', '_blank')
+    }
+  } else {
+    // It leads within the page now, or to one of its files: it is followed as the page wrote it
+    const said = pageSaid.get(el)
+    if (said) {
+      pageSaid.delete(el)
+      put(el, 'target', said.target)
+      put(el, 'rel', said.rel)
+    }
+  }
   withNoHold(el, opensAWindow(el.getAttribute('target') ?? ''))
 }
 /** What It does to a form: one whose answer opens in a window of its own leaves no hold. */
