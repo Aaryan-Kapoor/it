@@ -60,6 +60,8 @@ It has add-ons for Claude Code, Codex, Pi, OpenCode, Hermes Agent and OpenClaw, 
 | Hermes Agent | 0.20.1 |
 | OpenClaw | 2026.9.6 |
 
+The line that moves under a page's bar while its agent is at work goes by the agent's own turn where the add-on tells It of it. Claude Code's add-on says, with everything it asks, whether a turn of the conversation is running, and Codex's hooks say when a turn begins and when it stops. So for a conversation of either, and for a thread of T3 Code, which runs one of the two, the line moves from what you did until the turn that deals with it has ended, whatever the agent does to the page meanwhile. The add-ons for Pi, OpenCode, Hermes Agent and OpenClaw say nothing of turns, and neither does an agent that takes what you do with `it wait` and has no add-on in its conversation. For those the line goes by the page alone: it moves until the agent changes the page, and for ten minutes at most. The same holds for a Claude Code conversation that loaded its add-on before It was last updated, until the conversation is started again or `/reload-plugins` is typed in it.
+
 ### Claude Code
 
 When the conversation is idle, a click starts a turn. While a turn runs, the click is attached to the next tool result, so that nothing is interrupted, and it starts a turn when that one ends if no tool ran.
