@@ -894,6 +894,145 @@ describe('the script inside a page', () => {
       ])
     })
 
+    test('a target is taken as the browser takes it, with nothing trimmed: a name with spaces around a frame’s name, or around a keyword, opens a tab of its own with no hold', () => {
+      const asked: unknown[][] = []
+      const p = load(
+        [
+          '<iframe name="inside"></iframe>',
+          '<a id="spaced" href="https://elsewhere.invalid/a" target=" inside ">a frame’s name with spaces around it</a>',
+          '<a id="self" href="https://elsewhere.invalid/b" target=" _self ">a keyword with spaces around it</a>',
+          '<a id="local" href="other.html" target=" inside ">a file of the page’s, at a name no frame goes by</a>',
+          '<a id="inside" href="https://elsewhere.invalid/c" target="inside">the frame’s own name</a>',
+          '<a id="SELF" href="other.html" target="_SELF">a keyword in capitals</a>',
+        ].join(''),
+        (w) => {
+          w.open = (...given: unknown[]) => {
+            asked.push(given)
+            return null
+          }
+        },
+      )
+      const doc = p.w.document
+      const said = (id: string) => [doc.getElementById(id).getAttribute('target'), doc.getElementById(id).getAttribute('rel')]
+      expect(said('spaced')).toEqual(['_blank', 'noopener noreferrer'])
+      expect(said('self')).toEqual(['_blank', 'noopener noreferrer'])
+      expect(said('local')).toEqual([' inside ', 'noopener noreferrer'])
+      expect(said('inside')).toEqual(['inside', null])
+      expect(said('SELF')).toEqual(['_SELF', null])
+      p.w.open('', ' inside ')
+      doc.open('', ' inside ', '')
+      p.w.open('', 'inside')
+      expect(asked).toEqual([
+        ['', ' inside ', 'noopener,noreferrer'],
+        ['', ' inside ', 'noopener,noreferrer'],
+        ['', 'inside', undefined],
+      ])
+    })
+
+    test('a link or a form with no target of its own is followed in the page’s `<base target>`, and is given no hold where that opens a window, even when the base comes later', async () => {
+      const p = load(
+        [
+          '<base target="fresh">',
+          '<a id="out" href="https://elsewhere.invalid/a">another site</a>',
+          '<a id="file" href="other.html">a file of the page’s</a>',
+          '<a id="here" href="other.html" target="">its own empty target, which the base does not stand in for</a>',
+          '<form id="form" action="https://elsewhere.invalid/f"></form>',
+        ].join(''),
+      )
+      const doc = p.w.document
+      const said = (id: string) => [doc.getElementById(id).getAttribute('target'), doc.getElementById(id).getAttribute('rel')]
+      expect(said('out')).toEqual(['_blank', 'noopener noreferrer'])
+      expect(said('file')).toEqual([null, 'noopener noreferrer'])
+      expect(said('here')).toEqual(['', null])
+      expect(said('form')).toEqual([null, 'noopener noreferrer'])
+      // A base that a script adds, or whose target it changes, sets the page's links right at once
+      const q = load('<a id="file" href="other.html">a file of the page’s</a><form id="form"></form>')
+      const qdoc = q.w.document
+      const base = qdoc.head.appendChild(qdoc.createElement('base'))
+      base.setAttribute('target', 'fresh')
+      expect([qdoc.getElementById('file').getAttribute('rel'), qdoc.getElementById('form').getAttribute('rel')]).toEqual([
+        'noopener noreferrer',
+        'noopener noreferrer',
+      ])
+      await settled()
+    })
+
+    test('what a handler of the page’s writes to a link or a form is set right at once, before the browser follows it, by whatever way it is written and though the event goes no further', () => {
+      const p = load(
+        [
+          '<a id="a" href="https://elsewhere.invalid/a">a</a><a id="b" href="other.html">b</a><a id="c" href="other.html" rel="noopener">c</a>',
+          '<a id="d" href="other.html">d</a><a id="e" href="#below">e</a>',
+          '<form id="form" action="other.html"><button id="send">Send</button></form>',
+        ].join(''),
+      )
+      const doc = p.w.document
+      const el = (id: string) => doc.getElementById(id)
+      const said = (id: string) => [el(id).getAttribute('target'), el(id).getAttribute('rel')]
+      const seen: Record<string, unknown> = {}
+      const rewrites: Record<string, (link: any) => void> = {
+        a: (link) => {
+          link.setAttribute('target', 'fresh')
+          link.setAttribute('rel', 'opener')
+        },
+        b: (link) => {
+          link.target = 'fresh'
+          link.rel = 'opener'
+        },
+        c: (link) => {
+          link.target = 'fresh'
+          link.relList.remove('noopener')
+          link.relList.add('opener')
+        },
+        d: (link) => {
+          link.setAttribute('target', 'x')
+          link.getAttributeNode('target').value = 'fresh'
+          const rel = doc.createAttribute('rel')
+          rel.value = 'opener'
+          link.attributes.setNamedItem(rel)
+        },
+        // Within the page, then to another site, as the handler runs
+        e: (link) => {
+          link.href = 'https://elsewhere.invalid/e'
+        },
+      }
+      for (const [id, rewrite] of Object.entries(rewrites))
+        el(id).addEventListener('click', (e: any) => {
+          rewrite(el(id))
+          e.stopPropagation()
+          e.preventDefault()
+          seen[id] = said(id)
+        })
+      for (const id of Object.keys(rewrites)) el(id).click()
+      // Another site's opens in a tab of its own; a file of the page's opens where the page says, with no hold
+      expect(seen).toEqual({
+        a: ['_blank', 'noopener noreferrer'],
+        b: ['fresh', 'noopener noreferrer'],
+        c: ['fresh', 'noreferrer noopener'],
+        d: ['fresh', 'noopener noreferrer'],
+        e: ['_blank', 'noopener noreferrer'],
+      })
+      // A form whose submit handler aims it at a window and asks for a hold
+      const form = el('form')
+      form.addEventListener('submit', (e: any) => {
+        form.target = 'fresh'
+        form.setAttribute('rel', 'opener')
+        e.stopPropagation()
+        e.preventDefault()
+        seen.form = said('form')
+      })
+      form.requestSubmit()
+      expect(seen.form).toEqual(['fresh', 'noopener noreferrer'])
+      // And a button whose own target a handler changes
+      el('send').addEventListener('click', () => {
+        el('send').formTarget = 'other'
+        seen.button = form.getAttribute('rel')
+      })
+      form.removeAttribute('target')
+      form.setAttribute('rel', '')
+      el('send').click()
+      expect(seen.button).toBe('noopener noreferrer')
+    })
+
     test('a link in a closed shadow root that a handler of the page’s changes is set right again after the handler, where the window cannot see it and where the event goes no further than the root', async () => {
       const p = load()
       const doc = p.w.document

@@ -543,9 +543,24 @@ const elsewhere = (to: URL) => (to.protocol === 'http:' || to.protocol === 'http
 const IN_PLACE = new Set(['', '_self', '_parent', '_top'])
 /** Whether a target opens a new window: `_blank`, or any name that is not a keyword and no frame inside the page, `_new` among them. */
 function opensAWindow(target: string): boolean {
-  const said = target.trim()
-  if (said.toLowerCase() === '_blank') return true
-  return !IN_PLACE.has(said.toLowerCase()) && !namesAFrame(said)
+  if (target.toLowerCase() === '_blank') return true
+  return !IN_PLACE.has(target.toLowerCase()) && !namesAFrame(target)
+}
+/**
+ * The target a link or a form is followed in, as the browser takes it: the button's own, the
+ * element's own, or else the page's `<base target>`, as it is written. The browser trims nothing
+ * from a name, and compares the keywords alone without regard to case: ` inside ` is no frame's
+ * name `inside`, and ` _self ` is a name, not `_self`. A name with a line break and a `<` in it is
+ * taken as `_blank`, as the browser takes it.
+ */
+function targetOf(el: Element, submitter?: Element | null): string {
+  const said = submitter?.hasAttribute('formtarget')
+    ? submitter.getAttribute('formtarget')
+    : el.hasAttribute('target')
+      ? el.getAttribute('target')
+      : document.querySelector('base[target]')?.getAttribute('target')
+  const target = said ?? ''
+  return /[\t\n\r]/.test(target) && target.includes('<') ? '_blank' : target
 }
 /** The shadow roots a script made, in which a frame can be as well as in the document. */
 const shadowRoots: WeakRef<ShadowRoot>[] = []
@@ -596,6 +611,9 @@ function namesAFrame(target: string): boolean {
   }
   return false
 }
+/** The browser's own ways of writing an attribute, which It writes by: the page's are wrapped below, to set right what the page writes. */
+const setAttr = Element.prototype.setAttribute
+const removeAttr = Element.prototype.removeAttribute
 /** Gives a link or a form `noopener` and `noreferrer`, and takes `opener` away: the window it opens and the page have no hold on each other. */
 function withNoHold(el: Element, opens: boolean): void {
   const said = el.getAttribute('rel')
@@ -603,20 +621,20 @@ function withNoHold(el: Element, opens: boolean): void {
   const words = (said ?? '').split(/\s+/).filter(Boolean)
   const kept = words.filter((word) => word.toLowerCase() !== 'opener')
   if (opens) for (const word of ['noopener', 'noreferrer']) if (!kept.some((w) => w.toLowerCase() === word)) kept.push(word)
-  if (kept.length !== words.length || kept.some((word, n) => word !== words[n])) el.setAttribute('rel', kept.join(' '))
+  if (kept.length !== words.length || kept.some((word, n) => word !== words[n])) setAttr.call(el, 'rel', kept.join(' '))
 }
 /** What a link's own target and rel were before It sent it to a tab of its own, to be put back once it leads to another site no longer. */
 const pageSaid = new WeakMap<Element, { target: string | null; rel: string | null }>()
-const put = (el: Element, name: string, value: string | null) => (value === null ? el.removeAttribute(name) : el.setAttribute(name, value))
+const put = (el: Element, name: string, value: string | null) => (value === null ? removeAttr.call(el, name) : setAttr.call(el, name, value))
 /** What It does to a link: one to another site opens in a tab of its own, and one that opens a window leaves no hold. */
 function guide(el: Element): void {
   if (!isLink(el)) return
   const to = leadsTo(el)
-  const target = (el.getAttribute('target') ?? '').trim()
+  const target = targetOf(el)
   if (to && elsewhere(to)) {
     if (target.toLowerCase() !== '_blank' && !namesAFrame(target)) {
       pageSaid.set(el, { target: el.getAttribute('target'), rel: pageSaid.get(el)?.rel ?? el.getAttribute('rel') })
-      el.setAttribute('target', '_blank')
+      setAttr.call(el, 'target', '_blank')
     }
   } else {
     // It leads within the page now, or to one of its files: it is followed as the page wrote it
@@ -627,13 +645,12 @@ function guide(el: Element): void {
       put(el, 'rel', said.rel)
     }
   }
-  withNoHold(el, opensAWindow(el.getAttribute('target') ?? ''))
+  withNoHold(el, opensAWindow(targetOf(el)))
 }
 /** What It does to a form: one whose answer opens in a window of its own leaves no hold. */
 function guideForm(form: Element, submitter?: Element | null): void {
   if (form.localName !== 'form') return
-  const target = submitter?.hasAttribute('formtarget') ? (submitter.getAttribute('formtarget') ?? '') : (form.getAttribute('target') ?? '')
-  withNoHold(form, opensAWindow(target))
+  withNoHold(form, opensAWindow(targetOf(form, submitter)))
 }
 /** Everything It does to an element of the page as it appears or changes. */
 function tend(el: Element): void {
@@ -668,6 +685,115 @@ const WATCHED: MutationObserverInit = {
 watcher.observe(document, WATCHED)
 tendWithin(document)
 
+// What the page writes of what It looks after on an element is set right at once, and not only
+// when the observer next runs: a handler of the page's can change a link, a form or the page's
+// `<base>` and have the browser follow it in the same turn, before any observer is told, and
+// whether or not the event goes on to where It hears it. So every way of writing such an
+// attribute tends the element as it returns: the methods and the attribute nodes, the properties
+// that reflect them, and a link's or a form's `relList`.
+const LOOKED_AFTER = new Set([...(WATCHED.attributeFilter ?? []), 'formtarget'])
+const looksAfter = (name: unknown) => typeof name === 'string' && LOOKED_AFTER.has(name.replace(/^.*:/, '').toLowerCase())
+let tendingNow = false
+function tendNow(el: unknown): void {
+  if (tendingNow || !(el instanceof Element)) return
+  tendingNow = true
+  try {
+    if (el.localName === 'base') {
+      tendWithin(document)
+      for (const ref of shadowRoots) {
+        const root = ref.deref()
+        if (root) tendWithin(root)
+      }
+    } else if (el.localName === 'button' || el.localName === 'input') {
+      const form = (el as HTMLButtonElement).form
+      if (form) guideForm(form, el)
+    } else tend(el)
+  } finally {
+    tendingNow = false
+  }
+}
+type Given = unknown[]
+/** What a browser's prototype holds, read by name. */
+type Loose = any
+/** Wraps a method so that the element it wrote to is tended as it returns, where it wrote something It looks after. */
+function afterCalling(owner: Loose, name: string, elementOf: (self: Loose, given: Given) => unknown, wrote: (self: Loose, given: Given) => boolean): void {
+  const native = owner?.[name]
+  if (typeof native !== 'function') return
+  owner[name] = function (this: unknown, ...given: Given) {
+    const out = native.apply(this, given)
+    if (wrote(this, given)) tendNow(elementOf(this, given))
+    return out
+  }
+}
+/** Wraps a property's setter so that the element it wrote to is tended as it returns. */
+function afterSetting(owner: Loose, name: string, elementOf: (self: Loose) => unknown = (self) => self): void {
+  const said = owner && Object.getOwnPropertyDescriptor(owner, name)
+  if (!said?.set) return
+  const set = said.set
+  Object.defineProperty(owner, name, {
+    ...said,
+    set(this: unknown, value: unknown) {
+      set.call(this, value)
+      tendNow(elementOf(this))
+    },
+  })
+}
+/** Whose each attribute map, rel list and SVG link's target or address is, as the page is given it. */
+const ownersOf = new WeakMap<object, Element>()
+function noteOwner(owner: Loose, name: string): void {
+  const said = owner && Object.getOwnPropertyDescriptor(owner, name)
+  if (!said?.get) return
+  const get = said.get
+  Object.defineProperty(owner, name, {
+    ...said,
+    get(this: Element) {
+      const it = get.call(this)
+      if (it && typeof it === 'object') ownersOf.set(it, this)
+      return it
+    },
+  })
+}
+const itself = (it: unknown) => it
+const E = Element.prototype
+afterCalling(E, 'setAttribute', itself, (_, given) => looksAfter(given[0]))
+afterCalling(E, 'setAttributeNS', itself, (_, given) => looksAfter(given[1]))
+afterCalling(E, 'removeAttribute', itself, (_, given) => looksAfter(given[0]))
+afterCalling(E, 'removeAttributeNS', itself, (_, given) => looksAfter(given[1]))
+afterCalling(E, 'toggleAttribute', itself, (_, given) => looksAfter(given[0]))
+for (const name of ['setAttributeNode', 'setAttributeNodeNS', 'removeAttributeNode'])
+  afterCalling(E, name, itself, (_, given) => looksAfter((given[0] as Attr | null)?.name))
+// An attribute node written by itself, or put in or taken out of an element's attributes
+const ownerOfAttr = (it: Loose) => (it?.nodeType === 2 && looksAfter(it.name) ? it.ownerElement : null)
+afterSetting(Attr.prototype, 'value', ownerOfAttr)
+afterSetting(Node.prototype, 'nodeValue', ownerOfAttr)
+afterSetting(Node.prototype, 'textContent', ownerOfAttr)
+noteOwner(E, 'attributes')
+const MAP = typeof NamedNodeMap === 'function' ? NamedNodeMap.prototype : undefined
+const mapOwner = (it: object) => ownersOf.get(it)
+for (const name of ['setNamedItem', 'setNamedItemNS']) afterCalling(MAP, name, mapOwner, (_, given) => looksAfter((given[0] as Attr | null)?.name))
+afterCalling(MAP, 'removeNamedItem', mapOwner, (_, given) => looksAfter(given[0]))
+afterCalling(MAP, 'removeNamedItemNS', mapOwner, (_, given) => looksAfter(given[1]))
+// The properties that reflect them
+const LINKS = ['target', 'rel', 'href', 'protocol', 'username', 'password', 'host', 'hostname', 'port', 'pathname', 'search', 'hash', 'referrerPolicy', 'ping']
+const REFLECTING: [string, string[]][] = [
+  ['HTMLAnchorElement', LINKS],
+  ['HTMLAreaElement', LINKS],
+  ['HTMLFormElement', ['target', 'rel']],
+  ['HTMLBaseElement', ['target', 'href']],
+  ['HTMLButtonElement', ['formTarget']],
+  ['HTMLInputElement', ['formTarget']],
+  ['HTMLMetaElement', ['content', 'name']],
+]
+const kinds = window as unknown as Record<string, { prototype: object } | undefined>
+for (const [kind, names] of REFLECTING) for (const name of names) afterSetting(kinds[kind]?.prototype, name)
+// A link's or a form's rel as a list of words, and an SVG link's target and address
+for (const kind of ['HTMLAnchorElement', 'HTMLAreaElement', 'HTMLFormElement']) noteOwner(kinds[kind]?.prototype, 'relList')
+const TOKENS = typeof DOMTokenList === 'function' ? DOMTokenList.prototype : undefined
+for (const name of ['add', 'remove', 'toggle', 'replace']) afterCalling(TOKENS, name, mapOwner, (it) => ownersOf.has(it))
+afterSetting(TOKENS, 'value', (it) => ownersOf.get(it) ?? null)
+for (const name of ['target', 'href']) noteOwner(kinds.SVGAElement?.prototype, name)
+afterSetting(kinds.SVGAnimatedString?.prototype, 'baseVal', (it) => ownersOf.get(it) ?? null)
+
 /** Asks the site to open an address in a tab of its own. Sent on the window, so that the browser still counts the person's click when the site opens it. */
 function openedBySite(href: string): void {
   window.parent.postMessage({ type: 'it:open', url: href } satisfies PageToSite, config.app)
@@ -684,7 +810,7 @@ function opensRefused(link: Element, aside = false): boolean {
   const to = leadsTo(link)
   if (!to || !REFUSED.has(to.protocol) || link.hasAttribute('download')) return false
   if (aside) return to.protocol !== 'javascript:'
-  const target = (link.getAttribute('target') ?? '').trim()
+  const target = targetOf(link)
   // Followed in the frame, `javascript:` runs the page's own script, as it does on any page. A
   // refused `_top` or `_parent` is counted with the windows, since WebKit opens one for it
   return target.toLowerCase() !== '' && target.toLowerCase() !== '_self' && !namesAFrame(target)
@@ -748,11 +874,23 @@ Element.prototype.attachShadow = function (this: Element, init: ShadowRootInit) 
   }
   return root
 }
-// A form is checked on its way out too, with the button that sent it, which may name its own target
+// A form is checked on its way out too, with the button that sent it, which may name its own target,
+// and again once every handler of the submit event has run, just before the browser reads its
+// target and rel: as the form's data is gathered, which a page's handler there cannot keep from It
+const submittedBy = new WeakMap<Element, Element | null>()
 window.addEventListener(
   'submit',
   (e) => {
-    if (e.target instanceof Element) guideForm(e.target, (e as SubmitEvent).submitter)
+    if (!(e.target instanceof Element)) return
+    submittedBy.set(e.target, (e as SubmitEvent).submitter)
+    guideForm(e.target, (e as SubmitEvent).submitter)
+  },
+  true,
+)
+window.addEventListener(
+  'formdata',
+  (e) => {
+    if (e.target instanceof Element) guideForm(e.target, submittedBy.get(e.target))
   },
   true,
 )
@@ -760,8 +898,8 @@ window.addEventListener(
 // reaching the window: it is checked here instead, on its way
 const clickElement = HTMLElement.prototype.click
 HTMLElement.prototype.click = function (this: HTMLElement) {
+  guide(this)
   if (!this.isConnected) {
-    guide(this)
     if (isLink(this)) {
       const to = leadsTo(this)
       if (opensRefused(this)) return
@@ -788,7 +926,7 @@ function openOut(this: Window, url?: string | URL, target?: string, features?: s
   }
   const named = target === undefined || target === null ? '' : String(target)
   // A frame inside the page is the page's own to follow a link in, as it asked
-  if (namesAFrame(named.trim())) return openWindow.call(this, url, target, features)
+  if (namesAFrame(named)) return openWindow.call(this, url, target, features)
   // One to another site opens in a tab of its own, as a link to one does
   const where = to && elsewhere(to) ? '_blank' : named || '_blank'
   // What is said last of a feature is what is taken
