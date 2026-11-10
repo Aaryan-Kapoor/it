@@ -598,7 +598,9 @@ export default defineSchema({
     tailnet: v.optional(v.boolean()),
     /** Whether the machine It runs on is on a tailnet, so that It can be kept to one. */
     canTailnet: v.optional(v.boolean()),
-    /** Why turning the network on there opens It to the internet, in words that finish "This machine …", where it would. */
+    /** Whether the door, being open to the network, answers at every address the machine has and whoever reaches one, the internet included. */
+    internet: v.optional(v.boolean()),
+    /** Why the internet reaches the machine It runs on, in words that finish "This machine …", where it does. */
     exposed: v.optional(v.string()),
     /**
      * The machine's name on its tailnet, such as `studio.tail1234.ts.net`, while the door is open

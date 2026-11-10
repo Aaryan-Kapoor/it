@@ -74,6 +74,21 @@ describe('what the service says of its door', () => {
     expect(await t.query(internal.network.current, {})).toMatchObject({ on: false, tailnet: false })
     await t.mutation(internal.network.report, { on: true, wanted: true, addresses: [LAN] })
     expect(await t.query(internal.network.current, {})).not.toHaveProperty('tailnet')
+    expect(await t.query(internal.network.current, {})).not.toHaveProperty('internet')
+  })
+
+  test('answering the internet too is told to the command and to the owner’s browser, only while the door is open, and is false wherever it is not said', async () => {
+    const { t, owner } = await household()
+    await t.mutation(internal.network.report, { on: true, wanted: true, addresses: [LAN], tailnet: false, canTailnet: false })
+    expect(await t.query(internal.network.current, {})).toMatchObject({ on: true, tailnet: false, internet: false })
+    expect((await owner.query(api.network.get, {})).internet).toBe(false)
+    await t.mutation(internal.network.report, { on: true, wanted: true, addresses: [LAN], tailnet: false, canTailnet: false, internet: true })
+    expect(await t.query(internal.network.current, {})).toMatchObject({ on: true, tailnet: false, internet: true })
+    expect((await owner.query(api.network.get, {})).internet).toBe(true)
+    // Closed, the door answers nobody, whatever was said of it last
+    await t.mutation(internal.network.report, { on: false, wanted: false, addresses: [], tailnet: false, canTailnet: false, internet: true })
+    expect(await t.query(internal.network.current, {})).toMatchObject({ on: false, internet: false })
+    expect((await owner.query(api.network.get, {})).internet).toBe(false)
   })
 
   test('is what the owner’s browser and the command are told, in the order it was said, and there is one record of it however often it is said', async () => {
@@ -216,6 +231,7 @@ describe('the network as a switch on the site', () => {
       addresses: [],
       tailnet: false,
       canTailnet: null,
+      internet: false,
       exposed: null,
       asked: null,
       answered: null,

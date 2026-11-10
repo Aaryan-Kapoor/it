@@ -24,7 +24,7 @@ import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
 import { log } from './lib/log'
 
-/** The three ways the network can be: off, on for every network the machine is on, or on for the person's tailnet alone. */
+/** The three ways the site may ask the network to be: off, on for the network the machine is on, or on for the person's tailnet alone. */
 const way = v.union(v.literal('off'), v.literal('on'), v.literal('tailscale'))
 /** How long an asking that the service has not taken up is still acted on. One left from before the service was stopped is not carried out hours later. */
 export const ASKED_FOR_MS = 60_000
@@ -71,13 +71,15 @@ const NOT_LINKABLE: Record<Unlinked, string> = {
   no_address: 'The machine It runs on has no address on a network just now.',
 }
 
-async function said(ctx: QueryCtx): Promise<{ on: boolean; wanted: boolean; addresses: string[]; tailnet?: boolean }> {
+async function said(ctx: QueryCtx): Promise<{ on: boolean; wanted: boolean; addresses: string[]; tailnet?: boolean; internet?: boolean }> {
   const row = await ctx.db.query('network').first()
   return {
     on: row?.on ?? false,
     wanted: row?.wanted ?? false,
     addresses: row?.on ? row.addresses : [],
     ...(typeof row?.tailnet === 'boolean' ? { tailnet: row.on && row.tailnet } : {}),
+    // Said only by a service that knows of answering the internet, as the tailnet is
+    ...(typeof row?.tailnet === 'boolean' ? { internet: row.on && row.internet === true } : {}),
   }
 }
 
@@ -97,14 +99,16 @@ export const report = internalMutation({
     background: v.optional(v.boolean()),
     usage: v.optional(v.boolean()),
     // What the site needs to offer the network as a switch: whether the door answers the tailnet
-    // alone, whether the machine is on one, and why "on" would mean the internet there
+    // alone, whether the machine is on one, whether it answers the internet too, and why the
+    // internet reaches the machine where it does
     tailnet: v.optional(v.boolean()),
     canTailnet: v.optional(v.boolean()),
+    internet: v.optional(v.boolean()),
     exposed: v.optional(v.string()),
     // The machine's name on the tailnet, where the door answers to it: a link an agent gives can be at it
     tailnetName: v.optional(v.string()),
   },
-  handler: async (ctx, { on, wanted, addresses, background, usage, tailnet, canTailnet, exposed, tailnetName }) => {
+  handler: async (ctx, { on, wanted, addresses, background, usage, tailnet, canTailnet, internet, exposed, tailnetName }) => {
     const kept = on ? [...new Set(addresses.filter((a) => a.length <= 300 && ADDRESS.test(a)))].slice(0, MOST) : []
     const why = exposed?.slice(0, 300)
     const named = on && tailnetName !== undefined && tailnetName.length <= 253 && TAILNET_NAME.test(tailnetName) ? tailnetName : undefined
@@ -117,6 +121,7 @@ export const report = internalMutation({
       row.usage === usage &&
       row.tailnet === tailnet &&
       row.canTailnet === canTailnet &&
+      row.internet === internet &&
       row.exposed === why &&
       row.tailnetName === named &&
       JSON.stringify(row.addresses) === JSON.stringify(kept)
@@ -124,7 +129,7 @@ export const report = internalMutation({
       return null
     const stopped = row?.usage === true && usage !== true
     const usageGeneration = (row?.usageGeneration ?? 0) + (stopped ? 1 : 0)
-    const stands = { on, wanted, addresses: kept, background, usage, usageGeneration, tailnet, canTailnet, exposed: why, tailnetName: named }
+    const stands = { on, wanted, addresses: kept, background, usage, usageGeneration, tailnet, canTailnet, internet, exposed: why, tailnetName: named }
     if (row) await ctx.db.patch(row._id, stands)
     else await ctx.db.insert('network', stands)
     // Counts were being sent and are no more. What was noted for them goes now, and is not left
@@ -220,8 +225,9 @@ export const current = internalQuery({ args: {}, handler: (ctx) => said(ctx) })
 
 /**
  * How the door stands, for the owner's browser, with what it needs to offer the network as a
- * switch: whether It is kept to the tailnet, whether it can be, why "on" would mean the
- * internet on that machine, and what was asked here and what became of it.
+ * switch: whether It is kept to the tailnet, whether it can be, whether it answers the internet
+ * too, why the internet reaches that machine where it does, and what was asked here and what
+ * became of it.
  */
 export const get = query({
   args: {},
@@ -235,6 +241,8 @@ export const get = query({
       tailnet: on && row?.tailnet === true,
       // Null while the service has not said, as from a service of an earlier It: the switch is then not offered
       canTailnet: row?.canTailnet ?? null,
+      // Whether It answers the internet too, which only the command on that machine turns on
+      internet: on && row?.internet === true,
       exposed: row?.exposed ?? null,
       asked: row?.asked ?? null,
       answered: row?.answered ?? null,

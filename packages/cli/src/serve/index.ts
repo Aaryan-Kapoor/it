@@ -198,26 +198,34 @@ const ASKED_MS = 5_000
  * counts of its use are being sent at this moment (`usage`). With them, the machine's name on
  * its tailnet where the door answers to it (`tailnetName`), which the links agents give can be at.
  */
-export const standsAs = (door: { network: boolean; tailnet?: boolean }, wanted: boolean, port: number, named: () => string | undefined = tailnetName) => {
+export const standsAs = (
+  door: { network: boolean; tailnet?: boolean; internet?: boolean },
+  wanted: boolean,
+  port: number,
+  named: () => string | undefined = tailnetName,
+) => {
   const onTailnet = tailnetAddresses().length > 0
+  const internet = door.network && door.tailnet !== true && door.internet === true
   // The door answers to that name kept to the tailnet, and open to every network on a machine that is on one
   const name = door.network && (door.tailnet === true || onTailnet) ? named() : undefined
   return {
     on: door.network,
     wanted,
-    addresses: door.network ? reachable(port, undefined, door.tailnet === true) : [],
+    addresses: door.network ? reachable(port, undefined, door.tailnet === true, tailnetName, internet) : [],
     background: startsByItself(),
     usage: counting(),
     // What the site needs to offer the network as a switch: whether the door answers the tailnet
-    // alone, whether this machine is on one, and why "on" would mean the internet here
+    // alone, whether this machine is on one, whether it answers the internet too, and why the
+    // internet reaches this machine where it does
     tailnet: door.network && door.tailnet === true,
     canTailnet: onTailnet,
+    ...(internet ? { internet: true } : {}),
     ...(onTheInternet() ? { exposed: onTheInternet()!.why } : {}),
     ...(name ? { tailnetName: name } : {}),
   }
 }
 type Stands = ReturnType<typeof standsAs>
-/** What the owner may ask of the network on the site: off, on for every network this machine is on, or on for the tailnet alone. */
+/** What the owner may ask of the network on the site: off, on for the network this machine is on, or on for the tailnet alone. Answering the internet too is asked only of the command. */
 type Way = 'off' | 'on' | 'tailscale'
 /**
  * What some work comes to, or nothing once `over` is: whichever is first, and nothing too where
@@ -235,8 +243,11 @@ export const unless = <T>(work: Promise<T>, over: Promise<unknown>): Promise<T |
  * asking for it to be tried: left to the settings, which say what they said before, the door
  * stayed shut and the answer was that it could not listen.
  */
-export const opensAnew = (settings: { network: boolean; tailnet: boolean }, tried: { network: boolean; tailnet: boolean }, asked: boolean): boolean =>
-  asked || settings.network !== tried.network || settings.tailnet !== tried.tailnet
+export const opensAnew = (
+  settings: { network: boolean; tailnet: boolean; internet?: boolean },
+  tried: { network: boolean; tailnet: boolean; internet?: boolean },
+  asked: boolean,
+): boolean => asked || settings.network !== tried.network || settings.tailnet !== tried.tailnet || (settings.internet === true) !== (tried.internet === true)
 /** How long a backend that would not take everything said is told only how the door stands, before it is told everything again. */
 const SHORT_MS = 600_000
 /**
@@ -421,22 +432,30 @@ async function keptDoor(
 ): Promise<{ stop(): Promise<void> } | null> {
   const erased = erasing(say)
   const content = makeContent(config, backend, say, erased)
-  const open = async (network: boolean, tailnet: boolean) => {
+  const open = async (network: boolean, tailnet: boolean, internet: boolean) => {
+    const only = network && tailnet
+    const wide = network && !only && internet
     try {
       return {
-        door: await startDoor({ ...config, network, tailnet: network && tailnet }, backend, say, { content, erased }),
+        door: await startDoor({ ...config, network, tailnet: only, internet: wide }, backend, say, { content, erased }),
         network,
-        tailnet: network && tailnet,
+        tailnet: only,
+        internet: wide,
       }
     } catch (err) {
       if (!network) throw err
       say(`door: could not listen on the network (${why(err)}); it answers this machine only`)
-      return { door: await startDoor({ ...config, network: false, tailnet: false }, backend, say, { content, erased }), network: false, tailnet: false }
+      return {
+        door: await startDoor({ ...config, network: false, tailnet: false, internet: false }, backend, say, { content, erased }),
+        network: false,
+        tailnet: false,
+        internet: false,
+      }
     }
   }
   let now: Awaited<ReturnType<typeof open>>
   try {
-    now = await open(config.network, config.tailnet === true)
+    now = await open(config.network, config.tailnet === true, config.internet === true)
   } catch (err) {
     // No door was opened to ask anything of it
     await content.close().catch(() => {})
@@ -445,6 +464,7 @@ async function keptDoor(
   /** What the settings last said, which is what was last tried. */
   let wanted = config.network
   let wantedTailnet = config.network && config.tailnet === true
+  let wantedInternet = config.network && !wantedTailnet && config.internet === true
   const report = teller(
     (said) => asAdmin(backend, 'network:report', said),
     backend.behind !== undefined,
@@ -531,20 +551,32 @@ async function keptDoor(
       // Settings that cannot be read just now say nothing, and the door stays as it is
       let said: boolean | undefined
       let saidTailnet = false
+      let saidInternet = false
       try {
         const kept = readConfig()
         said = kept?.network
         saidTailnet = kept?.network === true && kept.tailnet === true
+        saidInternet = kept?.network === true && !saidTailnet && kept.internet === true
       } catch {}
-      if (said !== undefined && opensAnew({ network: said, tailnet: saidTailnet }, { network: wanted, tailnet: wantedTailnet }, taken !== undefined)) {
+      if (
+        said !== undefined &&
+        opensAnew(
+          { network: said, tailnet: saidTailnet, internet: saidInternet },
+          { network: wanted, tailnet: wantedTailnet, internet: wantedInternet },
+          taken !== undefined,
+        )
+      ) {
         wanted = said
         wantedTailnet = saidTailnet
+        wantedInternet = saidInternet
         // Whom the door answers is part of how it was opened, so it is opened anew for that too
-        if (said !== now.network || saidTailnet !== now.tailnet) {
+        if (said !== now.network || saidTailnet !== now.tailnet || saidInternet !== now.internet) {
           await now.door.stop()
-          now = await open(said, saidTailnet)
+          now = await open(said, saidTailnet, saidInternet)
         }
       }
+      // On for the network the machine is on, the door listens where the machine's private addresses are now
+      await now.door.refresh()
       if (taken !== undefined) {
         // Asked to listen on the network, and it could not: the setting is put back, as `it network on`
         // puts it back, so that the same is not tried each time the service starts, and that is the answer
@@ -553,6 +585,7 @@ async function keptDoor(
           noteNetwork(false)
           wanted = false
           wantedTailnet = false
+          wantedInternet = false
         }
         // Where the backend cannot be told, the asking stays with it as taken, and the next look goes on with it and says this again
         await fromBackend('network:answer', { asked: taken.at, to: taken.to, ok: stands, ...(stands ? {} : { why: 'cannot_listen' }) })

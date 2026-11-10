@@ -7,7 +7,7 @@ import os from 'node:os'
 import { inTailnet, tailnetName } from './tailnet'
 
 /** An address of this machine as the system lists it, under the name of the interface it is on. */
-type Listed = Pick<os.NetworkInterfaceInfo, 'address' | 'family' | 'internal'>
+type Listed = Pick<os.NetworkInterfaceInfo, 'address' | 'family' | 'internal'> & { scopeid?: number }
 type Interfaces = NodeJS.Dict<Listed[]>
 
 /**
@@ -17,7 +17,7 @@ type Interfaces = NodeJS.Dict<Listed[]>
  * for its virtual machines, these are the ones that Windows, its Linux and Docker make and name
  * themselves, which all stay inside the machine.
  */
-const BRIDGE =
+export const BRIDGE =
   /^(docker\d|br-[0-9a-f]{12}$|veth(?!ernet)|virbr|vboxnet|vmnet|lxcbr|lxdbr|cni|flannel|cali|podman|bridge\d{3}|vethernet \((default switch|wsl|nat|dockernat)\b|virtualbox host-only|vmware network adapter)/i
 /** Interfaces that are one end of a private tunnel. A device on the same tunnel reaches this machine by them, and a screen on the home network does not. */
 const TUNNEL = /^(tun|tap|utun|wg|tailscale|ppp|zt|ipsec|nordlynx)|vpn|wireguard|tailscale|zerotier/i
@@ -28,6 +28,65 @@ const TUNNEL = /^(tun|tap|utun|wg|tailscale|ppp|zt|ipsec|nordlynx)|vpn|wireguard
  * The name does not say which, so its addresses are given after those of any other adapter.
  */
 const SWITCH = /^vethernet \(/i
+
+/**
+ * Whether an address is one that only a private network, one link or this machine itself can
+ * send from or arrive at: under IPv4 the ranges kept for private networks (10/8, 172.16/12 and
+ * 192.168/16), the range carriers and tailnets use (100.64/10), an address a machine gives itself
+ * (169.254/16) and loopback, and under IPv6 a private network's own addresses (fc00::/7), an
+ * address of one link (fe80::/10) and loopback. With the network on for the network the machine
+ * is on, the door answers only at such addresses, and only callers that have one. An address
+ * under IPv4 that arrives written as IPv6 is read as what it is, and anything that cannot be
+ * read is taken for one of the internet's.
+ */
+export function isPrivate(address: string): boolean {
+  const plain = address
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '')
+    .split('%')[0]!
+  const four = /^(?:::ffff:)?(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(plain)
+  if (four) {
+    const [first, second] = [Number(four[1]), Number(four[2])]
+    return (
+      first === 127 ||
+      first === 10 ||
+      (first === 172 && second >= 16 && second <= 31) ||
+      (first === 192 && second === 168) ||
+      (first === 100 && second >= 64 && second <= 127) ||
+      (first === 169 && second === 254)
+    )
+  }
+  // The first group is written whole for either range: `fc::1` is 00fc::1, which is the internet's
+  return plain === '::1' || /^f[cd][0-9a-f]{2}:/.test(plain) || /^fe[89ab][0-9a-f]:/.test(plain)
+}
+
+/**
+ * Where the door listens with the network on for the network this machine is on: each of the
+ * machine's own addresses that is private (`isPrivate`), and none of the internet's, so that a
+ * device that asks at one of those is refused by the system before the door hears of it. A
+ * browser that was given several addresses for the machine's name then goes on to the next, as
+ * it does for a name looked up on the home network that has an address of the internet's too.
+ * Loopback is not among them, since the door listens there whatever the network. An address of
+ * one link is written with the link it is on, by its name, or on Windows by its number, which is
+ * how each system takes it; one on a bridge to the machine's own containers is left out, since
+ * a machine may have dozens of those, one for each container, and no screen is behind any.
+ */
+export function listenAt(interfaces: Interfaces = os.networkInterfaces(), windows = process.platform === 'win32'): string[] {
+  const found = new Set<string>()
+  for (const [name, addresses] of Object.entries(interfaces))
+    for (const a of addresses ?? []) {
+      if (a.internal) continue
+      const address = a.address.split('%')[0]!.toLowerCase()
+      if (!isPrivate(address) || address === '::1' || address.startsWith('127.')) continue
+      if (a.family === 'IPv6' && /^fe[89ab]/.test(address)) {
+        if (BRIDGE.test(name)) continue
+        const link = windows ? a.scopeid : name
+        if (link === undefined || link === '' || link === 0) continue
+        found.add(`${address}%${link}`)
+      } else found.add(address)
+    }
+  return [...found].sort()
+}
 
 /** How likely an address is to be the one a screen on the home network can open: the lower the likelier, and nothing for one that no other device can use. */
 function rank(name: string, a: Listed): number | undefined {
@@ -149,14 +208,17 @@ const MOST = 8
  * addresses with the port, the one most likely to work first: an address of the home network,
  * then any other under IPv4, then those of a tunnel, then IPv6. Loopback, addresses that mean
  * something on one link only, and the bridges to this machine's own containers and virtual
- * machines are left out. With `tailnet`, It answers the person's tailnet alone: the machine's
- * name there comes first, where it is known, and then its addresses there, and nothing else.
+ * machines are left out, and so are the internet's own addresses, at which the door does not
+ * listen, unless `internet` says that It answers the internet too. With `tailnet`, It answers
+ * the person's tailnet alone: the machine's name there comes first, where it is known, and then
+ * its addresses there, and nothing else.
  */
 export function reachable(
   port: number,
   interfaces: Interfaces = os.networkInterfaces(),
   tailnet = false,
   named: () => string | undefined = tailnetName,
+  internet = false,
 ): string[] {
   const found: { at: string; rank: number }[] = []
   // On a tailnet the machine has a name there, which goes on working when its addresses change
@@ -165,7 +227,15 @@ export function reachable(
   for (const [name, addresses] of Object.entries(interfaces))
     for (const a of addresses ?? []) {
       // Kept to the tailnet, only its addresses there are ones another device can use
-      const ranked = tailnet ? (a.internal || !inTailnet(a.address) ? undefined : a.family === 'IPv4' ? 0 : 1) : rank(name, a)
+      const ranked = tailnet
+        ? a.internal || !inTailnet(a.address)
+          ? undefined
+          : a.family === 'IPv4'
+            ? 0
+            : 1
+        : internet || isPrivate(a.address)
+          ? rank(name, a)
+          : undefined
       if (ranked === undefined) continue
       // The address as a browser writes it, and always with its port. A browser leaves port 80
       // out of an address, and the backend keeps for the pairing screen only an address that

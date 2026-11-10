@@ -19,6 +19,12 @@ export interface ServiceConfig {
   network: boolean
   /** With the network on, whether the door answers the person's tailnet alone, and no other network this machine is on. */
   tailnet?: boolean
+  /**
+   * With the network on, whether the door answers at every address the machine has, the
+   * internet's among them, and whoever can reach one. Without it, the network on is the private
+   * networks the machine is on: its home network or whatever network it is on, and its tailnet.
+   */
+  internet?: boolean
   /** What the backend program makes its own keys from. */
   instanceSecret: string
   /** What the service shows the backend to load functions into it and to run its internal ones. */
@@ -61,6 +67,7 @@ function kept(): ServiceConfig | null {
     port === undefined ||
     typeof c.network !== 'boolean' ||
     (c.tailnet !== undefined && typeof c.tailnet !== 'boolean') ||
+    (c.internet !== undefined && typeof c.internet !== 'boolean') ||
     typeof c.instanceSecret !== 'string' ||
     !/^[0-9a-f]{64}$/.test(c.instanceSecret) ||
     typeof c.adminKey !== 'string' ||
@@ -79,6 +86,7 @@ function kept(): ServiceConfig | null {
     port,
     network: c.network,
     ...(c.tailnet === true ? { tailnet: true } : {}),
+    ...(c.internet === true ? { internet: true } : {}),
     instanceSecret: c.instanceSecret,
     adminKey: c.adminKey,
     sessionSecret: c.sessionSecret,
@@ -240,17 +248,20 @@ export function makeConfig(): ServiceConfig {
 
 /**
  * Turns the network on or off in the settings, which are otherwise left as the file has them.
- * `tailnet` says that, on, it is the person's tailnet alone that is answered.
+ * `tailnet` says that, on, it is the person's tailnet alone that is answered, and `internet`
+ * that it is every address the machine has, the internet's included. Neither is kept once the
+ * network is off, and the tailnet alone goes before the internet where both are asked.
  * The running service looks there every second, and opens its door anew when this has changed.
  * False where there are no settings to change.
  */
-export function noteNetwork(network: boolean, tailnet = false): boolean {
+export function noteNetwork(network: boolean, tailnet = false, internet = false): boolean {
   const config = kept()
-  // The tailnet alone is a way of being on, and is not kept once the network is off
+  // The tailnet alone and the internet are ways of being on, and are not kept once the network is off
   const only = network && tailnet
-  if (config && (config.network !== network || (config.tailnet === true) !== only)) {
-    const { tailnet: _, ...rest } = config
-    writeWhole(settingsFile(), { ...rest, network, ...(only ? { tailnet: true } : {}) })
+  const wide = network && !only && internet
+  if (config && (config.network !== network || (config.tailnet === true) !== only || (config.internet === true) !== wide)) {
+    const { tailnet: _, internet: __, ...rest } = config
+    writeWhole(settingsFile(), { ...rest, network, ...(only ? { tailnet: true } : {}), ...(wide ? { internet: true } : {}) })
   }
   return config !== null
 }
