@@ -4,6 +4,7 @@
 // that does it and in a tab that is told.
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import {
+  backendTakes,
   displayKey,
   forgetAll,
   forgetDisplayKey,
@@ -11,6 +12,7 @@ import {
   keepFor,
   keepSignOutToken,
   keptFor,
+  learnTakes,
   letGoElsewhere,
   letGoOf,
   noteRegistered,
@@ -19,6 +21,7 @@ import {
   signOutLater,
   signOutTokenSpent,
   timesLetGo,
+  watchTakes,
   whenLetGo,
 } from './lib'
 
@@ -250,5 +253,24 @@ describe('letting go of everything the site keeps in a browser', () => {
     expect([letGoOf('alice'), keptFor()]).toEqual([false, 'alice'])
     keepSignOutToken('token', 'alice', 4, 'display-1')
     expect(hasSignOutToken('alice', { id: 'display-1', epoch: 3 })).toBe(true)
+  })
+})
+
+describe('what the backend takes', () => {
+  test('what depends on it is told when a form is named and when it no longer is, and not when nothing changed', () => {
+    learnTakes([])
+    const told = vi.fn()
+    const stop = watchTakes(told)
+    learnTakes(['mounts.picture'])
+    expect([backendTakes('mounts.picture'), told.mock.calls.length]).toEqual([true, 1])
+    learnTakes(['mounts.picture'])
+    expect(told.mock.calls.length).toBe(1)
+    // An older backend's answer names nothing
+    learnTakes(undefined)
+    expect([backendTakes('mounts.picture'), told.mock.calls.length]).toEqual([false, 2])
+    stop()
+    learnTakes(['mounts.picture'])
+    expect(told.mock.calls.length).toBe(2)
+    learnTakes([])
   })
 })
