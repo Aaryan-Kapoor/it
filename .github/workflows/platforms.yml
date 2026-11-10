@@ -102,12 +102,15 @@ jobs:
         with:
           name: it-programs
           path: ${{ runner.temp }}/it-programs
+      # Asked its version in a folder of its own: wherever CI is set, every command, this one
+      # too, writes the file that turns usage reporting off into the folder It lives in, and the
+      # stack starts It only in a folder that is still empty
       - name: Use the standalone program for this system
         env:
           PROGRAM: ${{ matrix.program }}
         run: |
           chmod +x "$RUNNER_TEMP/it-programs/$PROGRAM"
-          "$RUNNER_TEMP/it-programs/$PROGRAM" --version
+          IT_HOME="$RUNNER_TEMP/it-version-home" "$RUNNER_TEMP/it-programs/$PROGRAM" --version
           echo "IT_BIN=$RUNNER_TEMP/it-programs/$PROGRAM" >> "$GITHUB_ENV"
       # The stack goes on running behind the steps that follow, as in the main workflow
       - name: Start It
