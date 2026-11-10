@@ -670,6 +670,7 @@ const watcher = new MutationObserver((changes) => {
         if (added.nodeType !== Node.ELEMENT_NODE) continue
         tend(added as Element)
         tendWithin(added as Element)
+        reachWithin(added as Element)
       }
   }
 })
@@ -679,7 +680,6 @@ const WATCHED: MutationObserverInit = {
   attributes: true,
   attributeFilter: ['name', 'content', 'referrerpolicy', 'ping', 'href', 'target', 'rel'],
 }
-watcher.observe(document, WATCHED)
 tendWithin(document)
 
 // What the page writes of what It looks after on an element is set right at once, and not only
@@ -866,35 +866,89 @@ function onTheWay(e: Event, capture: boolean, sends = true): void {
     openedBySite(to.href)
   }
 }
-for (const event of FOLLOWING) for (const capture of [true, false]) window.addEventListener(event, (e) => onTheWay(e, capture), capture)
-// A shadow root hides what is in it from the document's observer, and a closed one hides it from
-// the window's listeners as well. So each root a script makes, open or closed, is watched as the
-// document is, and hears of the links followed in it.
+/** What hears links followed: in the window, before the page's handlers and after them, and in a root, after the handlers there. Each is one function, so that putting it back where it is already does nothing. */
+const followedBefore = (e: Event) => onTheWay(e, true)
+const followedAfter = (e: Event) => onTheWay(e, false)
+const followedAfterInRoot = (e: Event) => onTheWay(e, false, false)
 /**
  * A form is checked on its way out too, and again once every handler of the submit event has
  * run, as its data is gathered, just before the browser reads its target and rel. Neither event
- * leaves a shadow root, so each root a script makes hears them for its own forms, as the window
- * does for the document's.
+ * leaves a shadow root, so each root It reaches hears them for its own forms, as the window does
+ * for the document's.
  */
 const FORMS = ['submit', 'formdata']
 const onItsWayOut = (e: Event) => {
   if (e.target instanceof Element) guideForm(e.target)
 }
-for (const event of FORMS) window.addEventListener(event, onItsWayOut, true)
+/**
+ * What the window hears of links and forms, and what the document's observer watches. Opening
+ * the document again, as `document.open` does, and `document.write` once the page has loaded,
+ * takes every listener away from the window and the document: so they are put back each time.
+ */
+function listen(): void {
+  for (const event of FOLLOWING) {
+    window.addEventListener(event, followedBefore, true)
+    window.addEventListener(event, followedAfter)
+  }
+  for (const event of FORMS) window.addEventListener(event, onItsWayOut, true)
+  watcher.observe(document, WATCHED)
+}
+listen()
+/**
+ * A shadow root hides what is in it from the document's observer, and a closed one hides it from
+ * the window's listeners as well. So each root It can reach is watched as the document is and
+ * hears of the links and forms followed in it, before the handlers inside it and again after
+ * them, since a handler there may change a link and keep the event from going further. It reaches
+ * every root a script makes, open or closed, and every open one declared in markup: as the page is
+ * parsed, set with `setHTMLUnsafe`, parsed with `Document.parseHTMLUnsafe` or written. A closed
+ * root declared in markup is given to no script, and is the one It cannot reach.
+ */
+const reached = new WeakSet<ShadowRoot>()
+function reach(root: ShadowRoot): void {
+  if (reached.has(root)) return
+  reached.add(root)
+  watcher.observe(root, WATCHED)
+  shadowRoots.push(new WeakRef(root))
+  for (const event of FOLLOWING) {
+    root.addEventListener(event, followedBefore, true)
+    root.addEventListener(event, followedAfterInRoot)
+  }
+  for (const event of FORMS) root.addEventListener(event, onItsWayOut, true)
+  tendWithin(root)
+  reachWithin(root)
+}
+/** Reaches every open root declared within, and within those. */
+function reachWithin(within: ParentNode): void {
+  if (within instanceof Element && within.shadowRoot) reach(within.shadowRoot)
+  for (const el of within.querySelectorAll('*')) if (el.shadowRoot) reach(el.shadowRoot)
+}
 const attachShadow = Element.prototype.attachShadow
 Element.prototype.attachShadow = function (this: Element, init: ShadowRootInit) {
   const root = attachShadow.call(this, init)
-  watcher.observe(root, WATCHED)
-  shadowRoots.push(new WeakRef(root))
-  // Before the handlers inside the root, and again after them: a handler there may change the
-  // link and keep the event from going further
-  for (const event of FOLLOWING) {
-    root.addEventListener(event, (e) => onTheWay(e, true), true)
-    root.addEventListener(event, (e) => onTheWay(e, false, false))
-  }
-  for (const event of FORMS) root.addEventListener(event, onItsWayOut, true)
+  reach(root)
   return root
 }
+// Markup with declared roots in it, set into an element or a root, or parsed into a document of its own
+for (const owner of [Element.prototype, typeof ShadowRoot === 'function' ? ShadowRoot.prototype : undefined] as Loose[]) {
+  const native = owner?.setHTMLUnsafe
+  if (typeof native !== 'function') continue
+  owner.setHTMLUnsafe = function (this: ParentNode, ...given: Given) {
+    const out = native.apply(this, given)
+    tendWithin(this)
+    reachWithin(this)
+    return out
+  }
+}
+const parseUnsafe = (Document as Loose).parseHTMLUnsafe
+if (typeof parseUnsafe === 'function')
+  (Document as Loose).parseHTMLUnsafe = function (this: unknown, ...given: Given) {
+    const parsed = parseUnsafe.apply(this, given)
+    tendWithin(parsed)
+    reachWithin(parsed)
+    return parsed
+  }
+// And whatever the page's own markup declares, once it is all parsed
+document.addEventListener('DOMContentLoaded', () => reachWithin(document))
 // A link or a form the page made and never put in the document is activated with no event
 // reaching the window: it is checked here instead, on its way
 const clickElement = HTMLElement.prototype.click
@@ -941,8 +995,27 @@ window.open = openOut
 const openDocument = Document.prototype.open as (...given: unknown[]) => unknown
 Document.prototype.open = function (this: Document, ...given: unknown[]) {
   if (given.length > 2) return openOut.call(window, given[0] as string | URL, given[1] as string, given[2] as string)
-  return openDocument.apply(this, given)
+  const out = openDocument.apply(this, given)
+  if (this === document) listen()
+  return out
 } as typeof Document.prototype.open
+// Writing to the document once it has loaded opens it again first, which takes the window's and
+// the document's listeners away: they are put back as the writing returns, and what was written is
+// set right then, before anything of the page's can follow it
+for (const name of ['write', 'writeln'] as const) {
+  const native = Document.prototype[name]
+  Document.prototype[name] = function (this: Document, ...given: string[]) {
+    const out = native.apply(this, given)
+    if (this === document) {
+      listen()
+      if (document.readyState !== 'loading') {
+        tendWithin(document)
+        reachWithin(document)
+      }
+    }
+    return out
+  }
+}
 
 // What the page's own script fails with is said to the site, which says it above the page. The
 // person cannot see a script fail: they see a button that does nothing, and take it for an
