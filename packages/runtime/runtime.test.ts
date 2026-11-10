@@ -727,6 +727,43 @@ describe('the script inside a page', () => {
         'sms:+15551234567',
       ])
     })
+
+    test('a link aimed at a name that holds no document, such as an embed or an object that shows a picture, opens a tab of its own with no hold either way, and one aimed at a frame that holds a document is followed there', async () => {
+      const asked: unknown[][] = []
+      const p = load(
+        [
+          '<embed name="help" type="image/png"><object name="picture" type="image/png"></object><iframe name="inside"></iframe>',
+          '<a id="embed" href="https://elsewhere.invalid/a" target="help">a named embed</a>',
+          '<a id="picture" href="https://elsewhere.invalid/b" target="picture">a picture in an object</a>',
+          '<a id="own" href="other.html" target="help">its own file, at a named embed</a>',
+          '<a id="global" href="https://elsewhere.invalid/c" target="lookalike">a name the page’s script gave something of its own</a>',
+          '<a id="inside" href="https://elsewhere.invalid/d" target="inside">a frame of the page</a>',
+        ].join(''),
+        (w) => {
+          w.open = (...given: unknown[]) => {
+            asked.push(given)
+            return null
+          }
+          // Something of the page's own under a name, made to look like a frame's window
+          w.lookalike = { parent: w }
+        },
+      )
+      const doc = p.w.document
+      const said = (id: string) => [doc.getElementById(id).getAttribute('target'), doc.getElementById(id).getAttribute('rel')]
+      for (const id of ['embed', 'picture', 'global']) expect([id, said(id)]).toEqual([id, ['_blank', 'noopener noreferrer']])
+      // Its own file opens in a window by that name, with no hold either way
+      expect(said('own')).toEqual(['help', 'noopener noreferrer'])
+      expect(said('inside')).toEqual(['inside', null])
+      // And a window the page's script opens at such a name is held to the same
+      p.w.open('other.html', 'help')
+      p.w.open('https://elsewhere.invalid/e', 'picture')
+      p.w.open('https://elsewhere.invalid/f', 'inside')
+      expect(asked).toEqual([
+        ['other.html', 'help', 'noopener,noreferrer'],
+        ['https://elsewhere.invalid/e', '_blank', 'noopener,noreferrer'],
+        ['https://elsewhere.invalid/f', 'inside', undefined],
+      ])
+    })
   })
 
   test('what the page’s own script fails with is said to the site, the first few times, and a picture that did not load is not', async () => {

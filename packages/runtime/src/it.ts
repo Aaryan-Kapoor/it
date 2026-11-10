@@ -547,10 +547,23 @@ function opensAWindow(target: string): boolean {
   if (said.toLowerCase() === '_blank') return true
   return !IN_PLACE.has(said.toLowerCase()) && !namesAFrame(said)
 }
-/** Whether a target names a frame inside the page, which the page means a link to be followed in. */
+/**
+ * Whether a target names a frame inside the page, which the page means a link to be followed
+ * in: a document the page holds in a frame of its own under that name, as the browser itself
+ * finds it by name. An element that merely has the name, such as an `embed` or an `object` that
+ * shows a picture, holds no document, and a link aimed at it would open a window instead.
+ */
 function namesAFrame(target: string): boolean {
-  if (IN_PLACE.has(target.toLowerCase()) || target.toLowerCase() === '_blank') return false
-  for (const frame of document.querySelectorAll('iframe[name], frame[name], object[name], embed[name]')) if (frame.getAttribute('name') === target) return true
+  if (target === '' || IN_PLACE.has(target.toLowerCase()) || target.toLowerCase() === '_blank') return false
+  let found: unknown
+  try {
+    found = (window as unknown as Record<string, unknown>)[target]
+  } catch {
+    return false
+  }
+  if (!found || found === window) return false
+  // One of the windows of the page's own frames, which nothing of the page's can stand in for
+  for (let n = 0; n < window.length; n++) if (window[n] === found) return true
   return false
 }
 /** Gives a link or a form `noopener` and `noreferrer`, and takes `opener` away: the window it opens and the page have no hold on each other. */
