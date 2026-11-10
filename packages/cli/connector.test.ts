@@ -27,6 +27,8 @@ const stand = vi.hoisted(() => ({
   found: [] as { id: string; version?: string; addon: string }[],
   /** Every call the connector made to the backend. */
   calls: [] as { name: string; args: any }[],
+  /** Every event the connector recorded for usage reporting, with its properties. */
+  recorded: [] as { name: string; properties: Record<string, unknown> }[],
   saving: new Set<Promise<void>>(),
   /** What a call answers, when the test wants something other than the usual. Undefined leaves it to the usual. */
   answer: null as null | ((name: string, args: any) => unknown),
@@ -179,7 +181,7 @@ vi.mock('./src/setup', () => ({
 vi.mock('./src/usage', () => ({
   agentOf: (harness: unknown) => String(harness ?? 'unknown'),
   begin: () => {},
-  record: () => {},
+  record: (name: string, properties: Record<string, unknown>) => void stand.recorded.push({ name, properties }),
   startSender: () => ({ stop: () => {} }),
   thisMachine: () => ({}),
   thisProgram: () => ({}),
@@ -233,7 +235,7 @@ vi.mock('./src/lib', async (original) => {
   }
 })
 
-import { type ConnectorInfo, infoFile, local, mac, runConnector, wayOf } from './src/connector'
+import { type ConnectorInfo, infoFile, local, mac, NOT_LOADED, notLoadedToo, type Route, runConnector, wayOf } from './src/connector'
 import { DeliveryRecovery, eraseDeliveryRecovery } from './src/delivery-recovery'
 import * as files from './src/lib'
 import { readJson } from './src/lib'
@@ -340,6 +342,7 @@ afterEach(async () => {
   stand.watching.clear()
   stand.asking.clear()
   stand.calls.length = 0
+  stand.recorded.length = 0
   stand.reconciled.length = 0
   said.length = 0
   stand.codex.length = 0
@@ -739,6 +742,8 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     stand.codex[0]!.end()
     await until(() => called('delivery:handedOff').includes('click-1'))
     expect(conversationProfile({ harness: 'codex', id: 'thread-1' })).toBeUndefined()
+    // A hand-over that happened has no why
+    expect(stand.recorded.filter((r) => r.name === 'agent.woken').map((r) => r.properties)).toEqual([{ result: 'resumed', agent: 'codex', why: 'none' }])
   })
 
   test('Auto-wake reopens a legacy conversation with no profile in the service’s environment and gives it the click.', async () => {
@@ -1160,6 +1165,44 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     })
     expect(stand.codex).toEqual([])
     expect(said.some((line) => line.includes('was not taken by the reopening of its conversation'))).toBe(true)
+    // Counted with the word for why, and nothing of the words themselves
+    await until(() => stand.recorded.some((r) => r.name === 'agent.woken'))
+    expect(stand.recorded.find((r) => r.name === 'agent.woken')!.properties).toEqual({ result: 'declined', agent: 'codex', why: 'no_folder' })
+  })
+
+  test.each([false, true])(
+    'a Claude Code conversation that published its page without It’s add-on, and cannot be reopened, has its page say how to load the add-on, unless the add-on was heard from it: heard %s',
+    async (heard) => {
+      const id = '11111111-2222-4333-8444-555555555555'
+      await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }, (home) => {
+        writeFileSync(
+          path.join(home, 'conversations.json'),
+          JSON.stringify({ [`claude-code:${id}`]: { cwd: path.join(home, 'gone'), at: Date.now(), addon: false } }),
+        )
+        if (heard) writeFileSync(path.join(home, 'heard.json'), JSON.stringify({ [`claude-code:${id}`]: 1 }))
+      })
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
+      offered({ ...click(1), session: { harness: 'claude-code', id } })
+      await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'))
+      expect(stand.calls.find((c) => c.name === 'machines:wakeFailed')!.args).toEqual({
+        for: { harness: 'claude-code', id },
+        // Why it could not be reopened is said either way, and for one that has not loaded the add-on, what lets it hear the page after it
+        why: heard
+          ? 'the folder its conversation was held in is not known on this machine, or is gone'
+          : `the folder its conversation was held in is not known on this machine, or is gone. ${NOT_LOADED}`,
+      })
+      // What is counted is still the word for why the reopening failed
+      await until(() => stand.recorded.some((r) => r.name === 'agent.woken'))
+      expect(stand.recorded.find((r) => r.name === 'agent.woken')!.properties).toEqual({ result: 'declined', agent: 'claude-code', why: 'no_folder' })
+    },
+  )
+
+  test('a reason too long to fit beside the advice to load the add-on is cut short, so that the advice is never what the backend cuts off', () => {
+    const said = notLoadedToo(`Claude Code exited with 1, and its last words were: ${'x'.repeat(400)}`)
+    expect(said.length).toBeLessThanOrEqual(300)
+    expect(said.endsWith(NOT_LOADED)).toBe(true)
+    expect(said).toMatch(/^Claude Code exited with 1, and its last words were: x+…\. /)
+    expect(notLoadedToo('it is being reopened already')).toBe(`it is being reopened already. ${NOT_LOADED}`)
   })
 
   /** A click on the page of the conversation thread-1, made a moment after click(n) would be. */
@@ -5687,4 +5730,60 @@ process.stdin.on('end', () => {
     expect(readFileSync(at.given(0), 'utf8')).toContain('[action click-1]')
     await until(() => ended().length > 0, 90_000)
   }, 180_000)
+})
+
+describe('how what is done on a conversation’s pages would reach it, as the connector answers `it create` and `it status`', () => {
+  const claude = '11111111-2222-4333-8444-555555555555'
+  const way = (harness: string, session: string) => local<Route>(`/route?harness=${harness}&session=${session}`, { timeoutMs: 6000 })
+
+  test('a conversation whose add-on is listening is said to be listening, and one that is not is said not to be', async () => {
+    await start()
+    expect(await way('codex', 'thread-1')).toEqual({ connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1' } })
+    expect(await way('codex', 'thread-1')).toMatchObject({ connected: true, listening: true, thread: 'none' })
+    // An app the person has not connected here is said to be not connected
+    expect(await way('opencode', 'ses_abc')).toMatchObject({ connected: false, listening: false, thread: 'none' })
+  })
+
+  test('a Claude Code conversation that a thread of T3 Code holds is said to be held there, and the thread is noted as a click’s look notes it', async () => {
+    stand.t3.running = true
+    stand.t3.threads.set(claude, 't3-thread-a')
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+    expect(await way('claude-code', claude)).toEqual({ connected: true, listening: false, runtime: 'inactive', thread: 'held' })
+    expect(stand.t3.asked).toHaveLength(1)
+    await until(() => existsSync(path.join(home, 't3-threads.json')))
+    expect(JSON.parse(readFileSync(path.join(home, 't3-threads.json'), 'utf8'))).toEqual({ [`claude-code:${claude}`]: 't3-thread-a' })
+    // Noted, it is not asked about again
+    expect(await way('claude-code', claude)).toMatchObject({ thread: 'held' })
+    expect(stand.t3.asked).toHaveLength(1)
+  })
+
+  test('one that T3 Code says no thread holds is said to be in none, and one it has not answered for is said to be unknown', async () => {
+    stand.t3.running = true
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+    expect(await way('claude-code', claude)).toMatchObject({ thread: 'none' })
+    stand.t3.slow = true
+    expect(await way('claude-code', '22222222-2222-4333-8444-555555555555')).toMatchObject({ thread: 'unknown' })
+  })
+
+  test('where T3 Code is not running, a conversation is held in no thread and nothing is asked', async () => {
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+    expect(await way('claude-code', claude)).toMatchObject({ thread: 'none' })
+    expect(stand.t3.asked).toEqual([])
+  })
+
+  test('one in the note of threads is held there without asking, and where that note cannot be read it is unknown', async () => {
+    stand.t3.running = true
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }, (home) =>
+      writeFileSync(path.join(home, 't3-threads.json'), JSON.stringify({ [`claude-code:${claude}`]: 't3-thread-a' })),
+    )
+    expect(await way('claude-code', claude)).toMatchObject({ thread: 'held' })
+    expect(stand.t3.asked).toEqual([])
+    await stop?.()
+    stop = null
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }, (home) =>
+      writeFileSync(path.join(home, 't3-threads.json'), 'not a note'),
+    )
+    expect(await way('claude-code', claude)).toMatchObject({ thread: 'unknown' })
+  })
 })

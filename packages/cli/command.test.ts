@@ -28,7 +28,7 @@ import { behindMark, MARK, PORTS, TAKES, UPLOAD, WHEN } from '@it/protocol'
 
 // What setup says last to an agent, as the program has it: said here in the program's own words, so that a change of them is a change here
 const AFTER_SETUP =
-  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
+  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. Where setup said last that the person is to type /reload-plugins in this conversation, or to start a new one, pass that on to them in the same message as the link, as it stands. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
 
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
@@ -2983,6 +2983,8 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
           version: 2,
           url: `${b.url}/p/board`,
           note: 'This page was another conversation’s, and is this one’s now: what is done on it comes here.',
+          // With no connector here to ask, whether what is done on it arrives by itself is not known
+          arrives: expect.objectContaining({ byItself: 'unknown' }),
         },
       ])
       // The page is this same conversation's, under the id it had before its app gave it a new one, which the connector here
@@ -3064,6 +3066,7 @@ describe.skipIf(process.platform === 'win32')('a command that two agent apps hav
           url: `${b.url}/p/plan`,
           note: 'This page was given to the an-app-of-their-own conversation theirs-1. This command also carried the marks of Codex, and which of them ran it could not be told. If that is not the conversation you are in, publish it again with --take, and with IT_HARNESS and IT_SESSION set to your own app and conversation.',
           tell: TELL,
+          arrives: expect.objectContaining({ byItself: 'unknown' }),
         },
       ])
       // And that is the conversation the backend was told
@@ -3078,7 +3081,10 @@ describe.skipIf(process.platform === 'win32')('a command that two agent apps hav
       // One app's marks alone leave nothing to say
       b.asked.length = 0
       const alone = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], { ...b.env, CODEX_THREAD_ID: 'codex-1' })
-      expect([alone.code, printed(alone)]).toEqual([0, { id: 'plan', version: 1, url: `${b.url}/p/plan`, tell: TELL }])
+      expect([alone.code, printed(alone)]).toEqual([
+        0,
+        { id: 'plan', version: 1, url: `${b.url}/p/plan`, tell: TELL, arrives: expect.objectContaining({ byItself: 'unknown' }) },
+      ])
       expect(b.asked.find((x) => x.path === 'publish:begin')!.args.session).toEqual({ harness: 'codex', id: 'codex-1' })
     } finally {
       await b.close()
@@ -6312,6 +6318,145 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and whether an agent 
       writeFileSync(path.join(m.home, '.profile'), `export PATH='/somewhere/else/bin':"$PATH"\n`)
       const other = await run(m, ['setup', '--yes', '--no-service'], { ...b.env, IT_HOME: odd })
       expect(other.err).toContain('`it` is not on your PATH yet')
+    } finally {
+      await b.close()
+    }
+  })
+})
+
+describe('whether what the person does arrives by itself, as a page’s command tells its agent', () => {
+  const claude = '11111111-2222-4333-8444-555555555555'
+  /**
+   * A connector that answers `/route` as given, and says what it was asked. At a port, as the
+   * connector is on Windows, where a socket's path is no way in: each answer sealed with the
+   * token, as the connector seals what it answers at a port.
+   */
+  async function connectorSaying(m: { it: string }, route: Record<string, unknown> | null) {
+    const asked: string[] = []
+    const token = 'a'.repeat(48)
+    const server = http.createServer((req, res) => {
+      asked.push(req.url ?? '')
+      const answering = route !== null && req.url?.startsWith('/route?') === true
+      const status = answering ? 200 : 404
+      const answer = answering ? JSON.stringify(route) : '{}'
+      const seal = createHmac('sha256', token).update(`${req.headers['x-it-nonce']}\n${status}\n${answer}`).digest('hex')
+      req.resume().on('end', () => res.writeHead(status, { 'content-type': 'application/json', 'x-it-mac': seal }).end(answer))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('The stand-in connector did not open its port.')
+    writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ port: address.port, token, pid: process.pid, version: '0.0.0' }))
+    return { asked, close: () => new Promise<void>((resolve) => server.close(() => resolve())) }
+  }
+  const publishing = (m: ReturnType<typeof machine>) =>
+    backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: 'plan', version: 1, url: 'https://site.example/p/plan' }
+      if (fn === 'artifacts:get') return { title: 'Plan' }
+      return null
+    })
+  let b: Awaited<ReturnType<typeof backend>>
+  const notes = (m: { it: string }) => JSON.parse(readFileSync(path.join(m.it, 'conversations.json'), 'utf8'))
+
+  test('a Claude Code conversation that has not loaded It’s add-on is told that nothing arrives by itself, to wait, and to ask the person to reload its plugins', async () => {
+    const m = machine()
+    b = await publishing(m)
+    const c = await connectorSaying(m, { connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    try {
+      const ran = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], {
+        ...b.env,
+        CLAUDE_CODE_SESSION_ID: claude,
+        CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.321',
+      })
+      const said = printed(ran)
+      expect(said).toMatchObject({ id: 'plan', tell: TELL, arrives: { byItself: false } })
+      expect(said.arrives.next).toContain('type /reload-plugins in this conversation')
+      expect(said.arrives.next).toContain('`it wait --id plan --timeout 100`')
+      expect(c.asked).toEqual([`/route?harness=claude-code&session=${claude}`])
+      // And the conversation's note says that it published without the add-on, for the connector to tell its page
+      expect(notes(m)[`claude-code:${claude}`]).toMatchObject({ addon: false })
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
+  test('one in a Claude Code too old for that is told to ask the person for a new conversation instead', async () => {
+    const m = machine()
+    b = await publishing(m)
+    const c = await connectorSaying(m, { connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    try {
+      const ran = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], {
+        ...b.env,
+        CLAUDE_CODE_SESSION_ID: claude,
+        CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.280',
+      })
+      expect(printed(ran).arrives.next).toContain('start a new Claude Code conversation')
+      expect(printed(ran).arrives.next).not.toContain('/reload-plugins')
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
+  test('one whose thread of T3 Code takes what is done, without its add-on, is told it arrives by itself through the thread, and to end its turn', async () => {
+    const m = machine()
+    b = await publishing(m)
+    const c = await connectorSaying(m, { connected: true, listening: false, runtime: 'inactive', thread: 'held' })
+    try {
+      const ran = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], { ...b.env, CLAUDE_CODE_SESSION_ID: claude })
+      expect(printed(ran).arrives).toMatchObject({ byItself: true, via: 't3' })
+      expect(printed(ran).arrives.next).toMatch(/^End your turn\./)
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
+  test('one whose add-on is listening is told it arrives by itself through the add-on, and its note says nothing of a missing add-on', async () => {
+    const m = machine()
+    b = await publishing(m)
+    const c = await connectorSaying(m, { connected: true, listening: true, runtime: 'active', thread: 'none' })
+    try {
+      const ran = await run(m, ['update', 'plan', '--html', '<p>again</p>'], {
+        ...b.env,
+        CLAUDE_CODE_SESSION_ID: claude,
+        IT_HARNESS: 'claude-code',
+        IT_SESSION: claude,
+      })
+      expect(printed(ran).arrives).toMatchObject({ byItself: true, via: 'addon' })
+      expect(notes(m)[`claude-code:${claude}`]).not.toHaveProperty('addon')
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
+  test('where the connector cannot be asked, or answers as one from before it was asked this, it is said to be unknown, with the agent told to wait', async () => {
+    const m = machine()
+    b = await publishing(m)
+    try {
+      const without = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], { ...b.env, CODEX_THREAD_ID: 'thread-1' })
+      expect(printed(without).arrives).toMatchObject({ byItself: 'unknown' })
+      expect(printed(without).arrives.next).toContain('`it wait --id plan --timeout 100`')
+      const c = await connectorSaying(m, null)
+      try {
+        const older = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], { ...b.env, CODEX_THREAD_ID: 'thread-1' })
+        expect(printed(older).arrives).toMatchObject({ byItself: 'unknown' })
+      } finally {
+        await c.close()
+      }
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a command that cannot tell which conversation it runs in says nothing of it', async () => {
+    const m = machine()
+    b = await publishing(m)
+    try {
+      const ran = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], b.env)
+      expect(printed(ran)).not.toHaveProperty('arrives')
     } finally {
       await b.close()
     }

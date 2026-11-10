@@ -1969,7 +1969,7 @@ describe('what cannot be trusted', () => {
     // Properties that are allowed, on an object of a kind that carries more than its own keys
     writeFileSync(
       spool(),
-      `{"id":"${id}","name":"agent.woken","at":"${at}","properties":{"result":"resumed","agent":"codex"},"tag":"${tag}","note":"for acme"}\n`,
+      `{"id":"${id}","name":"agent.woken","at":"${at}","properties":{"result":"resumed","agent":"codex","why":"none"},"tag":"${tag}","note":"for acme"}\n`,
     )
     const posts: string[] = []
     let now = 0
@@ -1980,7 +1980,7 @@ describe('what cannot be trusted', () => {
     sender.stop()
     // The id is one made as the line was taken, and the rest is the line's
     expect(posted(posts)).toEqual([
-      { id: expect.stringMatching(/^[0-9a-f-]{36}$/), name: 'agent.woken', at, properties: { result: 'resumed', agent: 'codex' } },
+      { id: expect.stringMatching(/^[0-9a-f-]{36}$/), name: 'agent.woken', at, properties: { result: 'resumed', agent: 'codex', why: 'none' } },
     ])
     expect(posts.join('')).not.toContain(id)
   })

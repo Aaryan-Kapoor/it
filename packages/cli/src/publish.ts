@@ -7,7 +7,21 @@ import { type FileHandle, open } from 'node:fs/promises'
 import path from 'node:path'
 import { type FileEntry, isSafePath, LIMITS, NOUN, PUBLICATION, sizeSaid, UPLOAD, uploadBudgetMs } from '@it/protocol'
 import { claimLock } from './legacy-lock'
-import { api, call, direct, doorRefusal, inHome, machine, Problem, readJson, sessionAsked, sessionNote, throughDoor, writePrivate } from './lib'
+import {
+  api,
+  call,
+  claudeAddonHere,
+  direct,
+  doorRefusal,
+  inHome,
+  machine,
+  Problem,
+  readJson,
+  sessionAsked,
+  sessionNote,
+  throughDoor,
+  writePrivate,
+} from './lib'
 import { type Profile, profileOf } from './profiles'
 import { aloneAt } from './serve/backend'
 import { makeOnce } from './serve/config'
@@ -254,14 +268,22 @@ export async function noteConversation(
   session: { harness: string; id: string },
   cwd = process.cwd(),
   profile: Profile | null | undefined = profileOf(session.harness),
+  /**
+   * Whether It's add-on ran in the conversation when this was noted, where that is known: false
+   * is kept with the note, true takes it away, and undefined leaves the note as it says.
+   */
+  addon?: boolean,
 ): Promise<void> {
   try {
     const key = `${session.harness}:${session.id}`
-    type Note = { cwd: string; at: number; profile?: Profile }
+    type Note = { cwd: string; at: number; profile?: Profile; addon?: false }
     const read = () => readJson<Record<string, Note>>(conversationsFile()) ?? {}
     // A note an hour or more from the clock, either way, is written again with the time now
     const unchanged = (noted: Note | undefined) =>
-      noted?.cwd === cwd && JSON.stringify(noted.profile) === JSON.stringify(profile ?? noted.profile) && Math.abs(Date.now() - noted.at) < NOTED_FOR_MS
+      noted?.cwd === cwd &&
+      JSON.stringify(noted.profile) === JSON.stringify(profile ?? noted.profile) &&
+      (addon === undefined || (noted.addon === false) === !addon) &&
+      Math.abs(Date.now() - noted.at) < NOTED_FOR_MS
     // Hooks report the folder on every event. An unchanged note needs no lock or disk flush.
     if (unchanged(read()[key])) return
     // Preserve the command's three-second chance to keep its note under contention, but
@@ -275,7 +297,8 @@ export async function noteConversation(
           const kept = read()
           if (unchanged(kept[key])) return
           const selected = profile ?? kept[key]?.profile
-          kept[key] = { cwd, at: Date.now(), ...(selected ? { profile: selected } : {}) }
+          const without = addon === undefined ? kept[key]?.addon === false : !addon
+          kept[key] = { cwd, at: Date.now(), ...(selected ? { profile: selected } : {}), ...(without ? { addon: false as const } : {}) }
           const newest = Object.entries(kept)
             .filter(([, noted]) => typeof noted?.cwd === 'string' && typeof noted.at === 'number')
             .sort((a, b) => b[1].at - a[1].at)
@@ -294,6 +317,15 @@ export async function noteConversation(
     // A note that cannot be kept keeps nothing from being published
   }
 }
+/**
+ * Whether the conversation last published a page here while It's add-on did not run in it, as
+ * a Claude Code conversation that was already open when the add-on was installed does until it
+ * reloads its plugins.
+ */
+export function publishedWithoutAddon(session: { harness: string; id: string }): boolean {
+  return readJson<Record<string, { addon?: unknown }>>(conversationsFile())?.[`${session.harness}:${session.id}`]?.addon === false
+}
+
 /** The recorded profile stays local, alongside the working folder. */
 export function conversationProfile(session: { harness: string; id: string }): unknown {
   return readJson<Record<string, { profile?: unknown }>>(conversationsFile())?.[`${session.harness}:${session.id}`]?.profile
@@ -637,7 +669,9 @@ export async function publish(input: {
       // It refuses, after everything was erased say, leaves no note of a conversation behind.
       // None is needed sooner: a page becomes this conversation's, and its clicks come here,
       // only as it is finished.
-      if (session) await noteConversation(session)
+      // With whether It's add-on runs in it, where this command can tell: a conversation that
+      // publishes without it is told so by the connector, should it not be able to be reopened
+      if (session) await noteConversation(session, undefined, undefined, session.harness === 'claude-code' ? claudeAddonHere() : undefined)
       // Counted: which agent app, new or not, how large and of how many files in a few bands, and
       // four things that are each so or not: whether it was given a state to start with, whether it
       // sends anything back, whether it carries a picture, and whether it was brought up at once.

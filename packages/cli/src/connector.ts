@@ -30,7 +30,7 @@ import {
   WAKES,
   wakesOn,
 } from '@it/protocol'
-import { ADDON_API, AddonRuntimes } from './addon-runtime'
+import { ADDON_API, type AddonRuntime, AddonRuntimes } from './addon-runtime'
 import { ADDONS } from './addons.generated'
 import {
   DeliveryRecovery,
@@ -66,7 +66,7 @@ import {
 } from './lib'
 import { incompatible } from './login'
 import { profileEnvironment, readProfile } from './profiles'
-import { conversationFolder, conversationProfile, noteConversation } from './publish'
+import { conversationFolder, conversationProfile, noteConversation, publishedWithoutAddon } from './publish'
 import { alone, lockHeld } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
@@ -94,6 +94,7 @@ import {
   WOKEN,
   windowsProgram,
 } from './wake'
+import { wakeWhy } from './wake-why'
 
 /** A click as an add-on receives it: its data as a value, the one wording agents read, and the few words a person is shown where an app has another place for the rest. */
 export interface Delivered extends Click {
@@ -156,7 +157,7 @@ const SERVE_BYTES = 200_000 // and how large that answer may be: an add-on reads
 const WAITER_BYTES = 700_000 // and how large the clicks in one answer to a waiter may be together: `it wait` reads no more than a megabyte
 const keyOf = (harness: string, id: string) => `${harness}:${id}`
 /** Everything an add-on or a command asks the connector for. */
-const ROUTES = ['/health', '/addon', '/session', '/clicks', '/waiting', '/ack', '/runs']
+const ROUTES = ['/health', '/addon', '/session', '/clicks', '/waiting', '/ack', '/runs', '/route']
 /** What was asked for, as it may be written down: one of the connector's own routes, or one fixed word for anything else. */
 const routeOf = (asked: string | undefined): string => {
   const route = (asked ?? '').split('?')[0]!
@@ -545,6 +546,30 @@ async function unfit(): Promise<Problem | null | undefined> {
  * nothing is said to have been stopped or cut off, and what it was for is given back as it was.
  */
 const NOT_STARTED = '\u0000 not started'
+/**
+ * How what is done on a conversation's pages would reach it, as the connector answers at
+ * `/route`: whether its app is connected here, whether its add-on is listening, how the add-on
+ * last spoke for that app, and whether a thread of T3 Code holds it.
+ */
+export interface Route {
+  connected: boolean
+  listening: boolean
+  runtime: AddonRuntime['state']
+  thread: 'held' | 'none' | 'unknown'
+}
+/**
+ * What the page says after why a Claude Code conversation could not be reopened, where that
+ * conversation has not loaded It's add-on either: what lets it hear the page, where it is still
+ * open. The backend keeps 300 characters of what the page says, so the reason before it is cut
+ * short where the two would not fit together (`notLoadedToo`).
+ */
+export const NOT_LOADED =
+  'Its conversation has not loaded It’s add-on either, as when it was open before It was installed: if it is still open, type /reload-plugins in it, and what you did reaches it'
+/** Why a conversation could not be reopened, and then that it has not loaded It's add-on, together in what the backend keeps. */
+export const notLoadedToo = (why: string): string => {
+  const room = 300 - NOT_LOADED.length - 2
+  return `${why.length > room ? `${why.slice(0, room - 1)}…` : why}. ${NOT_LOADED}`
+}
 /** Whether this machine joined an It that runs on another computer. */
 const joined = (): boolean => typeof readJson<{ at?: unknown }>(inHome('machine.json'))?.at === 'string'
 /** What stands in the way of handing anything over before a machine that joined has first asked whether the two fit: nothing is known yet. */
@@ -1029,6 +1054,44 @@ async function connecting(say: (line: string) => void): Promise<void> {
         soon(again)
       })
     return stillAsking()
+  }
+  /** How long a question about a conversation's way waits for T3 Code to say whether a thread holds it. */
+  const ROUTE_T3_MS = 3_000
+  /**
+   * How what is done on a conversation's pages would reach it now, as far as this connector can
+   * tell, for `it create`, `it update` and `it status` to say to the agent: whether the
+   * conversation's add-on is listening, and whether a thread of T3 Code holds it, which T3 Code
+   * then takes the click to whatever the add-on does. `thread` is `unknown` where T3 Code is
+   * running and has not said within a few seconds whether one of its threads holds the
+   * conversation, where it would not take a message for it a moment ago, and where the note of
+   * the threads cannot be read. The look is the one a click makes, and what it finds is noted
+   * as a click's look notes it.
+   */
+  const wayFor = async (harness: string, id: string): Promise<Route> => {
+    const key = follow(keyOf(harness, id))
+    const now = Date.now()
+    const listening = [keyOf(harness, id), key].some((k) => {
+      const s = sessions.get(k)
+      return s !== undefined && now - s.seen < LIVE_MS
+    })
+    const answer = { connected: connected(harness), listening, runtime: runtimes.status(harness).state }
+    if (harness !== 'claude-code' && harness !== 'codex') return { ...answer, thread: 'none' }
+    if (notedThread(key) !== undefined) return { ...answer, thread: 'held' }
+    if (t3ThreadsHeld()) return { ...answer, thread: 'unknown' }
+    if (!t3Seen || now - t3Seen.at > 5000) t3Seen = { at: now, server: t3Server() }
+    if (!t3Seen.server) return { ...answer, thread: 'none' }
+    const refused = t3Refused.get(key)
+    if (refused !== undefined && now - refused < T3_REFUSED_MS) return { ...answer, thread: 'unknown' }
+    const settled = () => {
+      const known = t3Known.get(key)
+      return known !== undefined && known !== 'asking' && (known.thread !== null || Date.now() - known.at < T3_AGAIN_MS) ? known : undefined
+    }
+    // Not known, or known to be in none too long ago to go by: asked, as a click asks
+    if (!settled()) t3For(key, { harness, id })
+    const until = steady() + ROUTE_T3_MS
+    while (!settled() && steady() < until) await new Promise((r) => setTimeout(r, 50))
+    const known = settled()
+    return { ...answer, thread: known === undefined ? 'unknown' : known.thread ? 'held' : 'none' }
   }
   /**
    * A person can switch a thread of T3 Code to another agent app, and the thread then runs
@@ -2141,8 +2204,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * own app speaking to them, and goes to the page alone: never into the log.
    */
   const notReopened = (session: { harness: string; id: string }, why: string) => {
-    const words = saidLast.get(follow(keyOf(session.harness, session.id)))
-    void call('mutation', api.machines.wakeFailed, { for: session, why: words ? `${why}, and its last words were: ${words}` : why }).catch(() => {})
+    const key = keyOf(session.harness, session.id)
+    const words = saidLast.get(follow(key))
+    const said = words ? `${why}, and its last words were: ${words}` : why
+    // A Claude Code conversation that published its page while It's add-on did not run in it, and
+    // has not been heard from since, has not loaded the add-on, as one that was already open when
+    // the add-on was installed has not. Why its reopening failed is said all the same, since the
+    // conversation may be gone for good, and after it what lets it hear the page where it is still open
+    const unloaded =
+      session.harness === 'claude-code' && publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))
+    void call('mutation', api.machines.wakeFailed, { for: session, why: unloaded ? notLoadedToo(said) : said }).catch(() => {})
   }
   /** Whether anybody was at the page for any click that is waiting for a click's conversation. One such, and the conversation is reopened as for a person, whatever else waits in front of it. */
   const someoneThere = (click: Offered, offered = inbox) =>
@@ -2548,7 +2619,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             rode.add(c.id)
           }
         }
-        record('agent.woken', { result: 'resumed', agent: agentOf(harness) })
+        record('agent.woken', { result: 'resumed', agent: agentOf(harness), why: 'none' })
         if (stalled.get(line) === click.id) stalled.delete(line)
         await confirmAll()
       } else {
@@ -2558,7 +2629,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
         stalledAt.set(click.id, Date.now())
         // Its thread of T3 Code is the only way it may go: it is tried there for as long as it waits, and never given up on
         const forThread = t3 !== undefined && t3Only(key)
-        record('agent.woken', { result: n >= QUEUE_WAITS.length && !forThread ? 'failed' : 'declined', agent: agentOf(harness) })
+        // Why, as one of a few fixed words made from the refusal: its own words stay on this machine
+        record('agent.woken', { result: n >= QUEUE_WAITS.length && !forThread ? 'failed' : 'declined', agent: agentOf(harness), why: wakeWhy(refused ?? '') })
         if (reopening) notReopened(click.session!, refused)
         // T3 Code could not take it, and is not asked again for a while (see `t3For`). A conversation that may go
         // other ways goes as any other meanwhile, which is tried at once; one held in a thread waits for it
@@ -3050,6 +3122,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     const harness = String(url.searchParams.get('harness') ?? body.harness ?? '').slice(0, 40)
     const id = String(url.searchParams.get('session') ?? body.session ?? '').slice(0, 200)
+    // How what is done on this conversation's pages would reach it now: asked by the `it`
+    // command that publishes a page or says how It stands, run in that conversation
+    if (req.method === 'GET' && url.pathname === '/route') {
+      if (!harness || !id) return [400, { error: 'say which harness and session' }]
+      return [200, await wayFor(harness, id)]
+    }
     // What the marks put into a conversation stand for: asked by the conversation's own hook
     // as the turn begins that a mark started, or at the next moment one of its hooks runs.
     // Given for as long as no hook has said that it has it, so that an answer lost on its way
@@ -3369,7 +3447,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // running. One that does not say is taken to have been heard at once.
       const woke = body.woke === true
       // One report is one turn, however many clicks it carried: counted as one waking
-      if (woke && ids.length) record('agent.woken', { result: 'resumed', agent: agentOf(held.get(ids[0]!)!.click.session?.harness) })
+      if (woke && ids.length) record('agent.woken', { result: 'resumed', agent: agentOf(held.get(ids[0]!)!.click.session?.harness), why: 'none' })
       for (const clickId of ids) {
         const click = held.get(clickId)!.click
         counting.set(clickId, { at: click.at, harness: click.session?.harness, path: woke ? 'woke' : 'heard' })
