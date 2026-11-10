@@ -12,9 +12,11 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
 
-const here = path.dirname(new URL(import.meta.url).pathname)
+// This folder as the system writes it: on Windows a file URL's path begins with a slash before the drive
+const here = fileURLToPath(new URL('.', import.meta.url))
 const source = readFileSync(path.join(here, 'it-bridge/hooks/register.js'), 'utf8')
 
 /** The code, without its comments, which Claude Code does not read for this either. */
