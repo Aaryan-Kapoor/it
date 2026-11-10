@@ -159,7 +159,7 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
       expect([never, slow.code, slow.message]).toEqual([
         never,
         'offline',
-        'The newest release of It had not been fetched after 0 minutes, so it was given up and nothing was changed.',
+        'It 9.9.9 had not been fetched after 0 minutes, so it was given up and nothing was changed.',
       ])
       expect(slow.hint).toContain('run the line It was installed with again')
       expect(Date.now() - began).toBeLessThan(5000)
@@ -172,7 +172,7 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     const off = new AbortController()
     setTimeout(() => off.abort(), 200)
     expect(((await fetchNewer({ program: here(), within: 60_000, signal: off.signal }).catch((err) => err)) as Problem).message).toBe(
-      `The newest release of It could not be fetched (${name}).`,
+      `It 9.9.9 could not be fetched (${name}).`,
     )
     // The next try is not held up by the one that was given up
     trickled = null
@@ -596,6 +596,20 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     ])
     // The newer release really was the latest by then, and is what the next look finds
     expect(await latest()).toBe('9.9.10')
+  })
+
+  test('says which version could not be fetched, and that its release is not where this It was installed from, where the release latest.json names is not there', async () => {
+    release('9.9.9')
+    delete tagged['v9.9.9']
+    const before = readFileSync(here(), 'utf8')
+    const problem = await refused()
+    expect([problem.code, problem.message, problem.hint]).toEqual([
+      'offline',
+      'It 9.9.9 could not be fetched (SHA256SUMS).',
+      `It is fetched from ${process.env.IT_INSTALL_BASE}, where this It was installed from. Check that the release v9.9.9 is there, then try again.`,
+    ])
+    expect(asked).toEqual(['/latest/download/latest.json', '/download/v9.9.9/SHA256SUMS'])
+    expect(readFileSync(here(), 'utf8')).toBe(before)
   })
 
   test('compares the normalized version of the program with the advertised release', async () => {

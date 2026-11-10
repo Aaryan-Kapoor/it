@@ -73,12 +73,14 @@ export function keepBase(): void {
 async function file(name: string, most: number, signal?: AbortSignal, progress?: (got: number, of: number | undefined) => void, tag?: string): Promise<Buffer> {
   const { base, plain } = releases()
   const url = tag ? `${base}/download/${tag}/${name}` : `${base}/latest/download/${name}`
+  // Where a release is named, it is the version this upgrade is for, which may no longer be the newest
+  const which = tag ? `It ${tag.replace(/^v/, '')}` : 'The newest release of It'
   const unreachable = () =>
     new Problem(
-      `The newest release of It could not be fetched (${name}).`,
+      `${which} could not be fetched (${name}).`,
       'offline',
       base !== INSTALL.releases
-        ? `It is fetched from ${base}, where this It was installed from. Check that a release is there, then try again.`
+        ? `It is fetched from ${base}, where this It was installed from. Check that ${tag ? `the release ${tag}` : 'a release'} is there, then try again.`
         : 'Check that this machine is online, then try again.',
     )
   const tooLarge = () => new Problem(`What was fetched as ${name} is larger than any release of It holds, so none of it was kept.`, 'checksum')
@@ -329,7 +331,7 @@ export async function fetchNewer(
     fetching.catch((err) => {
       if (!limit.aborted || opts.signal?.aborted) throw err
       throw new Problem(
-        `The newest release of It had not been fetched after ${Math.round(allowed / 60_000)} minutes, so it was given up and nothing was changed.`,
+        `It ${to} had not been fetched after ${Math.round(allowed / 60_000)} minutes, so it was given up and nothing was changed.`,
         'offline',
         'Try again. On a connection too slow for that, run the line It was installed with again: it waits for as long as the download takes.',
       )
