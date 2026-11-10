@@ -30,7 +30,7 @@ import {
   WAKES,
   wakesOn,
 } from '@it/protocol'
-import { ADDON_API, AddonRuntimes } from './addon-runtime'
+import { ADDON_API, type AddonRuntime, AddonRuntimes } from './addon-runtime'
 import { ADDONS } from './addons.generated'
 import {
   DeliveryRecovery,
@@ -157,7 +157,7 @@ const SERVE_BYTES = 200_000 // and how large that answer may be: an add-on reads
 const WAITER_BYTES = 700_000 // and how large the clicks in one answer to a waiter may be together: `it wait` reads no more than a megabyte
 const keyOf = (harness: string, id: string) => `${harness}:${id}`
 /** Everything an add-on or a command asks the connector for. */
-const ROUTES = ['/health', '/addon', '/session', '/clicks', '/waiting', '/ack', '/runs']
+const ROUTES = ['/health', '/addon', '/session', '/clicks', '/waiting', '/ack', '/runs', '/route']
 /** What was asked for, as it may be written down: one of the connector's own routes, or one fixed word for anything else. */
 const routeOf = (asked: string | undefined): string => {
   const route = (asked ?? '').split('?')[0]!
@@ -551,6 +551,17 @@ const NOT_STARTED = '\u0000 not started'
  * loaded It's add-on. It goes to the page as it is, and is kept short: the backend keeps 300
  * characters of it.
  */
+/**
+ * How what is done on a conversation's pages would reach it, as the connector answers at
+ * `/route`: whether its app is connected here, whether its add-on is listening, how the add-on
+ * last spoke for that app, and whether a thread of T3 Code holds it.
+ */
+export interface Route {
+  connected: boolean
+  listening: boolean
+  runtime: AddonRuntime['state']
+  thread: 'held' | 'none' | 'unknown'
+}
 export const NOT_LOADED =
   'its conversation has not loaded It’s add-on, as happens when it was already open when It was installed. Type /reload-plugins in that conversation, or open it again, and what you did reaches it'
 /** Whether this machine joined an It that runs on another computer. */
@@ -1037,6 +1048,44 @@ async function connecting(say: (line: string) => void): Promise<void> {
         soon(again)
       })
     return stillAsking()
+  }
+  /** How long a question about a conversation's way waits for T3 Code to say whether a thread holds it. */
+  const ROUTE_T3_MS = 3_000
+  /**
+   * How what is done on a conversation's pages would reach it now, as far as this connector can
+   * tell, for `it create`, `it update` and `it status` to say to the agent: whether the
+   * conversation's add-on is listening, and whether a thread of T3 Code holds it, which T3 Code
+   * then takes the click to whatever the add-on does. `thread` is `unknown` where T3 Code is
+   * running and has not said within a few seconds whether one of its threads holds the
+   * conversation, where it would not take a message for it a moment ago, and where the note of
+   * the threads cannot be read. The look is the one a click makes, and what it finds is noted
+   * as a click's look notes it.
+   */
+  const wayFor = async (harness: string, id: string): Promise<Route> => {
+    const key = follow(keyOf(harness, id))
+    const now = Date.now()
+    const listening = [keyOf(harness, id), key].some((k) => {
+      const s = sessions.get(k)
+      return s !== undefined && now - s.seen < LIVE_MS
+    })
+    const answer = { connected: chosen(harness), listening, runtime: runtimes.status(harness).state }
+    if (harness !== 'claude-code' && harness !== 'codex') return { ...answer, thread: 'none' }
+    if (notedThread(key) !== undefined) return { ...answer, thread: 'held' }
+    if (t3ThreadsHeld()) return { ...answer, thread: 'unknown' }
+    if (!t3Seen || now - t3Seen.at > 5000) t3Seen = { at: now, server: t3Server() }
+    if (!t3Seen.server) return { ...answer, thread: 'none' }
+    const refused = t3Refused.get(key)
+    if (refused !== undefined && now - refused < T3_REFUSED_MS) return { ...answer, thread: 'unknown' }
+    const settled = () => {
+      const known = t3Known.get(key)
+      return known !== undefined && known !== 'asking' && (known.thread !== null || Date.now() - known.at < T3_AGAIN_MS) ? known : undefined
+    }
+    // Not known, or known to be in none too long ago to go by: asked, as a click asks
+    if (!settled()) t3For(key, { harness, id })
+    const until = steady() + ROUTE_T3_MS
+    while (!settled() && steady() < until) await new Promise((r) => setTimeout(r, 50))
+    const known = settled()
+    return { ...answer, thread: known === undefined ? 'unknown' : known.thread ? 'held' : 'none' }
   }
   /**
    * A person can switch a thread of T3 Code to another agent app, and the thread then runs
@@ -3068,6 +3117,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     const harness = String(url.searchParams.get('harness') ?? body.harness ?? '').slice(0, 40)
     const id = String(url.searchParams.get('session') ?? body.session ?? '').slice(0, 200)
+    // How what is done on this conversation's pages would reach it now: asked by the `it`
+    // command that publishes a page or says how It stands, run in that conversation
+    if (req.method === 'GET' && url.pathname === '/route') {
+      if (!harness || !id) return [400, { error: 'say which harness and session' }]
+      return [200, await wayFor(harness, id)]
+    }
     // What the marks put into a conversation stand for: asked by the conversation's own hook
     // as the turn begins that a mark started, or at the next moment one of its hooks runs.
     // Given for as long as no hook has said that it has it, so that an answer lost on its way

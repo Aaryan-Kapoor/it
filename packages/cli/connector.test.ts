@@ -235,7 +235,7 @@ vi.mock('./src/lib', async (original) => {
   }
 })
 
-import { type ConnectorInfo, infoFile, local, mac, NOT_LOADED, runConnector, wayOf } from './src/connector'
+import { type ConnectorInfo, infoFile, local, mac, NOT_LOADED, type Route, runConnector, wayOf } from './src/connector'
 import { DeliveryRecovery, eraseDeliveryRecovery } from './src/delivery-recovery'
 import * as files from './src/lib'
 import { readJson } from './src/lib'
@@ -5719,4 +5719,60 @@ process.stdin.on('end', () => {
     expect(readFileSync(at.given(0), 'utf8')).toContain('[action click-1]')
     await until(() => ended().length > 0, 90_000)
   }, 180_000)
+})
+
+describe('how what is done on a conversation’s pages would reach it, as the connector answers `it create` and `it status`', () => {
+  const claude = '11111111-2222-4333-8444-555555555555'
+  const way = (harness: string, session: string) => local<Route>(`/route?harness=${harness}&session=${session}`, { timeoutMs: 6000 })
+
+  test('a conversation whose add-on is listening is said to be listening, and one that is not is said not to be', async () => {
+    await start()
+    expect(await way('codex', 'thread-1')).toEqual({ connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1' } })
+    expect(await way('codex', 'thread-1')).toMatchObject({ connected: true, listening: true, thread: 'none' })
+    // An app the person has not connected here is said to be not connected
+    expect(await way('opencode', 'ses_abc')).toMatchObject({ connected: false, listening: false, thread: 'none' })
+  })
+
+  test('a Claude Code conversation that a thread of T3 Code holds is said to be held there, and the thread is noted as a click’s look notes it', async () => {
+    stand.t3.running = true
+    stand.t3.threads.set(claude, 't3-thread-a')
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+    expect(await way('claude-code', claude)).toEqual({ connected: true, listening: false, runtime: 'inactive', thread: 'held' })
+    expect(stand.t3.asked).toHaveLength(1)
+    await until(() => existsSync(path.join(home, 't3-threads.json')))
+    expect(JSON.parse(readFileSync(path.join(home, 't3-threads.json'), 'utf8'))).toEqual({ [`claude-code:${claude}`]: 't3-thread-a' })
+    // Noted, it is not asked about again
+    expect(await way('claude-code', claude)).toMatchObject({ thread: 'held' })
+    expect(stand.t3.asked).toHaveLength(1)
+  })
+
+  test('one that T3 Code says no thread holds is said to be in none, and one it has not answered for is said to be unknown', async () => {
+    stand.t3.running = true
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+    expect(await way('claude-code', claude)).toMatchObject({ thread: 'none' })
+    stand.t3.slow = true
+    expect(await way('claude-code', '22222222-2222-4333-8444-555555555555')).toMatchObject({ thread: 'unknown' })
+  })
+
+  test('where T3 Code is not running, a conversation is held in no thread and nothing is asked', async () => {
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+    expect(await way('claude-code', claude)).toMatchObject({ thread: 'none' })
+    expect(stand.t3.asked).toEqual([])
+  })
+
+  test('one in the note of threads is held there without asking, and where that note cannot be read it is unknown', async () => {
+    stand.t3.running = true
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }, (home) =>
+      writeFileSync(path.join(home, 't3-threads.json'), JSON.stringify({ [`claude-code:${claude}`]: 't3-thread-a' })),
+    )
+    expect(await way('claude-code', claude)).toMatchObject({ thread: 'held' })
+    expect(stand.t3.asked).toEqual([])
+    await stop?.()
+    stop = null
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }, (home) =>
+      writeFileSync(path.join(home, 't3-threads.json'), 'not a note'),
+    )
+    expect(await way('claude-code', claude)).toMatchObject({ thread: 'unknown' })
+  })
 })
