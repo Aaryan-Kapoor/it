@@ -997,7 +997,9 @@ describe('a display locked to a page', () => {
     // And pushed to it once its site is closed, as to any display
     vi.advanceTimersByTime(200_000)
     for (const sent of [everywhere, byName, byId])
-      expect((await h.t.query(internal.push._targets, { notificationId: sent.id, now: Date.now() }))?.targets.map((x: { displayId: string }) => x.displayId)).toContain(h.tv.id)
+      expect(
+        (await h.t.query(internal.push._targets, { notificationId: sent.id, now: Date.now() }))?.targets.map((x: { displayId: string }) => x.displayId),
+      ).toContain(h.tv.id)
     expect(await h.t.query(internal.push._still, { notificationId: byId.id, displayId: h.tv.id, endpoint: PUSH })).toBe(true)
     // None of it moves the display off its page, nor ends its lock
     const after = await h.row(h.tv.id)
