@@ -93,7 +93,7 @@ export const tabId = (): string => Array.from(crypto.getRandomValues(new Uint8Ar
 export function startReports(
   send: (report: Report) => Promise<unknown>,
   takes: () => boolean,
-  at: { document: Document; window: Window; now: () => number; clock?: ReportClock } = {
+  at: { document: Document; window: Window; now: () => number; wall?: () => number; clock?: ReportClock } = {
     document,
     window,
     now: () => performance.now(),
@@ -101,12 +101,20 @@ export function startReports(
   },
 ): () => void {
   const { document: doc, window: win, now, clock } = at
+  const wall = at.wall ?? (() => Date.now())
   /** Whether the last report could say no time, so that one is made again once the clock is learned. */
   let untimed = false
   const tab = tabId()
   let sequence = 0
   /** When the person last used the site here, by a clock that only goes forward, and when the last use that was said happened. */
   let usedAt = Number.NEGATIVE_INFINITY
+  /**
+   * The same, by the browser's own clock. Where the machine sleeps, the clock that only goes
+   * forward may stand still, and a use from before the sleep would look as if it were a moment
+   * ago: a use is of a moment ago only where both clocks say so.
+   */
+  let usedWallAt = Number.NEGATIVE_INFINITY
+  const fresh = () => now() - usedAt < USED_EVERY_MS && Math.abs(wall() - usedWallAt) < USED_EVERY_MS
   let saidUseOf = Number.NEGATIVE_INFINITY
   let toldUsedAt = Number.NEGATIVE_INFINITY
   let asking = false
@@ -120,7 +128,7 @@ export function startReports(
     const observedAt = clock?.at()
     untimed = clock !== undefined && observedAt === undefined
     if (untimed) clock!.ask()
-    const used = !untimed && shown && usedAt > saidUseOf && now() - usedAt < USED_EVERY_MS
+    const used = !untimed && shown && usedAt > saidUseOf && fresh()
     const what = closing ? { phase: 'none' as const } : page
     return {
       tab,
@@ -164,6 +172,7 @@ export function startReports(
   const used = () => {
     if (!visible()) return
     usedAt = now()
+    usedWallAt = wall()
     const wait = toldUsedAt + USED_EVERY_MS - usedAt
     if (wait <= 0) tell()
     else if (later === undefined)
@@ -195,7 +204,7 @@ export function startReports(
   pageChanged.add(tell)
   // Learned afresh, the clock lets a report say when it was made, and the use that was kept with it
   const unlearn = clock?.learned(() => {
-    if (untimed || (usedAt > saidUseOf && now() - usedAt < USED_EVERY_MS)) tell()
+    if (untimed || (usedAt > saidUseOf && fresh())) tell()
   })
   const beat = win.setInterval(() => visible() && tell(), VISIBLE_EVERY_MS)
   const looking = win.setInterval(look, LOOK_EVERY_MS)

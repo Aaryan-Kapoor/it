@@ -321,3 +321,36 @@ test('after the machine slept, the backend’s time is not known closely enough 
   learnClock(wall - 40, { sent, back: readClocks() })
   expect(reportClock()).toBe(Math.floor(wall))
 })
+
+test('a use kept from before the machine slept is not said as a use after it, and one made on waking is', async () => {
+  const c = clockOf()
+  c.set(1_000_000)
+  // The clock that only goes forward, as this test moves it: it stands still while the machine sleeps
+  let mono = 0
+  const sent: Report[] = []
+  stop = startReports(
+    (r) => {
+      sent.push(r)
+      // The backend does not take it: its clock was learned before the sleep, and this one's is not yet
+      return Promise.resolve({ accepted: true, used: false })
+    },
+    () => true,
+    { document, window, now: () => mono, wall: () => Date.now(), clock: c.clock },
+  )
+  await vi.advanceTimersByTimeAsync(0)
+  click()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.at(-1)).toMatchObject({ used: true })
+  // Three minutes asleep, and a tenth of a second by the clock that stood still
+  vi.setSystemTime(Date.now() + 180_000)
+  mono += 100
+  const count = sent.length
+  c.learn(1_180_000)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.slice(count).filter((r) => r.used)).toEqual([])
+  // A click on waking is a use
+  mono += 100
+  click()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sent.at(-1)).toMatchObject({ used: true, observedAt: 1_180_000 })
+})
