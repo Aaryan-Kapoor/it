@@ -10,8 +10,9 @@ import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } fro
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
+import { record as recordAction } from './actions'
 import { get as pageQuery, takePage } from './artifacts'
-import { inboxPage as inboxPageQuery, inbox as inboxQuery } from './delivery'
+import { inboxPage as inboxPageQuery, inbox as inboxQuery, waitingPage as waitingPageQuery } from './delivery'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -5975,12 +5976,110 @@ describe('cases at the edges', () => {
       for (const page of read) expect(carried(page)).toBeLessThanOrEqual(192 * 1024)
     })
 
+    /**
+     * Runs `waitingPage` by hand over a view of the database in which every action has the same
+     * moment of arrival and the same moment its record was made, which the stand-in backend
+     * never gives two records but the real one may.
+     */
+    async function tiedRead(t: T, m: { id: string }, args: { slug: string; after?: string }) {
+      const tie = (x: any) => (x && typeof x === 'object' && 'clientActionId' in x ? { ...x, _creationTime: 0, createdAt: 0, madeAt: 0 } : x)
+      const view = (q: any): any =>
+        new Proxy(q, {
+          get(target, name) {
+            if (name === Symbol.asyncIterator)
+              return async function* () {
+                for await (const x of target) yield tie(x)
+              }
+            const value = target[name]
+            if (typeof value !== 'function') return value
+            return (...given: unknown[]) => {
+              const out = value.apply(target, given)
+              return ['take', 'first', 'unique', 'collect'].includes(String(name))
+                ? Promise.resolve(out).then((r) => (Array.isArray(r) ? r.map(tie) : tie(r)))
+                : view(out)
+            }
+          },
+        })
+      return t.run(async (ctx) => {
+        const db = new Proxy(ctx.db, {
+          get(target: any, name) {
+            if (name === 'query') return (table: never) => view(target.query(table))
+            if (name === 'get') return async (id: never) => tie(await target.get(id))
+            const value = target[name]
+            return typeof value === 'function' ? value.bind(target) : value
+          },
+        })
+        const identity = { issuer: SITE, subject: m.id, kind: 'machine' }
+        return (waitingPageQuery as any)._handler({ ...ctx, db, auth: { getUserIdentity: async () => identity } }, args) as Promise<{
+          actions: { id: string; cursor: string }[]
+          from: string
+          more: boolean
+          earlier: boolean
+        }>
+      })
+    }
+
+    test('fifty-one actions that arrived at the same moment, with records made at the same moment, are each read once, numbered or not', async () => {
+      for (const numbered of [false, true]) {
+        const t = backend()
+        await person(t, 'alice')
+        const m = await machineOf(t, 'alice')
+        const p = await publish(m, 'plan')
+        const ids = await insertClicks(t, p.artifactId, 51)
+        if (numbered) await t.run(async (ctx) => ids.forEach((id, i) => void ctx.db.patch(id as never, { seq: i + 1 } as never)))
+        const first = await tiedRead(t, m, { slug: 'plan', after: '0' })
+        expect(first.actions.length).toBe(50)
+        expect(first.more).toBe(true)
+        const rest = await tiedRead(t, m, { slug: 'plan', after: first.actions.at(-1)!.cursor })
+        expect(rest.actions.length).toBe(1)
+        expect(rest.more).toBe(false)
+        const read = [...first.actions, ...rest.actions].map((c) => c.id)
+        expect(new Set(read).size).toBe(51)
+        expect([...read].sort()).toEqual([...ids].sort())
+        // Numbered, they come by number; from before then, by id, the one order that tells them apart
+        expect(read).toEqual(numbered ? ids : [...ids].sort())
+        // The newest of them, and the place before them, which read after gives them again
+        const newest = await tiedRead(t, m, { slug: 'plan' })
+        expect(newest.actions.map((c) => c.id)).toEqual(read.slice(1))
+        expect(newest.earlier).toBe(true)
+        expect((await tiedRead(t, m, { slug: 'plan', after: newest.from })).actions.map((c) => c.id)).toEqual(read.slice(1))
+      }
+    })
+
+    test('each action recorded is given its page’s next number, after any kept from before, and read after them', async () => {
+      const t = backend()
+      const alice = await person(t, 'alice')
+      const m = await machineOf(t, 'alice')
+      const p = await publish(m, 'plan')
+      const old = await insertClicks(t, p.artifactId, 3)
+      const made = []
+      for (const id of ['click-0001', 'click-0002'])
+        made.push(
+          (await alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope(id) })).actionId,
+        )
+      // Two recorded in one transaction from the same reading of the page are numbered apart
+      const twice = await t.run(async (ctx) => {
+        const page = (await ctx.db.get(p.artifactId as never))!
+        const one = await recordAction(ctx as never, page as never, { clientActionId: 'click-0003', name: 'approve', payload: '{}', contentVersion: 1 })
+        const two = await recordAction(ctx as never, page as never, { clientActionId: 'click-0004', name: 'approve', payload: '{}', contentVersion: 1 })
+        return [one.actionId, two.actionId]
+      })
+      const rows = await t.run((ctx) => ctx.db.query('actions').collect())
+      const seqOf = (id: string) => rows.find((x) => x._id === id)!.seq
+      expect([...made, ...twice].map(seqOf)).toEqual([1, 2, 3, 4])
+      expect(old.map(seqOf)).toEqual([undefined, undefined, undefined])
+      const read = (await pages(m, 'plan')).flatMap((page) => page.actions)
+      expect(read.map((c) => c.id)).toEqual([...old, ...made, ...twice])
+      expect(read.slice(3).map((c) => c.cursor)).toEqual(['1', '2', '3', '4'])
+      expect((await m.as.query(api.delivery.waitingPage, { slug: 'plan', after: '2' })).actions.map((c) => c.id)).toEqual(twice)
+    })
+
     test('a place that is not one is refused, and so is a page that is not there', async () => {
       const t = backend()
       await person(t, 'alice')
       const m = await machineOf(t, 'alice')
       await publish(m, 'plan')
-      for (const after of ['', 'x', '12', '1:2:3', '-1:2', `${'9'.repeat(17)}:1`]) {
+      for (const after of ['', 'x', '1:2', '1:2:3', '-1', '01', 'o1', 'o1:not an id', '9'.repeat(17)]) {
         expect(await code(m.as.query(api.delivery.waitingPage, { slug: 'plan', after }))).toBe('invalid')
       }
       expect(await code(m.as.query(api.delivery.waitingPage, { slug: 'none' }))).toBe('not_found')

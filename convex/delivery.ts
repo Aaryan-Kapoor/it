@@ -6,7 +6,7 @@
 // Two things about a click never change while it is delivered: which machine it is for, and
 // which conversation. Who holds the lease is recorded separately, so a machine that borrows a
 // click and dies does not take it away from its owner.
-import { LEASE_MS, LIMITS, LISTENING_MOST, QUEUES, WAKE_BACK_MS, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
+import { type ActionPlace, actionPlace, LEASE_MS, LIMITS, LISTENING_MOST, placeCursor, QUEUES, WAKE_BACK_MS, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -431,32 +431,29 @@ export const waiting = query({
 const PAGE_MOST = 50
 const PAGE_BYTES = 192 * 1024
 
-/**
- * Where a click stands among a page's waiting clicks, as `waitingPage` gives it out and takes it
- * back: when It received it, and when its record was made, which together put every click in
- * one order that a click keeps for as long as it exists. "0" stands before every click.
- */
-const position = (x: Doc<'actions'>) => `${x.createdAt}:${x._creationTime}`
-function placeOf(cursor: string): { made: number; at: number } | null {
-  if (cursor === '0') return null
-  const m = /^(\d{1,16}):(\d{1,16}(?:\.\d{1,20})?)$/.exec(cursor)
-  if (!m) return fail('invalid', 'That is not a place among the actions on a page: give the `cursor` of one that was listed, or 0 for the start.')
-  return { made: Number(m[1]), at: Number(m[2]) }
-}
+/** Where a click stands among its page's waiting clicks (`ActionPlace` in the protocol says the order). */
+const placeOfRow = (x: Doc<'actions'>): ActionPlace => (x.seq !== undefined ? { seq: x.seq } : { at: x._creationTime, id: x._id })
+const byId = (x: Doc<'actions'>, y: Doc<'actions'>) => (x._id < y._id ? -1 : x._id > y._id ? 1 : 0)
 
 /**
  * The clicks waiting on one page, a bounded page of them at a time: what `it actions --id` lists
  * and `it actions --id --follow` watches, on a backend that names it in `TAKES.waitingPage`.
+ *
+ * They are read in one order that puts every click in a place of its own, which it keeps for as
+ * long as it exists (`ActionPlace`): by the number each was given on its page, under the page's
+ * record, so that a click committed later always comes later, whatever the clocks said. Those
+ * recorded before clicks were numbered come first, by when their records were made and then by
+ * id; no more of them are ever made, so nothing can come in among them.
  *
  * Without `after` it is the newest of them, oldest first: a click that has just been made is
  * always among them, however many older ones wait unanswered. `from` is then the place just
  * before them, so that reading `after` it gives these and every later one, and `earlier` says
  * whether older ones wait that were left out.
  *
- * With `after`, it is those that It received after that place, oldest first, and `more` says
- * whether more wait after the last of them. Each click carries its own place as `cursor`. Read
- * after the last one's, and again after the last of those, this reaches every click that waits,
- * however many there are; watched after it, it changes as soon as another one comes.
+ * With `after`, it is those after that place, oldest first, and `more` says whether more wait
+ * after the last of them. Each click carries its own place as `cursor`. Read after the last
+ * one's, and again after the last of those, this reaches every click that waits, however many
+ * there are; watched after it, it changes as soon as another one comes.
  *
  * It only reads, as `waiting` does: nothing is claimed, held or answered by reading it.
  */
@@ -464,9 +461,41 @@ export const waitingPage = query({
   args: { slug: v.string(), after: v.optional(v.string()) },
   handler: async (ctx, { slug, after }) => {
     const { user } = await requireMachine(ctx)
-    const place = after === undefined ? undefined : placeOf(after)
+    const place = after === undefined ? undefined : actionPlace(after)
+    if (place === undefined && after !== undefined)
+      fail('invalid', 'That is not a place among the actions on a page: give the `cursor` of one that was listed, or 0 for the start.')
     const a = (await artifactBySlug(ctx, user._id, slug)) ?? fail('not_found', 'No such page.')
-    const pending = () => ctx.db.query('actions').withIndex('by_artifact_delivery', (q) => q.eq('artifactId', a._id).eq('delivery', 'pending'))
+    /** The numbered ones, in order, after a number or from the first. */
+    const numbered = (order: 'asc' | 'desc', after = 0) =>
+      ctx.db
+        .query('actions')
+        .withIndex('by_artifact_seq', (q) => q.eq('artifactId', a._id).eq('delivery', 'pending').gt('seq', after))
+        .order(order)
+    /**
+     * Those from before clicks were numbered, in order, from a place among them or from the
+     * first. Records made in the same moment are read together and put in order by id: in the
+     * index they stand in an order of the backend's own.
+     */
+    async function* older(order: 'asc' | 'desc', from?: { at: number; id: string }) {
+      const rows = ctx.db
+        .query('actions')
+        .withIndex('by_artifact_seq', (q) => {
+          const old = q.eq('artifactId', a._id).eq('delivery', 'pending').eq('seq', undefined)
+          return from ? old.gte('_creationTime', from.at) : old
+        })
+        .order(order)
+      let moment: Doc<'actions'>[] = []
+      const together = function* () {
+        moment.sort(order === 'asc' ? byId : (x, y) => byId(y, x))
+        for (const x of moment) if (!from || x._creationTime !== from.at || x._id > from.id) yield x
+        moment = []
+      }
+      for await (const x of rows) {
+        if (moment.length && moment[0]!._creationTime !== x._creationTime) yield* together()
+        moment.push(x)
+      }
+      yield* together()
+    }
     const bytes = new TextEncoder()
     /** Takes rows in order while they fit, and gives back the first that did not, if any did not. */
     const fill = async (rows: AsyncIterable<Doc<'actions'>>, into: Doc<'actions'>[]): Promise<Doc<'actions'> | undefined> => {
@@ -484,32 +513,27 @@ export const waitingPage = query({
     let more = false
     let from = after ?? '0'
     if (place === undefined) {
-      const left = await fill(pending().order('desc'), rows)
+      async function* newestFirst() {
+        yield* numbered('desc')
+        yield* older('desc')
+      }
+      const left = await fill(newestFirst(), rows)
       rows.reverse()
       if (left) {
         earlier = true
-        from = position(left)
+        from = placeCursor(placeOfRow(left))
       }
     } else {
-      // Those received at the same moment as the place, after it, and then those received later
+      const at = place
       async function* later() {
-        if (place) {
-          yield* ctx.db
-            .query('actions')
-            .withIndex('by_artifact_delivery', (q) =>
-              q.eq('artifactId', a._id).eq('delivery', 'pending').eq('createdAt', place.made).gt('_creationTime', place.at),
-            )
-        }
-        yield* ctx.db.query('actions').withIndex('by_artifact_delivery', (q) => {
-          const all = q.eq('artifactId', a._id).eq('delivery', 'pending')
-          return place ? all.gt('createdAt', place.made) : all
-        })
+        if (at === null || !('seq' in at)) yield* older('asc', at ?? undefined)
+        yield* numbered('asc', at !== null && 'seq' in at ? at.seq : 0)
       }
       more = (await fill(later(), rows)) !== undefined
     }
-    const places = new Map(rows.map((x) => [x._id as string, position(x)]))
-    const clicks = (await asClicks(ctx, rows)).map((c) => ({ ...c, cursor: places.get(c.id)! }))
-    return { actions: clicks, from, more, earlier }
+    const clicks = await asClicks(ctx, rows)
+    const places = new Map(rows.map((x) => [x._id as string, placeCursor(placeOfRow(x))]))
+    return { actions: clicks.map((c) => ({ ...c, cursor: places.get(c.id)! })), from, more, earlier }
   },
 })
 
