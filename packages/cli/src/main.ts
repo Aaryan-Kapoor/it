@@ -507,15 +507,15 @@ function anothers(slug: string, theirs: Made | null): Problem {
  * way, and what the agent is to do about it, as `arrives` says it: the connector says whether
  * the conversation's add-on is listening and whether a thread of T3 Code holds it. Given with
  * every page an agent publishes or shows, where `slug` is that page, and by `it status`. Nothing
- * where no conversation is known and a person ran the command, or where `known` asks for a
- * conversation and none is.
+ * where the command cannot tell which conversation it runs in: a person's or a script's, or an
+ * agent app's that does not say, which the skill tells to wait.
  */
-async function arrivalHere(a: Args, slug?: string, known = false): Promise<Arrives | undefined> {
+async function arrivalHere(slug?: string): Promise<Arrives | undefined> {
   const session = sessionAsked()?.session
-  if (!session && (known || forPerson(a))) return undefined
-  const asked = session
-    ? await local<Partial<Route>>(`/route?harness=${encodeURIComponent(session.harness)}&session=${encodeURIComponent(session.id)}`, { timeoutMs: 5000 })
-    : null
+  if (!session) return undefined
+  const asked = await local<Partial<Route>>(`/route?harness=${encodeURIComponent(session.harness)}&session=${encodeURIComponent(session.id)}`, {
+    timeoutMs: 5000,
+  })
   // An answer that is not one is no answer: a connector from before it answered this says nothing of it
   const route =
     asked && typeof asked.connected === 'boolean' && typeof asked.listening === 'boolean' && ['held', 'none', 'unknown'].includes(asked.thread as string)
@@ -525,7 +525,7 @@ async function arrivalHere(a: Args, slug?: string, known = false): Promise<Arriv
 }
 
 async function published(done: { slug: string; version: number; url: string; note?: string; urlNote?: string }, a: Args, fresh = false): Promise<void> {
-  const arrival = await arrivalHere(a, done.slug)
+  const arrival = await arrivalHere(done.slug)
   const result = {
     id: done.slug,
     version: done.version,
@@ -2323,7 +2323,7 @@ async function status(a: Args) {
   if (!forPerson(a)) {
     // Asked from a conversation: whether what is done on its pages arrives there by itself, which
     // the add-ons' state above cannot say of it, since a thread of T3 Code takes it as well
-    const arrival = running && !blocked ? await arrivalHere(a, undefined, true) : undefined
+    const arrival = running && !blocked ? await arrivalHere() : undefined
     return out(arrival ? { ...stands, arrives: arrival } : stands)
   }
   // To a person: what is wrong and what to do about it first, then whether It is running and

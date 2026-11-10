@@ -6317,3 +6317,134 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and whether an agent 
     }
   })
 })
+
+describe('whether what the person does arrives by itself, as a page’s command tells its agent', () => {
+  const claude = '11111111-2222-4333-8444-555555555555'
+  /** A connector that answers `/route` as given, and says what it was asked. */
+  async function connectorSaying(m: { it: string }, route: Record<string, unknown> | null) {
+    const asked: string[] = []
+    const socket = path.join(m.it, 'connector.sock')
+    const server = http.createServer((req, res) => {
+      asked.push(req.url ?? '')
+      if (route && req.url?.startsWith('/route?')) return res.end(JSON.stringify(route))
+      res.statusCode = 404
+      res.end('{}')
+    })
+    await new Promise<void>((resolve) => server.listen(socket, resolve))
+    writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'a'.repeat(48), pid: process.pid, version: '0.0.0' }))
+    return { asked, close: () => new Promise<void>((resolve) => server.close(() => resolve())) }
+  }
+  const publishing = (m: ReturnType<typeof machine>) =>
+    backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: 'plan', version: 1, url: 'https://site.example/p/plan' }
+      if (fn === 'artifacts:get') return { title: 'Plan' }
+      return null
+    })
+  let b: Awaited<ReturnType<typeof publishing>>
+  const notes = (m: { it: string }) => JSON.parse(readFileSync(path.join(m.it, 'conversations.json'), 'utf8'))
+
+  test('a Claude Code conversation that has not loaded It’s add-on is told that nothing arrives by itself, to wait, and to ask the person to reload its plugins', async () => {
+    const m = machine()
+    b = await publishing(m)
+    const c = await connectorSaying(m, { connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    try {
+      const ran = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], {
+        ...b.env,
+        CLAUDE_CODE_SESSION_ID: claude,
+        CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.321',
+      })
+      const said = printed(ran)
+      expect(said).toMatchObject({ id: 'plan', tell: TELL, arrives: { byItself: false } })
+      expect(said.arrives.next).toContain('type /reload-plugins in this conversation')
+      expect(said.arrives.next).toContain('`it wait --id plan --timeout 100`')
+      expect(c.asked).toEqual([`/route?harness=claude-code&session=${claude}`])
+      // And the conversation's note says that it published without the add-on, for the connector to tell its page
+      expect(notes(m)[`claude-code:${claude}`]).toMatchObject({ addon: false })
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
+  test('one in a Claude Code too old for that is told to ask the person for a new conversation instead', async () => {
+    const m = machine()
+    b = await publishing(m)
+    const c = await connectorSaying(m, { connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    try {
+      const ran = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], {
+        ...b.env,
+        CLAUDE_CODE_SESSION_ID: claude,
+        CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.280',
+      })
+      expect(printed(ran).arrives.next).toContain('start a new Claude Code conversation')
+      expect(printed(ran).arrives.next).not.toContain('/reload-plugins')
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
+  test('one whose thread of T3 Code takes what is done, without its add-on, is told it arrives by itself through the thread, and to end its turn', async () => {
+    const m = machine()
+    b = await publishing(m)
+    const c = await connectorSaying(m, { connected: true, listening: false, runtime: 'inactive', thread: 'held' })
+    try {
+      const ran = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], { ...b.env, CLAUDE_CODE_SESSION_ID: claude })
+      expect(printed(ran).arrives).toMatchObject({ byItself: true, via: 't3' })
+      expect(printed(ran).arrives.next).toMatch(/^End your turn\./)
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
+  test('one whose add-on is listening is told it arrives by itself through the add-on, and its note says nothing of a missing add-on', async () => {
+    const m = machine()
+    b = await publishing(m)
+    const c = await connectorSaying(m, { connected: true, listening: true, runtime: 'active', thread: 'none' })
+    try {
+      const ran = await run(m, ['update', 'plan', '--html', '<p>again</p>'], {
+        ...b.env,
+        CLAUDE_CODE_SESSION_ID: claude,
+        IT_HARNESS: 'claude-code',
+        IT_SESSION: claude,
+      })
+      expect(printed(ran).arrives).toMatchObject({ byItself: true, via: 'addon' })
+      expect(notes(m)[`claude-code:${claude}`]).not.toHaveProperty('addon')
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
+  test('where the connector cannot be asked, or answers as one from before it was asked this, it is said to be unknown, with the agent told to wait', async () => {
+    const m = machine()
+    b = await publishing(m)
+    try {
+      const without = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], { ...b.env, CODEX_THREAD_ID: 'thread-1' })
+      expect(printed(without).arrives).toMatchObject({ byItself: 'unknown' })
+      expect(printed(without).arrives.next).toContain('`it wait --id plan --timeout 100`')
+      const c = await connectorSaying(m, null)
+      try {
+        const older = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], { ...b.env, CODEX_THREAD_ID: 'thread-1' })
+        expect(printed(older).arrives).toMatchObject({ byItself: 'unknown' })
+      } finally {
+        await c.close()
+      }
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a command that cannot tell which conversation it runs in says nothing of it', async () => {
+    const m = machine()
+    b = await publishing(m)
+    try {
+      const ran = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], b.env)
+      expect(printed(ran)).not.toHaveProperty('arrives')
+    } finally {
+      await b.close()
+    }
+  })
+})
