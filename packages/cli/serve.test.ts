@@ -1618,6 +1618,12 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     const other = run(['serve', '--log', path.join(folder, 'other.log')])
     expect(await other.ended).toBe(1)
     expect(readFileSync(path.join(folder, 'other.log'), 'utf8')).toMatch(/ could not start: already_running\n$/)
+    // With no terminal, in fixed words that say what to do, and not the running one's process number
+    expect(JSON.parse(other.err().trim().split('\n').pop()!).error).toEqual({
+      code: 'already_running',
+      message: 'It is already running for this folder.',
+      hint: '`it service status` says so. Stop that one first if you meant to start this one.',
+    })
     expect(await fetch(`${at.site}/health`).then((r) => r.ok)).toBe(true)
     // This machine's own commands reach the backend as this machine
     const who = run(['whoami'])
