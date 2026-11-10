@@ -95,25 +95,34 @@ Some of what comes back is not quite as it was. A page that was deleted since th
 
 A display that was signed out since the upgrade does not open pages once the copy is back. The part of It that serves pages remembers the sign-out for about a day, in `content-data/`, and refuses the display's older sign-out number until then. That record is part of what keeps a page from being opened by a display that was signed out, so leave it in place. To use the display again sooner, forget it on the site's Displays page and pair that browser again, which makes it a new display that has never been signed out.
 
-The newer data is not thrown away by these steps. It is moved into a folder of its own, so that you can go forward to it again with the newer It.
+The newer data is not thrown away. Before the copy is put back, the whole of It's folder is copied aside as it stands, to `~/.it-after-upgrade`, so that you can go forward to it again with the newer It.
 
 ### Putting the copy back
 
-These steps are the same on Linux and macOS. Where It's folder is not `~/.it`, use the folder `IT_HOME` names instead.
+These steps are the same on Linux and macOS. Where It's folder is not `~/.it`, use the folder `IT_HOME` names instead, in the commands as well. The disk needs room for a second copy of the whole folder, files of pages included.
 
-1. Stop It and keep it from starting again by itself, with `it service uninstall`. Where you started it yourself with `it serve`, stop that with Ctrl-C. `it service status` says whether It is still running, and the next step must wait until it is not.
-2. Move the newer data aside and put the copy in its place. Put the name of the copy's folder after `copy=` in these commands, and run them in a terminal:
+1. Where you started It yourself with `it serve`, stop that with Ctrl-C.
+2. Put the name of the copy's folder after `copy=` in these lines, and paste them into a terminal that runs bash or zsh. In fish, type `sh` first. They stop the background service and keep it from starting again by itself, copy It's folder to `~/.it-after-upgrade`, and then put the copy in place of the database. They stop at the first command that fails, and they change nothing where `~/.it-after-upgrade` is there already or It is still running.
 
    ```sh
-   cd ~/.it/backend
-   copy=before-...
-   mkdir after-upgrade
-   mv db.sqlite3* data.json storage after-upgrade/
-   cp -p "$copy"/db.sqlite3* "$copy"/data.json .
-   cp -Rp "$copy"/storage .
+   (
+     set -e
+     it service uninstall
+     cd ~/.it/backend
+     copy=before-...
+     if [ ! -f "$copy/data.json" ]; then echo "There is no copy named $copy here, so nothing was changed." >&2; exit 1; fi
+     if [ -e lock ]; then echo "It is still running, so nothing was changed. Stop it, and run these lines again." >&2; exit 1; fi
+     if [ -e ~/.it-after-upgrade ]; then echo "~/.it-after-upgrade is there already, so nothing was changed." >&2; exit 1; fi
+     cp -Rp ~/.it ~/.it-after-upgrade
+     echo "It's folder as it was is kept in ~/.it-after-upgrade."
+     rm -rf db.sqlite3* data.json storage
+     cp -p "$copy"/db.sqlite3* "$copy"/data.json .
+     cp -Rp "$copy"/storage .
+     echo "The copy is in place."
+   )
    ```
 
-   If `mkdir` says that `after-upgrade` is there already, give the folder another name in the three lines that use it. The copy itself is left as it is, so the steps can be tried again.
+   The last thing they say is "The copy is in place." Where they stop before that, nothing after the command that failed has run, and the line above says why. If they stopped before saying that It's folder is kept in `~/.it-after-upgrade`, It's folder is as it was: delete whatever `~/.it-after-upgrade` they left, and run them again. If they stopped after saying so, put It's folder back as it was before you run them again, with `mv ~/.it ~/.it-failed && mv ~/.it-after-upgrade ~/.it`, and delete `~/.it-failed` once It runs again. If It ended without tidying up after itself, the lines say that it is still running when it is not. Then start it once with `it serve`, stop it with Ctrl-C, and run them again.
 3. Install the older version, naming its release, as `v0.1.36` is named here:
 
    ```sh
@@ -122,24 +131,56 @@ These steps are the same on Linux and macOS. Where It's folder is not `~/.it`, u
 
    Run at a terminal, the script goes on into `it setup`, which registers the background service again and starts it. Where it does not, run `it setup` yourself.
 
-On Windows the steps are the same, in PowerShell:
+On Windows the steps are the same, in PowerShell. Paste the block whole: the braces make it stop at the first error, where separate lines would go on past it.
 
 ```powershell
-it service uninstall
-cd ~\.it\backend
-$copy = 'before-...'
-New-Item -ItemType Directory after-upgrade
-Move-Item db.sqlite3*, data.json, storage after-upgrade
-Copy-Item "$copy\db.sqlite3*", "$copy\data.json" .
-Copy-Item "$copy\storage" . -Recurse
+& {
+  $ErrorActionPreference = 'Stop'
+  $copy = 'before-...'
+  $folder = Join-Path $HOME '.it'
+  $backend = Join-Path $folder 'backend'
+  it service uninstall
+  if ($LASTEXITCODE -ne 0) { throw 'The background service could not be stopped, so nothing was changed.' }
+  if (-not (Test-Path (Join-Path $backend "$copy\data.json"))) { throw "There is no copy named $copy in $backend, so nothing was changed." }
+  if (Test-Path (Join-Path $backend 'lock')) { throw 'It is still running, so nothing was changed. Stop it, and run this again.' }
+  if (Test-Path "$folder-after-upgrade") { throw "$folder-after-upgrade is there already, so nothing was changed." }
+  Copy-Item $folder "$folder-after-upgrade" -Recurse -Force
+  "It's folder as it was is kept in $folder-after-upgrade."
+  Set-Location $backend
+  Remove-Item db.sqlite3*, data.json, storage -Recurse -Force
+  Copy-Item "$copy\db.sqlite3*", "$copy\data.json" . -Force
+  Copy-Item "$copy\storage" . -Recurse -Force
+  'The copy is in place.'
+}
 $env:IT_VERSION = 'v0.1.36'; irm https://github.com/Aaryan-Kapoor/it/releases/download/v0.1.36/install.ps1 | iex
 ```
 
+What to do where the block stops partway is the same as above, with `~\.it-after-upgrade` in place of `~/.it-after-upgrade`, and `Rename-Item` in place of `mv`.
+
 Once the older It is running, `it status` says that the database is at the older version, with nothing under `behind`, and your pages are there as they were before the upgrade. Where the newer It brought a newer backend program, it removed the older one, so the older It fetches its own again the first time it starts, and that start has to reach GitHub or the place `IT_BACKEND_RELEASES` names. The older It goes on telling you that the newer version is out. Installing that same version again changes the data again in the same way, so wait for a release that fixes what went wrong, or turn the reminder off with `it updates off`.
 
-To go forward again instead, stop It in the same way, move the files in `after-upgrade` back into `~/.it/backend/` in place of the ones there, and install the newer It. What was done with the older It in the meantime is then lost in the same way. When you no longer need the newer data, delete the `after-upgrade` folder yourself. It never removes a folder it did not make.
+### Going forward again
 
-The steps on Linux are tested together: a test of It's own keeps a copy as an upgrade does, loads newer functions with a field the older ones do not know and writes data that uses it, runs the commands above, and then starts the older It on the copy and opens the page that was there. The steps on macOS and Windows, and installing an older release from GitHub, are not run by that test.
+To go forward to the newer data instead, put the whole folder you kept back in the place of It's folder, and start the newer It from it. Everything that was published, changed or deleted while you were on the older It is lost when you do, because the folder comes back whole, with the newer It's database and the files of its pages together. Putting back only the database would not do: a page published again on the older It can have written its files where the newer database expects others, and the newer It would then show the older bytes under the newer version.
+
+Stop It with Ctrl-C where you started it with `it serve`, and paste these lines in the same way:
+
+```sh
+(
+  set -e
+  it service uninstall
+  if [ ! -d ~/.it-after-upgrade ]; then echo "There is no ~/.it-after-upgrade to go forward to, so nothing was changed." >&2; exit 1; fi
+  if [ -e ~/.it/backend/lock ]; then echo "It is still running, so nothing was changed. Stop it, and run these lines again." >&2; exit 1; fi
+  if [ -e ~/.it-rolled-back ]; then echo "~/.it-rolled-back is there already, so nothing was changed." >&2; exit 1; fi
+  mv ~/.it ~/.it-rolled-back
+  mv ~/.it-after-upgrade ~/.it
+  echo "It's folder is as it was before you went back."
+)
+```
+
+Then run `~/.it/bin/it setup`, which is the newer It, and it starts the background service again. On Windows, use `Move-Item` in place of `mv` and `~\.it\bin\it.exe setup`. The folder from the older It is kept in `~/.it-rolled-back`, and when you no longer need it, or when you no longer need `~/.it-after-upgrade` after going back, delete it yourself. It never removes a folder it did not make.
+
+The steps on Linux are tested as they are written here, by a test of It's own. It keeps a copy as an upgrade does, loads newer functions with fields the older ones do not know and writes data that uses them, and runs the lines above unchanged, once to put the copy back and again to see that a second run refuses and changes nothing. It then starts the older It on the copy, opens the page that was there, pairs again a display that was signed out since the upgrade, and goes forward again to find the newer pages as they were. It also picks between two copies by the rule above. The steps on macOS and Windows, and installing an older release from GitHub, are not run by that test.
 
 ## How long things are kept
 
