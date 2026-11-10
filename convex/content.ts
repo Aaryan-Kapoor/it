@@ -120,7 +120,8 @@ async function enqueue(
   return jobId
 }
 /** Showings opened for a display before `epoch` are over, and tickets made for it before then open nothing. Answers with the job, for a caller that wants to know when the content service has confirmed. */
-export const revokeLater = (ctx: MutationCtx, args: { userId: Id<'users'>; displayId: string; epoch: number }) => enqueue(ctx, 'revoke', args.userId, args)
+export const revokeLater = (ctx: MutationCtx, args: { userId: Id<'users'>; displayId: string; epoch: number }, opts: { inMs?: number } = {}) =>
+  enqueue(ctx, 'revoke', args.userId, args, opts)
 /** How long after something is deleted an upload that was already under way could still land. */
 const GRANT_TAIL_MS = PUBLICATION.grantTailMs
 /**
@@ -198,38 +199,62 @@ export const _settle = internalMutation({
   },
 })
 
+/** Asks the content service for what a job asks, once, and says how that went. Nothing is noted of the job here. */
+async function attempt(ctx: ActionCtx, jobId: Id<'contentJobs'>, job: { op: string; body: string; attempts: number }): Promise<'done' | 'more' | 'failed'> {
+  let outcome: 'done' | 'more' | 'failed' = 'failed'
+  try {
+    const r = await control(ctx, job.op, job.body)
+    if (!r.ok) log('content_job.failed', { jobId, op: job.op, try: job.attempts + 1, status: r.status }, 'error')
+    if (r.ok) {
+      // Only a proper answer counts. One that cannot be read, or does not say what was asked,
+      // is a failure, and the job is tried again.
+      const said = (await r.json().catch(() => null)) as { more?: unknown; removed?: unknown; epoch?: unknown } | null
+      // A deletion that says there is more and that it removed nothing got nowhere. It is no
+      // step on the way, to be followed by the next at once: it waits as a failure does, so
+      // that what cannot be removed is not asked for without end and without a pause.
+      const stuck = job.op === 'delete' && said?.more === true && said.removed === 0
+      if (job.op === 'delete' && typeof said?.more === 'boolean' && !stuck) outcome = said.more ? 'more' : 'done'
+      if (job.op === 'revoke' && typeof said?.epoch === 'number') outcome = 'done'
+      if (outcome === 'failed')
+        log(
+          'content_job.failed',
+          { jobId, op: job.op, try: job.attempts + 1, status: r.status, reason: stuck ? 'nothing_removed' : 'unreadable_answer' },
+          'error',
+        )
+    }
+  } catch (err) {
+    // The content service could not be reached: tried again later
+    log('content_job.failed', { jobId, op: job.op, try: job.attempts + 1, reason: 'unreachable', kind: kind(err) }, 'error')
+  }
+  return outcome
+}
+
 export const run = internalAction({
   args: { jobId: v.id('contentJobs') },
   handler: async (ctx, { jobId }) => {
     const job = await ctx.runQuery(internal.content._job, { jobId })
     if (!job) return null
-    let outcome: 'done' | 'more' | 'failed' = 'failed'
-    try {
-      const r = await control(ctx, job.op, job.body)
-      if (!r.ok) log('content_job.failed', { jobId, op: job.op, try: job.attempts + 1, status: r.status }, 'error')
-      if (r.ok) {
-        // Only a proper answer counts. One that cannot be read, or does not say what was asked,
-        // is a failure, and the job is tried again.
-        const said = (await r.json().catch(() => null)) as { more?: unknown; removed?: unknown; epoch?: unknown } | null
-        // A deletion that says there is more and that it removed nothing got nowhere. It is no
-        // step on the way, to be followed by the next at once: it waits as a failure does, so
-        // that what cannot be removed is not asked for without end and without a pause.
-        const stuck = job.op === 'delete' && said?.more === true && said.removed === 0
-        if (job.op === 'delete' && typeof said?.more === 'boolean' && !stuck) outcome = said.more ? 'more' : 'done'
-        if (job.op === 'revoke' && typeof said?.epoch === 'number') outcome = 'done'
-        if (outcome === 'failed')
-          log(
-            'content_job.failed',
-            { jobId, op: job.op, try: job.attempts + 1, status: r.status, reason: stuck ? 'nothing_removed' : 'unreadable_answer' },
-            'error',
-          )
-      }
-    } catch (err) {
-      // The content service could not be reached: tried again later
-      log('content_job.failed', { jobId, op: job.op, try: job.attempts + 1, reason: 'unreachable', kind: kind(err) }, 'error')
-    }
+    const outcome = await attempt(ctx, jobId, job)
     await overClashes(() => ctx.runMutation(internal.content._settle, { jobId, outcome }))
     return null
+  },
+})
+
+/**
+ * A revocation asked for now, by a caller that waits for it, as locking a display does: true
+ * once the content service has said it took it in, and the job is then done. Where it did not,
+ * the job is left to be tried as it was going to be, and the caller is told so.
+ */
+export const revokeNow = internalAction({
+  args: { jobId: v.id('contentJobs') },
+  handler: async (ctx, { jobId }): Promise<boolean> => {
+    const job = await ctx.runQuery(internal.content._job, { jobId })
+    // Already done, by its own run
+    if (!job) return true
+    if (job.op !== 'revoke') return false
+    if ((await attempt(ctx, jobId, job)) !== 'done') return false
+    await overClashes(() => ctx.runMutation(internal.content._settle, { jobId, outcome: 'done' }))
+    return true
   },
 })
 
