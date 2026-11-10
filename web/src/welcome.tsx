@@ -122,24 +122,29 @@ export function useTour() {
 /** Where this browser keeps which showing of the tour's first page it has been taken to. */
 const TOUR_OPENED = 'it.tour.opened'
 /**
- * The tour's first page, where this browser is to be taken to it by itself: it is up, no tour
- * has been finished or declined, and this browser has not been taken to it before. An agent
+ * The tour's first page, where this browser is to be taken to it by itself: it is up and is
+ * still the tour's own, no tour has been finished or declined, and this browser has not been
+ * taken to this showing of it before. An agent
  * that has just installed It puts that page up before the person has paired a browser, when no
  * display was there to be asked to show it, so the browser goes to it as it first comes to the
- * person's pages. Once only for each time the page is put up: someone who goes back to their
- * pages is left there.
+ * person's pages. Once only for each time the page is put up, which is a version of it: someone
+ * who goes back to their pages is left there. A page under the tour's id that someone published
+ * themselves, or took for their own, is not the tour's, and is gone to by nobody. Nor is any
+ * where the backend does not say which pages are the tour's, as one from before it did does not.
  */
 export function tourPageToOpen(
-  pages: { id: string; slug: string; version: number | null }[] | undefined,
+  pages: { id: string; slug: string; version: number | null; tour?: string | null }[] | undefined,
   tour: { doneAt: number | null } | undefined,
   opened: string | null,
-): { id: string; slug: string } | null {
+): { showing: string; slug: string } | null {
   if (!pages || !tour || tour.doneAt !== null) return null
-  const first = pages.find((page) => page.slug === `${TOUR.prefix}${TOUR.menu}` && page.version !== null)
-  return first && opened !== first.id ? { id: first.id, slug: first.slug } : null
+  const first = pages.find((page) => page.slug === `${TOUR.prefix}${TOUR.menu}` && page.tour === TOUR.menu && page.version !== null)
+  if (!first) return null
+  const showing = `${first.id}:${first.version}`
+  return opened === showing ? null : { showing, slug: first.slug }
 }
 /** Takes a browser that is at its pages to the tour's first page, as `tourPageToOpen` says. */
-export function useTourOpens(pages: { id: string; slug: string; version: number | null }[] | undefined, path: string): void {
+export function useTourOpens(pages: { id: string; slug: string; version: number | null; tour?: string | null }[] | undefined, path: string): void {
   const tour = useQuery(api.tour.get, {}) as Tour | undefined
   useEffect(() => {
     if (path !== '/') return
@@ -151,7 +156,7 @@ export function useTourOpens(pages: { id: string; slug: string; version: number 
     if (!first) return
     // Noted before it is gone to. A browser that will not keep the note is taken there each time it comes to its pages while the tour is on
     try {
-      localStorage.setItem(TOUR_OPENED, first.id)
+      localStorage.setItem(TOUR_OPENED, first.showing)
     } catch {}
     navigate(`/p/${first.slug}`)
   }, [pages, tour, path])
