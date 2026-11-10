@@ -486,6 +486,42 @@ function startConnector(h, extraEnv = {}) {
   children.push(child)
   return child
 }
+/**
+ * Takes the lock Codex takes on a conversation's file on Windows, as Rust's File::try_lock takes
+ * it: the file opened for reading and writing and shared with every program for all three, and
+ * then LockFileEx, to itself and without waiting, over every byte from the first. The program
+ * that holds it is one of the run's, stopped with the others at the end. Resolves once it holds
+ * the lock.
+ */
+const HOLDS_AS_CODEX = `$ErrorActionPreference = 'Stop'
+$file = [System.IO.File]::Open($env:E2E_LOCK_FILE, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]'ReadWrite, Delete')
+Add-Type -Namespace ItE2e -Name Kernel32 -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true)] public static extern bool LockFileEx(Microsoft.Win32.SafeHandles.SafeFileHandle file, uint flags, uint reserved, uint lengthLow, uint lengthHigh, ref System.Threading.NativeOverlapped overlapped);'
+$overlapped = New-Object System.Threading.NativeOverlapped
+if (-not [ItE2e.Kernel32]::LockFileEx($file.SafeFileHandle, 3, 0, [uint32]::MaxValue, [uint32]::MaxValue, [ref]$overlapped)) { exit 3 }
+[Console]::Out.WriteLine('holding')
+[Console]::Out.Flush()
+Start-Sleep -Seconds 3600
+`
+function holdAsCodex(file) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(HOLDS_AS_CODEX, 'utf16le').toString('base64')], {
+      env: { ...process.env, E2E_LOCK_FILE: file },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+    children.push(child)
+    let said = ''
+    child.stdout.on('data', (bytes) => {
+      said += bytes
+      if (said.includes('holding')) resolve(child)
+    })
+    child.stderr.on('data', (bytes) => {
+      said += bytes
+    })
+    child.once('error', reject)
+    child.once('exit', (code) => reject(new Error(`what takes the lock Codex takes ended with ${code} before it held it: ${said.slice(-300)}`)))
+  })
+}
 /** Asks the connector something the way an add-on does: over its socket (or port), with its token. */
 function askConnector(h, p, body, { token } = {}) {
   const c = JSON.parse(readFileSync(path.join(h, 'connector.json'), 'utf8'))
@@ -4137,10 +4173,13 @@ try {
   // Chosen, with no hook running, the click goes into Codex's own queue for that conversation.
   // That queue is for a conversation some Codex has open, which Codex says with a file it keeps
   // open for as long as the conversation is being written. This run stands in for that Codex.
+  // On Windows It asks whether a program holds the lock Codex takes on that file, and not who
+  // has it open, so there a program of the run's takes that lock (holdAsCodex).
   const locks = path.join(process.env.IT_E2E_APPS, 'codex', 'thread-writer-locks')
   mkdirSync(locks, { recursive: true })
   writeFileSync(path.join(locks, `${thread}.lock`), '')
-  openSync(path.join(locks, `${thread}.lock`), 'r')
+  if (process.platform === 'win32') await holdAsCodex(path.join(locks, `${thread}.lock`))
+  else openSync(path.join(locks, `${thread}.lock`), 'r')
   const choseCodex = await chooses('codex')
   const queued = await until(() => queuedInCodex()[0], 25_000)
   const message = queued?.find((arg) => arg.startsWith('--message=')) ?? ''
