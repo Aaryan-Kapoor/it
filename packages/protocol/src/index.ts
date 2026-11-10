@@ -28,6 +28,20 @@ export const TAKES = {
    * only then, since an older backend refuses the whole call.
    */
   pictures: 'mounts.picture',
+  /**
+   * A page shown on one display named by its id (`--on-id`). An older It refuses the whole call
+   * with nothing said of why, so the command asks whether It names this before it sends anything,
+   * and never falls back to a name: an id is asked for to reach exactly that display.
+   */
+  showById: 'displays.show.displayId',
+  /** A notification sent to one display named by its id, as a page is shown by one. */
+  notifyById: 'notifications.send.displayId',
+  /**
+   * What each tab of a display says of itself: whether it is visible, and whether the person
+   * used it a moment ago. The site sends it only where the backend names it, since an older
+   * one has no such function and the site would fill its log with refusals.
+   */
+  displayReports: 'displays.report',
 } as const
 
 /** The word the interface uses for a thing shown on a display. It is said in one place so that it can be changed in one. */
