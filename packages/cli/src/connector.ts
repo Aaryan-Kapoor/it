@@ -983,7 +983,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
           })
           kept(w).told.delete(id)
         }
-        if (ended) kept(w).finished = w.finished = false
+        // Only this watch's own: one it was merged into meanwhile may have an ending of its own still to tell
+        if (ended) w.finished = false
         // Something may have been handed to it while It was being told
         lookAtTurn(key, w)
         if (watchedTurns.get(key) === w && (w.want === 'ended' || w.want === 'unknown') && !w.told.size) watchedTurns.delete(key)

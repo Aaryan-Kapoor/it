@@ -5941,6 +5941,29 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     ).toEqual([CLAUDE.id, second.id, third.id])
   })
 
+  test('a conversation merged into another while It is being told that its short turn ended leaves the other’s own short turn to be told as ended', async () => {
+    standIn()
+    await start('socket', APPS)
+    const other = { harness: 'claude-code', id: 'conversation-2' }
+    await asks(false)
+    await asks(false, other.id)
+    // It takes its time to answer that the first conversation's turn, which was over before its receipt, has ended
+    let answer!: () => void
+    stand.answer = (name, args) =>
+      name === 'turns:say' && args.for?.id === CLAUDE.id && args.running === false ? new Promise<null>((done) => (answer = () => done(null))) : undefined
+    await handed(1, { woke: true, turn: false, turnOver: true }, false)
+    await until(() => told().some((said) => said.for?.id === CLAUDE.id && said.running === false))
+    // The other's turn was over before its receipt as well, and nothing has been told of it yet
+    offered(click(2, other))
+    await until(async () => ((await asks(false, other.id))?.clicks ?? []).some((got) => got.id === 'click-2'))
+    expect(await local('/ack', { method: 'POST', body: { ids: ['click-2'], woke: true, turn: false, turnOver: true } })).toEqual({ ok: true, acked: 1 })
+    expect(await local('/session', { method: 'POST', body: { harness: 'claude-code', session: other.id, was: CLAUDE.id } })).toMatchObject({ ok: true })
+    await pass()
+    answer()
+    await until(() => told().some((said) => said.for?.id === other.id && said.running === false))
+    expect(told().find((said) => said.for?.id === other.id && said.running === false)).toMatchObject({ untold: true })
+  })
+
   test('an It from before it took any of this is told nothing more once it has said so', async () => {
     standIn()
     stand.answer = (name) => (name === 'turns:say' ? Promise.reject(new Error('Could not find public function for turns:say')) : undefined)
