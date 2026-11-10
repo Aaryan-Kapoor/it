@@ -1867,8 +1867,10 @@ export function withoutTables(text: string, owned: (header: string) => boolean):
  * forms. Nothing where either is not there.
  */
 export function joinLine(pasted: string): { url: string; code: string } | undefined {
-  // An address in quotation marks is one in brackets, which a shell would otherwise read as more than they are
-  const url = /--url[\s=]+["']?(https?:\/\/[^\s"']+)["']?/.exec(pasted)?.[1] ?? /(?:^|\s)["']?(https?:\/\/(?!itcan\.do)[^\s"']+)["']?/.exec(pasted)?.[1]
+  // An address in quotation marks is one in brackets, which a shell would otherwise read as more than they are.
+  // The address the install script comes from is never the address of an It, in the line It gives or in an older one
+  const url =
+    /--url[\s=]+["']?(https?:\/\/[^\s"']+)["']?/.exec(pasted)?.[1] ?? /(?:^|\s)["']?(https?:\/\/(?!itcan\.do|github\.com\/)[^\s"']+)["']?/.exec(pasted)?.[1]
   const code = /--code[\s=]+["']?([A-Za-z0-9_-]{6,64})["']?/.exec(pasted)?.[1] ?? /(?:^|\s)([A-Za-z0-9]{16,64})\s*$/.exec(pasted.trim())?.[1]
   return url && code ? { url, code } : undefined
 }

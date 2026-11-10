@@ -516,10 +516,12 @@ describe('adding a machine', () => {
     expect(calls).toEqual(['sessions:inviteMachine'])
     // First the line that installs and joins: It installed by itself at a terminal is set up there, and a computer with an It of its own cannot join
     expect(host.querySelector('.pairing .modal-lede')!.textContent).toBe('Run this on the other computer. It installs It there and joins it to this one.')
-    expect(text('.pair-command.install code')).toBe(`curl -fsSL https://itcan.do/install.sh | sh -s -- login --url ${LAN} --code ${CODE}`)
+    expect(text('.pair-command.install code')).toBe(
+      `curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.sh | sh -s -- login --url ${LAN} --code ${CODE}`,
+    )
     // Then the joining alone, which is pasted where the install asks, as on Windows, and run by a computer that has the command already
     expect(host.querySelector('.pairing p.modal-sub')!.textContent).toBe(
-      'On Windows, install It with irm https://itcan.do/install.ps1 | iex. When it asks where your It is, choose “On another computer of mine” and paste the line below. That line is also all that a computer needs that has the it command already.',
+      'On Windows, install It with irm https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.ps1 | iex. When it asks where your It is, choose “On another computer of mine” and paste the line below. That line is also all that a computer needs that has the it command already.',
     )
     expect(text('.pair-command.join code')).toBe(`it login --url ${LAN} --code ${CODE}`)
     expect([...host.querySelectorAll('.pair-command')]).toHaveLength(2)
@@ -527,7 +529,9 @@ describe('adding a machine', () => {
     expect(host.querySelector('.pairing')!.textContent).not.toContain('localhost')
     // Another of the machine's addresses can be chosen, and one under IPv6 is written so that a shell reads it as one word, in both
     await choose(SIX)
-    expect(text('.pair-command.install code')).toBe(`curl -fsSL https://itcan.do/install.sh | sh -s -- login --url "${SIX}" --code ${CODE}`)
+    expect(text('.pair-command.install code')).toBe(
+      `curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.sh | sh -s -- login --url "${SIX}" --code ${CODE}`,
+    )
     expect(text('.pair-command.join code')).toBe(`it login --url "${SIX}" --code ${CODE}`)
   })
 

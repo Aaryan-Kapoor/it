@@ -585,10 +585,12 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     delete process.env.IT_INSTALL_BASE
     expect(releases().base).toBe('https://example.com/releases')
     // Set up again from the usual place, it is the usual place again
-    process.env.IT_INSTALL_BASE = 'https://itcan.do/releases'
+    process.env.IT_INSTALL_BASE = 'https://github.com/Aaryan-Kapoor/it/releases'
     keepBase()
     delete process.env.IT_INSTALL_BASE
     expect(existsSync(path.join(folder, 'releases.json'))).toBe(false)
+    // And the usual place is It's releases on GitHub, where the install scripts download from too
+    expect(releases()).toEqual({ base: 'https://github.com/Aaryan-Kapoor/it/releases', plain: false })
   })
 
   test('is looked for every half hour until that is turned off, by the command or by a variable', () => {

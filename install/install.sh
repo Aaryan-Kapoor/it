@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs It on your computer: one program, in ~/.it/bin.
 #
-#   curl -fsSL https://itcan.do/install.sh | sh
+#   curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.sh | sh
 #
 # It downloads the program for this system, checks it against the published checksum, and puts
 # it in ~/.it/bin, with the license it comes under and the notices of what it includes in ~/.it.
@@ -20,11 +20,12 @@
 # To join an It that runs on another computer, give it the command that It's site shows under
 # Machines, Add a machine:
 #
-#   curl -fsSL https://itcan.do/install.sh | sh -s -- login --url <address> --code <code>
+#   curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.sh | sh -s -- login --url <address> --code <code>
 #
 # The program is installed as above and then joins that It, and no It is set up here: a
 # computer runs It or joins one, and one that has set up its own cannot join.
 #
+# It downloads from It's releases on GitHub, at https://github.com/Aaryan-Kapoor/it/releases.
 # IT_INSTALL_BASE names another place to download from, laid out as GitHub lays out a
 # repository's releases. IT_VERSION names a release other than the latest, by its tag.
 # IT_INSTALL_NO_PATH, set to anything, leaves your PATH and your shell's profile alone.
@@ -70,7 +71,8 @@ if [ "$#" -gt 0 ]; then
   join=1
 fi
 
-BASE="${IT_INSTALL_BASE:-https://itcan.do/releases}"
+USUAL="https://github.com/Aaryan-Kapoor/it/releases"
+BASE="${IT_INSTALL_BASE:-${USUAL}}"
 BASE="${BASE%/}"
 VERSION="${IT_VERSION:-latest}"
 
@@ -189,13 +191,6 @@ case "${BASE}" in
 esac
 command -v curl >/dev/null 2>&1 || { say "Install curl first." >&2; exit 1; }
 command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || { say "Install sha256sum or shasum first." >&2; exit 1; }
-# Where CI is set, every download says so, and itcan.do counts it apart from a person's. CI is
-# read as the program reads it: without the spaces or quotes around it, and set to anything but
-# nothing, 0, false, no or off. Given nothing after the colon, curl sends no such header at all.
-case "$(printf '%s' "${CI:-}" | tr 'A-Z' 'a-z' | sed -e "s/^[[:space:]\"']*//" -e "s/[[:space:]\"']*\$//")" in
-  '' | 0 | false | no | off) ci= ;;
-  *) ci=1 ;;
-esac
 # A download is given up when it cannot be begun within half a minute, and when nothing of it
 # has come for a whole minute: left to itself curl waits for either without end, and says
 # nothing while it does. One that is slow and still coming is waited for, however long it
@@ -208,8 +203,8 @@ unfetched() {
 fetch() {
   meter=--silent
   if [ "${led}" = 1 ] && [ "${3:-}" = shown ]; then meter=--progress-bar; fi
-  if [ "${plain}" = 1 ]; then curl -fS "${meter}" --connect-timeout 30 --speed-limit 1 --speed-time 60 --noproxy '*' --max-redirs 0 -H "X-It-CI:${ci}" "$1" -o "$2" || unfetched "$1" "$?"
-  else curl -fSL "${meter}" --connect-timeout 30 --speed-limit 1 --speed-time 60 --proto '=https' --proto-redir '=https' --tlsv1.2 -H "X-It-CI:${ci}" "$1" -o "$2" || unfetched "$1" "$?"
+  if [ "${plain}" = 1 ]; then curl -fS "${meter}" --connect-timeout 30 --speed-limit 1 --speed-time 60 --noproxy '*' --max-redirs 0 "$1" -o "$2" || unfetched "$1" "$?"
+  else curl -fSL "${meter}" --connect-timeout 30 --speed-limit 1 --speed-time 60 --proto '=https' --proto-redir '=https' --tlsv1.2 "$1" -o "$2" || unfetched "$1" "$?"
   fi
   # What curl leaves is an ordinary file. Anything else there is not a download, and is not read
   if [ ! -f "$2" ] || [ -L "$2" ]; then
@@ -514,7 +509,7 @@ if [ "${led}" = 1 ]; then did "Installed in ${DIR}"; fi
 # into the note as it stands is not noted, and neither is anything said to be.
 noted="${BASE%/}"
 case "${noted}" in
-  https://itcan.do/releases) rm -f -- "${HOME_DIR}/releases.json" 2>/dev/null || true ;;
+  "${USUAL}") rm -f -- "${HOME_DIR}/releases.json" 2>/dev/null || true ;;
   *'"'* | *'\'* | *"
 "*) : ;;
   *)

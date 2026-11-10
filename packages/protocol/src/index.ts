@@ -232,11 +232,14 @@ export const LISTENING_MOST = 40
  */
 export const ALIVE = { everyMs: 30_000, onlineMs: 100_000 } as const
 
-/** How It is installed: the two commands a person runs, and where the programs they download are published. */
+/**
+ * How It is installed: the two commands a person runs, and where the programs they download are
+ * published. Both are It's releases on GitHub, where the scripts are published beside the programs.
+ */
 export const INSTALL = {
-  sh: 'curl -fsSL https://itcan.do/install.sh | sh',
-  ps: 'irm https://itcan.do/install.ps1 | iex',
-  releases: 'https://itcan.do/releases',
+  sh: 'curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.sh | sh',
+  ps: 'irm https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.ps1 | iex',
+  releases: 'https://github.com/Aaryan-Kapoor/it/releases',
 } as const
 
 /** A version of It as its three numbers, or nothing where it is not written as one. */
