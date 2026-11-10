@@ -3212,7 +3212,12 @@ try {
   const keptBack = new Promise((resolve) => {
     letGo = resolve
   })
+  // The request the first tab signs out with, which is the one whose answer is kept back: the
+  // site asks for an ended session's cookie to be cleared at the same address, and an answer to
+  // that is no answer to signing out
+  let signingOut
   await lateOne.context.route('**/session/end', async (route) => {
+    signingOut ??= route.request()
     const response = await route.fetch()
     const lines = response
       .headersArray()
@@ -3289,7 +3294,7 @@ try {
   // Now the answer reaches the first tab. It is about the session that was signed out, and the
   // browser holds another by now.
   const reachedIt = tabOne
-    .waitForResponse((r) => new URL(r.url()).pathname === '/session/end', { timeout: 30_000 })
+    .waitForResponse((r) => r.request() === signingOut, { timeout: 30_000 })
     .then(
       (r) => r.status(),
       () => 'never',
@@ -3329,7 +3334,8 @@ try {
       }),
     JSON.stringify(lateAnswer),
   )
-  await lateOne.context.unroute('**/session/end')
+  // Whatever is still on its way through the route when the browser is closed is let go, and not taken for the run failing
+  await lateOne.context.unrouteAll({ behavior: 'ignoreErrors' })
   // That browser pairs a screen, and the owner then forgets the display it is. The site says
   // first what goes with it, and the browser's pairing and the screen's end with the display.
   const pairedByIt = await pairedByScript(`${APP}/pair#${await codeFrom(pairedAfresh, 'a screen')}`)
