@@ -1114,8 +1114,18 @@ async function connecting(say: (line: string) => void): Promise<void> {
     )
     if (runs.status !== 'found') return { ...answer, thread: runs.status === 'none' ? 'none' : 'unknown' }
     if (notedThread(key) === undefined) say(`${a(harness)} conversation (${short(id)}) is held in a thread of T3 Code`)
+    // A search for its thread that a click began is over, whether one is under way or only what
+    // one read is kept, and what it would say in the end counts for nothing, as when the
+    // conversation is heard from (`followThread`): one that read the thread before T3 Code had the
+    // conversation's id would otherwise end in none and keep its clicks from the thread
+    const knownNow = t3Known.get(key)
+    if (knownNow === undefined || knownNow === 'asking' || !knownNow.thread) {
+      t3Known.set(key, { thread: runs.thread, at: Date.now() })
+      t3Searches.delete(key)
+      t3Pending.delete(key)
+      t3Retries.delete(key)
+    }
     noteThread(key, runs.thread)
-    t3Known.set(key, { thread: runs.thread, at: Date.now() })
     return { ...answer, thread: 'held' }
   }
   /**

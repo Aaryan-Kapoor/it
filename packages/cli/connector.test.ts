@@ -89,6 +89,8 @@ const stand = vi.hoisted(() => ({
     refusal: null as string | null,
     /** Every time it was asked whether a thread runs a conversation now, by the ids it was asked of (`t3RunsNow`). */
     runsAsked: [] as string[][],
+    /** Whether T3 Code could not say whether a thread runs a conversation now, as `t3RunsNow` says when its time runs out. */
+    runsUnknown: false,
   },
 }))
 // T3 Code is asked over its own server and its own command (t3.test.ts tries what is read from
@@ -110,10 +112,10 @@ vi.mock('./src/t3', async (original) => ({
       return thread === undefined ? { status: 'incomplete', progressed } : thread === null ? { status: 'absent' } : { status: 'found', thread }
     }),
   // Whether a thread runs a conversation now: the thread T3 Code holds it in, where the test says one does, and
-  // otherwise none, or, where the test has T3 Code slow, not known, as `t3RunsNow` says when its time runs out
+  // otherwise none, or not known where the test says T3 Code could not say
   t3RunsNow: async (_t3: unknown, of: { ids: readonly string[] }) => {
     stand.t3.runsAsked.push([...of.ids])
-    if (stand.t3.slow) return { status: 'unknown' }
+    if (stand.t3.runsUnknown) return { status: 'unknown' }
     const thread = of.ids.map((id) => stand.t3.threads.get(id)).find((t) => t !== undefined)
     return thread ? { status: 'found', thread } : { status: 'none' }
   },
@@ -371,7 +373,7 @@ afterEach(async () => {
   stand.restartWay = undefined
   // A lookup a test left unanswered is answered, so that nothing of it outlasts the test
   for (const asked of stand.t3.asked) asked.answer(null)
-  Object.assign(stand.t3, { running: false, slow: false, refusing: null, refusal: null })
+  Object.assign(stand.t3, { running: false, slow: false, refusing: null, refusal: null, runsUnknown: false })
   stand.t3.threads.clear()
   stand.t3.asked.length = 0
   stand.t3.sent.length = 0
@@ -5770,6 +5772,17 @@ process.stdin.on('end', () => {
 describe('how what is done on a conversation’s pages would reach it, as the connector answers `it create` and `it status`', () => {
   const claude = '11111111-2222-4333-8444-555555555555'
   const way = (harness: string, session: string) => local<Route>(`/route?harness=${harness}&session=${session}`, { timeoutMs: 6000 })
+  const click = (n: number) => ({
+    id: `click-${n}`,
+    artifact: `page-${n}`,
+    title: 'A page',
+    name: 'approve',
+    payload: '{}',
+    at: Date.now() - 10_000 + n,
+    attended: true,
+    session: { harness: 'codex', id: `thread-${n}` },
+  })
+  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inboxPage')!(clicks)
 
   test('a conversation whose add-on is listening is said to be listening, and one that is not is said not to be', async () => {
     await start()
@@ -5803,8 +5816,24 @@ describe('how what is done on a conversation’s pages would reach it, as the co
     // In none for now is not in none for good: it is asked again the next time
     expect(await way('claude-code', claude)).toMatchObject({ thread: 'none' })
     expect(stand.t3.runsAsked).toEqual([[claude], [claude]])
-    stand.t3.slow = true
+    stand.t3.runsUnknown = true
     expect(await way('claude-code', '22222222-2222-4333-8444-555555555555')).toMatchObject({ thread: 'unknown' })
+  })
+
+  test('a thread found to run the conversation ends a search a click began, so that the search ending in none cannot keep its clicks from that thread', async () => {
+    stand.t3.running = true
+    stand.t3.slow = true
+    await start()
+    offered(click(1))
+    await until(() => stand.t3.asked.length === 1)
+    // T3 Code has the conversation's id by now, and says that a running thread runs it
+    stand.t3.threads.set('thread-1', 't3-thread-a')
+    expect(await way('codex', 'thread-1')).toMatchObject({ thread: 'held' })
+    // The search the click began ends, having read that thread before T3 Code had the id: it says none
+    stand.t3.asked[0]!.answer(null)
+    offered(click(1), { ...click(2), session: { harness: 'codex', id: 'thread-1' } })
+    await until(() => stand.t3.sent.some((m) => m.text.includes('click-2')))
+    expect(stand.t3.sent.every((m) => m.thread === 't3-thread-a')).toBe(true)
   })
 
   test('where T3 Code is not running, a conversation is held in no thread and nothing is asked', async () => {
