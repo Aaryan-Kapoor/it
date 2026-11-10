@@ -38,6 +38,8 @@ interface DisplayRow {
   push: boolean
   /** False for a display whose browser's pairing has ended. Said only where every display is listed. */
   paired?: boolean
+  /** False for a display the person closed to agents. An earlier backend leaves it out. */
+  agents?: boolean
 }
 
 /**
@@ -63,6 +65,9 @@ function DisplayItem({
   const convex = useConvex()
   const rename = useMutation(api.displays.rename)
   const forget = useMutation(api.displays.forget)
+  const allowAgents = useMutation(api.displays.allowAgents)
+  // Offered only where the backend has the switch: one whose functions are older has none
+  const switchable = useBackendTakes(TAKES.agentsSwitch)
   const [name, setName] = useState<string | null>(null)
   const renaming = useOpener<HTMLButtonElement>(name !== null)
   const support = pushSupport()
@@ -103,6 +108,11 @@ function DisplayItem({
                 Not paired
               </span>
             )}
+            {switchable && d.agents === false && (
+              <span className="chip quiet" title="Agents may not show pages or send notifications here.">
+                Closed to agents
+              </span>
+            )}
           </span>
           <span className="row-sub">
             {here ? 'Open now' : d.paired === false ? 'Shows nothing until its browser is paired again' : `Last open ${ago(d.lastSeenAt, now)}`}
@@ -127,6 +137,18 @@ function DisplayItem({
                     : turnOnPush(convex).then((r) => (r === 'on' ? undefined : Promise.reject(new Error(r)))),
                 )
               }}
+            />
+          </label>
+        )}
+        {switchable && (owner || here) && d.agents !== undefined && (
+          <label className="switch" title="Whether agents may show pages and send notifications here. A page already open here stays as it is.">
+            <span>Open to agents</span>
+            <input
+              type="checkbox"
+              role="switch"
+              aria-checked={d.agents}
+              checked={d.agents}
+              onChange={() => act(allowAgents({ displayId: d.id as Id<'displays'>, allowed: !d.agents }))}
             />
           </label>
         )}

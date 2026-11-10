@@ -680,6 +680,34 @@ describe('telling the backend that this display is open', () => {
   })
 })
 
+describe('what each tab says of itself', () => {
+  test('register and heartbeat are asked exactly as an earlier backend takes them, and a tab reports only where the backend names it', async () => {
+    cookie = CODES.ownercode00000000001!
+    await start()
+    await settle()
+    expect(asked.find((a) => a.what === 'displays:register')!.args).toEqual({ key: expect.any(String), userAgent: navigator.userAgent })
+    expect(asked.find((a) => a.what === 'displays:heartbeat')!.args).toEqual({ key: expect.any(String) })
+    // The backend named nothing: no report
+    expect(names()).not.toContain('displays:report')
+    root.unmount()
+    asked.length = 0
+    answers['displays:register'] = () => ({ ...DISPLAY, takes: ['displays.report'] })
+    answers['displays:heartbeat'] = () => ({ now: Date.now(), takes: ['displays.report'] })
+    await start()
+    await settle()
+    expect(asked.find((a) => a.what === 'displays:heartbeat')!.args).toEqual({ key: expect.any(String) })
+    expect(asked.find((a) => a.what === 'displays:report')!.args).toEqual({
+      key: expect.any(String),
+      epoch: 0,
+      expectedSession: expect.any(String),
+      tab: expect.stringMatching(/^[0-9a-f]{32}$/),
+      sequence: 1,
+      phase: 'none',
+      visible: true,
+    })
+  })
+})
+
 describe('finding a page with the keyboard', () => {
   /** Presses a key where the keyboard is, and gives back the press, which says whether the site took it for itself. */
   const key = async (to: EventTarget, named: string, more: KeyboardEventInit = {}) => {
