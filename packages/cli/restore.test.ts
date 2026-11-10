@@ -1,21 +1,25 @@
 // Going back to an older It once a newer one has changed the data, by putting back the copy the
 // newer one kept before it changed anything, as "Going back to an older It" in docs/data.md
-// says. The commands that put the copy back are read from that page and run as they are written
-// there, so the page cannot come to say something that does not work.
+// says, and going forward again. The lines that put the copy back and that go forward are read
+// from that page and run exactly as they are written there, with `sh` and nothing added, so the
+// page cannot come to say something that does not work. Where they stop `it service uninstall`
+// is a stand-in that says what it was asked and ends as it is told to: no service of this
+// machine's is touched.
 //
-// The older It is this source. The newer one is this source too, under the next version number,
+// The older It is this source. A newer one is this source too, under a later version number,
 // with functions whose schema gives every display two optional fields the older schema does not
-// have, `usedAt` and `reports`, and a module that writes them. In one case it also says that it
-// runs a newer release of the backend program, as a release may. Both run the real backend
-// program, on ports of this file's own, in a folder of each test's own.
+// have, `usedAt` and `reports`, and a module that writes them. Some of them also say that they
+// run a newer release of the backend program, as a release may, and one has functions that the
+// data refuses. All run the real backend program, on ports of this file's own, in a folder of
+// each test's own.
 //
 // What this does not cover: two real releases from GitHub, a backend program that is in truth
 // another build and has changed the database's own format, the older backend program being
-// fetched again, the install script putting the older program in place, and the steps on macOS
-// and on Windows, whose PowerShell commands are not run.
-import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
+// fetched again, the install script putting the older program in place, `it service uninstall`
+// itself, and the steps on macOS and on Windows, whose PowerShell commands are not run.
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { ConvexHttpClient } from 'convex/browser'
@@ -46,17 +50,26 @@ const comes = async (what: () => boolean | Promise<boolean>, seen: () => unknown
   throw new Error(`What was waited for had not come after ${ms / 1000} seconds. What was there: ${JSON.stringify(seen())}`)
 }
 
-/** The next version of It, and a release of the backend program newer than any It has run. */
+/** Later versions of It, and a release of the backend program newer than any It has run. */
 const NEWER = VERSION.replace(/\d+$/, (patch) => String(Number(patch) + 1))
+const NEWEST = VERSION.replace(/\d+$/, (patch) => String(Number(patch) + 2))
 const NEWER_RELEASE = 'precompiled-2099-01-01-abcdef0'
 
 let folder: string
 let scratch: string
-/** This source as the program, and the newer It as one with newer functions only and as one that runs a newer backend program too. */
+/** A folder with `it` in it that stands in for the command the documented lines run. */
+let stub: string
+/** A newer It: the program, and the hash of its functions. */
+interface Later {
+  program: string
+  hash: string
+}
+/** This source as the program, and later Its. */
 let older: string
-let newerFunctions: string
-let newerBoth: string
-let NEWER_HASH: string
+let newerFunctions: Later
+let newerBoth: Later
+let refusing: Later
+let newest: Later
 
 /** The source of `restoring.js`, a module of the newer functions that writes and reads the two fields only they know. */
 const RESTORING = `
@@ -90,57 +103,78 @@ const bundled = (name: string, plugins: Plugin[] = []) =>
     plugins,
   }).then(() => path.join(scratch, name))
 
-beforeAll(async () => {
-  scratch = mkdtempSync(path.join(os.tmpdir(), 'it-restore-scratch-'))
-  older = await bundled('older.mjs')
-  // The newer functions: the displays of their schema have two more fields, which may be left out
+/**
+ * A later It under `version`, running the backend program `release`. Its functions either give
+ * displays the two optional fields and carry the module that writes them, which the data takes,
+ * or ask every person's record for a field it does not have, which the data refuses.
+ */
+async function later(name: string, version: string, release: string, functions: 'taken' | 'refused'): Promise<Later> {
   const request = JSON.parse(functionsText()) as {
     appDefinition: { schema: { source: string }; changedModules: { path: string; source: string; environment: string }[] }
   }
   const schema = request.appDefinition.schema.source
-  request.appDefinition.schema.source = schema.replace(
-    /generatedName:\s*(\w+)\.string\(\),/,
-    (whole, v: string) =>
-      `${whole} usedAt: ${v}.optional(${v}.number()), reports: ${v}.optional(${v}.array(${v}.object({ at: ${v}.number(), visible: ${v}.boolean() }))),`,
-  )
+  if (functions === 'taken') {
+    request.appDefinition.schema.source = schema.replace(
+      /generatedName:\s*(\w+)\.string\(\),/,
+      (whole, v: string) =>
+        `${whole} usedAt: ${v}.optional(${v}.number()), reports: ${v}.optional(${v}.array(${v}.object({ at: ${v}.number(), visible: ${v}.boolean() }))),`,
+    )
+    const restoring = await build({
+      stdin: { contents: RESTORING, resolveDir: __dirname, loader: 'js' },
+      bundle: true,
+      format: 'esm',
+      platform: 'neutral',
+      mainFields: ['module', 'main'],
+      write: false,
+      logLevel: 'silent',
+    })
+    request.appDefinition.changedModules.push({ path: 'restoring.js', source: restoring.outputFiles[0]!.text, environment: 'isolate' })
+  } else {
+    request.appDefinition.schema.source = schema.replace(/subject:\s*(\w+)\.string\(\),/, (whole, v: string) => `${whole} somethingNew: ${v}.string(),`)
+  }
   expect(request.appDefinition.schema.source).not.toBe(schema)
-  // And a module of their own that uses them, bundled whole as the backend takes a module
-  const restoring = await build({
-    stdin: { contents: RESTORING, resolveDir: __dirname, loader: 'js' },
-    bundle: true,
-    format: 'esm',
-    platform: 'neutral',
-    mainFields: ['module', 'main'],
-    write: false,
-    logLevel: 'silent',
-  })
-  request.appDefinition.changedModules.push({ path: 'restoring.js', source: restoring.outputFiles[0]!.text, environment: 'isolate' })
   const text = JSON.stringify(request)
-  NEWER_HASH = createHash('sha256').update(text).digest('hex')
-  const newer = (release: string): Plugin => ({
-    name: 'a newer It',
+  const hash = createHash('sha256').update(text).digest('hex')
+  const plugin: Plugin = {
+    name: 'a later It',
     setup(b) {
       b.onLoad({ filter: /functions\.generated\.ts$/ }, () => ({
         loader: 'ts',
-        contents: `export const FUNCTIONS_HASH = '${NEWER_HASH}'\nexport const FUNCTIONS_GZIP = ''\nexport const functions = () => ${JSON.stringify(text)}`,
+        contents: `export const FUNCTIONS_HASH = '${hash}'\nexport const FUNCTIONS_GZIP = ''\nexport const functions = () => ${JSON.stringify(text)}`,
       }))
       b.onLoad({ filter: /[\\/]src[\\/]lib\.ts$/ }, (asked) => ({
         loader: 'ts',
-        contents: readFileSync(asked.path, 'utf8').replace(`export const VERSION = '${VERSION}'`, `export const VERSION = '${NEWER}'`),
+        contents: readFileSync(asked.path, 'utf8').replace(`export const VERSION = '${VERSION}'`, `export const VERSION = '${version}'`),
       }))
       b.onLoad({ filter: /[\\/]src[\\/]serve[\\/]config\.ts$/ }, (asked) => ({
         loader: 'ts',
         contents: readFileSync(asked.path, 'utf8').replace(`export const RELEASE = '${RELEASE}'`, `export const RELEASE = '${release}'`),
       }))
     },
-  })
-  newerFunctions = await bundled('newer-functions.mjs', [newer(RELEASE)])
-  newerBoth = await bundled('newer-both.mjs', [newer(NEWER_RELEASE)])
-}, 120_000)
+  }
+  return { program: await bundled(name, [plugin]), hash }
+}
+
+beforeAll(async () => {
+  scratch = mkdtempSync(path.join(os.tmpdir(), 'it-restore-scratch-'))
+  stub = path.join(scratch, 'stub')
+  mkdirSync(stub)
+  writeFileSync(path.join(stub, 'it'), '#!/bin/sh\necho "$*" >> "$STUB_ASKED"\nexit "$STUB_ENDS"\n', { mode: 0o755 })
+  ;[older, newerFunctions, newerBoth, refusing, newest] = await Promise.all([
+    bundled('older.mjs'),
+    later('newer-functions.mjs', NEWER, RELEASE, 'taken'),
+    later('newer-both.mjs', NEWER, NEWER_RELEASE, 'taken'),
+    later('refusing.mjs', NEWER, NEWER_RELEASE, 'refused'),
+    later('newest.mjs', NEWEST, NEWER_RELEASE, 'taken'),
+  ])
+}, 180_000)
 afterAll(() => rmSync(scratch, { recursive: true, force: true }))
 
+/** Folders a test made beside its own, as the documented lines make them, and that go with it. */
+let beside: string[]
 beforeEach(async () => {
   folder = mkdtempSync(path.join(os.tmpdir(), 'it-restore-'))
+  beside = [folder, `${folder}-after-upgrade`, `${folder}-rolled-back`]
   process.env.IT_PORT = String(await ports.next())
 }, 120_000)
 
@@ -152,7 +186,7 @@ afterEach(async () => {
       await new Promise((resolve) => child.once('exit', resolve))
     }
   }
-  rmSync(folder, { recursive: true, force: true })
+  for (const made of beside) rmSync(made, { recursive: true, force: true })
   await ports.release()
 }, 120_000)
 
@@ -190,8 +224,8 @@ const run = (it: string, args: string[], home = folder) => {
   return { child, ended, out: () => out, err: () => err }
 }
 /** What a command printed as JSON, once it has ended well. */
-const said = async (it: string, args: string[]) => {
-  const ran = run(it, args)
+const said = async (it: string, args: string[], home = folder) => {
+  const ran = run(it, args, home)
   const code = await ran.ended
   expect([args, code === 0 ? 0 : { code, said: ran.err() }]).toEqual([args, 0])
   return JSON.parse(ran.out())
@@ -218,28 +252,64 @@ const stopped = async (service: Served) => {
   service.child.kill('SIGTERM')
   expect(await service.ended).toBe(0)
 }
-const inBackend = (...parts: string[]) => path.join(folder, 'backend', ...parts)
 const json = (file: string) => JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+/** Every folder, file and link under a folder, by its path from there, each file with a hash of what it holds and each link with where it leads. */
+const tree = (dir: string, under = ''): string[] =>
+  readdirSync(path.join(dir, under), { withFileTypes: true })
+    .flatMap((entry) => {
+      const name = path.join(under, entry.name)
+      const full = path.join(dir, name)
+      if (entry.isSymbolicLink()) return [`${name} -> ${readlinkSync(full)}`]
+      if (entry.isDirectory()) return [`${name}/`, ...tree(dir, name)]
+      return [`${name} ${createHash('sha256').update(readFileSync(full)).digest('hex')}`]
+    })
+    .sort()
 
-/** The commands docs/data.md gives for Linux and macOS, as they are written there. */
-function documentedSteps(): string {
+/** The section of docs/data.md these steps are in. */
+const section = () => {
   const page = readFileSync(path.join(__dirname, '../../docs/data.md'), 'utf8')
-  const section = page.slice(page.indexOf('## Going back to an older It'))
-  const [, indent, block] = /^( *)```sh\n([\s\S]*?)^\1```/m.exec(section) ?? []
-  expect(block, 'the section has a block of shell commands').toBeDefined()
-  return block!
-    .split('\n')
-    .map((line) => line.slice(indent!.length))
-    .join('\n')
+  const from = page.indexOf('## Going back to an older It')
+  return page.slice(from, page.indexOf('\n## ', from + 1))
+}
+/** The block of shell lines in that section that has `marker` in it, as it is written there. */
+function documented(marker: string): string {
+  const blocks = [...section().matchAll(/^( *)```sh\n([\s\S]*?)^\1```/gm)].map(([, indent, block]) =>
+    block!
+      .split('\n')
+      .map((line) => line.slice(indent!.length))
+      .join('\n'),
+  )
+  const found = blocks.filter((block) => block.includes(marker))
+  expect(found, `one block of shell lines in the section has ${marker} in it`).toHaveLength(1)
+  return found[0]!
+}
+/**
+ * Runs documented lines with `sh`, as a person pastes them, for It's folder `home`: the folder
+ * they name is put where they say `~/.it`, and the copy's name where they say `copy=before-...`.
+ * Nothing else of them is changed. `it` is the stand-in, which ends as `ends` says.
+ */
+function pasted(lines: string, home: string, copy?: string, ends = 0) {
+  expect(lines).toContain('~/.it')
+  let script = lines.replaceAll('~/.it', `'${home}'`)
+  if (copy !== undefined) {
+    expect(script).toMatch(/^ *copy=before-\.\.\.$/m)
+    script = script.replace(/^( *)copy=before-\.\.\.$/m, `$1copy=${copy}`)
+  }
+  const asked = path.join(scratch, `asked-${Math.random().toString(36).slice(2)}`)
+  const ran = spawnSync('sh', ['-c', script], {
+    env: { PATH: `${stub}:${process.env.PATH}`, HOME: home, STUB_ASKED: asked, STUB_ENDS: String(ends) },
+    encoding: 'utf8',
+  })
+  return { code: ran.status, out: ran.stdout, err: ran.stderr, asked: existsSync(asked) ? readFileSync(asked, 'utf8') : '' }
 }
 
 describe.skipIf(!program || windows)('going back to an older It by putting back the copy from before the upgrade', () => {
   test.each([
-    ['newer functions', false],
-    ['newer functions and a newer backend program', true],
+    ['newer functions, with a display signed out since', false, true],
+    ['newer functions and a newer backend program', true, false],
   ])(
-    'after an It with %s has changed the data, the documented steps put the copy back, and the older It starts on it with its page, state and display as they were',
-    async (_, programToo) => {
+    'after an It with %s has changed the data, the documented lines put the copy back, the older It starts on it with its page and state as they were, and the documented lines go forward again',
+    async (_, programToo, signedOut) => {
       const newer = programToo ? newerBoth : newerFunctions
       const port = Number(process.env.IT_PORT)
       const door = `http://127.0.0.1:${port}`
@@ -261,61 +331,81 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
       })
       expect(await said(older, ['set', 'plan', 'step', '2'])).toMatchObject({ revision: 2 })
       const asSite = { origin: door, 'x-it-site': '1', 'content-type': 'application/json' }
-      const code = new URL((await said(older, ['site', '--no-open'])).url).hash.slice(1)
-      const redeemed = await fetch(`${door}/session/redeem`, { method: 'POST', headers: asSite, body: JSON.stringify({ code }) })
-      expect(redeemed.status).toBe(200)
-      const cookie = redeemed.headers.getSetCookie()[0]!.split(';')[0]!
-      /** The paired browser, with a token its pairing earns it now. */
-      const browser = async () => {
+      /** Pairs a browser as the owner's through the door, as the site does, and gives its cookie. */
+      const paired = async (it: string) => {
+        const code = new URL((await said(it, ['site', '--no-open'])).url).hash.slice(1)
+        const redeemed = await fetch(`${door}/session/redeem`, { method: 'POST', headers: asSite, body: JSON.stringify({ code }) })
+        expect(redeemed.status).toBe(200)
+        return redeemed.headers.getSetCookie()[0]!.split(';')[0]!
+      }
+      const first = { cookie: await paired(older), key: 'a-display-key-000001' }
+      /** A paired browser, with a token its pairing earns it now. */
+      const browser = async (cookie: string) => {
         const earned = await fetch(`${door}/session/token`, { method: 'POST', headers: { ...asSite, cookie } })
         expect(earned.status).toBe(200)
         const client = new ConvexHttpClient(door, { logger: false })
         client.setAuth(((await earned.json()) as { token: string }).token)
         return client
       }
-      const displayKey = 'a-display-key-000001'
-      await (await browser()).mutation(ref<'mutation'>('displays:register'), { key: displayKey, userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Chrome/144.0' })
-      /** Opens a page on the display as the site does: a showing, its one ticket, and the page's first file under the address the ticket is traded for. */
-      const opened = async (slug: string) => {
-        const client = await browser()
+      const register = async (as: { cookie: string; key: string }) =>
+        (await browser(as.cookie)).mutation(ref<'mutation'>('displays:register'), { key: as.key, userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Chrome/144.0' })
+      await register(first)
+      /**
+       * Opens a page on a display as the site does: a showing, its one ticket, and the page's
+       * first file under the address the ticket is traded for. Where the ticket is refused,
+       * what is given is how.
+       */
+      const opened = async (slug: string, as: { cookie: string; key: string }) => {
+        const client = await browser(as.cookie)
         const page = (await client.query(ref<'query'>('artifacts:get'), { slug })) as { id: string }
-        const { mountId } = (await client.mutation(ref<'mutation'>('mounts:create'), { artifactId: page.id, displayKey })) as { mountId: string }
+        const { mountId } = (await client.mutation(ref<'mutation'>('mounts:create'), { artifactId: page.id, displayKey: as.key })) as { mountId: string }
         const { ticket } = (await client.action(ref<'action'>('mounts:ticket'), { mountId })) as { ticket: string }
         const traded = await fetch(`${pages}/open/${ticket}`, { redirect: 'manual' })
-        expect(traded.status).toBe(303)
+        if (traded.status !== 303) return { status: traded.status, body: '' }
         const shown = await fetch(new URL(traded.headers.get('location')!, pages))
         return { status: shown.status, body: await shown.text() }
       }
-      expect(await opened('plan')).toEqual({ status: 200, body: index })
+      expect(await opened('plan', first)).toEqual({ status: 200, body: index })
       await stopped(service)
-      const before = json(inBackend('data.json'))
+      const before = json(path.join(folder, 'backend', 'data.json'))
       expect(before).toMatchObject({ release: RELEASE, it: VERSION, functions: FUNCTIONS_HASH, functionsOf: VERSION })
 
       // The newer It keeps a copy and loads its functions, which the data takes
-      service = serve(newer, 'newer.log')
+      service = serve(newer.program, 'newer.log')
       await started(service)
       expect(service.lines()).toContain('backend: a copy of the database was kept before it is changed (database_copied)')
-      expect(service.lines()).toContain(`backend: functions loaded (${NEWER_HASH.slice(0, 12)})`)
-      const copies = readdirSync(inBackend()).filter((name) => name.startsWith('before-'))
-      expect(copies).toEqual([programToo ? `before-${NEWER_RELEASE}-functions-${NEWER_HASH.slice(0, 12)}` : `before-functions-${NEWER_HASH.slice(0, 12)}`])
+      expect(service.lines()).toContain(`backend: functions loaded (${newer.hash.slice(0, 12)})`)
+      const copies = readdirSync(path.join(folder, 'backend')).filter((name) => name.startsWith('before-'))
+      expect(copies).toEqual([programToo ? `before-${NEWER_RELEASE}-functions-${newer.hash.slice(0, 12)}` : `before-functions-${newer.hash.slice(0, 12)}`])
       const copy = copies[0]!
-      const kept = readdirSync(inBackend(copy)).sort()
-      expect(kept).toEqual(expect.arrayContaining(['copy.json', 'data.json', 'db.sqlite3', 'storage']))
-      expect(json(inBackend(copy, 'data.json'))).toEqual(before)
-      // It writes what only it knows of, and more is done after the upgrade: the state changed again, and another page
+      const inCopy = path.join(folder, 'backend', copy)
+      expect(readdirSync(inCopy)).toEqual(expect.arrayContaining(['copy.json', 'data.json', 'db.sqlite3', 'storage']))
+      expect(json(path.join(inCopy, 'data.json'))).toEqual(before)
+      // It writes what only it knows of, and more is done after the upgrade: the state changed
+      // again, another page, a second version of the first, and maybe a display signed out
       const backend = { api: backendAt(port).api, adminKey: json(path.join(folder, 'service.json')).adminKey as string }
       expect(await asAdmin(backend, 'restoring:mark', {})).toBe(1)
       expect(await asAdmin(backend, 'restoring:seen', {})).toEqual([
-        { key: displayKey, usedAt: expect.any(Number), reports: [{ at: expect.any(Number), visible: true }] },
+        { key: first.key, usedAt: expect.any(Number), reports: [{ at: expect.any(Number), visible: true }] },
       ])
-      expect(await said(newer, ['set', 'plan', 'step', '3'])).toMatchObject({ revision: 3 })
-      expect(await said(newer, ['create', 'Later', '--id', 'later', '--html', '<p>later</p>'])).toMatchObject({ id: 'later' })
+      expect(await said(newer.program, ['set', 'plan', 'step', '3'])).toMatchObject({ revision: 3 })
+      expect(await said(newer.program, ['create', 'Later', '--id', 'later', '--html', '<p>later</p>'])).toMatchObject({ id: 'later' })
+      expect(await said(newer.program, ['update', 'plan', '--html', '<p>newer-v2</p>'])).toMatchObject({ version: 2 })
+      if (signedOut) {
+        const client = await browser(first.cookie)
+        const { job } = (await client.mutation(ref<'mutation'>('displays:signOut'), { key: first.key })) as { job: string }
+        // The part of It that serves pages has been told, and remembers it
+        await comes(
+          async () => (await client.query(ref<'query'>('displays:signOutConfirmed'), { job })) === true,
+          () => 'the sign-out unconfirmed',
+        )
+      }
       await stopped(service)
-      expect(json(inBackend('data.json'))).toMatchObject({
+      expect(json(path.join(folder, 'backend', 'data.json'))).toMatchObject({
         release: programToo ? NEWER_RELEASE : RELEASE,
         it: NEWER,
         functionsOf: NEWER,
-        functions: NEWER_HASH,
+        functions: newer.hash,
       })
 
       // The older It is not started on the newer data
@@ -340,26 +430,33 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
         rmSync(control, { recursive: true, force: true })
       }
 
-      // The copy is put back with the commands the documentation gives, as they are written there
-      const steps = documentedSteps()
-      expect(steps).toMatch(/^copy=before-\.\.\.$/m)
-      expect(steps).toContain('~/.it')
-      execFileSync('sh', ['-e', '-c', steps.replace(/^copy=.*$/m, `copy=${copy}`).replaceAll('~/.it', `'${folder}'`)], {
-        env: { PATH: process.env.PATH, HOME: folder },
-        stdio: 'pipe',
-      })
-      // The newer data is aside, whole, and the copy is as it was
-      expect(json(inBackend('after-upgrade', 'data.json'))).toMatchObject({ it: NEWER, functionsOf: NEWER })
-      expect(readdirSync(inBackend('after-upgrade'))).toEqual(expect.arrayContaining(['data.json', 'db.sqlite3', 'storage']))
-      expect(readdirSync(inBackend(copy)).sort()).toEqual(kept)
-      expect(existsSync(inBackend('copy.json'))).toBe(false)
+      // The documented lines, where the service cannot be stopped, change nothing
+      const back = documented('copy=')
+      const asItWas = tree(folder)
+      const unstopped = pasted(back, folder, copy, 1)
+      expect([unstopped.code, unstopped.out, unstopped.asked]).toEqual([1, '', 'service uninstall\n'])
+      expect(tree(folder)).toEqual(asItWas)
+      expect(existsSync(`${folder}-after-upgrade`)).toBe(false)
+      // Run as they are written, they stop the service, keep the whole folder as it was, and put the copy back
+      const put = pasted(back, folder, copy)
+      expect([put.code, put.err, put.asked]).toEqual([0, '', 'service uninstall\n'])
+      expect(put.out).toMatch(/kept in .*-after-upgrade\.\nThe copy is in place\.\n$/)
+      expect(tree(`${folder}-after-upgrade`)).toEqual(asItWas)
+      expect(json(path.join(folder, 'backend', 'data.json'))).toEqual(before)
+      expect(existsSync(path.join(folder, 'backend', 'copy.json'))).toBe(false)
+      // A second run refuses, and changes nothing anywhere
+      const restored = tree(folder)
+      const again = pasted(back, folder, copy)
+      expect(again.code).toBe(1)
+      expect(again.out).toBe('')
+      expect(again.err).toMatch(/-after-upgrade is there already, so nothing was changed\.\n$/)
+      expect([tree(folder), tree(`${folder}-after-upgrade`)]).toEqual([restored, asItWas])
 
       // The older It starts on it, with its own functions in it and none refused
       service = serve(older, 'restored.log')
       await started(service)
       expect(service.lines()).not.toMatch(/backend_older|functions_kept|copy_failed|database_copied/)
-      const status = await said(older, ['status', '--json'])
-      expect(status.database).toEqual({ release: RELEASE, it: VERSION, functions: FUNCTIONS_HASH, functionsOf: VERSION })
+      expect((await said(older, ['status', '--json'])).database).toEqual({ release: RELEASE, it: VERSION, functions: FUNCTIONS_HASH, functionsOf: VERSION })
       // The functions it has are the older ones: the newer module is not among them
       expect(
         await asAdmin(backend, 'restoring:seen', {}).then(
@@ -367,15 +464,87 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
           () => 'not there',
         ),
       ).toBe('not there')
-      // The page opens on the display, with its state as it was before the upgrade, and what was done since is gone
+      // The page and its state are as they were before the upgrade, and what was done since is gone
       expect(await said(older, ['state', 'plan'])).toEqual({ state: { step: 2 }, revision: 2 })
+      expect(await said(older, ['read', 'plan'])).toMatchObject({ version: 1 })
       expect((await said(older, ['list'])).map((page: { id: string }) => page.id)).toEqual(['plan'])
-      expect(((await (await browser()).query(ref<'query'>('displays:list'), {})) as { key?: string }[]).length).toBe(1)
-      expect(await opened('plan')).toEqual({ status: 200, body: index })
-      // And it goes on from there
+      const displays = (await (await browser(first.cookie)).query(ref<'query'>('displays:list'), {})) as { id: string }[]
+      expect(displays).toHaveLength(1)
+      let display = first
+      if (!signedOut) expect(await opened('plan', display)).toEqual({ status: 200, body: index })
+      else {
+        // The display signed out since the upgrade opens nothing, as the page says, until it is forgotten and paired again
+        expect(await opened('plan', display)).toEqual({ status: 401, body: '' })
+        await (await browser(first.cookie)).mutation(ref<'mutation'>('displays:forget'), { displayId: displays[0]!.id })
+        display = { cookie: await paired(older), key: 'a-display-key-000002' }
+        await register(display)
+        expect(await opened('plan', display)).toEqual({ status: 200, body: index })
+      }
+      // And it goes on from there, publishing a second version of its own over the files the newer one had
       expect(await said(older, ['set', 'plan', 'step', '4'])).toMatchObject({ revision: 3 })
+      expect(await said(older, ['update', 'plan', '--html', '<p>older-v2</p>'])).toMatchObject({ version: 2 })
+      expect(await opened('plan', display)).toEqual({ status: 200, body: '<p>older-v2</p>' })
+      await stopped(service)
+
+      // Going forward again with the documented lines puts the whole folder back as it was kept
+      const forward = pasted(documented('-rolled-back'), folder)
+      expect([forward.code, forward.err, forward.asked]).toEqual([0, '', 'service uninstall\n'])
+      expect(forward.out).toBe("It's folder is as it was before you went back.\n")
+      expect(tree(folder)).toEqual(asItWas)
+      expect(json(path.join(`${folder}-rolled-back`, 'backend', 'data.json'))).toMatchObject({ it: VERSION, functionsOf: VERSION })
+      // And the newer It starts on it, with its own second version, its own bytes and its own state
+      service = serve(newer.program, 'forward.log')
+      await started(service)
+      expect(service.lines()).not.toMatch(/database_copied|functions_kept/)
+      expect(await said(newer.program, ['state', 'plan'])).toEqual({ state: { step: 3 }, revision: 3 })
+      expect((await said(newer.program, ['list'])).map((page: { id: string }) => page.id).sort()).toEqual(['later', 'plan'])
+      expect(await opened('plan', first)).toEqual({ status: 200, body: '<p>newer-v2</p>' })
       await stopped(service)
     },
-    400_000,
+    600_000,
   )
+
+  test('of two copies, the one to put back is the one the older It last ran on, though a later one says its functions are the older It’s', async () => {
+    const setup = run(older, ['setup', '--none', '--no-service'])
+    expect(await setup.ended, setup.err()).toBe(0)
+    let service = serve(older, 'older.log')
+    await started(service)
+    await stopped(service)
+    // A newer It with a newer backend program, whose functions the data refuses: it serves with the older functions, on its own program
+    service = serve(refusing.program, 'refusing.log')
+    await started(service)
+    expect(service.lines()).toContain('backend: the functions of this version were refused, and the ones already loaded go on serving (functions_kept)')
+    await stopped(service)
+    // And the newest, on that same program, whose functions the data takes
+    service = serve(newest.program, 'newest.log')
+    await started(service)
+    expect(service.lines()).toContain(`backend: functions loaded (${newest.hash.slice(0, 12)})`)
+    await stopped(service)
+    const kept = readdirSync(path.join(folder, 'backend'))
+      .filter((name) => name.startsWith('before-'))
+      .sort()
+    expect(kept).toEqual([`before-${NEWER_RELEASE}-functions-${refusing.hash.slice(0, 12)}`, `before-functions-${newest.hash.slice(0, 12)}`].sort())
+    const noted = Object.fromEntries(kept.map((copy) => [copy, json(path.join(folder, 'backend', copy, 'data.json'))]))
+    // Both say that their functions are the older It's. Only one was last run by it
+    for (const copy of kept) expect(noted[copy]).toMatchObject({ functionsOf: VERSION })
+    expect(section()).toContain('The copy to put back is the one whose `it` is the version you want to go back to')
+    const chosen = kept.filter((copy) => noted[copy]!.it === VERSION)
+    expect(chosen).toEqual([`before-${NEWER_RELEASE}-functions-${refusing.hash.slice(0, 12)}`])
+    expect(noted[`before-functions-${newest.hash.slice(0, 12)}`]).toMatchObject({ it: NEWER, release: NEWER_RELEASE })
+    // Each is put back in a copy of the folder, as the page says, and the older It is started on it: it runs on the one chosen, and refuses the other
+    for (const copy of kept) {
+      const home = mkdtempSync(path.join(os.tmpdir(), 'it-restore-choice-'))
+      beside.push(home, `${home}-after-upgrade`)
+      cpSync(folder, home, { recursive: true })
+      expect(pasted(documented('copy='), home, copy)).toMatchObject({ code: 0, err: '' })
+      const tried = serve(older, 'tried.log', home)
+      if (chosen.includes(copy)) {
+        await started(tried)
+        await stopped(tried)
+      } else {
+        expect(await tried.ended).toBe(1)
+        expect(tried.lines()).toMatch(/could not start: backend_older\n$/)
+      }
+    }
+  }, 600_000)
 })
