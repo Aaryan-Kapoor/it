@@ -1542,3 +1542,154 @@ describe('the script itself', () => {
     expect(RUNTIME.split('\n')[0]).toMatch(/^\/\*! It\. Copyright \(c\) 2026 Aaryan Kapoor\. Source-available under the It License 1\.1\./)
   })
 })
+
+// The camera, live: the site sends pictures, and the page's script draws each into a canvas whose
+// stream the page holds. A canvas is stood in for by one that writes down what was drawn on it,
+// and its stream by tracks that say whether they were stopped.
+describe('the camera, live in a page', () => {
+  function withCanvas() {
+    const drawn: unknown[] = []
+    const tracks = [{ stopped: false, stop: () => (tracks[0]!.stopped = true) }]
+    const stream = { getTracks: () => tracks }
+    const p = load('', (w) => {
+      w.HTMLCanvasElement.prototype.getContext = () => ({ drawImage: (picture: unknown) => drawn.push(picture) })
+      w.HTMLCanvasElement.prototype.captureStream = () => stream
+    })
+    return { p, drawn, tracks, stream }
+  }
+  /** A picture as the site sends one, which says whether it was closed. */
+  const picture = (width = 640, height = 480) => {
+    const made = { width, height, closed: false, close: () => (made.closed = true) }
+    return made
+  }
+  /** The camera opened, and the site's answer given. */
+  async function opened() {
+    const c = withCanvas()
+    const opening = c.p.It.camera({ facing: 'environment', width: 1280 })
+    const port = c.p.answer()
+    const asked = port.sent[0]
+    c.p.fromSite({ type: 'it:result', requestId: asked.requestId, ok: true })
+    const cam = await opening
+    return { ...c, port, asked, cam }
+  }
+
+  test('is asked for under an id the page names it by, with what was asked of the camera, and gives the stream once it is open', async () => {
+    const { asked, cam, stream } = await opened()
+    expect(asked).toMatchObject({ type: 'it:camera', video: { facingMode: 'environment', width: 1280 } })
+    expect(typeof asked.camera).toBe('string')
+    expect(asked.camera.length).toBeGreaterThan(8)
+    expect(cam.stream).toBe(stream)
+    expect(cam.state).toBe('live')
+    expect([cam.width, cam.height]).toEqual([0, 0])
+  })
+
+  test('draws each picture into the stream, hands it to onframe, closes it, and says it was drawn, a picture that came before the answer among them', async () => {
+    const c = withCanvas()
+    const opening = c.p.It.camera()
+    const port = c.p.answer()
+    const named = port.sent[0].camera
+    const early = picture()
+    c.p.fromSite({ type: 'it:camera-frame', camera: named, frame: 1, picture: early })
+    expect(c.drawn).toEqual([early])
+    expect(early.closed).toBe(true)
+    c.p.fromSite({ type: 'it:result', requestId: port.sent[0].requestId, ok: true })
+    const cam = await opening
+    const seen: unknown[] = []
+    cam.onframe = (given: { closed: boolean }) => seen.push(given.closed)
+    const next = picture(1280, 720)
+    c.p.fromSite({ type: 'it:camera-frame', camera: named, frame: 2, picture: next })
+    // Handed over open, and closed once the page's own handler returned
+    expect(seen).toEqual([false])
+    expect(next.closed).toBe(true)
+    expect([cam.width, cam.height]).toEqual([1280, 720])
+    expect(port.sent.filter((m) => m.type === 'it:camera-drawn')).toEqual([
+      { type: 'it:camera-drawn', camera: named, frame: 1 },
+      { type: 'it:camera-drawn', camera: named, frame: 2 },
+    ])
+  })
+
+  test('a page’s onframe handler that throws still has the picture closed and said drawn, and the console says only that it threw', async () => {
+    const { p, port, asked, cam } = await opened()
+    const said: unknown[][] = []
+    p.w.console.error = (...args: unknown[]) => said.push(args)
+    cam.onframe = () => {
+      throw new Error('e2e-private-secret')
+    }
+    const given = picture()
+    p.fromSite({ type: 'it:camera-frame', camera: asked.camera, frame: 1, picture: given })
+    expect(given.closed).toBe(true)
+    expect(port.sent.filter((m) => m.type === 'it:camera-drawn')).toHaveLength(1)
+    expect(said).toEqual([['[It] a camera’s onframe handler threw']])
+  })
+
+  test('is told when it pauses, goes on and ends, with why in words, and once ended its stream is stopped and nothing more is drawn', async () => {
+    const { p, port, asked, cam, tracks, drawn } = await opened()
+    const told: unknown[][] = []
+    cam.onchange = (state: string, why?: string) => told.push([state, why])
+    p.fromSite({ type: 'it:camera-state', camera: asked.camera, state: 'paused' })
+    expect(cam.state).toBe('paused')
+    p.fromSite({ type: 'it:camera-state', camera: asked.camera, state: 'live' })
+    p.fromSite({ type: 'it:camera-state', camera: asked.camera, state: 'ended', why: 'taken_over' })
+    expect(told).toEqual([
+      ['paused', undefined],
+      ['live', undefined],
+      ['ended', 'Another conversation took this page over.'],
+    ])
+    expect(cam.state).toBe('ended')
+    expect(tracks[0]!.stopped).toBe(true)
+    const late = picture()
+    p.fromSite({ type: 'it:camera-frame', camera: asked.camera, frame: 3, picture: late })
+    expect(late.closed).toBe(true)
+    expect(drawn).toEqual([])
+    expect(port.sent.filter((m) => m.type === 'it:camera-drawn')).toEqual([])
+    // Stopped after it ended, nothing more is asked of the site
+    await cam.stop()
+    expect(port.sent.filter((m) => m.type === 'it:camera-stop')).toEqual([])
+  })
+
+  test('stop closes the camera at the site and ends the stream, and resolves where the site had closed it already', async () => {
+    const { p, port, asked, cam, tracks } = await opened()
+    const stopping = cam.stop()
+    expect(cam.state).toBe('ended')
+    expect(tracks[0]!.stopped).toBe(true)
+    const stop = port.sent.find((m) => m.type === 'it:camera-stop')
+    expect(stop).toMatchObject({ camera: asked.camera })
+    p.fromSite({ type: 'it:result', requestId: stop.requestId, ok: false, error: 'That camera is not open.' })
+    await expect(stopping).resolves.toBeUndefined()
+  })
+
+  test('refused, it rejects with the site’s own reason, and its stream is stopped', async () => {
+    const c = withCanvas()
+    const opening = c.p.It.camera()
+    const port = c.p.answer()
+    c.p.fromSite({
+      type: 'it:result',
+      requestId: port.sent[0].requestId,
+      ok: false,
+      error: 'The person did not allow this page to use the camera on this screen.',
+    })
+    await expect(opening).rejects.toThrow('The person did not allow this page to use the camera on this screen.')
+    expect(c.tracks[0]!.stopped).toBe(true)
+    // A picture for a camera the page does not hold is closed, and nothing is said of it
+    const stray = picture()
+    c.p.fromSite({ type: 'it:camera-frame', camera: port.sent[0].camera, frame: 1, picture: stray })
+    expect(stray.closed).toBe(true)
+    expect(port.sent.filter((m) => m.type === 'it:camera-drawn')).toEqual([])
+  })
+
+  test('ended by the site before its answer came, it rejects with why rather than giving a camera that is over', async () => {
+    const c = withCanvas()
+    const opening = c.p.It.camera()
+    const port = c.p.answer()
+    c.p.fromSite({ type: 'it:camera-state', camera: port.sent[0].camera, state: 'ended', why: 'device' })
+    c.p.fromSite({ type: 'it:result', requestId: port.sent[0].requestId, ok: true })
+    await expect(opening).rejects.toThrow('The camera stopped giving pictures.')
+  })
+
+  test('a browser that cannot make a stream of a canvas is refused with a sentence that says so, and the site is asked nothing', async () => {
+    const p = load()
+    const port = p.answer()
+    await expect(p.It.camera()).rejects.toThrow('This browser cannot make a stream of the camera’s pictures.')
+    expect(port.sent).toEqual([])
+  })
+})

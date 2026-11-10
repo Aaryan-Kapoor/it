@@ -276,6 +276,7 @@ function receive(message: SiteToPage): void {
     waiting.delete(message.requestId)
     answer(message)
   } else if (message.type === 'it:recording') heard(message)
+  else if (message.type === 'it:camera-frame' || message.type === 'it:camera-state') seen(message)
 }
 
 // What the page keeps for itself (It.store). What is set within a moment goes to the site as
@@ -1437,6 +1438,144 @@ async function photo(options: { facing?: 'user' | 'environment' } = {}): Promise
   return taken(said.file, 'image/jpeg')
 }
 
+// The camera, live. The site opens it and sends the page each picture it gives, and the page
+// draws each onto a canvas of its own, whose stream is the camera's picture as the page has it:
+// for a video element, or for a call the page makes itself with RTCPeerConnection. Each picture
+// is said to be drawn once it is, and the site sends the next only then, so a page that is slow
+// to draw is sent fewer pictures and never a pile of them.
+
+type CameraState = 'live' | 'paused' | 'ended'
+/** Why the live camera ended without the page asking, as the site says it. */
+const CAMERA_ENDED: Record<string, string> = {
+  person: 'The person stopped the camera in It’s bar.',
+  taken_back: 'The person took back what they had allowed this page.',
+  not_shown: 'The page was closed while the camera was live.',
+  device: 'The camera stopped giving pictures.',
+  taken_over: 'Another conversation took this page over.',
+}
+interface Camera {
+  /** The camera's picture, as a stream: for a video element's `srcObject`, or a track to send in a call. */
+  readonly stream: MediaStream
+  /** The size of the last picture, or 0 before the first. */
+  readonly width: number
+  readonly height: number
+  /** Live, paused (while the screen does not show It), or ended. */
+  readonly state: CameraState
+  /** Called with each picture, as an ImageBitmap, once it is drawn into the stream. It is closed when the call returns. */
+  onframe: ((picture: ImageBitmap) => void) | null
+  /** Called each time the state changes without the page asking, with the reason where it ended. */
+  onchange: ((state: CameraState, why?: string) => void) | null
+  /** Closes the camera. */
+  stop(): Promise<void>
+}
+/** The live cameras the page holds, by the id the page named each by: what the site sends is handed to them. */
+const cameras = new Map<string, { picture: (frame: number, picture: ImageBitmap) => void; heard: (state: CameraState, why?: string) => void }>()
+/** What the site sent of a live camera. A picture for no camera the page holds is closed, and nothing more is done with it. */
+function seen(message: Extract<SiteToPage, { type: 'it:camera-frame' | 'it:camera-state' }>): void {
+  const held = cameras.get(message.camera)
+  if (message.type === 'it:camera-state') held?.heard(message.state, message.why)
+  else if (held) held.picture(message.frame, message.picture as unknown as ImageBitmap)
+  else message.picture?.close?.()
+}
+
+/**
+ * Opens the camera live, and gives its picture as a stream the page holds. Resolves once the
+ * camera is open. The page asks for the camera when it is published, and the person allows it on
+ * each screen, as for `It.record` and `It.photo`. `facing` is `user` for the camera that faces the
+ * person and `environment` for the one on the back of a phone; `width`, `height` and `frameRate`
+ * are what the camera is asked for, and it gives what it can.
+ */
+async function camera(
+  options: { facing?: 'user' | 'environment'; facingMode?: 'user' | 'environment'; width?: number; height?: number; frameRate?: number } = {},
+): Promise<Camera> {
+  const canvas = document.createElement('canvas')
+  const drawing = canvas.getContext('2d')
+  if (!drawing || typeof canvas.captureStream !== 'function') throw new Error('This browser cannot make a stream of the camera’s pictures.')
+  // A frame of the stream each time a picture is drawn, as the camera gives them
+  const stream = canvas.captureStream()
+  const named = id()
+  let state: CameraState = 'live'
+  let why: string | undefined
+  let width = 0
+  let height = 0
+  /** Lets go of the stream: a video element that shows it, and a call that sends it, see it end. */
+  const over = () => {
+    state = 'ended'
+    cameras.delete(named)
+    for (const t of stream.getTracks()) t.stop()
+  }
+  // Made before the camera is asked for: a picture can come before the answer does
+  const live: Camera = {
+    stream,
+    get width() {
+      return width
+    },
+    get height() {
+      return height
+    },
+    get state() {
+      return state
+    },
+    onframe: null,
+    onchange: null,
+    stop: async () => {
+      if (state === 'ended') return
+      over()
+      // Refused only where the site has closed it already, which is what was asked
+      await done({ type: 'it:camera-stop', requestId: id(), camera: named }).catch(() => {})
+    },
+  }
+  cameras.set(named, {
+    picture: (frame, picture) => {
+      if (state === 'ended') return picture.close()
+      if (width !== picture.width || height !== picture.height) {
+        canvas.width = width = picture.width
+        canvas.height = height = picture.height
+      }
+      drawing.drawImage(picture, 0, 0)
+      const call = live.onframe
+      if (typeof call === 'function')
+        try {
+          call(picture)
+        } catch {
+          console.error('[It] a camera’s onframe handler threw')
+        }
+      picture.close()
+      send({ type: 'it:camera-drawn', camera: named, frame })
+    },
+    heard: (now, said) => {
+      if (state === 'ended') return
+      if (now === 'ended') {
+        why = said
+        over()
+      } else state = now
+      const call = live.onchange
+      if (typeof call !== 'function') return
+      try {
+        call(now, said === undefined ? undefined : (CAMERA_ENDED[said] ?? said))
+      } catch {
+        console.error('[It] a camera’s onchange handler threw')
+      }
+    },
+  })
+  const facing = options.facing ?? options.facingMode
+  const video = {
+    ...(facing === 'user' || facing === 'environment' ? { facingMode: facing } : {}),
+    ...(options.width === undefined ? {} : { width: options.width }),
+    ...(options.height === undefined ? {} : { height: options.height }),
+    ...(options.frameRate === undefined ? {} : { frameRate: options.frameRate }),
+  }
+  try {
+    await done({ type: 'it:camera', requestId: id(), camera: named, video })
+  } catch (err) {
+    over()
+    throw err
+  }
+  // Ended by the site while it was being opened: said as that, and not as a camera that is live
+  if (live.state === 'ended' && why) throw new Error(CAMERA_ENDED[why] ?? 'The camera has ended.')
+  return live
+}
+
 const api = {
   id: config.id,
   version: config.version,
@@ -1457,6 +1596,7 @@ const api = {
   action,
   record,
   photo,
+  camera,
   stage,
   commit,
   staged: () => ({ ...staged }),
