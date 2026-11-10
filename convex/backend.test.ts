@@ -14,6 +14,7 @@ import { record as recordAction } from './actions'
 import { get as pageQuery, takePage } from './artifacts'
 import { inboxPage as inboxPageQuery, inbox as inboxQuery, waitingPage as waitingPageQuery } from './delivery'
 import schema from './schema'
+import { TURNS_MOST } from './turns'
 
 const modules = import.meta.glob('./**/*.ts')
 const SITE = 'https://backend.test'
@@ -4817,6 +4818,56 @@ describe('whether a turn of a page’s conversation is running, as its machine s
     await m.as.mutation(api.turns.say, { for: SESSION, running: false })
     expect(await turns(t)).toEqual([])
     expect((await alice.browser.query(api.artifacts.get, { slug: 'plan' })).turn).toBeNull()
+  })
+
+  test('a turn its machine never said was running, said to have ended, is kept as one that began and ended at that moment, also in the place of an earlier one', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan', { session: SESSION })
+    const turn = async () => (await alice.browser.query(api.artifacts.get, { slug: 'plan' })).turn
+    const first = Date.now()
+    await m.as.mutation(api.turns.say, { for: SESSION, running: false, untold: true })
+    expect(await turn()).toEqual({ since: first, endedAt: first })
+    vi.advanceTimersByTime(9_000)
+    await m.as.mutation(api.turns.say, { for: SESSION, running: false, untold: true })
+    expect(await turns(t)).toHaveLength(1)
+    expect(await turn()).toEqual({ since: first + 9_000, endedAt: first + 9_000 })
+    // One that is running when that is said has ended, and began when it was said to
+    vi.advanceTimersByTime(1_000)
+    await m.as.mutation(api.turns.say, { for: SESSION, running: true })
+    vi.advanceTimersByTime(4_000)
+    await m.as.mutation(api.turns.say, { for: SESSION, running: false, untold: true })
+    expect(await turn()).toEqual({ since: first + 10_000, endedAt: first + 14_000 })
+  })
+
+  test('a machine has room for so many records and no more: one past that takes the place of the turn that ended longest ago, and of the one running longest where none has ended', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const other = await machineOf(t, 'alice', 'desktop')
+    const of = (n: number) => ({ harness: 'claude-code', id: `sess-${n}` })
+    await other.as.mutation(api.turns.say, { for: of(0), running: true })
+    for (let n = 0; n < TURNS_MOST; n++) {
+      vi.advanceTimersByTime(1_000)
+      await m.as.mutation(api.turns.say, { for: of(n), running: true })
+    }
+    // The fifth ended, and the rest run on
+    vi.advanceTimersByTime(1_000)
+    await m.as.mutation(api.turns.say, { for: of(4), running: false })
+    const mine = async () => (await turns(t)).filter((row) => row.machineId === m.id).map((row) => row.sessionId)
+    expect(await mine()).toHaveLength(TURNS_MOST)
+    vi.advanceTimersByTime(1_000)
+    await m.as.mutation(api.turns.say, { for: of(TURNS_MOST), running: true })
+    expect(await mine()).toHaveLength(TURNS_MOST)
+    expect(await mine()).not.toContain('sess-4')
+    vi.advanceTimersByTime(1_000)
+    await m.as.mutation(api.turns.say, { for: of(TURNS_MOST + 1), running: true })
+    expect(await mine()).toHaveLength(TURNS_MOST)
+    expect(await mine()).not.toContain('sess-0')
+    expect(await mine()).toContain(`sess-${TURNS_MOST + 1}`)
+    // Another machine's records are none of this one's to make room with
+    expect((await turns(t)).filter((row) => row.machineId !== m.id)).toHaveLength(1)
   })
 
   test('only a machine says it, and only of its own conversations: a browser is refused, and another person’s machine and another machine of the person’s change nothing', async () => {
