@@ -249,7 +249,7 @@ window.World = (() => {
       if (!draws) continue
       var dx = 0,
         dy = 0,
-        lit = 0.2 + d.heat,
+        lit = 0.26 + d.heat,
         hue = d.heat > 0.12 || d.to || d.path ? d.hue : WHITE
       for (var w = 0; w < waves.length; w++) {
         var wv = waves[w]
@@ -799,7 +799,7 @@ window.World = (() => {
       g.setTransform(dpr, 0, 0, dpr, 0, 0)
       g.clearRect(0, 0, wide, high)
       g.fillStyle = COLOUR[WHITE]
-      g.globalAlpha = 0.2
+      g.globalAlpha = 0.26
       for (var i = 0; i < dots.length; i++) g.fillRect(dots[i].hx - 0.9, dots[i].hy - 0.9, 1.8, 1.8)
       g.globalAlpha = 1
     }

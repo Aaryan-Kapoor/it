@@ -1028,10 +1028,10 @@ async function tour(a: Args) {
     if (eq < 1) throw new Problem('--param is written name=value.', 'invalid')
     given[param.slice(0, eq)] = loose(param.slice(eq + 1))
   }
-  // The agent's plate on the page carries the name of the agent app that is giving the tour, where that is known
   aimedAt(a)
   await canAimById(a, TAKES.showById)
   await canAimEverywhere(a, TAKES.showEverywhere)
+  // The agent's hand on the page carries the name of the agent app that is giving the tour, where that is known
   const by = sessionAsked()?.session.harness
   const made = tourPage(name, given, text(a, 'agent') ?? (by && Object.hasOwn(KNOWN, by) ? KNOWN[by as Harness].label : undefined))
   // The page is this conversation's from now on, whoever showed it last. An agent app that does
