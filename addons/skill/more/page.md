@@ -52,7 +52,7 @@ await cam.stop()
 ```
 
 - **The page never gets the camera itself.** It sends the page each picture, and `cam.stream` is made in the page from them. The next picture comes only once the page has drawn the last, so a slow `onframe` gets fewer pictures and never a backlog. Read or draw the picture inside `onframe`. `cam.width` and `cam.height` are the last picture's size, at most 1920 pixels on its longer side, and at most 30 pictures come in a second, whatever you ask for.
-- **It can end without the page asking.** It pauses while the screen does not show It, and ends when the user stops it or takes back what they allowed, when another conversation takes the page over, or when the page closes. `cam.onchange` says which, and `cam.stream` ends.
+- **It can end without the page asking.** It pauses while the browser says the page is not shown, and ends when the user stops it or takes back what they allowed, when another conversation takes the page over, or when the page closes. `cam.onchange` says which, and `cam.stream` ends.
 - **Sound can be recorded beside it.** While the camera is live, `It.record({ audio: true })` works, with its own Stop in It's bar. `It.photo` and a recording with video are refused then: take your own picture from `cam.onframe` (draw it on a canvas and use `canvas.toBlob`), or record `cam.stream` yourself. `It.camera` is refused while a recording with video or a photo is under way. Only the picture is live: a call made from `cam.stream` has no sound from the user.
 
 ## Keeping something with the page
