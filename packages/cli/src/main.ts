@@ -39,7 +39,7 @@ import {
 } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
-import { type Arrives, arrives, claudeRunning } from './arrives'
+import { type Arrives, arrives, claudeAfterSetup, claudeRunning } from './arrives'
 import { choices, conversationIds, local, type Route, refusedFor } from './connector'
 import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
@@ -572,7 +572,7 @@ const TOUR_RULE_ONE = '1. **Never block.**'
  * in the background, which an app without one runs in front and never hears from again: so
  * here the rule is another, in the place of the first, and not a second word against it.
  */
-const TOUR_RULE_ONE_WAITING = `1. **Wait for each thing they do.** This conversation was open before It's add-on was installed, so nothing the person does on a page arrives here by itself. After every page you show and every answer you give, run \`it wait --timeout 100\` and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Where it is refused because your harness does not tell \`it\` which conversation this is, add \`--id\` and the id of the page that is on the screen. Do not use \`--follow\`, and do not put the command in the background: it has to end for you to be shown what it printed. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing.`
+const TOUR_RULE_ONE_WAITING = `1. **Wait for each thing they do.** This conversation was most likely open before It's add-on was installed, and then what the person does on a page does not arrive here by itself. What each \`it tour show\` prints says so under \`arrives\`. Where \`arrives.byItself\` is \`true\`, as it is in a thread of T3 Code, what they do arrives as a message that begins \`[It]\`: after each page and each answer, end your turn, and do not wait. Otherwise, after every page you show and every answer you give, run \`it wait --timeout 100\` and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Where it is refused because your harness does not tell \`it\` which conversation this is, add \`--id\` and the id of the page that is on the screen. Do not use \`--follow\`, and do not put the command in the background: it has to end for you to be shown what it printed. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing. During the tour, say nothing else of what \`arrives.next\` says: where it asks the person to type /reload-plugins or to start a new conversation, say that once, after the ending, unless you passed it on with the pairing link already.`
 /** The tour as an agent that waited for the button is given it. */
 function tourForOneThatWaited(guide: string): string {
   const lines = guide.split('\n')
@@ -592,7 +592,7 @@ function tourForOneThatWaited(guide: string): string {
  * with how to read the guide itself.
  */
 export const AFTER_SETUP =
-  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
+  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. Where setup said last that the person is to type /reload-plugins in this conversation, or to start a new one, pass that on to them in the same message as the link, as it stands. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
 
 /**
  * `it tour --wait`: waits until the person asks for the tour with the button on the site, and
@@ -1677,6 +1677,11 @@ async function settingUpLed(a: Args, begunAlready = false) {
       // someone whose only agent app is too old was told that none was found that It can connect, and no more
       else if (h.addon === 'too_old' && h.detail) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
     }
+    // Claude Code, connected just now from inside one of its conversations that has not loaded the add-on: said last of all
+    const reload =
+      wanted.includes('claude-code') && !connectedBefore.has('claude-code') && after.some((h) => h.id === 'claude-code' && h.addon === 'connected')
+        ? claudeAfterSetup()
+        : undefined
 
     // Registered is not yet running. The connector itself is asked, and given a little while to answer
     if (inBackground && !trouble && !(await answering()))
@@ -1763,6 +1768,7 @@ async function settingUpLed(a: Args, begunAlready = false) {
 
     const add = await pathLine()
     if (add) left.push(`\`it\` is not on your PATH yet, so an agent that runs it by name will not find it. ${add}`)
+    if (reload) left.push(reload)
     flow.line()
     if (left.length) {
       flow.line(flow.bold('Left for you'))
@@ -2026,6 +2032,12 @@ async function settingUp(a: Args, joined: boolean) {
           ? `\nIt’s site is at ${site}. No browser is let in until it is paired: \`it site\` opens the site in a browser on this machine and pairs that browser, and \`it site --no-open\` prints the link that does.`
           : `\nNo browser is let in to It’s site until it is paired: \`it site\` opens the site in a browser on this machine and pairs that browser, and \`it site --no-open\` prints the link that does.`,
       )
+    }
+    // Claude Code, connected just now from inside one of its conversations that has not loaded the add-on: said last of all,
+    // since it is what decides whether what the person does on a page reaches the conversation they are in
+    if (wanted.includes('claude-code') && !before.has('claude-code') && after.some((h) => h.id === 'claude-code' && h.addon === 'connected')) {
+      const reload = claudeAfterSetup()
+      if (reload) say(`\n${reload}`)
     }
     if (!forPerson(a))
       out({

@@ -3,6 +3,7 @@
 // show` and `it status` print as `arrives`, for the conversation they run in. An agent told that
 // it arrives by itself ends its turn; one told anything else waits for it with `it wait`.
 import type { Route } from './connector'
+import { claudeAddonHere } from './lib'
 import { KNOWN, older } from './setup'
 
 export interface Arrives {
@@ -111,4 +112,18 @@ export function arrives(f: Facts): Arrives {
   return unknown(
     `It has not heard from It’s add-on in this conversation in the last few seconds, so it cannot tell whether what the person does arrives here by itself.`,
   )
+}
+
+/**
+ * What setup says last where it has just connected Claude Code from inside a Claude Code
+ * conversation that has not loaded the add-on, as a conversation that was open when the
+ * add-on was installed has not: Claude Code loads an add-on as a conversation starts. Such a
+ * conversation loads it with `/reload-plugins`, and in a Claude Code too old for that, a new
+ * conversation is where It's add-on runs. Nothing anywhere else.
+ */
+export function claudeAfterSetup(e: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (claudeAddonHere(e) !== false) return undefined
+  return tooOldToReload(claudeRunning(e))
+    ? 'Claude Code: this conversation was already open when It’s add-on was installed, and this Claude Code is too old to load the add-on into an open conversation. Start a new Claude Code conversation before you use It: the add-on loads there by itself, and what you do on a page reaches it.'
+    : 'Claude Code: this conversation was already open when It’s add-on was installed, so it has not loaded it. Type /reload-plugins in this conversation before you use It here: Claude Code then loads the add-on, and what you do on a page reaches the conversation by itself. Typed while the agent is still replying, it is applied once the reply is over.'
 }

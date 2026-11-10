@@ -1,7 +1,7 @@
 // What `it create`, `it update`, `it tour show` and `it status` say to an agent of whether what
 // the person does on its pages arrives in its conversation by itself, and what to do about it.
 import { describe, expect, test } from 'vitest'
-import { arrives, claudeRunning, loadAddon, RELOAD_PLUGINS_SINCE, tooOldToReload } from './src/arrives'
+import { arrives, claudeAfterSetup, claudeRunning, loadAddon, RELOAD_PLUGINS_SINCE, tooOldToReload } from './src/arrives'
 import type { Route } from './src/connector'
 
 const claude = { harness: 'claude-code', id: '11111111-2222-4333-8444-555555555555' }
@@ -91,5 +91,27 @@ describe('the Claude Code a command runs inside', () => {
     expect(tooOldToReload(undefined)).toBe(false)
     expect(loadAddon('2.1.286')).toContain('start a new Claude Code conversation')
     expect(loadAddon(undefined)).toContain('/reload-plugins')
+  })
+})
+
+describe('what setup says last where it has just connected Claude Code', () => {
+  const inClaude = { CLAUDE_CODE_SESSION_ID: '11111111-2222-4333-8444-555555555555' }
+  test('from inside a conversation that has not loaded the add-on: to type /reload-plugins there before using It', () => {
+    const said = claudeAfterSetup({ ...inClaude, CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.321' })!
+    expect(said).toMatch(/^Claude Code: /)
+    expect(said).toContain('Type /reload-plugins in this conversation before you use It here')
+    expect(claudeAfterSetup(inClaude)).toContain('/reload-plugins')
+  })
+
+  test('from inside one of a Claude Code too old for that: to start a new conversation', () => {
+    const said = claudeAfterSetup({ ...inClaude, CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.286' })!
+    expect(said).toContain('Start a new Claude Code conversation')
+    expect(said).not.toContain('/reload-plugins')
+  })
+
+  test('nothing from outside Claude Code, or from a conversation where the add-on runs already', () => {
+    expect(claudeAfterSetup({})).toBeUndefined()
+    expect(claudeAfterSetup({ CODEX_THREAD_ID: 'thread-1' })).toBeUndefined()
+    expect(claudeAfterSetup({ ...inClaude, IT_HARNESS: 'claude-code', IT_SESSION: inClaude.CLAUDE_CODE_SESSION_ID })).toBeUndefined()
   })
 })

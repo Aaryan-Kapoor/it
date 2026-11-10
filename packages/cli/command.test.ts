@@ -28,7 +28,7 @@ import { behindMark, MARK, PORTS, TAKES, UPLOAD, WHEN } from '@it/protocol'
 
 // What setup says last to an agent, as the program has it: said here in the program's own words, so that a change of them is a change here
 const AFTER_SETUP =
-  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
+  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. Where setup said last that the person is to type /reload-plugins in this conversation, or to start a new one, pass that on to them in the same message as the link, as it stands. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
 
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
@@ -6341,7 +6341,7 @@ describe('whether what the person does arrives by itself, as a page’s command 
       if (fn === 'artifacts:get') return { title: 'Plan' }
       return null
     })
-  let b: Awaited<ReturnType<typeof publishing>>
+  let b: Awaited<ReturnType<typeof backend>>
   const notes = (m: { it: string }) => JSON.parse(readFileSync(path.join(m.it, 'conversations.json'), 'utf8'))
 
   test('a Claude Code conversation that has not loaded It’s add-on is told that nothing arrives by itself, to wait, and to ask the person to reload its plugins', async () => {
