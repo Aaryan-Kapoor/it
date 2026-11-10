@@ -5,17 +5,23 @@
 // button is then pressed as a person presses it, and the action is to be accepted, and to be one
 // that It holds for the page.
 //
-//   node e2e/safari.mjs [--simulator <udid>] [--driver <address>] [--out <folder>] [--tries <n>]
+//   node e2e/safari.mjs [--simulator <udid>] [--driver <address>] [--out <folder>] [--tries <n>] [--within <seconds>]
 //
 // safaridriver must be enabled first (`sudo safaridriver --enable`) and listening, at
 // http://127.0.0.1:4444 unless --driver says otherwise. With --simulator, the simulator must be
 // booted. Each try pairs a new session; the run passes when one of them passes, and says how
 // many did not. A screenshot of each try is written to --out.
+//
+// The whole check is over within --within seconds, 900 unless it says otherwise. Every request
+// to the driver has a deadline of its own that covers its whole answer (e2e/webdriver.mjs), and
+// none is given more than is left of that time, less what is kept for the end of each try: the
+// screenshot and the session's end are each given a short deadline of their own from that.
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { it, needsStack, sleep } from './lib.mjs'
 import { printCleanly, redact } from './logs.mjs'
 import { ownerAddress } from './site.mjs'
+import { webdriver } from './webdriver.mjs'
 
 printCleanly()
 const STACK = needsStack('The Safari check')
@@ -27,6 +33,11 @@ const DRIVER = arg('driver', 'http://127.0.0.1:4444')
 const SIMULATOR = arg('simulator', null)
 const OUT = arg('out', null)
 const TRIES = Number(arg('tries', '2'))
+/** When the check is to be over, and how long before it the end of a try is kept for. */
+const OVER = Date.now() + Number(arg('within', '900')) * 1000
+const KEPT_FOR_THE_END = 45_000
+/** What is left for anything but the end of a try, at most `ms`. */
+const left = (ms) => Math.min(ms, OVER - KEPT_FOR_THE_END - Date.now())
 const WHICH = SIMULATOR ? 'the iOS Simulator’s Safari' : 'Safari'
 if (OUT) mkdirSync(OUT, { recursive: true })
 
@@ -51,18 +62,9 @@ document.getElementById('press').addEventListener('click', () => {
 })
 </script></body></html>`
 
-async function driver(method, url, body) {
-  const r = await fetch(DRIVER + url, { method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
-  const text = await r.text()
-  let answer
-  try {
-    answer = JSON.parse(text).value
-  } catch {
-    answer = text
-  }
-  if (!r.ok) throw new Error(`${method} ${url.replace(/\/session\/[^/]+/, '/session/…')}: ${r.status} ${JSON.stringify(answer).slice(0, 400)}`)
-  return answer
-}
+const ask = webdriver(DRIVER)
+/** A request to the driver, given `ms` or what is left of the check's time, whichever is less. */
+const driver = (method, url, body, ms = 30_000) => ask(method, url, body, { ms: left(ms) })
 
 /** One try: a session of its own, paired afresh. Resolves with what it saw, and throws with where it stopped. */
 async function attempt(n) {
@@ -75,21 +77,22 @@ async function attempt(n) {
   // booted: it has taken as many as three, each of which safaridriver gives up on after half a minute
   for (let asked = 1; !session; asked++) {
     try {
-      session = await driver('POST', '/session', { capabilities: { alwaysMatch: CAPS } })
+      session = await driver('POST', '/session', { capabilities: { alwaysMatch: CAPS } }, 60_000)
     } catch (e) {
-      if (asked === 5) throw e
+      if (asked === 5 || left(10_000) < 10_000) throw e
       said(`no session yet (${e.message.slice(0, 160)}), asking again`)
       await sleep(10_000)
     }
   }
   const s = (p) => `/session/${session.sessionId}${p}`
-  const run = (script) => driver('POST', s('/execute/sync'), { script, args: [] })
+  const run = (script, ms) => driver('POST', s('/execute/sync'), { script, args: [] }, ms)
+  // Each ask is given no more than what is left of the wait, so the wait is over when it says
   const until = async (what, script, ms) => {
     const end = Date.now() + ms
     let last
-    while (Date.now() < end) {
+    while (Date.now() < end && left(ms) > 0) {
       // What the script gives back once it holds, and an error's words while it cannot yet be run
-      last = await run(script).catch((e) => e.message)
+      last = await run(script, Math.min(10_000, end - Date.now())).catch((e) => e.message)
       if (last && typeof last !== 'string') return last
       await sleep(500)
     }
@@ -154,11 +157,13 @@ async function attempt(n) {
     return { seconds: (Date.now() - begun) / 1000, pressedBy }
   } finally {
     // Only once the browser is paired: before then its address bar may still hold the code
+    // Each has a short deadline of its own, from the time kept for the end of a try, so that a
+    // driver that stalls here holds up neither the session's end nor what the try says
     if (OUT && paired)
-      await driver('GET', s('/screenshot'))
+      await ask('GET', s('/screenshot'), undefined, { ms: 15_000 })
         .then((png) => writeFileSync(path.join(OUT, `${SIMULATOR ? 'simulator' : 'safari'}-${n}.png`), Buffer.from(png, 'base64')))
-        .catch(() => {})
-    await driver('DELETE', s('')).catch(() => {})
+        .catch((e) => said(`no screenshot: ${e.message}`))
+    await ask('DELETE', s(''), undefined, { ms: 15_000 }).catch((e) => said(`the session did not end: ${e.message}`))
   }
 }
 
@@ -166,7 +171,7 @@ async function attempt(n) {
 await it(STACK.home, ['create', 'Safari check', '--id', PAGE, '--html', HTML]).catch(() => it(STACK.home, ['update', PAGE, '--html', HTML]))
 let passed = 0
 const faults = []
-for (let n = 1; n <= TRIES; n++) {
+for (let n = 1; n <= TRIES && left(60_000) >= 60_000; n++) {
   console.log(`${WHICH}, try ${n} of ${TRIES}`)
   try {
     const got = await attempt(n)
@@ -183,7 +188,9 @@ for (let n = 1; n <= TRIES; n++) {
   }
 }
 if (!passed) {
-  console.error(`${WHICH} did not pass in ${TRIES} tries`)
+  console.error(
+    `${WHICH} did not pass in ${faults.length} of the ${TRIES} tries it was given${faults.length < TRIES ? ', the time for the rest having run out' : ''}`,
+  )
   process.exit(1)
 }
 if (faults.length) console.log(`::warning::${WHICH} passed after ${faults.length} failed ${faults.length === 1 ? 'try' : 'tries'}: ${faults.join(' | ')}`)
