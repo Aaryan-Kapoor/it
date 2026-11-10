@@ -30,6 +30,9 @@ const stand = vi.hoisted(() => ({
   saving: new Set<Promise<void>>(),
   /** What a call answers, when the test wants something other than the usual. Undefined leaves it to the usual. */
   answer: null as null | ((name: string, args: any) => unknown),
+  /** What an update asked for on the site puts in place, where a test has one put in place, and how It is then started again as it. */
+  fetched: null as null | { from: string; to: string; program: string },
+  restartWay: undefined as undefined | 'setup' | 'launcher' | 'by hand',
   /** Every time Codex's own command was started, and how the test ends it. */
   codex: [] as { args: string[]; env?: NodeJS.ProcessEnv; end: (err?: unknown) => void }[],
   /** The Codex conversations that no Codex has open. Every other one is open somewhere, as it is in a window. */
@@ -154,6 +157,16 @@ vi.mock('node:child_process', async (original) => {
       stand.codex.push({ args, env: options.env, end: (err) => done(err ?? null) })
     },
   }
+})
+// An update asked for on the site fetches a program and starts It again as it: here, where a
+// test says so, what is put in place and the way It comes back are the test's to say
+vi.mock('./src/upgrade', async (original) => {
+  const real = await original<typeof import('./src/upgrade')>()
+  return { ...real, fetchNewer: async (...args: Parameters<typeof real.fetchNewer>) => stand.fetched ?? real.fetchNewer(...args) }
+})
+vi.mock('./src/service', async (original) => {
+  const real = await original<typeof import('./src/service')>()
+  return { ...real, restartWay: () => stand.restartWay ?? real.restartWay() }
 })
 vi.mock('./src/setup', () => ({
   detectAll: async () => stand.found,
@@ -341,6 +354,8 @@ afterEach(async () => {
   stand.takes = true
   stand.fast = 0
   stand.answer = null
+  stand.fetched = null
+  stand.restartWay = undefined
   // A lookup a test left unanswered is answered, so that nothing of it outlasts the test
   for (const asked of stand.t3.asked) asked.answer(null)
   Object.assign(stand.t3, { running: false, slow: false, refusing: null, refusal: null })
@@ -390,6 +405,38 @@ test('a connector brings the add-ons of the apps that are wanted up to its own v
   // Told what is wanted, once, as it is as soon as it is watching
   await until(() => stand.reconciled.length > 0)
   expect(stand.reconciled[0]).toEqual(['codex', 'pi'])
+})
+
+test('an update asked for on the site that is in place before the connector has finished starting stops it with the restart code once it can stop', async () => {
+  // The first report is slow to be answered, and the update is asked for as soon as the site is watched
+  let answered!: () => void
+  const slow = new Promise<void>((r) => {
+    answered = r
+  })
+  stand.answer = async (name) => {
+    if (name === 'machines:report') await slow
+    return undefined
+  }
+  stand.fetched = { from: '0.1.0', to: '9.9.9', program: path.join(os.tmpdir(), 'it-new', 'it.exe') }
+  stand.restartWay = 'launcher'
+  stand.found = []
+  home = mkdtempSync(path.join(os.tmpdir(), 'it-connector-'))
+  made.push(home)
+  process.env.IT_HOME = home
+  delete process.env.IT_CONNECTOR_PORT
+  const running = runConnector((line) => said.push(line))
+  await until(() => stand.watching.has('machines:me'))
+  stand.watching.get('machines:me')!({ wanted: [], upgrade: { state: 'asked', version: '9.9.9' } })
+  await until(() => stand.calls.some((c) => c.name === 'machines:upgrading' && c.args.state === 'restarting'))
+  // The new program is in place and the site told so, while the connector is still starting
+  expect(said).toContain('upgrade: starting again as 9.9.9')
+  answered()
+  try {
+    await running
+    expect(process.exitCode).toBe(75)
+  } finally {
+    process.exitCode = undefined
+  }
 })
 
 describe('the lock one connector holds for a folder', () => {

@@ -18,10 +18,9 @@ An add-on is how what you do on a page gets back into the conversation that made
 
 `it upgrade`, the Update on the site's Machines page, and the install command run again each put a new program in place, and the add-ons in your agent apps are brought up to the same version on each of these ways:
 
-- **Where It is registered to start by itself**, `it upgrade` has the new program run its setup, which starts It again and brings every add-on that is wanted up to date. The site's Update does the same on Linux and macOS.
+- **Where It is registered to start by itself**, `it upgrade` has the new program run its setup, which starts It again and brings every add-on that is wanted up to date. The site's Update does the same on Linux and macOS. On Windows the site's Update instead stops the service, and the launcher the system starts it with starts it again as the new program a few seconds later, which brings the add-ons up to date as it starts. A Windows service registered by an It older than 0.1.35 is started again this way only once `it setup` has been run there, and the site says so after the update.
 - **Where nothing starts It by itself and It is not running**, `it upgrade` has the new program bring up to date the add-ons that this It folder put into the apps, with `it setup --refresh`, which changes nothing else.
 - **Where you started It yourself with `it serve` and it is running**, the add-ons are left as they are until you start It again as the new version, which `it upgrade` tells you to do. The `it serve` that is running is the older version, and one that found a newer It's add-on in an app would stop to make way for it, with nothing to start it again.
-- **On Windows, after the site's Update**, the new program is in place and the service that is running is still the old one, so the site says to run `it setup` there. Whenever It starts as the new version, by `it setup` or when the computer is next started, it brings the add-ons up to date as it starts.
 - **The install command, run again at a terminal**, goes on into `it setup`, which brings them up to date. Run where there is no terminal, it only puts the program in place, and the add-ons are brought up to date when It next starts as the new version.
 
 The running service also brings the add-ons up to date when it starts, when the apps you chose change, and every half hour.

@@ -184,6 +184,25 @@ export function standalone(): string | null {
   return process.execPath
 }
 
+/**
+ * Removes the programs an update on Windows moved aside from the folder the program is in. One
+ * that is still running cannot be removed, and is left for the next time: each update looks, and
+ * so does the service as it starts, which after an update asked for on the site is the new
+ * program, started once the one moved aside has ended.
+ */
+export function sweepOldPrograms(dir: string): void {
+  let names: string[]
+  try {
+    names = readdirSync(dir)
+  } catch {
+    return
+  }
+  for (const old of names.filter((f) => /^it\.old\.\d+\.exe$/.test(f)))
+    try {
+      rmSync(path.join(dir, old), { force: true })
+    } catch {}
+}
+
 /** Writes a file whole, with every byte on the disk, beside where it goes, and only then gives it its name. */
 function put(to: string, bytes: Buffer, mode: number): void {
   const part = `${to}.${process.pid}.part`
@@ -385,11 +404,7 @@ export async function fetchNewer(
         const started = startOf(process.pid)
         if (!started || !/^[0-9]+$/.test(started))
           throw new Problem('The process start time could not be read, so the installed program was left unchanged.', 'upgrade_program')
-        // One that is still running cannot be removed, and is left for the next time
-        for (const old of readdirSync(dir).filter((f) => /^it\.old\.\d+\.exe$/.test(f)))
-          try {
-            rmSync(path.join(dir, old), { force: true })
-          } catch {}
+        sweepOldPrograms(dir)
         const aside = path.join(dir, `it.old.${Date.now()}.exe`)
         const recovery = `${program}.recovery.json`
         put(

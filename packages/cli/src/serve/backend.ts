@@ -576,6 +576,18 @@ export function holderRuns(lock: Pick<Lock, 'pid' | 'started' | 'where'>): boole
 }
 
 /**
+ * Whether a lock is held at this moment, for whoever only has to know and takes no lock: by the
+ * process it names, the very one by its number and when it was started, as `holderRuns` says.
+ * Nothing that is noted beside the lock is asked, since a holder can have its lock before it
+ * writes such a note and after it has taken it away. A lock that cannot be read is no holder's,
+ * as `takeLock` finds once it has watched it go untouched: locks are written whole.
+ */
+export function lockHeld(file: string): boolean {
+  const lock = see(file)?.lock
+  return lock ? holderRuns(lock) : false
+}
+
+/**
  * Takes a lock: a file only one program can make. Where there is none, making it is all there
  * is to it. One whose holder is gone is never removed, since two programs that both found it
  * left would each remove what the other had just put there. It is replaced, and only by the

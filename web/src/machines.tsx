@@ -43,7 +43,7 @@ interface Machine {
   /** The newest version of It this machine has learned is out, where it looks for one. */
   latest?: string | null
   /** An upgrade of this machine that was asked for here, and how far it has got. */
-  upgrade?: { at: number; state: 'asked' | 'working' | 'failed' | 'installed'; why?: string; version?: string } | null
+  upgrade?: { at: number; state: 'asked' | 'working' | 'restarting' | 'failed' | 'installed'; why?: string; version?: string } | null
   harnesses: Harness[]
   wanted: string[]
   wakes: { harness: string; since: number }[]
@@ -204,18 +204,12 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
   if (state === 'installed')
     return (
       <p className="panel-note newer" data-tone="wait">
-        It {m.upgrade?.version ?? ''} is installed on {m.name}. It runs once It is started again there:{' '}
-        {m.system === 'win32' ? (
-          <>
-            run <code>it setup</code> in a terminal on that machine.
-          </>
-        ) : (
-          <>
-            stop <code>it serve</code> where it is running, and start it.
-          </>
-        )}{' '}
-        As it starts it brings the add-ons in the agent apps there up to date. An app that is already running goes on with the add-on it loaded, which still
-        takes clicks, until it is restarted, and its line on this page then says so.
+        {/* Said by a machine that could not start It again by itself: one started in a terminal, and one whose service was registered by an It
+            from before 0.1.35, whose launcher does not say that it is the service, as well as an older It that sent every Windows machine here */}
+        It {m.upgrade?.version ?? ''} is installed on {m.name}. It runs once It is started again there. If you started It in a terminal with{' '}
+        <code>it serve</code>, stop it and start it again. Otherwise run <code>it setup</code> in a terminal on that machine, which starts It again and lets the
+        next update start it again by itself. As it starts it brings the add-ons in the agent apps there up to date. An app that is already running goes on with
+        the add-on it loaded, which still takes clicks, until it is restarted, and its line on this page then says so.
       </p>
     )
   const behind = !m.runsIt && newer(host, m.connectorVersion)
@@ -228,21 +222,30 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
     ) : null
   const first = !m.runsIt && newer(out, host)
   // At work for as long as an upgrade takes, and no longer: one that has said nothing since
-  // was cut short, and is said to have been, with the way to ask for it again
-  const asked = state === 'asked' || state === 'working'
+  // was cut short, and is said to have been, with the way to ask for it again. A machine that
+  // was starting again as the new program and has not reported it since did not start as it:
+  // its launcher goes on trying, and what it met is in the service's log there.
+  const restarting = state === 'restarting'
+  const asked = state === 'asked' || state === 'working' || restarting
   const cutShort = asked && now - (m.upgrade?.at ?? 0) > UPGRADE_MS
   const working = asked && !cutShort
   return (
     <p className="panel-note newer" data-tone={state === 'failed' || cutShort ? 'bad' : undefined}>
       {working ? (
-        `Updating to It ${out}…`
+        restarting ? (
+          `Starting again as It ${out}…`
+        ) : (
+          `Updating to It ${out}…`
+        )
       ) : (
         <>
           {state === 'failed'
             ? `The update to It ${out} did not finish: ${(m.upgrade?.why ?? 'it is not known why').replace(/\.$/, '')}. `
-            : cutShort
-              ? `The update to It ${out} did not finish. This machine still runs ${m.connectorVersion}. `
-              : `It ${out} is out. This machine runs ${m.connectorVersion}. `}
+            : cutShort && restarting
+              ? `It ${out} is in place, and has not been heard from since it was started. Run it service logs on that machine to read why. `
+              : cutShort
+                ? `The update to It ${out} did not finish. This machine still runs ${m.connectorVersion}. `
+                : `It ${out} is out. This machine runs ${m.connectorVersion}. `}
           {first ? (
             'Update the machine It runs on first.'
           ) : (

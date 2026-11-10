@@ -5,11 +5,12 @@ import { existsSync, rmSync } from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { contentPort } from '@it/protocol'
-import { runConnector } from '../connector'
+import { connectorHeld, runConnector } from '../connector'
 import { eraseDeliveryRecovery } from '../delivery-recovery'
 import { elsewhere, inHome, type Machine, machine, machineFile, notSetUp, Problem, readJson, why, writePrivate } from '../lib'
 import { conversationsFile } from '../publish'
-import { startsByItself, stopFile, supervised } from '../service'
+import { launcherLooked, RESTART_CODE, startsByItself, stopFile, supervised } from '../service'
+import { standalone, sweepOldPrograms } from '../upgrade'
 import { ageBand, begin, countBand, counting, failureOf, record, recordNoted, sinceBegun } from '../usage'
 import { asAdmin, type Backend, endOf, removeCopies, startBackend } from './backend'
 import { backendFolder, noteNetwork, readConfig, type ServiceConfig } from './config'
@@ -50,6 +51,10 @@ export async function serve(say: (line: string) => void = (line) => void process
   const keep = () => void keepItsFolder(say, said).catch(() => {})
   keep()
   const keeping = setInterval(keep, KEEP_MS)
+  launcherLooked(say)
+  // On Windows the program an update moved aside is removed once it has ended, which it has where this is the program that update put in its place
+  const program = process.platform === 'win32' ? standalone() : null
+  if (program) sweepOldPrograms(path.dirname(program))
   let failed = false
   // Counting begins with the service where no command has begun it, so that a service that
   // cannot start is counted as one that could not
@@ -62,7 +67,8 @@ export async function serve(say: (line: string) => void = (line) => void process
         if (!config) {
           machine()
           ready()
-          return connector(say, asked.signal, told)
+          // On Windows, where a service the launcher started takes over from another connector only as the program installed now (#353)
+          return connector(say, asked.signal, told, process.platform === 'win32' && supervised())
         }
         return here(config, say, asked, told, ready)
       },
@@ -81,8 +87,11 @@ export async function serve(say: (line: string) => void = (line) => void process
     process.off('SIGINT', hear)
     process.off('SIGTERM', hear)
   }
-  say('service stopped')
-  if (failed) process.exitCode = 1
+  // Stopped to be started again as the program installed now, as after an update from the site,
+  // it ends with the code that says so to its launcher, and with no other failure's
+  const restart = process.exitCode === RESTART_CODE
+  say(restart ? 'service stopped, to be started again by its launcher as the program installed now' : 'service stopped')
+  if (failed) process.exitCode = restart ? RESTART_CODE : 1
 }
 
 /** The ports the door listens on: the site's, and the pages'. */
@@ -631,14 +640,33 @@ async function keptDoor(
   }
 }
 
+/** How long a service the launcher started waits before it looks again at whether another connector still holds this folder: longer each time, up to the last. */
+const HELD_WAITS = [30_000, 60_000, 120_000, 300_000] as const
+/** And how often it says in its log that it is still waiting. */
+const HELD_SAID_MS = 30 * 60_000
+
 /**
  * Runs the connector for as long as the service runs and this machine is one of It's machines.
  * On a first run the service is started a moment before the machine is enrolled, so the
  * connector starts when it has been. A machine that It has stopped knowing has no use for a
  * connector until it is enrolled anew, and the site goes on being served meanwhile. Whether
  * the connector ended as a failure, which it does to make way for a newer It.
+ *
+ * `relaunchWhenFree` is for a service that is the connector alone and was started by the
+ * Windows launcher. Where another connector already holds this folder, as one started by hand
+ * or a launcher that a replaced task left running (#353) does, it waits, and looks again at
+ * longer and longer intervals up to HELD_WAITS's last, saying so in its log when it begins and
+ * then only every HELD_SAID_MS. The other has gone when the connector's lock is held by no
+ * running process (`connectorHeld`): the note a connector writes of where it listens is missing
+ * while one is starting and stopping, and names an old process where one was left behind, so
+ * it says nothing either way. Once the other has gone it does not take the connector itself:
+ * it ends with RESTART_CODE, and its launcher starts the program that is installed now. A
+ * service that had waited for days would otherwise take over as the program it was started as,
+ * which after an update from the site is the one the update moved aside. It never ends well
+ * for this, which would end its launcher too: a service that cannot tell whether the other is
+ * an orphan or a person's would be left with nothing to start it again until the next logon.
  */
-async function connector(say: (line: string) => void, asked: AbortSignal, heard: () => NodeJS.Signals): Promise<boolean> {
+export async function connector(say: (line: string) => void, asked: AbortSignal, heard: () => NodeJS.Signals, relaunchWhenFree = false): Promise<boolean> {
   const pause = (ms: number) =>
     new Promise<void>((resolve) => {
       const done = () => {
@@ -651,6 +679,9 @@ async function connector(say: (line: string) => void, asked: AbortSignal, heard:
     })
   /** The identity the connector last ran as, and stopped by itself as. */
   let ended: string | undefined
+  /** How many times in a row another connector was found holding this folder, and when that was last said. */
+  let heldTimes = 0
+  let heldSaidAt = 0
   while (!asked.aborted) {
     try {
       // A previous connector or service may have stopped with cleanup still pending. Do this
@@ -664,6 +695,20 @@ async function connector(say: (line: string) => void, asked: AbortSignal, heard:
     const id = readJson<Machine>(machineFile())?.id
     if (!id || id === ended) {
       await pause(1000)
+      continue
+    }
+    if (heldTimes > 0) {
+      if (!connectorHeld()) {
+        say('the connector that held this folder has stopped; this service ends to be started again as the program installed now')
+        process.exitCode = RESTART_CODE
+        return true
+      }
+      if (Date.now() - heldSaidAt >= HELD_SAID_MS) {
+        heldSaidAt = Date.now()
+        say('another It still runs the connector for this folder; this service goes on waiting for it to stop')
+      }
+      heldTimes++
+      await pause(HELD_WAITS[Math.min(heldTimes, HELD_WAITS.length) - 1]!)
       continue
     }
     // The connector listens for a signal only once it has started. One that came before then
@@ -682,13 +727,21 @@ async function connector(say: (line: string) => void, asked: AbortSignal, heard:
       }
     } catch (err) {
       say(`connector: could not start: ${why(err)}`)
+      if (relaunchWhenFree && err instanceof Problem && err.code === 'already_running') {
+        say('another It already runs the connector for this folder; this service waits for it to stop, and then starts again')
+        heldTimes = 1
+        heldSaidAt = Date.now()
+        await pause(HELD_WAITS[0])
+        continue
+      }
       await pause(30_000)
       continue
     } finally {
       running = false
       clearInterval(again)
     }
-    if (process.exitCode === 1) return true
+    // Stopped to make way for a newer It, or to be started again as one, which its launcher does
+    if (process.exitCode === 1 || process.exitCode === RESTART_CODE) return true
     ended = id
   }
   return false

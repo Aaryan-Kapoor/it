@@ -42,7 +42,74 @@ export function command(): string[] {
 export const logFile = () => inHome('logs', 'it.log')
 /** A launch argument belongs to this process alone, unlike an inherited environment marker. */
 export const supervised = () => process.argv.includes('--supervised')
-export const restartsAfterUpgrade = () => supervised() && process.platform !== 'win32' && installedHere()
+/**
+ * The code the service ends with to have its Windows launcher start it again at once, as
+ * whatever program is now in its place: the one an upgrade asked for on the site has just put
+ * there. It is the code BSD's sysexits gives a failure that is only for now (EX_TEMPFAIL), and
+ * any code but 0 starts the service again: this one says in the log why it did.
+ */
+export const RESTART_CODE = 75
+/**
+ * How the service comes back as the program an upgrade has just put in place of this one.
+ * On Linux and macOS the new program's own setup writes the service's definition as its version
+ * has it and starts the service again (`setup`). On Windows that setup would stop the very task
+ * this program runs in, and what it started could be ended with the task, so there the service
+ * ends with RESTART_CODE and its launcher starts the new program in the same task five seconds
+ * later (`launcher`). Either way only a service the system starts for this folder comes back by
+ * itself: one a person started by hand is started again by that person (`by hand`).
+ *
+ * On Windows the launcher is not written again on this way, since cmd.exe reads a batch file as
+ * it runs it, and one written over while it runs goes on from the same place in another file.
+ * A version that needs another launcher must see to that itself: the service that starts says
+ * so in its log where its launcher is not the one it writes (see `launcherAsWritten`), and `it
+ * setup` writes it again.
+ */
+export function restartWay(): 'setup' | 'launcher' | 'by hand' {
+  if (!supervised() || !installedHere()) return 'by hand'
+  if (process.platform !== 'win32') return 'setup'
+  return launcherStartsAgain(readText(windowsLauncherFile())) ? 'launcher' : 'by hand'
+}
+const readText = (file: string): string => {
+  try {
+    return readFileSync(file, 'utf8')
+  } catch {
+    return ''
+  }
+}
+/**
+ * Whether a Windows launcher starts the program again when it ends with a failure: every one
+ * It has written since 0.1.10 does, and one that did not would leave the service stopped.
+ */
+export const launcherStartsAgain = (launcher: string): boolean => {
+  const lines = launcher.split(/\r?\n/)
+  const again = lines.indexOf(':again')
+  const ended = lines.indexOf('if %errorlevel% equ 0 exit /b 0')
+  return again >= 0 && ended > again && lines.indexOf('goto again') > ended
+}
+/**
+ * Whether the Windows launcher is the one this version writes for the program it runs, its
+ * settings aside, which are the shell's that registered it. Where it is not, it was written by
+ * an earlier version, which an upgrade on the site leaves in place, and only `it setup` writes
+ * it again.
+ */
+export const launcherAsWritten = (launcher: string, cmd: string[] = command()): boolean => {
+  const unset = (text: string) =>
+    text
+      .split(/\r?\n/)
+      .filter((l) => !l.startsWith('set '))
+      .join('\n')
+  return unset(launcher) === unset(windowsLauncher(cmd, {}))
+}
+/**
+ * Says in the log where the service runs under a Windows launcher that an earlier version wrote,
+ * and is not the one this version writes. Nothing changes it while it runs: see `restartWay`.
+ */
+export function launcherLooked(say: (line: string) => void): void {
+  if (process.platform !== 'win32' || !supervised()) return
+  const launcher = readText(windowsLauncherFile())
+  if (launcher && !launcherAsWritten(launcher))
+    say('the service was registered by an earlier version of It, which wrote its launcher another way; `it setup` writes it as this version does')
+}
 
 /**
  * The file by which a service is asked to stop where the system has no way of its own to ask:

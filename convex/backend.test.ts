@@ -4605,6 +4605,11 @@ describe('displays and machines', () => {
     expect((await host.as.query(api.machines.me, {})).upgrade).toMatchObject({ state: 'asked' })
     await host.as.mutation(api.machines.upgrading, { state: 'working' })
     expect((await onSite(host.id)).upgrade).toMatchObject({ state: 'working' })
+    // On Windows the new program is in place and the service is starting again as it: asked for again meanwhile, it is the same asking
+    await host.as.mutation(api.machines.upgrading, { state: 'restarting', version: '0.1.1' })
+    expect((await onSite(host.id)).upgrade).toMatchObject({ state: 'restarting', version: '0.1.1' })
+    expect(await code(ask(host.id))).toBe('ok')
+    expect((await onSite(host.id)).upgrade).toMatchObject({ state: 'restarting' })
     // It could not: why is kept for the site, cut to a length, and it can be asked for again
     await host.as.mutation(api.machines.upgrading, { state: 'failed', why: 'x'.repeat(1000) })
     expect((await onSite(host.id)).upgrade).toMatchObject({ state: 'failed', why: 'x'.repeat(300) })
