@@ -198,6 +198,21 @@ vi.mock('./src/setup', () => ({
     return []
   },
 }))
+// Claude Code's notes of the conversations it has open are read as it writes them. Whether the
+// process a note names is the Claude Code that wrote it is for claude-open.test.ts to try, on each
+// system: here the note names this test's own process, which is no Claude Code
+vi.mock('./src/claude-open', async (original) => {
+  const real = await original<typeof import('./src/claude-open')>()
+  return {
+    ...real,
+    openClaude: (folders: readonly string[]) =>
+      real.openClaude(
+        folders,
+        () => true,
+        () => true,
+      ),
+  }
+})
 vi.mock('./src/usage', () => ({
   agentOf: (harness: unknown) => String(harness ?? 'unknown'),
   begin: () => {},
@@ -6625,12 +6640,10 @@ describe('how what is done on a conversation’s pages would reach it, as the co
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-claude-'))
     mkdirSync(path.join(folder, 'sessions'))
     const opened = '33333333-2222-4333-8444-555555555555'
-    const stat = process.platform === 'linux' ? readFileSync(`/proc/${process.pid}/stat`, 'utf8') : ''
-    const procStart = stat ? stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] : undefined
     const since = Date.now() - 60_000
     writeFileSync(
       path.join(folder, 'sessions', `${process.pid}.json`),
-      JSON.stringify({ pid: process.pid, sessionId: opened, startedAt: since, procStart, kind: 'interactive', entrypoint: 'cli' }),
+      JSON.stringify({ pid: process.pid, sessionId: opened, startedAt: since, kind: 'interactive', entrypoint: 'cli' }),
     )
     stand.claudeFolders.push(folder)
     const told = () => stand.calls.filter((c) => c.name === 'machines:notLoaded').map((c) => c.args.conversations)
