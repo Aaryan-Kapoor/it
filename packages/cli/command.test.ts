@@ -6326,18 +6326,26 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and whether an agent 
 
 describe('whether what the person does arrives by itself, as a page’s command tells its agent', () => {
   const claude = '11111111-2222-4333-8444-555555555555'
-  /** A connector that answers `/route` as given, and says what it was asked. */
+  /**
+   * A connector that answers `/route` as given, and says what it was asked. At a port, as the
+   * connector is on Windows, where a socket's path is no way in: each answer sealed with the
+   * token, as the connector seals what it answers at a port.
+   */
   async function connectorSaying(m: { it: string }, route: Record<string, unknown> | null) {
     const asked: string[] = []
-    const socket = path.join(m.it, 'connector.sock')
+    const token = 'a'.repeat(48)
     const server = http.createServer((req, res) => {
       asked.push(req.url ?? '')
-      if (route && req.url?.startsWith('/route?')) return res.end(JSON.stringify(route))
-      res.statusCode = 404
-      res.end('{}')
+      const answering = route !== null && req.url?.startsWith('/route?') === true
+      const status = answering ? 200 : 404
+      const answer = answering ? JSON.stringify(route) : '{}'
+      const seal = createHmac('sha256', token).update(`${req.headers['x-it-nonce']}\n${status}\n${answer}`).digest('hex')
+      req.resume().on('end', () => res.writeHead(status, { 'content-type': 'application/json', 'x-it-mac': seal }).end(answer))
     })
-    await new Promise<void>((resolve) => server.listen(socket, resolve))
-    writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'a'.repeat(48), pid: process.pid, version: '0.0.0' }))
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('The stand-in connector did not open its port.')
+    writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ port: address.port, token, pid: process.pid, version: '0.0.0' }))
     return { asked, close: () => new Promise<void>((resolve) => server.close(() => resolve())) }
   }
   const publishing = (m: ReturnType<typeof machine>) =>
