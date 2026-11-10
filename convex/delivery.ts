@@ -72,6 +72,8 @@ async function asClicks(ctx: QueryCtx, rows: Doc<'actions'>[]) {
       // Which of the person's displays it was done on, where It knows: a page shown on several
       // can be answered on the one the person used
       ...(x.displayId !== undefined ? { displayId: x.displayId } : {}),
+      // Why this machine said it holds it back, where it has: said once, and not again with every offer
+      ...(x.heldBack && x.heldBack.by === x.machineId ? { heldBack: x.heldBack.why } : {}),
     })
   }
   return out
@@ -931,6 +933,34 @@ export const park = mutation({
     if (all && !moved && x.harness && x.sessionId)
       await ctx.scheduler.runAfter(0, internal.delivery.parkRest, { machineId: machine._id, harness: x.harness, sessionId: x.sessionId, decidedAt: Date.now() })
     return true
+  },
+})
+
+/** How many clicks one machine says it holds back, or no longer holds back, in one call. */
+const HOLD_MOST = 50
+
+/**
+ * The machine says why it will not start the conversation of some of the clicks it is to
+ * deliver, so that their page says so for as long as they wait (`heldBack`), or with `why`
+ * null that it no longer holds them back. Said again, it changes nothing. A click that is no
+ * longer this machine's to deliver, or no longer waits, is left as it is. Answers with the clicks
+ * it is done with, which is all of those asked about that are the person's.
+ */
+export const holdBack = mutation({
+  args: { ids: v.array(v.id('actions')), why: v.union(v.string(), v.null()) },
+  handler: async (ctx, { ids, why }): Promise<string[]> => {
+    const { user, machine } = await requireMachine(ctx)
+    if (ids.length > HOLD_MOST) fail('invalid', `At most ${HOLD_MOST} clicks at a time.`)
+    const done: string[] = []
+    for (const id of new Set(ids)) {
+      const x = await ctx.db.get(id)
+      if (!x || x.userId !== user._id) continue
+      done.push(id)
+      if (x.delivery === 'handed_off' || x.machineId !== machine._id) continue
+      const next = why === null ? undefined : { by: machine._id, why: why.slice(0, 300) }
+      if (x.heldBack?.by !== next?.by || x.heldBack?.why !== next?.why) await ctx.db.patch(id, { heldBack: next })
+    }
+    return done
   },
 })
 

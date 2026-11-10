@@ -2425,6 +2425,48 @@ describe('clicks and their delivery', () => {
     expect((await m.as.query(api.delivery.waitingPage, { slug: 'plan' })).actions[0]).not.toHaveProperty('displayId')
   })
 
+  test('why its machine holds a click back is kept with the click: offered to that machine, said on its page however many other conversations fail meanwhile, and taken away by that machine', async () => {
+    const { t, alice, m, p, click } = await setup()
+    const WHY = 'its conversation is open without It’s add-on: type /reload-plugins in it'
+    const { actionId } = await click('click-0001')
+    const onPage = async () => (await alice.browser.query(api.actions.forArtifact, { artifactId: p.artifactId })).find((x) => x.id === actionId)!.heldBack
+    expect(await onPage()).toBeNull()
+    expect((await inbox(m))[0]).not.toHaveProperty('heldBack')
+    expect(await m.as.mutation(api.delivery.holdBack, { ids: [actionId], why: WHY })).toEqual([actionId])
+    expect(await onPage()).toBe(WHY)
+    // Offered to the machine with it said, so that it says it once, also after it starts again
+    expect((await inbox(m))[0]).toMatchObject({ id: actionId, heldBack: WHY })
+    // Twenty-five other conversations could not be woken since: the machine's list of failures
+    // keeps its last twenty, and the click keeps its own reason all the same
+    for (let n = 0; n < 25; n++) await m.as.mutation(api.machines.wakeFailed, { for: { harness: 'claude-code', id: `other-${n}` }, why: 'gone' })
+    expect((await t.run((ctx) => ctx.db.get(m.id)))!.fails!.length).toBeLessThanOrEqual(20)
+    expect(await onPage()).toBe(WHY)
+    // Said again, it is as it was. A browser cannot say it, nor another person's machine, and fifty is the most at a time
+    expect(await m.as.mutation(api.delivery.holdBack, { ids: [actionId, actionId], why: WHY })).toEqual([actionId])
+    expect(await code(alice.browser.mutation(api.delivery.holdBack, { ids: [actionId], why: 'x' }))).toBe('forbidden')
+    await person(t, 'bob')
+    const his = await machineOf(t, 'bob')
+    expect(await his.as.mutation(api.delivery.holdBack, { ids: [actionId], why: 'x' })).toEqual([])
+    expect(await code(m.as.mutation(api.delivery.holdBack, { ids: Array(51).fill(actionId), why: 'x' }))).toBe('invalid')
+    expect(await onPage()).toBe(WHY)
+    // A long reason is kept to what the page has room for
+    await m.as.mutation(api.delivery.holdBack, { ids: [actionId], why: 'x'.repeat(500) })
+    expect((await onPage())!.length).toBe(300)
+    // Taken away by the machine, it is said no more
+    await m.as.mutation(api.delivery.holdBack, { ids: [actionId], why: null })
+    expect(await onPage()).toBeNull()
+    expect((await inbox(m))[0]).not.toHaveProperty('heldBack')
+    // Held back again and then taken by an agent: that click is on its way, and is not said to be held back
+    await m.as.mutation(api.delivery.holdBack, { ids: [actionId], why: WHY })
+    expect(await m.as.mutation(api.delivery.claim, { ids: [actionId] })).toEqual([actionId])
+    expect(await onPage()).toBeNull()
+    await m.as.mutation(api.delivery.handedOff, { id: actionId, route: 'addon' })
+    expect(await onPage()).toBeNull()
+    // Nor is anything held back once it has been handed over
+    expect(await m.as.mutation(api.delivery.holdBack, { ids: [actionId], why: WHY })).toEqual([actionId])
+    expect(await onPage()).toBeNull()
+  })
+
   test('an agent is told when a page sent an action and the site had seen no sign of anyone using it', async () => {
     const { m, click } = await setup()
     await click('click-0001', { attended: false })
@@ -4072,6 +4114,7 @@ describe('displays and machines', () => {
         'displays.show.everywhere',
         'notifications.send.everywhere',
         'displays.allowAgents',
+        'delivery.holdBack',
       ],
       now: expect.any(Number),
     })

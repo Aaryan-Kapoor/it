@@ -463,6 +463,15 @@ export default defineSchema({
     parkedBy: v.optional(v.id('machines')),
     /** When the person last asked, from the page, for it to be tried again after it was set aside. A machine that gave up on it before then forgets that it did. */
     retriedAt: v.optional(v.number()),
+    /**
+     * Why the machine it waits for will not start its conversation for it, in that machine's own
+     * words, as a Claude Code conversation that is open without It's add-on is not: said on its
+     * page for as long as it waits for that machine. Kept with the click, so that it is said
+     * however many other conversations fail meanwhile, and offered to the machine with the
+     * click, which then says it once, also after it starts again. Taken away by the machine once
+     * it no longer holds the click back, and said of nothing a machine other than `by` holds.
+     */
+    heldBack: v.optional(v.object({ by: v.id('machines'), why: v.string() })),
     leaseExpiresAt: v.optional(v.number()),
     route: v.optional(v.string()),
     /** The machine that said it was handed over, where a machine did: a machine that was at work on it and did not hand it over itself has lost it to that one. */

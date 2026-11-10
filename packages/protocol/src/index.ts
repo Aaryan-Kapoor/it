@@ -57,6 +57,12 @@ export const TAKES = {
   notifyEverywhere: 'notifications.send.everywhere',
   /** The switch that opens a display to agents or closes it: the site shows it only where it is named. */
   agentsSwitch: 'displays.allowAgents',
+  /**
+   * Why a machine holds a click back from reopening its conversation, kept with the click
+   * (`delivery.holdBack`) and said on its page for as long as it waits. A connector tells an It
+   * that does not name this as it told them before, as why the conversation could not be woken.
+   */
+  heldBack: 'delivery.holdBack',
 } as const
 
 /**
