@@ -847,8 +847,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       w.behind = key.startsWith('codex:') && turnKnown(key, Date.now()) === true
       w.idleAt = null
     }
+    // Kept until its turn is over, is known no more, or did not begin in its time, and never let go of sooner: It would go on saying that it runs
     watchedTurns.set(key, w)
-    if (watchedTurns.size > 500) watchedTurns.delete(watchedTurns.keys().next().value!)
     lookAtTurn(key, w)
     void tellTurns()
   }
@@ -905,16 +905,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (watchedTurns.get(key) === w && (w.want === 'ended' || w.want === 'unknown') && !w.told.size) watchedTurns.delete(key)
       }
     } catch (err) {
+      // Tried again with the next pass, and not at once
+      tellTurnsAgain = false
       if (/could not find/i.test(String((err as Error)?.message ?? err))) {
         turnsUntaken = true
         watchedTurns.clear()
         handedTo.clear()
-        // Tried again with the next pass, and not at once
-        tellTurnsAgain = false
-      } else {
-        tellTurnsAgain = false
-        seldom('turns', `could not tell It how a conversation’s turn stands (${why(err)}); trying again`)
-      }
+      } else seldom('turns', `could not tell It how a conversation’s turn stands (${why(err)}); trying again`)
     } finally {
       tellingTurns = false
     }
