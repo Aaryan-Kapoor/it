@@ -1,7 +1,7 @@
 // What a display shows while there is nothing on it: the things It can be, played one after
 // another as the launch film draws them, and beside them the sentence that gets a person
 // started, to give to their agent.
-import { ALIVE } from '@it/protocol'
+import { ALIVE, TOUR } from '@it/protocol'
 import { useMutation, useQuery } from 'convex/react'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
@@ -117,6 +117,44 @@ export function useTour() {
     ask,
     skip,
   }
+}
+
+/** Where this browser keeps which showing of the tour's first page it has been taken to. */
+const TOUR_OPENED = 'it.tour.opened'
+/**
+ * The tour's first page, where this browser is to be taken to it by itself: it is up, no tour
+ * has been finished or declined, and this browser has not been taken to it before. An agent
+ * that has just installed It puts that page up before the person has paired a browser, when no
+ * display was there to be asked to show it, so the browser goes to it as it first comes to the
+ * person's pages. Once only for each time the page is put up: someone who goes back to their
+ * pages is left there.
+ */
+export function tourPageToOpen(
+  pages: { id: string; slug: string; version: number | null }[] | undefined,
+  tour: { doneAt: number | null } | undefined,
+  opened: string | null,
+): { id: string; slug: string } | null {
+  if (!pages || !tour || tour.doneAt !== null) return null
+  const first = pages.find((page) => page.slug === `${TOUR.prefix}${TOUR.menu}` && page.version !== null)
+  return first && opened !== first.id ? { id: first.id, slug: first.slug } : null
+}
+/** Takes a browser that is at its pages to the tour's first page, as `tourPageToOpen` says. */
+export function useTourOpens(pages: { id: string; slug: string; version: number | null }[] | undefined, path: string): void {
+  const tour = useQuery(api.tour.get, {}) as Tour | undefined
+  useEffect(() => {
+    if (path !== '/') return
+    let opened: string | null = null
+    try {
+      opened = localStorage.getItem(TOUR_OPENED)
+    } catch {}
+    const first = tourPageToOpen(pages, tour, opened)
+    if (!first) return
+    // Noted before it is gone to. A browser that will not keep the note is taken there each time it comes to its pages while the tour is on
+    try {
+      localStorage.setItem(TOUR_OPENED, first.id)
+    } catch {}
+    navigate(`/p/${first.slug}`)
+  }, [pages, tour, path])
 }
 
 /** The way into the tour: a button where an agent is waiting to give it, and the sentence to give an agent where none is. */

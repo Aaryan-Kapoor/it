@@ -367,3 +367,27 @@ describe('the film on the first screen', () => {
     expect(film.told).toEqual([true, false])
   })
 })
+
+describe('the tour’s first page, for a browser that has just come to its pages', () => {
+  const up = [
+    { id: 'page-1', slug: 'notes', version: 2 },
+    { id: 'page-2', slug: 'tour-menu', version: 1 },
+  ]
+
+  test('is gone to where it is up, no tour is over, and this browser has not been taken to it', async () => {
+    const { tourPageToOpen } = await import('./welcome')
+    expect(tourPageToOpen(up, { doneAt: null }, null)).toEqual({ id: 'page-2', slug: 'tour-menu' })
+    // Put up again, it is another showing, and is gone to once more
+    expect(tourPageToOpen(up, { doneAt: null }, 'page-0')).toEqual({ id: 'page-2', slug: 'tour-menu' })
+  })
+
+  test('is not gone to a second time, nor once a tour was finished or declined, nor before the backend has said how things stand, nor where it has nothing published', async () => {
+    const { tourPageToOpen } = await import('./welcome')
+    expect(tourPageToOpen(up, { doneAt: null }, 'page-2')).toBeNull()
+    expect(tourPageToOpen(up, { doneAt: NOW }, null)).toBeNull()
+    expect(tourPageToOpen(up, undefined, null)).toBeNull()
+    expect(tourPageToOpen(undefined, { doneAt: null }, null)).toBeNull()
+    expect(tourPageToOpen([{ id: 'page-2', slug: 'tour-menu', version: null }], { doneAt: null }, null)).toBeNull()
+    expect(tourPageToOpen([{ id: 'page-1', slug: 'notes', version: 2 }], { doneAt: null }, null)).toBeNull()
+  })
+})
