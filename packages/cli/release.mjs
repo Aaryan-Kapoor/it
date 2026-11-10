@@ -81,9 +81,28 @@ for (const target of TARGETS) {
   // these minimums, and the install scripts check them. The variant is named outright, since
   // without one Bun takes the one it was itself built as, and two builders could differ.
   const compileTarget = `bun-${target}${target === 'darwin-x64' ? '-modern' : target.endsWith('-x64') ? '-baseline' : ''}`
-  execFileSync('bun', ['build', path.join(here, 'src/main.ts'), '--compile', '--minify', `--target=${compileTarget}`, '--outfile', path.join(out, name)], {
-    stdio: ['ignore', 'ignore', 'inherit'],
-  })
+  // A program Bun builds reads a `.env` file from the folder it is started in, unless it is told
+  // not to. It takes its settings from its own environment and nowhere else, so a project's
+  // `.env` is not to steer it. And in a folder this account may not list, the program Bun 1.3
+  // builds starts with no environment at all: no IT_HOME, no HOME, no CODEX_THREAD_ID. Started
+  // in It's own folder by an account kept out of it, it then looked for It in the wrong place
+  // and said to run `it setup`. A `bunfig.toml` there is not read either: the program would
+  // run any script that file names to be loaded first, from whatever folder `it` is run in.
+  execFileSync(
+    'bun',
+    [
+      'build',
+      path.join(here, 'src/main.ts'),
+      '--compile',
+      '--no-compile-autoload-dotenv',
+      '--no-compile-autoload-bunfig',
+      '--minify',
+      `--target=${compileTarget}`,
+      '--outfile',
+      path.join(out, name),
+    ],
+    { stdio: ['ignore', 'ignore', 'inherit'] },
+  )
   // Bun leaves on the program for an Intel Mac the signature that its own runtime for that
   // system came with, although it has written the bundle into bytes the signature holds hashes
   // of, and a Mac can be expected to end a program whose signature is not its own as it starts.

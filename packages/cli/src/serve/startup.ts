@@ -12,6 +12,11 @@ import { RELEASE } from './config'
 export const STARTUP_WAITS = [30_000, 120_000, 600_000] as const
 const file = () => inHome('startup.json')
 const recovery = 'Run `it serve` in a terminal to read why. After fixing it, run `it service install` to retry in the background.'
+/**
+ * What to do after a failed start whose fix is known without reading why in a terminal. Sent to
+ * `it serve` there, a service that was never set up only says to run `it setup`.
+ */
+const RECOVERY = new Map([['not_set_up', 'Run `it setup`, which sets It up and starts it again in the background.']])
 interface Attempt {
   key: string
   failures: number
@@ -108,7 +113,7 @@ export function startupKey(): string {
 export function startupStatus() {
   const a = read()
   if (!a || a === 'unreadable') return undefined
-  return { failures: a.failures, code: a.code, retryAt: a.retryAt, paused: a.retryAt === null, hint: recovery }
+  return { failures: a.failures, code: a.code, retryAt: a.retryAt, paused: a.retryAt === null, hint: RECOVERY.get(a.code) ?? recovery }
 }
 
 // These failures already say that a person must change something before another attempt.

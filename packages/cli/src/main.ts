@@ -75,6 +75,7 @@ import {
   machine,
   machineFile,
   NOT_RUNNING,
+  NOT_SET_UP,
   noteLeft,
   noteWas,
   notKnown,
@@ -2374,6 +2375,30 @@ async function status(a: Args) {
 }
 
 /**
+ * Why the service could not start, said with no terminal, for the codes where fixed words say
+ * what is to be done and that is not to run the service again. Told to run `it serve` in a
+ * terminal to read why, an agent that has just run `it serve` runs it again and is told the
+ * same. Only these words are said, never the error's own, which can name the person's folders:
+ * what an agent in Codex's sandbox is told to pass on names Codex's rules file, in a folder of
+ * theirs. The process number an already running It is named by is left out with the rest.
+ */
+const SAID_WITHOUT_A_TERMINAL = new Map<string, () => Problem>([
+  ['not_set_up', () => new Problem(NOT_SET_UP, 'not_set_up')],
+  // As it is said where no agent of Codex's ran it: the words for one name the rules file
+  ['blocked', () => keptOut({})],
+  [
+    'already_running',
+    () =>
+      new Problem(
+        'It is already running for this folder.',
+        'already_running',
+        '`it service status` says so. Stop that one first if you meant to start this one.',
+      ),
+  ],
+  ['lock_not_taken', () => new Problem('It could not take its lock: another program keeps putting one in its place.', 'lock_not_taken')],
+])
+
+/**
  * Runs something that goes on until it is stopped, which is the service.
  * What it says goes to the log it was given, or else to the terminal. `named` is how the
  * person is told of it, and `command` what they run to see it start.
@@ -2420,15 +2445,17 @@ async function keepRunning(a: Args, named: string, command: string, run: (line: 
     await run(line)
   } catch (err) {
     // Why it could not start is written down as a fixed word: one of this program's own
-    // codes, or the system's code for what a file or a socket refused. The explanation names
-    // the person's folders, so it is said only to a person at a terminal. Started by a
-    // supervisor, what this program prints may be kept as well, and the code is all it says.
+    // codes, or the system's code for what a file or a socket refused. The explanation may name
+    // the person's folders, so it is said only to a person at a terminal. With none, a code that
+    // has fixed words of its own (SAID_WITHOUT_A_TERMINAL) is said in those, and any other is
+    // said as the code alone. Started by a supervisor, what this program prints may be kept.
     const own = err instanceof Problem && /^[a-z_]{1,40}$/.test(err.code) ? err.code : undefined
     const system = String((err as { code?: unknown })?.code ?? '')
     const code = own ?? (/^E[A-Z0-9_]{2,30}$/.test(system) ? system : 'error')
     line(`could not start: ${code}`)
     if (process.stderr.isTTY) throw err
-    throw new Problem(`${named} could not start.`, code, `Run \`${command}\` in a terminal to read why.`)
+    const fixed = err instanceof Problem ? SAID_WITHOUT_A_TERMINAL.get(err.code) : undefined
+    throw fixed ? fixed() : new Problem(`${named} could not start.`, code, `Run \`${command}\` in a terminal to read why.`)
   }
   // It has stopped, and said so. Whatever is still pending (a token being asked for again
   // and again while the network is down, say) must not keep the program alive: a supervisor

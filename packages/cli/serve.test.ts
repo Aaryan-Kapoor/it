@@ -4,7 +4,7 @@
 // remote: a small server on this machine stands in for the release the program is fetched from.
 import { type ChildProcess, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
@@ -1140,7 +1140,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
    * and nothing else: no agent app of whoever runs the tests is found, and the backend program
    * finds the one thing a function of It's may ask it for.
    */
-  const run = (args: string[], env: Record<string, string> = {}, elsewhere?: string, runtime = process.execPath) => {
+  const run = (args: string[], env: Record<string, string> = {}, elsewhere?: string, runtime = process.execPath, from?: string) => {
     const commands = path.join(scratch, 'commands')
     if (!existsSync(commands)) {
       mkdirSync(commands)
@@ -1149,7 +1149,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     // `elsewhere` is another machine's folder: a command run there is told that folder and
     // nothing of where It is, which port it counts from or which backend program it runs
     const child = spawn(runtime, [it, ...args], {
-      cwd: elsewhere ?? folder,
+      cwd: from ?? elsewhere ?? folder,
       env: {
         // These fixtures use the same folder for HOME and IT_HOME. Bun must keep its
         // compilation cache elsewhere so the first setup still receives an empty folder.
@@ -1211,16 +1211,54 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
       .filter(Boolean)
       .map((line) => line.replace(/^\S+ /, ''))
 
-  test('`it serve` on a machine where It was never set up says to run `it setup`, and starts nothing', async () => {
+  test('`it serve` on a machine where It was never set up says to run `it setup` with no terminal to say it to, and starts nothing', async () => {
+    // Its output is taken as an agent takes it: not to a terminal, where it would be sent back to run `it serve` in one
     const ran = run(['serve', '--log', path.join(folder, 'service.log')])
     expect(await ran.ended).toBe(1)
     expect(lines()).toEqual(['could not start: not_set_up'])
-    expect(JSON.parse(ran.err().trim().split('\n').pop()!).error).toEqual({
-      code: 'not_set_up',
-      message: 'It could not start.',
-      hint: 'Run `it serve` in a terminal to read why.',
-    })
+    const said = JSON.parse(ran.err().trim().split('\n').pop()!).error
+    expect(said).toEqual({ code: 'not_set_up', message: 'It has not been set up on this machine, so run `it setup` first.' })
+    expect(JSON.stringify(said)).not.toContain('it serve')
     expect(existsSync(path.join(folder, 'backend'))).toBe(false)
+  })
+
+  test.skipIf(process.getuid?.() === 0)(
+    '`it serve` in Codex’s sandbox, as an account kept out of It’s folder, says so with no terminal, and names none of the person’s folders',
+    async () => {
+      // Codex's rules file is named from CODEX_HOME in what an agent in its sandbox is told to pass on
+      const codexHome = path.join(os.tmpdir(), 'PrivatePerson', 'private-codex')
+      chmodSync(folder, 0o300)
+      try {
+        // Run from a folder it may list, as Codex runs a command from the person's project. In
+        // one it may not, Bun starts a script with no environment at all, and no setting of
+        // its own keeps it from that. The standalone programs are built not to (release.mjs),
+        // and CI starts the Linux one in It's own folder, closed to it, to see that.
+        const ran = run(['serve'], { CODEX_THREAD_ID: 'a-thread', CODEX_HOME: codexHome }, undefined, process.execPath, scratch)
+        expect(await ran.ended).toBe(1)
+        expect(ran.err()).not.toContain('PrivatePerson')
+        expect(ran.err()).not.toContain(folder)
+        expect(JSON.parse(ran.err().trim().split('\n').pop()!).error).toEqual({
+          code: 'blocked',
+          message:
+            'It could not be asked from here: this command runs as an account that may not read It’s folder, as Codex’s sandbox on Windows runs commands. It may well be running.',
+          hint: 'Run `it` outside that sandbox, as the account It runs as. Do not start It again.',
+        })
+      } finally {
+        chmodSync(folder, 0o700)
+      }
+    },
+  )
+
+  test('a supervised start where It was never set up stops, and the service’s status says to run `it setup`', async () => {
+    expect(await well(run(['serve', '--supervised', '--log', path.join(folder, 'service.log')]))).toBe(0)
+    expect(kept('startup.json')).toMatchObject({ failures: 1, code: 'not_set_up', retryAt: null })
+    const reported = run(['service', 'status', '--json'])
+    expect(await well(reported)).toBe(0)
+    expect(JSON.parse(reported.out()).startup).toMatchObject({
+      paused: true,
+      code: 'not_set_up',
+      hint: 'Run `it setup`, which sets It up and starts it again in the background.',
+    })
   })
 
   test('a supervised start stops for broken settings, then starts after they are repaired and clears its failure', async () => {
@@ -1584,6 +1622,12 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     const other = run(['serve', '--log', path.join(folder, 'other.log')])
     expect(await other.ended).toBe(1)
     expect(readFileSync(path.join(folder, 'other.log'), 'utf8')).toMatch(/ could not start: already_running\n$/)
+    // With no terminal, in fixed words that say what to do, and not the running one's process number
+    expect(JSON.parse(other.err().trim().split('\n').pop()!).error).toEqual({
+      code: 'already_running',
+      message: 'It is already running for this folder.',
+      hint: '`it service status` says so. Stop that one first if you meant to start this one.',
+    })
     expect(await fetch(`${at.site}/health`).then((r) => r.ok)).toBe(true)
     // This machine's own commands reach the backend as this machine
     const who = run(['whoami'])
