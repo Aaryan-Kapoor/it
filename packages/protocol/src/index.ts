@@ -48,6 +48,15 @@ export const TAKES = {
    * watches. An earlier backend has only `delivery.waiting`, which gives the oldest 50.
    */
   waitingPage: 'delivery.waitingPage',
+  /**
+   * A page shown, or a notification sent, on every display agents may use (`--everywhere`). An
+   * older It, which took no display named for every display, refuses the argument, and is then
+   * asked with none named. A display's name is always a name: "all" too.
+   */
+  showEverywhere: 'displays.show.everywhere',
+  notifyEverywhere: 'notifications.send.everywhere',
+  /** The switch that opens a display to agents or closes it: the site shows it only where it is named. */
+  agentsSwitch: 'displays.allowAgents',
 } as const
 
 /**
