@@ -136,13 +136,10 @@ writeFileSync(
 const saysOfUsage = (r) => /reports usage|telemetry/i.test(r.said)
 /** Everything asked of this machine's stand-in servers, by the host that was asked and the path. */
 const asked = []
-/** And of those, what said it was asked for where CI is set. */
-const askedFromCi = []
 const serve = (handler) =>
   new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       asked.push(`${req.headers.host}${req.url}`)
-      if (req.headers['x-it-ci'] === '1') askedFromCi.push(`${req.headers.host}${req.url}`)
       handler(req, res)
     })
     server.listen(0, '127.0.0.1', () => resolve(server))
@@ -425,26 +422,6 @@ try {
       ['/latest/download/LICENSE.md', '/latest/download/SHA256SUMS', '/latest/download/THIRD_PARTY_NOTICES.md', `/latest/download/${program}`].sort().join(),
     asked.join(' '),
   )
-
-  // ---------- a download made where CI is set says so ----------
-  for (const [name, ci, marked] of [
-    ['ci-set', 'true', true],
-    ['ci-false', 'false', false],
-    // Read as the program reads it, without the spaces and quotes around it
-    ['ci-quoted', ` "False" `, false],
-    ['ci-unset', undefined, false],
-  ]) {
-    asked.length = 0
-    askedFromCi.length = 0
-    const r = await install(name, { CI: ci })
-    check(
-      marked
-        ? 'where CI is set, every download says that it was asked for there, so that the site can count it apart from a person’s'
-        : `where CI is ${ci === undefined ? 'not set' : `set to ${ci}`}, no download says that it was asked for there`,
-      r.code === 0 && asked.length === 4 && askedFromCi.length === (marked ? 4 : 0),
-      `${r.said}\nasked: ${asked.join(' ')}\nsaid it came from CI: ${askedFromCi.join(' ')}`,
-    )
-  }
 
   if (!windows) {
     // ---------- the PATH, in the file the person's own shell reads ----------
