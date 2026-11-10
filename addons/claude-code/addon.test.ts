@@ -263,6 +263,72 @@ describe('the Claude Code add-on', () => {
     expect([host.env.IT_HARNESS, host.env.IT_SESSION]).toEqual([undefined, undefined])
   })
 
+  test('a TypeError from inside the call for the conversation’s id is not taken for good: the next check whose call works asks for clicks again', async () => {
+    const host = await start()
+    const real = host.$.session.id
+    let once = true
+    host.$.session.id = async () => {
+      if (!once) return real()
+      once = false
+      throw new TypeError('something inside Claude Code')
+    }
+    await host.tick()
+    expect(asked.at(-1)).toMatchObject({ path: '/addon', body: { addon: { delivery: false, missing: ['session'] } } })
+    await host.tick()
+    expect(asked.filter((a) => a.path.startsWith('/clicks')).at(-1)?.body).toMatchObject({ addon: { delivery: true, missing: [] } })
+  })
+
+  test('clicks that could not be submitted for want of a way to are let go of at once, so that no later tool call hands over one the connector has given elsewhere, and a prompt is tried again after a while', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const host = await start()
+      const real = host.$.prompt.submit
+      let once = true
+      host.$.prompt.submit = (...args: Parameters<typeof real>) => {
+        if (!once) return real(...args)
+        once = false
+        throw new TypeError('something inside Claude Code')
+      }
+      offered = [{ id: 'click-1', text: 'A click' }]
+      await host.tick()
+      await host.settle()
+      expect(host.submits).toEqual([])
+      // The connector's hold runs out and it gives the click elsewhere: a tool call of this conversation hands over nothing
+      offered = []
+      const result = (await host.fire('tool.call', {}, {})) as { context?: unknown }
+      expect(result.context).toBeUndefined()
+      expect(acks()).toEqual([])
+      await host.tick()
+      expect(asked.at(-1)).toMatchObject({ path: '/addon', body: { addon: { delivery: false, missing: ['submit'] } } })
+      // A few seconds on, it is asked for clicks again, and the next one is submitted
+      vi.setSystemTime(Date.now() + 5_000)
+      offered = [{ id: 'click-2', text: 'Another click' }]
+      await host.tick()
+      expect(host.submits.map((sub) => sub.text)).toEqual(['Another click'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('a clock that could not be set going as the session started, for whatever reason, is said, and is set going with the next turn', async () => {
+    vi.resetModules()
+    const { register } = await import('./it-bridge/hooks/register.js')
+    const host = fakeHost()
+    const real = host.$.clock.every
+    let once = true
+    host.$.clock.every = (...args: Parameters<typeof real>) => {
+      if (!once) return real(...args)
+      once = false
+      throw new Error('not now')
+    }
+    register(host.on)
+    await host.fire('session.start')
+    expect(asked.find((a) => a.path === '/addon')?.body).toMatchObject({ addon: { delivery: false, missing: ['clock'] } })
+    await host.fire('turn.start', {})
+    await host.tick()
+    expect(asked.filter((a) => a.path.startsWith('/clicks')).at(-1)?.body).toMatchObject({ addon: { delivery: true, missing: [] } })
+  })
+
   test('a Claude Code that has all of it says so with every asking, and names nothing as missing', async () => {
     const host = await start()
     await host.tick()

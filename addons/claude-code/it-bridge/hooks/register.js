@@ -20,13 +20,22 @@ const INSTANCE = Math.random().toString(36).slice(2)
 // Claude Code loads a mod only where `$` is written as `$.noun.event(...)` at a call site, and
 // refuses the whole module where it is read in any other way, a `typeof` look at one among
 // them. So what this Claude Code has of what a click needs (the conversation's id, a way to
-// submit a prompt, and a clock) is never looked at: each is called as it is needed, and one
-// whose call throws a TypeError, as a call to something that is not there does, is noted here
-// as missing, and the connector is told.
+// submit a prompt, and a clock) is never looked at: each is called as it is needed. One whose
+// last call failed as a call to something that is not there fails, with a TypeError, is noted
+// here, and the connector is told that this add-on cannot take clicks. None is taken to be
+// missing for good: a TypeError may as well come from inside what was called, once. Each is
+// called again in its turn, and is taken off the list as soon as a call to it works.
 const lacking = new Set()
-/** Whether a call failed because what it called is not there, rather than for a reason of its own. */
+/** Whether a call failed as a call to something that is not there fails, rather than for a reason of its own. */
 const absent = (err) => err?.name === 'TypeError'
 const addon = () => ({ api: 1, version: ADDON_VERSION, delivery: lacking.size === 0, idle: true, missing: [...lacking] })
+// A way to submit a prompt cannot be tried without a click to submit, and while it is missing the
+// connector is asked for none. So once found missing it is let be for a while and then taken
+// off the list, and the next click tries it: after 5 seconds, then 30, 2 minutes, and then every
+// 10 minutes for as long as it is missing each time.
+const SUBMIT_AGAIN = [5_000, 30_000, 120_000, 600_000]
+let submitMisses = 0
+let submitAgainAt = 0
 // What Claude is told of It as a part of its own instructions, which this add-on adds: when a
 // page is the answer. The skill says how, and Claude reads it only once it has decided to use
 // It. The same words as every add-on that says them, kept in It's protocol as `WHEN`.
@@ -217,7 +226,7 @@ let refusals = 0
 let refusedAt = 0
 
 function handOver($) {
-  if (!pending.length || submitting.size) return
+  if (!pending.length || submitting.size || !addon().delivery) return
   if (refusals && Date.now() - refusedAt < WAITS[Math.min(refusals, WAITS.length) - 1]) return
   const clicks = pending.splice(0)
   for (const c of clicks) submitting.add(c.id)
@@ -238,17 +247,23 @@ function handOver($) {
   try {
     submitted = $.prompt.submit({ text: briefOf(clicks), asUser: true })
   } catch (err) {
-    // This Claude Code has no way to submit a prompt: the clicks wait here, and the connector is
-    // told at the next check, and gives this add-on no more
-    if (absent(err)) lacking.add('submit')
+    // Refused for a reason of its own, it is tried again as any refused prompt is
+    if (!absent(err)) return refused(err)
+    // Not there to submit with: the clicks are let go of, every one this add-on holds, and come
+    // back from the connector once a prompt can be submitted. Kept here while the connector is
+    // asked for none, one could be handed over long after the connector had given it elsewhere.
     for (const c of clicks) submitting.delete(c.id)
-    pending.unshift(...clicks)
+    pending.length = 0
+    lacking.add('submit')
+    submitAgainAt = Date.now() + SUBMIT_AGAIN[Math.min(submitMisses, SUBMIT_AGAIN.length - 1)]
+    submitMisses += 1
     return
   }
   Promise.resolve(submitted).then(
     (result) => {
       // A prompt that another hook refused never reached Claude, so it is not reported as given
       if (result && result.drop !== undefined) return refused()
+      submitMisses = 0
       if (began === generation) refusals = 0
       for (const c of clicks) {
         submitting.delete(c.id)
@@ -265,6 +280,34 @@ function handOver($) {
   )
 }
 
+/**
+ * Tells the connector what this Claude Code lacks, so that it gives this add-on no clicks, and
+ * lets go of every click held here: the connector gives each back to be delivered another way
+ * once its hold on it runs out, and one kept here could be handed over after that.
+ */
+async function lacks($) {
+  pending.length = 0
+  await ask($, '/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
+}
+
+/**
+ * Has the clock ask the connector once a second, where it does not yet: as the session starts,
+ * and with each hook after it where the clock could not be set going before. Whatever kept it
+ * from being set going, nothing asks the connector until it is, so the connector is told.
+ */
+function tickFrom($) {
+  if (ticking) return true
+  try {
+    $.clock.every(1000, () => check($).catch(() => {}))
+    ticking = true
+    lacking.delete('clock')
+    return true
+  } catch {
+    lacking.add('clock')
+    return false
+  }
+}
+
 // One check at a time: a slow answer must not let them pile up, one more every second
 let checking = false
 async function check($) {
@@ -278,20 +321,20 @@ async function check($) {
 }
 
 async function checkOnce($) {
-  if (!addon().delivery) {
-    await ask($, '/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
-    return
-  }
+  // A way to submit a prompt that was found missing is tried again in its time: the connector
+  // is asked for clicks again, and the next one tries it
+  if (lacking.has('submit') && Date.now() >= submitAgainAt) lacking.delete('submit')
   const began = generation
+  // The conversation's id is asked for at every check, which is how it is tried again
   let id
   try {
     id = await $.session.id()
+    lacking.delete('session')
   } catch (err) {
     if (!absent(err)) throw err
     lacking.add('session')
-    await ask($, '/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
-    return
   }
+  if (!addon().delivery) return lacks($)
   // The same conversation after /clear carries on under a new id, and pages made under the old
   // id follow it there
   const carriedOn = cleared !== null && id !== cleared
@@ -331,6 +374,8 @@ async function checkOnce($) {
   }
   const got = await ask($, `/clicks?harness=${HARNESS}&session=${encodeURIComponent(id)}`)
   if (!got || !Array.isArray(got.clicks)) return
+  // Something was found missing while the connector was answering: nothing is taken for now
+  if (!addon().delivery) return lacks($)
   // A click is its id and the words for it. One without either is not handed over: Claude Code
   // takes no empty message, and no empty note beside what a tool gave back.
   got.clicks = got.clicks.filter((c) => c && typeof c.id === 'string' && c.id && typeof c.text === 'string' && c.text)
@@ -396,16 +441,10 @@ export function register(on) {
     return entered
   })
   on('session.start', async ($, e, next) => {
-    // Keep reporting a missing delivery API for as long as this process stays open.
-    if (!ticking)
-      try {
-        $.clock.every(1000, () => check($).catch(() => {}))
-        ticking = true
-      } catch (err) {
-        if (absent(err)) lacking.add('clock')
-      }
+    // The clock asks the connector, and keeps telling it of anything missing for as long as this process stays open
+    tickFrom($)
     if (!addon().delivery) {
-      await ask($, '/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
+      await lacks($)
       return next(e)
     }
     running = false
@@ -435,11 +474,14 @@ export function register(on) {
   // Only the conversation's own turns say whether it is working. A subagent has turns of its
   // own inside one of them: when a helper finishes, the conversation is still in its turn, and
   // a click handed over then would start a turn of its own instead of joining this one.
-  on('turn.start', async (_$, e, next) => {
+  on('turn.start', async ($, e, next) => {
+    // A clock that could not be set going as the session started is tried again with each turn
+    if (!tickFrom($)) void lacks($)
     if (e?.agentId === undefined) running = true
     return next(e)
   })
   on('turn.complete', async ($, e, next) => {
+    if (!tickFrom($)) void lacks($)
     try {
       return await next(e)
     } finally {
@@ -450,10 +492,12 @@ export function register(on) {
     }
   })
   on('tool.call', async ($, e, next) => {
+    if (!tickFrom($)) void lacks($)
     const result = await next(e)
     // Only the main conversation is given a click. A tool call made by a subagent belongs to
     // the subagent, which knows nothing of the page; the click waits for the conversation itself.
-    if (e.agentId !== undefined || !pending.length || result.deny) return result
+    // Nor while this add-on has told the connector that it cannot take clicks: none is held then.
+    if (e.agentId !== undefined || !pending.length || result.deny || !addon().delivery) return result
     const clicks = pending.splice(0)
     for (const c of clicks) given.add(c.id)
     report(
