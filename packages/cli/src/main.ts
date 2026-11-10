@@ -1074,11 +1074,12 @@ async function uninstall(a: Args) {
           }
           // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
           crumbs(folder, say)
-          // The rule the person wrote for Codex on It's word is theirs, and is not taken out. It is said
-          // to be there, since it lets whatever is named `it` out of Codex's sandbox from now on.
+          // The file of rules It wrote for Codex went with the add-on. A rule the person wrote, or a
+          // file of It's they changed, is theirs, and is not taken out. It is said to be there, since
+          // it lets whatever is named `it` out of Codex's sandbox from now on.
           if (codexRuleLetsItOut())
             say(
-              `Codex: the rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder (\`${CODEX_RULE_FILE}\` is where It said to keep it). Delete it now that It is gone.`,
+              `Codex: a rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder, in a file It did not write or that was changed after It wrote it (\`${CODEX_RULE_FILE}\` is where It keeps its own). Delete the rule now that It is gone.`,
             )
           // 5. Whole owned folders and recognised top-level files. Windows moves the running executable out first. An add-on
           // that remains keeps the program and its ownership record so removal can be retried.

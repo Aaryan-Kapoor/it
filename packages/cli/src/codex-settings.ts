@@ -19,12 +19,13 @@
  * There is a third way, which leaves the sandbox alone: a rule in Codex's `rules` folder that
  * lets one command run outside it. Seen with Codex as it comes, in a plain folder and in a git
  * one: with the one rule for `it`, every `it` command runs unasked, and any other command is
- * still kept from the network and from writing outside its folder. Without it, a git folder
+ * still kept from the network and from writing outside its folder. So `it setup` writes that rule
+ * into a file of It's own there when it connects Codex (see `CODEX_RULES`). Without it, a git folder
  * asks for approval of each `it` command, and a plain folder refuses the asking itself
  * ("sandbox_approval: false") until the person chooses "Ask for approval" under /permissions.
  * And nothing gets out of the sandbox as it comes: a port of this machine is refused, and so
- * is a socket in a folder. So the rule is what a person is told of, and the network is only
- * looked for, as something that also lets `it` through. On Windows, Codex's elevated sandbox
+ * is a socket in a folder. So the rule is what It writes, and what a person is told of where It
+ * may not, and the network is only looked for, as something that also lets `it` through. On Windows, Codex's elevated sandbox
  * runs commands as accounts of its own, which It's folder is closed to, and there the network
  * lets nothing through: the rule is the one way.
  */
@@ -34,15 +35,47 @@ import path from 'node:path'
 
 /** The rule that lets `it`, and nothing else, run outside Codex's sandbox: one line of a file in Codex's `rules` folder. */
 export const CODEX_RULE = 'prefix_rule(pattern=["it"], decision="allow")'
+/**
+ * The commands of `it` that change It on this machine, rather than use it: its installation, its
+ * service, whom it answers, and the hold it keeps on conversations it cannot tell are over. An
+ * agent has no need to run them unasked. Codex takes the strictest of the rules a command
+ * matches, so these still ask the person first in the file It writes, and where nobody can be
+ * asked, as in a conversation It reopened, they are refused. A rule names a command by its first
+ * words, and `it` always takes its first word as the command.
+ */
+const CODEX_ASKED = [
+  '["it", ["setup", "uninstall", "upgrade", "login", "logout", "serve"]]',
+  '["it", "service", ["install", "uninstall"]]',
+  '["it", "network", ["on", "off", "tailscale"]]',
+  '["it", ["telemetry", "updates"], ["on", "off"]]',
+  '["it", "runs", "clear"]',
+]
+/** Where It keeps the file of its own in Codex's settings folder, with the rules that let `it` out of the sandbox. */
+export const CODEX_RULES_REL = 'rules/it.rules'
+/**
+ * The file `it setup` writes when it connects Codex: the one rule that lets `it` run outside
+ * Codex's sandbox, with the commands that change It itself still asked about. Codex reads it as
+ * Starlark, where a line that begins with `#` is a remark.
+ */
+export const CODEX_RULES = `# Written by It when \`it setup\` connected Codex. It lets the \`it\` command run outside Codex's
+# sandbox, so that it can reach It on this machine. Every other command stays in the sandbox,
+# and the \`it\` commands that change It itself, rather than use it, still ask you first.
+# It brings this file up to date with its add-on, and removes it when Codex is disconnected or
+# It is uninstalled. Once you change it, it is yours, and It leaves it alone.
+${CODEX_RULE}
+${CODEX_ASKED.map((pattern) => `prefix_rule(pattern=${pattern}, decision="prompt", justification="This changes It on this machine rather than using it.")`).join('\n')}
+`
 const codexHome = () => process.env.CODEX_HOME || path.join(os.homedir(), '.codex')
 
 /**
- * The file a person is told to keep it in: one of their own making, beside the one Codex keeps
- * its own rules in. That is in the folder Codex is using, which is the one the rule is then
+ * The file `it setup` writes it in, and a person is told of: one of It's own, beside the one Codex
+ * keeps its own rules in. That is in the folder Codex is using, which is the one the rule is then
  * looked for in: where `CODEX_HOME` names another folder than the usual one, a rule kept in the
  * usual one is never read, and the person who wrote it there is told to write it again.
  */
-export const CODEX_RULE_FILE = process.env.CODEX_HOME ? path.join(path.resolve(process.env.CODEX_HOME), 'rules', 'it.rules') : '~/.codex/rules/it.rules'
+export const CODEX_RULE_FILE = process.env.CODEX_HOME
+  ? path.join(path.resolve(process.env.CODEX_HOME), ...CODEX_RULES_REL.split('/'))
+  : `~/.codex/${CODEX_RULES_REL}`
 
 /** Codex's settings file as text, null when there is none, false when it could not be read. */
 export function codexConfig(home = codexHome()): string | null | false {
@@ -196,12 +229,18 @@ const WHY = 'Codex runs the commands its agent gives it in a sandbox that cannot
 /**
  * What a person is told where Codex, as it is set, keeps `it` from reaching It: in lines, with
  * the rule set out as it is to be typed. The rule leaves Codex's sandbox as it is for
- * everything else, which giving the sandbox the network would not.
+ * everything else, which giving the sandbox the network would not. `it setup` writes it when it
+ * connects Codex, so this is said mostly where the file is not It's to write: the person made one
+ * of that name, or changed It's since.
  */
 export const CODEX_SHUT = `${WHY}.
-To let \`it\` through, and leave the sandbox as it is for everything else, make the file \`${CODEX_RULE_FILE}\` with this one line in it, and start Codex again:
+To let \`it\` through, and leave the sandbox as it is for everything else, \`it setup\` writes the file \`${CODEX_RULE_FILE}\` when it connects Codex, but leaves a file of that name as it is where It did not write it, or where it was changed after It wrote it. Run \`it setup\` again, or put this one line in that file yourself, and start Codex again:
     ${CODEX_RULE}
 Without it, Codex asks you to approve each \`it\` command. In a folder that is not a git repository it does not ask at all, until you choose "Ask for approval" under \`/permissions\` there. None of this is needed if you run Codex with full access.`
 
-/** The same for an agent that was stopped there to pass on, in a sentence or two of its own reply. */
-export const CODEX_SHUT_SAID = `${WHY}. A file \`${CODEX_RULE_FILE}\` holding the one line \`${CODEX_RULE}\` lets \`it\` through and leaves the sandbox as it is for everything else. Codex reads it when it next starts.`
+/**
+ * The same for an agent that was stopped there to pass on, in a sentence or two of its own
+ * reply. Codex reads its rules as it starts, so a Codex that was running when setup wrote the
+ * file is one that does not have the rule yet.
+ */
+export const CODEX_SHUT_SAID = `${WHY}. \`it setup\` writes the file \`${CODEX_RULE_FILE}\` when it connects Codex, with the rule \`${CODEX_RULE}\`, which lets \`it\` through and leaves the sandbox as it is for everything else. Codex reads it when it next starts, so start Codex again. If \`it\` is still stopped after that, put that one line in the file yourself.`

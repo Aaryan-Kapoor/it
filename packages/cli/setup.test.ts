@@ -29,7 +29,7 @@ import type { Harness } from '@it/protocol'
 import { build } from 'esbuild'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS, SKILL } from './src/addons.generated'
-import { CODEX_RULE_FILE, CODEX_SHUT_SAID } from './src/codex-settings'
+import { CODEX_RULE_FILE, CODEX_RULES, CODEX_RULES_REL, CODEX_SHUT_SAID } from './src/codex-settings'
 import { shutIn, VERSION } from './src/lib'
 import { keepOriginal, ORIGINAL_LIMIT, restoreAbsent } from './src/preserve'
 import { startOf } from './src/serve/backend'
@@ -1151,8 +1151,8 @@ describe('the skill, for the two apps whose add-on is a plugin of their own', ()
     const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
     expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
     expect(read(skill)).toBe(SKILL)
-    // It is noted as a file this program put there, by where it is and what it held
-    expect(noted(id).installs[0]!.files!.map((f) => f.path)).toEqual([skill])
+    // It is noted as a file this program put there, by where it is and what it held, beside Codex's file of rules
+    expect(noted(id).installs[0]!.files!.map((f) => f.path)).toEqual(id === 'codex' ? [skill, path.join(folderOf(bin), 'rules/it.rules')] : [skill])
     // Connected again, nothing is set aside and nothing is said of it: the file is its own, and as it left it
     const { said, say } = lines()
     await connect(id, say)
@@ -1271,6 +1271,149 @@ describe('the skill, for the two apps whose add-on is a plugin of their own', ()
       expect(existsSync(stampFile(id))).toBe(false)
     },
   )
+})
+
+describe('the file of rules that lets `it` out of Codex’s sandbox', () => {
+  // Codex's sandbox reaches nothing on this machine as Codex comes, so `it setup` writes a file of
+  // rules of It's own beside Codex's, which lets `it` through. It is owned as the skill is, and a
+  // file of that name that It did not write, or that was changed since, is the person's: it is
+  // neither written over nor set aside, since a file set aside would no longer do what it did.
+  const rulesIn = (folder: string) => path.join(folder, ...CODEX_RULES_REL.split('/'))
+  const skillIn = (folder: string) => path.join(folder, 'skills/it/SKILL.md')
+  const files = () => noted('codex').installs[0]!.files!
+
+  test('connecting Codex writes it, notes it as It’s, and disconnecting takes it out again', async () => {
+    const rules = rulesIn(folderOf('codex'))
+    expect(codexRuleLetsItOut(folderOf('codex'))).toBe(false)
+    expect((await connect('codex', () => {})).addon).toMatch(/^(connected|needs_approval)$/)
+    expect(read(rules)).toBe(CODEX_RULES)
+    expect(files()).toEqual([
+      { path: skillIn(folderOf('codex')), sha256: sha(SKILL) },
+      { path: rules, sha256: sha(CODEX_RULES) },
+    ])
+    expect(codexRuleLetsItOut(folderOf('codex'))).toBe(true)
+    // Connected again, it is as it was, and nothing is said of it
+    const { said, say } = lines()
+    await connect('codex', say)
+    expect(said.filter((line) => /set aside|kept beside|had not put there/.test(line))).toEqual([])
+    expect(under(path.dirname(rules))).toEqual(['it.rules'])
+    expect(await disconnect('codex', () => {})).toBe(true)
+    expect(existsSync(rules)).toBe(false)
+    expect(existsSync(`${rules}.it-recovery`)).toBe(false)
+    // Codex's own rules folder stays, as Codex's other folders do
+    expect(existsSync(path.dirname(rules))).toBe(true)
+    expect(codexRuleLetsItOut(folderOf('codex'))).toBe(false)
+  })
+
+  test('holds the one rule that lets `it` out, and asks first of the commands that change It itself', () => {
+    const rules = CODEX_RULES.split('\n').filter((line) => line && !line.startsWith('#'))
+    expect(rules[0]).toBe(CODEX_RULE)
+    expect(rules.slice(1).every((line) => line.startsWith('prefix_rule(pattern=["it", ') && line.includes('decision="prompt"'))).toBe(true)
+    for (const word of ['setup', 'uninstall', 'upgrade', 'login', 'logout', 'serve', 'install', 'clear', 'on', 'off', 'tailscale'])
+      expect(rules.slice(1).join('\n')).toContain(`"${word}"`)
+    // Nothing in it lets anything but `it` out, and nothing is let out unasked but by the one rule
+    expect(rules.filter((line) => line.includes('"allow"'))).toEqual([CODEX_RULE])
+    expect(rules.every((line) => line.startsWith('prefix_rule(pattern=["it"'))).toBe(true)
+    expect(CODEX_RULES.endsWith('\n')).toBe(true)
+  })
+
+  test('where Codex is told to keep its settings elsewhere, it goes there, and is taken out from there', async () => {
+    const elsewhere = path.join(tmp, 'settings-of-codex')
+    vi.stubEnv('CODEX_HOME', elsewhere)
+    await connect('codex', () => {})
+    expect(read(rulesIn(elsewhere))).toBe(CODEX_RULES)
+    expect(existsSync(rulesIn(path.join(person, '.codex')))).toBe(false)
+    expect(codexRuleLetsItOut(elsewhere)).toBe(true)
+    // Taken out from where it was put, though the variable has gone since
+    vi.stubEnv('CODEX_HOME', '')
+    delete process.env.CODEX_HOME
+    expect(await disconnect('codex', () => {})).toBe(true)
+    expect(existsSync(rulesIn(elsewhere))).toBe(false)
+  })
+
+  test.each([
+    ['a file of rules of the person’s own', 'prefix_rule(pattern=["it", "status"], decision="allow")\n'],
+    ['one that holds just what It would write', CODEX_RULES],
+  ])('%s of that name is left as it is, is not noted as It’s, and stays when Codex is disconnected', async (_, theirs) => {
+    const rules = rulesIn(folderOf('codex'))
+    put(rules, theirs)
+    const { said, say } = lines()
+    expect((await connect('codex', say)).addon).toMatch(/^(connected|needs_approval)$/)
+    expect(read(rules)).toBe(theirs)
+    expect(under(path.dirname(rules))).toEqual(['it.rules'])
+    expect(said.filter((line) => /set aside|kept beside|had not put there/.test(line))).toEqual([])
+    expect(files().map((f) => f.path)).toEqual([skillIn(folderOf('codex'))])
+    // Nor is it written over when Codex is connected again, or taken by an upgrade
+    const record = noted('codex')
+    Object.assign(record.installs[0]!, { version: 'previous-version', build: 'an-earlier-build' })
+    put(stampFile('codex'), JSON.stringify(record))
+    await refresh(() => {})
+    expect(read(rules)).toBe(theirs)
+    expect(files().map((f) => f.path)).toEqual([skillIn(folderOf('codex'))])
+    expect(await disconnect('codex', () => {})).toBe(true)
+    expect(read(rules)).toBe(theirs)
+    expect(existsSync(stampFile('codex'))).toBe(false)
+  })
+
+  test('one It wrote that the person has changed since is theirs: it is not written over, and does not keep the add-on from being taken out', async () => {
+    const rules = rulesIn(folderOf('codex'))
+    await connect('codex', () => {})
+    const changed = `${CODEX_RULES}prefix_rule(pattern=["git", "push"], decision="prompt")\n`
+    writeFileSync(rules, changed)
+    // Put in again, as an upgrade does, it is left as it is, and is no longer noted as It's
+    const record = noted('codex')
+    Object.assign(record.installs[0]!, { version: 'previous-version', build: 'an-earlier-build' })
+    put(stampFile('codex'), JSON.stringify(record))
+    await refresh(() => {})
+    expect(read(rules)).toBe(changed)
+    expect(files().map((f) => f.path)).toEqual([skillIn(folderOf('codex'))])
+    expect(await disconnect('codex', () => {})).toBe(true)
+    expect(read(rules)).toBe(changed)
+    // And changed after the last connection, it is left on disconnecting without a word of the add-on not being gone
+    rmSync(rules)
+    await connect('codex', () => {})
+    writeFileSync(rules, changed)
+    const { said, say } = lines()
+    expect(await disconnect('codex', say)).toBe(true)
+    expect(read(rules)).toBe(changed)
+    expect(said.join('\n')).not.toContain('not all gone')
+    expect(existsSync(stampFile('codex'))).toBe(false)
+  })
+
+  test('an upgrade brings the file It wrote up to date, where the rule has changed since, and puts it in where an earlier It wrote none', async () => {
+    const rules = rulesIn(folderOf('codex'))
+    await connect('codex', () => {})
+    // As an earlier It left it: the rule as it was then, noted as It's
+    const earlier = `${CODEX_RULE}\n`
+    writeFileSync(rules, earlier)
+    const record = noted('codex')
+    Object.assign(record.installs[0]!, { version: 'previous-version', build: 'an-earlier-build' })
+    record.installs[0]!.files = record.installs[0]!.files!.map((f) => (f.path === rules ? { path: rules, sha256: sha(earlier) } : f))
+    put(stampFile('codex'), JSON.stringify(record))
+    expect(await refresh(() => {})).toEqual([{ id: 'codex', did: 'installed', restart: true }])
+    expect(read(rules)).toBe(CODEX_RULES)
+    expect(files()).toContainEqual({ path: rules, sha256: sha(CODEX_RULES) })
+    expect(existsSync(`${rules}.it-recovery`)).toBe(false)
+    // An It from before this file noted only the skill, and wrote no rules: an upgrade writes them
+    rmSync(rules)
+    const before = noted('codex')
+    Object.assign(before.installs[0]!, { version: 'previous-version', build: 'an-earlier-build' })
+    before.installs[0]!.files = before.installs[0]!.files!.filter((f) => f.path !== rules)
+    put(stampFile('codex'), JSON.stringify(before))
+    await refresh(() => {})
+    expect(read(rules)).toBe(CODEX_RULES)
+    expect(files()).toContainEqual({ path: rules, sha256: sha(CODEX_RULES) })
+  })
+
+  test.skipIf(process.platform === 'win32')('is never written through a link that leads out of Codex’s folder', async () => {
+    const outside = path.join(tmp, 'outside')
+    mkdirSync(outside)
+    mkdirSync(folderOf('codex'), { recursive: true })
+    symlinkSync(outside, path.join(folderOf('codex'), 'rules'))
+    expect((await connect('codex', () => {})).addon).toMatch(/^(connected|needs_approval)$/)
+    expect(readdirSync(outside)).toEqual([])
+    expect(files().map((f) => f.path)).toEqual([skillIn(folderOf('codex'))])
+  })
 })
 
 describe('what It writes and removes in an app’s folder', () => {
