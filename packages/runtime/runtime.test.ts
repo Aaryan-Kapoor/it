@@ -25,6 +25,8 @@ function load(html = '', before: (w: any) => void = () => {}) {
     pretendToBeVisual: true,
   })
   const w = dom.window as any
+  // A browser names a frame's window after the frame, which the stand-in does not
+  for (const frame of w.document.querySelectorAll('iframe[name]')) frame.contentWindow.name = frame.getAttribute('name')
   const hellos: any[] = []
   const fetched: { url: string; init: unknown }[] = []
   const page = { keepStatus: 204, port: null as Port | null }
@@ -838,6 +840,53 @@ describe('the script inside a page', () => {
       follow('out', 'auxclick', { button: 1 })
       follow('out', 'dragstart')
       expect([before, after]).toEqual([Array(6).fill(true), Array(6).fill(true)])
+    })
+
+    test('a link aimed at a name that no frame of the page goes by now opens a tab of its own with no hold either way, whatever of the page’s leads to a frame by that name, and one aimed at the name a frame goes by now is followed there', async () => {
+      const asked: unknown[][] = []
+      const p = load(
+        [
+          '<iframe></iframe><iframe name="inside"></iframe><iframe name="before"></iframe>',
+          '<a id="index" href="https://elsewhere.invalid/a" target="0">by the number of an unnamed frame</a>',
+          '<a id="lookalike" href="https://elsewhere.invalid/b" target="lookalike">by a property of the page’s that leads to a frame</a>',
+          '<a id="old" href="https://elsewhere.invalid/c" target="before">by the name a frame went by before</a>',
+          '<a id="new" href="https://elsewhere.invalid/d" target="after">by the name that frame goes by now</a>',
+          '<a id="inside" href="https://elsewhere.invalid/e" target="inside">by a frame’s name</a>',
+        ].join(''),
+        (w) => {
+          w.open = (...given: unknown[]) => {
+            asked.push(given)
+            return null
+          }
+          w.lookalike = w[0]
+          // The document in the frame gives itself another name
+          w.document.querySelector('iframe[name="before"]').contentWindow.name = 'after'
+        },
+      )
+      const doc = p.w.document
+      const said = (id: string) => [doc.getElementById(id).getAttribute('target'), doc.getElementById(id).getAttribute('rel')]
+      for (const id of ['index', 'lookalike', 'old']) expect([id, said(id)]).toEqual([id, ['_blank', 'noopener noreferrer']])
+      expect(said('new')).toEqual(['after', null])
+      expect(said('inside')).toEqual(['inside', null])
+      // A frame in a closed shadow root a script made is found by its name too, as a browser finds it
+      const root = doc.body.appendChild(doc.createElement('div')).attachShadow({ mode: 'closed' })
+      root.innerHTML = '<iframe name="shadowed"></iframe>'
+      root.querySelector('iframe').contentWindow.name = 'shadowed'
+      doc.body.insertAdjacentHTML('beforeend', '<a id="shadowed" href="https://elsewhere.invalid/f" target="shadowed">in a shadow root</a>')
+      await settled()
+      expect(said('shadowed')).toEqual(['shadowed', null])
+      // A window the page's script asks for by such a name is opened with no hold, so the page is
+      // given no handle on it, and nothing of a window of its own, such as its functions, to use
+      p.w.open('', '0')
+      p.w.open('', 'lookalike')
+      p.w.open('', 'before')
+      p.w.open('https://elsewhere.invalid/g', 'after')
+      expect(asked).toEqual([
+        ['', '0', 'noopener,noreferrer'],
+        ['', 'lookalike', 'noopener,noreferrer'],
+        ['', 'before', 'noopener,noreferrer'],
+        ['https://elsewhere.invalid/g', 'after', undefined],
+      ])
     })
 
     test('a link in a shadow root a script makes, open or closed, is set right as it appears and on its way to a click, and one that would open a window of what the page made, or a mail link, is held as any other', async () => {

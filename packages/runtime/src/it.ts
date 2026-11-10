@@ -547,23 +547,50 @@ function opensAWindow(target: string): boolean {
   if (said.toLowerCase() === '_blank') return true
   return !IN_PLACE.has(said.toLowerCase()) && !namesAFrame(said)
 }
+/** The shadow roots a script made, in which a frame can be as well as in the document. */
+const shadowRoots: WeakRef<ShadowRoot>[] = []
+/**
+ * The name a frame of the page's goes by now, which is the name a link's target finds it by, or
+ * `null` where that cannot be told. A document of the page's own in the frame, such as one the
+ * page wrote into it, has a name that can be read, and may have changed it since. Another site's
+ * document hides its name: the page's name for the frame is taken only where the browser itself
+ * finds that frame by it, and a frame inside a shadow root, which the browser's lookup does not
+ * reach, cannot be told.
+ */
+function nameOf(frame: Element, inDocument: boolean): string | null {
+  const shown = (frame as HTMLIFrameElement).contentWindow
+  if (!shown) return null
+  try {
+    return shown.name
+  } catch {}
+  const said = frame.getAttribute('name')
+  // A number names the page's frames in order, and the page's own properties stand in front of the browser's lookup
+  if (!inDocument || said === null || /^\d+$/.test(said) || Object.hasOwn(window, said)) return null
+  try {
+    return (window as unknown as Record<string, unknown>)[said] === shown ? said : null
+  } catch {
+    return null
+  }
+}
 /**
  * Whether a target names a frame inside the page, which the page means a link to be followed
- * in: a document the page holds in a frame of its own under that name, as the browser itself
- * finds it by name. An element that merely has the name, such as an `embed` or an `object` that
- * shows a picture, holds no document, and a link aimed at it would open a window instead.
+ * in: a frame of the page's, in the document or in a shadow root a script made, whose document
+ * goes by that name now. An element that merely has the name, such as an `embed` or an `object`
+ * that shows a picture, holds no document, and a property of the page's window that leads to a
+ * frame does not name it: a link aimed at either would open a window instead.
  */
 function namesAFrame(target: string): boolean {
   if (target === '' || IN_PLACE.has(target.toLowerCase()) || target.toLowerCase() === '_blank') return false
-  let found: unknown
-  try {
-    found = (window as unknown as Record<string, unknown>)[target]
-  } catch {
-    return false
+  const FRAMES = 'iframe, frame, object'
+  for (const frame of document.querySelectorAll(FRAMES)) if (nameOf(frame, true) === target) return true
+  for (let n = shadowRoots.length - 1; n >= 0; n--) {
+    const root = shadowRoots[n]!.deref()
+    if (!root) {
+      shadowRoots.splice(n, 1)
+      continue
+    }
+    for (const frame of root.querySelectorAll(FRAMES)) if (nameOf(frame, false) === target) return true
   }
-  if (!found || found === window) return false
-  // One of the windows of the page's own frames, which nothing of the page's can stand in for
-  for (let n = 0; n < window.length; n++) if (window[n] === found) return true
   return false
 }
 /** Gives a link or a form `noopener` and `noreferrer`, and takes `opener` away: the window it opens and the page have no hold on each other. */
@@ -704,6 +731,7 @@ const attachShadow = Element.prototype.attachShadow
 Element.prototype.attachShadow = function (this: Element, init: ShadowRootInit) {
   const root = attachShadow.call(this, init)
   watcher.observe(root, WATCHED)
+  shadowRoots.push(new WeakRef(root))
   for (const event of FOLLOWING) root.addEventListener(event, (e) => onTheWay(e, true), true)
   return root
 }
