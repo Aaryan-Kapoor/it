@@ -421,6 +421,96 @@ export const waiting = query({
 })
 
 /**
+ * How many of a page's waiting clicks one reading of `waitingPage` gives, and how much of what
+ * they carried, by `carried`. A click by itself always fits, so a reading that has any to give
+ * gives at least one. What is printed of them is bounded again where it is printed.
+ */
+const PAGE_MOST = 50
+const PAGE_BYTES = 192 * 1024
+
+/**
+ * Where a click stands among a page's waiting clicks, as `waitingPage` gives it out and takes it
+ * back: when It received it, and when its record was made, which together put every click in
+ * one order that a click keeps for as long as it exists. "0" stands before every click.
+ */
+const position = (x: Doc<'actions'>) => `${x.createdAt}:${x._creationTime}`
+function placeOf(cursor: string): { made: number; at: number } | null {
+  if (cursor === '0') return null
+  const m = /^(\d{1,16}):(\d{1,16}(?:\.\d{1,20})?)$/.exec(cursor)
+  if (!m) return fail('invalid', 'That is not a place among the actions on a page: give the `cursor` of one that was listed, or 0 for the start.')
+  return { made: Number(m[1]), at: Number(m[2]) }
+}
+
+/**
+ * The clicks waiting on one page, a bounded page of them at a time: what `it actions --id` lists
+ * and `it actions --id --follow` watches, on a backend that names it in `TAKES.waitingPage`.
+ *
+ * Without `after` it is the newest of them, oldest first: a click that has just been made is
+ * always among them, however many older ones wait unanswered. `from` is then the place just
+ * before them, so that reading `after` it gives these and every later one, and `earlier` says
+ * whether older ones wait that were left out.
+ *
+ * With `after`, it is those that It received after that place, oldest first, and `more` says
+ * whether more wait after the last of them. Each click carries its own place as `cursor`. Read
+ * after the last one's, and again after the last of those, this reaches every click that waits,
+ * however many there are; watched after it, it changes as soon as another one comes.
+ *
+ * It only reads, as `waiting` does: nothing is claimed, held or answered by reading it.
+ */
+export const waitingPage = query({
+  args: { slug: v.string(), after: v.optional(v.string()) },
+  handler: async (ctx, { slug, after }) => {
+    const { user } = await requireMachine(ctx)
+    const place = after === undefined ? undefined : placeOf(after)
+    const a = (await artifactBySlug(ctx, user._id, slug)) ?? fail('not_found', 'No such page.')
+    const pending = () => ctx.db.query('actions').withIndex('by_artifact_delivery', (q) => q.eq('artifactId', a._id).eq('delivery', 'pending'))
+    const bytes = new TextEncoder()
+    /** Takes rows in order while they fit, and gives back the first that did not, if any did not. */
+    const fill = async (rows: AsyncIterable<Doc<'actions'>>, into: Doc<'actions'>[]): Promise<Doc<'actions'> | undefined> => {
+      let used = 0
+      for await (const x of rows) {
+        const size = carried(bytes, x)
+        if (into.length === PAGE_MOST || (into.length && used + size > PAGE_BYTES)) return x
+        into.push(x)
+        used += size
+      }
+      return undefined
+    }
+    const rows: Doc<'actions'>[] = []
+    let earlier = false
+    let more = false
+    let from = after ?? '0'
+    if (place === undefined) {
+      const left = await fill(pending().order('desc'), rows)
+      rows.reverse()
+      if (left) {
+        earlier = true
+        from = position(left)
+      }
+    } else {
+      // Those received at the same moment as the place, after it, and then those received later
+      async function* later() {
+        if (place) {
+          yield* ctx.db
+            .query('actions')
+            .withIndex('by_artifact_delivery', (q) =>
+              q.eq('artifactId', a._id).eq('delivery', 'pending').eq('createdAt', place.made).gt('_creationTime', place.at),
+            )
+        }
+        yield* ctx.db.query('actions').withIndex('by_artifact_delivery', (q) => {
+          const all = q.eq('artifactId', a._id).eq('delivery', 'pending')
+          return place ? all.gt('createdAt', place.made) : all
+        })
+      }
+      more = (await fill(later(), rows)) !== undefined
+    }
+    const places = new Map(rows.map((x) => [x._id as string, position(x)]))
+    const clicks = (await asClicks(ctx, rows)).map((c) => ({ ...c, cursor: places.get(c.id)! }))
+    return { actions: clicks, from, more, earlier }
+  },
+})
+
+/**
  * What is waiting for one conversation that this machine may take, oldest first: what `it
  * wait` with no page named takes. Read by the conversation, so that other conversations'
  * clicks, however many, never stand in front of it.

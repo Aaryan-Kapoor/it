@@ -42,6 +42,12 @@ export const TAKES = {
    * one has no such function and the site would fill its log with refusals.
    */
   displayReports: 'displays.report',
+  /**
+   * A page's waiting actions read a bounded page at a time, the newest by default and those
+   * after a place with `after`, each with its place: what `it actions --id` lists and `--follow`
+   * watches. An earlier backend has only `delivery.waiting`, which gives the oldest 50.
+   */
+  waitingPage: 'delivery.waitingPage',
 } as const
 
 /** The word the interface uses for a thing shown on a display. It is said in one place so that it can be changed in one. */

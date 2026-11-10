@@ -997,6 +997,8 @@ describe("two people cannot see or touch each other's things", () => {
       () => bm.as.query(api.state.get, { slug: 'plan' }),
       () => bm.as.mutation(api.state.patch, { slug: 'plan', patch: '{"x":1}' }),
       () => bm.as.query(api.delivery.waiting, { slug: 'plan' }),
+      () => bm.as.query(api.delivery.waitingPage, { slug: 'plan' }),
+      () => bm.as.query(api.delivery.waitingPage, { slug: 'plan', after: '0' }),
       () => bm.as.query(api.delivery.get, { id: actionId }),
       () => bm.as.mutation(api.delivery.handedOff, { id: actionId, route: 'addon' }),
       () => bm.as.mutation(api.delivery.release, { id: actionId }),
@@ -4054,6 +4056,7 @@ describe('displays and machines', () => {
         'displays.show.displayId',
         'notifications.send.displayId',
         'displays.report',
+        'delivery.waitingPage',
       ],
       now: expect.any(Number),
     })
@@ -5871,6 +5874,107 @@ describe('cases at the edges', () => {
         )
       return ids
     })
+
+  describe("a page's waiting actions, read a bounded page at a time", () => {
+    /** Every page after a place, followed to the end, as a reader that pages through them does. */
+    async function pages(m: { as: ReturnType<T['withIdentity']> }, slug: string, after = '0') {
+      const read: { actions: { id: string; cursor: string; payload: string }[]; more: boolean }[] = []
+      for (let at = after; read.length < 100; ) {
+        const page = await m.as.query(api.delivery.waitingPage, { slug, after: at })
+        read.push(page)
+        if (!page.more) break
+        at = page.actions.at(-1)!.cursor
+      }
+      return read
+    }
+
+    test('the 51st action is read while fifty older ones wait unanswered, both by itself and after the place of the newest seen', async () => {
+      const t = backend()
+      await person(t, 'alice')
+      const m = await machineOf(t, 'alice')
+      const p = await publish(m, 'plan')
+      const now = Date.now()
+      const old = await insertClicks(t, p.artifactId, 50, {}, now - 100_000)
+      // A follower that started now has read the newest of them, and watches after the last
+      const first = await m.as.query(api.delivery.waitingPage, { slug: 'plan' })
+      expect(first.actions.map((c) => c.id)).toEqual(old)
+      expect(first).toMatchObject({ from: '0', earlier: false, more: false })
+      const watching = first.actions.at(-1)!.cursor
+      expect(await m.as.query(api.delivery.waitingPage, { slug: 'plan', after: watching })).toMatchObject({ actions: [], more: false })
+      const [fresh] = await insertClicks(t, p.artifactId, 1, {}, now)
+      // The oldest fifty stand in front of it in the read that an earlier backend has
+      expect((await m.as.query(api.delivery.waiting, { slug: 'plan' })).map((c) => c.id)).not.toContain(fresh)
+      // Not in these
+      const after = await m.as.query(api.delivery.waitingPage, { slug: 'plan', after: watching })
+      expect(after.actions.map((c) => c.id)).toEqual([fresh])
+      expect(after.more).toBe(false)
+      const newest = await m.as.query(api.delivery.waitingPage, { slug: 'plan' })
+      expect(newest.actions.map((c) => c.id)).toEqual([...old.slice(1), fresh])
+      expect(newest.earlier).toBe(true)
+      // Read after the place it says, it gives the same ones again: nothing between is skipped
+      expect((await m.as.query(api.delivery.waitingPage, { slug: 'plan', after: newest.from })).actions.map((c) => c.id)).toEqual(
+        newest.actions.map((c) => c.id),
+      )
+      // And reading changed nothing: every one of them still waits, held by no one
+      const rows = await t.run((ctx) => ctx.db.query('actions').collect())
+      expect(rows.length).toBe(51)
+      expect(rows.every((x) => x.delivery === 'pending' && x.leaseMachineId === undefined && x.handedAt === undefined)).toBe(true)
+    })
+
+    test('paged from the start, every waiting action is read once and in order, also many received at the same moment', async () => {
+      const t = backend()
+      await person(t, 'alice')
+      const m = await machineOf(t, 'alice')
+      const p = await publish(m, 'plan')
+      const now = Date.now()
+      const ids = [
+        ...(await insertClicks(t, p.artifactId, 70, {}, now - 10_000)),
+        // A hundred and twenty with the same moment of arrival, which a page's end falls among
+        ...(await insertClicks(t, p.artifactId, 120, { createdAt: now }, now)),
+        ...(await insertClicks(t, p.artifactId, 10, {}, now + 1)),
+      ]
+      const read = await pages(m, 'plan')
+      expect(read.map((page) => page.actions.length)).toEqual([50, 50, 50, 50])
+      expect(read.flatMap((page) => page.actions.map((c) => c.id))).toEqual(ids)
+      expect(read.at(-1)!.more).toBe(false)
+      // What has been taken for delivery since is not waiting, and is not read
+      await m.as.mutation(api.delivery.claim, { ids: [ids[199] as never] })
+      expect((await pages(m, 'plan', read[3]!.actions[48]!.cursor)).flatMap((page) => page.actions)).toEqual([])
+    })
+
+    test('a page of them holds no more than about 192 KB of what they carried, and always at least one', async () => {
+      const t = backend()
+      await person(t, 'alice')
+      const m = await machineOf(t, 'alice')
+      const p = await publish(m, 'plan')
+      const big = JSON.stringify({ text: 'x'.repeat(LIMITS.actionPayloadBytes - 20) })
+      expect(new TextEncoder().encode(big).length).toBeLessThanOrEqual(LIMITS.actionPayloadBytes)
+      const ids = await insertClicks(t, p.artifactId, 50, { payload: big })
+      const newest = await m.as.query(api.delivery.waitingPage, { slug: 'plan' })
+      const carried = (page: { actions: { payload: string }[] }) => page.actions.reduce((n, c) => n + c.payload.length, 0)
+      expect(newest.actions.length).toBeGreaterThan(0)
+      expect(newest.actions.length).toBeLessThan(10)
+      expect(carried(newest)).toBeLessThanOrEqual(192 * 1024)
+      // The newest are the ones read, and the older ones are said to have been left out
+      expect(newest.actions.map((c) => c.id)).toEqual(ids.slice(-newest.actions.length))
+      expect(newest.earlier).toBe(true)
+      // Paged through, they are every one of them, each page within the bound
+      const read = await pages(m, 'plan')
+      expect(read.flatMap((page) => page.actions.map((c) => c.id))).toEqual(ids)
+      for (const page of read) expect(carried(page)).toBeLessThanOrEqual(192 * 1024)
+    })
+
+    test('a place that is not one is refused, and so is a page that is not there', async () => {
+      const t = backend()
+      await person(t, 'alice')
+      const m = await machineOf(t, 'alice')
+      await publish(m, 'plan')
+      for (const after of ['', 'x', '12', '1:2:3', '-1:2', `${'9'.repeat(17)}:1`]) {
+        expect(await code(m.as.query(api.delivery.waitingPage, { slug: 'plan', after }))).toBe('invalid')
+      }
+      expect(await code(m.as.query(api.delivery.waitingPage, { slug: 'none' }))).toBe('not_found')
+    })
+  })
 
   test('inbox discovery reaches a middle conversation while twelve earlier names stay pending', async () => {
     const t = backend()
