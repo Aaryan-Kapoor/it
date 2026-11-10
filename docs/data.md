@@ -104,36 +104,49 @@ The lines below work on It's folder: the one `IT_HOME` names, where that is set 
 On Linux and macOS:
 
 1. Where you started It yourself with `it serve`, stop that with Ctrl-C.
-2. Put the name of the copy's folder after `copy=` in these lines, and paste them into a terminal that runs bash or zsh. In fish, type `sh` first. They stop the background service and keep it from starting again by itself, copy It's folder aside, and then put the copy in place of the database. They stop at the first command that fails. They change nothing where the copy is not there, It is still running, a folder kept aside or a copy cut short by an earlier run is there already, or a part of It's folder or of the copy that matters is a link, since a copy of a link would not hold what it leads to. They copy It's folder into a new folder of their own, and give that folder its name only once the copy is whole.
+2. Put the name of the copy's folder after `copy=` in these lines, and paste them into a terminal that runs bash, zsh or sh. In fish, type `sh` first. They look first at what they are about to do, then stop the background service and keep it from starting again by itself, copy It's folder aside, and put the copy in place of the database. They stop at the first command that fails, and they delete nothing. They change nothing where the copy is not there, It is still running, a folder kept aside or a copy cut short by an earlier run is there already, or a part of It's folder or of the copy that matters is a link, since a copy of a link would not hold what it leads to. They copy It's folder into a new folder of their own, and give that folder its name only once the copy is whole. The database files the copy replaces are moved into a new folder in `backend/` whose name begins with `replaced.`, and once the older It runs you can delete that folder yourself.
 
    ```sh
    (
      set -e
-     it service uninstall
      live=$(cd -P "${IT_HOME:-$HOME/.it}" && pwd -P)
      saved="$live-after-upgrade"
      copy=before-...
      from="$live/backend/$copy"
      if [ ! -f "$from/data.json" ]; then echo "There is no copy named $copy in $live/backend, so nothing was changed." >&2; exit 1; fi
-     if [ -e "$live/backend/lock" ]; then echo "It is still running, so nothing was changed. Stop it, and run these lines again." >&2; exit 1; fi
-     for left in "$saved" "$saved".part.*; do
-       if [ -e "$left" ] || [ -L "$left" ]; then echo "$left is there already, so nothing was changed. Look at what is in it, remove it yourself if you do not need it, and run these lines again." >&2; exit 1; fi
-     done
-     for entry in "$live/backend" "$live/content" "$live/content-data" "$live/backend"/db.sqlite3* "$live/backend/data.json" "$live/backend/storage" "$from" "$from"/db.sqlite3* "$from/data.json" "$from/storage"; do
+     parent=$(dirname "$live")
+     name=$(basename "$saved")
+     left=$(ls -A "$parent" | while IFS= read -r entry; do case $entry in "$name" | "$name".part.*) echo "$parent/$entry" ;; esac; done)
+     if [ -n "$left" ]; then echo "$left is there already, so nothing was changed. Look at what is in it, remove it yourself if you do not need it, and run these lines again." >&2; exit 1; fi
+     for entry in "$live/backend" "$live/content" "$live/content-data" "$from"; do
        if [ -L "$entry" ]; then echo "$entry is a link, so a copy would not hold what it leads to, and nothing was changed." >&2; exit 1; fi
      done
+     for file in db.sqlite3 db.sqlite3-wal db.sqlite3-shm db.sqlite3-journal data.json storage; do
+       for entry in "$live/backend/$file" "$from/$file"; do
+         if [ -L "$entry" ]; then echo "$entry is a link, so a copy would not hold what it leads to, and nothing was changed." >&2; exit 1; fi
+       done
+     done
+     it service uninstall
+     if [ -e "$live/backend/lock" ]; then echo "It is still running, so nothing was changed. Stop it, and run these lines again." >&2; exit 1; fi
      part=$(mktemp -d "$saved.part.XXXXXX")
      echo "Copying It's folder to $part."
      cp -Rp "$live"/. "$part"
-     for file in "$live/backend"/db.sqlite3* "$live/backend/data.json"; do
-       if [ ! -f "$part/backend/${file##*/}" ] || [ -L "$part/backend/${file##*/}" ] || [ "$part/backend/${file##*/}" -ef "$file" ]; then echo "$part is not a whole copy of its own, so nothing in It's folder was changed. Remove it yourself." >&2; exit 1; fi
+     for file in db.sqlite3 db.sqlite3-wal db.sqlite3-shm db.sqlite3-journal data.json; do
+       if [ -e "$live/backend/$file" ]; then
+         if [ ! -f "$part/backend/$file" ] || [ -L "$part/backend/$file" ] || [ "$part/backend/$file" -ef "$live/backend/$file" ]; then echo "$part is not a whole copy of its own, so nothing in It's folder was changed. Remove it yourself." >&2; exit 1; fi
+       fi
      done
      mv "$part" "$saved"
      echo "It's folder as it was is kept in $saved."
-     cd "$live/backend"
-     rm -rf db.sqlite3* data.json storage
-     cp -p "$from"/db.sqlite3* "$from"/data.json .
-     cp -Rp "$from"/storage .
+     aside=$(mktemp -d "$live/backend/replaced.XXXXXX")
+     for file in db.sqlite3 db.sqlite3-wal db.sqlite3-shm db.sqlite3-journal data.json storage; do
+       if [ -e "$live/backend/$file" ]; then mv "$live/backend/$file" "$aside/"; fi
+     done
+     echo "What the copy replaced is in $aside."
+     for file in db.sqlite3 db.sqlite3-wal db.sqlite3-shm db.sqlite3-journal data.json; do
+       if [ -e "$from/$file" ]; then cp -p "$from/$file" "$live/backend/"; fi
+     done
+     cp -Rp "$from/storage" "$live/backend/"
      echo "The copy is in place."
    )
    ```
@@ -171,14 +184,11 @@ On Windows, in PowerShell, which may be Windows PowerShell 5.1:
      $folder = if ($env:IT_HOME) { [IO.Path]::GetFullPath([IO.Path]::Combine((Get-Location -PSProvider FileSystem).ProviderPath, $env:IT_HOME)) } else { Join-Path $HOME '.it' }
      if ($env:IT_HOME) { $env:IT_HOME = $folder }
      Set-Location $env:TEMP
-     it service uninstall
-     if ($LASTEXITCODE -ne 0) { throw 'The background service could not be stopped, so nothing was changed.' }
      $live = Get-RealPath $folder
      $saved = "$live-after-upgrade"
      $backend = Join-Path $live 'backend'
      $from = Join-Path $backend $copy
      if (-not (Test-Path -LiteralPath (Join-Path $from 'data.json'))) { throw "There is no copy named $copy in $backend, so nothing was changed." }
-     if (Test-Path -LiteralPath (Join-Path $backend 'lock')) { throw 'It is still running, so nothing was changed. Stop it, and run this again.' }
      $name = Split-Path -Leaf $saved
      $left = @(Get-ChildItem -LiteralPath (Split-Path -Parent $live) -Force | Where-Object { $_.Name -eq $name -or $_.Name -like "$name.part.*" })
      if ($left.Count -gt 0) { throw "$($left[0].FullName) is there already, so nothing was changed. Look at what is in it, remove it yourself if you do not need it, and run this again." }
@@ -190,6 +200,9 @@ On Windows, in PowerShell, which may be Windows PowerShell 5.1:
      foreach ($entry in $entries) {
        if ($entry.LinkType) { throw "$($entry.FullName) is a link, so a copy would not hold what it leads to, and nothing was changed." }
      }
+     it service uninstall
+     if ($LASTEXITCODE -ne 0) { throw 'The background service could not be stopped, so nothing was changed.' }
+     if (Test-Path -LiteralPath (Join-Path $backend 'lock')) { throw 'It is still running, so nothing was changed. Stop it, and run this again.' }
      $part = "$saved.part." + [guid]::NewGuid().ToString('N')
      New-Item -ItemType Directory -Path $part | Out-Null
      "Copying It's folder to $part."
@@ -200,8 +213,11 @@ On Windows, in PowerShell, which may be Windows PowerShell 5.1:
      }
      Move-Item -LiteralPath $part -Destination $saved
      "It's folder as it was is kept in $saved."
-     Get-ChildItem -LiteralPath $backend -Filter 'db.sqlite3*' -Force | Remove-Item -Force
-     Remove-Item -LiteralPath (Join-Path $backend 'data.json'), (Join-Path $backend 'storage') -Recurse -Force
+     $aside = Join-Path $backend ('replaced.' + [guid]::NewGuid().ToString('N'))
+     New-Item -ItemType Directory -Path $aside | Out-Null
+     $moving = @(Get-ChildItem -LiteralPath $backend -Filter 'db.sqlite3*' -Force) + @(Get-Item -LiteralPath (Join-Path $backend 'data.json'), (Join-Path $backend 'storage') -Force)
+     foreach ($item in $moving) { Move-Item -LiteralPath $item.FullName -Destination $aside }
+     "What the copy replaced is in $aside."
      Get-ChildItem -LiteralPath $from -Filter 'db.sqlite3*' -Force | Copy-Item -Destination $backend
      Copy-Item -LiteralPath (Join-Path $from 'data.json') -Destination $backend
      Copy-Item -LiteralPath (Join-Path $from 'storage') -Destination $backend -Recurse
@@ -286,7 +302,7 @@ On Windows:
 
 When you no longer need the folder whose name ends in `-replaced`, or the one whose name ends in `-after-upgrade` once you have settled on the older It, delete it yourself. It never removes a folder it did not make.
 
-The steps on Linux are tested as they are written here, by a test of It's own. It keeps a copy as an upgrade does, loads newer functions with fields the older ones do not know and writes data that uses them, and runs the lines above unchanged: once where the background service cannot be stopped, once where It's folder cannot be copied whole, once more to see that the copy cut short is refused and left as it is, once to put the copy back, once more to see that a second run refuses and changes nothing, and once where It's folder is reached through a link in a folder with a space in its name. It then starts the older It on the copy, opens the page that was there, pairs again a display that was signed out since the upgrade, and puts the kept folder back to find the newer pages as they were. It also picks between two copies by the rule above, sees the lines refuse a folder whose stored files or whose database's journal are a link, and runs them with a relative `IT_HOME`. The steps on macOS and Windows, and installing an older release from GitHub, are not run by that test.
+The steps on Linux are tested as they are written here, by a test of It's own, which pastes them into sh, bash and zsh. It keeps a copy as an upgrade does, loads newer functions with fields the older ones do not know and writes data that uses them, and runs the lines above unchanged: once where the background service cannot be stopped, once where It's folder cannot be copied whole, once more to see that the copy cut short is refused and left as it is, once to put the copy back, once more to see that a second run refuses and changes nothing, and once where It's folder is reached through a link in a folder with a space in its name. It then starts the older It on the copy, opens the page that was there, pairs again a display that was signed out since the upgrade, and puts the kept folder back to find the newer pages as they were. It also picks between two copies by the rule above, sees the lines refuse a folder whose stored files or whose database's journal are a link, and runs them with a relative `IT_HOME`. The steps on macOS and Windows, and installing an older release from GitHub, are not run by that test.
 
 ## How long things are kept
 
