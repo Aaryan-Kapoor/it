@@ -5,7 +5,7 @@ import type { Doc, Id } from './_generated/dataModel'
 import { action, internalMutation, type MutationCtx, mutation, query } from './_generated/server'
 import { takePage } from './artifacts'
 import { revokeLater } from './content'
-import { aim, nameOf, stillPaired, targetOf } from './lib/aim'
+import { aim, nameOf, seenOf, stillPaired, targetOf } from './lib/aim'
 import {
   artifactBySlug,
   displayByKey,
@@ -134,7 +134,7 @@ export const register = mutation({
       if (!going) quota(mine.length, QUOTA.displays, 'displays', user._id)
       else {
         await signOutDisplay(ctx, going)
-        await ctx.db.delete(going._id)
+        await dropDisplay(ctx, going._id)
         for (const id of going.previousSessions ?? []) await endSession(ctx, id, 'forgotten', session._id)
         letGo = going._id
         log('display.let_go', { userId: user._id, displayId: going._id, idleMs: now - going.lastSeenAt })
@@ -293,6 +293,16 @@ export const heartbeat = mutation({
   },
 })
 
+/** Removes a display's record, and what it said of itself with it. */
+async function dropDisplay(ctx: MutationCtx, displayId: Id<'displays'>): Promise<void> {
+  const kept = await ctx.db
+    .query('presence')
+    .withIndex('by_display', (q) => q.eq('displayId', displayId))
+    .unique()
+  if (kept) await ctx.db.delete(kept._id)
+  await ctx.db.delete(displayId)
+}
+
 /** A tab's own id, made afresh each time the site is loaded there. */
 const TAB = /^[A-Za-z0-9_-]{16,64}$/
 /** How long what a tab last said of itself stands. A visible tab says so again every minute. */
@@ -363,7 +373,12 @@ export const report = mutation({
     // word, so this keeps a clock that is wrong from saying a use is newer than it was; a paired
     // browser that meant to could still say it was used when it was not
     const timely = a.observedAt !== undefined && Math.abs(now - a.observedAt) <= REPORT_SKEW_MS
-    const fresh = (d.reports ?? []).filter((r) => r.epoch === d.epoch && now - r.at < REPORT_MS && r.at <= now)
+    const kept = await ctx.db
+      .query('presence')
+      .withIndex('by_display', (q) => q.eq('displayId', d._id))
+      .unique()
+    const seen = await seenOf(ctx, d)
+    const fresh = seen.reports.filter((r) => r.epoch === d.epoch && now - r.at < REPORT_MS && r.at <= now)
     const before = fresh.find((r) => r.tab === a.tab)
     if (before && a.sequence <= before.sequence) return { accepted: false, now }
     await rateLimit(ctx, 'reportDisplay', d._id)
@@ -388,12 +403,15 @@ export const report = mutation({
       .sort((x, y) => y.at - x.at)
       .slice(0, TABS - 1)
     const reports = [...others, { tab: a.tab, sequence: a.sequence, at, epoch: d.epoch, phase: a.phase, visible: a.visible, ...page }]
-    const change: Partial<Doc<'displays'>> = { reports, reportedAt: Math.max(...reports.map((r) => r.at)) }
+    // Written to the display's presence, and never to the display itself, whose record a tray and
+    // much of the site read: a report a few times a minute would have them all read again
+    const change: Partial<Doc<'presence'>> = { reports, reportedAt: Math.max(...reports.map((r) => r.at)) }
     // Whether the use it said was taken, which the tab goes by to say it again or not: a use
     // within five seconds of the last one written is taken, and needs no writing
     const used = a.visible && a.used === true && timely
-    if (used && at - (d.usedAt ?? 0) > 5000) change.usedAt = at
-    await ctx.db.patch(d._id, change)
+    if (used && at - (seen.usedAt ?? 0) > 5000) change.usedAt = at
+    if (kept) await ctx.db.patch(kept._id, change)
+    else await ctx.db.insert('presence', { userId: d.userId, displayId: d._id, ...change })
     return { accepted: true, now, used }
   },
 })
@@ -488,7 +506,7 @@ export const forget = mutation({
     const d = await ownDisplay(ctx, user._id, displayId)
     await signOutDisplay(ctx, d)
     await ctx.db.insert('forgotten', { userId: user._id, key: d.key, at: Date.now() })
-    await ctx.db.delete(d._id)
+    await dropDisplay(ctx, d._id)
     // Whatever else that same browser had registered as is signed out as its session ends
     for (const id of [d.sessionId, ...(d.previousSessions ?? [])]) await endSession(ctx, id, 'forgotten')
     log('display.forgotten', { userId: user._id, displayId: d._id, sessionId: d.sessionId })

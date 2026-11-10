@@ -102,7 +102,13 @@ async function household(t: T = convexTest(schema, modules), who = 'owner') {
       })
     })
   const row = (id: Id<'displays'>): Promise<Doc<'displays'>> => t.run(async (ctx) => (await ctx.db.get(id))!)
-  return { t, user, agent, browser, page, row }
+  /** What a display said of itself, kept apart from its record, and when it was last used, which is when it was registered until it is used. */
+  const seen = (id: Id<'displays'>) =>
+    t.run(async (ctx) => {
+      const p = (await ctx.db.query('presence').collect()).find((x) => x.displayId === id) as Doc<'presence'> | undefined
+      return { reports: p?.reports, reportedAt: p?.reportedAt, usedAt: p?.usedAt ?? (await ctx.db.get(id))!.usedAt }
+    })
+  return { t, user, agent, browser, page, row, seen }
 }
 const key = (n: number) => `display-key-number-${String(n).padStart(4, '0')}`
 
@@ -256,7 +262,7 @@ describe('what each tab of a display says of itself', () => {
   const OTHER = 'b'.repeat(32)
 
   test('is kept per tab, by the backend’s clock, and one older than what the tab said last is ignored', async () => {
-    const { browser, row } = await household()
+    const { browser, seen } = await household()
     const laptop = await browser('owner', key(1))
     expect(await laptop.as.mutation(api.displays.report, said(laptop, TAB, 1, true))).toEqual({ accepted: true, now: Date.now(), used: false })
     await laptop.as.mutation(api.displays.report, said(laptop, OTHER, 1, false))
@@ -264,7 +270,7 @@ describe('what each tab of a display says of itself', () => {
     expect(await laptop.as.mutation(api.displays.report, said(laptop, TAB, 3, false))).toMatchObject({ accepted: true })
     // Sent before the last, it arrives after: what it says is no longer so
     expect(await laptop.as.mutation(api.displays.report, said(laptop, TAB, 2, true))).toMatchObject({ accepted: false })
-    const reports = (await row(laptop.id)).reports!
+    const reports = (await seen(laptop.id)).reports!
     expect(reports.map((r) => [r.tab, r.sequence, r.visible])).toEqual(
       expect.arrayContaining([
         [TAB, 3, false],
@@ -277,7 +283,7 @@ describe('what each tab of a display says of itself', () => {
 
   test('is said only by the display’s own browser: not by the owner’s for a screen, not under a pairing that ended, nor across accounts', async () => {
     const t = convexTest(schema, modules)
-    const { browser, row } = await household(t)
+    const { browser, seen } = await household(t)
     const laptop = await browser('owner', key(1))
     const tv = await browser('screen', key(2))
     // The owner's browser acts for every display, but says how things are only of its own
@@ -290,17 +296,17 @@ describe('what each tab of a display says of itself', () => {
     const other = await household(t, 'someone-else')
     const theirs = await other.browser('owner', key(3))
     expect(await code(theirs.as.mutation(api.displays.report, { ...said(theirs, TAB, 1, true), key: tv.key }))).toBe('not_found')
-    expect((await row(tv.id)).reports).toBeUndefined()
-    expect((await row(laptop.id)).reports).toBeUndefined()
+    expect((await seen(tv.id)).reports).toBeUndefined()
+    expect((await seen(laptop.id)).reports).toBeUndefined()
   })
 
   test('a report made before a sign-out is not taken after it', async () => {
-    const { t, browser, row } = await household()
+    const { t, browser, seen } = await household()
     const laptop = await browser('owner', key(1))
     await t.run((ctx) => ctx.db.patch(laptop.id, { epoch: 1 }))
     expect(await laptop.as.mutation(api.displays.report, said(laptop, TAB, 1, true))).toMatchObject({ accepted: false })
     expect(await laptop.as.mutation(api.displays.report, { ...said(laptop, TAB, 1, true), epoch: 1 })).toMatchObject({ accepted: true })
-    expect((await row(laptop.id)).reports!.map((r) => r.epoch)).toEqual([1])
+    expect((await seen(laptop.id)).reports!.map((r) => r.epoch)).toEqual([1])
   })
 
   test('a tab id or a count that is not one is refused', async () => {
@@ -312,7 +318,7 @@ describe('what each tab of a display says of itself', () => {
   })
 
   test('sixteen tabs are kept, and a seventeenth, visible or not, puts out the one that spoke longest ago; stale ones go first', async () => {
-    const { browser, row } = await household()
+    const { browser, seen } = await household()
     const laptop = await browser('owner', key(1))
     const tab = (n: number) => `tab-${String(n).padStart(28, '0')}`
     for (let n = 0; n < 16; n++) {
@@ -320,48 +326,48 @@ describe('what each tab of a display says of itself', () => {
       vi.advanceTimersByTime(10)
     }
     expect(await laptop.as.mutation(api.displays.report, said(laptop, tab(16), 1, true))).toMatchObject({ accepted: true })
-    let tabs = (await row(laptop.id)).reports!.map((r) => r.tab)
+    let tabs = (await seen(laptop.id)).reports!.map((r) => r.tab)
     expect(tabs).toHaveLength(16)
     expect(tabs).not.toContain(tab(0))
     expect(tabs).toContain(tab(16))
     // Long after, one tab speaks: what the others said has run out and is dropped
     vi.advanceTimersByTime(REPORT_MS)
     await laptop.as.mutation(api.displays.report, said(laptop, tab(5), 2, true))
-    tabs = (await row(laptop.id)).reports!.map((r) => r.tab)
+    tabs = (await seen(laptop.id)).reports!.map((r) => r.tab)
     expect(tabs).toEqual([tab(5)])
   })
 
   test('a use is kept as a time, at most once in five seconds, and only from a tab that is visible', async () => {
-    const { browser, row } = await household()
+    const { browser, seen } = await household()
     const laptop = await browser('owner', key(1))
-    const registered = (await row(laptop.id)).usedAt
+    const registered = (await seen(laptop.id)).usedAt
     // Someone paired it there a moment ago
     expect(registered).toBe(Date.now())
     vi.advanceTimersByTime(60_000)
     await laptop.as.mutation(api.displays.report, said(laptop, TAB, 1, false, { used: true }))
-    expect((await row(laptop.id)).usedAt).toBe(registered)
+    expect((await seen(laptop.id)).usedAt).toBe(registered)
     await laptop.as.mutation(api.displays.report, said(laptop, TAB, 2, true, { used: true }))
     const used = Date.now()
-    expect((await row(laptop.id)).usedAt).toBe(used)
+    expect((await seen(laptop.id)).usedAt).toBe(used)
     vi.advanceTimersByTime(2000)
     await laptop.as.mutation(api.displays.report, said(laptop, TAB, 3, true, { used: true }))
-    expect((await row(laptop.id)).usedAt).toBe(used)
+    expect((await seen(laptop.id)).usedAt).toBe(used)
     vi.advanceTimersByTime(4000)
     await laptop.as.mutation(api.displays.report, said(laptop, TAB, 4, true, { used: true }))
-    expect((await row(laptop.id)).usedAt).toBe(Date.now())
+    expect((await seen(laptop.id)).usedAt).toBe(Date.now())
   })
 
   test('a report held back through an outage longer than a use stands is kept as of when it was made, and is no use now', async () => {
-    const { browser, row } = await household()
+    const { browser, seen } = await household()
     const laptop = await browser('owner', key(1))
-    const registered = (await row(laptop.id)).usedAt!
+    const registered = (await seen(laptop.id)).usedAt!
     vi.advanceTimersByTime(60_000)
     // The person used the display, and the report of it was made then, but the connection was
     // down: it is sent again, unchanged, a minute later, when the connection is back
     const made = said(laptop, TAB, 1, true, { used: true })
     vi.advanceTimersByTime(60_000)
     expect(await laptop.as.mutation(api.displays.report, made)).toMatchObject({ accepted: true, used: false })
-    let d = await row(laptop.id)
+    let d = await seen(laptop.id)
     expect(d.usedAt).toBe(registered)
     expect(d.reports!.find((r) => r.tab === TAB)!.at).toBe(made.observedAt)
     // One that waited longer than a report stands is not taken at all
@@ -372,54 +378,72 @@ describe('what each tab of a display says of itself', () => {
     const timely = said(laptop, TAB, 2, true, { used: true })
     vi.advanceTimersByTime(REPORT_SKEW_MS)
     expect(await laptop.as.mutation(api.displays.report, timely)).toMatchObject({ accepted: true, used: true })
-    d = await row(laptop.id)
+    d = await seen(laptop.id)
     expect(d.usedAt).toBe(timely.observedAt)
     expect(d.reports!.map((r) => r.tab)).toEqual([TAB])
     // A time from a clock that runs ahead is taken as now, never later, and is no use, used or not
     vi.advanceTimersByTime(60_000)
     await laptop.as.mutation(api.displays.report, said(laptop, TAB, 3, true, { used: true, observedAt: Date.now() + 3_600_000 }))
-    d = await row(laptop.id)
+    d = await seen(laptop.id)
     expect(d.reports!.find((r) => r.tab === TAB)!.at).toBe(Date.now())
     expect(d.usedAt).toBe(timely.observedAt)
     // Ahead by no more than the clocks' leeway, it is a use, as of now
     vi.advanceTimersByTime(60_000)
     await laptop.as.mutation(api.displays.report, said(laptop, TAB, 4, true, { used: true, observedAt: Date.now() + REPORT_SKEW_MS }))
-    expect((await row(laptop.id)).usedAt).toBe(Date.now())
+    expect((await seen(laptop.id)).usedAt).toBe(Date.now())
     // One that says no time is never a use
     vi.advanceTimersByTime(60_000)
-    const before = (await row(laptop.id)).usedAt
+    const before = (await seen(laptop.id)).usedAt
     await laptop.as.mutation(api.displays.report, said(laptop, TAB, 5, true, { used: true, observedAt: undefined }))
-    d = await row(laptop.id)
+    d = await seen(laptop.id)
     expect(d.usedAt).toBe(before)
     expect(d.reports!.find((r) => r.tab === TAB)!.at).toBe(Date.now())
   })
 
   test('what a display that was closed said last goes at the hourly cleaning, and what a display in use says now stays', async () => {
-    const { t, browser, row } = await household()
+    const { t, browser, seen } = await household()
     const closed = await browser('owner', key(1))
     const open = await browser('screen', key(2))
     const quiet = await browser('screen', key(3))
     await closed.as.mutation(api.displays.report, said(closed, TAB, 1, false))
-    expect((await row(closed.id)).reportedAt).toBe(Date.now())
+    expect((await seen(closed.id)).reportedAt).toBe(Date.now())
     // An hour on, the one display still open says so again, a moment before the cleaning
     vi.advanceTimersByTime(3_600_000)
     await open.as.mutation(api.displays.report, said(open, TAB, 1, true))
     await t.mutation(internal.retention.sweepRecords, {})
-    const gone = await row(closed.id)
+    const gone = await seen(closed.id)
     expect([gone.reports, gone.reportedAt]).toEqual([undefined, undefined])
-    expect((await row(open.id)).reports!.map((r) => r.tab)).toEqual([TAB])
-    expect((await row(open.id)).reportedAt).toBe(Date.now())
+    expect((await seen(open.id)).reports!.map((r) => r.tab)).toEqual([TAB])
+    expect((await seen(open.id)).reportedAt).toBe(Date.now())
     // A display that never said anything is as it was, and so is when the person last used the closed one
-    expect((await row(quiet.id)).reports).toBeUndefined()
+    expect((await seen(quiet.id)).reports).toBeUndefined()
     expect(gone.usedAt).toBeDefined()
     // And the display that was closed is heard again as soon as it speaks
     await closed.as.mutation(api.displays.report, said(closed, TAB, 2, true))
-    expect((await row(closed.id)).reports!.map((r) => r.sequence)).toEqual([2])
+    expect((await seen(closed.id)).reports!.map((r) => r.sequence)).toEqual([2])
+  })
+
+  test('changes nothing in the display’s own record, which a tray and the site read, so that none of them is read again for it', async () => {
+    const { agent, browser, row, seen } = await household()
+    const laptop = await browser('owner', key(1))
+    await agent.mutation(api.notifications.send, { text: 'hello', everywhere: true })
+    const tray = () => laptop.as.query(api.notifications.list, { key: laptop.key })
+    const [record, before] = [await row(laptop.id), await tray()]
+    for (let n = 1; n <= 3; n++) {
+      vi.advanceTimersByTime(10_000)
+      await laptop.as.mutation(api.displays.report, said(laptop, TAB, n, n !== 2, { used: true }))
+    }
+    // What the tabs said and the use are kept, apart from the display
+    expect((await seen(laptop.id)).reports!.map((r) => r.sequence)).toEqual([3])
+    expect((await seen(laptop.id)).usedAt).toBe(Date.now())
+    // The display's record is as it was, field for field, and so is what its tray reads from it
+    expect(await row(laptop.id)).toEqual(record)
+    expect(await tray()).toEqual(before)
   })
 
   test('names only a showing this display made, since its last sign-out, and a page shown only once its ticket was given', async () => {
     const t = convexTest(schema, modules)
-    const { browser, page, row } = await household(t)
+    const { browser, page, seen } = await household(t)
     const laptop = await browser('owner', key(1))
     const tv = await browser('screen', key(2))
     const plan = await page('plan')
@@ -429,7 +453,7 @@ describe('what each tab of a display says of itself', () => {
     const theirs = await mount(tv)
     // Loading, before its ticket: the page and its version are kept beside what the tab said
     expect(await laptop.as.mutation(api.displays.report, said(laptop, TAB, 1, true, { phase: 'loading', mountId: mine }))).toMatchObject({ accepted: true })
-    expect((await row(laptop.id)).reports![0]).toMatchObject({ phase: 'loading', artifactId: plan, version: 1 })
+    expect((await seen(laptop.id)).reports![0]).toMatchObject({ phase: 'loading', artifactId: plan, version: 1 })
     // Shown is said only of a showing whose ticket was given
     expect(await code(laptop.as.mutation(api.displays.report, said(laptop, TAB, 2, true, { phase: 'shown', mountId: mine })))).toBe('not_found')
     await t.run(async (ctx) => {
@@ -452,7 +476,7 @@ describe('what each tab of a display says of itself', () => {
     // Showing nothing names no showing, and a page names its showing
     expect(await code(laptop.as.mutation(api.displays.report, { ...said(laptop, TAB, 5, true, { mountId: mine }), epoch: 1 }))).toBe('invalid')
     expect(await code(laptop.as.mutation(api.displays.report, { ...said(laptop, TAB, 5, true, { phase: 'shown' }), epoch: 1 }))).toBe('invalid')
-    expect((await row(laptop.id)).reports![0]).toMatchObject({ phase: 'shown', sequence: 3 })
+    expect((await seen(laptop.id)).reports![0]).toMatchObject({ phase: 'shown', sequence: 3 })
   })
 
   test('never names a card’s live preview on the grid as the page shown, loading or shown', async () => {

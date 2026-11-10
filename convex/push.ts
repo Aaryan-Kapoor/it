@@ -8,7 +8,7 @@ import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { type ActionCtx, action, internalAction, internalMutation, internalQuery, mutation, type QueryCtx } from './_generated/server'
 import { door } from './config'
-import { openNow } from './lib/aim'
+import { openNow, seenOf } from './lib/aim'
 import { displayByKey, requireBrowser } from './lib/authz'
 import { overClashes } from './lib/clash'
 import { fail } from './lib/errors'
@@ -98,7 +98,7 @@ export const _targets = internalQuery({
     const already = new Set<string>(n.pushedTo ?? [])
     const targets = []
     for (const d of displays) {
-      if (!d.push || d.agentsOff || openNow(d, now) || already.has(d._id) || !isFor(n, d)) continue
+      if (!d.push || d.agentsOff || already.has(d._id) || !isFor(n, d) || openNow(d, await seenOf(ctx, d), now)) continue
       if (await paired(ctx, d)) targets.push({ displayId: d._id, push: d.push })
     }
     return {

@@ -36,6 +36,22 @@ export const publicationResult = v.object({
   took: v.optional(v.boolean()),
 })
 
+/**
+ * What one tab of a display last said of itself (`displays.report`), by the backend's clock:
+ * whether it was visible, and what it showed, as a showing of the display's own and its page's
+ * version. The shape is the one earlier local builds of It wrote, so that a database of theirs loads.
+ */
+const tabReport = v.object({
+  tab: v.string(),
+  sequence: v.number(),
+  at: v.number(),
+  epoch: v.number(),
+  phase: v.union(v.literal('none'), v.literal('loading'), v.literal('shown'), v.literal('failed')),
+  visible: v.boolean(),
+  artifactId: v.optional(v.id('artifacts')),
+  version: v.optional(v.number()),
+})
+
 export default defineSchema({
   // A person. There is one, whose subject is `owner`, made when the first machine is enrolled.
   users: defineTable({
@@ -135,29 +151,11 @@ export default defineSchema({
     /** What an agent asked this display to show, and when. */
     showing: v.optional(v.object({ artifactId: v.id('artifacts'), at: v.number() })),
     push: v.optional(v.object({ endpoint: v.string(), p256dh: v.string(), auth: v.string() })),
-    /**
-     * What each tab of it last said of itself (`displays.report`), by the backend's clock: whether
-     * it was visible, and what it showed, as a showing of this display's own and its page's
-     * version. At most sixteen, and only of the sign-out number they were said under. The shape is
-     * the one earlier local builds of It wrote, so that a database of theirs loads.
-     */
-    reports: v.optional(
-      v.array(
-        v.object({
-          tab: v.string(),
-          sequence: v.number(),
-          at: v.number(),
-          epoch: v.number(),
-          phase: v.union(v.literal('none'), v.literal('loading'), v.literal('shown'), v.literal('failed')),
-          visible: v.boolean(),
-          artifactId: v.optional(v.id('artifacts')),
-          version: v.optional(v.number()),
-        }),
-      ),
-    ),
+    /** What each tab of it last said of itself, where an earlier build kept that here. It is read where `presence` has nothing, and is no longer written. */
+    reports: v.optional(v.array(tabReport)),
     /** When the newest of `reports` was said, so that the hourly cleaning finds the displays whose every report has run out. */
     reportedAt: v.optional(v.number()),
-    /** When the person last clicked, tapped or typed on the site here, to within ten seconds, or when the display was registered. */
+    /** When the display was registered, by someone standing at it. Later uses are kept in `presence`, as are what its tabs say now: `reports` and `reportedAt` here are only what an earlier build wrote. */
     usedAt: v.optional(v.number()),
     /** Set where the person said that agents may not show pages or send notifications on this display. */
     agentsOff: v.optional(v.boolean()),
@@ -174,6 +172,23 @@ export default defineSchema({
     .index('by_user_key', ['userId', 'key'])
     .index('by_session', ['sessionId'])
     .index('by_push_endpoint', ['push.endpoint'])
+    .index('by_reported', ['reportedAt']),
+
+  // What a display says of itself as it is used (`displays.report`), apart from the display's own
+  // record. That record is read by a tray and by much of the site, and a report written onto it a
+  // few times a minute would have every one of those read again each time. One per display.
+  presence: defineTable({
+    userId: v.id('users'),
+    displayId: v.id('displays'),
+    /** What each of its tabs last said, at most sixteen, and only of the sign-out number they were said under. */
+    reports: v.optional(v.array(tabReport)),
+    /** When the newest of `reports` was said, so that the hourly cleaning finds the ones whose every report has run out. */
+    reportedAt: v.optional(v.number()),
+    /** When the person last clicked, tapped or typed on the site there, to within ten seconds. */
+    usedAt: v.optional(v.number()),
+  })
+    .index('by_display', ['displayId'])
+    .index('by_user', ['userId'])
     .index('by_reported', ['reportedAt']),
 
   // A display the person told It to forget. Its key is refused from then on, so a browser that

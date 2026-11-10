@@ -124,7 +124,7 @@ async function purge(ctx: MutationCtx, userId: Id<'users'>): Promise<boolean> {
   // With each record goes what was kept under its id to hold it to a pace, and, for a machine,
   // the proofs it has used: none of it is left for the hourly cleaning to come to. A showing's
   // record is among what goes here, though its display and its page are gone already.
-  for (const table of ['displays', 'machines', 'sessions', 'invites', 'mounts', 'deletions'] as const) {
+  for (const table of ['presence', 'displays', 'machines', 'sessions', 'invites', 'mounts', 'deletions'] as const) {
     const rows = await ctx.db
       .query(table)
       .withIndex('by_user', (q: any) => q.eq('userId', userId))
@@ -368,13 +368,16 @@ export const sweepRecords = internalMutation({
     await drop(unnamed)
     // What the tabs of a display said of themselves, once the newest of it has run out: a
     // display that is closed says nothing more, and what it said last is not kept for ever
-    const unheard = await ctx.db
-      .query('displays')
-      .withIndex('by_reported', (q) => q.gt('reportedAt', 0).lt('reportedAt', now - REPORT_MS))
-      .take(LIGHT)
-    for (const d of unheard) await ctx.db.patch(d._id, { reports: undefined, reportedAt: undefined })
-    if (unheard.length === LIGHT) full = true
-    removed += unheard.length
+    // (and what an earlier build kept of it on the display itself)
+    for (const table of ['presence', 'displays'] as const) {
+      const unheard = await ctx.db
+        .query(table)
+        .withIndex('by_reported', (q) => q.gt('reportedAt', 0).lt('reportedAt', now - REPORT_MS))
+        .take(LIGHT)
+      for (const d of unheard) await ctx.db.patch(d._id, { reports: undefined, reportedAt: undefined })
+      if (unheard.length === LIGHT) full = true
+      removed += unheard.length
+    }
     if (full) await ctx.scheduler.runAfter(0, internal.retention.sweepRecords, {})
     if (removed) log('sweep.records', { removed })
     return null

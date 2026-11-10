@@ -45,6 +45,24 @@ export const nameOf = (d: Doc<'displays'>): string => d.name ?? d.generatedName
  */
 export const OPEN_MS = 150_000
 
+/** What a display last said of itself as it was used: what each of its tabs said, and when the person last used it. */
+export interface Seen {
+  reports: NonNullable<Doc<'presence'>['reports']>
+  usedAt?: number
+}
+/**
+ * What a display last said of itself, from its own record of that (`presence`), which is kept
+ * apart from the display's so that a report does not change what reads the display. Where there
+ * is none yet, what an earlier build kept on the display, and when it was registered.
+ */
+export async function seenOf(ctx: Ctx, d: Doc<'displays'>): Promise<Seen> {
+  const p = await ctx.db
+    .query('presence')
+    .withIndex('by_display', (q) => q.eq('displayId', d._id))
+    .unique()
+  return { reports: p?.reports ?? d.reports ?? [], usedAt: p?.usedAt ?? d.usedAt }
+}
+
 /**
  * Whether the site is open and visible on a display now, as far as what it last said tells.
  *
@@ -55,8 +73,8 @@ export const OPEN_MS = 150_000
  * hidden at once, while a tab of an earlier site that goes on beating, beside a newer tab that was
  * hidden, counts as open again with its next heartbeat that is written down, within a minute.
  */
-export function openNow(d: Doc<'displays'>, now: number): boolean {
-  const fresh = (d.reports ?? []).filter((r) => r.epoch === d.epoch && now - r.at < OPEN_MS && r.at <= now)
+export function openNow(d: Doc<'displays'>, seen: Seen, now: number): boolean {
+  const fresh = seen.reports.filter((r) => r.epoch === d.epoch && now - r.at < OPEN_MS && r.at <= now)
   if (fresh.some((r) => r.visible)) return true
   const hiddenAt = fresh.reduce((latest, r) => Math.max(latest, r.at), 0)
   return now - d.lastSeenAt < OPEN_MS && d.lastSeenAt > hiddenAt
@@ -68,19 +86,19 @@ export function openNow(d: Doc<'displays'>, now: number): boolean {
  * last seen open. With `pushed`, a display that takes notifications comes first among those that
  * are not open, since a notification reaches a closed display only that way.
  */
-export function likeliest(displays: Doc<'displays'>[], now: number, pushed = false): Doc<'displays'> | null {
-  const rank = (d: Doc<'displays'>): number[] => {
-    const open = openNow(d, now)
-    return [open ? 1 : 0, !open && pushed && d.push ? 1 : 0, d.usedAt ?? 0, d.lastSeenAt]
+export function likeliest(displays: { d: Doc<'displays'>; seen: Seen }[], now: number, pushed = false): Doc<'displays'> | null {
+  const rank = ({ d, seen }: { d: Doc<'displays'>; seen: Seen }): number[] => {
+    const open = openNow(d, seen, now)
+    return [open ? 1 : 0, !open && pushed && d.push ? 1 : 0, seen.usedAt ?? 0, d.lastSeenAt]
   }
   const ahead = (a: number[], b: number[]): boolean => {
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i]! > b[i]!
     return false
   }
   let best: { d: Doc<'displays'>; rank: number[] } | null = null
-  for (const d of displays) {
-    const r = rank(d)
-    if (!best || ahead(r, best.rank)) best = { d, rank: r }
+  for (const one of displays) {
+    const r = rank(one)
+    if (!best || ahead(r, best.rank)) best = { d: one.d, rank: r }
   }
   return best?.d ?? null
 }
@@ -167,15 +185,14 @@ export async function aim(ctx: Ctx, userId: Id<'users'>, target: Target, opts: {
       }),
     }
   const now = Date.now()
-  const chosen = likeliest(
-    asked.filter((d) => why.get(d._id) === null),
-    now,
-    opts.pushed,
-  )
+  const able = []
+  for (const d of asked) if (why.get(d._id) === null) able.push({ d, seen: await seenOf(ctx, d) })
+  const chosen = likeliest(able, now, opts.pushed)
+  const seen = able.find((x) => x.d === chosen)?.seen
   return {
     asked,
     to: chosen ? [chosen] : [],
     notShown: asked.filter((d) => d !== chosen).map((d) => left(d, why.get(d._id) ?? 'not_chosen')),
-    ...(chosen ? { chosen: openNow(chosen, now) ? ('open' as const) : ('last_used' as const) } : {}),
+    ...(chosen && seen ? { chosen: openNow(chosen, seen, now) ? ('open' as const) : ('last_used' as const) } : {}),
   }
 }
