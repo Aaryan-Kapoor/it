@@ -4123,6 +4123,7 @@ describe('displays and machines', () => {
         'notifications.send.everywhere',
         'displays.allowAgents',
         'delivery.holdBack',
+        'displays.lock',
       ],
       now: expect.any(Number),
     })

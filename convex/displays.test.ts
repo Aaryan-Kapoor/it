@@ -862,3 +862,180 @@ describe('where an agent’s notification goes', () => {
     expect(pushed).toEqual([PUSH('laptop')])
   })
 })
+
+describe('a display locked to a page', () => {
+  async function locked() {
+    const h = await household()
+    const laptop = await h.browser('owner', key(1))
+    const tv = await h.browser('screen', key(2))
+    const workout = await h.page('workout')
+    const review = await h.page('review')
+    return { ...h, laptop, tv, workout, review }
+  }
+  const mountOn = (b: { as: any; key: string }, artifactId: Id<'artifacts'>) => b.as.mutation(api.mounts.create, { artifactId, displayKey: b.key })
+  const ticketOf = (b: { as: any }, mountId: string) => b.as.action(api.mounts.ticket, { mountId })
+
+  test('a screen locks itself and unlocks itself; the owner’s browser locks and unlocks any display; an agent does neither', async () => {
+    const h = await locked()
+    await h.tv.as.mutation(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })
+    expect((await h.row(h.tv.id)).lockedTo?.artifactId).toBe(h.workout)
+    // The page is asked onto it at once
+    expect((await h.row(h.tv.id)).showing?.artifactId).toBe(h.workout)
+    expect(await h.tv.as.query(api.displays.mine, { key: h.tv.key })).toMatchObject({
+      lockedTo: { id: h.workout, slug: 'workout', title: 'Title of workout' },
+      lockEnded: false,
+    })
+    await h.tv.as.mutation(api.displays.unlock, { displayId: h.tv.id })
+    expect((await h.row(h.tv.id)).lockedTo).toBeUndefined()
+    // The owner's browser, for another display
+    await h.laptop.as.mutation(api.displays.lock, { displayId: h.tv.id, artifactId: h.review })
+    expect((await h.row(h.tv.id)).lockedTo?.artifactId).toBe(h.review)
+    await h.laptop.as.mutation(api.displays.unlock, { displayId: h.tv.id })
+    expect((await h.row(h.tv.id)).lockedTo).toBeUndefined()
+    // A screen cannot lock or unlock another display, and an agent cannot at all
+    expect(await code(h.tv.as.mutation(api.displays.lock, { displayId: h.laptop.id, artifactId: h.workout }))).toBe('not_found')
+    await h.laptop.as.mutation(api.displays.lock, { displayId: h.laptop.id, artifactId: h.workout })
+    expect(await code(h.tv.as.mutation(api.displays.unlock, { displayId: h.laptop.id }))).toBe('not_found')
+    expect(await code(h.agent.mutation(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout }))).toBe('forbidden')
+    expect(await code(h.agent.mutation(api.displays.unlock, { displayId: h.laptop.id }))).toBe('forbidden')
+    expect((await h.row(h.laptop.id)).lockedTo?.artifactId).toBe(h.workout)
+  })
+
+  test('another person’s page or display is no page or display to lock', async () => {
+    const t = convexTest(schema, modules)
+    const mine = await household(t)
+    const theirs = await household(t, 'someone-else')
+    const tv = await mine.browser('screen', key(1))
+    const elsewhere = await theirs.browser('owner', key(2))
+    const their = await theirs.page('plan')
+    expect(await code(tv.as.mutation(api.displays.lock, { displayId: tv.id, artifactId: their }))).toBe('not_found')
+    expect(await code(tv.as.mutation(api.displays.lock, { displayId: elsewhere.id, artifactId: await mine.page('plan') }))).toBe('not_found')
+  })
+
+  test('an agent is refused another page on it, by id, by name or with every display, and it is never the display in use', async () => {
+    const h = await locked()
+    await h.tv.as.mutation(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })
+    for (const asked of [{ displayId: h.tv.id }, { display: 'Chrome on Linux 2' }])
+      expect(await h.agent.mutation(api.displays.show, { slug: 'review', ...asked })).toMatchObject({
+        displays: [],
+        notShown: [{ displayId: h.tv.id, reason: 'locked' }],
+      })
+    expect((await h.agent.mutation(api.displays.show, { slug: 'review', everywhere: true })).displayIds).toEqual([h.laptop.id])
+    // Its own page is shown there when it is asked for by name, and still it is not chosen when none is named
+    expect((await h.agent.mutation(api.displays.show, { slug: 'workout', displayId: h.tv.id })).displayIds).toEqual([h.tv.id])
+    await h.tv.as.mutation(api.displays.report, {
+      key: h.tv.key,
+      epoch: (await h.row(h.tv.id)).epoch,
+      tab: 'f'.repeat(32),
+      sequence: 1,
+      phase: 'none',
+      visible: true,
+      used: true,
+      expectedSession: h.tv.session,
+    })
+    for (const slug of ['workout', 'review']) expect((await h.agent.mutation(api.displays.show, { slug })).displayIds).toEqual([h.laptop.id])
+    // A notification is no page: one named for it reaches it, and one named for none does not
+    expect((await h.agent.mutation(api.notifications.send, { text: 'hi', displayId: h.tv.id })).displayIds).toEqual([h.tv.id])
+    expect((await h.agent.mutation(api.notifications.send, { text: 'hi' })).displayIds).toEqual([h.laptop.id])
+    // create --open and update --open come through the same showing, as the tour does
+    expect((await h.row(h.tv.id)).showing?.artifactId).toBe(h.workout)
+  })
+
+  test('a screen is let open no other page there, whatever site asks, while the owner’s browser elsewhere still opens any', async () => {
+    const h = await locked()
+    await h.tv.as.mutation(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })
+    expect(await refused(mountOn(h.tv, h.review))).toMatchObject({ code: 'forbidden', locked: true })
+    expect(await code(mountOn(h.tv, h.workout))).toBe('ok')
+    expect(await code(mountOn(h.laptop, h.review))).toBe('ok')
+  })
+
+  test('a showing begun before the lock gets no ticket after it, a ticket given before it stops working, and the locked page is shown afresh', async () => {
+    const h = await locked()
+    const before = await mountOn(h.tv, h.review)
+    const given = await mountOn(h.tv, h.review)
+    await ticketOf(h.tv, given.mountId)
+    const epoch = (await h.row(h.tv.id)).epoch
+    vi.mocked(fetch).mockClear()
+    await h.laptop.as.mutation(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })
+    // Its showings and its tickets from before end, as a sign-out ends them: the content service is told
+    expect((await h.row(h.tv.id)).epoch).toBe(epoch + 1)
+    await h.t.finishAllScheduledFunctions(vi.runAllTimers)
+    const told = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/control/revoke'))
+    expect(told.map(([, init]) => JSON.parse(String((init as RequestInit).body)))).toEqual([
+      { userId: expect.any(String), displayId: h.tv.id, epoch: epoch + 1 },
+    ])
+    expect(await code(ticketOf(h.tv, before.mountId))).toBe('conflict')
+    // Locked to the same page again, nothing that shows it is ended
+    await h.tv.as.mutation(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })
+    expect((await h.row(h.tv.id)).epoch).toBe(epoch + 1)
+    // A mount of the page itself made just before a lock to another page gets no ticket either
+    const workoutMount = await mountOn(h.tv, h.workout)
+    await h.laptop.as.mutation(api.displays.lock, { displayId: h.tv.id, artifactId: h.review })
+    expect(await code(ticketOf(h.tv, workoutMount.mountId))).toBe('conflict')
+  })
+
+  test('every display of one browser’s pairing is under one lock: registered before, registered after, unlocked together', async () => {
+    const h = await locked()
+    // The same screen's browser, as a second display: its site data cleared, or a key made by hand
+    const again = async (k: string) => {
+      const d = await h.tv.as.mutation(api.displays.register, { key: k, userAgent: UA })
+      return d.id as Id<'displays'>
+    }
+    const before = await again(key(7))
+    await h.tv.as.mutation(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })
+    expect((await h.row(before)).lockedTo?.artifactId).toBe(h.workout)
+    const after = await again(key(8))
+    expect((await h.row(after)).lockedTo?.artifactId).toBe(h.workout)
+    expect(await refused(h.tv.as.mutation(api.mounts.create, { artifactId: h.review, displayKey: key(8) }))).toMatchObject({ locked: true })
+    // Registering a key it had already is no way out either
+    await h.t.run((ctx) => ctx.db.patch(before, { lockedTo: undefined }))
+    await again(key(7))
+    expect((await h.row(before)).lockedTo?.artifactId).toBe(h.workout)
+    // Of two locks one pairing came to have, the one set last is the pairing's
+    await h.t.run((ctx) => ctx.db.patch(after, { lockedTo: { artifactId: h.review, at: Date.now() + 1 } }))
+    await again(key(7))
+    for (const id of [h.tv.id, before, after]) expect((await h.row(id)).lockedTo?.artifactId).toBe(h.review)
+    // Unlocked from one, every one is unlocked; the owner's own display is not touched
+    await h.laptop.as.mutation(api.displays.lock, { displayId: h.laptop.id, artifactId: h.workout })
+    await h.tv.as.mutation(api.displays.unlock, { displayId: after })
+    for (const id of [h.tv.id, before, after]) expect((await h.row(id)).lockedTo).toBeUndefined()
+    expect((await h.row(h.laptop.id)).lockedTo?.artifactId).toBe(h.workout)
+  })
+
+  test('a display whose browser signs out and is paired again keeps its lock, and brings it to the new pairing', async () => {
+    const h = await locked()
+    const tv2 = await h.browser('screen', key(9))
+    await h.tv.as.mutation(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })
+    // The TV's pairing ends, and its browser comes back under another pairing that had a display already
+    await h.t.run((ctx) => ctx.db.patch(h.tv.session as Id<'sessions'>, { endedAt: Date.now() }))
+    await tv2.as.mutation(api.displays.register, { key: h.tv.key, userAgent: UA })
+    for (const id of [h.tv.id, tv2.id]) expect((await h.row(id)).lockedTo?.artifactId).toBe(h.workout)
+  })
+
+  test('deleting the page ends the lock, whoever deletes it, and the display is told', async () => {
+    const h = await locked()
+    await h.tv.as.mutation(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })
+    await h.agent.mutation(api.artifacts.remove, { slug: 'workout' })
+    expect((await h.row(h.tv.id)).lockedTo).toBeUndefined()
+    expect(await h.tv.as.query(api.displays.mine, { key: h.tv.key })).toMatchObject({ lockedTo: null, lockEnded: true })
+    // An agent's page goes there again
+    expect((await h.agent.mutation(api.displays.show, { slug: 'review', displayId: h.tv.id })).displayIds).toEqual([h.tv.id])
+    await h.tv.as.mutation(api.displays.lockEndedSeen, { key: h.tv.key })
+    expect((await h.tv.as.query(api.displays.mine, { key: h.tv.key }))?.lockEnded).toBe(false)
+    // The owner's browser deleting it ends a lock in the same way
+    await h.laptop.as.mutation(api.displays.lock, { displayId: h.tv.id, artifactId: h.review })
+    await h.laptop.as.mutation(api.artifacts.remove, { slug: 'review' })
+    expect(await h.tv.as.query(api.displays.mine, { key: h.tv.key })).toMatchObject({ lockedTo: null, lockEnded: true })
+  })
+
+  test('a locked display is listed with its page, for the owner and for an agent', async () => {
+    const h = await locked()
+    await h.tv.as.mutation(api.displays.lock, { displayId: h.tv.id, artifactId: h.workout })
+    for (const as of [h.laptop.as, h.agent])
+      expect((await as.query(api.displays.list, {})).find((d: { id: string }) => d.id === h.tv.id)?.lockedTo).toEqual({
+        id: h.workout,
+        slug: 'workout',
+        title: 'Title of workout',
+      })
+  })
+})
