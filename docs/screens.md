@@ -12,6 +12,10 @@ Where you are on the machine over SSH, or it has no screen, no browser is opened
 
 A browser paired this way is yours: everything on the site can be done from it. It becomes a display at once, so pages can be shown on it, and the site's Displays page lets you name it. Until you do it goes by the kind of browser it is, such as "Chrome on Linux", and a second browser of the same kind is "Chrome on Linux 2", so that you and an agent can tell the two apart. The site also has a page for your pages, one for your machines and their agent apps, and settings, where you can download the records It holds or erase everything.
 
+Two displays cannot be given one name: a name that another display already goes by, in any letter case, is refused when you type it, and the generated names count. Displays that came to share a name under an earlier version of It keep it until you rename one. Each display also has an id, which `it displays` prints beside its name and which never changes, through renaming and pairing again, until the display is forgotten. An agent names a display with `--on "<name>"`, or exactly one display by its id with `--on-id <id>`, on `it open`, `it notify`, and `--open` on `it create` and `it update`.
+
+While the site is open, each tab of a display tells It, once a minute and whenever it changes, whether it is visible, and whether you clicked, tapped, typed or scrolled there in the last few seconds. Nothing of what you did is sent, only that you did something, at most once in ten seconds. It keeps this per tab, by its own clock, so that a window in the back does not hide another of the same browser that is in front of you.
+
 A display stays on the Displays page when the pairing of its browser is ended, and is said there to be not paired. It shows nothing until that browser is paired again, which makes it the same display, and forgetting it takes it off the page.
 
 ## The first screen, and the tour

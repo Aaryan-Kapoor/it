@@ -79,6 +79,8 @@ A newer version of It may bring a newer backend program, newer functions, or bot
 | What was done on a page | A week after an agent was given it. A month if no agent ever took it. Where its machine set it aside after tries that came to nothing, the bar above the page says the day it goes |
 | A file a page sent with an action | As long as its action. One whose action was never sent goes after eight days. All of them go with their page, and when you erase everything |
 | A notification | A month |
+| What each tab of a display last said of itself: whether it was visible, and when | Until that display next says it, for as long as it is kept: sixteen tabs at most, and nothing older than two and a half minutes once the display speaks again. Gone when the display is forgotten |
+| When you last used a display: clicked, tapped or typed there | One time per display, written over each time, at most once in five seconds. In the records download. Gone when the display is forgotten |
 | A publish that was begun and never finished | An hour. Completing it is allowed for thirty minutes |
 | The outcome of a publication | Thirty days from when publishing began, or until its page is deleted. A repeated completion returns that outcome even after the content version has gone |
 | A page deletion receipt, with its title and id | Until seven days after completion, or until you erase everything. Unfinished deletions are kept and retried |
