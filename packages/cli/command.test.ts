@@ -1691,7 +1691,7 @@ describe('a network change taken by the running service', () => {
   }
 
   test('looks again until the service reports the requested policy, though networking was on already', async () => {
-    const door = await changing((read) => ({ on: true, wanted: true, tailnet: read < 4 }))
+    const door = await changing((read) => ({ on: true, wanted: true, tailnet: read < 4, internet: false }))
     try {
       const ran = await door.run()
       expect([ran.code, printed(ran).network, door.reads()]).toEqual([0, true, 4])
@@ -1716,6 +1716,25 @@ describe('a network change taken by the running service', () => {
       const ran = await door.run()
       expect(ran.code).toBe(1)
       expect([ran.code, ran.out, error(ran).code, door.settings().network]).toEqual([1, '', 'cannot_listen', false])
+    } finally {
+      await door.close()
+    }
+  })
+
+  test('does not take the network on from a service of an earlier It, which says nothing of the internet and listens on every address, and says to start It again', async () => {
+    // What the service before this one reported: on, wanted, and not kept to the tailnet
+    const door = await changing(() => ({ on: true, wanted: true, tailnet: false }))
+    try {
+      const ran = await door.run()
+      expect([ran.code, ran.out, error(ran).code, door.settings().network]).toEqual([1, '', 'not_confirmed', true])
+      expect(error(ran).hint).toContain('The service that is running is of an earlier It')
+      // Kept to the tailnet, which an earlier It did as this one does, it is taken
+      const tailnet = await changing(() => ({ on: true, wanted: true, tailnet: true }))
+      try {
+        expect((await tailnet.run('tailscale')).code).toBe(0)
+      } finally {
+        await tailnet.close()
+      }
     } finally {
       await door.close()
     }

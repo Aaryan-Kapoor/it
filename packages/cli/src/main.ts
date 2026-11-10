@@ -2190,15 +2190,24 @@ async function turnNetwork(
       'Another program may have one of the ports It listens on, on one of those addresses. `it service logs` says what the service met.',
     )
   }
-  if (running && (stands === undefined || (on && (stands.tailnet === undefined || (internet && stands.internet === undefined)))))
+  // A service of an earlier It says nothing of the internet, and with the network on it listens on every address the
+  // machine has, the internet's among them: on for the network the machine is on is not taken until a service says so
+  const earlier = stands !== undefined && stands.tailnet !== undefined && stands.internet === undefined
+  if (running && (stands === undefined || (on && (stands.tailnet === undefined || (!tailnet && earlier)))))
     throw new Problem(
       'The network setting was saved, but It could not confirm that the service applied it.',
       'not_confirmed',
       stands === undefined
         ? 'The service could not be asked how its door stands. Check `it service logs` and try again.'
-        : 'The backend functions do not report the applied network policy. Run `it status` on this machine to check whether older functions are still running.',
+        : stands.tailnet !== undefined
+          ? EARLIER
+          : 'The backend functions do not report the applied network policy. Run `it status` on this machine to check whether older functions are still running.',
     )
 }
+
+/** What is said where the service that is running is of an It from before the network on was kept to private addresses. */
+const EARLIER =
+  'The service that is running is of an earlier It, which with the network on listens on every address this machine has, the internet’s among them. Stop It and start it again, and the network is then kept to this machine’s private addresses.'
 
 /** What is said where the tailnet is asked for on a machine that is on none. */
 const noTailnet = () =>
@@ -2254,8 +2263,11 @@ async function network(a: Args) {
   const running = await runs()
   if (to !== undefined) await turnNetwork(config, running, on, tailnet, internet)
   // Asked only how things stand: a service that was to listen on the network and could not is said as it is
+  let earlier = false
   if (to === undefined && on && running) {
     const stands = await doorStands(config)
+    // And one of an earlier It, open on every address, is not said to keep It from the internet
+    earlier = !tailnet && !internet && stands?.on === true && stands.tailnet !== undefined && stands.internet === undefined
     if (stands?.wanted && !stands.on) {
       const could =
         'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'
@@ -2277,7 +2289,9 @@ async function network(a: Args) {
         ? 'The network is on, for your tailnet only. Your devices that are signed in to Tailscale can open It at:'
         : internet
           ? 'The network is on, for every address this machine has, the internet’s included. Whoever can reach one can open It at:'
-          : 'The network is on, for anyone on this network. Devices on it can open It, and its pairing screen, at these addresses, and It does not answer the internet:'
+          : earlier
+            ? 'The network is on, for anyone on this network. Devices on it can open It, and its pairing screen, at these addresses:'
+            : 'The network is on, for anyone on this network. Devices on it can open It, and its pairing screen, at these addresses, and It does not answer the internet:'
   // With no service running the setting is all there is: nothing listens anywhere until It starts
   const later = running ? undefined : 'It is not running on this machine at the moment, so this takes effect when it starts.'
   // Open to the internet too: said in so many words each time it is asked, and how the internet reaches this machine where that can be told
@@ -2288,8 +2302,10 @@ async function network(a: Args) {
   // On for the network the machine is on, with somewhere to open It: the tailnet is the way for a phone
   const phone = on && !tailnet && !internet && addresses.length ? PHONE_SAID : undefined
   // To a person the sentence is what is printed, with the addresses under it. Anywhere else it is said beside the JSON
-  if (forPerson(a)) return tell([said, ...addresses.map((address) => `  ${address}`), toAll, phone, later])
+  const stale = earlier ? EARLIER : undefined
+  if (forPerson(a)) return tell([said, ...addresses.map((address) => `  ${address}`), stale, toAll, phone, later])
   say(addresses.length ? `${said} ${addresses.join(', ')}` : said)
+  if (stale) say(stale)
   if (toAll) say(toAll)
   if (phone) say(phone)
   if (later) say(later)
