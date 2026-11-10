@@ -1028,13 +1028,16 @@ function openOut(this: Window, url?: string | URL, target?: string, features?: s
     return null
   }
   const named = target === undefined || target === null ? '' : String(target)
+  const asked = features === undefined || features === null ? '' : String(features)
+  // Each is made a string once, and that string is what the browser is given: an address, a name or
+  // features that said one thing to It and another to the browser could not pass by
   // A frame inside the page is the page's own to follow a link in, as it asked
-  if (namesAFrame(named)) return openWindow.call(this, url, target, features)
+  const address = url === undefined ? undefined : said
+  if (namesAFrame(named)) return openWindow.call(this, address, named, features === undefined ? undefined : asked)
   // One to another site opens in a tab of its own, as a link to one does
   const where = to && elsewhere(to) ? '_blank' : named || '_blank'
   // What is said last of a feature is what is taken
-  const asked = features === undefined || features === null ? '' : String(features)
-  return openWindow.call(this, url, where, `${asked}${asked.trim() ? ',' : ''}noopener,noreferrer`)
+  return openWindow.call(this, address, where, `${asked}${asked.trim() ? ',' : ''}noopener,noreferrer`)
 }
 window.open = openOut
 // Given an address, a name and features, `document.open` opens a window as `window.open` does,

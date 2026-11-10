@@ -898,6 +898,23 @@ describe('the script inside a page', () => {
       ])
     })
 
+    test('what `window.open` is given is made a string once, and that string is what the browser is given', () => {
+      const asked: unknown[][] = []
+      const p = load('<iframe name="inside"></iframe>', (w) => {
+        w.open = (...given: unknown[]) => {
+          asked.push(given)
+          return null
+        }
+      })
+      // A name that says a frame's name to It and `_blank` to whatever reads it next
+      let reads = 0
+      const shifty = { toString: () => (reads++ === 0 ? 'inside' : '_blank') }
+      let urlReads = 0
+      const address = { toString: () => (urlReads++ === 0 ? 'other.html' : 'https://elsewhere.invalid/x') }
+      p.w.open(address, shifty)
+      expect(asked).toEqual([['other.html', 'inside', undefined]])
+    })
+
     test('a target is taken as the browser takes it, with nothing trimmed: a name with spaces around a frame’s name, or around a keyword, opens a tab of its own with no hold', () => {
       const asked: unknown[][] = []
       const p = load(
