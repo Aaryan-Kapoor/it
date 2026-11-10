@@ -1935,7 +1935,12 @@ describe.skipIf(process.platform === 'win32' || !python)('the lists a person ask
         '  board    Tic-tac-toe  Claude Code on the desk  2 h ago',
         '',
       ])
-      expect((await atTerminal(m, ['displays'], b.env)).shown.split('\n')).toEqual(['1 display:', '  Kitchen  paired  seen just now', ''])
+      expect((await atTerminal(m, ['displays'], b.env)).shown.split('\n')).toEqual([
+        '1 display:',
+        '  Kitchen  paired  seen just now  d1',
+        'A display is named with --on "<name>", or by the id beside it with --on-id <id>.',
+        '',
+      ])
       expect((await atTerminal(m, ['whoami'], b.env)).shown.split('\n')).toEqual([
         'It knows this machine as “the desk”.',
         'Connected here: Pi.',

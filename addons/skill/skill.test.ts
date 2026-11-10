@@ -486,7 +486,7 @@ describe('the agent skill', () => {
 
   test('tells an agent what a display that is not paired means, and how to change state only while it is as it was read', () => {
     // What the command prints of a display it was asked onto and that shows nothing, and the one reason there is
-    expect(main).toMatch(/notShownOn\?: \{ display: string; reason: string \}\[\]/)
+    expect(main).toMatch(/notShownOn\?: \{ display: string; displayId\?: string; reason: string \}\[\]/)
     expect(main).toContain("d.reason === 'not_paired'")
     expect(skill).toContain('If `notShownOn` is there, it lists each display the page was asked onto and is not shown on, with a `reason`.')
     expect(skill).toContain('The one reason is `not_paired`')
@@ -831,7 +831,7 @@ describe('the agent skill', () => {
       /const mine = asked\?\.session[\s\S]{0,900}api\.displays\.show[\s\S]{0,300}\.\.\.\(mine \? \{ session: mine, agent: mine\.harness \} : \{\}\)/,
     )
     expect(source('../../convex/displays.ts')).toMatch(
-      /const took = mine && shown\.length \? \(await takePage\(ctx, artifact, machine, mine, agent\)\)\.took : false/,
+      /const took = mine && aimed\.to\.length \? \(await takePage\(ctx, artifact, machine, mine, agent\)\)\.took : false/,
     )
     expect(source('../../convex/publish.ts')).toMatch(/if \(args\.take && !args\.session\) fail\('invalid'/)
     expect(short).toContain('None of that holds where your harness does not tell `it` which conversation this is: read `it help actions`')

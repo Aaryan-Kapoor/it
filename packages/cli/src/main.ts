@@ -2593,10 +2593,11 @@ State
 
 Displays
   it open <id> [--on "<display>" | --on-id <display-id>]
+                                 --on names a display by its name, and --on-id by its id,
+                                 which stays when the display is renamed and is one
+                                 display's alone.
   it notify "<text>" [--id <id>] [--on "<display>" | --on-id <display-id>] [--sticky] [--button "Label=action"]…
-  it displays                    List each display with its name and its id. --on names a
-                                 display by its name, and --on-id by its id, which stays
-                                 when the display is renamed and is one display's alone.
+  it displays                    List each display with its name and its id.
 
 What the person did
   it wait [--id <id>] [--follow] [--timeout <seconds>]
