@@ -135,6 +135,28 @@ export default defineSchema({
     /** What an agent asked this display to show, and when. */
     showing: v.optional(v.object({ artifactId: v.id('artifacts'), at: v.number() })),
     push: v.optional(v.object({ endpoint: v.string(), p256dh: v.string(), auth: v.string() })),
+    /**
+     * What each tab of it last said of itself (`displays.report`): whether it was visible, by the
+     * backend's clock. At most sixteen, and only of the sign-out number they were said under. The
+     * shape is the one earlier local builds of It wrote, which also kept what each tab showed
+     * (`phase`, `artifactId`, `version`), so that a database of theirs loads.
+     */
+    reports: v.optional(
+      v.array(
+        v.object({
+          tab: v.string(),
+          sequence: v.number(),
+          at: v.number(),
+          epoch: v.number(),
+          visible: v.boolean(),
+          phase: v.optional(v.union(v.literal('none'), v.literal('loading'), v.literal('shown'), v.literal('failed'))),
+          artifactId: v.optional(v.id('artifacts')),
+          version: v.optional(v.number()),
+        }),
+      ),
+    ),
+    /** When the person last clicked, tapped or typed on the site here, to within ten seconds, or when the display was registered. */
+    usedAt: v.optional(v.number()),
     /** The session of the browser that registered it: forgetting the display ends that session, and that session ending signs the display out. */
     sessionId: v.id('sessions'),
     /** Earlier pairings of this display, whose invitations are ended when it is forgotten. */
