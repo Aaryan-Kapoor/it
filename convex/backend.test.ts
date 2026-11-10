@@ -2413,6 +2413,17 @@ describe('clicks and their delivery', () => {
     expect(await m.as.query(api.delivery.get, { id: actionId })).toMatchObject({ artifact: 'plan', payload: '{"n":1}', delivery: 'handed_off' })
   })
 
+  test('a click says which display it was done on', async () => {
+    const { t, m, click } = await setup()
+    const { actionId } = await click('click-0001')
+    const display = await t.run(async (ctx) => (await ctx.db.query('displays').collect()).find((d) => d.key === displayKey('alice'))!._id)
+    expect((await m.as.query(api.delivery.waitingPage, { slug: 'plan' })).actions).toMatchObject([{ id: actionId, displayId: display }])
+    expect(await m.as.query(api.delivery.get, { id: actionId })).toMatchObject({ displayId: display })
+    // One that came by no display says none
+    await t.run((ctx) => ctx.db.patch(actionId, { displayId: undefined }))
+    expect((await m.as.query(api.delivery.waitingPage, { slug: 'plan' })).actions[0]).not.toHaveProperty('displayId')
+  })
+
   test('an agent is told when a page sent an action and the site had seen no sign of anyone using it', async () => {
     const { m, click } = await setup()
     await click('click-0001', { attended: false })

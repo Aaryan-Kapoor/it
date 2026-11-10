@@ -56,6 +56,9 @@ async function asClicks(ctx: QueryCtx, rows: Doc<'actions'>[]) {
       // When the person last asked for it to be tried again, where they have: a machine that had
       // given up on it before then tries it afresh. It is for the connector, never the agent
       ...(x.retriedAt !== undefined ? { retriedAt: x.retriedAt } : {}),
+      // Which of the person's displays it was done on, where It knows: a page shown on several
+      // can be answered on the one the person used
+      ...(x.displayId !== undefined ? { displayId: x.displayId } : {}),
     })
   }
   return out
