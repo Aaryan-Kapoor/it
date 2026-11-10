@@ -1742,6 +1742,112 @@ try {
   await beside.close()
   await it(A, ['delete', oslug])
 
+  // Links out of a page, as an agent writes them and as a person clicks them. Another site is a
+  // listener of the run's own on this machine, which answers every address with a page. The page
+  // is given a plain link to it, with no target; a link to It's own site in a tab of its own,
+  // which a sandboxed tab refuses to load, since the site sends Cross-Origin-Opener-Policy; a
+  // link to one of its own files in a tab of its own; and a button that asks It to open an
+  // address. Each is clicked in the page as a person clicks.
+  const linkedTo = []
+  const linked = http.createServer((req, res) => {
+    linkedTo.push({ asked: req.url, referer: req.headers.referer ?? null })
+    res
+      .writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      .end('<!doctype html><title>Another site</title><link rel="icon" href="data:,"><h1>Another site</h1>')
+  })
+  await new Promise((resolve) => linked.listen(0, '127.0.0.1', resolve))
+  const out = `http://127.0.0.1:${linked.address().port}`
+  await page.goto(`${APP}/p/${slug}`)
+  const linking = await pageIn(page, { id: slug })
+  await linking.evaluate(
+    ({ out, app }) => {
+      const links = document.createElement('p')
+      links.id = 'links-out'
+      links.innerHTML = `<a id="out-plain" href="${out}/plain">another site</a> <a id="out-site" href="${app}/" target="_blank">It</a> <a id="out-own" href="index.html" target="_blank">its own file</a> <button id="out-open" type="button">open</button>`
+      document.body.append(links)
+      document.getElementById('out-open').addEventListener('click', () => window.It.open(`${out}/opened`))
+    },
+    { out, app: APP },
+  )
+  /** Clicks something in the page as a person would, and gives what the tab that opened shows: where it is, whether that is a showing's address, its origin, and whether it has an opener. */
+  const tabFrom = async (selector) => {
+    const opened = one.context.waitForEvent('page', { timeout: 15_000 }).catch(() => null)
+    await page.frameLocator('.mount iframe').locator(selector).click()
+    const tab = await opened
+    if (!tab) return { opened: false }
+    await tab.waitForLoadState('load').catch(() => {})
+    const seen = await tab
+      .evaluate(() => ({ origin: window.origin, opener: window.opener !== null, title: document.title }))
+      .catch((err) => ({ unread: String(err.message).split('\n')[0] }))
+    const at = tab.url()
+    await tab.close()
+    return { opened: true, at: at.replace(/\/s\/[^/]+\//, '/s/…/'), showing: SHOWING.test(at), ...seen }
+  }
+  const plainTab = await tabFrom('#out-plain')
+  const pageAfter = await linking
+    .evaluate(() => ({
+      links: document.getElementById('links-out') !== null,
+      it: typeof window.It?.action === 'function',
+      rel: document.getElementById('out-plain').getAttribute('rel'),
+    }))
+    .catch((err) => ({ unread: String(err.message).split('\n')[0] }))
+  check(
+    'a plain link in a page to another site, with no target, opens that site in an ordinary tab of its own with no opener, and the page stays as it was',
+    plainTab.at === `${out}/plain` &&
+      plainTab.origin === out &&
+      plainTab.opener === false &&
+      SHOWING.test(frameOf(page).url()) &&
+      pageAfter.links === true &&
+      pageAfter.it === true &&
+      pageAfter.rel === 'noopener noreferrer',
+    JSON.stringify({ plainTab, pageAfter }),
+  )
+  const siteTab = await tabFrom('#out-site')
+  check(
+    'a link in a page to It’s own site opens the site in an ordinary tab, where a sandboxed one would refuse it, with no opener',
+    siteTab.at === `${APP}/` && siteTab.origin === APP && siteTab.opener === false,
+    JSON.stringify(siteTab),
+  )
+  // It's script in the page says hello to the site that framed it, and in a tab by itself there is none: the browser says that its message had nowhere to go
+  const ownTab = await provoking(
+    one,
+    [
+      {
+        says: /^Failed to execute 'postMessage' on 'DOMWindow': The target origin provided \('[^']+'\) does not match the recipient window's origin \('null'\)\.$/,
+        times: 50,
+        may: true,
+        because: 'a page’s own file was opened in a tab of its own, where It’s script in it says hello to a site that is not there',
+      },
+    ],
+    () => tabFrom('#out-own'),
+  )
+  check(
+    'a link in a page to one of its own files, in a tab of its own, opens it there sandboxed as the page is',
+    ownTab.showing === true && ownTab.origin === 'null' && ownTab.opener === false,
+    JSON.stringify(ownTab),
+  )
+  const openTab = await tabFrom('#out-open')
+  check(
+    'It.open, called from a click in the page, opens the address in an ordinary tab of its own with no opener',
+    openTab.at === `${out}/opened` && openTab.origin === out && openTab.opener === false,
+    JSON.stringify(openTab),
+  )
+  // A window the page's own script opens is opened as well, and the page is given no handle on it
+  const handed = one.context.waitForEvent('page', { timeout: 15_000 }).catch(() => null)
+  const handle = await linking.evaluate((to) => window.open(to) === null, `${out}/scripted`)
+  const scripted = await handed
+  await scripted?.close()
+  check(
+    'and a window the page’s own script opens gives the page no handle on it, and every way out tells the other site nothing of where the page is',
+    handle === true &&
+      Boolean(scripted) &&
+      ['/plain', '/opened', '/scripted'].every((asked) => linkedTo.some((left) => left.asked === asked)) &&
+      linkedTo.every((left) => left.referer === null),
+    JSON.stringify({ handle, scripted: Boolean(scripted), linkedTo }),
+  )
+  linked.closeAllConnections()
+  await new Promise((resolve) => linked.close(resolve))
+
   // Forty tabs, opened ten at a time and all left open: more than a person is likely to have
   // open at once
   const many = []
