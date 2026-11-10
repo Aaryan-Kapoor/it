@@ -795,6 +795,50 @@ describe('the script inside a page', () => {
       c.setAttribute('href', 'https://elsewhere.invalid/again')
       expect(click(p, c).seen).toEqual({ target: '_blank', rel: 'noopener noreferrer' })
     })
+
+    test('a link to a data: or blob: address opens no window of its own by any way: the middle button, a click with a key that asks for a new tab or window, its menu, or dragging it out', async () => {
+      const p = load(
+        [
+          '<a id="blob" href="blob:http://content.test/0f0" target="_blank">blob</a>',
+          '<a id="data" href="data:text/html,<script>alert(1)</script>">data</a>',
+          '<a id="script" href="javascript:void(0)">script</a>',
+          '<a id="saved" href="blob:http://content.test/0f1" download="notes.txt">saved</a>',
+          '<a id="out" href="https://elsewhere.invalid/">elsewhere</a>',
+        ].join(''),
+      )
+      const doc = p.w.document
+      // Whether the way was still open by the time the page's own handler on the link heard of it, and once It had seen it after the page's handlers
+      const before: boolean[] = []
+      const after: boolean[] = []
+      for (const type of ['click', 'auxclick', 'contextmenu', 'dragstart']) {
+        for (const link of doc.querySelectorAll('a')) link.addEventListener(type, (e: Event) => before.push(!e.defaultPrevented))
+        p.w.addEventListener(type, (e: Event) => {
+          after.push(!e.defaultPrevented)
+          // The stand-in browser follows no link
+          e.preventDefault()
+        })
+      }
+      const follow = (id: string, type: string, init: MouseEventInit = {}) =>
+        doc.getElementById(id).dispatchEvent(new p.w.MouseEvent(type, { bubbles: true, cancelable: true, ...init }))
+      follow('blob', 'auxclick', { button: 1 })
+      follow('data', 'click', { ctrlKey: true })
+      follow('data', 'click', { metaKey: true })
+      follow('data', 'click', { shiftKey: true })
+      follow('data', 'auxclick', { button: 1 })
+      follow('blob', 'contextmenu', { button: 2 })
+      follow('data', 'dragstart')
+      expect([before, after]).toEqual([Array(7).fill(false), Array(7).fill(false)])
+      // Left as they were: a `javascript:` link's menu and middle button, a download, and a link to another site
+      before.length = 0
+      after.length = 0
+      follow('script', 'contextmenu', { button: 2 })
+      follow('script', 'auxclick', { button: 1 })
+      follow('saved', 'auxclick', { button: 1 })
+      follow('saved', 'click', { ctrlKey: true })
+      follow('out', 'auxclick', { button: 1 })
+      follow('out', 'dragstart')
+      expect([before, after]).toEqual([Array(6).fill(true), Array(6).fill(true)])
+    })
   })
 
   test('what the page’s own script fails with is said to the site, the first few times, and a picture that did not load is not', async () => {

@@ -642,40 +642,53 @@ function openedBySite(href: string): void {
 }
 /** The link a click or a key followed, which is the nearest one around what was clicked. */
 const linkIn = (path: EventTarget[]) => path.find((el): el is Element => el instanceof Element && isLink(el))
-/** Whether a link, followed now, would open a window of a kind that is never opened. */
-function opensRefused(link: Element): boolean {
+/**
+ * Whether a link, followed now, would open a window of a kind that is never opened. `aside` is
+ * a way of following it that opens a window of its own whatever its target says: the middle
+ * button, a click with a key that asks for a new tab or window, the link's menu, and dragging it
+ * out of the page. A `javascript:` link opened so is nothing, and its menu is left to it.
+ */
+function opensRefused(link: Element, aside = false): boolean {
   const to = leadsTo(link)
   if (!to || !REFUSED.has(to.protocol) || link.hasAttribute('download')) return false
+  if (aside) return to.protocol !== 'javascript:'
   const target = (link.getAttribute('target') ?? '').trim()
   // Followed in the frame, `javascript:` runs the page's own script, as it does on any page. A
   // refused `_top` or `_parent` is counted with the windows, since WebKit opens one for it
   return target.toLowerCase() !== '' && target.toLowerCase() !== '_self' && !namesAFrame(target)
 }
-// A script can activate a link before the observer runs. Check it on the way to its handlers
-// and again after them, including a link followed with the middle button or from the keyboard.
-for (const event of ['click', 'auxclick', 'keydown'])
-  for (const capture of [true, false])
-    window.addEventListener(
-      event,
-      (e) => {
-        for (const el of e.composedPath())
-          if (el instanceof Element) {
-            stopAuditing(el)
-            guide(el)
-          }
-        // After the page's own handlers, which may have taken the click for themselves
-        if (capture || e.type !== 'click' || e.defaultPrevented) return
-        const link = linkIn(e.composedPath())
-        if (!link) return
-        const to = leadsTo(link)
-        if (opensRefused(link)) e.preventDefault()
-        else if (to && SYSTEM.has(to.protocol) && !link.hasAttribute('download')) {
-          e.preventDefault()
-          openedBySite(to.href)
-        }
-      },
-      capture,
-    )
+/** Whether an event follows a link aside, in a window of its own whatever its target says. */
+const aside = (e: Event) => e.type !== 'click' || (e instanceof MouseEvent && (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey))
+/** Every way a link is followed, and the key that follows the one that has the focus. */
+const FOLLOWING = ['click', 'auxclick', 'contextmenu', 'dragstart', 'keydown']
+/**
+ * What It does on the way to a link being followed, before the page's own handlers (`capture`)
+ * and again after them, since a script can change a link or activate it before the observer has
+ * run.
+ */
+function onTheWay(e: Event, capture: boolean): void {
+  const path = e.composedPath()
+  for (const el of path)
+    if (el instanceof Element) {
+      stopAuditing(el)
+      guide(el)
+    }
+  if (e.type === 'keydown') return
+  const link = linkIn(path)
+  if (!link) return
+  if (opensRefused(link, aside(e))) {
+    e.preventDefault()
+    return
+  }
+  // After the page's own handlers, which may have taken the click for themselves
+  if (capture || e.type !== 'click' || e.defaultPrevented) return
+  const to = leadsTo(link)
+  if (to && SYSTEM.has(to.protocol) && !link.hasAttribute('download')) {
+    e.preventDefault()
+    openedBySite(to.href)
+  }
+}
+for (const event of FOLLOWING) for (const capture of [true, false]) window.addEventListener(event, (e) => onTheWay(e, capture), capture)
 // A form is checked on its way out too, with the button that sent it, which may name its own target
 window.addEventListener(
   'submit',
