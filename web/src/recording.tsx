@@ -110,7 +110,11 @@ function Ask({ page }: { page: string }) {
   const asking = useAsking()
   const armed = useArmed(asking)
   if (!asking || asking.page !== page) return null
-  const detail = `${madeBy(asking.agent, asking.machine)} made this page. Allowed, it may use ${kindsSaid(asking.kinds)} on this screen until you take it back, here or under Settings, or until it goes 30 days without using it. What it records is given to the page.`
+  // Allowed the camera, a page can see its picture live as well as record and take a photo: said here, since nothing more is asked later
+  const gives = asking.kinds.includes('camera')
+    ? 'With the camera it can record, take a photo, and see the camera’s picture live for as long as it keeps the camera open, and what it records or sees is the page’s to keep or to send anywhere.'
+    : 'What it records is given to the page.'
+  const detail = `${madeBy(asking.agent, asking.machine)} made this page. Allowed, it may use ${kindsSaid(asking.kinds)} on this screen until you take it back, here or under Settings, or until it goes 30 days without using it. ${gives}`
   return (
     <fieldset className="media-bar media-ask" aria-label={`“${asking.title}” asks to use ${kindsSaid(asking.kinds)} on this screen`} title={detail}>
       <span className="media-bar-icon">
