@@ -1,6 +1,6 @@
 // The site: pairing, this display's registration, and the frame around everything else.
 
-import { NOUN } from '@it/protocol'
+import { NOUN, TAKES } from '@it/protocol'
 import { useConvex, useConvexAuth, useMutation, useQuery } from 'convex/react'
 import { Component, type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { version } from '../package.json'
@@ -10,6 +10,7 @@ import { Copyable } from './dialog'
 import { Finder } from './finder'
 import {
   api,
+  backendTakes,
   displayKey,
   doneLeaving,
   forgetDisplayKey,
@@ -51,6 +52,7 @@ import {
 } from './outbox'
 import { Grid, PageView, wasShown } from './pages'
 import { hasPending, watchPending } from './pending'
+import { startReports } from './presence'
 import { dropPushHere, mendPush, pushSupport, turnOffPush, turnOnPush } from './push'
 import { ServiceNotice } from './service'
 import { codeSeen, current, signOut as endSession, pair, pairAsScreen, recheck, useSession } from './session'
@@ -444,7 +446,7 @@ function GivenUp({ user }: { user: string }) {
 /** Everything a paired browser shows. A screen is shown what a screen may use, and the owner the rest as well. */
 function Shell({ user, owner }: { user: string; owner: boolean }) {
   const convex = useConvex()
-  const { code } = useSession()
+  const { code, session } = useSession()
   const path = usePath()
   const key = displayKey()
   const display = useQuery(api.displays.mine, { key })
@@ -517,6 +519,18 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
       document.removeEventListener('visibilitychange', beat)
     }
   }, [convex, key])
+
+  // What this tab says of itself, so that an agent's page goes to the display the person is
+  // using: under the pairing and the sign-out number this display has now, and only where the
+  // backend names it, which is asked each time it would be sent
+  const epoch = display?.epoch
+  useEffect(() => {
+    if (epoch === undefined || !session) return
+    return startReports(
+      (r) => convex.mutation(api.displays.report, { key, epoch, expectedSession: session, ...r }),
+      () => backendTakes(TAKES.displayReports),
+    )
+  }, [convex, key, epoch, session])
 
   // Clicks that were waiting to be sent go when the connection comes back: when the browser
   // says it is online again, and when the connection to the backend itself is made again,
