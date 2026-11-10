@@ -878,17 +878,61 @@ function throughScript(script: string, dirs: string[], exists: (file: string) =>
     return null
   }
   const here = path.win32.dirname(script)
-  // The file it hands the words it was given on to, named from the script's own folder
-  const target = [...text.matchAll(/"%(?:~dp0|dp0%)\\?([^"%*\r\n]+)"\s+%\*/gi)]
-    .map((m) => path.win32.resolve(here, m[1]!))
-    .filter((file) => !/[\\/]node\.exe$/i.test(file))
-    .at(-1)
-  if (!target || !exists(target)) return null
-  if (/\.(com|exe)$/i.test(target)) return [target]
-  // A script, which these run with Node, and only then
-  if (!/\bnode(\.exe)?\b/i.test(text)) return null
+  const said = shimTarget(text)
+  if (!said) return null
+  const target = path.win32.resolve(here, said.file)
+  if (!exists(target)) return null
+  const program = /\.(com|exe)$/i.test(target)
+  if (!said.node) return program && !/[\\/]node\.exe$/i.test(target) ? [target] : null
+  if (program) return null
   const node = [here, ...dirs].map((dir) => path.win32.join(dir, 'node.exe')).find(exists)
   return node ? [node, target] : null
+}
+
+/** A file named from the script's own folder, as these scripts name it, in quotes: its name from that folder is caught. */
+const SHIM_FILE = String.raw`"%(?:~dp0|dp0%)\\?([^"%*\r\n]+)"`
+/** What hands the words on in npm's newer scripts, before the program they start. */
+const NPM_HANDOFF = String.raw`endLocal & goto #_undefined_# 2>NUL \|\| title %COMSPEC% & `
+/** Node, as these scripts name it: beside the script, by its name, or as npm's `_prog`, which it sets to one of those. */
+const SHIM_NODE = String.raw`("%(?:~dp0|dp0%)\\?node\.exe"|node(?:\.exe)?|"%_prog%")`
+/** A line that starts Node with a file and the words the script was given. */
+const THROUGH_NODE = new RegExp(String.raw`^@?(?:${NPM_HANDOFF})?${SHIM_NODE}\s+${SHIM_FILE}\s+%\*$`, 'i')
+/** A line that starts a file itself with the words the script was given. */
+const ITSELF = new RegExp(String.raw`^@?${SHIM_FILE}\s+%\*$`, 'i')
+/** Node, as npm sets `_prog` to it. */
+const NODE_PROG = /^(?:%(?:~dp0|dp0%)\\?node\.exe|node)$/i
+
+/**
+ * The file a command script that npm, pnpm or yarn wrote hands the words it was given on to,
+ * and whether it hands them to Node with it. Only the lines these write are read: a line that
+ * starts Node, beside the script or by its name, with a file named from the script's own folder,
+ * or one that starts such a file itself, each ending with the words it was given (`%*`). A
+ * remark (`rem`, `::`) is passed over as cmd.exe passes it over. Any other line that hands the
+ * words on, lines that hand them to different files, or npm's `_prog` set to anything but Node,
+ * make it a script of another kind, and nothing is read out of it.
+ */
+function shimTarget(text: string): { file: string; node: boolean } | null {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !/^@?(?:rem(?:\s|$)|::)/i.test(line))
+  const progs = lines.flatMap((line) => /^@?set\s+"_prog=([^"]*)"$/i.exec(line)?.[1] ?? [])
+  const found: { file: string; node: boolean }[] = []
+  for (const line of lines) {
+    if (!line.includes('%*')) continue
+    const node = THROUGH_NODE.exec(line)
+    if (node) {
+      if (/%_prog%/i.test(node[1]!) && !(progs.length && progs.every((prog) => NODE_PROG.test(prog)))) return null
+      found.push({ file: node[2]!, node: true })
+      continue
+    }
+    const itself = ITSELF.exec(line)
+    if (!itself) return null
+    found.push({ file: itself[1]!, node: false })
+  }
+  const [first] = found
+  if (!first || found.some((f) => f.node !== first.node || f.file.toLowerCase() !== first.file.toLowerCase())) return null
+  return first
 }
 
 /**

@@ -1478,6 +1478,39 @@ describe('a reopened run on Windows, as it is put to the system', () => {
       expect(windowsProgram('claude', 'C:\\npm', exists, read)).toEqual(['C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe'])
     })
 
+    test('only the lines npm, pnpm and yarn write are read out of a command script, and a remark is passed over as cmd.exe passes it', () => {
+      const pi = 'node_modules\\pi\\cli.js'
+      const PATH = 'C:\\npm;C:\\Program Files\\nodejs'
+      const starts = (script: string, more: Record<string, string> = {}) => {
+        const { exists, read } = disk({
+          'C:\\npm\\pi.cmd': script,
+          [`C:\\npm\\${pi}`]: '',
+          'C:\\npm\\cli.py': '',
+          'C:\\npm\\unrelated.exe': '',
+          [NODE]: '',
+          ...more,
+        })
+        return windowsProgram('pi', PATH, exists, read)
+      }
+      // A remark that names Node, before a line that starts something else: not a script for Node
+      expect(starts('@ECHO off\r\n@rem node is no longer used\r\npython "%~dp0\\cli.py" %*\r\n')).toBeNull()
+      // A remark that looks like a line handing the words on, after a script for Node: the remark starts nothing
+      expect(starts(`${npmScript(pi)}@rem "%~dp0\\unrelated.exe" %*\r\n`)).toEqual([NODE, `C:\\npm\\${pi}`])
+      expect(starts(`${npmScript(pi)}REM "%~dp0\\unrelated.exe" %*\r\n:: "%~dp0\\unrelated.exe" %*\r\n`)).toEqual([NODE, `C:\\npm\\${pi}`])
+      // npm's older script, which pnpm and yarn write too, with Node beside it or by its name
+      const older = `@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe"  "%~dp0\\${pi}" %*\r\n) ELSE (\r\n  @SETLOCAL\r\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n  node  "%~dp0\\${pi}" %*\r\n)`
+      expect(starts(older)).toEqual([NODE, `C:\\npm\\${pi}`])
+      // pnpm's for a program, which it starts with an @
+      expect(starts('@"%~dp0\\unrelated.exe"   %*\r\n')).toEqual(['C:\\npm\\unrelated.exe'])
+      // A line of any other kind that hands the words on, two files, a program for Node, or npm's _prog set to something else: none is read
+      expect(starts(`${npmScript(pi)}"%~dp0\\unrelated.exe" %*\r\n`)).toBeNull()
+      expect(starts(`${npmScript(pi)}call something-else %*\r\n`)).toBeNull()
+      expect(starts('@ECHO off\r\nnode  "%~dp0\\unrelated.exe" %*\r\n')).toBeNull()
+      expect(starts('@ECHO off\r\nnode --some-flag "%~dp0\\node_modules\\pi\\cli.js" %*\r\n')).toBeNull()
+      expect(starts('@ECHO off\r\n"%~dp0\\cli.py" %*\r\n')).toBeNull()
+      expect(starts(npmScript(pi).replace('SET "_prog=node"', 'SET "_prog=/bin/sh"'))).toBeNull()
+    })
+
     test('a command script whose program is not there, that starts something other than Node, or that cannot be read, starts nothing, and a later folder is not looked in for another', () => {
       const pi = 'node_modules\\pi\\cli.js'
       for (const files of <Record<string, string>[]>[
