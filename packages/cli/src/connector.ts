@@ -897,6 +897,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       there.owed ||= w.owed
       there.behind ||= w.behind
       there.finished ||= w.finished
+      // It may be in the middle of being told of the one that is let go of here: what it is
+      // told from now on is noted for the one that is kept, so that its ending is told as well
+      w.names = there.names
+      w.told = there.told
     } else watchedTurns.set(key, w)
     turnSeen(key)
   }

@@ -5871,6 +5871,39 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     expect(told()[2]).toEqual(ENDED)
   })
 
+  test('a conversation that comes to be heard under the id of another that is watched, while It is being told that it runs, has its ending told as well as the other’s', async () => {
+    standIn()
+    await start('socket', APPS)
+    const other = { harness: 'claude-code', id: 'conversation-2' }
+    await asks(false)
+    await asks(false, other.id)
+    // The other conversation is at work on a click of its own, and It has been told so
+    offered(click(2, other))
+    await until(async () => ((await asks(true, other.id))?.clicks ?? []).some((c) => c.id === 'click-2'))
+    expect(await local('/ack', { method: 'POST', body: { ids: ['click-2'], woke: false, turn: true } })).toEqual({ ok: true, acked: 1 })
+    await until(() => told().length === 2)
+    expect(told()[1]).toEqual({ for: other, running: true })
+    // It takes its time to answer that the first conversation runs
+    let answer!: () => void
+    stand.answer = (name, args) =>
+      name === 'turns:say' && args.for?.id === CLAUDE.id && args.running === true ? new Promise<null>((done) => (answer = () => done(null))) : undefined
+    await handed(1, { woke: true, turn: true }, false)
+    await until(() => told().length === 3)
+    expect(told()[2]).toEqual(RUNNING)
+    // Meanwhile the first carries on under the other's id, and that conversation's turn ends
+    expect(await local('/session', { method: 'POST', body: { harness: 'claude-code', session: other.id, was: CLAUDE.id } })).toMatchObject({ ok: true })
+    await asks(false, other.id)
+    await pass()
+    answer()
+    await until(() => told().filter((said) => said.running === false).length === 2)
+    expect(
+      told()
+        .filter((said) => said.running === false)
+        .map((said) => said.for.id)
+        .sort(),
+    ).toEqual([CLAUDE.id, other.id])
+  })
+
   test('an It from before it took any of this is told nothing more once it has said so', async () => {
     standIn()
     stand.answer = (name) => (name === 'turns:say' ? Promise.reject(new Error('Could not find public function for turns:say')) : undefined)

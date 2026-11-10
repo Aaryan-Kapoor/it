@@ -62,6 +62,7 @@ let lookedAt = 0
 let throughProxy = null // whether Claude Code would send what is asked of a port on this machine through a proxy, once that has been looked at
 let running = false // a turn is in progress
 let turns = 0 // how many turns of the conversation have begun
+let talks = 0 // how many times another conversation has taken this one's place: /clear does not, and anything else that ends one does
 let starting = false // a click was submitted as a prompt and taken, and the turn it starts has not begun yet
 let session = null // this conversation's id, which /clear changes
 const pending = [] // clicks taken from the connector, not yet handed to Claude
@@ -250,6 +251,7 @@ function handOver($) {
   for (const c of clicks) submitting.add(c.id)
   const began = generation
   const before = turns
+  const talk = talks
   const held = letGo
   const refused = () => {
     for (const c of clicks) submitting.delete(c.id)
@@ -299,8 +301,10 @@ function handOver($) {
         clicks.map((c) => c.id),
         true,
         // A short turn can begin and end before it is known here that its prompt was taken: said
-        // as that, so that it is not waited for as one that is still to begin
-        began === generation && before !== turns && !running,
+        // as that, so that it is not waited for as one that is still to begin. Also where the
+        // conversation was cleared meanwhile, which is the same conversation going on. Not where
+        // another conversation has taken its place: the turns since then are that one's
+        talk === talks && before !== turns && !running,
       )
     },
     (err) => refused(err),
@@ -389,7 +393,10 @@ async function checkOnce($) {
     // Anything but /clear that changes the id (the person resumed another conversation in this
     // window) is a different conversation: the first one keeps its pages, and what was taken
     // for it is not handed to this one.
-    if (!carriedOn) pending.length = 0
+    if (!carriedOn) {
+      pending.length = 0
+      if (session !== null) talks += 1
+    }
     session = id
   }
   // The connector is told of each change of id, in the order they happened. Nothing is asked
@@ -494,6 +501,7 @@ export function register(on) {
     generation += 1
     starting = false
     if (e?.reason !== 'clear') {
+      talks += 1
       pending.length = 0
       submitting.clear()
       // Another conversation starts with a clean slate: how often the last one refused is its own affair

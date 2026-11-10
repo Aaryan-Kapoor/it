@@ -1202,6 +1202,27 @@ describe('what the add-on says of whether its conversation is at work', () => {
     expect(asked.filter((a) => a.path === '/ack').at(-1)?.body).toMatchObject({ woke: true, turn: false, turnOver: true })
   })
 
+  test('a short turn that was over before its prompt was known to be taken is said to be over also where the conversation was cleared in between, and not where another conversation took its place', async () => {
+    const host = await start()
+    offered = [{ id: 'click-1', text: 'one' }]
+    await host.tick()
+    await host.fire('turn.start')
+    await host.fire('turn.complete')
+    await host.fire('session.end', { reason: 'clear', sessionId: 'session-1' })
+    host.submits[0]!.settle()
+    await host.settle()
+    expect(asked.filter((a) => a.path === '/ack').at(-1)?.body).toMatchObject({ woke: true, turn: false, turnOver: true })
+    // Another conversation is resumed in the window before the next prompt is known to be taken: its turns are none of that click's
+    offered = [{ id: 'click-2', text: 'two' }]
+    await host.tick()
+    await host.fire('turn.start')
+    await host.fire('turn.complete')
+    await host.fire('session.end', { reason: 'resume', sessionId: 'session-1' })
+    host.submits[1]?.settle()
+    await host.settle()
+    expect(asked.filter((a) => a.path === '/ack' && a.body?.ids?.includes('click-2')).every((a) => a.body.turnOver === undefined)).toBe(true)
+  })
+
   test('a prompt that is taken while its turn is running, or before it begins, is not said to be over', async () => {
     const host = await start()
     offered = [{ id: 'click-1', text: 'one' }]
