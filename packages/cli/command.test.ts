@@ -1539,6 +1539,28 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('where It cannot say whether it takes `--everywhere`, nothing is sent or published, and the command is refused as offline', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'displays:show' ? { displays: ['Desk'], took: false } : { id: 'n1' }))
+    try {
+      b.config.answer = () => ({})
+      for (const words of [
+        ['open', 'board', '--everywhere'],
+        ['notify', 'hello', '--everywhere'],
+        ['create', 'Board', '--html', '<p>hi</p>', '--open', '--everywhere'],
+        ['update', 'board', '--html', '<p>hi</p>', '--open', '--everywhere'],
+        ['tour', 'show', 'menu', '--everywhere'],
+      ]) {
+        const ran = await run(m, words, b.env)
+        expect([words.join(' '), ran.code === 0, error(ran).code]).toEqual([words.join(' '), false, 'offline'])
+      }
+      expect(b.asked).toEqual([])
+      expect(b.uploads).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it notify` to a display that takes nothing now, to none, or to a name two displays share, is refused with why, and nothing is sent', async () => {
     const m = machine()
     let refusal: Record<string, unknown> = {}

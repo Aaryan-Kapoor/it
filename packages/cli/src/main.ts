@@ -387,17 +387,26 @@ async function canAimById(a: Args, form: string): Promise<void> {
   if (takes === undefined) throw unknownForm()
 }
 /**
+ * Before every display is asked for, or anything is published to be shown on them all: whether
+ * the It this machine asks has said whether it takes `everywhere`, either way. Where it could not
+ * be asked, the command is refused as `offline`, with nothing sent and nothing published. Does
+ * nothing where every display is not asked for.
+ */
+async function canAimEverywhere(a: Args, form: string): Promise<void> {
+  if (!aimedAt(a).everywhere) return
+  if ((await takesForm(form)) === undefined) throw unknownForm()
+}
+/**
  * Runs something that names where it goes, with `run` given what to ask It. The backend says only
  * that there is no display of that name or id, or that the one named takes nothing now and why:
  * which display was asked for, and which there are, is said here, where it is the person's own
  * machine saying it.
  *
  * A display named by its id is asked for only once It has said it takes the form (`canAimById`).
- * Every display is asked for with `everywhere` only where It has not said it does not take that:
- * on its word that it does not, every display is asked for with none named, which on such an It
- * is every display, and the answer says so in `older`. Where It could not be asked first and the
- * call then fails with nothing said of why, It is asked again, and the same is done on its word.
- * Where It still cannot say, the failure is said as it is.
+ * Every display is asked for with `everywhere` only where It has said it takes that. On its word
+ * that it does not, every display is asked for with none named, which on such an It is every
+ * display, and the answer says so in `older`. Where It could not be asked, nothing is sent or
+ * published, and the command is refused as `offline`.
  */
 async function onDisplay<T extends object>(
   a: Args,
@@ -406,16 +415,10 @@ async function onDisplay<T extends object>(
 ): Promise<T & { older?: true }> {
   const target = aimedAt(a)
   await canAimById(a, forms.byId)
-  const broad = target.everywhere ? await takesForm(forms.everywhere) : true
+  await canAimEverywhere(a, forms.everywhere)
   try {
-    if (broad === false) return { ...(await run({})), older: true }
-    try {
-      return await run(target)
-    } catch (err) {
-      if (!(err instanceof Problem) || err.code !== 'error') throw err
-      if (target.everywhere && broad === undefined && (await takesForm(forms.everywhere)) === false) return { ...(await run({})), older: true }
-      throw err
-    }
+    if (target.everywhere && saidTakes.get(forms.everywhere) === false) return { ...(await run({})), older: true }
+    return await run(target)
   } catch (err) {
     if (!(err instanceof Problem)) throw err
     const which = target.displayId !== undefined ? `The display ${named(target.displayId)}` : named(target.display ?? '')
@@ -637,7 +640,10 @@ async function create(a: Args) {
   aimedAt(a)
   // Asked before anything is published, so that a page meant for a display It cannot reach by
   // its id is not published there to no display
-  if (a.flags.open === true) await canAimById(a, TAKES.showById)
+  if (a.flags.open === true) {
+    await canAimById(a, TAKES.showById)
+    await canAimEverywhere(a, TAKES.showEverywhere)
+  }
   const take = a.flags.take === true
   const page = { slug, title, files: await source(a), agent: text(a, 'agent'), state, shown: a.flags.open === true }
   let done: Awaited<ReturnType<typeof publish>>
@@ -913,6 +919,7 @@ async function tour(a: Args) {
   // The agent's plate on the page carries the name of the agent app that is giving the tour, where that is known
   aimedAt(a)
   await canAimById(a, TAKES.showById)
+  await canAimEverywhere(a, TAKES.showEverywhere)
   const by = sessionAsked()?.session.harness
   const made = tourPage(name, given, text(a, 'agent') ?? (by && Object.hasOwn(KNOWN, by) ? KNOWN[by as Harness].label : undefined))
   // The page is this conversation's from now on, whoever showed it last. An agent app that does
@@ -936,7 +943,10 @@ async function tour(a: Args) {
 
 async function update(a: Args) {
   aimedAt(a)
-  if (a.flags.open === true) await canAimById(a, TAKES.showById)
+  if (a.flags.open === true) {
+    await canAimById(a, TAKES.showById)
+    await canAimEverywhere(a, TAKES.showEverywhere)
+  }
   // Written as `it create` is, with the id in `--id` and a title in front of it, it is taken as that:
   // an agent that has just made a page with the one often asks for the other in the same shape
   const named = text(a, 'id')
