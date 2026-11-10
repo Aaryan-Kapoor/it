@@ -431,6 +431,11 @@ describe('the frame around a page', () => {
     await renderHeld()
     vi.setSystemTime(Date.now() + 3_600_000)
     const page = framed()
+    // The page's own script has said hello, so the site does not give up on it while the test's clock runs on
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent('message', { data: { type: 'it:hello', doc: 'doc-1' }, origin: 'null', source: page.frame.contentWindow }))
+      await vi.advanceTimersByTimeAsync(20)
+    })
     const opened: unknown[][] = []
     vi.spyOn(window, 'open').mockImplementation((...given: unknown[]) => {
       opened.push(given)
@@ -480,21 +485,44 @@ describe('the frame around a page', () => {
       await asks(refused)
     expect(opened.length).toBe(5)
     // A click on the site itself (the card that opened the page, say), which the browser reports
-    // for a few seconds as it reports one in the page: nothing is opened while it cannot be told whose it was
+    // for a few seconds as it reports one in the page. Nothing is opened while it cannot be told
+    // whose click it was, and the browser is asked again once the site's has worn off
+    const passes = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms))
     window.dispatchEvent(new Event('pointerdown'))
     await asks('https://elsewhere.test/f')
-    await act(() => vi.advanceTimersByTimeAsync(4000))
-    await asks('https://elsewhere.test/g')
+    await passes(4000)
     expect(opened.length).toBe(5)
-    await act(() => vi.advanceTimersByTimeAsync(1100))
+    // Nobody clicked in the page: once the site's click has worn off the browser says nobody has just acted, and nothing is opened
+    active = false
+    await passes(1100)
+    expect(opened.length).toBe(5)
+    // The person really does click in the page a moment after a click on the site: the browser is
+    // still reporting that once the site's has worn off, and the address is opened then
+    window.dispatchEvent(new Event('pointerdown'))
+    active = true
+    await asks('https://elsewhere.test/g')
+    await passes(4000)
+    expect(opened.length).toBe(5)
+    await passes(1100)
+    expect(opened.at(-1)).toEqual(['https://elsewhere.test/g', '_blank', 'noopener,noreferrer'])
+    // Another click on the site meanwhile makes it impossible to tell, and nothing is opened
+    await passes(6000)
+    window.dispatchEvent(new Event('pointerdown'))
     await asks('https://elsewhere.test/h')
-    expect(opened.at(-1)).toEqual(['https://elsewhere.test/h', '_blank', 'noopener,noreferrer'])
+    await passes(2000)
+    window.dispatchEvent(new Event('pointerdown'))
+    await passes(3100)
+    expect(opened.length).toBe(6)
+    // Long after any click on the site, a click in the page opens the address at once
+    await passes(6000)
+    await asks('https://elsewhere.test/i')
+    expect(opened.at(-1)).toEqual(['https://elsewhere.test/i', '_blank', 'noopener,noreferrer'])
     // Nor while the frame does not have the keyboard, however the browser says the person has just acted
     const elsewhere = document.body.appendChild(document.createElement('button'))
     elsewhere.focus()
     expect(document.activeElement).toBe(elsewhere)
-    await asks('https://elsewhere.test/i')
-    expect(opened.length).toBe(6)
+    await asks('https://elsewhere.test/j')
+    expect(opened.length).toBe(7)
     elsewhere.remove()
   })
 

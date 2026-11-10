@@ -356,15 +356,23 @@ export function Mount({
         // the person's system can open, which a sandboxed frame cannot hand to it, or It.open.
         // It is opened only from the person's own click or key in the page: the frame holds the
         // keyboard, which a click or a key in it gives it, and the browser says that the person
-        // has just acted, and does not say so only for a click on the site itself, which a page
-        // could take for its own. It is opened while this message is being handled, which is
-        // when WebKit still counts the person's gesture, and with no hold either way and no
-        // referrer: the window has no opener, and the site no handle on it.
+        // has just acted. It is opened while this message is being handled, which is when WebKit
+        // still counts the person's gesture, and with no hold either way and no referrer: the
+        // window has no opener, and the site no handle on it.
         const url = openedForAPage((e.data as { url?: unknown }).url)
-        if (!url || !inFrame()) return
-        if (activation && (!activation.isActive || Date.now() - lastElsewhere() <= SITE_TOUCH_MS)) return
-        if (!allowed()) return
-        window.open(url, '_blank', 'noopener,noreferrer')
+        if (!url || !inFrame() || (activation && !activation.isActive) || !allowed()) return
+        const open = () => void window.open(url, '_blank', 'noopener,noreferrer')
+        const unsure = activation ? lastElsewhere() + SITE_TOUCH_MS - Date.now() : 0
+        if (unsure <= 0) return open()
+        // The browser says the person has just acted, but so soon after a click on the site
+        // itself that it cannot yet be told which click it means, and a page could take the
+        // site's for its own. Once the site's has worn off, a click in the page is still being
+        // reported, and the address is opened then. Another click on the site meanwhile makes
+        // it impossible to tell, and then it is not opened at all.
+        const noted = siteTouchedAt
+        setTimeout(() => {
+          if (live && siteTouchedAt === noted && activation?.isActive && inFrame()) open()
+        }, unsure)
         return
       }
       if (type === 'it:hello') {
