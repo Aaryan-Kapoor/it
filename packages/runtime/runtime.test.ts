@@ -602,6 +602,30 @@ describe('the script inside a page', () => {
       expect([loose.getAttribute('target'), loose.getAttribute('rel')]).toEqual(['_blank', 'noopener noreferrer'])
     })
 
+    test('a mail, phone or messages link is opened by the site from the click, and not followed in the frame, unless the page took the click for itself', async () => {
+      const p = load(
+        '<a id="mail" href="mailto:someone@example.com?subject=Hi">mail</a><a id="tel" href="tel:+15551234567"><b id="inner">call</b></a><a id="sms" href="sms:+15551234567">text</a><a id="kept" href="mailto:kept@example.com">kept</a>',
+      )
+      const doc = p.w.document
+      const follow = (el: Element) => el.dispatchEvent(new p.w.MouseEvent('click', { bubbles: true, cancelable: true }))
+      expect([follow(doc.getElementById('mail')), follow(doc.getElementById('inner')), follow(doc.getElementById('sms'))]).toEqual([false, false, false])
+      // The page's own handler took this one, and it is left to the page
+      doc.getElementById('kept').addEventListener('click', (e: Event) => e.preventDefault())
+      follow(doc.getElementById('kept'))
+      // And a link the page made and never put in the document, and a window it asked for
+      const loose = doc.createElement('a')
+      loose.href = 'mailto:loose@example.com'
+      loose.click()
+      expect(p.w.open('tel:+15550000000')).toBeNull()
+      expect(openedFor(p)).toEqual([
+        'mailto:someone@example.com?subject=Hi',
+        'tel:+15551234567',
+        'sms:+15551234567',
+        'mailto:loose@example.com',
+        'tel:+15550000000',
+      ])
+    })
+
     test('a link that would open a window holding what the page made is not followed, and one followed in the frame is', async () => {
       const p = load(
         '<a id="script" href="javascript:void(0)" target="_blank">script</a><a id="data" href="data:text/html,hi" target="w">data</a><a id="blob" href="blob:http://content.test/0f0" target="_top">blob</a><a id="here" href="javascript:void(0)">here</a><a id="saved" href="blob:http://content.test/0f1" target="_blank" download="notes.txt">saved</a>',
@@ -676,6 +700,32 @@ describe('the script inside a page', () => {
       doc.getElementById('opener').setAttribute('rel', 'opener')
       await settled()
       expect(doc.getElementById('opener').getAttribute('rel')).toBe('noopener noreferrer')
+    })
+
+    test('It.open asks the site to open an address, read as a link would be, and refuses an address of any other kind', async () => {
+      const p = load()
+      p.It.open('https://elsewhere.invalid/a?b=c#d')
+      p.It.open('next.html')
+      p.It.open(new p.w.URL('mailto:someone@example.com'))
+      p.It.open('tel:+15551234567')
+      p.It.open('sms:+15551234567')
+      for (const refused of [
+        'javascript:alert(1)',
+        'data:text/html,hi',
+        'blob:http://content.test/0f0',
+        'file:///etc/hosts',
+        'ftp://elsewhere.invalid/',
+        'http://[not an address',
+      ])
+        expect(() => p.It.open(refused)).toThrow('It.open opens an address of one of these kinds: http, https, mailto, tel, sms.')
+      // Sent to the site alone: the stand-in hears only what is posted to the site's origin
+      expect(openedFor(p)).toEqual([
+        'https://elsewhere.invalid/a?b=c#d',
+        'http://content.test/s/a-token/v/3/next.html',
+        'mailto:someone@example.com',
+        'tel:+15551234567',
+        'sms:+15551234567',
+      ])
     })
   })
 

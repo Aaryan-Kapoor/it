@@ -396,6 +396,7 @@ describe('the agent skill', () => {
     expect(skill).toContain('A link to another site opens in a new tab.')
     expect(skill).toContain('so `window.open` returns `null`: do not take that for a blocked window. No referrer is sent.')
     expect(skill).toContain("a tab of the page's own files is sandboxed as the page is")
+    expect(skill).toContain("call `It.open(url)` in the handler of the user's click or key")
     expect(source('../../packages/runtime/src/it.ts')).toContain('noopener,noreferrer')
     // The in-page script stands in for the two kinds of storage, for as long as the document is open and not after
     const runtime = source('../../packages/runtime/src/it.ts')

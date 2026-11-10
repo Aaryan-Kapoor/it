@@ -188,6 +188,22 @@ export function policyHost(name: string): string {
  */
 export const SANDBOX = 'allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock'
 
+/** What the site opens for a page that asks it to: an address on the web, or one that a person's system hands to its mail, phone or messages app. */
+export const OPENED_FOR_A_PAGE: readonly string[] = ['http:', 'https:', 'mailto:', 'tel:', 'sms:']
+/** The longest address the site opens for a page. A mail link that carries a whole message fits in it. */
+export const OPENED_LENGTH = 16 * 1024
+/** An address a page asked the site to open, written whole, or `null` where it is not whole or not of a kind the site opens for a page. */
+export function openedForAPage(asked: unknown): string | null {
+  if (typeof asked !== 'string' || asked.length > OPENED_LENGTH) return null
+  let at: URL
+  try {
+    at = new URL(asked)
+  } catch {
+    return null
+  }
+  return OPENED_FOR_A_PAGE.includes(at.protocol) && at.href.length <= OPENED_LENGTH ? at.href : null
+}
+
 /** Sizes as It counts them, in units of 1,024. */
 const KB = 1024
 const MB = 1024 * KB
@@ -910,6 +926,13 @@ export type PageToSite =
   | { type: 'it:lapsed' }
   /** The page's own script failed with this. The site says so above the page: left unsaid, a button that does nothing looks like an agent that does not answer. */
   | { type: 'it:fault'; message: string }
+  /**
+   * Open this address in a tab of its own, from the person's click or key in the page. It is
+   * sent on the window, as the hello is, and never on the port: WebKit carries the person's
+   * gesture across a window's message and not across a port's, and the site opens the address
+   * while it is still handling the message.
+   */
+  | { type: 'it:open'; url: string }
 
 export type SiteToPage =
   /** The page's whole state. */

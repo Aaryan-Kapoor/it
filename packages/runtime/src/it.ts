@@ -11,6 +11,8 @@ import {
   isStoreKey,
   jsonText,
   LIMITS,
+  OPENED_FOR_A_PAGE,
+  openedForAPage,
   type PageToSite,
   SHRINK,
   type SiteToPage,
@@ -508,7 +510,9 @@ function quietenWithin(root: ParentNode): void {
 // way: the window has no opener, the page is given no handle on it, and no referrer is sent. On
 // localhost and over https the browser cuts the opener by itself, since the site sends
 // `Cross-Origin-Opener-Policy`; on plain http only this does. A window of a kind that would hold
-// what the page made, `javascript:`, `data:` or `blob:`, is not opened at all.
+// what the page made, `javascript:`, `data:` or `blob:`, is not opened at all. An address that
+// only the person's system can open, a mail, phone or messages link, is one a sandboxed frame
+// cannot hand to the system, so the site is asked to open it.
 //
 // Like the referrer rules above, this is done as links appear and again on the way to a click,
 // and a document the page makes inside itself is not watched.
@@ -518,6 +522,8 @@ const home = new URL(window.location.href).origin
 const XLINK = 'http://www.w3.org/1999/xlink'
 /** The kinds of address a window is never opened to. */
 const REFUSED = new Set(['javascript:', 'data:', 'blob:'])
+/** The kinds of address only the person's system opens. */
+const SYSTEM = new Set(['mailto:', 'tel:', 'sms:'])
 const isLink = (el: Element) => el.localName === 'a' || el.localName === 'area'
 /** An address as the page means it: read against where it says its addresses begin, or `null` where it is none. */
 function addressOf(said: string | null | undefined): URL | null {
@@ -600,6 +606,10 @@ new MutationObserver((changes) => {
 })
 tendWithin(document)
 
+/** Asks the site to open an address in a tab of its own. Sent on the window, so that the browser still counts the person's click when the site opens it. */
+function openedBySite(href: string): void {
+  window.parent.postMessage({ type: 'it:open', url: href } satisfies PageToSite, config.app)
+}
 /** The link a click or a key followed, which is the nearest one around what was clicked. */
 const linkIn = (path: EventTarget[]) => path.find((el): el is Element => el instanceof Element && isLink(el))
 /** Whether a link, followed now, would open a window of a kind that is never opened. */
@@ -626,7 +636,13 @@ for (const event of ['click', 'auxclick', 'keydown'])
         // After the page's own handlers, which may have taken the click for themselves
         if (capture || e.type !== 'click' || e.defaultPrevented) return
         const link = linkIn(e.composedPath())
-        if (link && opensRefused(link)) e.preventDefault()
+        if (!link) return
+        const to = leadsTo(link)
+        if (opensRefused(link)) e.preventDefault()
+        else if (to && SYSTEM.has(to.protocol) && !link.hasAttribute('download')) {
+          e.preventDefault()
+          openedBySite(to.href)
+        }
       },
       capture,
     )
@@ -644,7 +660,11 @@ const clickElement = HTMLElement.prototype.click
 HTMLElement.prototype.click = function (this: HTMLElement) {
   if (!this.isConnected) {
     guide(this)
-    if (isLink(this) && opensRefused(this)) return
+    if (isLink(this)) {
+      const to = leadsTo(this)
+      if (opensRefused(this)) return
+      if (to && SYSTEM.has(to.protocol) && !this.hasAttribute('download')) return openedBySite(to.href)
+    }
   }
   return clickElement.call(this)
 }
@@ -660,6 +680,10 @@ window.open = function (this: Window, url?: string | URL, target?: string, featu
   const said = url === undefined || url === null ? '' : String(url)
   const to = said === '' ? null : addressOf(said)
   if (to && REFUSED.has(to.protocol)) return null
+  if (to && SYSTEM.has(to.protocol)) {
+    openedBySite(to.href)
+    return null
+  }
   const named = target === undefined || target === null ? '' : String(target)
   // A frame inside the page is the page's own to follow a link in, as it asked
   if (namesAFrame(named.trim())) return openWindow.call(this, url, target, features)
@@ -915,6 +939,17 @@ const api = {
   clearStaged: () => {
     staged = {}
     for (const key of Object.keys(stagedAt)) delete stagedAt[key]
+  },
+  /**
+   * Opens an address in a tab of its own, as a link to it would: an http or https address, or a
+   * mail, phone or messages link. The site opens it, with no hold either way and no referrer,
+   * and only while the browser counts a click or key of the person's in the page, so call it
+   * from the handler of one.
+   */
+  open(url: string | URL): void {
+    const href = openedForAPage(addressOf(String(url))?.href)
+    if (!href) throw new Error(`It.open opens an address of one of these kinds: ${OPENED_FOR_A_PAGE.map((kind) => kind.slice(0, -1)).join(', ')}.`)
+    openedBySite(href)
   },
   /** Things the page keeps for itself. They follow the page to every display. */
   store: {

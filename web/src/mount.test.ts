@@ -426,6 +426,78 @@ describe('the frame around a page', () => {
     expect(submitted().at(-1)).toMatchObject({ clientActionId: 'click-0021', attended: true })
   })
 
+  test('an address the page asks to have opened is opened in a tab of its own, with no hold either way, only from the page’s own frame, only for the web or the person’s mail, phone or messages, and only from the person’s own click or key in the page', async () => {
+    // The clock is the test's, and is set well past any click on the site an earlier test made
+    await renderHeld()
+    vi.setSystemTime(Date.now() + 3_600_000)
+    const page = framed()
+    const opened: unknown[][] = []
+    vi.spyOn(window, 'open').mockImplementation((...given: unknown[]) => {
+      opened.push(given)
+      return null
+    })
+    const asks = async (url: unknown, source: Window = page.frame.contentWindow as Window) => {
+      window.dispatchEvent(new MessageEvent('message', { data: { type: 'it:open', url }, origin: 'null', source }))
+      await act(() => vi.advanceTimersByTimeAsync(1))
+    }
+    // Nobody has done anything in the page: the frame does not have the keyboard, and the browser says nobody has just acted
+    await asks('https://elsewhere.test/a')
+    page.frame.setAttribute('tabindex', '0')
+    page.frame.focus()
+    await asks('https://elsewhere.test/b')
+    active = true
+    await asks('https://elsewhere.test/c')
+    await asks('mailto:someone@example.com?subject=Hi')
+    await asks('tel:+15551234567')
+    await asks('sms:+15551234567')
+    await asks('HTTP://Elsewhere.test/d')
+    expect(opened).toEqual([
+      ['https://elsewhere.test/c', '_blank', 'noopener,noreferrer'],
+      ['mailto:someone@example.com?subject=Hi', '_blank', 'noopener,noreferrer'],
+      ['tel:+15551234567', '_blank', 'noopener,noreferrer'],
+      ['sms:+15551234567', '_blank', 'noopener,noreferrer'],
+      ['http://elsewhere.test/d', '_blank', 'noopener,noreferrer'],
+    ])
+    // Another window asking, whatever it asks: the site itself, or a frame that is not the page's
+    const other = document.body.appendChild(document.createElement('iframe'))
+    await asks('https://elsewhere.test/e', window)
+    await asks('https://elsewhere.test/e', other.contentWindow as Window)
+    other.remove()
+    // An address of any other kind, one that is not whole, or one that is no address
+    for (const refused of [
+      'javascript:alert(1)',
+      'data:text/html,<p>hi',
+      'blob:http://localhost/0f0',
+      'file:///etc/hosts',
+      'ftp://elsewhere.test/',
+      '/p/another-page',
+      'elsewhere.test',
+      `https://elsewhere.test/${'x'.repeat(16 * 1024)}`,
+      7,
+      { toString: () => 'https://elsewhere.test/' },
+      undefined,
+    ])
+      await asks(refused)
+    expect(opened.length).toBe(5)
+    // A click on the site itself (the card that opened the page, say), which the browser reports
+    // for a few seconds as it reports one in the page: nothing is opened while it cannot be told whose it was
+    window.dispatchEvent(new Event('pointerdown'))
+    await asks('https://elsewhere.test/f')
+    await act(() => vi.advanceTimersByTimeAsync(4000))
+    await asks('https://elsewhere.test/g')
+    expect(opened.length).toBe(5)
+    await act(() => vi.advanceTimersByTimeAsync(1100))
+    await asks('https://elsewhere.test/h')
+    expect(opened.at(-1)).toEqual(['https://elsewhere.test/h', '_blank', 'noopener,noreferrer'])
+    // Nor while the frame does not have the keyboard, however the browser says the person has just acted
+    const elsewhere = document.body.appendChild(document.createElement('button'))
+    elsewhere.focus()
+    expect(document.activeElement).toBe(elsewhere)
+    await asks('https://elsewhere.test/i')
+    expect(opened.length).toBe(6)
+    elsewhere.remove()
+  })
+
   test('a small message that would write out as an enormous one is refused before it is written out', async () => {
     const page = await show()
     await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })

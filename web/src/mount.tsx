@@ -20,6 +20,7 @@ import {
   jsonText,
   LIMITS,
   MESSAGE,
+  openedForAPage,
   type PageToSite,
   SANDBOX,
   type SiteToPage,
@@ -350,6 +351,22 @@ export function Mount({
       // Only this frame. What is in it has no origin to be known by: the window it came from is what tells
       if (!live || e.source !== frame.current?.contentWindow) return
       const type = (e.data as { type?: unknown } | null)?.type
+      if (type === 'it:open') {
+        // An address the page asks to have opened in a tab of its own: a link to an address only
+        // the person's system can open, which a sandboxed frame cannot hand to it, or It.open.
+        // It is opened only from the person's own click or key in the page: the frame holds the
+        // keyboard, which a click or a key in it gives it, and the browser says that the person
+        // has just acted, and does not say so only for a click on the site itself, which a page
+        // could take for its own. It is opened while this message is being handled, which is
+        // when WebKit still counts the person's gesture, and with no hold either way and no
+        // referrer: the window has no opener, and the site no handle on it.
+        const url = openedForAPage((e.data as { url?: unknown }).url)
+        if (!url || !inFrame()) return
+        if (activation && (!activation.isActive || Date.now() - lastElsewhere() <= SITE_TOUCH_MS)) return
+        if (!allowed()) return
+        window.open(url, '_blank', 'noopener,noreferrer')
+        return
+      }
       if (type === 'it:hello') {
         if (!ready) {
           // The page's own script is running: the page is there to be seen
