@@ -2576,12 +2576,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * Whether a Claude Code conversation is open without It's add-on, as far as this machine
    * knows: it published its page while the add-on did not run in it, as one that was already
    * open when the add-on was installed does, and the add-on has not been heard from in it since.
-   * Only Claude Code's own `it create` notes that (`publishedWithoutAddon`): Codex, Pi, OpenCode
+   * Live detection also covers upgraded conversations without that saved mark, including ones
+   * heard from by an older add-on. Only Claude Code's own notes and processes count: Codex, Pi, OpenCode
    * and Hermes are never taken to be.
    */
   const unloaded = (session: { harness: string; id: string }): boolean => {
     const key = keyOf(session.harness, session.id)
-    return session.harness === 'claude-code' && publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))
+    return (
+      session.harness === 'claude-code' &&
+      ((publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))) ||
+        notLoadedNow().some((c) => follow(keyOf(c.harness, c.sessionId)) === follow(key)))
+    )
   }
   /**
    * What this machine is telling It, or has told It, of why a click is held back from reopening
