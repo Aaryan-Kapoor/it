@@ -2271,9 +2271,10 @@ async function turnNetwork(
     )
   }
   // A service of an earlier It says nothing of the internet, and with the network on it listens on every address the
-  // machine has, the internet's among them: on for the network the machine is on is not taken until a service says so
+  // machine has, the internet's among them: on for the network the machine is on is not taken until a service says so.
+  // Kept to the tailnet, or open to the internet too, such a service already does what was asked
   const earlier = stands !== undefined && stands.tailnet !== undefined && stands.internet === undefined
-  if (running && (stands === undefined || (on && (stands.tailnet === undefined || (!tailnet && earlier)))))
+  if (running && (stands === undefined || (on && (stands.tailnet === undefined || (!tailnet && !internet && earlier)))))
     throw new Problem(
       'The network setting was saved, but It could not confirm that the service applied it.',
       'not_confirmed',
@@ -2347,7 +2348,8 @@ async function network(a: Args) {
   if (to === undefined && on && running) {
     const stands = await doorStands(config)
     // And one of an earlier It, open on every address, is not said to keep It from the internet
-    earlier = !tailnet && !internet && stands?.on === true && stands.tailnet !== undefined && stands.internet === undefined
+    // Whether its functions say which policy it applied or not: only a service of this It says it keeps the internet out
+    earlier = !tailnet && !internet && stands?.on === true && stands.internet === undefined
     if (stands?.wanted && !stands.on) {
       const could =
         'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'
@@ -2364,7 +2366,9 @@ async function network(a: Args) {
         ? 'The network is on, for your tailnet only, but this machine has no address there just now.'
         : internet
           ? 'The network is on, for every address this machine has, but it has no address on a network just now.'
-          : 'The network is on, for anyone on this network, but this machine has no private address on a network just now. It does not answer the internet.'
+          : earlier
+            ? 'The network is on, for anyone on this network, but this machine has no private address on a network just now.'
+            : 'The network is on, for anyone on this network, but this machine has no private address on a network just now. It does not answer the internet.'
       : tailnet
         ? 'The network is on, for your tailnet only. Your devices that are signed in to Tailscale can open It at:'
         : internet

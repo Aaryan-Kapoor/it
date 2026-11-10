@@ -1824,6 +1824,7 @@ describe('a network change taken by the running service', () => {
       settings,
       reads: () => reads,
       run: (to = 'on') => run(m, ['network', to], {}, process.execPath, ['--import', pathToFileURL(clock).href]),
+      ask: () => run(m, ['network'], {}, process.execPath, ['--import', pathToFileURL(clock).href]),
       close: async () => {
         await Promise.all(servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))))
         await held.release()
@@ -1869,6 +1870,11 @@ describe('a network change taken by the running service', () => {
       const ran = await door.run()
       expect([ran.code, ran.out, error(ran).code, door.settings().network]).toEqual([1, '', 'not_confirmed', true])
       expect(error(ran).hint).toContain('The service that is running is of an earlier It')
+      // Asked how it stands, it says the same, and does not say that It keeps the internet out
+      const asked = await door.ask()
+      expect(asked.code).toBe(0)
+      expect(asked.err).toContain('The service that is running is of an earlier It')
+      expect(asked.err).not.toContain('does not answer the internet')
       // Kept to the tailnet, which an earlier It did as this one does, it is taken
       const tailnet = await changing(() => ({ on: true, wanted: true, tailnet: true }))
       try {
@@ -1876,6 +1882,29 @@ describe('a network change taken by the running service', () => {
       } finally {
         await tailnet.close()
       }
+      // And so is answering the internet too, which such a service already does: it is not told that starting again keeps It to private addresses
+      const internet = await changing(() => ({ on: true, wanted: true, tailnet: false }))
+      try {
+        const ran = await internet.run('internet')
+        expect([ran.code, printed(ran)]).toMatchObject([0, { network: true, internet: true }])
+        expect(ran.err).not.toContain('The service that is running is of an earlier It')
+      } finally {
+        await internet.close()
+      }
+    } finally {
+      await door.close()
+    }
+  })
+
+  test('an earlier service whose functions say no policy at all is not said to keep the internet out', async () => {
+    const door = await changing(() => ({ on: true, wanted: true }))
+    try {
+      // Turned on, the change is not confirmed, since nothing says which policy was applied
+      expect(error(await door.run()).code).toBe('not_confirmed')
+      const asked = await door.ask()
+      expect(asked.code).toBe(0)
+      expect(asked.err).toContain('The service that is running is of an earlier It')
+      expect(asked.err).not.toContain('does not answer the internet')
     } finally {
       await door.close()
     }
