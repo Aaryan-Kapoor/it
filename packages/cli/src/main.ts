@@ -39,7 +39,18 @@ import {
 } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, OPTIONS, optionsFor, outputArgs, parse, text } from './args'
-import { type Arrives, arrives, claudeAfterSetup, claudeReloadLine, claudeRunning, type Facts, reloadLine, tellWordForWord, tooOldToReload } from './arrives'
+import {
+  type Arrives,
+  arrives,
+  claudeAfterSetup,
+  claudeReloadLine,
+  claudeRunning,
+  type Facts,
+  notLoadedHere,
+  reloadLine,
+  tellWordForWord,
+  tooOldToReload,
+} from './arrives'
 import { choices, conversationIds, local, type Route, refusedFor } from './connector'
 import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
@@ -815,15 +826,10 @@ async function factsHere(slug?: string, tour = false): Promise<Facts | undefined
 }
 /**
  * Whether the conversation is a Claude Code one that has not loaded It's add-on and can load it
- * with /reload-plugins: the one case in which `arrives` has the agent ask the person to type
- * that. Its app is connected, nothing listens for it, no thread of T3 Code holds it, and its
- * Claude Code is not too old to load an add-on into an open conversation.
+ * with /reload-plugins: the case in which `arrives` has the agent tell the person to type that,
+ * in a Claude Code that is not too old to load an add-on into an open conversation.
  */
-export function reloadsHere(f: Facts | undefined): boolean {
-  if (f?.session?.harness !== 'claude-code' || f.addonHere !== false || tooOldToReload(f.claude)) return false
-  const route = f.route
-  return route?.connected === true && !route.listening && route.thread === 'none' && route.runtime !== 'incompatible'
-}
+export const reloadsHere = (f: Facts | undefined): boolean => f !== undefined && notLoadedHere(f) && !tooOldToReload(f.claude)
 /**
  * What the agent that shows the tour's first page is told to do where its conversation has not
  * loaded the add-on. The page says so to the person and keeps what they do on it, and the agent
