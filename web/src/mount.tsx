@@ -309,7 +309,7 @@ export function Mount({
     let camera: Opened | null = null
     /** The id the page names its live camera by, and what it was opened under. */
     let cameraId = ''
-    let cameraBy: Held = { owner: '', grant: '' }
+    let cameraBy: Held = { owner: '', grant: '', doc: -1 }
     const CAMERA_LIVE =
       'The camera is live to this page just now, so It takes no photo and records no video for it. The page can take its own picture from cam.onframe or cam.stream, or stop the camera first. Sound alone can be recorded beside it.'
     // Another conversation took the page over: whatever records, is asked for or is open for a

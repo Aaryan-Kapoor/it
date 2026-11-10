@@ -1508,6 +1508,24 @@ describe('what records or takes a photo for a page, when the page changes hands 
       expect(frames(heard)).toEqual([])
     })
 
+    test('a document the page has left does not have the camera opened live for it, however late the browser gives the camera', async () => {
+      const { heard, ask, page } = await shownFor(FIRST, ['camera'])
+      letThrough = () => {}
+      await ask(openLive)
+      await page.fromFrame({ type: 'it:hello', doc: 'doc-2' })
+      await act(async () => {
+        letThrough?.()
+        await tick(60)
+      })
+      const { cameraFor } = await import('./media')
+      expect(cameraFor('page1')).toBeUndefined()
+      expect(tracks.every((t) => t.stopped)).toBe(true)
+      // The document that asked is gone, and is answered nothing
+      expect(resultOf(heard, 'c1')).toBeUndefined()
+      await picture()
+      expect(frames(heard)).toEqual([])
+    })
+
     test('a camera the browser gave after what the page was allowed was taken back is closed again at once', async () => {
       const { heard, ask } = await shownFor(FIRST, ['camera'])
       letThrough = () => {}
