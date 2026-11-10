@@ -373,9 +373,12 @@ export const report = mutation({
         .query('mounts')
         .withIndex('by_mount', (q) => q.eq('mountId', mountId))
         .unique()
-      // A showing of this display's own, made since its last sign-out, and shown only once its ticket was given
+      // A showing of this display's own, made since its last sign-out, and shown only once its
+      // ticket was given. A card's live preview on the grid is no page shown (`picture`): what the
+      // display shows is the page it has open, and never one of the pictures beside it
       if (!m || m.userId !== c.user._id || m.displayId !== d._id || m.epoch !== d.epoch || (a.phase === 'shown' && !m.ticketGiven))
         fail('not_found', 'No such showing on this display.')
+      if (m.picture) fail('invalid', 'A card’s live preview is no page shown.')
       page = { artifactId: m.artifactId, version: m.version }
     }
     // Never one refused for want of room: the tabs that spoke longest ago make way

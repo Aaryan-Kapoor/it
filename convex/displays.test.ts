@@ -455,6 +455,29 @@ describe('what each tab of a display says of itself', () => {
     expect((await row(laptop.id)).reports![0]).toMatchObject({ phase: 'shown', sequence: 3 })
   })
 
+  test('never names a card’s live preview on the grid as the page shown, loading or shown', async () => {
+    const t = convexTest(schema, modules)
+    const { browser, page, row } = await household(t)
+    const laptop = await browser('owner', key(1))
+    const plan = await page('plan')
+    const picture = (await laptop.as.mutation(api.mounts.create, { artifactId: plan, displayKey: laptop.key, picture: true })).mountId
+    await t.run(async (ctx) => {
+      const m = (await ctx.db.query('mounts').collect()).find((x) => x.mountId === picture)!
+      expect(m.picture).toBe(true)
+      await ctx.db.patch(m._id, { ticketGiven: true })
+    })
+    for (const [sequence, phase] of [
+      [1, 'loading'],
+      [2, 'shown'],
+      [3, 'failed'],
+    ] as const)
+      expect(await code(laptop.as.mutation(api.displays.report, said(laptop, TAB, sequence, true, { phase, mountId: picture })))).toBe('invalid')
+    expect((await row(laptop.id)).reports).toBeUndefined()
+    // The page opened whole on the same display is named as shown
+    const whole = (await laptop.as.mutation(api.mounts.create, { artifactId: plan, displayKey: laptop.key })).mountId
+    expect(await code(laptop.as.mutation(api.displays.report, said(laptop, TAB, 4, true, { phase: 'loading', mountId: whole })))).toBe('ok')
+  })
+
   test('is held to a pace per display, so that one display cannot use up another’s', async () => {
     const { browser } = await household()
     const laptop = await browser('owner', key(1))
