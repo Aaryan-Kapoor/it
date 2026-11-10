@@ -196,4 +196,61 @@ describe.each(BROWSERS)('a link or a form a page follows, in %s', (_name, type) 
       expect(said).toEqual({ opener: false, url: `${home}/named.html` })
     },
   )
+
+  test.skipIf(!here(type))(
+    'a link and a form in an open root that `setHTMLUnsafe` declares, followed by a click or a send the page makes there, open with no hold',
+    async () => {
+      const link = await opened(
+        `<div id="host"></div><button id="go" type="button">go</button>
+       <script>
+         document.getElementById('go').addEventListener('click', () => {
+           const host = document.getElementById('host')
+           host.setHTMLUnsafe('<div><template shadowrootmode="open"><a href="/dest" target="fresh">out</a></template></div>')
+           host.firstElementChild.shadowRoot.querySelector('a').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+         })
+       </script>`,
+      )
+      expect(link).toEqual({ opener: false, url: `${home}/dest` })
+      const form = await opened(
+        `<div id="host"></div><button id="go" type="button">go</button>
+       <script>
+         document.getElementById('go').addEventListener('click', () => {
+           const host = document.getElementById('host')
+           host.setHTMLUnsafe('<div><template shadowrootmode="open"><form action="/sent" target="fresh" rel="opener"></form></template></div>')
+           host.firstElementChild.shadowRoot.querySelector('form').requestSubmit()
+         })
+       </script>`,
+      )
+      expect(form).toEqual({ opener: false, url: `${home}/sent?` })
+    },
+  )
+
+  test.skipIf(!here(type))(
+    'a link in an open root the page’s own markup declares, clicked there by the page’s script as it loads, opens with no hold',
+    async () => {
+      const said = await opened(
+        `<div id="host"><template shadowrootmode="open"><a id="inner" href="/declared" target="fresh">out</a></template></div>
+       <button id="go" type="button">go</button>
+       <script>
+         const link = document.getElementById('host').shadowRoot.getElementById('inner')
+         document.getElementById('go').addEventListener('click', () => link.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+       </script>`,
+      )
+      expect(said).toEqual({ opener: false, url: `${home}/declared` })
+    },
+  )
+
+  test.skipIf(!here(type))('a link the page writes into its document once it has loaded, and clicks at once, opens with no hold', async () => {
+    const said = await opened(
+      `<button id="go" type="button">go</button>
+       <script>
+         document.getElementById('go').addEventListener('click', () => {
+           document.write('<a id="out" href="/written" target="fresh">out</a>')
+           document.getElementById('out').dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }))
+           document.close()
+         })
+       </script>`,
+    )
+    expect(said).toEqual({ opener: false, url: `${home}/written` })
+  })
 })
