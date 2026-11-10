@@ -861,19 +861,20 @@ describe('starting Codex to queue a click', () => {
     }
     expect(codexCommand('win32', PATHS, exists, unread)).toEqual([NODE, PNPM_SCRIPT])
   })
-  test('on Windows, a shim is read only for the lines npm and pnpm write, so a remark neither hides a later Codex nor starts what it names', () => {
+  test('on Windows, a shim that is not wholly one npm or pnpm wrote is passed over for the Codex after it, and what it names is not started', () => {
     const EXE = 'C:\\tools\\codex.exe'
     const PATH = `${NPM};C:\\tools;C:\\Program Files\\nodejs`
-    const files = { [NPM_SCRIPT]: '', [`${NPM}\\cli.py`]: '', [`${NPM}\\unrelated.exe`]: '', [EXE]: '', [NODE]: '' }
-    // A remark that names Node, before a line that starts Python: passed over for the Codex after it
-    expect(
-      codexCommand('win32', PATH, ...disk({ ...files, [`${NPM}\\codex.cmd`]: '@ECHO off\r\n@rem node is no longer used\r\npython "%~dp0\\cli.py" %*\r\n' })),
-    ).toEqual([EXE])
-    // A remark after npm's own lines that looks like one handing the words on: npm's lines are what is started
-    expect(codexCommand('win32', PATH, ...disk({ ...files, [`${NPM}\\codex.cmd`]: `${npmShim}@rem "%~dp0\\unrelated.exe" %*\r\n` }))).toEqual([
-      NODE,
-      NPM_SCRIPT,
+    const files = { [NPM_SCRIPT]: '', [`${NPM}\\cli.py`]: '', [`${NPM}\\unrelated.exe`]: '', 'C:\\elsewhere\\unrelated.exe': '', [EXE]: '', [NODE]: '' }
+    for (const shim of [
+      // A remark that names Node, before a line that starts Python
+      '@ECHO off\r\n@rem node is no longer used\r\npython "%~dp0\\cli.py" %*\r\n',
+      // npm's, with a remark after it that looks like a line handing the words on
+      `${npmShim}@rem "%~dp0\\unrelated.exe" %*\r\n`,
+      // npm's, with Node changed for Python, or its folder for another
+      npmShim.replace('SET "_prog=node"', 'SET "_prog=python" & rem changed'),
+      npmShim.replace('SET dp0=%~dp0', 'SET dp0=C:\\elsewhere'),
     ])
+      expect(codexCommand('win32', PATH, ...disk({ ...files, [`${NPM}\\codex.cmd`]: shim }))).toEqual([EXE])
   })
   test('on Windows, where no Codex on the PATH can be started without a shell, nothing is started and the click waits instead', () => {
     const PATH = `${NPM};C:\\Program Files\\nodejs`
