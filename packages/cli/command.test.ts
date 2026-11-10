@@ -1783,7 +1783,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
 
 describe('a network change taken by the running service', () => {
   const TAILNET_ONLY = "{tailscale0:[{address:'100.64.0.1',family:'IPv4',internal:false}]}"
-  async function changing(answer: (read: number, network: boolean) => unknown, initialTailnet = true, interfaces = TAILNET_ONLY) {
+  async function changing(answer: (read: number, network: boolean) => unknown, initialTailnet = true, interfaces = TAILNET_ONLY, initialNetwork = true) {
     const m = machine(true, true)
     const held = await holdBase(58_000, 10)
     const settings = () => JSON.parse(readFileSync(path.join(m.it, 'service.json'), 'utf8')) as { network: boolean }
@@ -1791,7 +1791,7 @@ describe('a network change taken by the running service', () => {
       path.join(m.it, 'service.json'),
       JSON.stringify({
         port: held.base,
-        network: true,
+        network: initialNetwork,
         tailnet: initialTailnet,
         instanceSecret: 'a'.repeat(64),
         adminKey: 'it-000000000000|made-up',
@@ -1918,6 +1918,7 @@ describe('a network change taken by the running service', () => {
       expect(asked.code).toBe(0)
       expect(asked.err).toContain('It does not answer the internet')
       expect(asked.err).not.toContain('has not confirmed')
+      expect(printed(asked).confirmed).toBeUndefined()
     } finally {
       await door.close()
     }
@@ -1936,7 +1937,66 @@ describe('a network change taken by the running service', () => {
         const asked = await door.ask()
         expect(asked.code).toBe(0)
         expect(asked.err).not.toContain('does not answer the internet')
-        expect(asked.err).toContain('has not confirmed that it keeps It from the internet')
+        expect(asked.err).toContain('has not confirmed that it applied this setting')
+        expect(printed(asked).confirmed).toBe(false)
+      } finally {
+        await door.close()
+      }
+    })
+
+  test('says the tailnet and off settings as done where the running service confirms them', async () => {
+    const tailnet = await changing(() => ({ on: true, wanted: true, tailnet: true, internet: false }))
+    try {
+      const asked = await tailnet.ask()
+      expect([asked.code, printed(asked).tailnet, printed(asked).confirmed]).toEqual([0, true, undefined])
+      expect(asked.err).toContain('The network is on, for your tailnet only.')
+      expect(asked.err).not.toContain('has not confirmed')
+    } finally {
+      await tailnet.close()
+    }
+    const off = await changing(() => ({ on: false, wanted: false }), false, TAILNET_ONLY, false)
+    try {
+      const asked = await off.ask()
+      expect([asked.code, printed(asked).network, printed(asked).confirmed]).toEqual([0, false, undefined])
+      expect(asked.err).toContain('The network is off. It answers this machine only.')
+    } finally {
+      await off.close()
+    }
+  })
+
+  for (const report of ['unavailable', 'answering the internet'])
+    test(`does not say that It is kept to the tailnet where the running service's policy is ${report}`, async () => {
+      const door = await changing(() =>
+        report === 'unavailable'
+          ? new Refusal({ code: 'unavailable', message: 'The report is not available.' })
+          : { on: true, wanted: true, tailnet: false, internet: true },
+      )
+      try {
+        const asked = await door.ask()
+        expect([asked.code, printed(asked).confirmed]).toEqual([0, false])
+        expect(asked.err).not.toContain('for your tailnet only')
+        expect(asked.err).toContain('has not confirmed that it applied this setting')
+      } finally {
+        await door.close()
+      }
+    })
+
+  for (const report of ['unavailable', 'still on'])
+    test(`does not say that It answers this machine only where the running service's door is ${report}`, async () => {
+      const door = await changing(
+        () =>
+          report === 'unavailable'
+            ? new Refusal({ code: 'unavailable', message: 'The report is not available.' })
+            : { on: true, wanted: true, tailnet: false, internet: true },
+        false,
+        TAILNET_ONLY,
+        false,
+      )
+      try {
+        const asked = await door.ask()
+        expect([asked.code, printed(asked).network, printed(asked).confirmed]).toEqual([0, false, false])
+        expect(asked.err).not.toContain('It answers this machine only')
+        expect(asked.err).toContain('has not confirmed that it applied this setting')
       } finally {
         await door.close()
       }
