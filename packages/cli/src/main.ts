@@ -513,8 +513,9 @@ function anothers(slug: string, theirs: Made | null): Problem {
 async function arrivalHere(slug?: string): Promise<Arrives | undefined> {
   const session = sessionAsked()?.session
   if (!session) return undefined
+  // The connector gives T3 Code up to eight seconds, the first time a couple of them to issue It a session
   const asked = await local<Partial<Route>>(`/route?harness=${encodeURIComponent(session.harness)}&session=${encodeURIComponent(session.id)}`, {
-    timeoutMs: 5000,
+    timeoutMs: 10_000,
   })
   // An answer that is not one is no answer: a connector from before it answered this says nothing of it
   const route =

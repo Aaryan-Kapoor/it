@@ -87,6 +87,8 @@ const stand = vi.hoisted(() => ({
     looked: [] as { harness: string; ids: string[]; known?: string }[],
     /** Why T3 Code gave It no session, as its own command would have said. */
     refusal: null as string | null,
+    /** Every time it was asked whether a thread runs a conversation now, by the ids it was asked of (`t3RunsNow`). */
+    runsAsked: [] as string[][],
   },
 }))
 // T3 Code is asked over its own server and its own command (t3.test.ts tries what is read from
@@ -107,6 +109,14 @@ vi.mock('./src/t3', async (original) => ({
       if (typeof thread === 'object' && thread !== null) return thread
       return thread === undefined ? { status: 'incomplete', progressed } : thread === null ? { status: 'absent' } : { status: 'found', thread }
     }),
+  // Whether a thread runs a conversation now: the thread T3 Code holds it in, where the test says one does, and
+  // otherwise none, or, where the test has T3 Code slow, not known, as `t3RunsNow` says when its time runs out
+  t3RunsNow: async (_t3: unknown, of: { ids: readonly string[] }) => {
+    stand.t3.runsAsked.push([...of.ids])
+    if (stand.t3.slow) return { status: 'unknown' }
+    const thread = of.ids.map((id) => stand.t3.threads.get(id)).find((t) => t !== undefined)
+    return thread ? { status: 'found', thread } : { status: 'none' }
+  },
   t3Running: async (_t3: unknown, of: { harness: string; ids: readonly string[] }, known?: string) => {
     stand.t3.looked.push({ harness: of.harness, ids: [...of.ids], ...(known === undefined ? {} : { known }) })
     for (const [thread, run] of stand.t3.runs) if (run.now.harness === of.harness && of.ids.includes(run.now.id)) return { thread, before: run.before }
@@ -371,6 +381,7 @@ afterEach(async () => {
   stand.t3.refused.length = 0
   stand.t3.runs.clear()
   stand.t3.looked.length = 0
+  stand.t3.runsAsked.length = 0
   if (home) rmSync(home, { recursive: true, force: true })
   home = ''
   for (const k of Object.keys(process.env)) if (!(k in before)) delete process.env[k]
@@ -4450,6 +4461,30 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     }
   })
 
+  test('a lone click for a closed Claude Code conversation is reopened once the searches that used their reads end in none, with no second click (#348)', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+    stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
+    offered({ ...click(9), session: { harness: 'claude-code', id: '11111111-2222-4333-8444-555555555555' } })
+    await until(() => stand.t3.asked.length === 1)
+    // Long past the click's own five seconds, as on a workspace of many hundreds of threads: each search
+    // reads so many threads and stops, and the next begins by itself for as long as the click waits
+    const wall = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000)
+    try {
+      stand.t3.asked[0]!.answer({ status: 'limited' })
+      await until(() => stand.t3.asked.length === 2)
+      stand.t3.asked[1]!.answer({ status: 'limited' })
+      await until(() => stand.t3.asked.length === 3)
+      expect(stand.calls.some((c) => c.name === 'machines:wakeFailed' || c.name === 'machines:runBegan')).toBe(false)
+      // Every thread read and none holds it: only then is it reopened, which here fails for want of its folder
+      stand.t3.asked[2]!.answer(null)
+      await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed' || c.name === 'machines:runBegan'))
+    } finally {
+      wall.mockRestore()
+    }
+  }, 60_000)
+
   test('a search that used its reads after its click went another way is taken up by the next click, which waits for it, and goes to the thread it finds', async () => {
     withT3Code()
     stand.t3.slow = true
@@ -5750,18 +5785,24 @@ describe('how what is done on a conversation’s pages would reach it, as the co
     stand.t3.threads.set(claude, 't3-thread-a')
     await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
     expect(await way('claude-code', claude)).toEqual({ connected: true, listening: false, runtime: 'inactive', thread: 'held' })
-    expect(stand.t3.asked).toHaveLength(1)
+    // Only whether a thread runs it now is asked, and the whole workspace is never searched for it
+    expect(stand.t3.runsAsked).toEqual([[claude]])
+    expect(stand.t3.asked).toEqual([])
     await until(() => existsSync(path.join(home, 't3-threads.json')))
     expect(JSON.parse(readFileSync(path.join(home, 't3-threads.json'), 'utf8'))).toEqual({ [`claude-code:${claude}`]: 't3-thread-a' })
     // Noted, it is not asked about again
     expect(await way('claude-code', claude)).toMatchObject({ thread: 'held' })
-    expect(stand.t3.asked).toHaveLength(1)
+    expect(stand.t3.runsAsked).toHaveLength(1)
   })
 
-  test('one that T3 Code says no thread holds is said to be in none, and one it has not answered for is said to be unknown', async () => {
+  test('one that no running thread of T3 Code runs is said to be in none, and noted nowhere, and one T3 Code could not say of is said to be unknown', async () => {
     stand.t3.running = true
     await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
     expect(await way('claude-code', claude)).toMatchObject({ thread: 'none' })
+    expect(existsSync(path.join(home, 't3-threads.json'))).toBe(false)
+    // In none for now is not in none for good: it is asked again the next time
+    expect(await way('claude-code', claude)).toMatchObject({ thread: 'none' })
+    expect(stand.t3.runsAsked).toEqual([[claude], [claude]])
     stand.t3.slow = true
     expect(await way('claude-code', '22222222-2222-4333-8444-555555555555')).toMatchObject({ thread: 'unknown' })
   })
@@ -5770,6 +5811,7 @@ describe('how what is done on a conversation’s pages would reach it, as the co
     await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
     expect(await way('claude-code', claude)).toMatchObject({ thread: 'none' })
     expect(stand.t3.asked).toEqual([])
+    expect(stand.t3.runsAsked).toEqual([])
   })
 
   test('one in the note of threads is held there without asking, and where that note cannot be read it is unknown', async () => {
@@ -5779,6 +5821,7 @@ describe('how what is done on a conversation’s pages would reach it, as the co
     )
     expect(await way('claude-code', claude)).toMatchObject({ thread: 'held' })
     expect(stand.t3.asked).toEqual([])
+    expect(stand.t3.runsAsked).toEqual([])
     await stop?.()
     stop = null
     await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }, (home) =>
