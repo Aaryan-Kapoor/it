@@ -4,7 +4,7 @@
 // session it is and what started it, and removes the file when it ends. A file left by one that
 // did not end cleanly names a process that is gone, or one that is another program by now, and
 // is passed over.
-import { execFile } from 'node:child_process'
+import { type ChildProcess, execFile } from 'node:child_process'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -56,18 +56,54 @@ export function ranFor(etime: string): number | undefined {
   return (((Number(d) * 24 + Number(h)) * 60 + Number(min!)) * 60 + Number(sec!)) * 1000
 }
 
-/** Runs only the discovery child, with a deadline that kills that child's PID, never a process group. */
-function processOutput(file: string, args: string[], timeout: number): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    execFile(file, args, { encoding: 'utf8', timeout, killSignal: 'SIGKILL', windowsHide: true, maxBuffer: 64 * 1024 }, (err, out) => {
-      resolve(err ? undefined : out)
+/** Discovery belongs to one connector lifetime; stopping it cannot stop a later connector. */
+export class ClaudeDiscovery {
+  private ended = false
+  private children = new Map<ChildProcess, { cancel: () => void; exited: Promise<void> }>()
+
+  get stopped(): boolean {
+    return this.ended
+  }
+
+  /** Kill only discovery's own child PIDs, settle scans as unknown, and wait until the PIDs are gone. */
+  async stop(): Promise<void> {
+    this.ended = true
+    const pending = [...this.children]
+    for (const [child, scan] of pending) {
+      scan.cancel()
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    }
+    await Promise.all(pending.map(([, scan]) => scan.exited))
+  }
+
+  output(file: string, args: string[], timeout: number): Promise<string | undefined> {
+    if (this.ended) return Promise.resolve(undefined)
+    return new Promise((resolve) => {
+      let answered = false
+      let didExit = false
+      const child = execFile(file, args, { encoding: 'utf8', timeout, killSignal: 'SIGKILL', windowsHide: true, maxBuffer: 64 * 1024 }, (err, out) => {
+        answered = true
+        if (didExit) this.children.delete(child)
+        resolve(this.ended || err ? undefined : out)
+      })
+      // Spawn failures have no PID. Their callback still settles the scan as unknown.
+      if (child.pid !== undefined) {
+        const exited = new Promise<void>((gone) => {
+          child.once('exit', () => {
+            didExit = true
+            if (answered) this.children.delete(child)
+            gone()
+          })
+        })
+        this.children.set(child, { cancel: () => resolve(undefined), exited })
+      }
     })
-  })
+  }
 }
 
 /** When a process began, by this machine's clock, as `ps` says how long it has run, to the second. */
-async function beganAt(pid: number): Promise<number | undefined> {
-  const out = await processOutput('ps', ['-o', 'etime=', '-p', String(pid)], 2000)
+async function beganAt(pid: number, discovery: ClaudeDiscovery): Promise<number | undefined> {
+  const out = await discovery.output('ps', ['-o', 'etime=', '-p', String(pid)], 2000)
   const ran = out === undefined ? undefined : ranFor(out)
   return ran === undefined ? undefined : Date.now() - ran
 }
@@ -76,10 +112,10 @@ async function beganAt(pid: number): Promise<number | undefined> {
 const SLACK_MS = 5_000
 
 /** Claude processes and their starts, read together as the backend reads Windows process identity. */
-async function windowsStarts(): Promise<Map<number, number>> {
+async function windowsStarts(discovery: ClaudeDiscovery): Promise<Map<number, number>> {
   const found = new Map<number, number>()
   const script = "Get-Process -Name claude -ErrorAction SilentlyContinue | ForEach-Object { try { '{0} {1}' -f $_.Id, $_.StartTime.ToFileTimeUtc() } catch {} }"
-  const out = await processOutput(
+  const out = await discovery.output(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
     5000,
@@ -102,14 +138,20 @@ async function windowsStarts(): Promise<Map<number, number>> {
  * later than the note's session did, as a process given the number afterwards cannot have. On
  * Windows its program is Claude Code's and began no later than the session did. A note that cannot be checked is passed over.
  */
-export async function sameProcess(pid: number, note: { procStart?: unknown; startedAt: number }, windows?: ReadonlyMap<number, number>): Promise<boolean> {
+export async function sameProcess(
+  pid: number,
+  note: { procStart?: unknown; startedAt: number },
+  windows?: ReadonlyMap<number, number>,
+  discovery = new ClaudeDiscovery(),
+): Promise<boolean> {
+  if (discovery.stopped) return false
   if (process.platform === 'linux' && typeof note.procStart === 'string') return startOf(pid) === note.procStart
   if (process.platform === 'linux' || process.platform === 'darwin') {
-    const began = await beganAt(pid)
+    const began = await beganAt(pid, discovery)
     return began !== undefined && began <= note.startedAt + SLACK_MS
   }
   if (process.platform === 'win32') {
-    const began = (windows ?? (await windowsStarts())).get(pid)
+    const began = (windows ?? (await windowsStarts(discovery))).get(pid)
     return began !== undefined && began <= note.startedAt + SLACK_MS
   }
   return false
@@ -125,15 +167,16 @@ export async function openClaude(
   folders: readonly string[],
   alive: (pid: number) => boolean = running,
   same: (pid: number, note: { procStart?: unknown; startedAt: number }) => boolean | Promise<boolean> = sameProcess,
+  discovery = new ClaudeDiscovery(),
 ): Promise<OpenClaude[]> {
   const open = new Map<string, OpenClaude>()
   // One fresh snapshot per scan, and only if there is a valid live note to check.
   let windows: Promise<Map<number, number>> | undefined
   const check =
-    process.platform === 'win32' && same === sameProcess
+    same === sameProcess
       ? async (pid: number, note: { procStart?: unknown; startedAt: number }) => {
-          windows ??= windowsStarts()
-          return sameProcess(pid, note, await windows)
+          if (process.platform === 'win32') windows ??= windowsStarts(discovery)
+          return sameProcess(pid, note, windows ? await windows : undefined, discovery)
         }
       : same
   for (const folder of new Set(folders)) {
@@ -147,6 +190,7 @@ export async function openClaude(
       continue
     }
     for (const name of names) {
+      if (discovery.stopped) return []
       try {
         const file = path.join(dir, name)
         if (statSync(file).size > LONGEST) continue
@@ -163,7 +207,7 @@ export async function openClaude(
       }
     }
   }
-  return [...open.values()]
+  return discovery.stopped ? [] : [...open.values()]
 }
 
 /** The folder Claude Code keeps its settings in where nothing names another. */

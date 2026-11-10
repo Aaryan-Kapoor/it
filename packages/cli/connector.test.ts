@@ -29,7 +29,7 @@ const stand = vi.hoisted(() => ({
   claudeFolders: [] as string[],
   claudeScans: 0,
   claudeRealProcesses: false,
-  scan: null as null | { started: () => void; completed: () => void; delay: number },
+  scan: null as null | { started: () => void; completed: () => void; delay: number; timeout?: number; child?: import('node:child_process').ChildProcess },
   /** Every call the connector made to the backend. */
   calls: [] as { name: string; args: any }[],
   /** Every event the connector recorded for usage reporting, with its properties. */
@@ -186,10 +186,16 @@ vi.mock('node:child_process', async (original) => {
       const scan = stand.scan
       if (scan && (bin === 'ps' || bin === 'powershell.exe')) {
         scan.started()
-        return real.execFile(process.execPath, ['-e', `setTimeout(() => console.log('00:00'), ${scan.delay})`], options, (err, out, stderr) => {
-          scan.completed()
-          done(err, out, stderr)
-        })
+        scan.child = real.execFile(
+          process.execPath,
+          ['-e', `setTimeout(() => console.log('00:00'), ${scan.delay})`],
+          { ...options, ...(scan.timeout ? { timeout: scan.timeout } : {}) },
+          (err, out, stderr) => {
+            scan.completed()
+            done(err, out, stderr)
+          },
+        )
+        return scan.child
       }
       if (bin === 'ps') return real.execFile(bin, args, options, done)
       // Windows PowerShell, through which a reopened run's job is asked after and ended on Windows, is run as it is, and
@@ -225,13 +231,14 @@ vi.mock('./src/claude-open', async (original) => {
   const real = await original<typeof import('./src/claude-open')>()
   return {
     ...real,
-    openClaude: (folders: readonly string[]) => {
+    openClaude: (folders: readonly string[], _alive: unknown, _same: unknown, discovery: InstanceType<typeof real.ClaudeDiscovery>) => {
       stand.claudeScans++
-      if (stand.claudeRealProcesses) return real.openClaude(folders, () => true)
+      if (stand.claudeRealProcesses) return real.openClaude(folders, () => true, undefined, discovery)
       return real.openClaude(
         folders,
         () => true,
         () => true,
+        discovery,
       )
     },
   }
@@ -6659,6 +6666,47 @@ describe('how what is done on a conversation’s pages would reach it, as the co
     offered({ ...click(2), session: { harness: 'codex', id: 'thread-1' } })
     await until(() => stand.t3.sent.some((m) => m.text.includes('click-2')))
     expect(stand.t3.sent.every((m) => m.thread === 't3-thread-a')).toBe(true)
+  })
+
+  test.each(['signal', 'update restart'] as const)('%s shutdown kills an in-flight discovery child before the connector returns', async (how) => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-claude-'))
+    made.push(folder)
+    mkdirSync(path.join(folder, 'sessions'))
+    writeFileSync(
+      path.join(folder, 'sessions', '1.json'),
+      JSON.stringify({ pid: 1, sessionId: claude, startedAt: Date.now() - 60_000, kind: 'interactive', entrypoint: 'cli' }),
+    )
+    stand.claudeFolders.push(folder)
+    stand.claudeRealProcesses = true
+    stand.scan = { started: () => {}, completed: () => {}, delay: 60_000, timeout: 60_000 }
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+    const real = Date.now
+    const ahead = vi.spyOn(Date, 'now').mockImplementation(() => real() + 60_000)
+    try {
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: real() - 60_000 }] })
+      offered({ ...click(1), session: { harness: 'claude-code', id: claude } })
+      await until(() => stand.scan?.child?.pid !== undefined)
+      const child = stand.scan!.child!
+      expect(() => process.kill(child.pid!, 0)).not.toThrow()
+      if (how === 'update restart') {
+        stand.fetched = { from: '0.1.0', to: '9.9.9', program: path.join(os.tmpdir(), 'it-new', 'it.exe') }
+        stand.restartWay = 'launcher'
+        stand.watching.get('machines:me')!({ wanted: ['claude-code'], upgrade: { state: 'asked', version: '9.9.9' } })
+        await until(() => said.includes('stopped'))
+      }
+      await stop!()
+      stop = null
+      expect(() => process.kill(child.pid!, 0)).toThrow()
+      if (how === 'update restart') expect(process.exitCode).toBe(75)
+    } finally {
+      ahead.mockRestore()
+      process.exitCode = undefined
+      const child = stand.scan?.child
+      if (child && child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL')
+        await new Promise<void>((resolve) => child.once('close', () => resolve()))
+      }
+    }
   })
 
   test('a slow process scan leaves local requests responsive and shares its in-flight result with the banner', async () => {

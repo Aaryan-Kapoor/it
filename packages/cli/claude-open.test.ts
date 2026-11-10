@@ -6,7 +6,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
-import { openClaude, ranFor, sameProcess } from './src/claude-open'
+import { ClaudeDiscovery, openClaude, ranFor, sameProcess } from './src/claude-open'
 
 const folders: string[] = []
 afterEach(async () => {
@@ -132,6 +132,41 @@ describe('the Claude Code conversations open at a person’s keyboard', async ()
         child.kill('SIGKILL')
         await new Promise<void>((resolve) => child!.once('close', () => resolve()))
       }
+    }
+  })
+
+  test('stopping discovery kills all owned child PIDs, settles scans, and prevents later scans', async () => {
+    const platform = process.platform
+    const run = childProcess.execFile
+    const discovery = new ClaudeDiscovery()
+    const children: ReturnType<typeof run>[] = []
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      childProcess.execFile = new Proxy(run, {
+        apply(_target, _self, [_file, _args, opts, callback]) {
+          const child = run(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { ...opts, timeout: 60_000 }, callback)
+          children.push(child)
+          return child
+        },
+      })
+      syncBuiltinESMExports()
+      const folder = folderWith([session(1), session(2)])
+      const first = openClaude([folder], alive, undefined, discovery)
+      const second = openClaude([folder], alive, undefined, discovery)
+      expect(children).toHaveLength(2)
+      await discovery.stop()
+      expect(discovery.stopped).toBe(true)
+      expect(await Promise.all([first, second])).toEqual([[], []])
+      for (const child of children) expect(() => process.kill(child.pid!, 0)).toThrow()
+      expect(await openClaude([folder], alive, undefined, discovery)).toEqual([])
+      expect(await sameProcess(1, { startedAt: 1_001 }, undefined, discovery)).toBe(false)
+      expect(children).toHaveLength(2)
+      await discovery.stop()
+    } finally {
+      await discovery.stop()
+      childProcess.execFile = run
+      syncBuiltinESMExports()
+      Object.defineProperty(process, 'platform', { value: platform })
     }
   })
 

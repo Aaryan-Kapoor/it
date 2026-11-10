@@ -33,7 +33,7 @@ import {
 } from '@it/protocol'
 import { ADDON_API, type AddonRuntime, AddonRuntimes } from './addon-runtime'
 import { ADDONS } from './addons.generated'
-import { type OpenClaude, openClaude } from './claude-open'
+import { ClaudeDiscovery, type OpenClaude, openClaude } from './claude-open'
 import {
   DeliveryRecovery,
   eraseDeliveryRecovery,
@@ -516,13 +516,14 @@ export async function runConnector(say: (line: string) => void): Promise<void> {
   if (other) throw alreadyThere(other)
   const left = lockHolder()
   let mine = false
+  const discovery = new ClaudeDiscovery()
   try {
     await alone(
       'connector',
       () => {
         mine = true
         if (left !== undefined && left !== process.pid) say(`took over from a connector that is gone and left its lock behind (pid ${left})`)
-        return connecting(say)
+        return connecting(say, discovery)
       },
       0,
     )
@@ -530,6 +531,8 @@ export async function runConnector(say: (line: string) => void): Promise<void> {
     // Another has the lock, and lives
     if (!mine && err instanceof Problem && err.code === 'busy') throw alreadyThere(lockHolder())
     throw err
+  } finally {
+    await discovery.stop()
   }
 }
 
@@ -609,7 +612,7 @@ const NOT_ASKED = new Problem('Whether this machine and the It it joined fit has
 const FITS_EVERY_MS = 60_000
 
 /** Everything the connector does once the folder's lock is its own. */
-async function connecting(say: (line: string) => void): Promise<void> {
+async function connecting(say: (line: string) => void, discovery: ClaudeDiscovery): Promise<void> {
   // Something that goes wrong again and again (the backend cannot be reached, say) is said once
   // every ten minutes for each thing it is about, however many other lines come in between
   const saidAt = new Map<string, number>()
@@ -1589,9 +1592,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
   let openFound: OpenClaude[] = []
   let openAsking: Promise<OpenClaude[]> | undefined
   const openNow = (): Promise<OpenClaude[]> => {
+    if (discovery.stopped) return Promise.resolve([])
     if (openAsking) return openAsking
     if (performance.now() - openChecked < OPEN_CACHE_MS) return Promise.resolve(openFound)
-    openAsking = openClaude(claudeFolders())
+    openAsking = openClaude(claudeFolders(), undefined, undefined, discovery)
       .catch(() => [])
       .then((found) => {
         openFound = found
@@ -1623,7 +1627,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     notLoadedAsking = true
     try {
       const open = connected('claude-code') && Date.now() - connectorBegan >= NOT_HEARD_MS ? await openNow() : []
-      if (over) return
+      if (over || closing) return
       const list = notLoadedNow(open)
       const said = JSON.stringify(list)
       if (said === notLoadedSaid) return
@@ -4667,6 +4671,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // started: nothing It runs with nobody watching runs on once It has been stopped. What each
   // was reopened for is given back, and is reopened for again when It next starts.
   closing = true
+  await discovery.stop()
   for (const timer of markTimers) clearTimeout(timer)
   for (const timer of followTimers.values()) clearTimeout(timer)
   followTimers.clear()
