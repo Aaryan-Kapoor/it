@@ -950,8 +950,11 @@ describe('The names the door answers to', () => {
       try {
         for (const [link, a] of Object.entries(os.networkInterfaces()).flatMap(([name, list]) => (list ?? []).map((one) => [name, one] as const))) {
           if (a.internal) continue
-          // An address of one link is reached on the link it is on
-          const to = a.family === 'IPv6' && /^fe[89ab]/i.test(a.address) ? `${a.address.split('%')[0]}%${link}` : a.address
+          // An address of one link is reached on the link it is on, by its name, and on Windows by its number
+          const to =
+            a.family === 'IPv6' && /^fe[89ab]/i.test(a.address)
+              ? `${a.address.split('%')[0]}%${process.platform === 'win32' ? (a as { scopeid?: number }).scopeid : link}`
+              : a.address
           const host = a.family === 'IPv6' ? `[${a.address.split('%')[0]}]` : a.address
           for (const port of [wide.base, contentPort(wide.base)]) {
             const got = await ask(port, { to, host: `${host}:${port}` }).then(
@@ -968,6 +971,8 @@ describe('The names the door answers to', () => {
         await wide.stop()
       }
     },
+    // On Windows a connection that is refused is tried again for a second or two before it is given up
+    60_000,
   )
 })
 
@@ -1028,6 +1033,7 @@ describe('Where the door listens, as the machine moves between networks', () => 
         await opened?.stop()
       }
     },
+    60_000,
   )
 
   test('An address that cannot be listened at is said once, by its code alone, and tried again at each look until it can be', async () => {
@@ -1048,7 +1054,8 @@ describe('Where the door listens, as the machine moves between networks', () => 
       await opened.refresh()
       await opened.refresh()
       const missed = said.filter((line) => line.startsWith('door: could not listen at'))
-      expect(missed).toEqual(['door: could not listen at one of this machine’s addresses (EADDRNOTAVAIL); trying again'])
+      // Under Bun, whose server says a port is in use where the address is not had, as under Node
+      expect(missed).toEqual(['door: could not listen at one of this machine’s addresses (address_unavailable); trying again'])
       expect(said.join('\n')).not.toContain('10.255.254.253')
       // The door is open all the same, on the machine itself
       expect(said.filter((line) => line.startsWith('door open'))).toEqual([expect.stringContaining('the network is on: this machine’s private addresses only')])
