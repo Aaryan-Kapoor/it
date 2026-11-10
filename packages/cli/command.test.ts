@@ -28,7 +28,7 @@ import { behindMark, MARK, PORTS, TAKES, UPLOAD, WHEN } from '@it/protocol'
 
 // What setup says last to an agent, as the program has it: said here in the program's own words, so that a change of them is a change here
 const AFTER_SETUP =
-  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
+  'If you are an agent installing It for someone, one step of the install guide comes after this one: run `it tour` and do what it prints. It has you put a first page up for the person and then give them the link that `it site --no-open` prints, to open on this computer, which opens on that page. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
 
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
@@ -6343,7 +6343,7 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
     // An agent that set an app up is told what follows setup, and how to read the guide whole: it may have been given only a summary of it
     expect(printed(one.ran).next).toBe(AFTER_SETUP)
     expect(AFTER_SETUP).toContain('`it site --no-open`')
-    expect(AFTER_SETUP).toContain('`it tour --wait`')
+    expect(AFTER_SETUP).toContain('run `it tour` and do what it prints')
     expect(AFTER_SETUP).toContain('`curl -fsSL https://itcan.do/install.md`')
     // Where nothing was set up, nothing follows
     expect(printed(none.ran).next).toBeUndefined()
@@ -7182,6 +7182,67 @@ describe('whether what the person does arrives by itself, as a page’s command 
       expect(c.asked).toEqual([`/route?harness=claude-code&session=${claude}`])
       // And the conversation's note says that it published without the add-on, for the connector to tell its page
       expect(notes(m)[`claude-code:${claude}`]).toMatchObject({ addon: false })
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
+  test('the tour’s first page, shown from such a conversation, is put up as one that cannot be heard yet, and its agent is told to give the line to type and end its turn, and not to wait', async () => {
+    const m = machine()
+    b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: 'tour-menu', version: 1, url: 'https://site.example/p/tour-menu' }
+      if (fn === 'displays:show') return { displays: ['Desk'] }
+      return null
+    })
+    const c = await connectorSaying(m, { connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    try {
+      const env = { ...b.env, CLAUDE_CODE_SESSION_ID: claude, CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.321' }
+      const said = printed(await run(m, ['tour', 'show', 'menu', '--param', 'folder=shop'], env))
+      expect(said).toMatchObject({ id: 'tour-menu', asleep: true, arrives: { byItself: false } })
+      expect(said.arrives.next).toContain('type /reload-plugins in this conversation')
+      expect(said.arrives.next).toContain('end your turn')
+      expect(said.arrives.next).toContain('do not run `it wait`')
+      // An agent that says which it is to be is taken at its word
+      const awake = printed(await run(m, ['tour', 'show', 'menu', '--param', 'asleep=false'], env))
+      expect(awake.asleep).toBeUndefined()
+      expect(awake.arrives.next).toContain('`it wait --id tour-menu --timeout 100`')
+      // And any other page of the tour is told what a page is told there: to wait for what is done on it
+      const other = printed(await run(m, ['tour', 'show', 'button'], env))
+      expect(other.asleep).toBeUndefined()
+      expect(other.arrives.next).toContain('--timeout 100`')
+      expect(other.arrives.next).not.toContain('end your turn')
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
+  test('where the conversation’s add-on is listening, or its Claude Code is too old to load one, the first page is put up awake', async () => {
+    const m = machine()
+    b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: 'tour-menu', version: 1, url: 'https://site.example/p/tour-menu' }
+      if (fn === 'displays:show') return { displays: ['Desk'] }
+      return null
+    })
+    const env = { ...b.env, CLAUDE_CODE_SESSION_ID: claude }
+    let c = await connectorSaying(m, { connected: true, listening: true, runtime: 'active', thread: 'none' })
+    try {
+      const said = printed(
+        await run(m, ['tour', 'show', 'menu'], { ...env, IT_HARNESS: 'claude-code', IT_SESSION: claude, CLAUDE_CODE_EXECPATH: '/x/versions/2.1.321' }),
+      )
+      expect(said.asleep).toBeUndefined()
+      expect(said.arrives).toMatchObject({ byItself: true, via: 'addon' })
+    } finally {
+      await c.close()
+    }
+    c = await connectorSaying(m, { connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    try {
+      const old = printed(await run(m, ['tour', 'show', 'menu'], { ...env, CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.280' }))
+      expect(old.asleep).toBeUndefined()
+      expect(old.arrives.next).toContain('start a new Claude Code conversation')
     } finally {
       await c.close()
       await b.close()
