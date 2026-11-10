@@ -861,6 +861,20 @@ describe('starting Codex to queue a click', () => {
     }
     expect(codexCommand('win32', PATHS, exists, unread)).toEqual([NODE, PNPM_SCRIPT])
   })
+  test('on Windows, a shim is read only for the lines npm and pnpm write, so a remark neither hides a later Codex nor starts what it names', () => {
+    const EXE = 'C:\\tools\\codex.exe'
+    const PATH = `${NPM};C:\\tools;C:\\Program Files\\nodejs`
+    const files = { [NPM_SCRIPT]: '', [`${NPM}\\cli.py`]: '', [`${NPM}\\unrelated.exe`]: '', [EXE]: '', [NODE]: '' }
+    // A remark that names Node, before a line that starts Python: passed over for the Codex after it
+    expect(
+      codexCommand('win32', PATH, ...disk({ ...files, [`${NPM}\\codex.cmd`]: '@ECHO off\r\n@rem node is no longer used\r\npython "%~dp0\\cli.py" %*\r\n' })),
+    ).toEqual([EXE])
+    // A remark after npm's own lines that looks like one handing the words on: npm's lines are what is started
+    expect(codexCommand('win32', PATH, ...disk({ ...files, [`${NPM}\\codex.cmd`]: `${npmShim}@rem "%~dp0\\unrelated.exe" %*\r\n` }))).toEqual([
+      NODE,
+      NPM_SCRIPT,
+    ])
+  })
   test('on Windows, where no Codex on the PATH can be started without a shell, nothing is started and the click waits instead', () => {
     const PATH = `${NPM};C:\\Program Files\\nodejs`
     // No script, no Node, a shim that cannot be read, or no PATH at all
