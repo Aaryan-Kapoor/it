@@ -805,7 +805,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     owed: boolean
     behind: boolean
     finished: boolean
-    /** Changes whenever a hand-over arrives or the turn changes, so an older reply cannot end a newer watch. */
+    /** Changes whenever a hand-over arrives, a watch merges in or the turn changes, so an older reply cannot end a newer watch. */
     generation: number
     idleAt: number | null
     want: 'running' | 'ended' | 'unknown' | 'wait'
@@ -908,6 +908,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     watchedTurns.delete(was)
     const there = watchedTurns.get(key)
     if (there) {
+      // Merged names and endings still need reporting, even when both watches already want ended.
+      there.generation++
       for (const name of w.names) there.names.add(name)
       for (const name of w.told) there.told.add(name)
       there.owed ||= w.owed

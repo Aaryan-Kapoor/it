@@ -5996,6 +5996,44 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     expect(told().find((said) => said.for?.id === other.id && said.running === false)).toMatchObject({ untold: true })
   })
 
+  test('a short turn merged into a watch whose ending awaits its reply keeps its own ending to report', async () => {
+    standIn()
+    await start('socket', APPS)
+    const other = { harness: 'claude-code', id: 'conversation-2' }
+    await asks(false)
+    await asks(false, other.id)
+    let release!: () => void
+    let entered!: () => void
+    const waiting = new Promise<void>((done) => (entered = done))
+    const reply = new Promise<null>((done) => (release = () => done(null)))
+    let held = false
+    stand.answer = (name, args) => {
+      if (name !== 'turns:say' || args.for?.id !== CLAUDE.id || args.running !== false || held) return undefined
+      held = true
+      entered()
+      return reply
+    }
+    await handed(1, { woke: true, turn: false, turnOver: true }, false)
+    await waiting
+    // The other short turn ends, then merges into the watch whose ending is still in flight.
+    offered(click(2, other))
+    await until(async () => ((await asks(false, other.id))?.clicks ?? []).some((got) => got.id === 'click-2'))
+    expect(await local('/ack', { method: 'POST', body: { ids: ['click-2'], woke: true, turn: false, turnOver: true } })).toEqual({ ok: true, acked: 1 })
+    expect(await local('/session', { method: 'POST', body: { harness: 'claude-code', session: CLAUDE.id, was: other.id } })).toMatchObject({ ok: true })
+    await pass()
+    expect(told()).toEqual([{}, { ...ENDED, untold: true }])
+    release()
+    await settled()
+    await pass()
+    expect(told()).toContainEqual({ for: other, running: false, untold: true })
+    const reported = told()
+    // Both watches have been let go: later turns without a click are not reported.
+    await asks(true)
+    await asks(false)
+    await pass()
+    expect(told()).toEqual(reported)
+  })
+
   test('an It from before it took any of this is told nothing more once it has said so', async () => {
     standIn()
     stand.answer = (name) => (name === 'turns:say' ? Promise.reject(new Error('Could not find public function for turns:say')) : undefined)
