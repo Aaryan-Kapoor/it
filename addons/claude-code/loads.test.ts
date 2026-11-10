@@ -109,7 +109,10 @@ describe.skipIf(!programs.length)('the Claude Code add-on, loaded by a real Clau
           stdio: ['pipe', 'ignore', 'ignore'],
         })
         const until = Date.now() + 60_000
-        while (!asked.some((a) => a.startsWith('/clicks?harness=claude-code&session=')) && Date.now() < until) await new Promise((r) => setTimeout(r, 250))
+        // Waited for until the add-on asks, or Claude Code says it refused it, which it says at once
+        const refusedIt = () => existsSync(debug) && /it-bridge@it failed to load|it-bridge: hooks module did not load/.test(readFileSync(debug, 'utf8'))
+        while (!asked.some((a) => a.startsWith('/clicks?harness=claude-code&session=')) && !refusedIt() && Date.now() < until)
+          await new Promise((r) => setTimeout(r, 250))
         const said = existsSync(debug)
           ? readFileSync(debug, 'utf8')
               .split('\n')
