@@ -1268,7 +1268,10 @@ main:has(.modal-overlay) {
 /* The title and the words beside it share a baseline, which is put where the middle of the
    title's capitals is the middle of the bar, from the cap height of the face the browser sets them
    in. The row is as tall as the bar, and the strut before the words is the height from the bar's top
-   to that baseline: half the bar and half the capitals. Its foot is its baseline. */
+   to that baseline: half the bar and half the capitals. Its foot is its baseline. A face that
+   does not say how tall its capitals are is given its ascent for them, which would put the words
+   well below the middle, so the half is never taken as more than 0.38em: no face the bar is set
+   in has capitals taller than three quarters of its size. */
 .page-nav-titlewrap {
   display: flex;
   align-items: baseline;
@@ -1281,7 +1284,7 @@ main:has(.modal-overlay) {
   content: "";
   flex: none;
   height: calc(var(--nav-h) / 2 + 0.35em);
-  height: calc(var(--nav-h) / 2 + 0.5cap);
+  height: calc(var(--nav-h) / 2 + min(0.5cap, 0.38em));
 }
 
 .page-nav-title {
