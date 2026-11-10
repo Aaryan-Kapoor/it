@@ -169,6 +169,9 @@ function run(
 
 /** What the command that made a page tells its agent, beside the page: to give the person the page's address in the chat. */
 const TELL = 'Give the user this url in the chat, in one short line that says what is on the page.'
+/** What `it create` and `it update` say of a page they published without --open, which no display shows. */
+const UNSHOWN = (id: string) =>
+  `The page is published and not shown on any display, because --open was not given. Run \`it open ${id}\` to show it, or add --open when you publish.`
 
 interface Asked {
   path: string
@@ -3129,6 +3132,7 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
           version: 2,
           url: `${b.url}/p/board`,
           note: 'This page was another conversation’s, and is this one’s now: what is done on it comes here.',
+          hint: UNSHOWN('board'),
           // With no connector here to ask, whether what is done on it arrives by itself is not known
           arrives: expect.objectContaining({ byItself: 'unknown' }),
         },
@@ -3212,6 +3216,7 @@ describe.skipIf(process.platform === 'win32')('a command that two agent apps hav
           url: `${b.url}/p/plan`,
           note: 'This page was given to the an-app-of-their-own conversation theirs-1. This command also carried the marks of Codex, and which of them ran it could not be told. If that is not the conversation you are in, publish it again with --take, and with IT_HARNESS and IT_SESSION set to your own app and conversation.',
           tell: TELL,
+          hint: UNSHOWN('plan'),
           arrives: expect.objectContaining({ byItself: 'unknown' }),
         },
       ])
@@ -3229,7 +3234,7 @@ describe.skipIf(process.platform === 'win32')('a command that two agent apps hav
       const alone = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], { ...b.env, CODEX_THREAD_ID: 'codex-1' })
       expect([alone.code, printed(alone)]).toEqual([
         0,
-        { id: 'plan', version: 1, url: `${b.url}/p/plan`, tell: TELL, arrives: expect.objectContaining({ byItself: 'unknown' }) },
+        { id: 'plan', version: 1, url: `${b.url}/p/plan`, tell: TELL, hint: UNSHOWN('plan'), arrives: expect.objectContaining({ byItself: 'unknown' }) },
       ])
       expect(b.asked.find((x) => x.path === 'publish:begin')!.args.session).toEqual({ harness: 'codex', id: 'codex-1' })
     } finally {
@@ -4109,7 +4114,17 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
       const opened = await run(m, ['open', 'plan'], b.env)
       expect([opened.code, printed(opened)]).toEqual([0, { id: 'plan', shownOn: [], hint: HINT }])
       const created = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>', '--open'], b.env)
-      expect([created.code, printed(created)]).toEqual([0, { id: 'plan', version: 1, url: 'https://site.example/p/plan', tell: TELL, shownOn: [], hint: HINT }])
+      expect([created.code, printed(created)]).toEqual([
+        0,
+        {
+          id: 'plan',
+          version: 1,
+          url: 'https://site.example/p/plan',
+          tell: TELL,
+          shownOn: [],
+          hint: `The page is published and not shown on any display. ${HINT} Then run \`it open plan\` to show it.`,
+        },
+      ])
     } finally {
       await b.close()
     }
@@ -4144,11 +4159,62 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
   })
 
   test('nothing of the kind is said when a display took the page', async () => {
-    const m = machine()
-    const b = await backend(m, answers(['Kitchen']))
+    const m = machine(true, true)
+    const b = await backend(m, (asked) => {
+      if (asked.path === 'artifacts:get') return { title: 'Plan' }
+      const said = answers(['Kitchen'])(asked)
+      return asked.path === 'publish:begin' ? { ...(said as object), upload: { url: `${b.url}/upload/`, grant: 'a-grant' } } : said
+    })
     try {
       const opened = await run(m, ['open', 'plan'], b.env)
       expect([opened.code, printed(opened)]).toEqual([0, { id: 'plan', shownOn: ['Kitchen'] }])
+      const created = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>', '--open'], b.env)
+      expect([created.code, printed(created)]).toEqual([0, { id: 'plan', version: 1, url: 'https://site.example/p/plan', tell: TELL, shownOn: ['Kitchen'] }])
+      const updated = await run(m, ['update', 'plan', '--html', '<p>hi</p>', '--open'], b.env)
+      expect([updated.code, printed(updated)]).toEqual([0, { id: 'plan', version: 1, url: 'https://site.example/p/plan', shownOn: ['Kitchen'] }])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it create` and `it update` without --open say that the page is shown on no display, and how to show it, though a display is paired', async () => {
+    const m = machine(true, true)
+    const b = await backend(m, (asked) => {
+      if (asked.path === 'artifacts:get') return { title: 'Plan' }
+      const said = answers(['Kitchen'])(asked)
+      return asked.path === 'publish:begin' ? { ...(said as object), upload: { url: `${b.url}/upload/`, grant: 'a-grant' } } : said
+    })
+    try {
+      const created = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], b.env)
+      expect([created.code, printed(created)]).toEqual([0, { id: 'plan', version: 1, url: 'https://site.example/p/plan', tell: TELL, hint: UNSHOWN('plan') }])
+      const updated = await run(m, ['update', 'plan', '--html', '<p>hi</p>'], b.env)
+      expect([updated.code, printed(updated)]).toEqual([0, { id: 'plan', version: 1, url: 'https://site.example/p/plan', hint: UNSHOWN('plan') }])
+      // No display was asked
+      expect(b.asked.some((x) => x.path === 'displays:show')).toBe(false)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it update --open` that no display could take says so, with why, and how to show the page once one can', async () => {
+    const m = machine(true, true)
+    const b = await backend(m, (asked) => {
+      if (asked.path === 'artifacts:get') return { title: 'Plan' }
+      const said = answers([])(asked)
+      return asked.path === 'publish:begin' ? { ...(said as object), upload: { url: `${b.url}/upload/`, grant: 'a-grant' } } : said
+    })
+    try {
+      const updated = await run(m, ['update', 'plan', '--html', '<p>hi</p>', '--open'], b.env)
+      expect([updated.code, printed(updated)]).toEqual([
+        0,
+        {
+          id: 'plan',
+          version: 1,
+          url: 'https://site.example/p/plan',
+          shownOn: [],
+          hint: `The page is published and not shown on any display. ${HINT} Then run \`it open plan\` to show it.`,
+        },
+      ])
     } finally {
       await b.close()
     }
@@ -5257,7 +5323,7 @@ describe.skipIf(process.platform === 'win32')('with a proxy named in the environ
           const listed = await run(m, ['list'], env, runtime)
           expect([listed.code, printed(listed)]).toEqual([0, []])
           const created = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>a page of the person’s own</p>'], env, runtime)
-          expect([created.code, printed(created)]).toEqual([0, { id: 'plan', version: 1, url: `${b.url}/p/plan`, tell: TELL }])
+          expect([created.code, printed(created)]).toEqual([0, { id: 'plan', version: 1, url: `${b.url}/p/plan`, tell: TELL, hint: UNSHOWN('plan') }])
           expect(b.uploads).toEqual([{ path: '/upload/u/index.html', bytes: Buffer.byteLength('<p>a page of the person’s own</p>') }])
           const status = printed(await run(m, ['status'], env, runtime))
           expect(status).toMatchObject({ running: true, enrolled: true, connector: { ok: true } })
@@ -5833,7 +5899,7 @@ describe.skipIf(process.platform === 'win32')('a machine that joined an It on an
           url: `${b.url}/p/plan`,
           tell: TELL,
           shownOn: [],
-          hint: `No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${b.url} in a browser on this machine and pair that browser. Other displays are added from there.`,
+          hint: `The page is published and not shown on any display. No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${b.url} in a browser on this machine and pair that browser. Other displays are added from there. Then run \`it open plan\` to show it.`,
         },
       ])
       expect(b.uploads).toEqual([{ path: '/upload/u/index.html', bytes: 9 }])

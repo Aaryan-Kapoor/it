@@ -617,21 +617,37 @@ async function published(done: { slug: string; version: number; url: string; not
     // Whether what the person does on it comes back here by itself, and so whether to end the turn or to wait
     ...(arrival ? { arrives: arrival } : {}),
   }
-  if (!a.flags.open) return out(result)
-  try {
-    out({ ...result, ...shownAs(await show(done.slug, a)) })
-  } catch (err) {
-    if (!(err instanceof Problem)) throw err
-    out({
-      ...result,
-      shownOn: [],
-      notShown: { code: err.code, message: err.message, ...(err.hint ? { hint: err.hint } : {}) },
-      // Said in so many words: an empty `shownOn` alone reads as "no display is paired", and this is not that
-      hint: `The ${NOUN.one} is published, and only showing it failed: \`notShown\` says why. Do not publish it again. Run \`it open ${done.slug}\` to show it.`,
-    })
-    process.exitCode = 1
-  }
+  let said: Record<string, unknown> & { hint?: string }
+  if (!a.flags.open) said = { ...result, hint: shownNowhere(done.slug, false) }
+  else
+    try {
+      const where = shownAs(await show(done.slug, a))
+      said = { ...result, ...where, ...(where.shownOn.length ? {} : { hint: shownNowhere(done.slug, true, where.hint) }) }
+    } catch (err) {
+      if (!(err instanceof Problem)) throw err
+      said = {
+        ...result,
+        shownOn: [],
+        notShown: { code: err.code, message: err.message, ...(err.hint ? { hint: err.hint } : {}) },
+        // Said in so many words: an empty `shownOn` alone reads as "no display is paired", and this is not that
+        hint: `The ${NOUN.one} is published, and only showing it failed: \`notShown\` says why. Do not publish it again. Run \`it open ${done.slug}\` to show it.`,
+      }
+      process.exitCode = 1
+    }
+  out(said)
+  // A person at a terminal is told it in a line of its own, beside the JSON
+  if (said.hint && forPerson(a)) tell([said.hint])
 }
+/**
+ * What `it create` and `it update` say when the page they published is shown on no display.
+ * Showing a page is asked for with --open, and an agent that left it out would otherwise go on
+ * as though the person could see the page. Where --open was given, `why` says why no display
+ * took it, and how to get one that would.
+ */
+const shownNowhere = (slug: string, opened: boolean, why?: string): string =>
+  opened
+    ? `The ${NOUN.one} is published and not shown on any display.${why ? ` ${why}` : ''} Then run \`it open ${slug}\` to show it.`
+    : `The ${NOUN.one} is published and not shown on any display, because --open was not given. Run \`it open ${slug}\` to show it, or add --open when you publish.`
 
 /** How often an agent that waits to give the tour says so, and asks whether it was asked for. */
 const TOUR_ASK_EVERY_MS = 2500
