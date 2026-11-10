@@ -1451,6 +1451,125 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('`it open` with no display named says which display was chosen and why, and how to ask for another', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show'
+        ? {
+            displays: ['Desk'],
+            displayIds: ['jh7desk'],
+            notShown: [
+              { display: 'TV', displayId: 'k57tv', reason: 'agents_off' },
+              { display: 'Phone', displayId: 'p1', reason: 'not_chosen' },
+            ],
+            took: false,
+            chosen: 'open',
+          }
+        : null,
+    )
+    try {
+      const opened = await run(m, ['open', 'board'], b.env)
+      expect(b.asked.find((x) => x.path === 'displays:show')!.args).toEqual({ slug: 'board' })
+      const said = printed(opened)
+      expect(said).toMatchObject({ shownOn: ['Desk'], shownDisplayIds: ['jh7desk'] })
+      expect(said.hint).toContain('No display was named, so it is shown on "Desk" alone')
+      expect(said.hint).toContain('--everywhere')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--everywhere` asks every display in so many words, `--on all` is the name "all", and neither goes with --on or --on-id', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show' && asked.args.display === 'all'
+        ? new Refusal({ code: 'not_found', message: 'No display has that name.', noSuchDisplay: true } as never)
+        : asked.path === 'displays:show'
+          ? { displays: ['Desk', 'TV'], took: false }
+          : asked.path === 'notifications:send'
+            ? { id: 'n1', displays: ['Desk', 'TV'], displayIds: ['d', 't'], notShown: [] }
+            : asked.path === 'displays:list'
+              ? [{ id: 'd', name: 'Desk' }]
+              : null,
+    )
+    try {
+      expect(printed(await run(m, ['open', 'board', '--everywhere'], b.env))).toMatchObject({ shownOn: ['Desk', 'TV'] })
+      expect(b.asked.find((x) => x.path === 'displays:show')!.args).toEqual({ slug: 'board', everywhere: true })
+      expect(printed(await run(m, ['notify', 'hi', '--everywhere'], b.env))).toEqual({ id: 'n1', sentTo: ['Desk', 'TV'], sentToIds: ['d', 't'] })
+      expect(b.asked.find((x) => x.path === 'notifications:send')!.args).toEqual({ text: 'hi', everywhere: true })
+      const named = await run(m, ['open', 'board', '--on', 'all'], b.env)
+      expect([named.code, error(named).code]).toEqual([1, 'not_found'])
+      expect(error(named).hint).toContain('use --everywhere in place of --on')
+      for (const words of [
+        ['open', 'board', '--everywhere', '--on', 'Desk'],
+        ['notify', 'hi', '--everywhere', '--on-id', 'd'],
+      ])
+        expect(error(await run(m, words, b.env)).code).toBe('invalid')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('against an It of an earlier version, `--everywhere` is asked again with no display named, which there is every display, and says so', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      'everywhere' in asked.args
+        ? SERVER_ERROR
+        : asked.path === 'displays:show'
+          ? { displays: ['Desk', 'TV'], notShown: [] }
+          : asked.path === 'notifications:send'
+            ? { id: 'n1' }
+            : null,
+    )
+    try {
+      const opened = printed(await run(m, ['open', 'board', '--everywhere'], b.env))
+      expect(opened).toMatchObject({ shownOn: ['Desk', 'TV'] })
+      expect(opened.hint).toContain('earlier version')
+      expect(printed(await run(m, ['notify', 'hi', '--everywhere'], b.env))).toEqual({ id: 'n1', hint: expect.stringContaining('earlier version') })
+      // The last of each was asked with no display named
+      expect(b.asked.filter((x) => x.path === 'displays:show').at(-1)!.args).toEqual({ slug: 'board' })
+      expect(b.asked.filter((x) => x.path === 'notifications:send').at(-1)!.args).toEqual({ text: 'hi' })
+      // An It that says it takes it is not asked again, and its failure is said as it is
+      b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showEverywhere] })
+      const failed = await run(m, ['open', 'board', '--everywhere'], b.env)
+      expect([failed.code, error(failed).code]).toEqual([1, 'error'])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it notify` to a display that takes nothing now, to none, or to a name two displays share, is refused with why, and nothing is sent', async () => {
+    const m = machine()
+    let refusal: Record<string, unknown> = {}
+    const b = await backend(m, (asked) =>
+      asked.path === 'notifications:send'
+        ? new Refusal(refusal as never)
+        : asked.path === 'displays:list'
+          ? [
+              { id: 'a1', name: 'TV', paired: true, agents: true },
+              { id: 'b2', name: 'tv', paired: true, agents: false },
+            ]
+          : null,
+    )
+    try {
+      refusal = { code: 'forbidden', message: 'That display takes nothing from agents now.', notSent: 'agents_off' }
+      let ran = await run(m, ['notify', 'hi', '--on', 'Kitchen'], b.env)
+      expect([ran.code, error(ran).code, error(ran).message]).toEqual([1, 'agents_off', expect.stringContaining('Agents may not use "Kitchen"')])
+      refusal = { code: 'forbidden', message: 'No display can take this notification now.', notSent: 'nowhere' }
+      ran = await run(m, ['notify', 'hi'], b.env)
+      expect([error(ran).code, error(ran).hint]).toEqual(['nowhere', '"tv" is closed to agents.'])
+      refusal = { code: 'conflict', message: 'More than one display has that name.', sharedName: true }
+      ran = await run(m, ['notify', 'hi', '--on', 'TV'], b.env)
+      expect([error(ran).code, error(ran).message]).toEqual([
+        'conflict',
+        'More than one display is called "TV", so it is not clear which one is meant. Nothing was sent.',
+      ])
+      expect(error(ran).hint).toBe('Send it to one of them by its id, with --on-id <id>: "TV" (a1) and "tv" (b2)')
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it notify --on-id` sends to that display by its id', async () => {
     const m = machine()
     const b = await backend(m, (asked) => (asked.path === 'notifications:send' ? { id: 'n1' } : null))

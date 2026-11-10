@@ -1510,8 +1510,15 @@ export async function translate(err: unknown): Promise<never> {
       message?: string
       noSuchDisplay?: boolean
       anothers?: boolean
+      notSent?: string
+      sharedName?: boolean
     }
-    throw new Problem(data.message ?? 'Refused.', data.noSuchDisplay ? 'no_such_display' : data.anothers ? 'anothers' : (data.code ?? 'error'))
+    // A display that was named and takes nothing now is refused with why, which is the code: `not_paired`, `agents_off` or `nowhere`
+    const why = typeof data.notSent === 'string' && /^[a-z_]{1,20}$/.test(data.notSent) ? data.notSent : undefined
+    throw new Problem(
+      data.message ?? 'Refused.',
+      data.noSuchDisplay ? 'no_such_display' : data.anothers ? 'anothers' : data.sharedName ? 'shared_name' : (why ?? data.code ?? 'error'),
+    )
   }
   const text = String((err as Error)?.message ?? err)
   if (clashed(err)) throw new Problem('It is busy just now. Try again in a moment.', 'unavailable')
