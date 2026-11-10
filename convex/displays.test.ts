@@ -711,19 +711,48 @@ describe('where an agent’s notification goes', () => {
     const kept = await h.agent.mutation(api.notifications.send, { text: 'for both, kept up', sticky: true, everywhere: true })
     expect(kept.displayIds.sort()).toEqual([a.id, b.id].sort())
     await a.as.mutation(api.displays.allowAgents, { displayId: a.id, allowed: false })
-    // A tray's worth goes to every display while the first is closed to agents, which is the second alone
+    // Far more than a tray's worth, and more than any number of them a tray could read past, goes
+    // to every display while the first is closed to agents, which is the second alone. Written as
+    // a send writes them: the notification, and a row in the tray of each display it is for
     await h.t.run(async (ctx) => {
       const user = (await ctx.db.query('users').first())!
-      for (let i = 0; i < 60; i++)
-        await ctx.db.insert('notifications', { userId: user._id, text: `for b ${i}`, sticky: false, to: [b.id], createdAt: Date.now() + 1 + i })
+      for (let i = 0; i < 1200; i++) {
+        const createdAt = Date.now() + 1 + i
+        const id = await ctx.db.insert('notifications', { userId: user._id, text: `for b ${i}`, sticky: false, to: [b.id], listed: true, createdAt })
+        await ctx.db.insert('recipients', { userId: user._id, notificationId: id, displayId: b.id, createdAt })
+      }
     })
     vi.advanceTimersByTime(1000)
     await a.as.mutation(api.displays.allowAgents, { displayId: a.id, allowed: true })
     expect(await tray(a)).toEqual(['for both, kept up'])
     const theirs = await tray(b)
     expect(theirs).toHaveLength(60)
-    expect(theirs[0]).toBe('for b 59')
+    expect(theirs[0]).toBe('for b 1199')
     expect(theirs).not.toContain('for both, kept up')
+    // Put away on one display, it is put away from every tray it was in
+    await a.as.mutation(api.notifications.dismiss, { key: a.key, ids: [kept.id] })
+    expect(await tray(a)).toEqual([])
+    const rows = await h.t.run(async (ctx) => (await ctx.db.query('recipients').collect()).filter((r) => r.notificationId === kept.id))
+    expect(rows.map((r) => r.dismissedAt !== undefined)).toEqual([true, true])
+  })
+
+  test('one sent to every display before trays had rows of their own still shows where it did, a tray’s worth at most', async () => {
+    const h = await household()
+    const a = await h.browser('owner', key(1))
+    await h.t.run(async (ctx) => {
+      const user = (await ctx.db.query('users').first())!
+      for (let i = 0; i < 70; i++)
+        await ctx.db.insert('notifications', { userId: user._id, text: `from before ${i}`, sticky: false, createdAt: Date.now() + i })
+    })
+    vi.advanceTimersByTime(1000)
+    const fresh = await h.agent.mutation(api.notifications.send, { text: 'new', everywhere: true })
+    const shown = await tray(a)
+    expect(shown).toHaveLength(60)
+    expect(shown.slice(0, 2)).toEqual(['new', 'from before 69'])
+    // Neither kind is shown to a display closed to agents
+    await a.as.mutation(api.displays.allowAgents, { displayId: a.id, allowed: false })
+    expect(await tray(a)).toEqual([])
+    expect(fresh.displayIds).toEqual([a.id])
   })
 
   test('one an earlier It sent to every display, which kept no list of whom, is not shown on a display registered after it', async () => {

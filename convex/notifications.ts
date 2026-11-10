@@ -1,7 +1,7 @@
 // A notification is the agent speaking to the person outside any one page. It is stored, so it
 // survives a reload; it shows as a toast and in a tray; and when the display it is meant for
 // does not have the site open, it goes out as a web push (push.ts).
-import { LIMITS, MESSAGE } from '@it/protocol'
+import { LIMITS, MESSAGE, QUOTA } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -69,20 +69,26 @@ export const send = mutation({
     // paired later
     const every = 'everywhere' in target
     const displayId: Id<'displays'> | undefined = every ? undefined : aimed.to[0]!._id
+    const createdAt = Date.now()
     const id = await ctx.db.insert('notifications', {
       userId: user._id,
       text: clean,
       artifactId: artifact?._id,
       displayId,
-      ...(every ? { to: aimed.to.map((d) => d._id) } : {}),
+      ...(every ? { to: aimed.to.map((d) => d._id), listed: true } : {}),
       sticky: sticky ?? false,
       buttons: buttons?.length ? buttons : undefined,
       // What the page shows now is what a button of this is about, however much later it is pressed
       ...(artifact && buttons?.length
         ? { contentVersion: artifact.currentVersion ?? 0, stateRevision: await revisionNow(ctx, artifact._id), title: artifact.title }
         : {}),
-      createdAt: Date.now(),
+      createdAt,
     })
+    // Sent to every display, a row in each of their trays: a tray reads its own rows, however
+    // many went to other displays meanwhile. What is sent to one display is read by its own index
+    if (every)
+      for (const d of aimed.to)
+        await ctx.db.insert('recipients', { userId: user._id, notificationId: id, displayId: d._id, artifactId: artifact?._id, createdAt })
     // Pushed now to displays that are closed. A display that was open a moment ago may have just
     // been closed, so a second look a few minutes on pushes to it if nobody has seen this yet.
     await ctx.scheduler.runAfter(0, internal.push.deliver, { notificationId: id })
@@ -109,28 +115,36 @@ export function isFor(n: Doc<'notifications'>, d: Doc<'displays'>): boolean {
   return n.to ? n.to.includes(d._id) : d.createdAt <= n.createdAt
 }
 
-/** How many of what went to every display a tray reads at most, looking for the ones that are for its display. */
-const BROADCASTS_READ = 1000
-
 /**
- * The newest of what went to every display that is for this one, up to a tray's worth. What went
- * to every display is kept in one list for all of them, with whom each was for, so the ones for
- * other displays are passed over until a tray's worth is found: a display closed to agents for a
- * while, while many went to the others, still has what was sent to it before. Nothing sent
- * before the display was there can be for it, so the reading stops there, and it never reads
- * more than `BROADCASTS_READ`. A display closed to agents is shown none of it, and reads none.
+ * The newest of what went to every display that is for this one, up to a tray's worth, which is
+ * read by this display's own rows in `recipients` and by nothing that went to other displays. A
+ * display closed to agents is shown none of it, and reads none.
+ *
+ * What an earlier It sent to every display has no rows. It was for every display that was there
+ * when it was sent, so every one of it since this display was registered is for this display, and
+ * the newest tray's worth of it is read by itself (`by_user_unlisted`), passing over nothing.
+ * There is no more of it from now on, and it goes when a month has passed.
  */
 async function broadcastsFor(ctx: QueryCtx, userId: Id<'users'>, display: Doc<'displays'>): Promise<Doc<'notifications'>[]> {
   if (display.agentsOff) return []
+  const rows = await ctx.db
+    .query('recipients')
+    .withIndex('by_display_time', (q) => q.eq('displayId', display._id).eq('dismissedAt', undefined))
+    .order('desc')
+    .take(TRAY)
   const out: Doc<'notifications'>[] = []
-  let read = 0
-  for await (const n of ctx.db
-    .query('notifications')
-    .withIndex('by_user_target', (q) => q.eq('userId', userId).eq('displayId', undefined).eq('dismissedAt', undefined).gte('createdAt', display.createdAt))
-    .order('desc')) {
-    if (isFor(n, display)) out.push(n)
-    if (out.length >= TRAY || ++read >= BROADCASTS_READ) break
+  for (const r of rows) {
+    const n = await ctx.db.get(r.notificationId)
+    if (n && n.userId === userId && !n.dismissedAt && isFor(n, display)) out.push(n)
   }
+  const earlier = await ctx.db
+    .query('notifications')
+    .withIndex('by_user_unlisted', (q) =>
+      q.eq('userId', userId).eq('displayId', undefined).eq('listed', undefined).eq('dismissedAt', undefined).gte('createdAt', display.createdAt),
+    )
+    .order('desc')
+    .take(TRAY)
+  for (const n of earlier) if (isFor(n, display)) out.push(n)
   return out
 }
 
@@ -206,7 +220,14 @@ export const dismiss = mutation({
     if (ids.length === 1 && mine.length === 0) fail('not_found', 'No such notification.')
     for (const n of mine)
       if (!n.dismissedAt) {
-        await ctx.db.patch(n._id, { dismissedAt: Date.now() })
+        const at = Date.now()
+        await ctx.db.patch(n._id, { dismissedAt: at })
+        // Put away from every tray it is in, which is one row for each display it was sent to
+        const rows = await ctx.db
+          .query('recipients')
+          .withIndex('by_notification', (q) => q.eq('notificationId', n._id))
+          .take(QUOTA.displays)
+        for (const r of rows) await ctx.db.patch(r._id, { dismissedAt: at })
         // Counted where it was put away unanswered: one that was answered has been counted as that
         if (!n.answeredAt) await counted(ctx, 'notification.ended', { how: 'dismissed', pushed: (n.pushedTo?.length ?? 0) > 0 })
       }

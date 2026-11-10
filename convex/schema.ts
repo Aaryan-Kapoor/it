@@ -547,11 +547,34 @@ export default defineSchema({
     dismissedAt: v.optional(v.number()),
     /** The displays this has already been pushed to, so a second pass does not push it twice. */
     pushedTo: v.optional(v.array(v.id('displays'))),
+    /** Set on one sent to every display once a row in `recipients` was written for each display in `to`. One an earlier It sent has none. */
+    listed: v.optional(v.boolean()),
   })
     .index('by_user', ['userId', 'createdAt'])
     .index('by_artifact', ['artifactId'])
-    // What one display's tray holds: what is addressed to it (or to every display) and not dismissed
+    // What one display's tray holds of what is addressed to it alone, and not dismissed
     .index('by_user_target', ['userId', 'displayId', 'dismissedAt', 'createdAt'])
+    // What an earlier It sent to every display, which has no rows in `recipients`, and not dismissed
+    .index('by_user_unlisted', ['userId', 'displayId', 'listed', 'dismissedAt', 'createdAt'])
+    .index('by_created', ['createdAt']),
+
+  // One row for each display a notification sent to every display was for, so that a display's
+  // tray reads its own rows and nothing that went to other displays. What is done with the
+  // notification (seen, answered, dismissed) is kept on the notification, for every display at
+  // once. Its dismissal is copied here as well, so that the tray's index leaves out what was dismissed.
+  recipients: defineTable({
+    userId: v.id('users'),
+    notificationId: v.id('notifications'),
+    displayId: v.id('displays'),
+    /** The page it is about, so that a page's rows go with the page. */
+    artifactId: v.optional(v.id('artifacts')),
+    createdAt: v.number(),
+    dismissedAt: v.optional(v.number()),
+  })
+    .index('by_display_time', ['displayId', 'dismissedAt', 'createdAt'])
+    .index('by_notification', ['notificationId'])
+    .index('by_artifact', ['artifactId'])
+    .index('by_user', ['userId'])
     .index('by_created', ['createdAt']),
 
   // A page's deletion receipt stays until seven days after confirmed completion.
