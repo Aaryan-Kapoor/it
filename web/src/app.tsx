@@ -26,6 +26,7 @@ import {
   readClocks,
   refusal,
   reloadWhenThere,
+  renaming,
   signOutConfirmed,
   signOutLater,
   signOutTokenSpent,
@@ -1008,7 +1009,7 @@ function Reminders({ display }: { display: DisplayView }) {
 
   const save = async () => {
     try {
-      await rename({ displayId: display.id as never, name })
+      await renaming(rename({ displayId: display.id as never, name }), name)
       setEditing(false)
       setError('')
     } catch (err) {

@@ -418,6 +418,8 @@ export interface Refusal {
   message: string
   /** Set when a display's key is refused because the person removed that display. */
   forgotten?: boolean
+  /** Set when a display is given a name that another display already has. */
+  nameTaken?: boolean
 }
 /**
  * Something went wrong that the person is told little or nothing about, and that someone
@@ -441,6 +443,18 @@ export function refusal(err: unknown): Refusal {
     if (data && typeof data === 'object' && 'code' in data) return data as Refusal
   }
   return { code: 'error', message: 'Something went wrong. Try again.' }
+}
+
+/**
+ * Renaming a display, refused with the name in the person's own words where another display
+ * already has it. The backend says that without the name, since a refusal is kept in its own
+ * record of what failed, and the name is the person's.
+ */
+export function renaming<T>(asked: Promise<T>, name: string): Promise<T> {
+  return asked.catch((err) => {
+    if (refusal(err).nameTaken) throw new ConvexError({ code: 'conflict', message: `Another screen is already called ${name.trim()}. Pick another name.` })
+    throw err
+  })
 }
 
 // ---------- time ----------
