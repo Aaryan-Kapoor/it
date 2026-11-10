@@ -1320,6 +1320,115 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('`it open --on-id` asks for that display by its id alone, prints the ids it is shown on, and takes no page for a command with no conversation', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show'
+        ? { displays: ['Desk'], displayIds: ['jh7desk'], notShown: [{ display: 'Laptop', displayId: 'k57laptop', reason: 'not_paired' }], took: false }
+        : null,
+    )
+    try {
+      const opened = await run(m, ['open', 'board', '--on-id', 'jh7desk'], b.env)
+      expect(opened.code).toBe(0)
+      expect(printed(opened)).toMatchObject({
+        id: 'board',
+        shownOn: ['Desk'],
+        shownDisplayIds: ['jh7desk'],
+        notShownOn: [{ display: 'Laptop', displayId: 'k57laptop', reason: 'not_paired' }],
+      })
+      expect(b.asked.find((x) => x.path === 'displays:show')!.args).toEqual({ slug: 'board', displayId: 'jh7desk' })
+      expect(b.asked.filter((x) => x.path === 'artifacts:take')).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--on` and `--on-id` together, or either of them empty, are refused before anything is asked or published', async () => {
+    const m = machine()
+    const b = await backend(m, () => null)
+    try {
+      for (const words of [
+        ['open', 'board', '--on', 'Desk', '--on-id', 'jh7desk'],
+        ['open', 'board', '--on-id='],
+        ['open', 'board', '--on=  '],
+        ['notify', 'hello', '--on', 'Desk', '--on-id', 'jh7desk'],
+        ['create', 'Board', '--html', '<p>hi</p>', '--open', '--on', 'Desk', '--on-id', 'jh7desk'],
+        ['update', 'board', '--html', '<p>hi</p>', '--open', '--on-id='],
+      ]) {
+        const ran = await run(m, words, b.env)
+        expect([words.join(' '), ran.code, error(ran).code]).toEqual([words.join(' '), 2, 'invalid'])
+      }
+      expect(b.asked).toEqual([])
+      expect(b.uploads).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('an id no display has is refused as not found, and the hint lists each display with its id', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show' || asked.path === 'notifications:send'
+        ? new Refusal({ code: 'not_found', message: 'No display has that id.', noSuchDisplay: true } as never)
+        : asked.path === 'displays:list'
+          ? [
+              { id: 'jh7desk', name: 'Desk' },
+              { id: 'k57tv', name: 'TV' },
+            ]
+          : null,
+    )
+    try {
+      for (const words of [
+        ['open', 'board', '--on-id', 'nope'],
+        ['notify', 'hello', '--on-id', 'nope'],
+      ]) {
+        const ran = await run(m, words, b.env)
+        expect([ran.code, error(ran).code, error(ran).message]).toEqual([1, 'not_found', 'No display has the id "nope".'])
+        expect(error(ran).hint).toBe('Displays: "Desk" (jh7desk), "TV" (k57tv)')
+      }
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('against an It of an earlier version, `--on-id` is refused as such and never asked again by a name or for every display', async () => {
+    const m = machine()
+    // An earlier It fails a call with an argument it does not know, and says nothing of why
+    const b = await backend(m, (asked) =>
+      (asked.path === 'displays:show' || asked.path === 'notifications:send') && 'displayId' in asked.args ? SERVER_ERROR : null,
+    )
+    try {
+      for (const words of [
+        ['open', 'board', '--on-id', 'jh7desk'],
+        ['notify', 'hello', '--on-id', 'jh7desk'],
+      ]) {
+        const ran = await run(m, words, b.env)
+        expect([ran.code, error(ran).code]).toEqual([2, 'invalid'])
+        expect(error(ran).message).toContain('earlier version')
+      }
+      // Asked only with the id, each time, and nothing else
+      expect(b.asked.filter((x) => x.path === 'displays:show' || x.path === 'notifications:send').every((x) => x.args.displayId === 'jh7desk')).toBe(true)
+      // On its word that it takes the form, the failure is said as it is
+      b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.notifyById] })
+      const ran = await run(m, ['open', 'board', '--on-id', 'jh7desk'], b.env)
+      expect([ran.code, error(ran).code, error(ran).message]).toEqual([1, 'error', expect.stringContaining('Server Error')])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it notify --on-id` sends to that display by its id', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'notifications:send' ? { id: 'n1' } : null))
+    try {
+      const ran = await run(m, ['notify', 'hello', '--on-id', 'jh7desk'], b.env)
+      expect(ran.code).toBe(0)
+      expect(b.asked.find((x) => x.path === 'notifications:send')!.args).toEqual({ text: 'hello', displayId: 'jh7desk' })
+    } finally {
+      await b.close()
+    }
+  })
+
   test.each([
     ['the machine It runs on', true],
     ['a machine that joined', false],
