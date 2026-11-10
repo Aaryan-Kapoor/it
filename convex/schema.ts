@@ -178,6 +178,13 @@ export default defineSchema({
     usedAt: v.optional(v.number()),
     /** Set where the person said that agents may not show pages or send notifications on this display. */
     agentsOff: v.optional(v.boolean()),
+    /**
+     * The page this display is locked to, and when: it keeps to that page, and no agent brings
+     * another up here. Every display of one browser's pairing has the same lock.
+     */
+    lockedTo: v.optional(v.object({ artifactId: v.id('artifacts'), at: v.number() })),
+    /** When the page this display was locked to was deleted, which ended the lock, until the display has said so to whoever is at it. */
+    lockEnded: v.optional(v.number()),
     /** The session of the browser that registered it: forgetting the display ends that session, and that session ending signs the display out. */
     sessionId: v.id('sessions'),
     /** Earlier pairings of this display, whose invitations are ended when it is forgotten. */

@@ -2,7 +2,7 @@ import { AUDIENCE, LIMITS, parseJson, QUOTA, TAKES } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { action, internalMutation, type MutationCtx, mutation, query } from './_generated/server'
+import { action, internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import { takePage } from './artifacts'
 import { site } from './config'
 import { revokeLater } from './content'
@@ -11,6 +11,7 @@ import {
   artifactBySlug,
   displayByKey,
   findDisplay,
+  ownArtifact,
   ownDisplay,
   requireBrowser,
   requireMachine,
@@ -93,6 +94,7 @@ export const register = mutation({
         // just as the browser asking to end every other session does.
         for (const id of previous.slice(0, -PREVIOUS_PAIRINGS)) await endSession(ctx, id, 'forgotten', session._id)
       }
+      await oneLock(ctx, (await ctx.db.get(existing._id))!)
       return { ...view(existing), takes }
     }
     // A display the person told It to forget does not come back under the key it had. The key
@@ -121,8 +123,9 @@ export const register = mutation({
       // A browser whose site data was cleared, or a private window, comes back as a new display
       // each time, so that a person could have as many displays as there may be, none of which
       // they still use, and be unable to add one. Room is made by letting one go: first one that nobody
-      // gave a name or turned notifications on for and that is not open now (it has not been
-      // for ten minutes), and failing that any display that has not been open for a month.
+      // gave a name or turned notifications on for, that nobody locked to a page, and that is not
+      // open now (it has not been for ten minutes), and failing that any display that has not been
+      // open for a month.
       // A browser that comes back still paired is simply registered again. What its earlier
       // pairings let in ends now, since deleting the display would lose the way to end it later.
       // The one to go is one the caller may act for, which for a screen is a display of its own
@@ -130,7 +133,7 @@ export const register = mutation({
       // all of them would sign out the owner's by registering itself anew.
       const leastRecent = (of: typeof mine) => of.reduce((a, b) => (a.lastSeenAt <= b.lastSeenAt ? a : b))
       const itsOwn = mine.filter((d) => speaksFor(c, d))
-      const passing = itsOwn.filter((d) => !d.name && !d.push && now - d.lastSeenAt > 600_000)
+      const passing = itsOwn.filter((d) => !d.name && !d.push && !d.lockedTo && now - d.lastSeenAt > 600_000)
       const oldest = itsOwn.length ? leastRecent(itsOwn) : null
       const going = passing.length ? leastRecent(passing) : oldest && now - oldest.lastSeenAt >= 30 * 86_400_000 ? oldest : null
       if (!going) quota(mine.length, QUOTA.displays, 'displays', user._id)
@@ -161,6 +164,9 @@ export const register = mutation({
       sessionId: session._id,
       screen: screenOf(userAgent),
     })
+    // A browser that comes back as a new display, under a pairing that has a display locked,
+    // is locked as that one is: its site data was cleared, say, or a key was made by hand
+    await oneLock(ctx, (await ctx.db.get(id))!, { fresh: true })
     log('display.registered', { userId: user._id, displayId: id, sessionId: session._id, role: session.role })
     return { ...view((await ctx.db.get(id))!), takes }
   },
@@ -216,7 +222,16 @@ export const wasForgotten = query({
   },
 })
 
-/** This display, and what an agent last asked it to show. */
+/** The page a display is locked to, as the site and an agent name it, or null. */
+async function lockOf(ctx: QueryCtx, d: Doc<'displays'>): Promise<{ id: Id<'artifacts'>; slug: string; title: string } | null> {
+  const page = d.lockedTo ? await ctx.db.get(d.lockedTo.artifactId) : null
+  return page ? { id: page._id, slug: page.slug, title: page.title } : null
+}
+
+/**
+ * This display, what an agent last asked it to show, the page it is locked to, and whether a
+ * lock it had ended because its page was deleted, which it has yet to say.
+ */
 export const mine = query({
   args: { key: v.string() },
   handler: async (ctx, { key }) => {
@@ -225,7 +240,13 @@ export const mine = query({
     const shown = d.showing ? await ctx.db.get(d.showing.artifactId) : null
     // The revocation number goes along, so that the site knows when the sign-out token it
     // keeps for this display has been used up and fetches another
-    return { ...view(d), epoch: d.epoch, showing: d.showing && shown ? { slug: shown.slug, at: d.showing.at } : null }
+    return {
+      ...view(d),
+      epoch: d.epoch,
+      showing: d.showing && shown ? { slug: shown.slug, at: d.showing.at } : null,
+      lockedTo: await lockOf(ctx, d),
+      lockEnded: d.lockEnded !== undefined,
+    }
   },
 })
 
@@ -242,7 +263,7 @@ export const list = query({
       .withIndex('by_user', (q) => q.eq('userId', user._id))
       .take(QUOTA.displays)
     const out = []
-    for (const d of all) out.push({ ...view(d), paired: await stillPaired(ctx, d) })
+    for (const d of all) out.push({ ...view(d), paired: await stillPaired(ctx, d), lockedTo: await lockOf(ctx, d) })
     return out
   },
 })
@@ -516,6 +537,90 @@ export const forget = mutation({
   },
 })
 
+/** Every display one browser's pairing registered, which share one lock. */
+const ofPairing = (ctx: MutationCtx, sessionId: Id<'sessions'>) =>
+  ctx.db
+    .query('displays')
+    .withIndex('by_session', (q) => q.eq('sessionId', sessionId))
+    .take(QUOTA.displays)
+
+/**
+ * Puts a display under a lock, or none. A display put under a lock to another page than it had
+ * is signed out of what it showed, as a sign-out does it: a showing it already has, and a ticket
+ * it was given and has not used, stop working, and what it asked for before cannot be given a
+ * ticket after. The page it is locked to is asked onto it at once, and shown afresh.
+ */
+async function putUnder(ctx: MutationCtx, d: Doc<'displays'>, lock: Doc<'displays'>['lockedTo'], opts: { fresh?: boolean } = {}): Promise<void> {
+  const now = Date.now()
+  const change: Partial<Doc<'displays'>> = { lockedTo: lock, lockEnded: undefined }
+  if (lock) change.showing = { artifactId: lock.artifactId, at: Math.max(now, (d.showing?.at ?? 0) + 1) }
+  if (lock && !opts.fresh && d.lockedTo?.artifactId !== lock.artifactId) {
+    change.epoch = d.epoch + 1
+    await revokeLater(ctx, { userId: d.userId, displayId: d._id, epoch: d.epoch + 1 })
+  }
+  await ctx.db.patch(d._id, change)
+}
+
+/**
+ * Keeps every display of one browser's pairing under one lock, after a display has joined that
+ * pairing: registered anew, or come back under it. Of the locks its displays have, the one set
+ * last is the pairing's, and a display under none is put under it: so a key made afresh, by
+ * clearing the site's data or by hand, is no way out of a lock. A pairing none of whose displays
+ * is locked leaves them as they are.
+ */
+async function oneLock(ctx: MutationCtx, d: Doc<'displays'>, opts: { fresh?: boolean } = {}): Promise<void> {
+  const all = await ofPairing(ctx, d.sessionId)
+  const lock = all.flatMap((x) => (x.lockedTo ? [x.lockedTo] : [])).sort((a, b) => b.at - a.at)[0]
+  if (!lock) return
+  for (const x of all) if (x.lockedTo?.artifactId !== lock.artifactId || x.lockedTo.at !== lock.at) await putUnder(ctx, x, lock, x._id === d._id ? opts : {})
+}
+
+/**
+ * Locks a display to one of the person's pages: from then on no agent brings another page up
+ * there, it is never the display chosen where an agent names none, a screen is let open no other
+ * page there, and the site on it keeps to that page. The page is brought up there at once.
+ *
+ * Asked by a paired browser and never by an agent: the owner's browser locks any display, and a
+ * screen itself and no other. Every display of the same browser's pairing is locked with it.
+ */
+export const lock = mutation({
+  args: { displayId: v.id('displays'), artifactId: v.id('artifacts') },
+  handler: async (ctx, { displayId, artifactId }) => {
+    const c = await requireBrowser(ctx)
+    const d = await ownDisplay(ctx, c.user._id, displayId)
+    if (!speaksFor(c, d)) fail('not_found', 'No such display.')
+    const page = await ownArtifact(ctx, c.user._id, artifactId)
+    if (page.currentVersion === undefined) fail('not_found', 'That page has nothing published yet.')
+    const lock = { artifactId: page._id, at: Date.now() }
+    for (const x of await ofPairing(ctx, d.sessionId)) await putUnder(ctx, x, lock)
+    log('display.locked', { userId: c.user._id, displayId: d._id, by: c.session.role })
+    return null
+  },
+})
+
+/** Unlocks a display, and every display of the same browser's pairing: the owner's browser any display, and a screen itself. */
+export const unlock = mutation({
+  args: { displayId: v.id('displays') },
+  handler: async (ctx, { displayId }) => {
+    const c = await requireBrowser(ctx)
+    const d = await ownDisplay(ctx, c.user._id, displayId)
+    if (!speaksFor(c, d)) fail('not_found', 'No such display.')
+    for (const x of await ofPairing(ctx, d.sessionId)) if (x.lockedTo) await putUnder(ctx, x, undefined)
+    log('display.unlocked', { userId: c.user._id, displayId: d._id, by: c.session.role })
+    return null
+  },
+})
+
+/** The display has said that the lock it had ended because its page was deleted. */
+export const lockEndedSeen = mutation({
+  args: { key: v.string() },
+  handler: async (ctx, { key }) => {
+    const d = await displayByKey(ctx, await requireBrowser(ctx), key)
+    if (d.lockEnded !== undefined) await ctx.db.patch(d._id, { lockEnded: undefined })
+    return null
+  },
+})
+
 /**
  * Whether agents may show pages and send notifications on a display. The owner's browser says so
  * for any display, and a screen for itself and no other: to a screen another display is none.
@@ -541,8 +646,9 @@ export const allowAgents = mutation({
  * shown on, with their ids in `displayIds`, says in `chosen` why a display was chosen where none
  * was named, and lists in `notShown` each other display with why it was not shown there:
  * `not_paired` for a display whose browser's pairing has ended, which shows nothing until that
- * browser is paired again; `agents_off` for one the person said agents may not use; and
- * `not_chosen` for one passed over for the display in use.
+ * browser is paired again; `agents_off` for one the person said agents may not use; `locked` for
+ * one locked to another page, or, where none was named, to any page; and `not_chosen` for one
+ * passed over for the display in use.
  */
 export const show = mutation({
   args: {
@@ -558,7 +664,7 @@ export const show = mutation({
     const target = targetOf({ display, displayId, everywhere })
     await rateLimit(ctx, 'show', user._id)
     const artifact = (await artifactBySlug(ctx, user._id, slug)) ?? fail('not_found', 'No such page.')
-    const aimed = await aim(ctx, user._id, target)
+    const aimed = await aim(ctx, user._id, target, { page: artifact._id })
     for (const d of aimed.to) {
       // The time of a showing is what a display goes by to tell a new asking from one it has
       // seen, and so it never goes back: a clock that was set back would otherwise have every
