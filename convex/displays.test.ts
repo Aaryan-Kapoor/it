@@ -177,6 +177,23 @@ describe('a display named by its id', () => {
     expect((await t.run((ctx) => ctx.db.get(id)))?.displayId).toBe(tv.id)
   })
 
+  test('a name that is only spaces is no display: refused, never taken as every display', async () => {
+    const { t, agent, browser, page, row } = await household()
+    const laptop = await browser('owner', key(1))
+    await page('plan')
+    // An older CLI sent `--on "   "` as it was typed, and the backend refused it as no such display
+    expect(await refused(agent.mutation(api.notifications.send, { text: 'hi', display: '   ' }))).toMatchObject({
+      code: 'not_found',
+      noSuchDisplay: true,
+    })
+    expect(await refused(agent.mutation(api.displays.show, { slug: 'plan', display: ' \t ' }))).toMatchObject({
+      code: 'not_found',
+      noSuchDisplay: true,
+    })
+    expect(await t.run((ctx) => ctx.db.query('notifications').collect())).toEqual([])
+    expect((await row(laptop.id)).showing).toBeUndefined()
+  })
+
   test('a display that shares its name with another is still reached alone by its id', async () => {
     const { t, agent, browser, page, row } = await household()
     const a = await browser('owner', key(1))

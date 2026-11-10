@@ -42,12 +42,18 @@ export async function stillPaired(ctx: Ctx, d: Doc<'displays'>): Promise<boolean
 
 /**
  * What a call names as where it goes, from its arguments. A display is named by its name or by
- * its id, never by both: a call that gave both would have to choose which it meant.
+ * its id, never by both: a call that gave both would have to choose which it meant. A name of
+ * only spaces is a name no display has, as an earlier It answered a notification sent to one,
+ * and never a call that named no display: that would send it somewhere else than was asked.
+ * Only a name left out, or empty, names none.
  */
 export function targetOf(args: { display?: string; displayId?: string }): Target {
   if (args.display !== undefined && args.displayId !== undefined) fail('invalid', 'Name a display by its name or by its id, not both.')
   if (args.displayId !== undefined) return { id: args.displayId }
-  if (args.display?.trim()) return { name: args.display }
+  if (args.display) {
+    if (!args.display.trim()) fail('not_found', 'No display has that name.', { noSuchDisplay: true })
+    return { name: args.display }
+  }
   return { none: true }
 }
 
