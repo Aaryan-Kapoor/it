@@ -253,4 +253,80 @@ describe.each(BROWSERS)('a link or a form a page follows, in %s', (_name, type) 
     )
     expect(said).toEqual({ opener: false, url: `${home}/written` })
   })
+
+  test.skipIf(!here(type))('a link written into the document once it has loaded, clicked by a script written with it, opens with no hold', async () => {
+    const said = await opened(
+      `<button id="go" type="button">go</button>
+       <script>
+         document.getElementById('go').addEventListener('click', () => {
+           document.write('<a id="out" href="/written" target="fresh" rel="opener">out</a><scr' + 'ipt>document.getElementById("out").dispatchEvent(new MouseEvent("click", { bubbles: true }))</scr' + 'ipt>')
+           document.close()
+         })
+       </script>`,
+    )
+    expect(said).toEqual({ opener: false, url: `${home}/written` })
+  })
+
+  test.skipIf(!here(type))('a link in an open root written into the document once it has loaded, clicked there at once, opens with no hold', async () => {
+    const said = await opened(
+      `<button id="go" type="button">go</button>
+       <script>
+         document.getElementById('go').addEventListener('click', () => {
+           document.write('<div id="host"><template shadowrootmode="open"><a href="/written-root" target="fresh" rel="opener">out</a></template></div>')
+           document.getElementById('host').shadowRoot.querySelector('a').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+           document.close()
+         })
+       </script>`,
+    )
+    expect(said).toEqual({ opener: false, url: `${home}/written-root` })
+  })
+
+  test.skipIf(!here(type))('a link and a form in the copied root of a host copied or brought in, filled and followed at once, open with no hold', async () => {
+    const page = (how: string, inside: string, follow: string) =>
+      `<div id="host"></div><button id="go" type="button">go</button>
+       <script>
+         document.getElementById('host').attachShadow({ mode: 'open', clonable: true })
+         document.getElementById('go').addEventListener('click', () => {
+           const copy = ${how}
+           copy.shadowRoot.innerHTML = '${inside}'
+           document.body.append(copy)
+           ${follow}
+         })
+       </script>`
+    const cloned = await opened(
+      page(
+        "document.getElementById('host').cloneNode(true)",
+        '<a href="/cloned" target="fresh" rel="opener">out</a>',
+        "copy.shadowRoot.querySelector('a').dispatchEvent(new MouseEvent('click', { bubbles: true }))",
+      ),
+    )
+    expect(cloned).toEqual({ opener: false, url: `${home}/cloned` })
+    const imported = await opened(
+      page(
+        "document.importNode(document.getElementById('host'), true)",
+        '<form action="/imported" target="fresh" rel="opener"></form>',
+        "copy.shadowRoot.querySelector('form').requestSubmit()",
+      ),
+    )
+    expect(imported).toEqual({ opener: false, url: `${home}/imported?` })
+  })
+
+  test.skipIf(!here(type))('a root whose document was opened again, its host put back after, still keeps its links from holding the page', async () => {
+    const said = await opened(
+      `<div id="host"></div><button id="go" type="button">go</button>
+       <script>
+         const host = document.getElementById('host')
+         const root = host.attachShadow({ mode: 'closed' })
+         document.getElementById('go').addEventListener('click', () => {
+           document.open()
+           document.write('<body></body>')
+           document.close()
+           document.body.append(host)
+           root.innerHTML = '<a href="/reopened" target="fresh" rel="opener">out</a>'
+           root.querySelector('a').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+         })
+       </script>`,
+    )
+    expect(said).toEqual({ opener: false, url: `${home}/reopened` })
+  })
 })
