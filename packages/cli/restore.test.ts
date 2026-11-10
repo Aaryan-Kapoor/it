@@ -679,6 +679,6 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
     }
   }, 600_000)
 
-  // Where this machine has no zsh, the lines are not pasted into it, and that is said here
-  test.skipIf(Boolean(zsh))('the documented lines pasted into zsh (not run: no zsh on this machine, and IT_TEST_ZSH names none)', () => {})
+  // Where this machine has no zsh, the lines are not pasted into it, and that is said here as a test left out
+  if (!zsh) test.skip('the documented lines pasted into zsh (not run: no zsh on this machine, and IT_TEST_ZSH names none)', () => {})
 })
