@@ -18,6 +18,8 @@
       const out = document.getElementById('out')
       let take = null
       async function record() {
+        // What the page said before is not taken for what It says of this recording
+        out.textContent = ''
         try {
           take = await It.record({ audio: true })
           take.onchange = (state, why) => (out.textContent = `${state}${why ? `: ${why}` : ''}`)

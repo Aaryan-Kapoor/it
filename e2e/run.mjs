@@ -2704,7 +2704,17 @@ try {
   )
   // Sound is recorded beside the live camera, and the camera goes on giving the page pictures all the while
   const picturesBeforeSound = (await liveShown()).pictures
-  const soundSaid = await recPressed(page, '#record', /^(recording|refused)/)
+  await page.frameLocator('.mount iframe').locator('#record').click()
+  // Allowed the camera alone, the page is asked about the microphone in the bar first
+  const askedForTheMic = await mediaQuestion.waitFor({ timeout: 15_000 }).then(
+    () => mediaQuestion.textContent(),
+    () => '',
+  )
+  if (askedForTheMic) await mediaQuestion.getByRole('button', { name: 'Allow', exact: true }).click()
+  const soundSaid = await recOut(page)
+    .filter({ hasText: /^(recording|refused)/ })
+    .waitFor({ timeout: 15_000 })
+    .then(() => recOut(page).textContent())
   // Both said in It's bar at once, each with its own Stop
   const bothChips = { camera: await liveRow.count(), recording: await page.locator('.page-nav .media-rec').count() }
   const soundSent = /^recording audio\//.test(soundSaid) ? await recPressed(page, '#stop', /^(accepted|refused)/) : soundSaid
@@ -2712,14 +2722,24 @@ try {
   const picturesAfterSound = await livePictures(picturesBeforeSound)
   check(
     'sound is recorded beside the live camera, each with its own chip in It’s bar, and reaches the agent while the camera goes on',
-    /^recording audio\//.test(soundSaid) &&
+    /wants the mic/.test(askedForTheMic) &&
+      /^recording audio\//.test(soundSaid) &&
       /^accepted /.test(soundSent) &&
       /^audio\//.test(soundTake?.files?.[0]?.type ?? '') &&
       !!picturesAfterSound &&
       bothChips.camera === 1 &&
       bothChips.recording === 1 &&
       (await liveRow.count()) === 1,
-    JSON.stringify({ soundSaid, bothChips, soundSent, files: soundTake?.files, picturesBeforeSound, picturesAfterSound, rows: await liveRow.count() }),
+    JSON.stringify({
+      askedForTheMic: /wants the mic/.test(askedForTheMic),
+      soundSaid,
+      bothChips,
+      soundSent,
+      files: soundTake?.files,
+      picturesBeforeSound,
+      picturesAfterSound,
+      rows: await liveRow.count(),
+    }),
   )
   if (soundTake) await it(A, ['ack', soundTake.id])
   // Stopped from It's bar, the camera closes, and the page's stream ends with it
