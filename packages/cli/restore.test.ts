@@ -193,7 +193,7 @@ let beside: string[]
 beforeEach(async () => {
   folder = mkdtempSync(path.join(os.tmpdir(), 'it-restore-'))
   real = realpathSync(folder)
-  beside = [folder, `${real}-after-upgrade`, `${real}-after-upgrade.part`, `${real}-replaced`]
+  beside = [folder, `${real}-after-upgrade`, `${real}-replaced`]
   process.env.IT_PORT = String(await ports.next())
 }, 120_000)
 
@@ -205,7 +205,10 @@ afterEach(async () => {
       await new Promise((resolve) => child.once('exit', resolve))
     }
   }
-  for (const made of beside) rmSync(made, { recursive: true, force: true })
+  for (const made of beside) {
+    for (const part of staged(made)) rmSync(part, { recursive: true, force: true })
+    rmSync(made, { recursive: true, force: true })
+  }
   await ports.release()
 }, 120_000)
 
@@ -271,6 +274,16 @@ const stopped = async (service: Served) => {
   service.child.kill('SIGTERM')
   expect(await service.ended).toBe(0)
 }
+/** The folders the lines began copying It's folder `home` into, and that are there still. */
+const staged = (home: string) => {
+  const dir = path.dirname(home)
+  const named = `${path.basename(home)}-after-upgrade.part.`
+  return existsSync(dir)
+    ? readdirSync(dir)
+        .filter((entry) => entry.startsWith(named))
+        .map((entry) => path.join(dir, entry))
+    : []
+}
 const json = (file: string) => JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
 /** Every folder, file and link under a folder, by its path from there, each file with a hash of what it holds and each link with where it leads. */
 const tree = (dir: string, under = ''): string[] =>
@@ -307,7 +320,7 @@ function documented(marker: string): string {
  * It's folder `home`. The copy's name is put where they say `copy=before-...`, and nothing else
  * of them is changed. `it` is the stand-in, which ends as `ends` says.
  */
-function pasted(lines: string, home: string, copy?: string, ends = 0) {
+function pasted(lines: string, home: string, copy?: string, ends = 0, cwd = scratch) {
   let script = lines
   if (copy !== undefined) {
     expect(script).toMatch(/^ *copy=before-\.\.\.$/m)
@@ -316,6 +329,7 @@ function pasted(lines: string, home: string, copy?: string, ends = 0) {
   const asked = path.join(scratch, `asked-${Math.random().toString(36).slice(2)}`)
   const ran = spawnSync('sh', ['-c', script], {
     env: { PATH: `${stub}:${process.env.PATH}`, HOME: scratch, IT_HOME: home, STUB_ASKED: asked, STUB_ENDS: String(ends) },
+    cwd,
     encoding: 'utf8',
   })
   return { code: ran.status, out: ran.stdout, err: ran.stderr, asked: existsSync(asked) ? readFileSync(asked, 'utf8') : '' }
@@ -466,24 +480,38 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
       expect([unstopped.code, unstopped.out, unstopped.asked]).toEqual([1, '', 'service uninstall\n'])
       expect(tree(folder)).toEqual(asItWas)
       expect(existsSync(saved)).toBe(false)
-      // Where It's folder cannot be copied whole, they stop before anything of it is changed, and the next run clears what was cut short
+      // Where It's folder cannot be copied whole, they stop before anything of it is changed,
+      // and leave what they began in a folder of their own, which the next run refuses to go
+      // past and never removes: that is the person's to look at
       if (process.getuid?.() !== 0) {
         const unreadable = path.join(folder, 'unreadable')
         writeFileSync(unreadable, 'kept from whoever copies')
         chmodSync(unreadable, 0)
         const cut = pasted(back, home, copy)
         rmSync(unreadable, { force: true })
-        expect(cut.code).not.toBe(0)
-        expect(cut.out).toBe(`Copying It's folder to ${saved}.\n`)
-        expect([tree(folder), existsSync(saved), existsSync(`${saved}.part`)]).toEqual([asItWas, false, true])
+        const [left, ...more] = staged(real)
+        expect([cut.code === 0, more, cut.out]).toEqual([false, [], `Copying It's folder to ${left}.\n`])
+        expect(left).toMatch(/-after-upgrade\.part\.\w{6}$/)
+        expect([tree(folder), existsSync(saved)]).toEqual([asItWas, false])
+        const leftAsItWas = tree(left!)
+        const halted = pasted(back, home, copy)
+        expect([halted.code, halted.out]).toEqual([1, ''])
+        expect(halted.err).toBe(
+          `${left} is there already, so nothing was changed. Look at what is in it, remove it yourself if you do not need it, and run these lines again.\n`,
+        )
+        expect([tree(folder), tree(left!), existsSync(saved)]).toEqual([asItWas, leftAsItWas, false])
+        // As the person does, having looked
+        rmSync(left!, { recursive: true, force: true })
       }
       // Run as they are written, they stop the service, keep the whole folder as it was, and put the copy back
       const put = pasted(back, home, copy)
       expect([put.code, put.err, put.asked]).toEqual([0, '', 'service uninstall\n'])
-      expect(put.out).toBe(`Copying It's folder to ${saved}.\nIt's folder as it was is kept in ${saved}.\nThe copy is in place.\n`)
+      const [copying, kept, done] = put.out.split('\n')
+      expect(copying).toMatch(new RegExp(`^Copying It's folder to ${saved.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.part\\.\\w{6}\\.$`))
+      expect([kept, done]).toEqual([`It's folder as it was is kept in ${saved}.`, 'The copy is in place.'])
       expect(lstatSync(saved).isDirectory()).toBe(true)
       expect(tree(saved)).toEqual(asItWas)
-      expect(existsSync(`${saved}.part`)).toBe(false)
+      expect(staged(real)).toEqual([])
       expect(json(path.join(folder, 'backend', 'data.json'))).toEqual(before)
       expect(existsSync(path.join(folder, 'backend', 'copy.json'))).toBe(false)
       if (home !== folder) expect([readlinkSync(home), existsSync(`${home}-after-upgrade`)]).toEqual([folder, false])
@@ -492,7 +520,9 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
       const again = pasted(back, home, copy)
       expect(again.code).toBe(1)
       expect(again.out).toBe('')
-      expect(again.err).toBe(`${saved} is there already, so nothing was changed.\n`)
+      expect(again.err).toBe(
+        `${saved} is there already, so nothing was changed. Look at what is in it, remove it yourself if you do not need it, and run these lines again.\n`,
+      )
       expect([tree(folder), tree(saved)]).toEqual([restored, asItWas])
 
       // The older It starts on it, with its own functions in it and none refused
@@ -581,7 +611,9 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
       const home = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'it-restore-choice-')))
       beside.push(home, `${home}-after-upgrade`)
       cpSync(folder, home, { recursive: true })
-      expect(pasted(documented('copy='), home, copy)).toMatchObject({ code: 0, err: '' })
+      // Told It's folder by a relative IT_HOME, which is taken from where the lines are pasted
+      expect(pasted(documented('copy='), path.basename(home), copy, 0, path.dirname(home))).toMatchObject({ code: 0, err: '' })
+      expect(existsSync(`${home}-after-upgrade`)).toBe(true)
       const tried = serve(older, 'tried.log', home)
       if (chosen.includes(copy)) {
         await started(tried)
@@ -591,16 +623,34 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
         expect(tried.lines()).toMatch(/could not start: backend_older\n$/)
       }
     }
-    // A folder whose backend keeps its stored files through a link is refused before anything is copied or changed
-    const linked = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'it-restore-linked-')))
-    beside.push(linked, `${linked}-after-upgrade`, `${linked}-storage`)
-    cpSync(folder, linked, { recursive: true })
-    renameSync(path.join(linked, 'backend', 'storage'), `${linked}-storage`)
-    symlinkSync(`${linked}-storage`, path.join(linked, 'backend', 'storage'))
-    const unlinked = tree(linked)
-    const refused = pasted(documented('copy='), linked, kept[0])
-    expect([refused.code, refused.out]).toEqual([1, ''])
-    expect(refused.err).toBe(`storage is a link, so a copy of It's folder would not hold what it leads to, and nothing was changed.\n`)
-    expect([tree(linked), existsSync(`${linked}-after-upgrade`)]).toEqual([unlinked, false])
+    // A folder whose backend keeps its stored files through a link, or whose database's journal
+    // is a link, even one that leads nowhere, is refused before anything is copied or changed
+    const links: [string, (linked: string) => void][] = [
+      [
+        'storage',
+        (linked) => {
+          renameSync(path.join(linked, 'backend', 'storage'), `${linked}-elsewhere`)
+          symlinkSync(`${linked}-elsewhere`, path.join(linked, 'backend', 'storage'))
+        },
+      ],
+      [
+        'db.sqlite3-wal',
+        (linked) => {
+          rmSync(path.join(linked, 'backend', 'db.sqlite3-wal'), { force: true })
+          symlinkSync(`${linked}-elsewhere`, path.join(linked, 'backend', 'db.sqlite3-wal'))
+        },
+      ],
+    ]
+    for (const [name, link] of links) {
+      const linked = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'it-restore-linked-')))
+      beside.push(linked, `${linked}-after-upgrade`, `${linked}-elsewhere`)
+      cpSync(folder, linked, { recursive: true })
+      link(linked)
+      const unlinked = tree(linked)
+      const refused = pasted(documented('copy='), linked, kept[0])
+      expect([name, refused.code, refused.out]).toEqual([name, 1, ''])
+      expect(refused.err).toBe(`${path.join(linked, 'backend', name)} is a link, so a copy would not hold what it leads to, and nothing was changed.\n`)
+      expect([tree(linked), existsSync(`${linked}-after-upgrade`), staged(linked)]).toEqual([unlinked, false, []])
+    }
   }, 600_000)
 })
