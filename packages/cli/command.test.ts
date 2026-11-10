@@ -5275,6 +5275,46 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     }
   })
 
+  test('an agent that asks for the pairing link is told to give it to the person at once, and in a Claude Code conversation without the add-on, with the words to load it', async () => {
+    const m = machine(true, true)
+    let connected = true
+    const b = await backend(m, (asked) =>
+      asked.path === 'machines:me'
+        ? { harnesses: [{ id: 'claude-code', addon: connected ? 'connected' : 'not_connected' }] }
+        : { code: 'Ab3dEf6hIj9kLm2nOp5q' },
+    )
+    const url = `${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q`
+    const give =
+      'Give the person this url now, in a message, before you run anything else: they open it in a browser on this computer, and it pairs that browser, once, within ten minutes.'
+    try {
+      // From a person's script, nothing but the address
+      expect(printed(await run(m, ['site', '--no-open'], b.env))).toEqual({ url })
+      // From a Codex thread, to give it at once
+      expect(printed(await run(m, ['site', '--no-open'], { ...b.env, CODEX_THREAD_ID: 'thread-1' }))).toEqual({ url, tell: give })
+      // From a Claude Code conversation that has not loaded the add-on, with the words to load it in the same message
+      const claude = {
+        ...b.env,
+        CLAUDE_CODE_SESSION_ID: '11111111-2222-4333-8444-555555555555',
+        CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.321',
+      }
+      expect(printed(await run(m, ['site', '--no-open'], claude))).toEqual({
+        url,
+        tell: `${give} In that same message, tell them this, word for word: “${reloadLine('2.1.321')}”`,
+      })
+      // But not where Claude Code's add-on is not connected on this machine, since loading it then does nothing
+      connected = false
+      expect(printed(await run(m, ['site', '--no-open'], claude))).toEqual({ url, tell: give })
+      // Nor where the add-on runs in the conversation already
+      connected = true
+      expect(printed(await run(m, ['site', '--no-open'], { ...claude, IT_HARNESS: 'claude-code', IT_SESSION: claude.CLAUDE_CODE_SESSION_ID }))).toEqual({
+        url,
+        tell: give,
+      })
+    } finally {
+      await b.close()
+    }
+  })
+
   test('with the network kept to the tailnet, another device is given only this machine’s addresses there, and none on the home network, which the door would not answer at', async () => {
     const m = machine(true, true)
     const onTailnet = /^http:\/\/(?:[a-z0-9.-]+\.ts\.net|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+|\[fd7a:115c:a1e0:[0-9a-f:]*\]):\d+$/

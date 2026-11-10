@@ -891,7 +891,26 @@ export const AFTER_SETUP =
  * not in a condition that an agent may read past.
  */
 export const afterSetupTelling = (line: string): string =>
-  `If you are an agent installing It for someone, two steps of the install guide come after this one. First, in one message, give the person the link that \`it site --no-open\` prints, to open on this computer, and tell them this, word for word: “${line}” Then, in the same turn, run \`it tour --wait\` and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
+  `If you are an agent installing It for someone, two steps of the install guide come after this one. First, write the person one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${line}” Then, only once that message is written and in the same turn, run \`it tour --wait\` and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
+
+/**
+ * What an agent that asked for a pairing link is told to do with it: give it to the person at
+ * once, in a message, before it runs anything else. An agent installing It was seen to print the
+ * link and go straight on to waiting for the tour, and the person was told nothing, the link
+ * included, until the waiting was over. In a Claude Code conversation that has not loaded the
+ * add-on, where Claude Code's add-on is connected on this machine, the same message carries the
+ * words the person is to type to load it.
+ */
+async function linkToTell(): Promise<{ tell?: string }> {
+  if (!sessionAsked()) return {}
+  const give =
+    'Give the person this url now, in a message, before you run anything else: they open it in a browser on this computer, and it pairs that browser, once, within ten minutes.'
+  const line = claudeReloadLine()
+  if (!line) return { tell: give }
+  const me = await call<{ harnesses?: { id: string; addon: string }[] } | null>('query', api.machines.me).catch(() => null)
+  const connected = me?.harnesses?.some((h) => h.id === 'claude-code' && h.addon === 'connected') === true
+  return { tell: connected ? `${give} In that same message, tell them this, word for word: “${line}”` : give }
+}
 
 /**
  * `it tour --wait`: waits until the person asks for the tour with the button on the site, and
@@ -3358,7 +3377,7 @@ async function main(argv: string[]): Promise<void> {
       const stands = await networkAsItStands(true)
       const elsewhereToo = stands.addresses.map((address) => `${address}/pair#${code}`)
       const opening = !a.flags['no-open'] && openBrowser(url)
-      if (!forPerson(a)) return out({ url, ...(elsewhereToo.length ? { urls: elsewhereToo } : {}) })
+      if (!forPerson(a)) return out({ url, ...(elsewhereToo.length ? { urls: elsewhereToo } : {}), ...(await linkToTell()) })
       if (opening) return tell(['It’s site is opening in your browser, and this link pairs it:', `  ${url}`])
       // No browser was opened here: nobody is at this machine's own screen, or it has none, or
       // it was asked not to. The address to open is then the one another device can reach,
