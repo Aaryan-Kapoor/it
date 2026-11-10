@@ -18,7 +18,8 @@ export interface Arrives {
 /**
  * The oldest Claude Code in which `/reload-plugins` loads It's add-on into a conversation that
  * was already open when the add-on was installed, and in which the add-on then starts: the
- * oldest that It's add-on is installed into, where it was seen to (and in 2.1.319).
+ * oldest that It's add-on is installed into. A mod built as It's add-on is was seen to load and
+ * start that way in 2.1.287 and 2.1.319, and It's add-on itself in 2.1.321.
  */
 export const RELOAD_PLUGINS_SINCE = KNOWN['claude-code'].min!
 
