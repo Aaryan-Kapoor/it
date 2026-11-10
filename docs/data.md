@@ -99,7 +99,7 @@ The newer data is not thrown away. Before the copy is put back, the whole of It'
 
 ### Putting the copy back
 
-The lines below work on It's folder: the one `IT_HOME` names, where that is set in the terminal you paste them into, and `~/.it` otherwise. If your It keeps its folder somewhere else and `IT_HOME` is not set in that terminal, set it there first, as in `export IT_HOME="/path/to/its/folder"` on Linux and macOS, or `$env:IT_HOME = 'D:\path\to\its\folder'` in PowerShell. Where It's folder is a link to another folder, the lines work on the folder it leads to, and keep the copy beside that one. The disk needs room for a second copy of the whole folder, files of pages included.
+The lines below work on It's folder: the one `IT_HOME` names, where that is set in the terminal you paste them into, and `~/.it` otherwise. If your It keeps its folder somewhere else and `IT_HOME` is not set in that terminal, set it there first, as in `export IT_HOME="/path/to/its/folder"` on Linux and macOS, or `$env:IT_HOME = 'D:\path\to\its\folder'` in PowerShell. A relative `IT_HOME` is taken from the folder the terminal is in, as It takes it, so paste the lines where you would run `it`. Where It's folder is a link to another folder, the lines work on the folder it leads to, and keep the copy beside that one. The disk needs room for a second copy of the whole folder, files of pages included.
 
 On Linux and macOS:
 
