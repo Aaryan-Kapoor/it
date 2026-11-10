@@ -411,7 +411,8 @@ function textOfBytes(bytes: Buffer): string | null {
  *   the very Codex that T3 Code holds for the thread, and T3 Code shows the turns it started
  *   itself: the agent did the work, the page changed, and the thread showed nothing.
  * - `queue`: some Codex has the conversation open, and takes a message from its own queue.
- * - `reopen`: the conversation is closed, and reopening is switched on for its agent app.
+ * - `reopen`: the conversation is closed, and reopening is switched on for its agent app. Never
+ *   a Claude Code conversation that is open without It's add-on (`OPEN_WITHOUT_ADDON`).
  *
  * Nothing where none of them holds: the click waits, and the site shows it.
  */
@@ -575,6 +576,14 @@ export interface Route {
  */
 export const NOT_LOADED =
   'Its conversation has not loaded It’s add-on either, as when it was open before It was installed: if it is still open, type /reload-plugins in it, and what you did reaches it'
+/**
+ * What the page says of a click that was not reopened for, because its Claude Code conversation
+ * is open without It's add-on: reopened, it would run as a second copy of what the person has
+ * open, so It leaves it, and says what lets the open one hear the page. Shown after "Couldn't
+ * wake Claude Code:", well within the 300 characters the backend keeps.
+ */
+export const OPEN_WITHOUT_ADDON =
+  'its conversation is open without It’s add-on, as when it was open before It was installed, so It did not start a second copy of it: type /reload-plugins in it, or open it again if you closed it, and what you did reaches it'
 /** Why a conversation could not be reopened, and then that it has not loaded It's add-on, together in what the backend keeps. */
 export const notLoadedToo = (why: string): string => {
   const room = 300 - NOT_LOADED.length - 2
@@ -2237,16 +2246,46 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * own app speaking to them, and goes to the page alone: never into the log.
    */
   const notReopened = (session: { harness: string; id: string }, why: string) => {
-    const key = keyOf(session.harness, session.id)
-    const words = saidLast.get(follow(key))
+    const words = saidLast.get(follow(keyOf(session.harness, session.id)))
     const said = words ? `${why}, and its last words were: ${words}` : why
-    // A Claude Code conversation that published its page while It's add-on did not run in it, and
-    // has not been heard from since, has not loaded the add-on, as one that was already open when
-    // the add-on was installed has not. Why its reopening failed is said all the same, since the
-    // conversation may be gone for good, and after it what lets it hear the page where it is still open
-    const unloaded =
-      session.harness === 'claude-code' && publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))
-    void call('mutation', api.machines.wakeFailed, { for: session, why: unloaded ? notLoadedToo(said) : said }).catch(() => {})
+    // Why its reopening failed is said all the same, since the conversation may be gone for good,
+    // and after it what lets it hear the page where it is still open. A conversation known to be
+    // open without the add-on is not reopened at all (`keptShut`), so this is said only of one
+    // whose reopening was under way before It knew
+    void call('mutation', api.machines.wakeFailed, { for: session, why: unloaded(session) ? notLoadedToo(said) : said }).catch(() => {})
+  }
+  /**
+   * Whether a Claude Code conversation is open without It's add-on, as far as this machine
+   * knows: it published its page while the add-on did not run in it, as one that was already
+   * open when the add-on was installed does, and the add-on has not been heard from in it since.
+   * Only Claude Code's own `it create` notes that (`publishedWithoutAddon`): Codex, Pi, OpenCode
+   * and Hermes are never taken to be.
+   */
+  const unloaded = (session: { harness: string; id: string }): boolean => {
+    const key = keyOf(session.harness, session.id)
+    return session.harness === 'claude-code' && publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))
+  }
+  /** The clicks whose page has been told that their conversation is open without It's add-on, and so was not reopened: each is told once. */
+  const toldShut = new Set<string>()
+  /**
+   * Whether a click is kept from reopening its conversation, because the conversation is open
+   * without It's add-on (`unloaded`). Reopened, it would run as a second copy of the one the
+   * person has open. The click waits instead, and reaches the conversation as soon as the person
+   * types /reload-plugins in it, which the page says, once for each click, as why it was not woken.
+   */
+  const keptShut = (click: Offered): boolean => {
+    const session = click.session!
+    if (!unloaded(session)) return false
+    if (!toldShut.has(click.id)) {
+      if (toldShut.size > 500) toldShut.delete(toldShut.values().next().value!)
+      toldShut.add(click.id)
+      seldom(
+        `shut:${keyOf(session.harness, session.id)}`,
+        `${a(session.harness)} conversation (${short(keyOf(session.harness, session.id))}) is open without It’s add-on, so it is not reopened; its page says to type /reload-plugins in it`,
+      )
+      void call('mutation', api.machines.wakeFailed, { for: session, why: OPEN_WITHOUT_ADDON }).catch(() => {})
+    }
+    return true
   }
   /** Whether anybody was at the page for any click that is waiting for a click's conversation. One such, and the conversation is reopened as for a person, whatever else waits in front of it. */
   const someoneThere = (click: Offered, offered = inbox) =>
@@ -3035,7 +3074,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
                 connected(session.harness) &&
                 (!codex || (!reopenedNow.has(key) && codexHold(key) === false)) &&
                 !runtimes.blocksWake(session.harness) &&
-                !t3Undecided(key),
+                !t3Undecided(key) &&
+                // Asked last, since it tells the page: only of a click that would otherwise be reopened for
+                !keptShut(click),
             })
         if (forAddOn) {
           // Route 1: the add-on will ask for it, or the running turn's next hook will
@@ -3090,7 +3131,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // but for the moment that lets a few things done together go together. It is run in
           // line like a queue, one click of a conversation at a time. And only so often: past
           // that the click waits, and goes with the next reopening. Nor while it is at work in a
-          // window It cannot see into: it is looked at again once it is quiet.
+          // window It cannot see into: it is looked at again once it is quiet. Never where It
+          // knows it is open without It's add-on (`keptShut`): that click waits for /reload-plugins.
           const left = SETTLE_MS - beenThere(click, now)
           if (left > 0) {
             waitingBehind.add(key)

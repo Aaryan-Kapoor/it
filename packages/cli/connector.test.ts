@@ -250,7 +250,7 @@ vi.mock('./src/lib', async (original) => {
   }
 })
 
-import { type ConnectorInfo, infoFile, local, mac, NOT_LOADED, notLoadedToo, type Route, runConnector, wayOf } from './src/connector'
+import { type ConnectorInfo, infoFile, local, mac, NOT_LOADED, notLoadedToo, OPEN_WITHOUT_ADDON, type Route, runConnector, wayOf } from './src/connector'
 import { DeliveryRecovery, eraseDeliveryRecovery } from './src/delivery-recovery'
 import * as files from './src/lib'
 import { readJson } from './src/lib'
@@ -1186,32 +1186,64 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(stand.recorded.find((r) => r.name === 'agent.woken')!.properties).toEqual({ result: 'declined', agent: 'codex', why: 'no_folder' })
   })
 
-  test.each([false, true])(
-    'a Claude Code conversation that published its page without It’s add-on, and cannot be reopened, has its page say how to load the add-on, unless the add-on was heard from it: heard %s',
-    async (heard) => {
-      const id = '11111111-2222-4333-8444-555555555555'
-      await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }, (home) => {
+  /** A connector that reopens conversations of `harness`, with what is noted of the conversation `id` written in its folder before it starts. */
+  const reopensFor = async (harness: string, id: string, note: Record<string, unknown> | null, heard = false) => {
+    await start('socket', { wanted: [harness], found: [...CONNECTED, { id: harness, version: '2.1.300', addon: 'connected' }] }, (home) => {
+      if (note)
         writeFileSync(
           path.join(home, 'conversations.json'),
-          JSON.stringify({ [`claude-code:${id}`]: { cwd: path.join(home, 'gone'), at: Date.now(), addon: false } }),
+          JSON.stringify({ [`${harness}:${id}`]: { cwd: path.join(home, 'gone'), at: Date.now(), ...note } }),
         )
-        if (heard) writeFileSync(path.join(home, 'heard.json'), JSON.stringify({ [`claude-code:${id}`]: 1 }))
-      })
-      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
-      offered({ ...click(1), session: { harness: 'claude-code', id } })
-      await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'))
-      expect(stand.calls.find((c) => c.name === 'machines:wakeFailed')!.args).toEqual({
-        for: { harness: 'claude-code', id },
-        // Why it could not be reopened is said either way, and for one that has not loaded the add-on, what lets it hear the page after it
-        why: heard
-          ? 'the folder its conversation was held in is not known on this machine, or is gone'
-          : `the folder its conversation was held in is not known on this machine, or is gone. ${NOT_LOADED}`,
-      })
-      // What is counted is still the word for why the reopening failed
-      await until(() => stand.recorded.some((r) => r.name === 'agent.woken'))
-      expect(stand.recorded.find((r) => r.name === 'agent.woken')!.properties).toEqual({ result: 'declined', agent: 'claude-code', why: 'no_folder' })
-    },
-  )
+      if (heard) writeFileSync(path.join(home, 'heard.json'), JSON.stringify({ [`${harness}:${id}`]: 1 }))
+    })
+    stand.watching.get('machines:me')!({ wanted: [harness], wakes: [{ harness, since: Date.now() - 60_000 }] })
+  }
+  const failures = () => stand.calls.filter((c) => c.name === 'machines:wakeFailed')
+  const GONE = 'the folder its conversation was held in is not known on this machine, or is gone'
+  const CLAUDE_ID = '11111111-2222-4333-8444-555555555555'
+
+  test('a Claude Code conversation that published its page without It’s add-on, and has not been heard from since, is never reopened, and its page says to type /reload-plugins, once for each click', async () => {
+    await reopensFor('claude-code', CLAUDE_ID, { addon: false })
+    offered({ ...click(1), session: { harness: 'claude-code', id: CLAUDE_ID } })
+    await until(() => failures().length > 0)
+    expect(failures()[0]!.args).toEqual({ for: { harness: 'claude-code', id: CLAUDE_ID }, why: OPEN_WITHOUT_ADDON })
+    expect(OPEN_WITHOUT_ADDON).toContain('type /reload-plugins in it')
+    expect(OPEN_WITHOUT_ADDON.length).toBeLessThanOrEqual(300)
+    expect(said.some((line) => line.includes('is open without It’s add-on, so it is not reopened'))).toBe(true)
+    // Looked at again pass after pass, the click is still not reopened for, and the page is not told again
+    await new Promise((r) => setTimeout(r, 2500))
+    expect(failures()).toHaveLength(1)
+    expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+    expect(said.some((line) => line.includes('the reopening of its conversation'))).toBe(false)
+    // Nothing was tried, so no waking is counted
+    expect(stand.recorded.some((r) => r.name === 'agent.woken')).toBe(false)
+    // A later click is told of in its turn, since the page says why only of a failure after its last click
+    offered({ ...click(2), session: { harness: 'claude-code', id: CLAUDE_ID } })
+    await until(() => failures().length > 1)
+    expect(failures()[1]!.args).toEqual({ for: { harness: 'claude-code', id: CLAUDE_ID }, why: OPEN_WITHOUT_ADDON })
+  })
+
+  test.each([
+    ['its add-on heard from since', { addon: false }, true],
+    ['a note that it published with its add-on', {}, false],
+    ['no note of it', null, false],
+  ] as const)('a closed Claude Code conversation with %s is reopened as before, and why it could not be is said without the advice', async (_, note, heard) => {
+    await reopensFor('claude-code', CLAUDE_ID, note, heard)
+    offered({ ...click(1), session: { harness: 'claude-code', id: CLAUDE_ID } })
+    await until(() => failures().length > 0)
+    expect(failures()[0]!.args).toEqual({ for: { harness: 'claude-code', id: CLAUDE_ID }, why: GONE })
+    expect(said.some((line) => line.includes('was not taken by the reopening of its conversation'))).toBe(true)
+    await until(() => stand.recorded.some((r) => r.name === 'agent.woken'))
+    expect(stand.recorded.find((r) => r.name === 'agent.woken')!.properties).toEqual({ result: 'declined', agent: 'claude-code', why: 'no_folder' })
+  })
+
+  test.each(['pi', 'opencode', 'hermes'])('a conversation of %s is reopened as before, whatever is noted of It’s add-on in it', async (harness) => {
+    await reopensFor(harness, 'conversation-1', { addon: false })
+    offered({ ...click(1), session: { harness, id: 'conversation-1' } })
+    await until(() => failures().length > 0)
+    expect(failures()[0]!.args).toEqual({ for: { harness, id: 'conversation-1' }, why: GONE })
+    expect(said.some((line) => line.includes('was not taken by the reopening of its conversation'))).toBe(true)
+  })
 
   test('a reason too long to fit beside the advice to load the add-on is cut short, so that the advice is never what the backend cuts off', () => {
     const said = notLoadedToo(`Claude Code exited with 1, and its last words were: ${'x'.repeat(400)}`)
