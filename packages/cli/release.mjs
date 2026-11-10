@@ -86,7 +86,8 @@ for (const target of TARGETS) {
   // `.env` is not to steer it. And in a folder this account may not list, the program Bun 1.3
   // builds starts with no environment at all: no IT_HOME, no HOME, no CODEX_THREAD_ID. Started
   // in It's own folder by an account kept out of it, it then looked for It in the wrong place
-  // and said to run `it setup`.
+  // and said to run `it setup`. A `bunfig.toml` there is not read either: the program would
+  // run any script that file names to be loaded first, from whatever folder `it` is run in.
   execFileSync(
     'bun',
     [
@@ -94,6 +95,7 @@ for (const target of TARGETS) {
       path.join(here, 'src/main.ts'),
       '--compile',
       '--no-compile-autoload-dotenv',
+      '--no-compile-autoload-bunfig',
       '--minify',
       `--target=${compileTarget}`,
       '--outfile',
