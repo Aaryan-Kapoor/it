@@ -2550,6 +2550,10 @@ input[role="switch"]:disabled {
   border: 1px solid var(--line);
   border-radius: var(--r-md);
 }
+/* A notice in a page of rows, such as a display's settings, lines up with the rows under it */
+.list-view > .notice {
+  margin: 0;
+}
 .shell[data-view="page"] > .notice {
   flex-shrink: 0;
   margin-bottom: 12px;
@@ -2557,10 +2561,6 @@ input[role="switch"]:disabled {
 
 .notice > span {
   flex: 1 1 260px;
-}
-/* A notice in a page of rows, such as a display's settings, lines up with the rows under it */
-.list-view > .notice {
-  margin: 0;
 }
 
 /* ══ The site, which scrolls under its bar ══ */
