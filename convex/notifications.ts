@@ -5,7 +5,7 @@ import { LIMITS, MESSAGE } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { type MutationCtx, mutation, query } from './_generated/server'
+import { type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import { madeAt, record } from './actions'
 import { aim, nameOf, targetOf } from './lib/aim'
 import { artifactBySlug, type Browser, displayByKey, findDisplay, requireBrowser, requireMachine } from './lib/authz'
@@ -109,6 +109,31 @@ export function isFor(n: Doc<'notifications'>, d: Doc<'displays'>): boolean {
   return n.to ? n.to.includes(d._id) : d.createdAt <= n.createdAt
 }
 
+/** How many of what went to every display a tray reads at most, looking for the ones that are for its display. */
+const BROADCASTS_READ = 1000
+
+/**
+ * The newest of what went to every display that is for this one, up to a tray's worth. What went
+ * to every display is kept in one list for all of them, with whom each was for, so the ones for
+ * other displays are passed over until a tray's worth is found: a display closed to agents for a
+ * while, while many went to the others, still has what was sent to it before. Nothing sent
+ * before the display was there can be for it, so the reading stops there, and it never reads
+ * more than `BROADCASTS_READ`. A display closed to agents is shown none of it, and reads none.
+ */
+async function broadcastsFor(ctx: QueryCtx, userId: Id<'users'>, display: Doc<'displays'>): Promise<Doc<'notifications'>[]> {
+  if (display.agentsOff) return []
+  const out: Doc<'notifications'>[] = []
+  let read = 0
+  for await (const n of ctx.db
+    .query('notifications')
+    .withIndex('by_user_target', (q) => q.eq('userId', userId).eq('displayId', undefined).eq('dismissedAt', undefined).gte('createdAt', display.createdAt))
+    .order('desc')) {
+    if (isFor(n, display)) out.push(n)
+    if (out.length >= TRAY || ++read >= BROADCASTS_READ) break
+  }
+  return out
+}
+
 /** The tray: what this display should show, newest first. */
 export const list = query({
   args: { key: v.string() },
@@ -117,15 +142,16 @@ export const list = query({
     const { user } = c
     const display = await findDisplay(ctx, c, key)
     // Read by who it is for, so that what is addressed to another display, or was dismissed,
-    // never stands in front of what belongs here: the newest for every display, the newest for
-    // this one, and then the newest of the two together.
-    const forTarget = (displayId: Id<'displays'> | undefined) =>
-      ctx.db
-        .query('notifications')
-        .withIndex('by_user_target', (q) => q.eq('userId', user._id).eq('displayId', displayId).eq('dismissedAt', undefined))
-        .order('desc')
-        .take(TRAY)
-    const recent = [...(await forTarget(undefined)), ...(display ? await forTarget(display._id) : [])].sort((a, b) => b.createdAt - a.createdAt)
+    // never stands in front of what belongs here: the newest for this display, the newest of
+    // what went to every display that this one was among, and then the newest of the two together.
+    const forThis = display
+      ? await ctx.db
+          .query('notifications')
+          .withIndex('by_user_target', (q) => q.eq('userId', user._id).eq('displayId', display._id).eq('dismissedAt', undefined))
+          .order('desc')
+          .take(TRAY)
+      : []
+    const recent = [...(display ? await broadcastsFor(ctx, user._id, display) : []), ...forThis].sort((a, b) => b.createdAt - a.createdAt)
     const slugs = new Map<string, string | null>()
     const out = []
     for (const n of recent) {

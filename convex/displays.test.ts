@@ -680,6 +680,28 @@ describe('where an agent’s notification goes', () => {
     expect(await tray(tv)).toEqual([])
   })
 
+  test('what went to every display stays in a display’s tray however many went to the others while it was closed to agents', async () => {
+    const h = await household()
+    const a = await h.browser('owner', key(1))
+    const b = await h.browser('screen', key(2))
+    const kept = await h.agent.mutation(api.notifications.send, { text: 'for both, kept up', sticky: true, everywhere: true })
+    expect(kept.displayIds.sort()).toEqual([a.id, b.id].sort())
+    await a.as.mutation(api.displays.allowAgents, { displayId: a.id, allowed: false })
+    // A tray's worth goes to every display while the first is closed to agents, which is the second alone
+    await h.t.run(async (ctx) => {
+      const user = (await ctx.db.query('users').first())!
+      for (let i = 0; i < 60; i++)
+        await ctx.db.insert('notifications', { userId: user._id, text: `for b ${i}`, sticky: false, to: [b.id], createdAt: Date.now() + 1 + i })
+    })
+    vi.advanceTimersByTime(1000)
+    await a.as.mutation(api.displays.allowAgents, { displayId: a.id, allowed: true })
+    expect(await tray(a)).toEqual(['for both, kept up'])
+    const theirs = await tray(b)
+    expect(theirs).toHaveLength(60)
+    expect(theirs[0]).toBe('for b 59')
+    expect(theirs).not.toContain('for both, kept up')
+  })
+
   test('one an earlier It sent to every display, which kept no list of whom, is not shown on a display registered after it', async () => {
     const h = await household()
     const laptop = await h.browser('owner', key(1))
