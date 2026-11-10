@@ -35,15 +35,14 @@ export const create = mutation({
     if (!picture) await rateLimit(ctx, 'mount', user._id)
     const shownOn = picture ? await displayByKey(ctx, c, displayKey) : null
     if (shownOn) await rateLimit(ctx, 'picture', shownOn._id)
-    // A display locked to a page shows no grid, and so no previews. When the lock lands (the
-    // display work's PR 6), a preview on a locked display is refused here, whoever asks
     const artifact = await ownArtifact(ctx, user._id, artifactId)
     if (artifact.currentVersion === undefined) fail('not_found', 'That page has nothing published yet.')
     const display = shownOn ?? (await displayByKey(ctx, c, displayKey))
-    // A display locked to a page shows that page and no other, whatever site asks
-    if (display.lockedTo && display.lockedTo.artifactId !== artifactId) {
-      log('mount.refused', { userId: user._id, displayId: display._id, reason: 'locked' }, 'warn')
-      fail('forbidden', 'This display is locked to another page.', { locked: true })
+    // A display locked to a page shows that page and no other, whatever site asks. Nor does it
+    // show a grid, and so it is given no preview of any page, the one it is locked to included
+    if (display.lockedTo && (picture || display.lockedTo.artifactId !== artifactId)) {
+      log('mount.refused', { userId: user._id, displayId: display._id, reason: picture ? 'locked_preview' : 'locked' }, 'warn')
+      fail('forbidden', picture ? 'A display locked to a page shows no previews.' : 'This display is locked to another page.', { locked: true })
     }
     // An id nobody has used before, for every showing, always
     const mountId = hex(crypto.getRandomValues(new Uint8Array(16)))
@@ -99,8 +98,9 @@ export const _take = internalMutation({
       log('ticket.not_given', { userId: user._id, displayId: display._id, reason: 'signed_out_since' }, 'warn')
       fail('conflict', 'No ticket is available for that.')
     }
-    // Locked since this mount was made, to another page: what was asked for before the lock gets nothing after it
-    if (display.lockedTo && display.lockedTo.artifactId !== m.artifactId) {
+    // Locked since this mount was made, to another page, or made as a preview, which a locked
+    // display shows none of: what was asked for before the lock gets nothing after it
+    if (display.lockedTo && (m.picture === true || display.lockedTo.artifactId !== m.artifactId)) {
       log('ticket.not_given', { userId: user._id, displayId: display._id, reason: 'locked' }, 'warn')
       fail('conflict', 'No ticket is available for that.')
     }
