@@ -666,3 +666,42 @@ describe.skipIf(!shell || process.platform === 'win32')('stopping It at the end 
     expect(it.setAside()).toBe('')
   }, 60_000)
 })
+
+// The workflow that runs the browser suite on macOS and Windows (.github/workflows/platforms.yml).
+// Its steps before It is started run the standalone program for its version, with the folder
+// the stack is to start It in already named. Wherever CI is set, every command writes the file
+// that turns usage reporting off into the folder It lives in, and the stack starts It only in
+// one that is empty. The step is run as it is written, with a stand-in that writes that file.
+describe.skipIf(!shell || process.platform === 'win32')('the browser suite on macOS and Windows', () => {
+  const platforms = readFileSync(path.join(root, '.github', 'workflows', 'platforms.yml'), 'utf8').split('\n')
+  const own = []
+  let inFlow = false
+  for (const line of platforms.slice(platforms.indexOf('jobs:') + 1)) {
+    const id = /^ {2}([a-z][a-z0-9-]*):$/.exec(line)?.[1]
+    if (id) inFlow = id === 'flow'
+    else if (inFlow && !/^\s*#/.test(line)) own.push(line)
+  }
+  const starts = own.flatMap((line, i) => (/^ {6}- /.test(line) ? [i] : []))
+  const flow = starts.map((at, n) => own.slice(at, starts[n + 1]).join('\n'))
+  const stackAt = flow.findIndex((step) => step.includes('node e2e/stack.mjs'))
+
+  test('leaves the folder It is started in empty until the stack starts It there', () => {
+    const before = flow.slice(0, stackAt).filter((step) => step.includes('it-programs/$PROGRAM'))
+    expect(before.length).toBeGreaterThan(0)
+    const temp = mkdtempSync(path.join(os.tmpdir(), 'it-platforms-test-'))
+    try {
+      const program = 'it-stand-in'
+      mkdirSync(path.join(temp, 'it-programs'))
+      writeFileSync(path.join(temp, 'it-programs', program), '#!/bin/sh\nmkdir -p "$IT_HOME" && printf CI > "$IT_HOME/telemetry-off"\n')
+      const home = path.join(temp, 'it-home')
+      const env = { ...process.env, CI: 'true', RUNNER_TEMP: temp, IT_HOME: home, PROGRAM: program, GITHUB_ENV: path.join(temp, 'env') }
+      for (const step of before) {
+        const ran = asRunner(scriptOf(step), { env, cwd: temp })
+        expect(ran.status, ran.stderr).toBe(0)
+      }
+      expect(existsSync(home) ? readdirSync(home) : []).toEqual([])
+    } finally {
+      rmSync(temp, { recursive: true, force: true })
+    }
+  })
+})

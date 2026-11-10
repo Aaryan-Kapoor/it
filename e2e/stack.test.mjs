@@ -3,7 +3,7 @@
 // stopped noticing when that is not so. Nothing of It runs here: the program the stack starts
 // is a stand-in, which sets up and serves as little as the stack looks for, and stops, or does
 // not, as each test tells it to.
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -247,6 +247,26 @@ describe.skipIf(process.platform === 'win32')('a stack that stands in for the re
     expect(noFolder).toMatch(
       /The stack cannot start: IT_STACK_BACKEND_ARCHIVES names the folder that holds the backend program’s archive, and .* is no folder\./,
     )
+  })
+
+  test('does not start in a folder that is not empty, and notes that it held nothing, so that the check of what was written down reads its log and passes it', {
+    timeout: 60_000,
+  }, async () => {
+    const folder = mkdtempSync(path.join(dir, 'used-'))
+    const [home, logs, holds] = [path.join(folder, 'home'), path.join(folder, 'logs'), path.join(folder, 'holds.jsonl')]
+    // As a CI runner's folder is left by the program asked its version there: CI turns usage reporting off, and the file that says so is written
+    mkdirSync(home)
+    writeFileSync(path.join(home, 'telemetry-off'), 'CI')
+    const refused = await startStack('stops', { IT_HOME: home, IT_STACK_LOGS: logs, IT_E2E_INVENTORY: holds }).catch((err) => err.message)
+    expect(refused).toMatch(/The stack cannot start: It is started in a fresh folder, and .* is not empty\./)
+    expect(readFileSync(holds, 'utf8')).toBe('')
+    // What it said is kept beside the logs, as a CI step keeps it
+    writeFileSync(path.join(logs, 'stack.log'), refused)
+    const checked = spawnSync(process.execPath, [path.join(here, 'logs.mjs'), logs], {
+      env: { ...surroundings(logs), IT_E2E_INVENTORY: holds },
+      encoding: 'utf8',
+    })
+    expect(checked.status, checked.stderr).toBe(0)
   })
 })
 

@@ -32,7 +32,7 @@
 // it stops the service and starts it again on the same folder, which is how a run sees that It
 // keeps what it holds.
 import { spawn } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
@@ -67,6 +67,11 @@ const logs = STACK_LOGS
 mkdirSync(logs, { recursive: true })
 // The note an earlier stack left says where that one was, and this one is not there
 rmSync(stackNote(), { force: true })
+// The note of the credentials a run holds (IT_E2E_INVENTORY) is begun here, before anything
+// that holds one exists, so that a stack that cannot start has noted that it held nothing. The
+// check of what was written down reads that, as it reads any note, and what such a stack wrote
+// can then be read and kept: without it the check finds no note at all, and keeps nothing.
+if (process.env.IT_E2E_INVENTORY) appendFileSync(process.env.IT_E2E_INVENTORY, '', { mode: 0o600 })
 
 const port = process.env.IT_PORT ? Number(process.env.IT_PORT) : STACK_PORT
 if (!Number.isInteger(port) || port < 1 || port > 65_000) cannot(`IT_PORT is the port everything is counted from, and "${process.env.IT_PORT}" is not one.`)

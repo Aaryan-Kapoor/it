@@ -102,13 +102,20 @@ jobs:
         with:
           name: it-programs
           path: ${{ runner.temp }}/it-programs
+      # Asked its version in a folder of its own: wherever CI is set, every command, this one
+      # too, writes the file that turns usage reporting off into the folder It lives in, and the
+      # stack starts It only in a folder that is still empty
       - name: Use the standalone program for this system
         env:
           PROGRAM: ${{ matrix.program }}
         run: |
           chmod +x "$RUNNER_TEMP/it-programs/$PROGRAM"
-          "$RUNNER_TEMP/it-programs/$PROGRAM" --version
+          IT_HOME="$RUNNER_TEMP/it-version-home" "$RUNNER_TEMP/it-programs/$PROGRAM" --version
           echo "IT_BIN=$RUNNER_TEMP/it-programs/$PROGRAM" >> "$GITHUB_ENV"
+      # It refuses to write a page where that would leave less than 2 GB free on the disk it keeps
+      # its files on, so how much room the runner has is said before It is started
+      - name: Room on the disk It keeps its files on
+        run: df -k "$RUNNER_TEMP"
       # The stack goes on running behind the steps that follow, as in the main workflow
       - name: Start It
         id: stack
@@ -143,7 +150,7 @@ jobs:
         if: always() && steps.scan.outcome == 'success'
         working-directory: ${{ runner.temp }}/it-kept
         run: |
-          for log in stack.log service.log; do echo "::group::$log"; tail -n 150 "$log" 2>/dev/null || echo "(there is none)"; echo "::endgroup::"; done
+          for log in stack.log service.log cli.said.log; do echo "::group::$log"; tail -n 150 "$log" 2>/dev/null || echo "(there is none)"; echo "::endgroup::"; done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always() && steps.scan.outcome == 'success'
         with:

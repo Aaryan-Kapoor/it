@@ -1,7 +1,8 @@
 // Waits for the stack (e2e/stack.mjs) to answer, and says what does not.
 //   node e2e/ready.mjs [seconds]
-// Exits 1 with the end of the stack's log when the time runs out, so that a CI run that could
-// not start its stack shows why.
+// Exits 1 with the end of the stack's logs when the time runs out, so that a CI run that could
+// not start its stack shows why: what the stack itself said, which is all there is of a stack
+// that ended before it set It up, and what the service and the CLI wrote.
 import { existsSync, readFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
@@ -56,7 +57,7 @@ if (down.length) {
         ? `not answering: ${down.join('; ')}`
         : 'the stack that noted where it is has stopped: what it said as it did is in its own output',
   )
-  for (const name of ['service.log', 'cli.said.log']) {
+  for (const name of ['stack.log', 'service.log', 'cli.said.log']) {
     const file = path.join(STACK_LOGS, name)
     // Cleaned of anything that is, or is shaped like, a credential: this goes to a CI step's own log
     console.error(`\n--- the end of ${file}\n${existsSync(file) ? redact(readFileSync(file, 'utf8').split('\n').slice(-40).join('\n')) : '(no such file)'}`)

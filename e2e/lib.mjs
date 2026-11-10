@@ -3,7 +3,7 @@
 // and the checks of what was reported as usage and of an agent app's add-on.
 import './node.mjs'
 import { execFile, execFileSync, spawn } from 'node:child_process'
-import { accessSync, appendFileSync, constants, createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { accessSync, appendFileSync, constants, copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -577,6 +577,27 @@ else if (what === 'add') keep({ ...has, added: true })
 else if (what === 'remove') keep({ ...has, added: false })
 else if (what === 'list') console.log(has.from ? 'it-bridge@it  ' + (has.added ? 'installed, enabled' : 'not installed') + '  0.1.0  ' + has.from : 'No plugins.')
 `
+/** The command script npm 7 and later writes for Codex on Windows, as it writes it. */
+const NPM_CODEX_SHIM = [
+  '@ECHO off',
+  'GOTO start',
+  ':find_dp0',
+  'SET dp0=%~dp0',
+  'EXIT /b',
+  ':start',
+  'SETLOCAL',
+  'CALL :find_dp0',
+  '',
+  'IF EXIST "%dp0%\\node.exe" (',
+  '  SET "_prog=%dp0%\\node.exe"',
+  ') ELSE (',
+  '  SET "_prog=node"',
+  '  SET PATHEXT=%PATHEXT:;.JS;=;%',
+  ')',
+  '',
+  'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*',
+  '',
+].join('\r\n')
 /** A word as a shell takes it for one word, whatever is in it. */
 const quoted = (word) => `'${word.replaceAll("'", `'\\''`)}'`
 const standing = new Set()
@@ -594,17 +615,22 @@ export function standInApps(folder) {
   const program = path.join(bin, 'stand-in.mjs')
   writeFileSync(program, STAND_IN)
   for (const command of APP_COMMANDS) {
-    // Started by this Node at its own address, so that nothing is looked for by name to run a stand-in
-    if (process.platform === 'win32') writeFileSync(path.join(bin, `${command}.cmd`), `@echo off\r\n"${process.execPath}" "${program}" ${command} %*\r\n`)
-    else {
+    // Started by this Node at its own address, so that nothing is looked for by name to run a stand-in.
+    // Codex's on Windows is written below, as npm writes it.
+    if (process.platform === 'win32') {
+      if (command !== 'codex') writeFileSync(path.join(bin, `${command}.cmd`), `@echo off\r\n"${process.execPath}" "${program}" ${command} %*\r\n`)
+    } else {
       writeFileSync(path.join(bin, command), `#!/bin/sh\nexec ${quoted(process.execPath)} ${quoted(program)} ${command} "$@"\n`, { mode: 0o755 })
       accessSync(path.join(bin, command), constants.X_OK)
     }
   }
   // On Windows a Codex installed through npm is a .cmd file with Codex's own script beside it,
   // and It starts that script with Node, since only a shell can start a .cmd file and a shell
-  // would read a page's title as part of the command. The stand-in is laid out as that Codex
-  // is, so that It finds it as it finds the real one.
+  // would read a page's title as part of the command. It reads which script and which Node out
+  // of the .cmd file, and only out of one that is, line for line, what a package manager
+  // writes (packages/cli/src/wake.ts). So the stand-in is laid out as that Codex is: npm's own
+  // command script, Codex's script under node_modules, and this Node beside the command script,
+  // where npm's script and It both look for a Node first, so that none is looked for by name.
   if (process.platform === 'win32') {
     const beside = path.join(bin, 'node_modules', '@openai', 'codex', 'bin')
     mkdirSync(beside, { recursive: true })
@@ -612,6 +638,8 @@ export function standInApps(folder) {
       path.join(beside, 'codex.js'),
       `process.argv.splice(2, 0, 'codex')\nimport(require('node:url').pathToFileURL(${JSON.stringify(program)}).href)\n`,
     )
+    copyFileSync(process.execPath, path.join(bin, 'node.exe'))
+    writeFileSync(path.join(bin, 'codex.cmd'), NPM_CODEX_SHIM)
   }
   standing.add(bin)
   return bin
