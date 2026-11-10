@@ -807,6 +807,18 @@ async function connecting(say: (line: string) => void): Promise<void> {
     finished: boolean
     idleAt: number | null
     want: 'running' | 'ended' | 'unknown' | 'wait'
+    /** The watch this one was merged into, where the conversation came to be heard under an id that was watched already. */
+    into?: Watched
+  }
+  /**
+   * The watch that is kept for a conversation, where the one given was merged into another, and
+   * that one into another in its turn. It may be in the middle of being told of a watch when
+   * that watch is merged away, and what It answers is then noted for the one that is kept.
+   */
+  const kept = (w: Watched): Watched => {
+    let now = w
+    while (now.into) now = now.into
+    return now
   }
   const watchedTurns = new Map<string, Watched>()
   /** The conversation each click was handed to, for as long as It has yet to confirm the hand-over. */
@@ -899,8 +911,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       there.finished ||= w.finished
       // It may be in the middle of being told of the one that is let go of here: what it is
       // told from now on is noted for the one that is kept, so that its ending is told as well
-      w.names = there.names
-      w.told = there.told
+      w.into = there
     } else watchedTurns.set(key, w)
     turnSeen(key)
   }
@@ -944,9 +955,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const harness = key.slice(0, key.indexOf(':'))
         if (w.want === 'running') {
           for (const id of w.names) {
-            if (w.told.has(id)) continue
+            if (kept(w).told.has(id)) continue
             await call('mutation', api.turns.say, { for: { harness, id }, running: true })
-            w.told.add(id)
+            kept(w).told.add(id)
           }
           continue
         }
@@ -957,7 +968,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           if (!settle) continue
           for (const id of [...w.told]) {
             await call('mutation', api.turns.say, { for: { harness, id } })
-            w.told.delete(id)
+            kept(w).told.delete(id)
           }
           continue
         }
@@ -970,9 +981,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
             ...(w.want === 'ended' ? { running: false } : {}),
             ...(ended && !w.told.has(id) ? { untold: true } : {}),
           })
-          w.told.delete(id)
+          kept(w).told.delete(id)
         }
-        if (ended) w.finished = false
+        if (ended) kept(w).finished = w.finished = false
         // Something may have been handed to it while It was being told
         lookAtTurn(key, w)
         if (watchedTurns.get(key) === w && (w.want === 'ended' || w.want === 'unknown') && !w.told.size) watchedTurns.delete(key)

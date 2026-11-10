@@ -5904,6 +5904,43 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     ).toEqual([CLAUDE.id, other.id])
   })
 
+  test('a conversation merged into another that is merged into a third, while It is being told that the first runs, has its ending told with theirs', async () => {
+    standIn()
+    await start('socket', APPS)
+    const second = { harness: 'claude-code', id: 'conversation-2' }
+    const third = { harness: 'claude-code', id: 'conversation-3' }
+    for (const c of [CLAUDE, second, third]) await asks(false, c.id)
+    // The second and the third are at work on clicks of their own, and It has been told so
+    for (const [n, c] of [
+      [2, second],
+      [3, third],
+    ] as const) {
+      offered(click(n, c))
+      await until(async () => ((await asks(true, c.id))?.clicks ?? []).some((got) => got.id === `click-${n}`))
+      expect(await local('/ack', { method: 'POST', body: { ids: [`click-${n}`], woke: false, turn: true } })).toEqual({ ok: true, acked: 1 })
+    }
+    await until(() => told().length === 3)
+    // It takes its time to answer that the first runs
+    let answer!: () => void
+    stand.answer = (name, args) =>
+      name === 'turns:say' && args.for?.id === CLAUDE.id && args.running === true ? new Promise<null>((done) => (answer = () => done(null))) : undefined
+    await handed(1, { woke: true, turn: true }, false)
+    await until(() => told().length === 4)
+    // Meanwhile the first carries on under the second's id, and that one under the third's, whose turn then ends
+    expect(await local('/session', { method: 'POST', body: { harness: 'claude-code', session: second.id, was: CLAUDE.id } })).toMatchObject({ ok: true })
+    expect(await local('/session', { method: 'POST', body: { harness: 'claude-code', session: third.id, was: second.id } })).toMatchObject({ ok: true })
+    await asks(false, third.id)
+    await pass()
+    answer()
+    await until(() => told().filter((said) => said.running === false).length === 3)
+    expect(
+      told()
+        .filter((said) => said.running === false)
+        .map((said) => said.for.id)
+        .sort(),
+    ).toEqual([CLAUDE.id, second.id, third.id])
+  })
+
   test('an It from before it took any of this is told nothing more once it has said so', async () => {
     standIn()
     stand.answer = (name) => (name === 'turns:say' ? Promise.reject(new Error('Could not find public function for turns:say')) : undefined)
