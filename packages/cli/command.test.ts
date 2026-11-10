@@ -1782,7 +1782,8 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
 })
 
 describe('a network change taken by the running service', () => {
-  async function changing(answer: (read: number, network: boolean) => unknown, initialTailnet = true) {
+  const TAILNET_ONLY = "{tailscale0:[{address:'100.64.0.1',family:'IPv4',internal:false}]}"
+  async function changing(answer: (read: number, network: boolean) => unknown, initialTailnet = true, interfaces = TAILNET_ONLY) {
     const m = machine(true, true)
     const held = await holdBase(58_000, 10)
     const settings = () => JSON.parse(readFileSync(path.join(m.it, 'service.json'), 'utf8')) as { network: boolean }
@@ -1818,7 +1819,7 @@ describe('a network change taken by the running service', () => {
     // Only the network's polling waits move this clock, so requests still take their usual time.
     writeFileSync(
       clock,
-      "import os from 'node:os'; os.networkInterfaces = () => ({tailscale0:[{address:'100.64.0.1',family:'IPv4',internal:false}]}); let offset = 0; const now = Date.now; Date.now = () => now() + offset; const later = setTimeout; globalThis.setTimeout = (run, ms, ...args) => later(() => { if (ms === 200) offset += 5000; run(...args) }, ms === 200 || ms === 2500 ? 1 : ms)\n",
+      `import os from 'node:os'; os.networkInterfaces = () => (${interfaces}); let offset = 0; const now = Date.now; Date.now = () => now() + offset; const later = setTimeout; globalThis.setTimeout = (run, ms, ...args) => later(() => { if (ms === 200) offset += 5000; run(...args) }, ms === 200 || ms === 2500 ? 1 : ms)\n`,
     )
     return {
       settings,
@@ -1903,6 +1904,50 @@ describe('a network change taken by the running service', () => {
       expect(error(await door.run()).code).toBe('not_confirmed')
       const asked = await door.ask()
       expect(asked.code).toBe(0)
+      expect(asked.err).toContain('The service that is running is of an earlier It')
+      expect(asked.err).not.toContain('does not answer the internet')
+    } finally {
+      await door.close()
+    }
+  })
+
+  test('says that It does not answer the internet where the running service confirms it keeps the internet out', async () => {
+    const door = await changing(() => ({ on: true, wanted: true, tailnet: false, internet: false }), false)
+    try {
+      const asked = await door.ask()
+      expect(asked.code).toBe(0)
+      expect(asked.err).toContain('It does not answer the internet')
+      expect(asked.err).not.toContain('has not confirmed')
+    } finally {
+      await door.close()
+    }
+  })
+
+  for (const report of ['unavailable', 'answering the internet'])
+    test(`does not say that It keeps the internet out where the running service's policy is ${report}`, async () => {
+      const door = await changing(
+        () =>
+          report === 'unavailable'
+            ? new Refusal({ code: 'unavailable', message: 'The report is not available.' })
+            : { on: true, wanted: true, tailnet: false, internet: true },
+        false,
+      )
+      try {
+        const asked = await door.ask()
+        expect(asked.code).toBe(0)
+        expect(asked.err).not.toContain('does not answer the internet')
+        expect(asked.err).toContain('has not confirmed that it keeps It from the internet')
+      } finally {
+        await door.close()
+      }
+    })
+
+  test('a machine with no private address while an earlier service runs is not said to keep the internet out', async () => {
+    const door = await changing(() => ({ on: true, wanted: true, tailnet: false }), false, "{eth0:[{address:'203.0.113.5',family:'IPv4',internal:false}]}")
+    try {
+      const asked = await door.ask()
+      expect(asked.code).toBe(0)
+      expect(asked.err).toContain('this machine has no private address on a network just now')
       expect(asked.err).toContain('The service that is running is of an earlier It')
       expect(asked.err).not.toContain('does not answer the internet')
     } finally {

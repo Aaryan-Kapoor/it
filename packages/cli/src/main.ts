@@ -2290,6 +2290,10 @@ async function turnNetwork(
 const EARLIER =
   'The service that is running is of an earlier It, which with the network on listens on every address this machine has, the internet’s among them. Stop It and start it again, and the network is then kept to this machine’s private addresses.'
 
+/** What is said where the service that is running has not said that it keeps the internet out, as asked. */
+const UNCONFIRMED =
+  'The service that is running has not confirmed that it keeps It from the internet. `it service logs` says what the service met, and stopping It and starting it again applies the setting afresh.'
+
 /** What is said where the tailnet is asked for on a machine that is on none. */
 const noTailnet = () =>
   new Problem(
@@ -2345,11 +2349,15 @@ async function network(a: Args) {
   if (to !== undefined) await turnNetwork(config, running, on, tailnet, internet)
   // Asked only how things stand: a service that was to listen on the network and could not is said as it is
   let earlier = false
+  // That It does not answer the internet is said only where it is known: with no service running nothing listens, a
+  // change just made was confirmed by the service, and asked how things stand, the service must say it keeps the internet out
+  let keptIn = to !== undefined || !running
   if (to === undefined && on && running) {
     const stands = await doorStands(config)
     // And one of an earlier It, open on every address, is not said to keep It from the internet
     // Whether its functions say which policy it applied or not: only a service of this It says it keeps the internet out
     earlier = !tailnet && !internet && stands?.on === true && stands.internet === undefined
+    keptIn = stands?.on === true && stands.internet === false
     if (stands?.wanted && !stands.on) {
       const could =
         'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'
@@ -2366,14 +2374,14 @@ async function network(a: Args) {
         ? 'The network is on, for your tailnet only, but this machine has no address there just now.'
         : internet
           ? 'The network is on, for every address this machine has, but it has no address on a network just now.'
-          : earlier
+          : !keptIn
             ? 'The network is on, for anyone on this network, but this machine has no private address on a network just now.'
             : 'The network is on, for anyone on this network, but this machine has no private address on a network just now. It does not answer the internet.'
       : tailnet
         ? 'The network is on, for your tailnet only. Your devices that are signed in to Tailscale can open It at:'
         : internet
           ? 'The network is on, for every address this machine has, the internet’s included. Whoever can reach one can open It at:'
-          : earlier
+          : !keptIn
             ? 'The network is on, for anyone on this network. Devices on it can open It, and its pairing screen, at these addresses:'
             : 'The network is on, for anyone on this network. Devices on it can open It, and its pairing screen, at these addresses, and It does not answer the internet:'
   // With no service running the setting is all there is: nothing listens anywhere until It starts
@@ -2386,7 +2394,7 @@ async function network(a: Args) {
   // On for the network the machine is on, with somewhere to open It: the tailnet is the way for a phone
   const phone = on && !tailnet && !internet && addresses.length ? PHONE_SAID : undefined
   // To a person the sentence is what is printed, with the addresses under it. Anywhere else it is said beside the JSON
-  const stale = earlier ? EARLIER : undefined
+  const stale = earlier ? EARLIER : on && !tailnet && !internet && !keptIn ? UNCONFIRMED : undefined
   if (forPerson(a)) return tell([said, ...addresses.map((address) => `  ${address}`), stale, toAll, phone, later])
   say(addresses.length ? `${said} ${addresses.join(', ')}` : said)
   if (stale) say(stale)
