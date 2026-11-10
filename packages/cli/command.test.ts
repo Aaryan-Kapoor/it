@@ -1421,24 +1421,28 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
-  test('where It cannot say whether it takes `--on-id`, the display is asked for by its id, and a failure is said as it is', async () => {
+  test('where It cannot say whether it takes `--on-id`, nothing is sent or published, and the command is refused as offline', async () => {
     const m = machine()
-    const b = await backend(m, (asked) => (asked.path === 'displays:show' || asked.path === 'notifications:send' ? SERVER_ERROR : null))
+    const b = await backend(m, (asked) => (asked.path === 'displays:show' ? { displays: ['Desk'], displayIds: ['jh7desk'], took: false } : { id: 'n1' }))
     try {
-      // Its door answers with nothing It would say, as a door that is not It's does
+      // Its door answers with nothing It would say, as a door that is not It's does, while its functions can still be called
       b.config.answer = () => ({})
-      const ran = await run(m, ['open', 'board', '--on-id', 'jh7desk'], b.env)
-      expect([ran.code, error(ran).code, error(ran).message]).toEqual([1, 'error', expect.stringContaining('Server Error')])
-      // Asked by the id alone, however often a failure of that kind is tried again, and never by a name or for every display
-      const shows = b.asked.filter((x) => x.path === 'displays:show').map((x) => x.args)
-      expect(shows.length).toBeGreaterThan(0)
-      for (const args of shows) expect(args).toEqual({ slug: 'board', displayId: 'jh7desk' })
-      // On its word that it takes the form, the failure is said as it is too, and It is not asked anything else
+      for (const words of [
+        ['open', 'board', '--on-id', 'jh7desk'],
+        ['notify', 'hello', '--on-id', 'jh7desk'],
+        ['create', 'Board', '--html', '<p>hi</p>', '--open', '--on-id', 'jh7desk'],
+        ['update', 'board', '--html', '<p>hi</p>', '--open', '--on-id', 'jh7desk'],
+        ['tour', 'show', 'menu', '--on-id', 'jh7desk'],
+      ]) {
+        const ran = await run(m, words, b.env)
+        expect([words.join(' '), ran.code === 0, error(ran).code]).toEqual([words.join(' '), false, 'offline'])
+      }
+      expect(b.asked).toEqual([])
+      expect(b.uploads).toEqual([])
+      // Once It says it takes the form, the same command is sent, by the id alone
       b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showById, TAKES.notifyById] })
-      b.asked.length = 0
-      const again = await run(m, ['notify', 'hello', '--on-id', 'jh7desk'], b.env)
-      expect([again.code, error(again).code, error(again).message]).toEqual([1, 'error', expect.stringContaining('Server Error')])
-      expect(new Set(b.asked.map((x) => x.path))).toEqual(new Set(['notifications:send']))
+      expect((await run(m, ['open', 'board', '--on-id', 'jh7desk'], b.env)).code).toBe(0)
+      expect(b.asked.map((x) => x.args)).toEqual([{ slug: 'board', displayId: 'jh7desk' }])
     } finally {
       await b.close()
     }

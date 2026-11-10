@@ -350,19 +350,25 @@ const olderForId = () =>
     'invalid',
     'Name the display with --on "<name>" instead, or update It. `it status` says which version it is.',
   )
+/** What is said where It could not say whether it takes a later form of a call: nothing is sent in a form it may not take. */
+const unknownForm = () =>
+  new Problem(
+    'It could not be asked whether it takes this, so nothing was sent and nothing was published.',
+    'offline',
+    'Check that It is running and can be reached (`it status`), then try again.',
+  )
 /**
  * Before a display is asked for by its id, or anything is published to be shown on one: whether
- * the It this machine asks takes the form. On its word that it does not, the command is refused
- * there, with nothing sent and nothing published, and it never asks again by a name, since the id
- * was given to reach that display and no other. Where It could not be asked, that is not taken
- * for a no: the command goes ahead, and what It then answers is said as it is. True where no
- * display is named by its id.
+ * the It this machine asks takes the form, on its own word. Where it says it does not, the command
+ * is refused as `invalid`, and it never asks again by a name, since the id was given to reach that
+ * display and no other. Where it could not be asked, the command is refused as `offline`. Either
+ * way nothing is sent and nothing is published. Does nothing where no display is named by its id.
  */
-async function canAimById(a: Args, form: string): Promise<boolean | undefined> {
-  if (aimedAt(a).displayId === undefined) return true
+async function canAimById(a: Args, form: string): Promise<void> {
+  if (aimedAt(a).displayId === undefined) return
   const takes = await takesForm(form)
   if (takes === false) throw olderForId()
-  return takes
+  if (takes === undefined) throw unknownForm()
 }
 /**
  * Runs something that names a display. The backend says only that there is none of that name
@@ -370,17 +376,14 @@ async function canAimById(a: Args, form: string): Promise<boolean | undefined> {
  * machine saying it.
  *
  * A display named by its id is asked for only once It has said it takes the form (`canAimById`).
- * Where It could not be asked first, and the call then fails with nothing said of why, It is
- * asked again, and on its word that it does not take the form, that is said.
  */
 async function onDisplay<T>(a: Args, run: () => Promise<T>, byId: string = TAKES.showById): Promise<T> {
   const target = aimedAt(a)
-  const known = await canAimById(a, byId)
+  await canAimById(a, byId)
   try {
     return await run()
   } catch (err) {
     if (!(err instanceof Problem)) throw err
-    if (target.displayId !== undefined && known === undefined && err.code === 'error' && (await takesForm(byId)) === false) throw olderForId()
     if (err.code !== 'no_such_display') throw err
     const all = await call<{ id: string; name: string }[]>('query', api.displays.list).then(
       (all) => all.map((d) => (target.displayId !== undefined ? `${named(d.name)} (${d.id})` : named(d.name))).join(', '),
