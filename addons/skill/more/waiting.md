@@ -4,7 +4,7 @@
 
 - **`"byItself": true`, `"via": "addon"`**: It's add-on is listening in this conversation, and what the user does arrives as a message that begins `[It]`. End your turn, and do not wait.
 - **`"byItself": true`, `"via": "t3"`**: a thread of T3 Code holds this conversation, and T3 Code puts what the user does into the thread, whether or not the add-on runs there. End your turn, and do not wait.
-- **`"byItself": false`**: nothing arrives by itself, and `next` says why. In a Claude Code conversation that was already open when It's add-on was installed, it asks you to tell the user to type /reload-plugins in this conversation once your reply has ended, or, in a Claude Code too old for that, to start a new one. Wait for what they do until then.
+- **`"byItself": false`**: nothing arrives by itself, and `next` says why. In a Claude Code conversation that was already open when It's add-on was installed, it gives you a sentence to tell the user word for word, unless you have told them already: to type /reload-plugins in this conversation, or, in a Claude Code too old for that, to start a new one. Say it as it stands, and wait for what they do until then.
 - **`"byItself": "unknown"`**: It cannot tell, as where its connector could not be asked, where T3 Code is running and has not said whether one of its threads holds this conversation, or in Hermes, whose add-on is let speak in some places only. In Hermes a message arrives by itself in the plain `hermes` terminal. In Hermes's TUI and its desktop app it arrives only in a Hermes later than 0.21.5, once the user has allowed it there, and in its messaging gateway it never does. Wait for it.
 - **No `arrives` at all**: It cannot tell which conversation you are in. Wait for it, and name the page with `--id`.
 

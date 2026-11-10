@@ -47,6 +47,20 @@ export const loadAddon = (running: string | undefined): string =>
     ? 'start a new Claude Code conversation, where It’s add-on loads by itself, and carry on there: this Claude Code is too old to load it into this conversation'
     : 'type /reload-plugins in this conversation once your reply has ended: Claude Code then loads It’s add-on here'
 
+/**
+ * What the person is told, in so many words, so that a Claude Code conversation that was
+ * already open when It's add-on was installed loads it. It is written for the person and in the
+ * agent's voice, since the agent passes it on as it stands, and it is short, since an agent that
+ * is told to pass on something long puts it in its own words and leaves things out.
+ */
+export const reloadLine = (running: string | undefined): string =>
+  tooOldToReload(running)
+    ? 'Start a new Claude Code chat to use It. This Claude Code is too old to load It’s add-on into this one.'
+    : 'Type /reload-plugins in this chat, so that what you do on It’s pages reaches me. If I’m still replying, it takes effect when I’m done.'
+
+/** How an agent is told to pass on what the person is to be told: in its next message, and word for word. */
+export const tellWordForWord = (line: string): string => `Tell the person this in your next message, word for word: “${line}”`
+
 /** What the agent is told to run while nothing arrives by itself. */
 const waitFor = (slug: string | undefined) =>
   `After you show the ${slug ? 'page' : 'person a page'}, run \`it wait ${slug ? `--id ${slug} ` : ''}--timeout 100\`, act on what it prints, and run it again when it prints {"timedOut": true}: do not put it in the background, since it has to end for you to see what it printed.`
@@ -62,6 +76,8 @@ export interface Facts {
   route: Route | null
   /** The page the command published or showed, for `it wait --id`. */
   slug?: string
+  /** Whether that page is one of the tour's, which the agent gives by the tour's own rules. */
+  tour?: boolean
 }
 
 /** Whether what the person does arrives by itself, by which way, and what to do, from what It knows of the conversation. */
@@ -103,10 +119,17 @@ export function arrives(f: Facts): Arrives {
     return not(
       `The add-on that ${app} has loaded cannot take clicks from this It, so nothing the person does arrives here by itself. \`it status\` says what to do about it.`,
     )
-  if (harness === 'claude-code' && f.addonHere === false)
+  if (harness === 'claude-code' && f.addonHere === false) {
+    // Said word for word, and once: in the tour, where an agent that installed It said it with the
+    // pairing link, it is not said again until the ending, and then only where it was not said
+    const line = reloadLine(f.claude)
+    const tell = f.tour
+      ? `Unless you told the person this with the pairing link, tell them this once, word for word, after the tour’s ending: “${line}”`
+      : `Unless you have told the person already in this conversation, tell them this in your next message, word for word: “${line}”`
     return not(
-      `Nothing the person does on ${on} arrives here by itself yet: It’s add-on is not running in this conversation, as happens when the conversation was already open when the add-on was installed. In one short line, ask the person to ${loadAddon(f.claude)}. From then on what they do arrives by itself. Until then, wait for it.`,
+      `Nothing the person does on ${on} arrives here by itself yet: It’s add-on is not running in this conversation, as happens when the conversation was already open when the add-on was installed. ${tell} From then on what they do arrives by itself. Until then, wait for it.`,
     )
+  }
   if (harness === 'claude-code' && f.addonHere === true)
     return unknown(
       'It’s add-on runs in this conversation, and It has not heard from it in the last few seconds: `it status` says why, such as a proxy that keeps the add-on from reaching It.',
@@ -117,15 +140,24 @@ export function arrives(f: Facts): Arrives {
 }
 
 /**
- * What setup says last where it has just connected Claude Code from inside a Claude Code
- * conversation that has not loaded the add-on, as a conversation that was open when the
- * add-on was installed has not: Claude Code loads an add-on as a conversation starts. Such a
+ * What the person is told where setup has just connected Claude Code from inside a Claude Code
+ * conversation that has not loaded the add-on, as a conversation that was open when the add-on
+ * was installed has not: Claude Code loads an add-on as a conversation starts. Such a
  * conversation loads it with `/reload-plugins`, and in a Claude Code too old for that, a new
  * conversation is where It's add-on runs. Nothing anywhere else.
  */
-export function claudeAfterSetup(e: NodeJS.ProcessEnv = process.env): string | undefined {
+export function claudeReloadLine(e: NodeJS.ProcessEnv = process.env): string | undefined {
   if (claudeAddonHere(e) !== false) return undefined
-  return tooOldToReload(claudeRunning(e))
-    ? 'Claude Code: this conversation was already open when It’s add-on was installed, and this Claude Code is too old to load the add-on into an open conversation. Start a new Claude Code conversation before you use It: the add-on loads there by itself, and what you do on a page reaches it.'
-    : 'Claude Code: this conversation was already open when It’s add-on was installed, so it has not loaded it. Type /reload-plugins in this conversation before you use It here: Claude Code then loads the add-on, and what you do on a page reaches the conversation by itself. Typed while the agent is still replying, it is applied once the reply is over.'
+  return reloadLine(claudeRunning(e))
+}
+
+/**
+ * What setup says last of all, in words, in that conversation. It is addressed to the agent that
+ * ran setup, which is the one that reads it: the person sees what the agent says, and not what a
+ * command printed for it. So it tells the agent what to say, and gives the words to say.
+ */
+export function claudeAfterSetup(e: NodeJS.ProcessEnv = process.env): string | undefined {
+  const line = claudeReloadLine(e)
+  if (!line) return undefined
+  return `For the agent that ran this: this Claude Code conversation was already open when It’s add-on was installed, so it has not loaded it, and nothing the person does on a page reaches it yet. Tell the person this in your next message, word for word:\n\n  ${line}`
 }

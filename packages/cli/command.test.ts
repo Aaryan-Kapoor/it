@@ -28,12 +28,13 @@ import { behindMark, MARK, PORTS, TAKES, UPLOAD, WHEN } from '@it/protocol'
 
 // What setup says last to an agent, as the program has it: said here in the program's own words, so that a change of them is a change here
 const AFTER_SETUP =
-  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. Where setup said last that the person is to type /reload-plugins in this conversation, or to start a new one, pass that on to them in the same message as the link, as it stands. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
+  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
 
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { BOOLEAN } from './src/args'
+import { reloadLine } from './src/arrives'
 import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
 import { VERSION } from './src/lib'
 import { aloneAt } from './src/serve/backend'
@@ -7035,7 +7036,8 @@ describe('whether what the person does arrives by itself, as a page’s command 
       })
       const said = printed(ran)
       expect(said).toMatchObject({ id: 'plan', tell: TELL, arrives: { byItself: false } })
-      expect(said.arrives.next).toContain('type /reload-plugins in this conversation')
+      expect(said.arrives.next).toContain('Type /reload-plugins in this chat')
+      expect(said.arrives.next).toContain('word for word')
       expect(said.arrives.next).toContain('`it wait --id plan --timeout 100`')
       expect(c.asked).toEqual([`/route?harness=claude-code&session=${claude}`])
       // And the conversation's note says that it published without the add-on, for the connector to tell its page
@@ -7056,7 +7058,7 @@ describe('whether what the person does arrives by itself, as a page’s command 
         CLAUDE_CODE_SESSION_ID: claude,
         CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.280',
       })
-      expect(printed(ran).arrives.next).toContain('start a new Claude Code conversation')
+      expect(printed(ran).arrives.next).toContain('Start a new Claude Code chat to use It')
       expect(printed(ran).arrives.next).not.toContain('/reload-plugins')
     } finally {
       await c.close()
@@ -7124,6 +7126,90 @@ describe('whether what the person does arrives by itself, as a page’s command 
       expect(printed(ran)).not.toHaveProperty('arrives')
     } finally {
       await b.close()
+    }
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('what setup says last, from inside a Claude Code conversation that has not loaded the add-on it installs', () => {
+  /** A stand-in for Claude Code's own command: it keeps a marketplace and its one plugin, and copies the plugin as Claude Code does. */
+  function claudeStandIn(m: { home: string; bin: string }) {
+    const kept = path.join(m.home, 'claude-kept.json')
+    writeFileSync(
+      path.join(m.bin, 'claude'),
+      `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path')
+const kept = ${JSON.stringify(kept)}
+const has = fs.existsSync(kept) ? JSON.parse(fs.readFileSync(kept, 'utf8')) : {}
+const folder = process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME, '.claude')
+const said = process.argv.slice(2).join(' ')
+const keep = () => fs.writeFileSync(kept, JSON.stringify(has))
+const copyOf = (v) => path.join(folder, 'plugins/cache/it/it-bridge', v)
+if (said === '--version') console.log('2.1.322 (Claude Code)')
+else if (said === 'plugin marketplace list --json') console.log(JSON.stringify(has.from ? [{ name: 'it', source: 'directory', path: has.from, installLocation: has.from }] : []))
+else if (said === 'plugin list --json') console.log(JSON.stringify(has.on ? [{ id: 'it-bridge@it', version: has.version, scope: 'user', enabled: true, installPath: copyOf(has.version) }] : []))
+else if (said.startsWith('plugin marketplace add ')) { has.from = process.argv[5]; keep() }
+else if (said === 'plugin marketplace update it') {}
+else if (said === 'plugin install it-bridge@it --scope user') {
+  has.version = JSON.parse(fs.readFileSync(path.join(has.from, 'it-bridge/.claude-plugin/plugin.json'), 'utf8')).version
+  fs.cpSync(path.join(has.from, 'it-bridge'), copyOf(has.version), { recursive: true })
+  has.on = true
+  keep()
+} else { console.error('the stand-in does not know ' + said); process.exit(2) }
+`,
+    )
+    chmodSync(path.join(m.bin, 'claude'), 0o755)
+  }
+
+  test('it ends with words for the person, which the agent is told to say word for word in the message with the pairing link', async () => {
+    // A machine joining an It on another computer, which is set up as a first setup is and needs no backend program of its own
+    const joining = async (env: Record<string, string>) => {
+      const m = machine(false)
+      claudeStandIn(m)
+      const answers = http.createServer((_req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}'))
+      const socket = path.join(m.it, 'connector.sock')
+      await new Promise<void>((r) => answers.listen(socket, r))
+      writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'ef'.repeat(24), pid: process.pid, version: 'x', startedAt: 0 }))
+      const b = await backend(m, (asked) => (asked.path === 'machines:me' ? { id: 'machine-2', name: 'the laptop', wanted: [] } : null))
+      try {
+        return await run(m, ['login', '--url', b.url, '--code', 'Ab3dEf6hIj9kLm2nOp5q', '--name', 'the laptop', '--only', 'claude-code', '--no-service'], {
+          CLAUDE_CONFIG_DIR: path.join(m.home, 'claude'),
+          ...env,
+        })
+      } finally {
+        await new Promise((r) => answers.close(r))
+        await b.close()
+      }
+    }
+    // Inside a Claude Code conversation, which It's add-on does not run in
+    const ran = await joining({
+      CLAUDE_CODE_SESSION_ID: '11111111-2222-4333-8444-555555555555',
+      CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.321',
+    })
+    const said = printed(ran)
+    expect(said.harnesses).toMatchObject([{ id: 'claude-code', addon: 'connected' }])
+    const line = reloadLine('2.1.321')
+    // The words are in the step that comes next, and not in a condition
+    expect(said.next).toContain(
+      `give the person the link that \`it site --no-open\` prints, to open on this computer, and tell them this, word for word: “${line}”`,
+    )
+    expect(said.next).not.toContain('Where setup said')
+    // And they are the last thing it prints, addressed to the agent
+    expect(Object.keys(said).pop()).toBe('tell')
+    expect(said.tell).toBe(`Tell the person this in your next message, word for word: “${line}”`)
+    // What it says in words ends the same way: to the agent, with the words on their own
+    expect(ran.err.trimEnd().endsWith(`Tell the person this in your next message, word for word:\n\n  ${line}`)).toBe(true)
+    expect(ran.err).toContain('For the agent that ran this:')
+
+    // Outside a conversation nothing of it is said, and neither where the add-on runs in it already
+    const outside: Record<string, string>[] = [
+      {},
+      { CLAUDE_CODE_SESSION_ID: '11111111-2222-4333-8444-555555555555', IT_HARNESS: 'claude-code', IT_SESSION: '11111111-2222-4333-8444-555555555555' },
+    ]
+    for (const env of outside) {
+      const plain = await joining(env)
+      expect(printed(plain).next).toBe(AFTER_SETUP)
+      expect(printed(plain).tell).toBeUndefined()
+      expect(plain.err).not.toContain('/reload-plugins')
     }
   })
 })

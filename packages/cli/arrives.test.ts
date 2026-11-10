@@ -1,7 +1,7 @@
 // What `it create`, `it update`, `it tour show` and `it status` say to an agent of whether what
 // the person does on its pages arrives in its conversation by itself, and what to do about it.
 import { describe, expect, test } from 'vitest'
-import { arrives, claudeAfterSetup, claudeRunning, loadAddon, RELOAD_PLUGINS_SINCE, tooOldToReload } from './src/arrives'
+import { arrives, claudeAfterSetup, claudeReloadLine, claudeRunning, loadAddon, RELOAD_PLUGINS_SINCE, reloadLine, tooOldToReload } from './src/arrives'
 import type { Route } from './src/connector'
 
 const claude = { harness: 'claude-code', id: '11111111-2222-4333-8444-555555555555' }
@@ -26,18 +26,28 @@ describe('whether what the person does arrives by itself', () => {
     expect(said.next).not.toContain('/reload-plugins')
   })
 
-  test('not at all in a Claude Code conversation that has not loaded the add-on: the agent waits, and asks the person to reload its plugins', () => {
+  test('not at all in a Claude Code conversation that has not loaded the add-on: the agent waits, and tells the person word for word to reload its plugins', () => {
     const said = arrives({ session: claude, addonHere: false, claude: '2.1.321', route: route(), slug: 'plan' })
     expect(said.byItself).toBe(false)
     expect(said.via).toBeUndefined()
-    expect(said.next).toContain('type /reload-plugins in this conversation once your reply has ended')
+    expect(said.next).toContain(`tell them this in your next message, word for word: “${reloadLine('2.1.321')}”`)
+    expect(said.next).toContain('Unless you have told the person already in this conversation')
     expect(said.next).toContain('`it wait --id plan --timeout 100`')
+  })
+
+  test('on a page of the tour, the words are said once, after its ending, unless they were said with the pairing link', () => {
+    const said = arrives({ session: claude, addonHere: false, claude: '2.1.321', route: route(), slug: 'it-tour-menu', tour: true })
+    expect(said.byItself).toBe(false)
+    expect(said.next).toContain(
+      `Unless you told the person this with the pairing link, tell them this once, word for word, after the tour’s ending: “${reloadLine('2.1.321')}”`,
+    )
+    expect(said.next).not.toContain('in your next message')
   })
 
   test('in a Claude Code too old to load the add-on that way, the person is asked to start a new conversation', () => {
     const said = arrives({ session: claude, addonHere: false, claude: '2.1.280', route: route(), slug: 'plan' })
     expect(said.byItself).toBe(false)
-    expect(said.next).toContain('start a new Claude Code conversation')
+    expect(said.next).toContain('Start a new Claude Code chat to use It')
     expect(said.next).not.toContain('/reload-plugins')
   })
 
@@ -102,16 +112,27 @@ describe('the Claude Code a command runs inside', () => {
 
 describe('what setup says last where it has just connected Claude Code', () => {
   const inClaude = { CLAUDE_CODE_SESSION_ID: '11111111-2222-4333-8444-555555555555' }
-  test('from inside a conversation that has not loaded the add-on: to type /reload-plugins there before using It', () => {
+  test('from inside a conversation that has not loaded the add-on: to the agent, to tell the person word for word to type /reload-plugins', () => {
     const said = claudeAfterSetup({ ...inClaude, CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.321' })!
-    expect(said).toMatch(/^Claude Code: /)
-    expect(said).toContain('Type /reload-plugins in this conversation before you use It here')
-    expect(claudeAfterSetup(inClaude)).toContain('/reload-plugins')
+    expect(said).toMatch(/^For the agent that ran this: /)
+    expect(said).toContain('Tell the person this in your next message, word for word:')
+    // The words for the person come last, on their own, as they are to be said
+    expect(said.endsWith(`\n\n  ${reloadLine('2.1.321')}`)).toBe(true)
+    expect(reloadLine('2.1.321')).toContain('Type /reload-plugins in this chat')
+    expect(claudeReloadLine(inClaude)).toBe(reloadLine(undefined))
+  })
+
+  test('the words for the person are short and in the agent’s voice, as an agent passes them on as they stand', () => {
+    for (const line of [reloadLine('2.1.321'), reloadLine('2.1.286')]) {
+      expect(line.length).toBeLessThan(140)
+      expect(line).not.toMatch(/\bagent\b|\bIt’s add-on is not running\b/)
+    }
+    expect(reloadLine('2.1.321')).toContain('reaches me')
   })
 
   test('from inside one of a Claude Code too old for that: to start a new conversation', () => {
     const said = claudeAfterSetup({ ...inClaude, CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.286' })!
-    expect(said).toContain('Start a new Claude Code conversation')
+    expect(said).toContain('Start a new Claude Code chat to use It')
     expect(said).not.toContain('/reload-plugins')
   })
 
@@ -119,5 +140,6 @@ describe('what setup says last where it has just connected Claude Code', () => {
     expect(claudeAfterSetup({})).toBeUndefined()
     expect(claudeAfterSetup({ CODEX_THREAD_ID: 'thread-1' })).toBeUndefined()
     expect(claudeAfterSetup({ ...inClaude, IT_HARNESS: 'claude-code', IT_SESSION: inClaude.CLAUDE_CODE_SESSION_ID })).toBeUndefined()
+    expect(claudeReloadLine({})).toBeUndefined()
   })
 })

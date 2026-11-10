@@ -39,7 +39,7 @@ import {
 } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
-import { type Arrives, arrives, claudeAfterSetup, claudeRunning } from './arrives'
+import { type Arrives, arrives, claudeAfterSetup, claudeReloadLine, claudeRunning, tellWordForWord } from './arrives'
 import { choices, conversationIds, local, type Route, refusedFor } from './connector'
 import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
@@ -779,7 +779,7 @@ function anothers(slug: string, theirs: Made | null): Problem {
  * where the command cannot tell which conversation it runs in: a person's or a script's, or an
  * agent app's that does not say, which the skill tells to wait.
  */
-async function arrivalHere(slug?: string): Promise<Arrives | undefined> {
+async function arrivalHere(slug?: string, tour = false): Promise<Arrives | undefined> {
   const session = sessionAsked()?.session
   if (!session) return undefined
   // The connector gives T3 Code up to eight seconds, the first time a couple of them to issue It a session
@@ -791,11 +791,16 @@ async function arrivalHere(slug?: string): Promise<Arrives | undefined> {
     asked && typeof asked.connected === 'boolean' && typeof asked.listening === 'boolean' && ['held', 'none', 'unknown'].includes(asked.thread as string)
       ? (asked as Route)
       : null
-  return arrives({ session, addonHere: session?.harness === 'claude-code' ? claudeAddonHere() : undefined, claude: claudeRunning(), route, slug })
+  return arrives({ session, addonHere: session?.harness === 'claude-code' ? claudeAddonHere() : undefined, claude: claudeRunning(), route, slug, tour })
 }
 
-async function published(done: { slug: string; version: number; url: string; note?: string; urlNote?: string }, a: Args, fresh = false): Promise<void> {
-  const arrival = await arrivalHere(done.slug)
+async function published(
+  done: { slug: string; version: number; url: string; note?: string; urlNote?: string },
+  a: Args,
+  fresh = false,
+  tour = false,
+): Promise<void> {
+  const arrival = await arrivalHere(done.slug, tour)
   const result = {
     id: done.slug,
     version: done.version,
@@ -858,7 +863,7 @@ const TOUR_RULE_ONE = '1. **Never block.**'
  * in the background, which an app without one runs in front and never hears from again: so
  * here the rule is another, in the place of the first, and not a second word against it.
  */
-const TOUR_RULE_ONE_WAITING = `1. **Wait for each thing they do.** This conversation was most likely open before It's add-on was installed, and then what the person does on a page does not arrive here by itself. What each \`it tour show\` prints says so under \`arrives\`. Where \`arrives.byItself\` is \`true\`, as it is in a thread of T3 Code, what they do arrives as a message that begins \`[It]\`: after each page and each answer, end your turn, and do not wait. Otherwise, after every page you show and every answer you give, run \`it wait --timeout 100\` and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Where it is refused because your harness does not tell \`it\` which conversation this is, add \`--id\` and the id of the page that is on the screen. Do not use \`--follow\`, and do not put the command in the background: it has to end for you to be shown what it printed. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing. During the tour, say nothing else of what \`arrives.next\` says: where it asks the person to type /reload-plugins or to start a new conversation, say that once, after the ending, unless you passed it on with the pairing link already.`
+const TOUR_RULE_ONE_WAITING = `1. **Wait for each thing they do.** This conversation was most likely open before It's add-on was installed, and then what the person does on a page does not arrive here by itself. What each \`it tour show\` prints says so under \`arrives\`. Where \`arrives.byItself\` is \`true\`, as it is in a thread of T3 Code, what they do arrives as a message that begins \`[It]\`: after each page and each answer, end your turn, and do not wait. Otherwise, after every page you show and every answer you give, run \`it wait --timeout 100\` and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Where it is refused because your harness does not tell \`it\` which conversation this is, add \`--id\` and the id of the page that is on the screen. Do not use \`--follow\`, and do not put the command in the background: it has to end for you to be shown what it printed. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing. During the tour, say nothing else of what \`arrives.next\` says. Where it gives words for the person to type /reload-plugins or to start a new conversation, you told them those words with the pairing link, as setup said to: do not say them again during the tour. If you did not, say them once, word for word, after the ending.`
 /** The tour as an agent that waited for the button is given it. */
 function tourForOneThatWaited(guide: string): string {
   const lines = guide.split('\n')
@@ -878,7 +883,15 @@ function tourForOneThatWaited(guide: string): string {
  * with how to read the guide itself.
  */
 export const AFTER_SETUP =
-  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. Where setup said last that the person is to type /reload-plugins in this conversation, or to start a new one, pass that on to them in the same message as the link, as it stands. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
+  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
+
+/**
+ * The same, where the conversation that ran setup has not loaded the add-on it has just
+ * installed, and the person has to be told what to type: the words are in the step itself, and
+ * not in a condition that an agent may read past.
+ */
+export const afterSetupTelling = (line: string): string =>
+  `If you are an agent installing It for someone, two steps of the install guide come after this one. First, in one message, give the person the link that \`it site --no-open\` prints, to open on this computer, and tell them this, word for word: “${line}” Then, in the same turn, run \`it tour --wait\` and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
 
 /**
  * `it tour --wait`: waits until the person asks for the tour with the button on the site, and
@@ -996,7 +1009,7 @@ async function tour(a: Args) {
   // Counted as a page of the tour that was shown, by its name, which is It's own
   usage.record('tour.shown', { page: name as usage.TourPage, agent: usage.agentOf(by) })
   a.flags.open = true
-  await published(done, a)
+  await published(done, a, false, true)
 }
 
 async function update(a: Args) {
@@ -1972,10 +1985,13 @@ async function settingUpLed(a: Args, begunAlready = false) {
       // someone whose only agent app is too old was told that none was found that It can connect, and no more
       else if (h.addon === 'too_old' && h.detail) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
     }
-    // Claude Code, connected just now from inside one of its conversations that has not loaded the add-on: said last of all
+    // Claude Code, connected just now from inside one of its conversations that has not loaded the add-on: said last of all, to the person
     const reload =
-      wanted.includes('claude-code') && !connectedBefore.has('claude-code') && after.some((h) => h.id === 'claude-code' && h.addon === 'connected')
-        ? claudeAfterSetup()
+      wanted.includes('claude-code') &&
+      !connectedBefore.has('claude-code') &&
+      after.some((h) => h.id === 'claude-code' && h.addon === 'connected') &&
+      claudeReloadLine()
+        ? 'Claude Code: the conversation this ran in was already open when It’s add-on was installed, so it has not loaded it. Type /reload-plugins in it, so that what you do on a page reaches it.'
         : undefined
 
     // Registered is not yet running. The connector itself is asked, and given a little while to answer
@@ -2329,11 +2345,13 @@ async function settingUp(a: Args, joined: boolean) {
       )
     }
     // Claude Code, connected just now from inside one of its conversations that has not loaded the add-on: said last of all,
-    // since it is what decides whether what the person does on a page reaches the conversation they are in
-    if (wanted.includes('claude-code') && !before.has('claude-code') && after.some((h) => h.id === 'claude-code' && h.addon === 'connected')) {
-      const reload = claudeAfterSetup()
-      if (reload) say(`\n${reload}`)
-    }
+    // since it is what decides whether what the person does on a page reaches the conversation they are in, and
+    // said to the agent, with the words it is to tell the person, since the agent is the one that reads it
+    const reloadLine =
+      wanted.includes('claude-code') && !before.has('claude-code') && after.some((h) => h.id === 'claude-code' && h.addon === 'connected')
+        ? claudeReloadLine()
+        : undefined
+    if (reloadLine) say(`\n${claudeAfterSetup()}`)
     if (!forPerson(a))
       out({
         harnesses: after,
@@ -2344,7 +2362,11 @@ async function settingUp(a: Args, joined: boolean) {
         ...(unasked ? { hint: unasked } : {}),
         // An agent that is installing It reads this whole, whatever it was given of the guide.
         // Said once an agent app is connected: until then the hint above is what comes next
-        ...(after.some((h) => h.addon === 'connected' || h.addon === 'needs_approval') ? { next: AFTER_SETUP } : {}),
+        ...(after.some((h) => h.addon === 'connected' || h.addon === 'needs_approval')
+          ? { next: reloadLine ? afterSetupTelling(reloadLine) : AFTER_SETUP }
+          : {}),
+        // And the words themselves, last of all in what it prints
+        ...(reloadLine ? { tell: tellWordForWord(reloadLine) } : {}),
       })
     // Setup that leaves It not running where it was wanted has not done what it was asked, and ends by saying so
     if (trouble) process.exitCode = 1
