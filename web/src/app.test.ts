@@ -704,6 +704,7 @@ describe('what each tab says of itself', () => {
       sequence: 1,
       phase: 'none',
       visible: true,
+      observedAt: expect.any(Number),
     })
   })
 })

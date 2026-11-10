@@ -1492,6 +1492,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
               ? [{ id: 'd', name: 'Desk' }]
               : null,
     )
+    b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showEverywhere, TAKES.notifyEverywhere] })
     try {
       expect(printed(await run(m, ['open', 'board', '--everywhere'], b.env))).toMatchObject({ shownOn: ['Desk', 'TV'] })
       expect(b.asked.find((x) => x.path === 'displays:show')!.args).toEqual({ slug: 'board', everywhere: true })
@@ -1526,9 +1527,9 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(opened).toMatchObject({ shownOn: ['Desk', 'TV'] })
       expect(opened.hint).toContain('earlier version')
       expect(printed(await run(m, ['notify', 'hi', '--everywhere'], b.env))).toEqual({ id: 'n1', hint: expect.stringContaining('earlier version') })
-      // The last of each was asked with no display named
-      expect(b.asked.filter((x) => x.path === 'displays:show').at(-1)!.args).toEqual({ slug: 'board' })
-      expect(b.asked.filter((x) => x.path === 'notifications:send').at(-1)!.args).toEqual({ text: 'hi' })
+      // Each was asked with no display named, and never in the form It said it does not take
+      expect(b.asked.filter((x) => x.path === 'displays:show').map((x) => x.args)).toEqual([{ slug: 'board' }])
+      expect(b.asked.filter((x) => x.path === 'notifications:send').map((x) => x.args)).toEqual([{ text: 'hi' }])
       // An It that says it takes it is not asked again, and its failure is said as it is
       b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.showEverywhere] })
       const failed = await run(m, ['open', 'board', '--everywhere'], b.env)

@@ -502,6 +502,7 @@ describe('which display an agent’s page goes to where it names none', () => {
       phase: 'none',
       visible,
       expectedSession: b.session,
+      observedAt: Date.now(),
       ...(used ? { used: true } : {}),
     })
   /** Three displays, each last heard long ago: what they say next decides. */
@@ -612,7 +613,17 @@ describe('which display an agent’s page goes to where it names none', () => {
 describe('where an agent’s notification goes', () => {
   const TAB = 'e'.repeat(32)
   const tell = (b: { as: any; key: string; session: string }, sequence: number, visible: boolean) =>
-    b.as.mutation(api.displays.report, { key: b.key, epoch: 0, tab: TAB, sequence, phase: 'none', visible, expectedSession: b.session, used: true })
+    b.as.mutation(api.displays.report, {
+      key: b.key,
+      epoch: 0,
+      tab: TAB,
+      sequence,
+      phase: 'none',
+      visible,
+      expectedSession: b.session,
+      used: true,
+      observedAt: Date.now(),
+    })
   const tray = (b: { as: any; key: string }) => b.as.query(api.notifications.list, { key: b.key }).then((all: { text: string }[]) => all.map((n) => n.text))
   const PUSH = (name: string) => `https://fcm.googleapis.com/fcm/send/${name}`
 
