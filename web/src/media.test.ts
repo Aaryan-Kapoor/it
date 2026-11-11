@@ -487,6 +487,34 @@ describe('a recording under way', () => {
     host.remove()
   })
 
+  /** It's bar for page-1, drawn, with a way to press one of its buttons by what it says and to take it away. */
+  const bar = async () => {
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    await act(async () => root.render(createElement(MediaBar, { page: 'page-1' })))
+    const button = (name: string) => [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === name) as HTMLButtonElement | undefined
+    const gone = async () => {
+      await act(async () => root.unmount())
+      host.remove()
+    }
+    return { host, button, gone }
+  }
+
+  test('is said in the bar with a button that says Discard, since it throws the take away, and not Stop, which the page’s own Stop and the camera’s keep', async () => {
+    const { told } = await record(8 * MiB)
+    const { host, button, gone } = await bar()
+    const discard = host.querySelector('.media-rec button') as HTMLButtonElement
+    expect(discard.textContent?.trim()).toBe('Discard')
+    expect(discard.getAttribute('aria-label')).toBe('Discard the recording')
+    expect(discard.title).toContain('thrown away')
+    expect(button('Stop')).toBeUndefined()
+    await act(async () => discard.click())
+    expect(told).toHaveBeenCalledWith('ended', 'person', undefined)
+    expect(liveFor('page-1')).toBeUndefined()
+    await gone()
+  })
+
   test('a stop that lets more through than the most is cut back to whole pieces within it', () => {
     const piece = (n: number) => new Blob([new Uint8Array(n)])
     expect(withinTheMost([piece(4), piece(4), piece(4)], 9).map((p) => p.size)).toEqual([4, 4])

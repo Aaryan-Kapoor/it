@@ -4021,7 +4021,7 @@ fieldset.media-bar {
 .media-waiting .media-bar-icon {
   color: var(--danger);
 }
-/* While a page records: a red dot, how long, and Stop. The camera live to a page looks the same, and says it is live */
+/* While a page records: a red dot, how long, and Discard. The camera live to a page looks the same, says it is live, and has Stop */
 .media-rec,
 .media-cam {
   flex: none;
@@ -4051,7 +4051,7 @@ fieldset.media-bar {
 .media-rec-time {
   font-variant-numeric: tabular-nums;
 }
-.media-rec-stop,
+.media-rec-discard,
 .media-cam-stop {
   display: inline-flex;
   align-items: center;
@@ -4067,7 +4067,7 @@ fieldset.media-bar {
   font-weight: 550;
   cursor: pointer;
 }
-.media-rec-stop:hover,
+.media-rec-discard:hover,
 .media-cam-stop:hover {
   background: var(--danger);
 }
@@ -4154,12 +4154,12 @@ fieldset.media-bar {
     animation: none;
   }
 }
-/* On a phone, the camera's chip and a recording's beside it would push It's bar onto a second row and the page down with it: the mark steps aside, both Stops show only their square, and the camera's chip says just "Live". Each keeps its own label for whoever hears the screen read */
+/* On a phone, the camera's chip and a recording's beside it would push It's bar onto a second row and the page down with it: the mark steps aside, Stop shows only its square and Discard only its bin, and the camera's chip says just "Live". Each keeps its own label for whoever hears the screen read */
 @media (max-width: 520px) {
   .page-nav:has(.media-cam):has(.media-rec) .page-nav-mark {
     display: none;
   }
-  .page-nav:has(.media-cam):has(.media-rec) :is(.media-rec-stop, .media-cam-stop) {
+  .page-nav:has(.media-cam):has(.media-rec) :is(.media-rec-discard, .media-cam-stop) {
     gap: 0;
     padding: 0 7px;
     font-size: 0;

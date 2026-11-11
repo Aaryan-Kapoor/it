@@ -6,7 +6,7 @@
 // back too.
 import type { MediaKind } from '@it/protocol'
 import { useEffect, useRef, useState } from 'react'
-import { IconStop } from './brand'
+import { IconBin, IconStop } from './brand'
 import { ago, useNow } from './lib'
 import {
   cameraFor,
@@ -185,8 +185,11 @@ function View({ stream, className, onView }: { stream: MediaStream; className: s
 }
 
 /**
- * One recording under way, in the bar: a red dot, how long, and Stop, with the camera's picture
- * the size of the dot's row where the camera records, so that what is recorded is seen.
+ * One recording under way, in the bar: a red dot, how long, and Discard, with the camera's
+ * picture the size of the dot's row where the camera records, so that what is recorded is seen.
+ * Its button says Discard and not Stop: it throws the take away, where the page's own Stop keeps
+ * it and the camera's Stop only closes the camera. On a phone, beside something else in the bar,
+ * it shows only its bin.
  */
 function Recording({ l }: { l: Live }) {
   const now = useTicking()
@@ -207,13 +210,13 @@ function Recording({ l }: { l: Live }) {
       </span>
       <button
         type="button"
-        className="media-rec-stop"
-        title="Stop recording. What was recorded is thrown away, and is not given to the page."
-        aria-label="Stop recording"
+        className="media-rec-discard"
+        title="Stop recording and discard it: what was recorded is thrown away, and is not given to the page. The page's own Stop keeps it."
+        aria-label="Discard the recording"
         onClick={() => l.end('person')}
       >
-        <IconStop />
-        Stop
+        <IconBin />
+        Discard
       </button>
     </span>
   )

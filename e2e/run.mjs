@@ -2958,7 +2958,7 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
       .catch(() => '')) ?? ''
   check(
     'allowed, It records for the page, and It’s own bar says that it is recording',
-    /^recording audio\//.test(recSaid) && /^Recording the microphone for /.test(recordingBar) && (await page.locator('.media-rec-stop').count()) === 1,
+    /^recording audio\//.test(recSaid) && /^Recording the microphone for /.test(recordingBar) && (await page.locator('.media-rec-discard').count()) === 1,
     JSON.stringify({ recSaid, recordingBar }),
   )
   const recSent = await recPressed(page, '#stop', /^(accepted|refused)/)
