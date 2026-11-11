@@ -226,9 +226,11 @@ In the TUI and the desktop app, a conversation listens as soon as it is open, wh
 
 Where a click can arrive depends on where Hermes runs:
 
-- **In the plain `hermes` terminal**, a click starts a turn when the conversation is idle. While a turn runs the click waits, because a message sent then would interrupt the turn.
+- **In the plain `hermes` terminal**, a click starts a turn when the conversation is idle. While a turn runs the click waits, because a message sent then would interrupt the turn. From Hermes 0.23.1 the plain terminal's agent runs in a background gateway, as the TUI's does, and there a click arrives only once you have allowed it, as the next line says. Hermes then keeps the click until the running turn is over. The turn a click starts is not shown in the plain terminal: the agent has it and answers on the page.
 - **In the TUI and the desktop app**, a click arrives only in a Hermes later than 0.21.5, and only once you have allowed it, which `it setup` says how to do. Hermes itself then keeps the click until the running turn is over. In Hermes 0.21.5 and earlier, a click for these waits in the inbox.
 - **In the messaging gateway**, a page made after an agent's first turn has no conversation to send clicks to. Those clicks wait for `it wait` or the site.
+
+Where Hermes refuses what the add-on hands over because you have not allowed it, `it status` says so and gives the command that allows it, and does not call the add-on active. Hermes reads the setting while it runs, so the clicks that waited arrive once the command has been run, without a restart.
 
 One narrow window is known and accepted: in the terminal a click is handed over only when nothing you typed is waiting, but a `/resume` entered in the instant between that look and the hand-over takes the click with it into the other conversation.
 
