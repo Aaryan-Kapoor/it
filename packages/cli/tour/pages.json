@@ -1,4 +1,28 @@
 {
+  "start": {
+    "title": "Getting started",
+    "params": {
+      "asleep": false
+    },
+    "state": {
+      "room": {},
+      "board": {},
+      "checklist": {
+        "added": [],
+        "note": ""
+      },
+      "chess": {
+        "reply": "",
+        "note": ""
+      },
+      "cube": {},
+      "drums": {
+        "theirs": [],
+        "note": ""
+      },
+      "approval": {}
+    }
+  },
   "menu": {
     "title": "The It tour",
     "params": {

@@ -446,7 +446,7 @@ export const USAGE_MAY_BE = {
   },
   'notification.sent': { agent: AGENT_APPS, buttons: SO_OR_NOT, sticky: SO_OR_NOT, page: SO_OR_NOT, to: ['one', 'all'] },
   'notification.ended': { how: ['answered', 'dismissed'], pushed: SO_OR_NOT },
-  'tour.shown': { page: ['menu', 'whiteboard', 'chess', 'checklist', 'drums', 'button', 'done'], agent: AGENT_APPS },
+  'tour.shown': { page: ['start', 'menu', 'whiteboard', 'chess', 'checklist', 'drums', 'button', 'done'], agent: AGENT_APPS },
   'tour.ended': { seen: ['0', '1', '2', '3', '4', '5'] },
   'upgrade.done': { from: THREE_NUMBERS, to: THREE_NUMBERS, by: ['command', 'site'], result: ['ok', 'failed'] },
   'service.failed': { what: ['backend_program', 'backend_silent', 'backend_exited', 'port_taken', 'lock_lost', 'functions', 'door', 'other'] },

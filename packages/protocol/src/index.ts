@@ -122,9 +122,13 @@ export function comparePlaces(a: ActionPlace | null, b: ActionPlace | null): num
 /** The word the interface uses for a thing shown on a display. It is said in one place so that it can be changed in one. */
 export const NOUN = { one: 'page', many: 'pages', One: 'Page', Many: 'Pages' } as const
 
-/** The built-in tour's fixed page ids and the order in which its examples are shown. */
-export const TOUR = { prefix: 'tour-', menu: 'menu', end: 'done', steps: ['whiteboard', 'chess', 'checklist', 'drums', 'button'] } as const
-export const TOUR_NAMES: readonly string[] = [TOUR.menu, ...TOUR.steps, TOUR.end]
+/**
+ * The built-in tour's fixed page ids: the page it begins on, which holds a first run of It on
+ * its own, and then the menu, the examples in the order in which they are shown, and the ending,
+ * for a person who asks to see more.
+ */
+export const TOUR = { prefix: 'tour-', start: 'start', menu: 'menu', end: 'done', steps: ['whiteboard', 'chess', 'checklist', 'drums', 'button'] } as const
+export const TOUR_NAMES: readonly string[] = [TOUR.start, TOUR.menu, ...TOUR.steps, TOUR.end]
 
 /** Token audiences. A token made for one is refused everywhere else. */
 export const AUDIENCE = {

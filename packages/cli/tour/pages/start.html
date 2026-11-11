@@ -1,0 +1,1801 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started with It</title>
+<style>
+/*fonts.css*/
+  :root { color-scheme: light dark; --paper: #f3efe6; --card: #fffdf8; --ink: #1c1a16; --soft: #6d685d; --faint: #a39d8f; --line: #e2dbcc; --green: #17805a; --green-soft: #e3f1e9; --on-green: #ffffff; --clay: #cf6f4d; --clay-dark: #b85c3c; --sage: #9fab93; --sage-dark: #87947b; --wood: #b98c5d; --wood-dark: #8c6238; --floor: #ead9bb; --plank: #d9c49d; --sheen: #f1e4cb; --rug: #cdd5d4; --rug-line: #b9c4c3; --wall: #2a2722; --sun: #ffffff; --sheet: #f6f2e8; --dotc: rgba(28, 26, 22, .13); --bezel: #15130f; --asked: rgba(255, 253, 248, .7); --amber: #9a5b00; --amber-soft: #fbefd6; --amber-line: #ecc98a; --sq: #efe5d2; --sq-dark: #c9a77f; --sq-last: #f2d98a; --pad: #ebe4d6; --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
+  @media (prefers-color-scheme: dark) {
+    :root { --paper: #100f0d; --card: #1a1916; --ink: #f4f0e7; --soft: #aaa497; --faint: #777165; --line: #2f2c27; --green: #3ecf93; --green-soft: #12281f; --on-green: #06150e; --clay: #d97a58; --clay-dark: #b9603f; --sage: #6f7c66; --sage-dark: #56624f; --wood: #8f6a44; --wood-dark: #5e4226; --floor: #2a231a; --plank: #382f23; --sheen: #30281e; --rug: #37403f; --rug-line: #445050; --wall: #ded8cb; --sun: #ffe9b0; --sheet: #1f1d19; --dotc: rgba(244, 240, 231, .12); --bezel: #000000; --asked: rgba(26, 25, 22, .7); --amber: #f5bd5c; --amber-soft: #2a2010; --amber-line: #5c4419; --sq: #3b352c; --sq-dark: #6d5a43; --sq-last: #7d6a2d; --pad: #26241f; }
+    body::before { opacity: .25; } .btn { box-shadow: none; } .agent, .plan, .prompt { box-shadow: none; }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { background: var(--paper); color: var(--ink); font: 400 16px/1.5 Text, -apple-system, "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+  body::before { content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .5; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .3 0 0 0 0 .22 0 0 0 .09 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E"); }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  [hidden] { display: none !important; }
+  .wrap { position: relative; min-height: 100%; max-width: 1280px; margin: 0 auto; padding: 22px 34px 30px; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 18px; font-size: 13px; color: var(--soft); }
+  .mark { height: 19px; width: auto; color: var(--ink); flex: none; }
+  .crumb { letter-spacing: .14em; text-transform: uppercase; font-size: 11px; font-weight: 600; }
+  .steps { margin-left: auto; display: flex; align-items: center; gap: 6px; } .steps i { width: 22px; height: 3px; border-radius: 2px; background: var(--line); } .steps i.on { background: var(--ink); }
+  .steps span { margin-right: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .skip { background: none; border: 0; color: var(--soft); text-decoration: underline; text-underline-offset: 3px; font-size: 13px; padding: 6px 2px; } .skip:hover { color: var(--ink); }
+  .real { margin: 10px 0 0; font-size: 11.5px; color: var(--faint); }
+  /* Said where the conversation that put the page up cannot hear it yet */
+  .asleep { margin-top: 14px; display: flex; gap: 12px; align-items: flex-start; padding: 12px 16px; border: 1px solid var(--amber-line); border-radius: 14px; background: var(--amber-soft); color: var(--ink); font-size: 14.5px; line-height: 1.45; }
+  .asleep b { color: var(--amber); font-weight: 600; }
+  .asleep code { font: 600 13.5px/1 var(--mono); padding: 2px 6px; border-radius: 6px; background: var(--card); border: 1px solid var(--amber-line); color: var(--amber); white-space: nowrap; }
+  .asleep i { flex: none; width: 10px; height: 10px; margin-top: 6px; border-radius: 50%; background: var(--amber); }
+  .stage { flex: 1; display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 8fr); gap: 44px; align-items: center; padding: 16px 0 4px; }
+  .stage.swap { animation: swap .35s ease-out; } @keyframes swap { from { opacity: 0; transform: translateY(8px); } }
+  .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; color: var(--green); display: flex; align-items: center; gap: 9px; } .eyebrow::before { content: ""; width: 18px; height: 1px; background: var(--green); }
+  h1 { font: 800 clamp(34px, 4vw, 54px)/1 Display; letter-spacing: -.04em; margin-top: 14px; } h1 em { font-style: normal; color: var(--faint); }
+  .lede { margin-top: 14px; font-size: 16.5px; line-height: 1.5; color: var(--soft); max-width: 40ch; }
+  .asked { margin-top: 18px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--asked); max-width: 430px; }
+  .asked small { display: block; font-size: 10.5px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--faint); margin-bottom: 4px; }
+  .asked p { font-size: 15.5px; }
+  /* What the agent says, as it says it, and what the page knows of where its answer is */
+  .agent { margin-top: 12px; padding: 14px 16px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); box-shadow: 0 1px 0 rgba(28, 26, 22, .03), 0 12px 30px -18px rgba(28, 26, 22, .25); max-width: 430px; min-height: 96px; }
+  .pill { display: inline-flex; align-items: center; gap: 7px; background: var(--green); color: var(--on-green); font: 600 12.5px/1 Text; padding: 6px 10px 6px 8px; border-radius: 8px; letter-spacing: .01em; max-width: 60%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; vertical-align: middle; }
+  .pill i { flex: none; width: 12px; height: 12px; border-radius: 4px; background: rgba(255,255,255,.9); position: relative; } .pill i::after { content: ""; position: absolute; inset: 3px; border-radius: 2px; background: var(--green); }
+  .agent .state { margin-left: 10px; font-size: 13px; color: var(--soft); vertical-align: middle; } .agent .state b { font-weight: 500; font-variant-numeric: tabular-nums; }
+  .agent .state.live::after { content: ""; display: inline-block; width: 1.1em; text-align: left; animation: dots 1.2s steps(4) infinite; } @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+  .agent .state.off { color: var(--clay-dark); }
+  .agent .you { margin-top: 10px; font-size: 13px; color: var(--soft); } .agent .you::before { content: "You: "; color: var(--faint); }
+  .agent .line { margin-top: 11px; font: 400 14.5px/1.55 var(--mono); color: var(--ink); min-height: 2.9em; overflow-wrap: anywhere; }
+  .agent .line.hint { font: 400 14px/1.5 Text; color: var(--faint); }
+  .caret::after { content: ""; display: inline-block; width: 7px; height: 1.05em; margin-left: 2px; background: var(--green); vertical-align: -.18em; animation: blink 1s steps(2) infinite; } @keyframes blink { 50% { opacity: 0; } }
+  .row { display: flex; align-items: center; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 48px; padding: 0 22px; border-radius: 999px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font: 600 15px/1 Text; transition: transform .12s, box-shadow .2s; box-shadow: 0 10px 24px -14px rgba(28, 26, 22, .6); }
+  .btn:hover { transform: translateY(-1px); } .btn:active { transform: translateY(1px); } .btn svg { width: 16px; height: 16px; }
+  .btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); box-shadow: none; } .btn.ghost:hover { border-color: var(--ink); }
+  .btn.small { min-height: 38px; padding: 0 16px; font-size: 14px; box-shadow: none; }
+  .btn:disabled { opacity: .45; cursor: default; transform: none; }
+  .btn:focus-visible, .skip:focus-visible, .key:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+  .plan { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 22px; padding: 18px 18px 12px; box-shadow: 0 1px 0 rgba(28, 26, 22, .03), 0 30px 60px -34px rgba(28, 26, 22, .35); }
+  .plan-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 2px 6px 12px; }
+  .plan-top b { font: 700 18px/1 Display; letter-spacing: -.02em; } .plan-top span { font: 400 12px/1 var(--mono); color: var(--faint); }
+  .plan-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 6px 2px; font: 400 12px/1.3 var(--mono); color: var(--faint); flex-wrap: wrap; }
+  .note { margin-top: 12px; text-align: center; font-size: 11.5px; color: var(--faint); }
+
+  /* The room */
+  svg.room { display: block; width: 100%; height: auto; border-radius: 12px; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .scale { display: inline-flex; align-items: center; gap: 8px; } .scale i { width: 60px; height: 5px; border: 1px solid var(--faint); border-top: 0; }
+  #chair { outline: none; cursor: grab; transition: transform .7s cubic-bezier(.22, 1, .36, 1); } #chair:focus-visible .lift > rect:first-child { stroke: var(--green); stroke-width: 3; }
+  #chair.held { cursor: grabbing; transition: none; } #chair.still { cursor: default; }
+  #chair .lift { transition: transform .2s; transform-origin: 39px 39px; } #chair.held .lift { transform: scale(1.06); }
+  #nudge { transition: opacity .3s; } #nudge.off { opacity: 0; }
+  #ghost { opacity: 0; transition: opacity .3s; } #ghost.on { opacity: 1; }
+  .dim { opacity: 0; transition: opacity .4s; } .dim.on { opacity: 1; } .dim line { stroke-dasharray: 400; stroke-dashoffset: 400; transition: stroke-dashoffset .7s ease-out; } .dim.on line { stroke-dashoffset: 0; }
+  #lamp { opacity: 0; transition: opacity .6s .2s; } #lamp.on { opacity: 1; }
+  #tagged { opacity: 0; transition: opacity .3s; } #tagged.on { opacity: 1; }
+
+  /* The whiteboard */
+  .sheet { border-radius: 12px; background: var(--sheet) radial-gradient(circle at 1px 1px, var(--dotc) 1px, transparent 0) 0 0 / 22px 22px; touch-action: none; cursor: crosshair; }
+  svg.pen { display: block; width: 100%; height: auto; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .pen .hand { font-family: Hand, "Segoe Print", "Bradley Hand", cursive; font-weight: 600; fill: var(--ink); }
+  .pen .ink { fill: none; stroke: var(--ink); stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+  .pen .theirs { fill: none; stroke: var(--green); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset .8s ease-out; } .pen .theirs.on { stroke-dashoffset: 0; }
+  .pen .said { font-family: Hand, "Segoe Print", "Bradley Hand", cursive; font-weight: 600; fill: var(--green); opacity: 0; transition: opacity .5s; } .pen .said.on { opacity: 1; }
+  #slot-word { transition: opacity .3s; }
+  .answer { display: flex; align-items: center; gap: 12px; padding: 12px 6px 4px; flex-wrap: wrap; }
+  .answer span { margin-left: auto; font: 400 12px/1 var(--mono); color: var(--faint); }
+
+  /* The list */
+  .list-card { min-height: 0; }
+  .bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin: 0 6px 10px; } .bar i { display: block; height: 100%; width: 0; background: var(--green); transition: width .4s; }
+  .pane { position: relative; }
+  .items { list-style: none; max-height: min(52vh, 380px); overflow-y: auto; padding: 0 2px; overscroll-behavior: contain; }
+  .items li { overflow: hidden; transition: height .45s cubic-bezier(.22, 1, .36, 1), opacity .3s; }
+  .items li.in { opacity: 0; } .items li.out { opacity: 0; height: 0 !important; }
+  .item { width: 100%; display: flex; gap: 12px; align-items: flex-start; text-align: left; padding: 10px 8px; border: 0; border-radius: 12px; background: none; }
+  .item:hover { background: var(--paper); } .item:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+  .box { flex: none; width: 22px; height: 22px; margin-top: 1px; border-radius: 7px; border: 2px solid var(--line); display: grid; place-items: center; transition: background .2s, border-color .2s; }
+  .box svg { width: 14px; height: 14px; fill: none; stroke: var(--on-green); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; opacity: 0; }
+  .item[aria-checked="true"] .box { background: var(--green); border-color: var(--green); } .item[aria-checked="true"] .box svg { opacity: 1; }
+  .item[aria-checked="true"] .text { color: var(--faint); text-decoration: line-through; text-decoration-color: var(--faint); }
+  .words-of { display: flex; flex-direction: column; gap: 2px; min-width: 0; } .text { font-size: 15.5px; }
+  .by-agent { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--green); } .by-agent i { width: 8px; height: 8px; border-radius: 3px; background: var(--green); }
+  .why { font-size: 13px; color: var(--soft); }
+  .items li[data-by="agent"] .item { background: var(--green-soft); margin: 2px 0; }
+  .items li.nudge .item { animation: nudge .5s; } @keyframes nudge { 30% { transform: translateX(-4px); } 60% { transform: translateX(4px); } }
+  .add { display: flex; gap: 8px; padding: 12px 4px 4px; }
+  .add input { flex: 1; min-width: 0; height: 38px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); font: 400 15px/1 Text; }
+  .add input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+
+  /* The chessboard: one square is 1em of the board, so that everything on it is cut to its size */
+  .chess { display: flex; flex-direction: column; align-items: center; }
+  .board { position: relative; width: min(100%, 60vh, 470px); aspect-ratio: 1; display: grid; grid-template: repeat(8, 1fr) / repeat(8, 1fr); border-radius: 12px; overflow: hidden; container-type: inline-size; line-height: 1; -webkit-user-select: none; user-select: none; touch-action: manipulation; will-change: transform; transition: opacity .3s; }
+  .sq { position: relative; min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; -webkit-appearance: none; appearance: none; font-size: 12.5cqi; cursor: default; background: var(--sq); color: var(--sq-dark); }
+  .sq.dk { background: var(--sq-dark); color: var(--sq); }
+  .sq.last { background: var(--sq-last); color: var(--wood-dark); }
+  .sq.check { background: var(--clay); color: #fff; }
+  .sq.can { cursor: pointer; }
+  @media (hover: hover) { .sq.can:hover { box-shadow: inset 0 0 0 .05em rgba(14, 14, 16, .25); } }
+  .sq.pick, .sq.pick:hover { box-shadow: inset 0 0 0 .065em var(--ink); }
+  .sq:focus-visible { outline: 0; box-shadow: inset 0 0 0 .065em var(--green); }
+  .sq.to::after { content: ""; position: absolute; left: 50%; top: 50%; width: 30%; height: 30%; margin: -15% 0 0 -15%; border-radius: 50%; background: rgba(14, 14, 16, .26); pointer-events: none; }
+  .sq.to.cap::after { width: 90%; height: 90%; margin: -45% 0 0 -45%; background: none; box-shadow: inset 0 0 0 .075em rgba(14, 14, 16, .34); }
+  .co { position: absolute; font-size: max(9px, .17em); font-weight: 700; font-style: normal; line-height: 1; pointer-events: none; }
+  .co.r { left: 6%; top: 6%; } .co.f { right: 7%; bottom: 5%; }
+  .pc { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-family: Pieces, "Noto Sans Symbols 2", "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", sans-serif; font-size: .86em; font-weight: 400; line-height: 1; color: #1c1a16; pointer-events: none; }
+  .pc.w { color: #fffdf8; -webkit-text-stroke: .075em #1c1a16; paint-order: stroke fill; }
+  .pc.fly { inset: auto; width: 12.5%; height: 12.5%; z-index: 3; }
+  .chess[data-wait="1"] .board { opacity: .92; }
+  .chess .plan-foot { width: min(100%, 60vh, 470px); padding: 12px 2px 0; font: 400 13.5px/1.3 Text; color: var(--soft); }
+
+  /* The cube */
+  .cube-views { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .cube-views figure { text-align: center; } .cube-views figcaption { font: 400 11.5px/1 var(--mono); color: var(--faint); margin-top: 6px; letter-spacing: .06em; }
+  svg.cube { display: block; width: 100%; height: auto; max-height: 34vh; outline: none; }
+  svg.cube .body { fill: #1c1a16; } svg.cube polygon.st { stroke-linejoin: round; transition: fill .28s; }
+  svg.cube:focus-visible .body { stroke: var(--green); stroke-width: .06; }
+  .keys { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-top: 12px; }
+  .key { min-height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); font: 600 15px/1 var(--mono); color: var(--ink); }
+  .key:hover { border-color: var(--ink); } .key:disabled { opacity: .45; cursor: default; }
+  .cube-foot { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+  .cube-foot .said { margin-left: auto; font: 400 12px/1.3 var(--mono); color: var(--faint); }
+
+  /* The drum machine */
+  .pads { display: grid; grid-template-columns: repeat(4, 1fr) 10px repeat(4, 1fr); grid-auto-rows: 1fr; gap: 8px; }
+  .lanes { display: grid; grid-template-rows: repeat(4, 1fr); gap: 8px; font: 600 11px/1 var(--mono); color: var(--faint); letter-spacing: .08em; text-transform: uppercase; }
+  .lanes span { display: flex; align-items: center; }
+  .drum-grid { display: grid; grid-template-columns: 52px 1fr; gap: 10px; }
+  .pad { position: relative; min-width: 0; aspect-ratio: 1; padding: 0; border: 0; border-radius: 12px; cursor: pointer; background: var(--pad); transition: background .15s, transform .1s, box-shadow .15s; }
+  .pad[data-r="0"] { --on: #cf6f4d; } .pad[data-r="1"] { --on: #d8a24a; } .pad[data-r="2"] { --on: #87947b; } .pad[data-r="3"] { --on: #3d7d84; }
+  .pad.on { background: var(--on); }
+  .pad:active { transform: scale(.94); }
+  .pad:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+  .pad.now { box-shadow: 0 0 0 2px var(--ink); } .pad.now.on { transform: scale(1.05); }
+  .pad.theirs { animation: land .5s cubic-bezier(.22, 1, .36, 1) backwards; animation-delay: var(--d, 0ms); }
+  .pad.theirs::after { content: ""; position: absolute; right: 6px; top: 6px; width: 9px; height: 9px; border-radius: 3px; background: var(--green); box-shadow: 0 0 0 2px var(--card); }
+  @keyframes land { from { transform: scale(.6); opacity: .3; } }
+  .drum-foot { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .drum-foot .key-of { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--soft); } .drum-foot .key-of i { width: 9px; height: 9px; border-radius: 3px; background: var(--green); }
+  .drum-foot .hint { margin-left: auto; font-size: 12.5px; color: var(--faint); }
+
+  /* The approval, on a phone */
+  .phone { width: min(340px, 100%); margin: 0 auto; background: var(--bezel); border-radius: 44px; padding: 10px; box-shadow: 0 40px 70px -36px rgba(28,26,22,.6); }
+  .phone-in { background: var(--card); border-radius: 35px; overflow: hidden; padding: 0 18px 20px; }
+  .phone-top { display: flex; justify-content: space-between; align-items: center; padding: 14px 6px 10px; font: 600 13px/1 Text; } .phone-top i { width: 78px; height: 22px; border-radius: 12px; background: var(--bezel); }
+  .pr-head small { font-size: 10.5px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--green); }
+  .pr-head h3 { font: 700 26px/1.05 Display; letter-spacing: -.03em; margin-top: 8px; } .pr-head p { color: var(--soft); font-size: 14.5px; margin-top: 8px; }
+  .prs { list-style: none; margin: 16px 0; display: grid; gap: 8px; }
+  .prs li { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 11px 12px; border: 1px solid var(--line); border-radius: 14px; font-size: 14px; }
+  .prs li i { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; transition: all .3s; } .prs li.done i { background: var(--green); border-color: var(--green); }
+  .prs li i svg { width: 12px; height: 12px; opacity: 0; transition: opacity .3s; } .prs li.done i svg { opacity: 1; }
+  .prs li b { font-weight: 600; display: block; } .prs li small { font: 400 11.5px/1.3 var(--mono); color: var(--faint); }
+  .prs li em { font-style: normal; font-size: 12px; color: var(--faint); } .prs li.done em { color: var(--green); font-weight: 600; }
+  .phone-actions { display: grid; gap: 8px; } .phone-actions .btn { width: 100%; }
+
+  /* The ending */
+  .end { flex: 1; display: flex; flex-direction: column; justify-content: center; max-width: 700px; margin: 0 auto; padding: 30px 0; width: 100%; }
+  .end h1 { font-size: clamp(40px, 5.4vw, 68px); }
+  .prompts { display: grid; gap: 10px; margin-top: 26px; }
+  .prompt { display: flex; align-items: center; gap: 14px; justify-content: space-between; padding: 14px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 12px 30px -22px rgba(28,26,22,.3); }
+  .prompt small { display: block; font-size: 10.5px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--faint); margin-bottom: 3px; } .prompt span { font-size: 16px; }
+  .end .status { margin-top: 12px; font-size: 13.5px; color: var(--soft); min-height: 1.5em; }
+
+  @media (max-width: 900px) {
+    .wrap { padding: 16px 16px 24px; } header { gap: 12px; } .steps i { width: 12px; }
+    .stage { display: flex; flex-direction: column; align-items: stretch; gap: 0; padding-top: 18px; }
+    .words { display: contents; } .head { order: 1; } .shot { order: 2; margin-top: 16px; } .agent { order: 3; max-width: none; margin-top: 14px; } .row { order: 4; }
+    .lede, .asked, .crumb, .answer span { display: none; }
+    h1 { font-size: 30px; } .plan { padding: 12px 12px 8px; border-radius: 18px; }
+    .btn { min-height: 46px; padding: 0 18px; font-size: 14.5px; white-space: nowrap; }
+    .end h1 { font-size: 36px; } .end { padding-top: 18px; } .items { max-height: 46vh; }
+    .drum-grid { grid-template-columns: 1fr; } .lanes { display: none; } .pads { gap: 5px; grid-template-columns: repeat(4, 1fr) 4px repeat(4, 1fr); } .pad { border-radius: 9px; }
+    .cube-foot .said { margin-left: 0; width: 100%; }
+  }
+  @media (max-width: 420px) { .steps i { width: 7px; } .steps span { margin-right: 4px; } .skip { font-size: 12.5px; } }
+  @media (prefers-reduced-motion: reduce) { * { animation-duration: .01s !important; transition-duration: .01s !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <svg class="mark" viewBox="83 -1503 1472 1503" role="img" aria-label="It"><path fill="currentColor" d="M104 0H399V-1056H104ZM251 -1189C348 -1189 419 -1256 419 -1346C419 -1436 348 -1503 251 -1503C154 -1503 83 -1436 83 -1346C83 -1256 154 -1189 251 -1189ZM1111.6 -1056H895.6V-1344H600.6V-1056H418.6V-825H600.6V-280C600.6 -88 707.6 0 939.6 0H1111.6V-231H998.6C918.6 -231 895.6 -254 895.6 -326V-825H1111.6Z"/><circle cx="1350" cy="-205" r="205" fill="var(--green)"/></svg>
+    <span class="crumb">Getting started</span>
+    <span class="steps" id="steps" aria-live="polite"></span>
+    <button class="skip" id="skip" type="button">Skip the tour</button>
+  </header>
+  <p class="real" id="real">A real agent answers this page. Each answer takes a few seconds.</p>
+  <div class="asleep" id="asleep" role="status" hidden><i></i><p><b>Your agent cannot hear this page yet.</b> In the Claude Code chat that put it up, type <code>/reload-plugins</code>. What you do here is kept, and the answers come once it has loaded.</p></div>
+
+  <!-- 1. The room -->
+  <section class="stage" data-step="room" hidden>
+    <div class="words">
+      <div class="head"><p class="eyebrow">A page your agent made</p><h1>Move the armchair. <em>Your agent checks the room.</em></h1></div>
+      <p class="lede">You asked for a floor plan, so your agent built one. What you do on it goes back to your agent, and it answers on the page.</p>
+      <div class="asked"><small>You asked</small><p>“Draw my living room and let me move the furniture.”</p></div>
+      <div class="agent" aria-live="polite"><span class="pill"><i></i><span class="who"></span></span><span class="state">is watching the page</span><p class="you" hidden></p><p class="line"></p></div>
+      <div class="row"><button class="btn" type="button" data-go="next">Next: the whiteboard <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button></div>
+    </div>
+    <div class="shot">
+      <div class="plan">
+        <div class="plan-top"><b>Living room</b><span>6.4 × 4.4 m · 28 m²</span></div>
+        <svg class="room" viewBox="0 0 720 520" role="img" aria-label="A floor plan of a living room, seen from above">
+          <defs>
+            <pattern id="wood" width="120" height="48" patternUnits="userSpaceOnUse"><rect width="120" height="48" fill="var(--floor)"/><path d="M0 0h120M0 16h120M0 32h120" stroke="var(--plank)" stroke-width="1"/><path d="M40 0v16M100 16v16M20 32v16M80 32v16" stroke="var(--plank)" stroke-width="1"/><path d="M0 8h120M0 40h120" stroke="var(--sheen)" stroke-width=".8" opacity=".7"/></pattern>
+            <pattern id="weave" width="14" height="14" patternUnits="userSpaceOnUse"><rect width="14" height="14" fill="var(--rug)"/><path d="M0 7h14M7 0v14" stroke="var(--rug-line)" stroke-width="1.4"/></pattern>
+            <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--sun)" stop-opacity=".55"/><stop offset="1" stop-color="var(--sun)" stop-opacity="0"/></linearGradient>
+            <filter id="drop" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#3b2f1c" flood-opacity=".22"/></filter>
+            <filter id="held" x="-40%" y="-40%" width="180%" height="200%"><feDropShadow dx="0" dy="12" stdDeviation="10" flood-color="#3b2f1c" flood-opacity=".3"/></filter>
+            <radialGradient id="glow"><stop offset="0" stop-color="#ffe9a8" stop-opacity=".95"/><stop offset="1" stop-color="#ffe9a8" stop-opacity="0"/></radialGradient>
+          </defs>
+          <rect x="40" y="40" width="640" height="440" fill="url(#wood)"/>
+          <path d="M250 40 L470 40 L560 330 L160 330 Z" fill="url(#sun)"/>
+          <g filter="url(#drop)"><rect x="350" y="150" width="290" height="230" rx="8" fill="url(#weave)"/><rect x="362" y="162" width="266" height="206" rx="4" fill="none" stroke="var(--paper)" stroke-width="2" opacity=".8"/></g>
+          <g filter="url(#drop)"><rect x="566" y="140" width="96" height="250" rx="16" fill="var(--sage-dark)"/><rect x="566" y="152" width="70" height="226" rx="12" fill="var(--sage)"/><path d="M570 228h62M570 304h62" stroke="var(--sage-dark)" stroke-width="2"/><rect x="566" y="140" width="96" height="20" rx="10" fill="var(--sage-dark)"/><rect x="566" y="370" width="96" height="20" rx="10" fill="var(--sage-dark)"/></g>
+          <g filter="url(#drop)"><ellipse cx="470" cy="265" rx="44" ry="68" fill="var(--wood-dark)"/><ellipse cx="470" cy="265" rx="38" ry="62" fill="var(--wood)"/><path d="M448 232c14-10 30-10 44 0M444 266c18-10 36-10 52 0M448 298c14-9 30-9 44 0" stroke="var(--wood-dark)" stroke-width="1.5" fill="none"/><circle cx="476" cy="250" r="9" fill="var(--paper)"/><circle cx="476" cy="250" r="5" fill="#d8c9a8"/></g>
+          <g filter="url(#drop)"><rect x="60" y="48" width="170" height="36" rx="3" fill="var(--wood-dark)"/><g transform="translate(66 53)"><rect width="10" height="26" fill="#cf6f4d"/><rect x="12" width="8" height="26" fill="var(--paper)"/><rect x="22" width="12" height="26" fill="#3d5a52"/><rect x="36" width="7" height="26" fill="#d8b24a"/><rect x="45" width="11" height="26" fill="#5c6e8a"/><rect x="62" width="9" height="26" fill="var(--paper)"/><rect x="73" width="12" height="26" fill="#cf6f4d"/><rect x="87" width="8" height="26" fill="#2f3b36"/><rect x="104" width="12" height="26" fill="#d8b24a"/><rect x="118" width="9" height="26" fill="#9fab93"/><rect x="129" width="11" height="26" fill="var(--paper)"/><rect x="142" width="12" height="26" fill="#3d5a52"/></g></g>
+          <g filter="url(#drop)"><circle cx="642" cy="80" r="17" fill="#a0603d"/><g fill="#4f7d5a"><ellipse cx="642" cy="62" rx="9" ry="20"/><ellipse cx="642" cy="62" rx="9" ry="20" transform="rotate(60 642 80)"/><ellipse cx="642" cy="62" rx="9" ry="20" transform="rotate(120 642 80)"/><ellipse cx="642" cy="62" rx="9" ry="20" transform="rotate(180 642 80)"/><ellipse cx="642" cy="62" rx="9" ry="20" transform="rotate(240 642 80)"/><ellipse cx="642" cy="62" rx="9" ry="20" transform="rotate(300 642 80)"/></g><circle cx="642" cy="80" r="6" fill="#3d6347"/></g>
+          <path d="M140 480 H680 V40 H40 V480" fill="none" stroke="var(--wall)" stroke-width="10" stroke-linejoin="miter"/>
+          <rect x="250" y="34" width="220" height="12" fill="var(--paper)"/><path d="M250 36h220M250 44h220" stroke="var(--wall)" stroke-width="2"/><path d="M360 34v12" stroke="var(--wall)" stroke-width="2"/>
+          <rect x="37" y="380" width="7" height="100" rx="2" fill="var(--wood-dark)"/><path d="M44 380 A100 100 0 0 1 140 480" fill="none" stroke="var(--wall)" stroke-width="1.3" stroke-dasharray="3 6" opacity=".55"/>
+          <text x="52" y="506" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="var(--faint)" letter-spacing="1.5">DOOR</text><text x="326" y="26" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="var(--faint)" letter-spacing="1.5">WINDOW</text>
+          <rect id="ghost" width="78" height="78" rx="18" fill="none" stroke="var(--faint)" stroke-width="1.6" stroke-dasharray="5 6"/>
+          <g class="dim" id="dim"><line id="dim-line" stroke="var(--green)" stroke-width="1.6"/><g id="dim-label"><rect x="-34" y="-12" width="68" height="24" rx="12" fill="var(--green)"/><text id="dim-text" text-anchor="middle" y="4.5" font-family="ui-monospace, Menlo, monospace" font-size="12.5" font-weight="600" fill="var(--on-green)"></text></g></g>
+          <g id="lamp"><circle r="46" fill="url(#glow)"/><circle r="13" fill="#fffdf8" stroke="#d8b24a" stroke-width="3" filter="url(#drop)"/><circle r="4" fill="#d8b24a"/></g>
+          <g id="chair" tabindex="0" role="button" aria-label="The armchair. Drag it, or move it with the arrow keys and press Enter.">
+            <g class="lift" filter="url(#drop)"><rect width="78" height="78" rx="18" fill="var(--clay-dark)"/><rect x="0" y="0" width="78" height="22" rx="11" fill="var(--clay-dark)"/><rect x="12" y="20" width="54" height="50" rx="12" fill="var(--clay)"/><rect x="0" y="16" width="14" height="56" rx="7" fill="var(--clay-dark)"/><rect x="64" y="16" width="14" height="56" rx="7" fill="var(--clay-dark)"/><path d="M22 44h34" stroke="var(--clay-dark)" stroke-width="2" stroke-linecap="round" opacity=".6"/></g>
+            <g id="nudge"><rect x="-1" y="-34" width="80" height="24" rx="12" fill="var(--ink)"/><text x="39" y="-18" text-anchor="middle" font-family="Text, sans-serif" font-size="12" font-weight="600" fill="var(--paper)">drag me</text><path d="M33 -10l6 6 6-6" fill="var(--ink)"/></g>
+          </g>
+          <g id="tagged"><rect x="0" y="0" width="112" height="24" rx="7" fill="var(--green)"/><rect x="7" y="6" width="12" height="12" rx="4" fill="#fff" opacity=".92"/><rect x="10" y="9" width="6" height="6" rx="2" fill="var(--green)"/><text id="tagged-text" x="25" y="16.5" font-family="Text, sans-serif" font-size="12" font-weight="600" fill="var(--on-green)"></text></g>
+        </svg>
+        <div class="plan-foot"><span class="scale"><i></i>1 m</span><button class="btn ghost small" type="button" id="reset">Put it back</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. The whiteboard -->
+  <section class="stage" data-step="board" hidden>
+    <div class="words">
+      <div class="head"><p class="eyebrow">It reads what you write</p><h1>Answer the sum. <em>Your agent marks it.</em></h1></div>
+      <p class="lede">A page can be a whiteboard. Write your answer on the sheet in your own hand. Your agent is sent a picture of it, reads it, and marks it where you are looking.</p>
+      <div class="asked"><small>You asked</small><p>“Quiz me on areas, one question at a time.”</p></div>
+      <div class="agent" aria-live="polite"><span class="pill"><i></i><span class="who"></span></span><span class="state">is watching the page</span><p class="you" hidden></p><p class="line"></p></div>
+      <div class="row"><button class="btn ghost" type="button" data-go="back">Back</button><button class="btn" type="button" data-go="next">Next: a list <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button></div>
+    </div>
+    <div class="shot">
+      <div class="plan">
+        <div class="plan-top"><b>Homework</b><span>question 3 of 8</span></div>
+        <div class="sheet"><svg class="pen" id="pen" viewBox="0 0 720 420" role="img" aria-label="A sheet of homework with one sum on it. Write your answer on it with your finger or the mouse.">
+          <text class="hand" x="46" y="74" font-size="40">a square garden has sides of 12 m.</text>
+          <text class="hand" x="46" y="122" font-size="40">what is its area?</text>
+          <g transform="translate(560 54)" stroke="var(--ink)" stroke-width="2.4" fill="rgba(23,128,90,.07)"><rect width="96" height="96"/><path d="M0 114h96M0 108v12M96 108v12" fill="none"/></g><text class="hand" x="608" y="194" font-size="26" text-anchor="middle">12 m</text>
+          <text class="hand" id="eq" x="46" y="278" font-size="64">12 × 12 =</text>
+          <rect id="slot" x="306" y="196" width="200" height="120" rx="14" fill="none" stroke="var(--faint)" stroke-width="1.5" stroke-dasharray="5 7"/><text id="slot-word" x="406" y="340" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="var(--faint)" letter-spacing="1.5">WRITE YOUR ANSWER HERE</text>
+          <g id="inks"></g>
+          <ellipse class="theirs" id="ring" pathLength="1"/><path class="theirs" id="arrow" pathLength="1"/><path class="theirs" id="tick" pathLength="1"/>
+          <text class="said" id="right" font-size="64"></text><text class="said" id="hint" x="46" y="384" font-size="44"></text>
+        </svg></div>
+        <div class="answer"><button class="btn small" type="button" id="check">Check it</button><button class="btn ghost small" type="button" id="wipe">Clear</button><span>write with your finger or the mouse</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. The list -->
+  <section class="stage" data-step="checklist" hidden>
+    <div class="words">
+      <div class="head"><p class="eyebrow">It keeps a list with you</p><h1>Tick off what is packed. <em>Your agent adds what you forgot.</em></h1></div>
+      <p class="lede">A page can be a list you share. Tick things off and add your own, and a moment after you stop your agent reads the whole of it.</p>
+      <div class="asked"><small>You asked</small><p>“Help me pack for a weekend away.”</p></div>
+      <div class="agent" aria-live="polite"><span class="pill"><i></i><span class="who"></span></span><span class="state">is watching the page</span><p class="you" hidden></p><p class="line"></p></div>
+      <div class="row"><button class="btn ghost" type="button" data-go="back">Back</button><button class="btn" type="button" data-go="next">Next: a game <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button></div>
+    </div>
+    <div class="shot">
+      <div class="plan list-card">
+        <div class="plan-top"><b>Packing for the weekend</b><span id="count"></span></div>
+        <div class="bar"><i id="fill"></i></div>
+        <div class="pane" id="pane"><ul class="items" id="list" aria-label="The packing list"></ul></div>
+        <form class="add" id="add"><input id="new" maxlength="80" autocomplete="off" placeholder="Add something" aria-label="Add something to the list"><button class="btn small" id="put" type="submit">Add</button></form>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. The chessboard -->
+  <section class="stage" data-step="chess" hidden>
+    <div class="words">
+      <div class="head"><p class="eyebrow">It plays along</p><h1 id="head">Make a move. <em>Your agent answers on the board.</em></h1></div>
+      <p class="lede">A page can be a game. You play White. Each move goes to your agent with every move it may answer with, and it plays its own.</p>
+      <div class="asked"><small>You asked</small><p>“Play me at chess. I’ll be white.”</p></div>
+      <div class="agent" aria-live="polite"><span class="pill"><i></i><span class="who"></span></span><span class="state">is watching the page</span><p class="you" hidden></p><p class="line"></p></div>
+      <div class="row"><button class="btn ghost" type="button" data-go="back">Back</button><button class="btn" type="button" data-go="next">Next: a puzzle <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button></div>
+    </div>
+    <div class="shot">
+      <div class="plan chess" id="chess-card" data-wait="0">
+        <div class="board" id="board" role="group" aria-label="The chessboard. You play White, from the bottom."></div>
+        <div class="plan-foot"><span id="chess-hint"></span><button class="btn ghost small" id="new-game" type="button">New game</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. The cube -->
+  <section class="stage" data-step="cube" hidden>
+    <div class="words">
+      <div class="head"><p class="eyebrow">It works things out with you</p><h1>Turn the cube. <em>Your agent finds the way back.</em></h1></div>
+      <p class="lede">A page can be a puzzle. Turn the faces, or mix it up, then ask your agent. It reads the cube and plays the next turns towards solving it, one at a time.</p>
+      <div class="asked"><small>You asked</small><p>“Help me solve my cube.”</p></div>
+      <div class="agent" aria-live="polite"><span class="pill"><i></i><span class="who"></span></span><span class="state">is watching the page</span><p class="you" hidden></p><p class="line"></p></div>
+      <div class="row"><button class="btn ghost" type="button" data-go="back">Back</button><button class="btn" type="button" data-go="next">Next: a beat <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button></div>
+    </div>
+    <div class="shot">
+      <div class="plan">
+        <div class="plan-top"><b>A Rubik’s cube</b><span id="cube-turns">solved</span></div>
+        <div class="cube-views">
+          <figure><svg class="cube" id="cube-front" viewBox="-2.9 -3.1 5.8 6.2" tabindex="0" role="img" aria-label="The cube from the front, top and right. Press U, D, L, R, F or B to turn a face, with Shift to turn it the other way."></svg><figcaption>FRONT, TOP, RIGHT</figcaption></figure>
+          <figure><svg class="cube" id="cube-back" viewBox="-2.9 -3.1 5.8 6.2" role="img" aria-label="The cube from the back, bottom and left"></svg><figcaption>BACK, BOTTOM, LEFT</figcaption></figure>
+        </div>
+        <div class="keys" id="keys" role="group" aria-label="Turn a face"></div>
+        <div class="cube-foot"><button class="btn small" type="button" id="cube-ask">Ask for the next turns</button><button class="btn ghost small" type="button" id="cube-mix">Mix it up</button><button class="btn ghost small" type="button" id="cube-solve">Start solved</button><span class="said" id="cube-said"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6. The drum machine -->
+  <section class="stage" data-step="drums" hidden>
+    <div class="words">
+      <div class="head"><p class="eyebrow">It can make a sound</p><h1>Tap out a beat. <em>Your agent plays between yours.</em></h1></div>
+      <p class="lede">A page can play. Tap the pads, and a moment after you stop your agent adds hits of its own in the gaps. Press Play to hear it.</p>
+      <div class="asked"><small>You asked</small><p>“Make a beat with me.”</p></div>
+      <div class="agent" aria-live="polite"><span class="pill"><i></i><span class="who"></span></span><span class="state">is watching the page</span><p class="you" hidden></p><p class="line"></p></div>
+      <div class="row"><button class="btn ghost" type="button" data-go="back">Back</button><button class="btn" type="button" data-go="next">Next: from your phone <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button></div>
+    </div>
+    <div class="shot">
+      <div class="plan">
+        <div class="plan-top"><b>A drum machine</b><span>118 bpm · one bar</span></div>
+        <div class="drum-grid"><div class="lanes" aria-hidden="true"><span>Hat</span><span>Clap</span><span>Snare</span><span>Kick</span></div><div class="pads" id="pads" role="group" aria-label="The pads: four drums, eight steps"></div></div>
+        <div class="drum-foot"><button class="btn small" type="button" id="play" data-on="0"><span>Play</span></button><button class="btn ghost small" type="button" id="clear">Clear</button><span class="hint" id="drum-hint">Tap a few pads to start</span><span class="key-of" id="drum-key" hidden><i></i><span></span></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7. The approval -->
+  <section class="stage" data-step="approval" hidden>
+    <div class="words">
+      <div class="head"><p class="eyebrow">Any screen, any time</p><h1>Give the word from your phone. <em>Hours later.</em></h1></div>
+      <p class="lede">A page stays on every screen you pair. A tap on it later reaches the same agent on your computer, with what it knew.</p>
+      <div class="asked"><small>You asked</small><p>“When the three pull requests are ready, ask me on my phone before you merge.”</p></div>
+      <div class="agent" aria-live="polite"><span class="pill"><i></i><span class="who"></span></span><span class="state">is watching the page</span><p class="you" hidden></p><p class="line"></p></div>
+      <div class="row"><button class="btn ghost" type="button" data-go="back">Back</button><button class="btn" type="button" data-go="next">Finish <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button></div>
+    </div>
+    <div class="shot">
+      <div class="phone"><div class="phone-in">
+        <div class="phone-top"><span>11:02</span><i></i><span>It</span></div>
+        <div class="pr-head"><small>Ready to merge</small><h3>Three pull requests are waiting for you.</h3><p>The tests pass on all three. Nothing is merged until you say so.</p></div>
+        <ul class="prs" id="prs">
+          <li><i><svg viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.5l2.5 2.5 4.5-5.5"/></svg></i><span><b>Fix the cart total</b><small>#41 · +68 −12 · 7 tests</small></span><em>Ready</em></li>
+          <li><i><svg viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.5l2.5 2.5 4.5-5.5"/></svg></i><span><b>Retry on a 502</b><small>#42 · +31 −4 · 3 tests</small></span><em>Ready</em></li>
+          <li><i><svg viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.5l2.5 2.5 4.5-5.5"/></svg></i><span><b>Remove the debug route</b><small>#43 · +2 −40 · 2 tests</small></span><em>Ready</em></li>
+        </ul>
+        <div class="phone-actions"><button class="btn" type="button" id="yes">Merge all three</button><button class="btn ghost" type="button" id="no">Not yet</button></div>
+      </div></div>
+      <p class="note">Your phone · the chat was closed at 5:40 pm · these pull requests are part of the demo</p>
+    </div>
+  </section>
+
+  <!-- 8. The ending -->
+  <section class="end stage" data-step="end" hidden>
+    <p class="eyebrow">That is It</p>
+    <h1>Now ask your agent <em>for a page of your own.</em></h1>
+    <p class="lede" style="max-width:52ch">Say what you want to see or to use, in your own words. Your agent builds the page, and what you do on it goes back to your agent.</p>
+    <div class="prompts" id="prompts"></div>
+    <div class="row"><button class="btn" type="button" id="fin">Go to my pages <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button><button class="btn ghost" type="button" id="again">See it again</button></div>
+    <p class="status" id="fin-status" aria-live="polite"></p>
+  </section>
+</div>
+<script>
+/*chess.engine*/
+</script>
+<script>
+// The first run of It on one page: a room, a whiteboard, a list, a game of chess, a cube, a drum
+// machine, an approval on a phone, and an ending. The page goes from one to the next by itself,
+// and asks nothing of the agent to do it. What the person does in each goes to the agent as one
+// action, and the agent answers in the page's state, under the name of that part: `room`,
+// `board`, `checklist`, `chess`, `cube`, `drums` and `approval`. Every answer to something the
+// person did names the request it answers, and an answer to an earlier one is not drawn.
+(() => {
+  var It = window.It || { state: {}, revision: 0, onState: () => () => {}, action: () => Promise.resolve() };
+  var P = window.__PARAMS || {};
+  var AGENT = String(P.agent || "") || "Your agent";
+  // How long an agent has to answer before what was asked of it is the person's to do again
+  var SLOW = 40000;
+  var calm = !!window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var $ = (id) => document.getElementById(id);
+  var SVG = "http://www.w3.org/2000/svg";
+  var STEPS = ["room", "board", "checklist", "chess", "cube", "drums", "approval", "end"];
+  var sections = {};
+  STEPS.forEach((k) => { sections[k] = document.querySelector('[data-step="' + k + '"]'); });
+  // The agent's answers for one part of the page, as the state has them
+  var part = (key) => { var v = (It.state || {})[key]; return v && typeof v === "object" && !Array.isArray(v) ? v : {}; };
+  var newId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (n) => n.toString(16).padStart(2, "0")).join("");
+  var tidy = (v, most) => (typeof v === "string" || typeof v === "number" ? String(v).replace(/\s+/g, " ").trim().slice(0, most) : "");
+  var listen = (fn) => { var off = It.onState(fn); return typeof off === "function" ? off : () => {}; };
+
+  // ── Where the conversation that put the page up cannot hear it yet ──
+  // The page says so, and what to type, until the first answer of the agent's arrives
+  var asleep = P.asleep === true || P.asleep === "true";
+  $("asleep").hidden = !asleep;
+  function heardFrom() { $("asleep").hidden = true; }
+
+  // ── What the agent says, and what the page knows of where its answer is ──
+  // The page says only what it knows: that what was done is on its way, that the agent has it
+  // and has not answered, for how long by this browser's clock, and that it answered. What the
+  // agent is doing is said only in the agent's own words, which come in the state.
+  function Box(section) {
+    var el = section.querySelector(".agent"), state = el.querySelector(".state"), you = el.querySelector(".you"), line = el.querySelector(".line");
+    el.querySelector(".who").textContent = AGENT;
+    var since = -1, tick = 0, quiet = 0, typing = 0;
+    var secs = () => Math.max(1, Math.round((Date.now() - since) / 1000));
+    function stopClock() { clearTimeout(tick); clearTimeout(quiet); tick = quiet = 0; }
+    function show(html, cls) { state.className = "state" + (cls ? " " + cls : ""); state.innerHTML = html; }
+    function count() { show("has what you did and has not answered yet · <b>" + secs() + " s</b>"); tick = setTimeout(count, 1000); }
+    return {
+      /** What the person did, in a few words of the page's. */
+      you(t) { you.textContent = t || ""; you.hidden = !t; },
+      /** The agent's own words, written out as they come. */
+      say(t) {
+        var mine = ++typing, words = tidy(t, 400), i = 0;
+        line.classList.remove("caret", "hint");
+        if (calm || !words) { line.textContent = words; return; }
+        line.classList.add("caret");
+        (function next() {
+          if (mine !== typing) return;
+          line.textContent = words.slice(0, ++i);
+          if (i >= words.length) { line.classList.remove("caret"); return; }
+          setTimeout(next, words.charAt(i - 1) === "." ? 110 : 14);
+        })();
+      },
+      said: () => line.textContent,
+      /** What the person can do here, in the page's words, where the agent has said nothing yet. */
+      hint(t) { ++typing; line.classList.remove("caret"); line.classList.add("hint"); line.textContent = t || ""; },
+      idle(t) { stopClock(); since = -1; show(t || "is watching the page"); },
+      sending(at) { stopClock(); since = typeof at === "number" ? at : Date.now(); show("sending what you did", "live"); },
+      /** It took what was done. Where nothing has come a while after, `back` gives the person their part again. */
+      asked(back) {
+        clearTimeout(tick); clearTimeout(quiet);
+        if (since < 0) since = Date.now();
+        count();
+        quiet = setTimeout(() => {
+          quiet = 0; clearTimeout(tick);
+          show("has not answered after " + secs() + " s. It is yours again, and a late answer is still shown", "off");
+          if (back) back();
+        }, SLOW);
+      },
+      got() {
+        var took = since >= 0 ? ((Date.now() - since) / 1000).toFixed(1) : "";
+        stopClock(); since = -1;
+        show(took ? "answered in <b>" + took + " s</b>" : "answered");
+        heardFrom();
+      },
+      refused() { stopClock(); since = -1; show("did not get that. Do it again", "off"); },
+      waiting: () => since >= 0,
+    };
+  }
+
+  /**
+   * One thing at a time that the person asks of the agent in a part of the page, and its answer.
+   * The answer counts where it names the request that is waiting, and only once. It may be heard
+   * before the page hears that It took the request, as a connection that dropped between the two
+   * brings them back: it is kept, and drawn when the request is known to have gone.
+   */
+  function Asker(key, box, apply, back) {
+    var me = { request: null, sent: false, early: null };
+    me.send = (name, data, at) => {
+      var id = newId();
+      me.request = id; me.sent = false; me.early = null;
+      box.sending(at);
+      It.action(name, Object.assign({ request: id }, data)).then(() => {
+        if (me.request !== id) return;
+        me.sent = true;
+        box.asked(() => { if (me.request === id) back(); });
+        var kept = me.early;
+        me.early = null;
+        if (kept) take(kept);
+      }, () => {
+        if (me.request !== id) return;
+        me.request = null;
+        box.refused();
+        back();
+      });
+    };
+    me.forget = () => { me.request = null; me.early = null; };
+    me.waiting = () => me.request !== null;
+    function take(got) {
+      me.request = null;
+      box.got();
+      apply(got);
+    }
+    listen(() => {
+      var got = part(key);
+      if (!me.request || got.request !== me.request) return;
+      if (!me.sent) { me.early = got; return; }
+      take(got);
+    });
+    return me;
+  }
+
+  // ── Going from one part to the next, which is the page's own and asks nothing of anyone ──
+  var at = 0, entering = {}, leaving = {};
+  function steps(n) {
+    $("steps").innerHTML = "<span>" + (n + 1) + " of " + STEPS.length + "</span>" + STEPS.map((_, i) => '<i class="' + (i <= n ? "on" : "") + '"></i>').join("");
+  }
+  function go(n) {
+    n = Math.max(0, Math.min(STEPS.length - 1, n));
+    if (n !== at && leaving[STEPS[at]]) leaving[STEPS[at]]();
+    at = n;
+    STEPS.forEach((k, i) => { sections[k].hidden = i !== n; });
+    var s = sections[STEPS[n]];
+    s.classList.remove("swap");
+    void s.offsetWidth;
+    if (!calm) s.classList.add("swap");
+    $("skip").hidden = STEPS[n] === "end";
+    steps(n);
+    document.documentElement.scrollTop = 0;
+    if (entering[STEPS[n]]) entering[STEPS[n]]();
+  }
+  document.addEventListener("click", (e) => {
+    var b = e.target.closest ? e.target.closest("[data-go]") : null;
+    if (b) go(at + (b.getAttribute("data-go") === "next" ? 1 : -1));
+  });
+  $("skip").addEventListener("click", () => go(STEPS.length - 1));
+
+  // ── 1. The room ──
+  (() => {
+    var box = Box(sections.room), svg = sections.room.querySelector("svg.room"), chair = $("chair");
+    // The drawing is in centimetres, from its own corner: the room's inside starts 40 in
+    var O = 40, ROOM = { x: 45, y: 45, w: 630, h: 430 }, SIZE = 78, HINGE = { x: 40, y: 480 }, SWING = 100;
+    var THINGS = [{ x: 566, y: 140, w: 96, h: 250, n: "sofa" }, { x: 426, y: 197, w: 88, h: 136, n: "coffee table" }, { x: 60, y: 48, w: 170, h: 36, n: "shelves" }, { x: 616, y: 52, w: 54, h: 56, n: "plant" }];
+    var START = { x: 250, y: 300 };
+    var where = { x: START.x, y: START.y }, busy = false, grab = null, dropped = null;
+    var lo = { x: ROOM.x + 4, y: ROOM.y + 4 }, hi = { x: ROOM.x + ROOM.w - SIZE - 4, y: ROOM.y + ROOM.h - SIZE - 4 };
+    var clamp = (p) => ({ x: Math.min(hi.x, Math.max(lo.x, p.x)), y: Math.min(hi.y, Math.max(lo.y, p.y)) });
+    var put = (p) => { where = p; chair.style.transform = "translate(" + p.x + "px, " + p.y + "px)"; };
+    var over = (p, t) => p.x < t.x + t.w + 10 && p.x + SIZE > t.x - 10 && p.y < t.y + t.h + 10 && p.y + SIZE > t.y - 10;
+    // How far the corner nearest the door is from the door's swing: under nothing, the door hits it
+    var clears = (p) => Math.round(Math.hypot(p.x - HINGE.x, p.y + SIZE - HINGE.y) - SWING);
+    var blocked = (p) => (clears(p) < 6 ? "door" : (THINGS.find((t) => over(p, t)) || {}).n || null);
+    var free = (p) => p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y && !blocked(p);
+    // The free places nearest to one, every ten centimetres, each some way from the others
+    function nearest(p, most) {
+      var all = [];
+      for (var x = lo.x; x <= hi.x; x += 10) for (var y = lo.y; y <= hi.y; y += 10) { var q = { x: x, y: y }; if (free(q)) all.push({ q: q, d: Math.hypot(x - p.x, y - p.y) }); }
+      all.sort((a, b) => a.d - b.d);
+      var out = free(p) ? [{ x: Math.round(p.x), y: Math.round(p.y) }] : [];
+      for (var i = 0; i < all.length && out.length < most; i++) if (out.every((o) => Math.hypot(o.x - all[i].q.x, o.y - all[i].q.y) >= 40)) out.push(all[i].q);
+      return out;
+    }
+    var cm = (p) => [Math.round(p.x - O), Math.round(p.y - O)];
+    var sofa = (p) => Math.round(Math.hypot(p.x + SIZE / 2 - 614, p.y + SIZE / 2 - 265));
+    var byWindow = (p) => p.y < 130 && p.x > 220 && p.x < 440;
+    function measure(p) {
+      var from = { x: p.x, y: p.y + SIZE }, far = Math.hypot(from.x - HINGE.x, from.y - HINGE.y) || 1;
+      var to = { x: HINGE.x + ((from.x - HINGE.x) / far) * SWING, y: HINGE.y + ((from.y - HINGE.y) / far) * SWING };
+      var l = $("dim-line");
+      l.setAttribute("x1", from.x); l.setAttribute("y1", from.y); l.setAttribute("x2", to.x); l.setAttribute("y2", to.y);
+      var mid = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 }, short = Math.hypot(from.x - to.x, from.y - to.y) < 90;
+      $("dim-label").setAttribute("transform", short ? "translate(" + Math.max(84, to.x - ((from.x - HINGE.x) / far) * 44) + ", " + Math.min(456, to.y - ((from.y - HINGE.y) / far) * 44) + ")" : "translate(" + (mid.x + 34) + ", " + (mid.y - 16) + ")");
+      $("dim-text").textContent = clears(p) + " cm";
+      $("dim").classList.add("on");
+    }
+    var marks = (on) => ["ghost", "dim", "lamp", "tagged"].forEach((id) => $(id).classList.toggle("on", !!on && on.indexOf(id) >= 0));
+    var hold = (yes) => { busy = yes; chair.classList.toggle("still", yes); };
+    $("tagged-text").textContent = AGENT.slice(0, 16).toLowerCase();
+    var asker = Asker("room", box, (got) => {
+      var a = got.armchair, wanted = Array.isArray(a) && a.length === 2 && a.every((v) => typeof v === "number" && isFinite(v)) ? { x: Math.round(a[0] + O), y: Math.round(a[1] + O) } : null;
+      // The agent's place is taken where the armchair can stand there, and the nearest free place to where the person put it otherwise
+      var to = wanted && free(wanted) ? wanted : nearest(dropped, 1)[0] || dropped;
+      var far = Math.round(Math.hypot(to.x - dropped.x, to.y - dropped.y)), on = ["dim"];
+      if (far > 6) {
+        $("ghost").setAttribute("x", dropped.x); $("ghost").setAttribute("y", dropped.y);
+        $("tagged").setAttribute("transform", "translate(" + Math.min(to.x, 560) + ", " + (to.y - 32) + ")");
+        on.push("ghost", "tagged");
+      }
+      put(to);
+      if (got.lamp === true) {
+        $("lamp").setAttribute("transform", "translate(" + (to.x + SIZE + 34 > ROOM.x + ROOM.w - 20 ? to.x - 30 : to.x + SIZE + 30) + ", " + (to.y + 22) + ")");
+        on.push("lamp");
+      }
+      marks(on);
+      measure(to);
+      box.say(got.say);
+      hold(false);
+    }, () => hold(false));
+    function drop() {
+      if (busy) return;
+      dropped = { x: Math.round(where.x), y: Math.round(where.y) };
+      var near = nearest(dropped, 3);
+      hold(true);
+      marks(null);
+      box.you("moved the armchair");
+      asker.send("moved", {
+        armchair: cm(dropped),
+        size: SIZE,
+        room: [640, 440],
+        in_the_way: blocked(dropped),
+        free: near.map(cm),
+        door_clears_by: clears(dropped),
+        from_sofa: sofa(dropped),
+        by_window: byWindow(dropped),
+      });
+    }
+    var point = (e) => { var r = svg.getBoundingClientRect(); return { x: ((e.clientX - r.left) / (r.width || 720)) * 720, y: ((e.clientY - r.top) / (r.height || 520)) * 520 }; };
+    var lift = chair.querySelector(".lift");
+    chair.addEventListener("pointerdown", (e) => {
+      if (busy) return;
+      var p = point(e);
+      grab = { dx: p.x - where.x, dy: p.y - where.y };
+      try { chair.setPointerCapture(e.pointerId); } catch (err) {}
+      chair.classList.add("held");
+      lift.setAttribute("filter", "url(#held)");
+      marks(null);
+      $("nudge").classList.add("off");
+    });
+    chair.addEventListener("pointermove", (e) => { if (!grab) return; var p = point(e); put(clamp({ x: p.x - grab.dx, y: p.y - grab.dy })); });
+    var up = () => { if (!grab) return; grab = null; chair.classList.remove("held"); lift.setAttribute("filter", "url(#drop)"); drop(); };
+    chair.addEventListener("pointerup", up);
+    chair.addEventListener("pointercancel", up);
+    chair.addEventListener("keydown", (e) => {
+      if (busy) return;
+      var step = { ArrowLeft: [-20, 0], ArrowRight: [20, 0], ArrowUp: [0, -20], ArrowDown: [0, 20] }[e.key];
+      if (step) { e.preventDefault(); $("nudge").classList.add("off"); marks(null); put(clamp({ x: where.x + step[0], y: where.y + step[1] })); }
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); drop(); }
+    });
+    $("reset").addEventListener("click", () => {
+      if (busy) return;
+      asker.forget();
+      put({ x: START.x, y: START.y });
+      marks(null);
+      box.idle();
+      box.you("");
+      box.hint("Drag the armchair anywhere, and the answer comes here.");
+    });
+    put(where);
+    box.idle();
+    box.you("");
+    box.hint("Drag the armchair anywhere, and the answer comes here.");
+  })();
+
+  // ── 2. The whiteboard ──
+  (() => {
+    var box = Box(sections.board), pen = $("pen"), inks = $("inks"), checkBtn = $("check"), wipeBtn = $("wipe");
+    var W = 720, H = 420, INK = "#1c1a16";
+    var QUESTION = "A square garden has sides of 12 m. What is its area?", SUM = "12 × 12 =";
+    // The lines the person wrote, as parts of the sheet (0 to 1 across and down), as the whiteboard keeps them
+    var mine = [], current = null, busy = false;
+    var spots = ["ring", "arrow", "tick", "right", "hint"];
+    var clean = () => spots.forEach((id) => $(id).classList.remove("on"));
+    function ready() { checkBtn.disabled = busy || !mine.length; wipeBtn.disabled = busy || !mine.length; }
+    function draw(s) { s.el.setAttribute("points", s.points.map((p) => (p[0] * W).toFixed(1) + "," + (p[1] * H).toFixed(1)).join(" ")); }
+    var point = (e) => {
+      var r = pen.getBoundingClientRect();
+      return [Math.min(1, Math.max(0, (e.clientX - r.left) / (r.width || W))), Math.min(1, Math.max(0, (e.clientY - r.top) / (r.height || H)))];
+    };
+    pen.addEventListener("pointerdown", (e) => {
+      if (busy) return;
+      try { pen.setPointerCapture(e.pointerId); } catch (err) {}
+      var el = document.createElementNS(SVG, "polyline");
+      el.setAttribute("class", "ink");
+      inks.appendChild(el);
+      current = { points: [point(e)], width: 5, erase: false, color: INK, el: el };
+      mine.push(current);
+      draw(current);
+      clean();
+      $("slot-word").style.opacity = 0;
+      ready();
+    });
+    pen.addEventListener("pointermove", (e) => { if (current) { current.points.push(point(e)); draw(current); } });
+    ["pointerup", "pointercancel", "pointerleave"].forEach((kind) => pen.addEventListener(kind, () => { current = null; }));
+    wipeBtn.addEventListener("click", () => {
+      if (busy) return;
+      mine.splice(0).forEach((s) => s.el.remove());
+      clean();
+      $("slot-word").style.opacity = 1;
+      ready();
+    });
+
+    // A picture of the sheet as the person sees it, the question, the sum and what they wrote, in
+    // dark ink on white whatever the screen's colours, as large as a model reads a picture at.
+    // Where the browser can make none, there is none, and the lines are all the agent is given.
+    function picture() {
+      var fonts = document.fonts && document.fonts.load ? document.fonts.load('600 64px Hand').catch(() => {}) : null;
+      return Promise.resolve(fonts).then(() => new Promise((resolve) => {
+        try {
+          var k = 2, c = document.createElement("canvas");
+          c.width = W * k; c.height = H * k;
+          var g = c.getContext("2d");
+          if (!g) return resolve(null);
+          g.scale(k, k);
+          g.fillStyle = "#ffffff"; g.fillRect(0, 0, W, H);
+          g.fillStyle = "#111111"; g.strokeStyle = "#111111";
+          g.font = '600 40px Hand, "Segoe Print", cursive';
+          g.fillText("a square garden has sides of 12 m.", 46, 74);
+          g.fillText("what is its area?", 46, 122);
+          g.lineWidth = 2.4; g.strokeRect(560, 54, 96, 96);
+          g.font = '600 26px Hand, "Segoe Print", cursive';
+          g.fillText("12 m", 584, 194);
+          g.font = '600 64px Hand, "Segoe Print", cursive';
+          g.fillText(SUM, 46, 278);
+          g.lineWidth = 3.6; g.lineCap = "round"; g.lineJoin = "round";
+          mine.forEach((s) => {
+            g.beginPath();
+            s.points.forEach((p, i) => (i ? g.lineTo(p[0] * W, p[1] * H) : g.moveTo(p[0] * W, p[1] * H)));
+            if (s.points.length === 1) g.lineTo(s.points[0][0] * W + 0.1, s.points[0][1] * H);
+            g.stroke();
+          });
+          c.toBlob((made) => resolve(made || null), "image/png");
+        } catch (err) { resolve(null); }
+      }));
+    }
+/*whiteboard.fitting*/
+    // Where the person's ink is on the sheet, which the agent's marks are drawn round
+    function inked() {
+      var xs = [], ys = [];
+      mine.forEach((s) => s.points.forEach((p) => { xs.push(p[0] * W); ys.push(p[1] * H); }));
+      var x = Math.min.apply(null, xs), y = Math.min.apply(null, ys);
+      return { x: x, y: y, w: Math.max.apply(null, xs) - x, h: Math.max.apply(null, ys) - y };
+    }
+    var asker = Asker("board", box, (got) => {
+      clean();
+      var b = inked(), later = (ms, fn) => setTimeout(() => { if (!asker.waiting()) fn(); }, calm ? 0 : ms);
+      if (got.right === true) {
+        var tx = Math.min(600, b.x + b.w + 30), ty = b.y + b.h / 2;
+        $("tick").setAttribute("d", "M" + tx + " " + (ty + 6) + " l22 24 l44 -62");
+        $("tick").classList.add("on");
+      } else {
+        var ring = $("ring");
+        ring.setAttribute("cx", b.x + b.w / 2); ring.setAttribute("cy", b.y + b.h / 2); ring.setAttribute("rx", b.w / 2 + 24); ring.setAttribute("ry", b.h / 2 + 18);
+        ring.classList.add("on");
+        var x = Math.min(548, b.x + b.w + 32), y = b.y + b.h / 2;
+        $("arrow").setAttribute("d", "M" + x + " " + y + " h46 m-14 -11 l14 11 l-14 11");
+        later(500, () => $("arrow").classList.add("on"));
+        var right = $("right");
+        right.setAttribute("x", x + 56); right.setAttribute("y", y + 21);
+        right.textContent = tidy(got.answer, 8);
+        later(900, () => right.classList.add("on"));
+      }
+      $("hint").textContent = tidy(got.hint, 44);
+      later(1300, () => $("hint").classList.add("on"));
+      box.say(got.say);
+      busy = false;
+      ready();
+    }, () => { busy = false; ready(); });
+    checkBtn.addEventListener("click", () => {
+      if (busy || !mine.length) return;
+      var began = Date.now();
+      busy = true;
+      clean();
+      ready();
+      box.sending(began);
+      picture().then((png) => {
+        var data = fitted(png);
+        // Sent as it is, it would be refused, and again each time: so the person is told what would let it go
+        if (!data) {
+          busy = false;
+          ready();
+          box.idle();
+          box.you("That is too many lines to send at once. Clear the sheet, and write it again.");
+          return;
+        }
+        box.you("wrote an answer and pressed Check it");
+        asker.send("checked", Object.assign({ question: QUESTION, sum: SUM }, data), began);
+      });
+    });
+    ready();
+    box.idle();
+    box.you("");
+    box.hint("Write your answer on the sheet with your finger or the mouse, and press Check it.");
+  })();
+
+  // ── 3. The list ──
+  (() => {
+    var box = Box(sections.checklist);
+    var list = $("list"), pane = $("pane"), form = $("add"), field = $("new"), put = $("put"), count = $("count"), fill = $("fill");
+    var TICK = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 8.5l3.2 3.2 6.4-7.2"/></svg>';
+    var MOST = 60;      // as long as a list gets, so that telling the agent of it stays small
+    var PAUSE = 1200;   // how long after the last tick or addition the agent is told
+    var items = [], rows = {}, seq = 0;
+    var ticked = {}, unticked = {}, mine = [];   // what the person has done since the agent was last told
+    var telling = 0, heard = null, lastNote = "", loaded = false;
+    var word = "packed";
+    function find(text) {
+      var k = text.toLowerCase();
+      for (var i = 0; i < items.length; i++) if (items[i].text.toLowerCase() === k) return items[i];
+      return null;
+    }
+    var things = (n) => n + (n === 1 ? " thing" : " things");
+    var short = (text) => (text.length > 34 ? text.slice(0, 32).trim() + "…" : text);
+    // One row: a checkbox that is the whole row, so that the words can be pressed as well as the box
+    function row(item) {
+      var li = document.createElement("li"), b = document.createElement("button");
+      var bx = document.createElement("span"), words = document.createElement("span"), text = document.createElement("span");
+      li.className = "row"; li.setAttribute("data-by", item.by);
+      b.type = "button"; b.className = "item"; b.setAttribute("role", "checkbox");
+      bx.className = "box"; bx.innerHTML = TICK;
+      words.className = "words-of"; text.className = "text"; text.textContent = item.text;
+      words.appendChild(text);
+      if (item.by === "agent") {
+        var who = document.createElement("span"), why = document.createElement("span");
+        who.className = "by-agent"; who.appendChild(document.createElement("i")); who.appendChild(document.createTextNode(AGENT));
+        why.className = "why";
+        words.appendChild(who); words.appendChild(why);
+      }
+      b.appendChild(bx); b.appendChild(words); li.appendChild(b);
+      b.addEventListener("click", () => toggle(item));
+      return li;
+    }
+    // What of a row can change: whether it is ticked, and why the agent added it
+    function dress(item) {
+      var li = rows[item.id];
+      if (!li) return;
+      var b = li.firstChild;
+      b.setAttribute("aria-checked", item.done ? "true" : "false");
+      if (item.by !== "agent") return;
+      li.querySelector(".why").textContent = item.why;
+      b.setAttribute("aria-label", item.text + ", added by " + AGENT + (item.why ? ": " + item.why : ""));
+    }
+    function mount(item, sliding) {
+      if (rows[item.id] || items.indexOf(item) < 0) return;
+      var li = (rows[item.id] = row(item)), after = null;
+      dress(item);
+      // It goes where it is in the list: before the first one after it that is already shown
+      for (var i = items.indexOf(item) + 1; i < items.length && !after; i++) after = rows[items[i].id] || null;
+      list.insertBefore(li, after);
+      if (sliding && !calm) {
+        var tall = li.offsetHeight;
+        li.style.height = "0px";
+        li.classList.add("in");
+        void li.offsetHeight;
+        li.style.height = tall + "px";
+        setTimeout(() => { li.classList.remove("in"); li.style.height = ""; }, 520);
+      }
+      if (sliding && li.scrollIntoView && !sections.checklist.hidden) li.scrollIntoView({ block: "nearest", behavior: calm ? "auto" : "smooth" });
+    }
+    function unmount(item) {
+      var li = rows[item.id];
+      delete rows[item.id];
+      if (!li) return;
+      li.style.height = li.offsetHeight + "px";
+      void li.offsetHeight;
+      li.firstChild.disabled = true;
+      li.classList.add("out");
+      setTimeout(() => li.remove(), calm ? 0 : 280);
+    }
+    function tally() {
+      var n = items.length, d = items.filter((i) => i.done).length;
+      count.textContent = n ? d + " of " + n + " " + word : "Nothing on it yet";
+      fill.style.width = n ? (100 * d) / n + "%" : "0";
+      put.disabled = !field.value.trim() || n >= MOST;
+    }
+    // ── What the person does ──
+    function toggle(item) {
+      item.done = !item.done;
+      dress(item);
+      tally();
+      // Ticking one and unticking it again is nothing done
+      var into = item.done ? ticked : unticked, outOf = item.done ? unticked : ticked;
+      if (outOf[item.id]) delete outOf[item.id]; else into[item.id] = 1;
+      soon();
+    }
+    field.addEventListener("input", tally);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      var text = tidy(field.value, 80);
+      if (!text) return;
+      var there = find(text);
+      if (!there && items.length >= MOST) return;
+      // The words are taken, and the place to write stays ready for the next ones, however Add was pressed
+      field.value = "";
+      field.focus();
+      if (there) {
+        // It is on the list already: the one that is there is pointed at, and nothing is added
+        var li = rows[there.id];
+        if (li) { li.classList.remove("nudge"); void li.offsetWidth; li.classList.add("nudge"); }
+        tally();
+        return;
+      }
+      var item = { id: ++seq, text: text, done: false, by: "you", why: "" };
+      items.push(item);
+      mine.push(text);
+      mount(item, true);
+      tally();
+      soon();
+    });
+    function soon() {
+      clearTimeout(telling);
+      if (!Object.keys(ticked).length && !Object.keys(unticked).length && !mine.length) return;
+      telling = setTimeout(tell, PAUSE);
+    }
+    // Tells the agent the whole list as it now is, and says what was just done to it
+    function tell() {
+      var said = [], t = Object.keys(ticked).length, u = Object.keys(unticked).length, a = mine.length;
+      if (t) said.push("ticked " + things(t));
+      if (u) said.push("unticked " + things(u));
+      if (a) said.push("added " + short(mine[0]) + (a > 1 ? " and " + (a - 1) + " more" : ""));
+      var last = said.pop();
+      box.you(said.length ? said.join(", ") + (a > 1 ? ", " : " and ") + last : last);
+      ticked = {}; unticked = {}; mine = [];
+      var sent = ++told;
+      box.sending();
+      It.action("list", { items: items.map((i) => ({ text: i.text, done: i.done, by: i.by })) }).then(() => { if (sent === told) box.asked(); }, () => { if (sent === told) box.refused(); });
+    }
+    var told = 0;
+    // ── What the agent does ──
+    // What the agent has added, as the state has it: each thing once, in words of a sensible length
+    function wanted() {
+      var given = part("checklist").added, out = [], had = {};
+      (Array.isArray(given) ? given : []).forEach((one) => {
+        var text = tidy(one && typeof one === "object" ? one.text : one, 80), k = text.toLowerCase();
+        if (!text || had[k] || out.length >= 20) return;
+        had[k] = 1;
+        out.push({ text: text, why: tidy(one && one.why, 120) });
+      });
+      return out;
+    }
+    function hear() {
+      var want = wanted(), note = tidy(part("checklist").note, 160);
+      var now = JSON.stringify([want, note]);
+      // The state changed elsewhere on the page, or the agent set the same again: nothing here is new
+      if (now === heard) return;
+      heard = now;
+      var fresh = [], gone = [], asked = {};
+      want.forEach((one) => {
+        var item = find(one.text);
+        if (item) {
+          // On the list already. Where it is the agent's own it stays, with why as it is now given
+          if (item.by === "agent") { asked[item.id] = 1; item.stays = false; if (item.why !== one.why) { item.why = one.why; dress(item); } }
+          return;
+        }
+        if (items.length >= MOST) return;
+        item = { id: ++seq, text: one.text, done: false, by: "agent", why: one.why, stays: false };
+        items.push(item);
+        asked[item.id] = 1;
+        fresh.push(item);
+      });
+      // What the agent no longer has in `added` goes again, unless the person has ticked it: then
+      // it stays, and goes on staying whatever they do with it after
+      items.slice().forEach((item) => {
+        if (item.by !== "agent" || asked[item.id] || item.stays) return;
+        if (item.done) { item.stays = true; return; }
+        items.splice(items.indexOf(item), 1);
+        gone.push(item);
+        unmount(item);
+      });
+      // They slide in one after another. What was there when the page opened is simply there
+      var step = fresh.length > 6 ? 140 : 260;
+      fresh.forEach((item, i) => { if (loaded && !calm) setTimeout(() => mount(item, true), i * step); else mount(item, false); });
+      tally();
+      if (!loaded) return;
+      var said = note && note !== lastNote;
+      lastNote = note;
+      box.got();
+      if (said) box.say(note);
+      else if (fresh.length) {
+        var first = fresh[0], more = fresh.length - 1;
+        box.say("added " + short(first.text) + (first.why ? ", for " + first.why : "") + (more ? (first.why ? ", and " : " and ") + more + " more" : ""));
+      } else if (gone.length) box.say("took " + (gone.length === 1 ? short(gone[0].text) : things(gone.length)) + " off again");
+    }
+    // ── The list it starts with ──
+    ["Passport", "Phone charger", "Toothbrush", "Rain jacket", "Book for the train"].forEach((text) => items.push({ id: ++seq, text: text, done: false, by: "you", why: "" }));
+    items.forEach((item) => mount(item, false));
+    listen(hear);
+    hear();
+    loaded = true;
+    box.idle();
+    box.you("");
+    box.hint("Tick off what is packed and add what is missing. A moment after you stop, the list goes to " + AGENT + ".");
+  })();
+
+  // ── 4. The chessboard ──
+  // A game of chess. The person plays White from the bottom and the agent plays Black. Each
+  // move of the person goes to the agent with the position it left and every move the agent may
+  // answer with; the agent answers by setting `chess.reply` in the state to one of those, and
+  // the page plays it on the board. The rules are the engine's: nothing here decides a move.
+  (() => {
+    var box = Box(sections.chess), C = Chess;
+    var card = $("chess-card"), boardEl = $("board"), hintEl = $("chess-hint");
+    // The solid figures (U+265A to U+265F), each followed by the mark that asks for it as text and not as a picture
+    var FIGURE = { k: "♚︎", q: "♛︎", r: "♜︎", b: "♝︎", n: "♞︎", p: "♟︎" };
+    var still = calm;
+    var pos = C.read(C.START), now = C.state(pos);   // the position, and how it stands for the side to move
+    var picked = -1, goes = {}, last = null;          // the square picked up, where it may go, and the last move
+    var waiting = false, sent = false, turn = 0;      // waiting for the agent; whether it has been told; which move this is
+    var pendingId = null;
+    var early = null;                                 // what the agent set for this move before it was known to have been told
+    var cells = [], shown = [], figures = [], home = 12;
+
+    function figure(p) {
+      var el = document.createElement("span");
+      el.className = "pc " + C.side(p);
+      el.setAttribute("aria-hidden", "true");
+      el.textContent = FIGURE[C.kind(p)];
+      return el;
+    }
+    function square(s) {
+      var el = document.createElement("button"), f = s & 7, r = s >> 3;
+      el.type = "button";
+      el.setAttribute("data-sq", C.name(s));
+      el.tabIndex = s === home ? 0 : -1;
+      var mark = (cls, text) => {
+        var i = document.createElement("i");
+        i.className = "co " + cls;
+        i.setAttribute("aria-hidden", "true");
+        i.textContent = text;
+        el.appendChild(i);
+      };
+      if (f === 0) mark("r", String(r + 1));
+      if (r === 0) mark("f", "abcdefgh".charAt(f));
+      el.addEventListener("click", () => tap(s));
+      // One square of the board is in the order of the tab key, and the arrows go from it to the others
+      el.addEventListener("focus", () => {
+        cells[home].tabIndex = -1;
+        home = s;
+        el.tabIndex = 0;
+      });
+      cells[s] = el;
+      shown[s] = "";
+      figures[s] = null;
+      return el;
+    }
+    for (var row = 7; row >= 0; row--) for (var file = 0; file < 8; file++) boardEl.appendChild(square(row * 8 + file));
+    boardEl.addEventListener("keydown", (e) => {
+      var step = { ArrowUp: 8, ArrowDown: -8, ArrowLeft: -1, ArrowRight: 1 }[e.key], at = cells.indexOf(document.activeElement);
+      if (!step || at < 0) return;
+      e.preventDefault();
+      var to = at + step;
+      if (to >= 0 && to < 64 && (step === 8 || step === -8 || (to >> 3) === (at >> 3))) cells[to].focus();
+    });
+
+    function render() {
+      var mine = !waiting && !now.over && pos.turn === "w";
+      goes = {};
+      // A pawn of the person's that reaches the far side always becomes a queen
+      if (mine && picked >= 0) now.legal.forEach((m) => { if (m.from === picked && (!m.promo || m.promo === "q")) goes[m.to] = m; });
+      var hot = now.check ? C.king(pos.b, pos.turn) : -1;
+      for (var s = 0; s < 64; s++) {
+        var el = cells[s], p = pos.b[s], m = goes[s], own = mine && C.side(p) === "w";
+        el.className = "sq" + (((s & 7) + (s >> 3)) % 2 ? "" : " dk") + (last && (last.from === s || last.to === s) ? " last" : "") +
+          (s === hot ? " check" : "") + (mine && s === picked ? " pick" : "") + (m ? " to" + (m.took ? " cap" : "") : "") + (own || m ? " can" : "");
+        el.setAttribute("aria-label", C.name(s) + (p ? ", " + (C.side(p) === "w" ? "white " : "black ") + C.NAME[C.kind(p)] : "") +
+          (s === hot ? ", in check" : "") + (mine && s === picked ? ", picked up" : "") + (m ? (m.took ? ", can take here" : ", can go here") : ""));
+        if (shown[s] !== p) {
+          if (figures[s]) el.removeChild(figures[s]);
+          figures[s] = p ? el.appendChild(figure(p)) : null;
+          shown[s] = p;
+        }
+      }
+      card.setAttribute("data-wait", waiting ? "1" : "0");
+      hintEl.textContent = now.over === "checkmate" ? "Checkmate. " + (pos.turn === "b" ? "You won." : AGENT + " won.")
+        : now.over ? "Stalemate. " + (pos.turn === "b" ? AGENT + " has" : "You have") + " no move, so it is a draw."
+        : now.check && pos.turn === "w" ? "Your king is in check."
+        : waiting ? "The move is " + AGENT + "’s." : "You play White. Your move.";
+    }
+
+    // A piece drawn over the board, on the square `s`, for as long as it is moving
+    function flying(p, s) {
+      var el = figure(p);
+      el.className += " fly";
+      el.style.left = (s & 7) * 12.5 + "%";
+      el.style.top = (7 - (s >> 3)) * 12.5 + "%";
+      return boardEl.appendChild(el);
+    }
+    // Slides what now stands on `to` there from `from`. The piece itself is already in its place:
+    // only a picture of it travels, so that nothing is left half-way if the board changes meanwhile.
+    function slide(from, to, ms) {
+      var real = figures[to];
+      if (!real || still || !real.animate) return;
+      var fly = flying(pos.b[to], to), dx = ((from & 7) - (to & 7)) * 100, dy = ((to >> 3) - (from >> 3)) * 100;
+      real.style.visibility = "hidden";
+      var a = fly.animate([{ transform: "translate(" + dx + "%," + dy + "%)" }, { transform: "translate(0,0)" }], { duration: ms, easing: "cubic-bezier(.3,.75,.3,1)" });
+      a.onfinish = a.oncancel = () => { real.style.visibility = ""; fly.remove(); };
+    }
+    // Plays a move on the board: the position, then the picture of it
+    function put(m, ms) {
+      var took = m.took ? { piece: m.took, at: m.flag === "ep" ? m.to + (pos.turn === "w" ? -8 : 8) : m.to } : null;
+      pos = C.play(pos, m);
+      now = C.state(pos);
+      last = m;
+      picked = -1;
+      turn++;
+      return () => {
+        // The piece that was taken fades where it stood, under the one that takes it
+        if (took && !still && boardEl.animate) {
+          var ghost = flying(took.piece, took.at), a = ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: ms, easing: "ease-in" });
+          a.onfinish = a.oncancel = () => ghost.remove();
+        }
+        slide(m.from, m.to, ms);
+        // In castling the rook goes too
+        if (m.flag === "short") slide(m.to + 1, m.to - 1, ms);
+        if (m.flag === "long") slide(m.to - 2, m.to + 1, ms);
+      };
+    }
+    // A move as something done, by the person ("moved a pawn to e4") or by the agent ("moved its knight to f6")
+    function told(m, mine) {
+      var who = C.NAME[C.kind(m.piece)], at = C.name(m.to), text;
+      var the = mine ? (who === "king" || who === "queen" ? "the " : "a ") : "its ";
+      if (m.flag === "short" || m.flag === "long") text = "castled " + (m.flag === "short" ? "kingside" : "queenside");
+      else if (m.flag === "ep") text = "took " + (mine ? "a" : "your") + " pawn en passant on " + at;
+      else if (m.took) text = "took " + (mine ? "the " : "your ") + C.NAME[C.kind(m.took)] + " on " + at + (mine ? " with " + the + who : "");
+      else text = "moved " + the + who + " to " + at;
+      if (m.promo) text += " and made a " + C.NAME[m.promo];
+      return text + (now.over ? ", " + now.over : now.check ? ", check" : "");
+    }
+
+    // The person's move: played at once, and told to the agent with all it needs to answer
+    function mine(m) {
+      var before = { pos: pos, last: last }, draw = put(m, 180), at = turn, began = Date.now();
+      waiting = !now.over;
+      sent = false;
+      early = null;
+      pendingId = newId();
+      render();
+      draw();
+      box.you(told(m, true));
+      box.sending(began);
+      It.action("move", { request: pendingId, move: C.uci(m), said: C.said(m, now), fen: C.fen(pos), legal: now.legal.map(C.uci), check: now.check, over: now.over }).then(() => {
+        if (turn !== at) return;
+        var kept = early;
+        sent = true;
+        early = null;
+        // A move that ended the game has no answer to wait for
+        if (now.over) box.idle();
+        else box.asked();
+        // The agent had answered already: its answer is played now
+        if (kept) answer(kept.reply, kept.fresh);
+      }, () => {
+        if (turn !== at) return;
+        // The agent was not told: the move is taken back, so that the board and the agent do not come apart
+        pos = before.pos; last = before.last; now = C.state(pos); waiting = false; early = null; pendingId = null; turn++;
+        box.you("");
+        box.refused();
+        render();
+      });
+    }
+    // The agent's move
+    function theirs(m) {
+      var draw = put(m, 250);
+      waiting = false;
+      pendingId = null;
+      render();
+      draw();
+      box.got();
+      box.say(told(m, false));
+    }
+    function tap(s) {
+      if (waiting || now.over || pos.turn !== "w") return;
+      if (goes[s]) return mine(goes[s]);
+      // Another of their pieces is picked up in its place; the same one again, or anywhere else, puts it down
+      picked = C.side(pos.b[s]) === "w" && s !== picked ? s : -1;
+      render();
+    }
+    // What the agent set as its move. It counts only while the move is the agent's and the agent
+    // has been told of the person's. The agent may be told, and answer, before the page hears
+    // that it was: a connection that dropped between the two brings them back in that order. So
+    // what is set meanwhile is kept for that move, and played when the move is known to have gone.
+    function answer(reply, fresh) {
+      if (!waiting || now.over || pos.turn !== "b" || !pendingId) return;
+      var prefix = pendingId + ":";
+      if (!reply.startsWith(prefix)) return;
+      var move = reply.slice(prefix.length).trim();
+      if (!move) return;
+      // Hearing the same answer twice before the move was accepted must keep its request for a correction.
+      if (!sent) { early = { reply: reply, fresh: fresh || !!(early && early.reply === reply && early.fresh) }; return; }
+      var m = C.find(now.legal, move);
+      if (m) theirs(m);
+      // Not a move it may make: the agent is told so, once for what it set, and the person is shown nothing of it
+      else if (fresh) It.action("illegal", { request: pendingId, move: move.slice(0, 40), fen: C.fen(pos), legal: now.legal.map(C.uci) }).catch(() => {});
+    }
+    var text = (v) => (v == null ? "" : String(v));
+    var revision = () => (typeof It.revision === "number" ? It.revision : -1);
+    // What was in the state when the page opened is of an earlier game, and is not a move in this one
+    var seenReply = text(part("chess").reply), seenNote = "", seenRev = revision();
+    function heard() {
+      var st = part("chess"), reply = text(st.reply), note = text(st.note).slice(0, 160);
+      var rev = revision(), again = seenRev >= 0 && rev > seenRev;
+      seenRev = rev;
+      if (reply !== seenReply) {
+        seenReply = reply;
+        answer(reply, true);
+      } else if (again && note === seenNote) {
+        // A repeated state still belongs only to the request its reply names.
+        answer(reply, false);
+      }
+      if (note !== seenNote) {
+        seenNote = note;
+        if (note) box.say(note);
+      }
+    }
+    $("new-game").addEventListener("click", () => {
+      var at = ++turn;
+      pendingId = null;
+      pos = C.read(C.START); now = C.state(pos); last = null; picked = -1; waiting = false; sent = false; early = null;
+      render();
+      box.you("started a new game");
+      box.say("");
+      box.idle();
+      It.action("reset", {}).then(() => { if (turn === at) box.idle(); }, () => {});
+    });
+    listen(heard);
+    render();
+    heard();
+    box.idle();
+    box.hint("You are White. Make a move, and the answer is played on the board.");
+  })();
+
+  // ── 5. The cube ──
+  // A Rubik's cube, kept as the 54 letters that name each sticker by the face whose colour it
+  // has, face by face in the order U, R, F, D, L, B, each read row by row as that face is seen
+  // from outside with U above (and B above for D, and F above for U). A turn is named as cubers
+  // name it: U, D, L, R, F or B turns that face a quarter clockwise as seen from outside, with '
+  // for the other way and 2 for a half turn.
+  (() => {
+    var box = Box(sections.cube);
+    var FACES = "URFDLB", SOLVED = "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
+    var NORMAL = { U: [0, 1, 0], R: [1, 0, 0], F: [0, 0, 1], D: [0, -1, 0], L: [-1, 0, 0], B: [0, 0, -1] };
+    var COLOUR = { U: "#f4f1ea", R: "#c8402e", F: "#1f9d5f", D: "#f2c230", L: "#ec7a24", B: "#2d63c8" };
+    var NAMED = /^[UDLRFB](2|')?$/;
+    // Where each sticker is: the small cube it is on, from -1 to 1 along each way, and the way it faces
+    function where(face, r, c) {
+      return { U: [-1 + c, 1, -1 + r], R: [1, 1 - r, 1 - c], F: [-1 + c, 1 - r, 1], D: [-1 + c, -1, 1 - r], L: [-1, 1 - r, -1 + c], B: [1 - c, 1 - r, -1] }[face];
+    }
+    var STICKERS = [];
+    FACES.split("").forEach((f) => { for (var i = 0; i < 9; i++) STICKERS.push({ at: where(f, Math.floor(i / 3), i % 3), n: NORMAL[f] }); });
+    var dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    var cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    // A quarter turn clockwise, seen from outside along `n`
+    var quarter = (n, v) => { var c = cross(n, v), k = dot(n, v); return [n[0] * k - c[0], n[1] * k - c[1], n[2] * k - c[2]]; };
+    var same = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+    var find = (at, n) => STICKERS.findIndex((s) => same(s.at, at) && same(s.n, n));
+    // Which sticker goes where in each face's quarter turn
+    var MOVES = {};
+    FACES.split("").forEach((f) => {
+      var n = NORMAL[f], to = STICKERS.map((s, i) => (dot(s.at, n) === 1 ? find(quarter(n, s.at), quarter(n, s.n)) : i));
+      MOVES[f] = to;
+    });
+    function turn(faces, name) {
+      var times = name.length === 1 ? 1 : name.charAt(1) === "2" ? 2 : 3, to = MOVES[name.charAt(0)], out = faces.split("");
+      for (var t = 0; t < times; t++) { var next = out.slice(); to.forEach((j, i) => { next[j] = out[i]; }); out = next; }
+      return out.join("");
+    }
+    window.__cube = { turn: turn, SOLVED: SOLVED };
+
+    // ── Drawing it: two views, from the front, top and right, and from the back, bottom and left ──
+    var VIEWS = [{ el: $("cube-front"), d: [1, 1, 1] }, { el: $("cube-back"), d: [-1, -1, -1] }];
+    VIEWS.forEach((v) => {
+      var len = Math.hypot.apply(null, v.d), d = v.d.map((x) => x / len), r = cross([0, 1, 0], d), rl = Math.hypot.apply(null, r);
+      r = r.map((x) => x / rl);
+      var up = cross(d, r);
+      var flat = (p) => [dot(p, r), -dot(p, up)];
+      var pts = (list) => list.map((p) => flat(p).map((x) => x.toFixed(3)).join(",")).join(" ");
+      v.polys = [];
+      // The body: each face that is seen, as one dark square under its stickers
+      FACES.split("").forEach((f) => {
+        var n = NORMAL[f];
+        if (dot(n, d) <= 0) return;
+        var u = n[0] ? [0, 1, 0] : [1, 0, 0], w = cross(n, u);
+        var c = n.map((x) => x * 1.5), poly = document.createElementNS(SVG, "polygon");
+        poly.setAttribute("class", "body");
+        poly.setAttribute("points", pts([[-1, -1], [1, -1], [1, 1], [-1, 1]].map((k) => [0, 1, 2].map((i) => c[i] + 1.56 * (k[0] * u[i] + k[1] * w[i])))));
+        v.el.appendChild(poly);
+      });
+      STICKERS.forEach((s, i) => {
+        if (dot(s.n, d) <= 0) return;
+        var u = s.n[0] ? [0, 1, 0] : [1, 0, 0], w = cross(s.n, u), c = [0, 1, 2].map((k) => s.at[k] + s.n[k] * 0.5);
+        var poly = document.createElementNS(SVG, "polygon");
+        poly.setAttribute("class", "st");
+        poly.setAttribute("stroke-width", "0.07");
+        poly.setAttribute("points", pts([[-1, -1], [1, -1], [1, 1], [-1, 1]].map((k) => [0, 1, 2].map((j) => c[j] + 0.4 * (k[0] * u[j] + k[1] * w[j])))));
+        poly.setAttribute("data-i", i);
+        v.el.appendChild(poly);
+        v.polys.push({ el: poly, i: i });
+      });
+    });
+    var faces = SOLVED, turns = [], busy = false, playing = 0;
+    function paint() {
+      VIEWS.forEach((v) => v.polys.forEach((p) => { var c = COLOUR[faces.charAt(p.i)]; p.el.setAttribute("fill", c); p.el.setAttribute("stroke", c); }));
+      $("cube-turns").textContent = faces === SOLVED ? "solved" : turns.length + (turns.length === 1 ? " turn" : " turns") + " since it was solved";
+      $("cube-ask").disabled = busy || faces === SOLVED;
+      $("cube-mix").disabled = $("cube-solve").disabled = busy;
+      [].forEach.call($("keys").children, (k) => { k.disabled = busy; });
+    }
+    // The turns since the cube was solved, as few as they are: two turns of one face in a row are one, or none
+    var quarters = (name) => (name.length === 1 ? 1 : name.charAt(1) === "2" ? 2 : 3);
+    function apply(name) {
+      faces = turn(faces, name);
+      var before = turns[turns.length - 1];
+      if (before && before.charAt(0) === name.charAt(0)) {
+        var q = (quarters(before) + quarters(name)) % 4;
+        turns.pop();
+        if (q) turns.push(name.charAt(0) + ["", "", "2", "'"][q]);
+      } else turns.push(name);
+      if (faces === SOLVED) turns = [];
+      if (turns.length > 60) turns = turns.slice(-60);
+    }
+    function mineTurn(name) {
+      if (busy) return;
+      asker.forget();
+      apply(name);
+      $("cube-said").textContent = "";
+      paint();
+    }
+    ["U", "R", "F", "D", "L", "B", "U'", "R'", "F'", "D'", "L'", "B'"].forEach((name) => {
+      var b = document.createElement("button");
+      b.type = "button"; b.className = "key"; b.textContent = name;
+      b.setAttribute("aria-label", "Turn " + name);
+      b.addEventListener("click", () => mineTurn(name));
+      $("keys").appendChild(b);
+    });
+    $("cube-front").addEventListener("keydown", (e) => {
+      var k = (e.key || "").toUpperCase();
+      if (FACES.indexOf(k) < 0 || k.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+      e.preventDefault();
+      mineTurn(e.shiftKey ? k + "'" : k);
+    });
+    $("cube-mix").addEventListener("click", () => {
+      if (busy) return;
+      asker.forget();
+      var lastFace = "";
+      for (var i = 0; i < 12; i++) {
+        var f;
+        do f = FACES.charAt(Math.floor(Math.random() * 6)); while (f === lastFace);
+        lastFace = f;
+        apply(f + ["", "'", "2"][Math.floor(Math.random() * 3)]);
+      }
+      box.you("mixed the cube up");
+      $("cube-said").textContent = "";
+      paint();
+    });
+    $("cube-solve").addEventListener("click", () => {
+      if (busy) return;
+      asker.forget();
+      faces = SOLVED; turns = [];
+      box.you("");
+      $("cube-said").textContent = "";
+      paint();
+    });
+    var asker = Asker("cube", box, (got) => {
+      var given = Array.isArray(got.moves) ? got.moves.slice(0, 20) : [];
+      var good = given.filter((m) => typeof m === "string" && NAMED.test(m.trim())).map((m) => m.trim());
+      var left = given.length - good.length;
+      box.say(got.say);
+      // Each turn the agent gives is played one at a time, and only one that is a turn's name
+      var run = ++playing, i = 0;
+      (function next() {
+        if (run !== playing) return;
+        if (i >= good.length) {
+          busy = false;
+          $("cube-said").textContent = "Played " + good.length + (good.length === 1 ? " turn" : " turns") + (left ? ". " + left + " " + (left === 1 ? "was not a turn's name, and was" : "were not turns' names, and were") + " left out" : "") + (faces === SOLVED ? ". Solved." : ".");
+          paint();
+          return;
+        }
+        apply(good[i++]);
+        paint();
+        setTimeout(next, calm ? 0 : 450);
+      })();
+    }, () => { busy = false; paint(); });
+    $("cube-ask").addEventListener("click", () => {
+      if (busy || faces === SOLVED) return;
+      busy = true;
+      playing++;
+      $("cube-said").textContent = "";
+      paint();
+      box.you("asked for the next turns");
+      asker.send("turned", { faces: faces, turns: turns.slice(), solved: faces === SOLVED });
+    });
+    paint();
+    box.idle();
+    box.hint("Turn a face, or mix it up, and then ask for the next turns.");
+  })();
+
+  // ── 6. The drum machine ──
+  // The person taps hits onto the pads. A moment after they stop, the page tells the agent the
+  // beat, and the agent answers with hits of its own, in `drums.theirs`. Those are shown on the
+  // same pads with a green dot, and are played in the same loop.
+  (() => {
+    var box = Box(sections.drums);
+    var ROWS = ["hat", "clap", "snare", "kick"], NAMES = ["Hat", "Clap", "Snare", "Kick"];
+    // Eight steps are two beats, four steps to the beat
+    var STEPS = 8, BPM = 118, STEP = 60 / BPM / 2;
+    var padsEl = $("pads"), playBtn = $("play"), clearBtn = $("clear"), hint = $("drum-hint"), key = $("drum-key");
+    var blank = () => ROWS.map(() => { var row = []; for (var c = 0; c < STEPS; c++) row.push(false); return row; });
+    var count = (g) => g.reduce((n, row) => n + row.filter(Boolean).length, 0);
+    var mine = blank(), theirs = blank(), ignoreReplies = false, request = null;
+    var taken = null, noteWas = "", asked = false, waiting = false, sentAt = 0, sentKey = null, sendTimer = 0;
+    // How many times the state has been set, where It says
+    var turn = () => (typeof It.revision === "number" ? It.revision : 0);
+    // How much has been played so far, kept where it can be counted
+    var meter = (window.__drums = { audio: "none", steps: 0, notes: 0 });
+
+    // ── The sound: every drum is made here, from a tone or from noise ──
+    var AC = window.AudioContext || window.webkitAudioContext, ctx = null, out = null, hiss = null;
+    // The browser lets sound start only from a tap, so this is called from every one
+    function audio() {
+      if (!AC) return null;
+      if (!ctx) {
+        try {
+          ctx = new AC();
+          // Every drum at once is held under the top, so that nothing is ever cut off
+          var squeeze = ctx.createDynamicsCompressor(), trim = ctx.createGain();
+          out = ctx.createGain();
+          out.gain.value = .8;
+          trim.gain.value = .8;
+          out.connect(squeeze);
+          squeeze.connect(trim);
+          trim.connect(ctx.destination);
+          hiss = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+          var d = hiss.getChannelData(0);
+          for (var i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+          meter.audio = ctx.state;
+          ctx.onstatechange = () => { meter.audio = ctx.state; };
+        } catch (e) {
+          ctx = null; AC = null;
+          return null;
+        }
+      }
+      if (ctx.state !== "running" && ctx.resume) {
+        try { var p = ctx.resume(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+      }
+      return ctx;
+    }
+    // A tone that may fall from one pitch to another, and dies away
+    function tone(t, to, shape, from, down, fall, peak, len) {
+      var o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = shape;
+      o.frequency.setValueAtTime(from, t);
+      if (down !== from) o.frequency.exponentialRampToValueAtTime(down, t + fall);
+      g.gain.setValueAtTime(.0001, t);
+      g.gain.exponentialRampToValueAtTime(peak, t + .004);
+      g.gain.exponentialRampToValueAtTime(.0001, t + len);
+      o.connect(g); g.connect(to);
+      o.start(t); o.stop(t + len + .02);
+    }
+    // A burst of noise through a filter, dying away
+    function burst(t, to, kind, freq, q, peak, len) {
+      var s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+      s.buffer = hiss;
+      f.type = kind; f.frequency.value = freq; f.Q.value = q;
+      g.gain.setValueAtTime(peak, t);
+      g.gain.exponentialRampToValueAtTime(.0001, t + len);
+      s.connect(f); f.connect(g); g.connect(to);
+      s.start(t, Math.random() * .6, len + .03);
+    }
+    var VOICE = [
+      // Hat: a tick of the highest noise
+      (t, to) => burst(t, to, "highpass", 7500, .7, .34, .05),
+      // Clap: three bursts a few thousandths of a second apart, the last one ringing
+      (t, to) => {
+        burst(t, to, "bandpass", 1200, 1.1, 1.5, .02);
+        burst(t + .011, to, "bandpass", 1200, 1.1, 1.5, .02);
+        burst(t + .022, to, "bandpass", 1200, 1.1, 1.7, .17);
+      },
+      // Snare: noise, and a short tone under it
+      (t, to) => { burst(t, to, "highpass", 1400, .6, .55, .17); tone(t, to, "triangle", 180, 180, 0, .5, .11); },
+      // Kick: a sine that falls fast, with a tick at its start for speakers too small for the rest
+      (t, to) => { tone(t, to, "sine", 150, 45, .11, 1, .34); burst(t, to, "lowpass", 1800, .7, .22, .012); },
+    ];
+
+    // ── The loop: steps are given their times a little ahead, on the sound's own clock ──
+    var playing = false, live = false, timer = 0, frame = 0, step = 0, at = 0, due = [], bus = null, lit = -1;
+    // The sound's clock where there is sound, and the page's where there is none
+    var clock = () => (live ? ctx.currentTime : performance.now() / 1000);
+    function line() {
+      if (!bus) { bus = ctx.createGain(); bus.connect(out); }
+      return bus;
+    }
+    function ahead() {
+      var on = !!(ctx && ctx.state === "running");
+      // Sound has come or gone: the loop goes on by the other clock, from the first step not yet played
+      if (on !== live) {
+        if (!on && bus) { try { bus.disconnect(); } catch (e) {} bus = null; }
+        step = (step - (due.length % STEPS) + STEPS) % STEPS;
+        live = on; at = clock() + .05; due = [];
+      }
+      var now = clock();
+      // Fallen behind, as in a tab nobody is looking at: what was missed is left out, and the place is kept
+      if (at < now - .03) {
+        var missed = Math.ceil((now - at) / STEP);
+        step = (step + missed) % STEPS;
+        at += missed * STEP;
+      }
+      var far = document.hidden ? 1.25 : .12;
+      while (at < now + far) {
+        if (live) for (var r = 0; r < ROWS.length; r++) if (mine[r][step] || theirs[r][step]) { VOICE[r](at, line()); meter.notes++; }
+        due.push({ step: step, at: at });
+        meter.steps++;
+        step = (step + 1) % STEPS;
+        at += STEP;
+      }
+      if (due.length > 16) due.splice(0, due.length - 16);
+    }
+    // The light follows what is heard
+    function show() {
+      var now = clock() - (live ? Math.min(ctx.outputLatency || 0, .25) : 0), cur = -1;
+      while (due.length && due[0].at <= now) cur = due.shift().step;
+      if (cur >= 0) light(cur);
+      frame = requestAnimationFrame(show);
+    }
+    function light(c) {
+      if (c === lit) return;
+      if (lit >= 0) pad.forEach((row) => row[lit].classList.remove("now"));
+      lit = c;
+      if (c >= 0) pad.forEach((row) => row[c].classList.add("now"));
+      padsEl.setAttribute("data-step", c);
+    }
+    function start() {
+      if (playing) return;
+      playing = true;
+      live = !!(ctx && ctx.state === "running");
+      step = 0; at = clock() + .06; due = [];
+      timer = setInterval(ahead, 25);
+      ahead();
+      frame = requestAnimationFrame(show);
+      paint();
+    }
+    function stop() {
+      if (!playing) return;
+      playing = false;
+      clearInterval(timer);
+      cancelAnimationFrame(frame);
+      // What was already given a time is not heard
+      if (bus) {
+        var b = bus;
+        bus = null;
+        try { b.gain.setTargetAtTime(0, ctx.currentTime, .008); } catch (e) {}
+        setTimeout(() => { try { b.disconnect(); } catch (e) {} }, 400);
+      }
+      due = [];
+      light(-1);
+      paint();
+    }
+    // A page that is looked at again takes its sound up again, and one that is left is given its steps further ahead
+    document.addEventListener("visibilitychange", () => {
+      if (!playing) return;
+      if (!document.hidden) audio();
+      ahead();
+    });
+    // Nothing plays in another part of the page
+    leaving.drums = stop;
+
+    // ── The pads ──
+    var pad = ROWS.map((name, r) => {
+      var row = [];
+      for (var c = 0; c < STEPS; c++) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "pad";
+        b.setAttribute("data-r", r);
+        b.setAttribute("data-c", c);
+        b.style.gridRow = String(r + 1);
+        b.style.gridColumn = String(c < 4 ? c + 1 : c + 2);
+        padsEl.appendChild(b);
+        row.push(b);
+      }
+      return row;
+    });
+    key.querySelector("span").textContent = AGENT + "’s hits";
+    function paint() {
+      var any = count(theirs) > 0;
+      pad.forEach((row, r) => row.forEach((b, c) => {
+        var m = mine[r][c], t = theirs[r][c];
+        b.classList.toggle("on", m || t);
+        b.classList.toggle("mine", m);
+        b.classList.toggle("theirs", t);
+        b.setAttribute("aria-pressed", m ? "true" : "false");
+        b.setAttribute("aria-label", NAMES[r] + ", step " + (c + 1) + (t ? ", " + AGENT + " plays here" : ""));
+      }));
+      hint.hidden = any;
+      key.hidden = !any;
+      clearBtn.disabled = !any && !count(mine) && !playing;
+      playBtn.setAttribute("data-on", playing ? "1" : "0");
+      playBtn.querySelector("span").textContent = playing ? "Stop" : "Play";
+    }
+    function tap(r, c) {
+      var a = audio();
+      mine[r][c] = !mine[r][c];
+      // Replies to the previous beat stop applying as soon as a pad changes.
+      ignoreReplies = true; request = null;
+      if (mine[r][c] && a) VOICE[r](a.currentTime, out);
+      paint();
+      // The beat goes to the agent once the person has left it alone for a moment, however few hits are in it
+      clearTimeout(sendTimer);
+      sendTimer = setTimeout(send, 1500);
+    }
+    padsEl.addEventListener("click", (e) => {
+      var b = e.target.closest(".pad");
+      if (b) tap(+b.getAttribute("data-r"), +b.getAttribute("data-c"));
+    });
+    // The arrow keys go from pad to pad
+    padsEl.addEventListener("keydown", (e) => {
+      var b = e.target.closest(".pad"), d = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] }[e.key];
+      if (!b || !d) return;
+      var r = +b.getAttribute("data-r") + d[0], c = +b.getAttribute("data-c") + d[1];
+      if (r < 0 || r >= ROWS.length || c < 0 || c >= STEPS) return;
+      e.preventDefault();
+      pad[r][c].focus();
+    });
+    playBtn.addEventListener("click", () => {
+      audio();
+      if (playing) stop(); else start();
+    });
+    clearBtn.addEventListener("click", () => {
+      clearTimeout(sendTimer);
+      // The agent's hits go from the pads with the person's own, and stay gone until it plays others
+      mine = blank(); theirs = blank(); ignoreReplies = true; request = null;
+      sentKey = null; asked = false; waiting = false;
+      stop();
+      paint();
+      box.you("cleared the pads");
+      box.say("");
+      box.idle();
+      It.action("cleared", {}).then(() => box.idle(), () => {});
+    });
+
+    // ── What goes to the agent, and what comes back ──
+    function send() {
+      var n = count(mine), pattern = mine.map((row) => row.map((on) => (on ? "x" : ".")).join("")), k = pattern.join("/");
+      // An edit that restores the same beat still needs a fresh request for its answer.
+      if (k === sentKey && (!n || request)) return;
+      // With the last hit taken off there is no beat to play between. An agent that was told of
+      // one is told that the pads are empty, as the button that empties them tells it
+      if (!n) {
+        if (sentKey === null) return;
+        sentKey = k; waiting = false; asked = false; ignoreReplies = true; request = null;
+        theirs = blank();
+        stop();
+        paint();
+        box.you("took the last hit off");
+        box.say("");
+        box.idle();
+        It.action("cleared", {}).then(() => box.idle(), () => { if (sentKey === k) sentKey = null; });
+        return;
+      }
+      sentKey = k; asked = true; waiting = true; ignoreReplies = false; sentAt = turn();
+      request = newId();
+      var sentRequest = request;
+      box.you("put down " + n + (n === 1 ? " hit" : " hits"));
+      box.sending();
+      It.action("beat", { request: sentRequest, bpm: BPM, rows: ROWS.slice(), pattern: pattern }).then(() => {
+        if (request === sentRequest && waiting) box.asked();
+      }, () => {
+        if (request !== sentRequest) return;
+        sentKey = null; request = null;
+        box.refused();
+      });
+    }
+    // The agent's hits: four rows of eight, an `x` where it plays. None at all is no hits, and anything else is not taken.
+    function read(v) {
+      if (typeof v === "string" && v.charAt(0) === "[") { try { v = JSON.parse(v); } catch (e) { return null; } }
+      if (v == null || v === "" || (Array.isArray(v) && !v.length)) return blank();
+      if (!Array.isArray(v) || v.length !== ROWS.length) return null;
+      var g = [];
+      for (var r = 0; r < v.length; r++) {
+        if (typeof v[r] !== "string" || v[r].length !== STEPS) return null;
+        g.push(v[r].split("").map((ch) => ch === "x" || ch === "X"));
+      }
+      return g;
+    }
+    function hear() {
+      var st = part("drums"), k = taken, fresh = false;
+      try { k = JSON.stringify(st.theirs === undefined ? null : st.theirs); } catch (e) {}
+      // A reply to a beat that was edited or cleared cannot put its hits or note back.
+      if (ignoreReplies) { taken = k; return; }
+      // Pattern and note arrive together with the id of the beat they answer.
+      var reply = st.theirs;
+      if (request && (!reply || reply.request !== request)) return;
+      var pattern = request ? reply.pattern : reply;
+      if (k !== taken) {
+        var got = read(pattern);
+        if (got) {
+          taken = k; theirs = got; fresh = count(got) > 0;
+          // They land in the order they are played
+          for (var c = 0, i = 0; c < STEPS; c++) for (var r = 0; r < ROWS.length; r++) if (got[r][c]) pad[r][c].style.setProperty("--d", i++ * 70 + "ms");
+        }
+      }
+      // A matching reply may repeat the same hits as the previous beat.
+      else if (waiting && turn() > sentAt) {
+        var same = read(pattern);
+        if (same && count(same) > 0) { theirs = same; fresh = true; }
+      }
+      var text = request ? reply.note : st.note;
+      var note = typeof text === "string" ? text.trim().slice(0, 160) : "";
+      var said = !!note && note !== noteWas;
+      noteWas = note;
+      paint();
+      if (fresh) {
+        var added = 0;
+        waiting = false;
+        theirs.forEach((row, r) => row.forEach((on, c) => { if (on && !mine[r][c]) added++; }));
+        box.got();
+        if (!said) box.say(added ? "added " + added + (added === 1 ? " hit" : " hits") + " between yours" : "played the same hits as you");
+        // It is an answer to a beat the person sent, so it is heard at once
+        if (asked && !playing && !sections.drums.hidden) { audio(); start(); }
+      }
+      if (said) box.say(note);
+    }
+    listen(hear);
+    hear();
+    paint();
+    box.idle();
+    box.hint("Tap a few pads. A moment after you stop, the answer is played between your hits.");
+  })();
+
+  // ── 7. The approval ──
+  // These pull requests are part of the page and nowhere else. The person's answer goes to the
+  // agent, which answers on the page and does nothing else: nothing is merged anywhere.
+  (() => {
+    var box = Box(sections.approval), yes = $("yes"), no = $("no"), chose = null, merged = false;
+    var hold = (on) => { yes.disabled = no.disabled = on || merged; };
+    var asker = Asker("approval", box, (got) => {
+      box.say(got.say);
+      if (chose === "merge") {
+        merged = true;
+        [].forEach.call($("prs").children, (li, i) => setTimeout(() => { li.classList.add("done"); li.lastElementChild.textContent = "Merged"; }, calm ? 0 : i * 320));
+        yes.textContent = "Merged";
+      }
+      hold(false);
+    }, () => hold(false));
+    function answer(how) {
+      if (yes.disabled) return;
+      chose = how;
+      hold(true);
+      box.you(how === "merge" ? "pressed Merge all three" : "pressed Not yet");
+      asker.send("answered", { answer: how });
+    }
+    yes.addEventListener("click", () => answer("merge"));
+    no.addEventListener("click", () => answer("not_yet"));
+    box.idle();
+    box.hint("Give your answer on the phone.");
+  })();
+
+  // ── 8. The ending ──
+  (() => {
+    var PROMPTS = [["To decide", "Lay out the options side by side and let me pick one"], ["Before a change", "Show me the plan first, and let me approve it before you touch anything"], ["While you are away", "When you need a decision, ask me on my phone and wait for my answer"]];
+    var list = $("prompts"), fin = $("fin"), status = $("fin-status"), asked = 0;
+    PROMPTS.forEach((p) => {
+      var row = document.createElement("div"), words = document.createElement("span"), small = document.createElement("small"), copy = document.createElement("button");
+      row.className = "prompt";
+      small.textContent = p[0];
+      words.appendChild(small);
+      words.appendChild(document.createTextNode(p[1]));
+      copy.type = "button"; copy.className = "btn ghost small"; copy.textContent = "Copy";
+      copy.addEventListener("click", () => {
+        var done = () => { copy.textContent = "Copied"; };
+        try { if (navigator.clipboard) navigator.clipboard.writeText(p[1]).then(done, () => {}); } catch (e) {}
+      });
+      row.appendChild(words);
+      row.appendChild(copy);
+      list.appendChild(row);
+    });
+    $("again").addEventListener("click", () => go(0));
+    // The agent takes the tour's pages away, and the screen goes back to the person's own pages
+    fin.addEventListener("click", () => {
+      if (fin.disabled) return;
+      var mine = ++asked;
+      fin.disabled = true;
+      status.textContent = "Sending";
+      It.action("finish", { from: "start" }).then(() => {
+        if (mine !== asked) return;
+        status.textContent = AGENT + " has it, and has not answered yet. It takes the tour away, and then you are at your pages.";
+        setTimeout(() => {
+          if (mine !== asked) return;
+          fin.disabled = false;
+          status.textContent = AGENT + " has not answered. Press it again, or say so in its chat.";
+        }, SLOW);
+      }, () => {
+        if (mine !== asked) return;
+        fin.disabled = false;
+        status.textContent = "That did not go. Press it again.";
+      });
+    });
+  })();
+
+  go(0);
+})();
+</script>
+</body>
+</html>
