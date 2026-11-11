@@ -7846,6 +7846,28 @@ describe('whether what the person does arrives by itself, as a page’s command 
     }
   })
 
+  test('a Pi conversation that has not loaded It’s add-on is told that nothing arrives by itself, with the words for the person to type /reload, and one that has is not', async () => {
+    const m = machine()
+    b = await publishing(m)
+    const c = await connectorSaying(m, { connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    try {
+      // Pi names the conversation, and It's add-on, not running in it, names none
+      const without = printed(await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], { ...b.env, PI_SESSION_ID: 'pi-1' }))
+      expect(without.arrives).toMatchObject({ byItself: false })
+      expect(without.arrives.next).toContain(
+        'tell them this in your next message, word for word: “Type /reload in this chat, so that what you do on It’s pages reaches me.”',
+      )
+      expect(without.arrives.next).toContain(`\`${itOn(m)} wait --id plan --timeout 100\``)
+      expect(c.asked).toEqual(['/route?harness=pi&session=pi-1'])
+      // Where the add-on runs in it, it names the same conversation, and nothing is said of /reload
+      const loaded = printed(await run(m, ['update', 'plan', '--html', '<p>again</p>'], { ...b.env, PI_SESSION_ID: 'pi-1', IT_PI_SESSION: 'pi-1' }))
+      expect(loaded.arrives.byItself).toBe('unknown')
+      expect(loaded.arrives.next).not.toContain('/reload')
+    } finally {
+      await c.close()
+    }
+  })
+
   test('where the connector cannot be asked, or answers as one from before it was asked this, it is said to be unknown, with the agent told to wait', async () => {
     const m = machine()
     b = await publishing(m)

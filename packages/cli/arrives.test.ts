@@ -15,6 +15,8 @@ import {
   loadAddon,
   notLoadedHere,
   onWindows,
+  PI_RELOAD,
+  piNotLoadedHere,
   RELOAD_PLUGINS_SINCE,
   reloadLine,
   setupLine,
@@ -309,5 +311,43 @@ describe('how It’s program is named in a command an agent is told to run', () 
       else process.env.IT_HOME = was
       rmSync(folder, { recursive: true, force: true })
     }
+  })
+})
+
+describe('a Pi conversation that has not loaded It’s add-on', () => {
+  const pi = { harness: 'pi', id: 'pi-1' }
+  test('is told that nothing arrives by itself, and the agent tells the person word for word to type /reload, and waits', () => {
+    const said = arrives({ session: pi, addonHere: false, route: route(), slug: 'plan' })
+    expect(said.byItself).toBe(false)
+    expect(said.next).toContain(
+      `Unless you have told the person already in this conversation, tell them this in your next message, word for word: “${PI_RELOAD}”`,
+    )
+    expect(said.next).toContain(`\`${it()} wait --id plan --timeout 100\``)
+    expect(PI_RELOAD).toBe('Type /reload in this chat, so that what you do on It’s pages reaches me.')
+  })
+
+  test('on a page of the tour, the words are said once, after its ending, unless they were said with the pairing link', () => {
+    const said = arrives({ session: pi, addonHere: false, route: route(), slug: 'it-tour-menu', tour: true })
+    expect(said.next).toContain(
+      `Unless you told the person this with the pairing link, tell them this once, word for word, after the tour’s ending: “${PI_RELOAD}”`,
+    )
+    expect(said.next).not.toContain('in your next message')
+  })
+
+  test('is not told to reload where the add-on runs in it, where Pi is not connected, where the add-on it loaded cannot take clicks, or where It cannot tell', () => {
+    expect(piNotLoadedHere({ session: pi, addonHere: false, route: route() })).toBe(true)
+    for (const facts of [
+      { session: pi, addonHere: true, route: route() },
+      { session: pi, addonHere: undefined, route: route() },
+      { session: pi, addonHere: false, route: route({ connected: false }) },
+      { session: pi, addonHere: false, route: route({ runtime: 'incompatible' as const }) },
+      { session: pi, addonHere: false, route: null },
+      { session: claude, addonHere: false, route: route({ connected: false }) },
+    ]) {
+      expect(piNotLoadedHere(facts)).toBe(false)
+      expect(arrives(facts).next).not.toContain(PI_RELOAD)
+    }
+    // Heard from under its id while not running here: another copy of the conversation has the add-on, as before
+    expect(arrives({ session: pi, addonHere: false, route: route({ listening: true }) }).next).toContain('in another copy of it')
   })
 })

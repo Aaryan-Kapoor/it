@@ -100,6 +100,13 @@ export const t3ClaudeLine = (running: string | undefined): string =>
     ? 'What you do on It’s pages already reaches this thread through T3 Code.'
     : 'What you do on It’s pages already reaches this thread through T3 Code. Type /reload-plugins here too, so it also reaches me in the middle of a reply.'
 
+/**
+ * What the person is told, in so many words, so that a Pi conversation that was already open
+ * when It's add-on was installed loads it: Pi reads its extensions as a conversation starts, and
+ * `/reload` reads them again in the one that is open.
+ */
+export const PI_RELOAD = 'Type /reload in this chat, so that what you do on It’s pages reaches me.'
+
 /** How an agent is told to pass on what the person is to be told: in its next message, and word for word. */
 export const tellWordForWord = (line: string): string => `Tell the person this in your next message, word for word: “${line}”`
 
@@ -133,7 +140,7 @@ const waitFor = (slug: string | undefined) =>
 export interface Facts {
   /** The conversation the command runs in, where its agent app says which. */
   session: { harness: string; id: string } | undefined
-  /** Whether It's add-on runs in that conversation, where that can be told here (`claudeAddonHere`). */
+  /** Whether It's add-on runs in that conversation, where that can be told here (`addonHere` in lib.ts). */
   addonHere: boolean | undefined
   /** The version of the Claude Code the command runs inside (`claudeRunning`). */
   claude?: string
@@ -164,6 +171,14 @@ export const notLoadedHere = (f: Facts): boolean =>
   !f.route.listening &&
   f.route.thread === 'none' &&
   f.route.runtime !== 'incompatible'
+
+/**
+ * The same for Pi: a Pi conversation that was open when It's add-on was installed has not loaded
+ * it, as `piAddonHere` tells, and nothing else keeps what the person does from it. Pi has no
+ * thread of T3 Code to take it there another way.
+ */
+export const piNotLoadedHere = (f: Facts): boolean =>
+  f.session?.harness === 'pi' && f.addonHere === false && f.route?.connected === true && !f.route.listening && f.route.runtime !== 'incompatible'
 
 /**
  * Whether what the person does arrives by itself, by which way, and what to do, from what It
@@ -229,6 +244,15 @@ function arrivesAsIs(f: Facts): Arrives {
       : `Unless you have told the person already in this conversation, tell them this in your next message, word for word: “${line}”`
     return not(
       `Nothing the person does on ${on} arrives here by itself yet: It’s add-on is not running in this conversation, as happens when the conversation was already open when the add-on was installed. ${tell} From then on what they do arrives by itself. Until then, wait for it.`,
+    )
+  }
+  if (piNotLoadedHere(f)) {
+    // Said as Claude Code's is: word for word, and once
+    const tell = f.tour
+      ? `Unless you told the person this with the pairing link, tell them this once, word for word, after the tour’s ending: “${PI_RELOAD}”`
+      : `Unless you have told the person already in this conversation, tell them this in your next message, word for word: “${PI_RELOAD}”`
+    return not(
+      `Nothing the person does on ${on} arrives here by itself yet: It’s add-on is not running in this Pi conversation, as happens when the conversation was already open when the add-on was installed. ${tell} From then on what they do arrives by itself. Until then, wait for it.`,
     )
   }
   if (harness === 'claude-code' && f.addonHere === true)
