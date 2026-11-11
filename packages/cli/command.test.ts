@@ -7597,6 +7597,55 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
     }
   })
 
+  test('run from a Codex conversation, it tells the agent to pass on Codex’s note: to start Codex again now, and to ask for the tour once it is back', async () => {
+    const m = machine()
+    // A stand-in for Codex's own command: it keeps a marketplace and its one plugin, and lists them as Codex does
+    const kept = path.join(m.home, 'codex-kept.json')
+    writeFileSync(
+      path.join(m.bin, 'codex'),
+      `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path')
+const kept = ${JSON.stringify(kept)}
+const has = fs.existsSync(kept) ? JSON.parse(fs.readFileSync(kept, 'utf8')) : {}
+const words = process.argv.slice(2), said = words.join(' ')
+const keep = () => fs.writeFileSync(kept, JSON.stringify(has))
+const source = () => path.join(has.from, 'plugins/it-bridge')
+if (said === '--version') console.log('codex-cli 0.167.0')
+else if (said === 'plugin marketplace list --json') console.log(JSON.stringify({ marketplaces: has.from ? [{ name: 'it', root: has.from }] : [] }))
+else if (said === 'plugin list --marketplace it --json') {
+  const entry = { pluginId: 'it-bridge@it', name: 'it-bridge', marketplaceName: 'it', enabled: Boolean(has.on), installed: Boolean(has.on), source: { source: 'local', path: has.from ? source() : '' } }
+  console.log(JSON.stringify({ installed: has.from && has.on ? [entry] : [], available: has.from && !has.on ? [entry] : [] }))
+} else if (said === 'plugin list --marketplace it') {
+  if (!has.from) console.log('No plugins found in marketplace \`it\`.')
+  else console.log('PLUGIN        STATUS              VERSION  SOURCE\\n' + (has.on ? 'it-bridge@it  installed, enabled  0.1.0    ' : 'it-bridge@it  not installed           ') + source())
+} else if (words.length === 4 && said.startsWith('plugin marketplace add ')) { has.from = words[3]; keep() }
+else if (said === 'plugin add it-bridge@it') { has.on = true; keep() }
+else { console.error('the stand-in does not know ' + said); process.exit(2) }
+`,
+      { mode: 0o755 },
+    )
+    const b = await mine(m)
+    try {
+      const setup = await run(m, ['setup', '--no-service', '--only', 'codex'], { ...b.env, CODEX_THREAD_ID: 'thread-1', CODEX_HOME: path.join(m.home, 'codex') })
+      expect(setup.code).toBe(0)
+      // Codex has yet to run It's hooks, which it does once it is started again and they are trusted
+      const said = printed(setup)
+      expect(said.harnesses).toMatchObject([{ id: 'codex', version: '0.167.0', addon: 'needs_approval' }])
+      // What is to be done in this conversation takes the place of Codex's general note, with what to ask for once Codex is back
+      const note =
+        'Quit Codex and start it again now, then choose “Trust all and continue” when it asks to review hooks. Until then, Codex may ask you to approve every `it` command I run, and It’s hooks don’t run. In a terminal, `codex resume --last` brings this chat back. Once Codex is back, say “Give me the It tour.”'
+      // Starting Codex again ends the agent's turn, so the tour is left until it is back
+      expect(said.next).toContain(
+        `write the person one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${note}” Then end your turn, and do not run \`it tour --wait\` yet`,
+      )
+      expect(said.tell).toBe(`Tell the person this in your next message, word for word: “${note}”`)
+      expect(Object.keys(said).pop()).toBe('tell')
+      expect(setup.err.trimEnd().endsWith(`Tell them this in your next message, word for word:\n\n  ${note}`)).toBe(true)
+    } finally {
+      await b.close()
+    }
+  })
+
   test('run from an agent’s conversation, `--only` keeps an app the person chose though its command was not found this once', async () => {
     const m = machine()
     writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.18.32\n', { mode: 0o755 })
