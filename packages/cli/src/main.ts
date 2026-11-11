@@ -265,6 +265,9 @@ function appsSaid(found: LoadedStatus[], advise = true, withCodex = true): strin
   if (advise && found.some((h) => h.addon === 'not_connected' && supported(h.id))) lines.push('Run `it setup` to choose which agent apps are connected.')
   return lines
 }
+/** What is said, to an agent as to a person, where some conversations are held back because a turn of theirs from before may still be running. */
+const HELD_SAID =
+  'Some conversations are not reopened for now, since a turn of theirs from before may still be running here and could not be checked on or ended. `it runs` says which, and what lets them be reopened: once you have looked that nothing of them is running, `it runs clear` does.'
 /** What a person is told of the background service, and of whether what is done on a page is being handed to the conversations on this machine, which is the connector's doing. */
 function serviceSaid(
   background: { registered: boolean; state: string; startup?: service.ServiceStatus['startup'] },
@@ -291,9 +294,7 @@ function serviceSaid(
           'The It this machine joined has not yet said which version it speaks, so nothing done on a page is handed to an agent here yet. It is asked again every minute: check that that It is running and can be reached from here.',
         ]
       : []),
-    ...(typeof connector.heldRuns === 'number' && connector.heldRuns > 0
-      ? ['Some conversations are not reopened for now, since a turn of theirs from before may still be running: `it runs` says which, and what to do.']
-      : []),
+    ...(typeof connector.heldRuns === 'number' && connector.heldRuns > 0 ? [HELD_SAID] : []),
     ...(running && connector.ok !== true
       ? [
           'It is not handing what is done on a page to the conversations on this machine, so nothing done there reaches an agent here by itself. `it service logs` says what it met.',
@@ -2932,6 +2933,7 @@ async function status(a: Args) {
     ...(hint && !blocked ? { hint } : {}),
     ...(older && !blocked ? { restart: older } : {}),
     ...(reload && !blocked ? { reload } : {}),
+    ...(typeof connector.heldRuns === 'number' && connector.heldRuns > 0 && !blocked ? { held: HELD_SAID } : {}),
   }
   if (!forPerson(a)) {
     // Asked from a conversation: whether what is done on its pages arrives there by itself, which
@@ -3445,7 +3447,7 @@ async function main(argv: string[]): Promise<void> {
           ? [
               now.unread
                 ? `To let them be reopened again, look that no agent It started is still running here (${LOOK_AT_PROCESSES}), and then run \`it runs clear\`. Starting this machine again does not do it where the note could not be read.`
-                : `They are reopened again once this machine has been started again. To let them be reopened sooner, look that no agent It started is still running here (${LOOK_AT_PROCESSES}), and then run \`it runs clear\`.`,
+                : `They are reopened again once It sees that nothing of those turns is left, which it looks for every minute, or once this machine has been started again. To let them be reopened sooner, look that no agent It started is still running here (${LOOK_AT_PROCESSES}), and then run \`it runs clear\`.`,
             ]
           : ['Nothing is held back.']),
       ])
