@@ -33,7 +33,16 @@ import { useConvex } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { askTwice } from './backend'
 import { EmbedLayer } from './embeds'
-import { enterFullscreen, fullscreenAvailable, fullscreenJustLeft, fullscreenOn, leaveFullscreen, NOT_FULLSCREEN, onFullscreenChange } from './fullscreen'
+import {
+  enterFullscreen,
+  fullscreenAvailable,
+  fullscreenJustLeft,
+  fullscreenOn,
+  hostPlayers,
+  leaveFullscreen,
+  NOT_FULLSCREEN,
+  onFullscreenChange,
+} from './fullscreen'
 import { api, displayKey, type Id, note, refusal } from './lib'
 import { useLiveState } from './live'
 import {
@@ -289,6 +298,8 @@ export function Mount({
           (message) => port.current && toPage(port.current, message),
         )
       : null
+    // A player's own fullscreen button makes It fullscreen, with that player over the page under the bar (fullscreen.ts)
+    const unhost = embeds ? hostPlayers(embeds) : null
 
     // The microphone and the camera (media.ts). The site records for the page, one thing at a
     // time, when the page calls for it, and only once the person at this screen has allowed it.
@@ -1072,6 +1083,7 @@ export function Mount({
       camera = null
       shown?.removeEventListener('load', askWho)
       clearTimeout(asking?.timer)
+      unhost?.()
       embeds?.dispose()
       port.current?.close()
       port.current = null

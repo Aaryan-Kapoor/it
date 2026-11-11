@@ -1361,7 +1361,7 @@ function commit(name: string, extra?: Record<string, unknown>, sending?: Sending
 type RecordingState = 'recording' | 'paused' | 'ended'
 /** Why a recording ended without the page asking, as the site says it. */
 const ENDED: Record<string, string> = {
-  person: 'The person stopped the recording in It’s bar, and what was recorded was thrown away.',
+  person: 'The person discarded the recording in It’s bar, and what was recorded was thrown away.',
   taken_back: 'The person took back what they had allowed this page, and what was recorded was thrown away.',
   not_shown: 'The page was closed while it recorded, and what was recorded was thrown away.',
   device: 'The microphone or the camera stopped giving anything.',

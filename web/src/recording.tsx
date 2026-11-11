@@ -6,7 +6,7 @@
 // back too.
 import type { MediaKind } from '@it/protocol'
 import { useEffect, useRef, useState } from 'react'
-import { IconStop } from './brand'
+import { IconBin, IconStop } from './brand'
 import { ago, useNow } from './lib'
 import {
   cameraFor,
@@ -185,8 +185,11 @@ function View({ stream, className, onView }: { stream: MediaStream; className: s
 }
 
 /**
- * One recording under way, in the bar: a red dot, how long, and Stop, with the camera's picture
- * the size of the dot's row where the camera records, so that what is recorded is seen.
+ * One recording under way, in the bar: a red dot, how long, and Discard, with the camera's
+ * picture the size of the dot's row where the camera records, so that what is recorded is seen.
+ * Its button says Discard and not Stop: it throws the take away, where the page's own Stop keeps
+ * it and the camera's Stop only closes the camera. On a phone, beside something else in the bar,
+ * it shows only its bin.
  */
 function Recording({ l }: { l: Live }) {
   const now = useTicking()
@@ -207,13 +210,13 @@ function Recording({ l }: { l: Live }) {
       </span>
       <button
         type="button"
-        className="media-rec-stop"
-        title="Stop recording. What was recorded is thrown away, and is not given to the page."
-        aria-label="Stop recording"
+        className="media-rec-discard"
+        title="Stop recording and discard it: what was recorded is thrown away, and is not given to the page. The page's own Stop keeps it."
+        aria-label="Discard the recording"
         onClick={() => l.end('person')}
       >
-        <IconStop />
-        Stop
+        <IconBin />
+        Discard
       </button>
     </span>
   )
@@ -305,9 +308,10 @@ function Note({ page }: { page: string }) {
 /**
  * Everything about the microphone and the camera for the page shown, in It's bar, where nothing
  * on the page can cover it: It's question, or which page the browser is asking about, or the
- * photo being taken, or what records, or how the last recording stopped. The camera live to the
- * page is said beside whichever of those is shown, since it goes on all the while, a recording of
- * sound beside it among them.
+ * photo being taken, or how the last recording stopped. The camera live to the page, and what
+ * records for it, are said beside whichever of those is shown, since each goes on all the while:
+ * a page recording sound that asks for the camera still shows its recording, with Discard, while
+ * It asks.
  */
 export function MediaBar({ page }: { page: string }) {
   useMediaChanges()
@@ -319,16 +323,15 @@ export function MediaBar({ page }: { page: string }) {
   return (
     <>
       {c && <CameraLive c={c} />}
+      {l && <Recording l={l} />}
       {asking?.page === page ? (
         <Ask page={page} />
       ) : browser?.page === page ? (
         <BrowserAsks page={page} />
       ) : shooting?.page === page ? (
         <Photo page={page} />
-      ) : l ? (
-        <Recording l={l} />
       ) : (
-        <Note page={page} />
+        !l && <Note page={page} />
       )}
     </>
   )

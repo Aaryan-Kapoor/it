@@ -42,30 +42,71 @@ export function fullscreenAvailable(): boolean {
 let on = shownWhole() === whole()
 let endedAt = Number.NEGATIVE_INFINITY
 const listeners = new Set<() => void>()
+
+/**
+ * What hosts players over a page (embeds.ts, through mount.tsx): asked whether a frame the
+ * browser made fullscreen is one of its players, told to lay that player over the whole of the
+ * page under the bar once It is fullscreen for it, and told when It's fullscreen has ended.
+ */
+export interface PlayerHost {
+  owns(frame: Element): boolean
+  fill(frame: Element): void
+  unfill(): void
+}
+const hosts = new Set<PlayerHost>()
+/** Hosts players, whose own fullscreen is made It's: see `changed`. Gives back what stops that. */
+export function hostPlayers(host: PlayerHost): () => void {
+  hosts.add(host)
+  return () => void hosts.delete(host)
+}
+
 function changed(): void {
   const now = shownWhole()
-  // Nothing here is fullscreen but the site itself. A page's frame that the browser made
-  // fullscreen by itself, as a film's own controls can, would be drawn over It's bar, so it is
-  // left at once; the script in the page asks It's fullscreen for what it wanted instead
-  if (now !== null && now !== whole()) leaveTop()
+  // Nothing here is fullscreen but the site itself. A frame that the browser made fullscreen by
+  // itself, as a film's own controls can, would be drawn over It's bar, so it is left at once.
+  // In the page's own frame, the script in the page asks It's fullscreen for what it wanted
+  // instead. A player the site hosts over the page cannot, so It does that for it: once the
+  // player's fullscreen is left, the site is made fullscreen in its place, on the same click,
+  // and the player is laid over the whole of the page under the bar. Where the browser will
+  // not make the site fullscreen, the player stays where the page keeps it
+  if (now !== null && now !== whole()) {
+    const host = [...hosts].find((h) => h.owns(now))
+    const left = leaveTop()
+    if (host)
+      void left
+        .then(() => enterFullscreen())
+        .then(
+          () => hosts.has(host) && host.fill(now),
+          () => {},
+        )
+  }
   const was = on
   if (now === whole()) on = true
   else if (now === null) on = false
   if (was === on) return
-  if (!on) endedAt = performance.now()
+  if (!on) {
+    endedAt = performance.now()
+    // A player laid over the page goes back where the page keeps it, however It left fullscreen
+    for (const host of [...hosts]) host.unfill()
+  }
   for (const listener of [...listeners]) listener()
 }
 for (const kind of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(kind, changed)
 
-/** Leaves whatever is fullscreen on top, and only that. */
-function leaveTop(): void {
+/** Leaves whatever is fullscreen on top, and only that, and says when the browser has. */
+function leaveTop(): Promise<void> {
   const d = doc()
   try {
-    if (typeof d.exitFullscreen === 'function') void Promise.resolve(d.exitFullscreen()).catch(() => {})
-    else d.webkitExitFullscreen?.()
+    if (typeof d.exitFullscreen === 'function') return Promise.resolve(d.exitFullscreen()).catch(() => {})
+    if (typeof d.webkitExitFullscreen === 'function') {
+      const left = webkitChange(1000).then(() => {})
+      d.webkitExitFullscreen()
+      return left
+    }
   } catch {
     // Left already, in the moment between looking and asking
   }
+  return Promise.resolve()
 }
 
 export const fullscreenOn = (): boolean => on

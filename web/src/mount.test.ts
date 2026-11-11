@@ -1060,6 +1060,32 @@ describe('fullscreen, which a page asks the site for', () => {
     ])
   })
 
+  test('a player that goes fullscreen by its own button makes It fullscreen in its place, lies over the page under the bar, and goes back once It leaves', async () => {
+    const page = await connected()
+    await page.send(page.ports()[0]!, { type: 'it:embed', id: 'e1', url: 'https://www.youtube.com/embed/a' })
+    // Sending listened on the channel in its own way: what comes down it from now on is written down as before
+    page.ports()[0]!.onmessage = (m) => page.heard.push(m.data)
+    const player = host.querySelector<HTMLIFrameElement>('.mount > .embeds iframe')!
+    const box = player.parentElement as HTMLElement
+    // The browser makes the player's frame fullscreen, over It's bar, as its own button asks
+    browser.element = player
+    await act(async () => {
+      changed()
+      await tick()
+    })
+    expect(browser.asked).toEqual(['leave', 'enter'])
+    expect(browser.element).toBe(document.documentElement)
+    expect([box.style.transform, box.style.width, box.style.height, box.style.visibility]).toEqual(['none', '100%', '100%', ''])
+    expect(page.heard).toContainEqual({ type: 'it:fullscreen', on: true, enabled: true })
+    // It leaves fullscreen from the bar or by Escape: the player goes back to where the page keeps it, which it has not said yet
+    browser.element = null
+    await act(async () => {
+      changed()
+      await tick()
+    })
+    expect([box.style.transform, box.style.visibility]).toEqual(['', 'hidden'])
+  })
+
   test('where the browser has no fullscreen, as on an iPhone, the page is told so', async () => {
     browser.enabled = false
     const page = await connected()
