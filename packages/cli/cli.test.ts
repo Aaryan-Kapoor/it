@@ -2018,11 +2018,11 @@ describe('background service definitions', () => {
     // A folder whose name has letters that no one code page holds is read as itself, whichever code page PowerShell prints in
     expect(windowsRegisteredFor(task(printed('C:\\Users\\René 漢字\\.it\\bin')))).toBe('C:\\Users\\René 漢字\\.it')
     expect(sameWindowsFolder(windowsRegisteredFor(task(printed('C:\\Users\\René 漢字\\.it\\bin')))!, 'c:/users/rené 漢字/.it')).toBe(true)
-    // No task, or one that cannot be asked, is nobody's, and neither is anything PowerShell says that is not a folder's name so written
-    expect(windowsRegisteredFor(task('Get-ScheduledTask : No MSFT_ScheduledTask objects found', false))).toBeNull()
+    // No task is nobody's. A Windows that could not be asked, or that said something other than a folder's name so written, is said as that, and never taken for no task
     expect(windowsRegisteredFor(task(''))).toBeNull()
-    expect(windowsRegisteredFor(task('C:\\Users\\Ada\\.it\\bin'))).toBeNull()
-    expect(windowsRegisteredFor(task('WARNING: something of its own\r\n'))).toBeNull()
+    expect(() => windowsRegisteredFor(task('Access is denied.', false))).toThrow('reading the registered tasks failed: Access is denied.')
+    expect(() => windowsRegisteredFor(task('C:\\Users\\Ada\\.it\\bin'))).toThrow(/could not be read/)
+    expect(() => windowsRegisteredFor(task('WARNING: something of its own\r\n'))).toThrow(/could not be read/)
     // The same folder, however its letters are cased and whichever way its slashes lean, and no other
     expect(sameWindowsFolder('C:\\Users\\Ada\\.it', 'c:/users/ada/.IT/')).toBe(true)
     expect(sameWindowsFolder('C:\\Users\\Ada\\.it', 'C:\\Users\\Ada\\.it-old')).toBe(false)
@@ -2118,7 +2118,7 @@ describe('background service definitions', () => {
         writeFileSync(launcher, '@echo off\r\n')
         writeFileSync(path.join(commands, 'powershell.exe'), '#!/bin/sh\necho "Windows still has the task"\nexit 3\n', { mode: 0o755 })
         expect(() => serviceUninstall(20_000)).toThrow(
-          'the background task could not be taken away (Windows still has the task), so what it starts was left where it is',
+          /^the background task could not be taken away \(PowerShell ended with exit code 3 after \d+\.\d seconds, and printed: Windows still has the task\), so what it starts was left where it is$/,
         )
         expect(existsSync(launcher)).toBe(true)
         rmSync(path.join(commands, 'powershell.exe'))

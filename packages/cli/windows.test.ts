@@ -7,6 +7,10 @@ import { describe, expect, test } from 'vitest'
 import { psQuote, RUN_ONCE, WINDOWS_CLEANUP, WINDOWS_PATH_MOST, windowsDeletionCommand } from './src/lib'
 import { startOf } from './src/serve/backend'
 import {
+  askedTwice,
+  failure,
+  installedHere,
+  installedHereOr,
   PS_QUIET,
   windowsLauncher,
   windowsRecovery,
@@ -114,11 +118,122 @@ describe('how a second It folder of the same Windows account says its task stand
       expect(windowsStatus(() => ({ ok: true, out: `${sid} Running ${encoded('C:\\elsewhere\\bin')}\r\n${legacy}\r\n` }))).toEqual(mine)
     }))
 
-  test('no task, or no answer, is nothing registered', () => {
-    const none = { registered: false, state: 'not registered', where: 'Scheduled Task for this Windows account' }
-    expect(windowsStatus(() => ({ ok: true, out: '' }))).toEqual(none)
-    expect(windowsStatus(() => ({ ok: false, out: 'The task for this account is not an It launcher owned by this account.' }))).toEqual(none)
+  test('no task is nothing registered, and no answer is not known, with why', () => {
+    expect(windowsStatus(() => ({ ok: true, out: '' }))).toEqual({
+      registered: false,
+      state: 'not registered',
+      where: 'Scheduled Task for this Windows account',
+    })
+    expect(windowsStatus(() => ({ ok: false, out: '', why: 'PowerShell ended with exit code 1 after 2.8 seconds, and printed nothing' }))).toEqual({
+      registered: false,
+      state: 'unknown',
+      where: 'Scheduled Task for this Windows account',
+      note: "Windows could not be asked about this account's scheduled tasks: PowerShell ended with exit code 1 after 2.8 seconds, and printed nothing",
+    })
+    expect(windowsStatus(() => ({ ok: false, out: 'The task for this account is not an It launcher owned by this account.' })).note).toMatch(
+      /not an It launcher/,
+    )
   })
+})
+
+describe('a question to Windows that is not answered (#404)', () => {
+  test('says how the command ended, how long it ran and what it printed, whichever way it failed', () => {
+    const timedOut = Object.assign(new Error('spawnSync powershell.exe ETIMEDOUT'), { code: 'ETIMEDOUT' })
+    expect(failure('PowerShell', { status: null, signal: 'SIGKILL', error: timedOut, out: '' }, 30_004, 30_000)).toBe(
+      'PowerShell was ended at its limit of 30 seconds, after 30.0 seconds, and printed nothing',
+    )
+    // A limit that ended it long before it was reached says so
+    expect(failure('PowerShell', { status: null, signal: 'SIGKILL', error: timedOut, out: '' }, 2812, 30_000)).toBe(
+      'PowerShell was ended at its limit of 30 seconds, after 2.8 seconds, and printed nothing',
+    )
+    const missing = Object.assign(new Error('spawnSync powershell.exe ENOENT'), { code: 'ENOENT' })
+    expect(failure('PowerShell', { status: null, signal: null, error: missing, out: '' }, 3)).toBe(
+      'PowerShell could not be started (ENOENT), and printed nothing',
+    )
+    expect(failure('PowerShell', { status: 1, signal: null, out: '' }, 2812, 30_000)).toBe(
+      'PowerShell ended with exit code 1 after 2.8 seconds, and printed nothing',
+    )
+    expect(failure('PowerShell', { status: 1, signal: null, out: 'Access is denied.' }, 2812)).toBe(
+      'PowerShell ended with exit code 1 after 2.8 seconds, and printed: Access is denied.',
+    )
+    expect(failure('PowerShell', { status: 3221225786, signal: null, out: '' }, 500)).toBe(
+      'PowerShell ended with exit code 3221225786 (0xC000013A) after 0.5 seconds, and printed nothing',
+    )
+    expect(failure('PowerShell', { status: null, signal: 'SIGTERM', out: '' }, 1200, 30_000)).toBe(
+      'PowerShell was ended by SIGTERM after 1.2 seconds, and printed nothing',
+    )
+  })
+
+  test('is asked once more, unless it was ended at its time limit, and both failures are said', () => {
+    const ran = (why: string, timedOut = false) => ({ ok: false, out: '', status: timedOut ? null : 1, why, timedOut })
+    const answered = { ok: true, out: 'answer', status: 0, why: '', timedOut: false }
+    const answers = (...given: ReturnType<typeof ran>[]) => {
+      const asked: string[] = []
+      return {
+        asked,
+        ask: (script: string) => {
+          asked.push(script)
+          return given.shift()!
+        },
+      }
+    }
+    const once = answers(ran('first'), answered)
+    expect(askedTwice(once.ask, 'question')).toEqual(answered)
+    expect(once.asked).toEqual(['question', 'question'])
+    const twice = answers(ran('PowerShell ended with exit code 1'), ran('PowerShell ended with exit code 1'))
+    expect(askedTwice(twice.ask, 'question').why).toBe('PowerShell ended with exit code 1 (twice)')
+    const unlike = answers(ran('first'), ran('second'))
+    expect(askedTwice(unlike.ask, 'question').why).toBe('second; asked once before, first')
+    const slow = answers(ran('PowerShell was ended at its limit of 30 seconds, after 30.0 seconds', true))
+    expect(askedTwice(slow.ask, 'question').why).toMatch(/at its limit/)
+    expect(slow.asked).toHaveLength(1)
+  })
+
+  test('says why reading the tasks failed, and is never taken for there being no task', () => {
+    const why = 'PowerShell ended with exit code 1 after 2.8 seconds, and printed nothing'
+    expect(() => windowsRegisteredFolders(() => ({ ok: false, out: '', why }))).toThrow(`reading the registered tasks failed: ${why}`)
+    expect(() => windowsRegisteredFolders(() => ({ ok: false, out: '' }))).toThrow(/failed: nothing was said of why$/)
+    expect(() => windowsRegisteredFor(() => ({ ok: false, out: '', why }))).toThrow(why)
+  })
+
+  test.skipIf(process.platform === 'win32')(
+    'through the program’s own PowerShell, a question that fails twice with nothing printed is said with its exit code, and one that fails once is asked again',
+    () => {
+      const commands = mkdtempSync(path.join(os.tmpdir(), 'it-powershell-'))
+      const asked = path.join(commands, 'asked')
+      const fails = path.join(commands, 'fails')
+      const before = { PATH: process.env.PATH, IT_HOME: process.env.IT_HOME, platform: Object.getOwnPropertyDescriptor(process, 'platform')! }
+      try {
+        // Stands in for Windows PowerShell: fails silently as many times as the file says, and then answers that there is no task
+        writeFileSync(
+          path.join(commands, 'powershell.exe'),
+          `#!/bin/sh\necho asked >> '${asked}'\nleft=$(cat '${fails}')\nif [ "$left" -gt 0 ]; then echo $((left - 1)) > '${fails}'; exit 1; fi\nexit 0\n`,
+          { mode: 0o755 },
+        )
+        process.env.PATH = `${commands}:/usr/bin:/bin`
+        process.env.IT_HOME = path.join(commands, '.it')
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+        writeFileSync(fails, '2')
+        expect(() => installedHere()).toThrow(
+          /^reading the registered tasks failed: PowerShell ended with exit code 1 after \d+\.\d seconds, and printed nothing \(twice\)$/,
+        )
+        expect(readFileSync(asked, 'utf8').trim().split('\n')).toHaveLength(2)
+        writeFileSync(fails, '2')
+        expect(installedHereOr('unknown')).toBe('unknown')
+        writeFileSync(fails, '1')
+        expect(installedHereOr('unknown')).toBe(false)
+        expect(readFileSync(asked, 'utf8').trim().split('\n')).toHaveLength(6)
+        process.env.PATH = path.join(commands, 'none')
+        expect(() => installedHere()).toThrow('reading the registered tasks failed: PowerShell could not be started (ENOENT), and printed nothing (twice)')
+      } finally {
+        Object.defineProperty(process, 'platform', before.platform)
+        process.env.PATH = before.PATH
+        if (before.IT_HOME === undefined) delete process.env.IT_HOME
+        else process.env.IT_HOME = before.IT_HOME
+        rmSync(commands, { recursive: true, force: true })
+      }
+    },
+  )
 })
 
 describe.skipIf(process.platform !== 'win32')('Windows scripts run by Windows PowerShell', () => {

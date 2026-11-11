@@ -65,7 +65,7 @@ export const RESTART_CODE = 75
  * setup` writes it again.
  */
 export function restartWay(): 'setup' | 'launcher' | 'by hand' {
-  if (!supervised() || !installedHere()) return 'by hand'
+  if (!supervised() || !installedHereOr(false)) return 'by hand'
   if (process.platform !== 'win32') return 'setup'
   return launcherStartsAgain(readText(windowsLauncherFile())) ? 'launcher' : 'by hand'
 }
@@ -163,23 +163,66 @@ export function askToStop(folder: string, forMs = STOP_MS): void {
     if (Date.now() > until) throw new Error('It was asked to stop and is still stopping. Run this again once it has stopped')
 }
 
+/** What a command of the system's own gave: whether it did what it was asked, what it printed, and, where it did not, why. */
+export interface Ran {
+  ok: boolean
+  out: string
+  status: number | null
+  /** Why the command did not do what it was asked, in words, with what it printed: empty where it did. */
+  why: string
+  /** Whether it was ended for taking longer than it was given. */
+  timedOut: boolean
+}
+/**
+ * Says why a command did not do what it was asked: that it could not be started, that it was
+ * ended at its time limit or by a signal, or the code it ended with, and how long it ran, with
+ * whatever it printed. A failure that printed nothing is then still told from another.
+ */
+export function failure(
+  name: string,
+  r: { status: number | null; signal?: NodeJS.Signals | null; error?: (Error & { code?: string }) | undefined; out: string },
+  ms: number,
+  forMs?: number,
+): string {
+  const took = `${(ms / 1000).toFixed(1)} seconds`
+  const code = r.error?.code
+  const how =
+    code === 'ETIMEDOUT' || (forMs !== undefined && r.signal && ms >= forMs)
+      ? // How long it had run is said too: a limit that ended a command long before it was reached would be told so
+        `${name} was ended at its limit of ${Math.round((forMs ?? ms) / 1000)} seconds, after ${took}`
+      : r.error && r.status === null && !r.signal
+        ? `${name} could not be started (${code ?? r.error.message})`
+        : r.signal
+          ? `${name} was ended by ${r.signal} after ${took}`
+          : r.status !== null
+            ? `${name} ended with exit code ${r.status}${r.status > 0xffff ? ` (0x${r.status.toString(16).toUpperCase()})` : ''} after ${took}`
+            : `${name} ended after ${took} without saying how`
+  return r.out ? `${how}, and printed: ${r.out}` : `${how}, and printed nothing`
+}
 /**
  * Runs one of the system's own commands and gives what it printed. `forMs` is how long it is
  * given, for a command that only asks the system something: one that has not answered by then
  * is ended and has not answered. A command that changes something is given no limit, since
  * some of them wait for the service to stop, which takes as long as it takes.
  */
-function run(cmd: string, args: string[], forMs?: number): { ok: boolean; out: string; status: number | null } {
+function run(cmd: string, args: string[], forMs?: number): Ran {
   // The environment is named, though it is this program's own: Bun looks for a command along
   // the path it started with unless it is given one, and Node along the path as it is now.
   // Given it, both find the system's command where this program would be told to look.
+  const began = Date.now()
   const r = spawnSync(cmd, args, {
     encoding: 'utf8',
     windowsHide: true,
     env: process.env,
     ...(forMs === undefined ? {} : { timeout: forMs, killSignal: 'SIGKILL' as const }),
   })
-  return { ok: r.status === 0, out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim(), status: r.status }
+  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim()
+  const ok = r.status === 0 && !r.error
+  const ms = Date.now() - began
+  const name = path.win32.basename(cmd).replace(/\.exe$/i, '')
+  // Ended at its limit, and only where the limit had been reached: one ended sooner is asked again
+  const timedOut = forMs !== undefined && ms >= forMs * 0.9 && ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' || !!r.signal)
+  return { ok, out, status: r.status, timedOut, why: ok ? '' : failure(name === 'powershell' ? 'PowerShell' : name, { ...r, out }, ms, forMs) }
 }
 /** How long the system is given to answer a question about the service. */
 const ASKED_MS = 10_000
@@ -187,7 +230,8 @@ const ASKED_MS = 10_000
 const ASKED_WINDOWS_MS = 30_000
 function must(cmd: string, args: string[], what: string): void {
   const r = run(cmd, args)
-  if (!r.ok) throw new Error(`${what} failed: ${r.out || cmd}`)
+  // What the command printed is why it refused, where it printed anything, and otherwise how it ended is
+  if (!r.ok) throw new Error(`${what} failed: ${r.out || r.why}`)
 }
 
 // The settings a service needs are passed in its definition, because it does not start from a
@@ -387,7 +431,11 @@ function Test-ItTask($candidate) {
   $action = $candidate.Actions[0]
   return $owner -eq $sid -and $action.Execute -ieq 'conhost.exe' -and $action.Arguments -ieq ${ps('--headless cmd.exe /d /c .\\it-service.cmd')} -and [IO.Path]::IsPathRooted($action.WorkingDirectory) -and [IO.Path]::GetFileName(([string]$action.WorkingDirectory).TrimEnd('\\')) -ieq 'bin'
 }
-$tasks = @(Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop)
+# A folder of the Task Scheduler with no task in it is not found, which is said as an error like any other: it is none
+function Get-ItRootTasks {
+  try { Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop } catch { if ($_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound_TaskPath,*') { throw } }
+}
+$tasks = @(Get-ItRootTasks)
 $task = $tasks | Where-Object { $_.TaskName -eq $name }
 if ($task -and -not (Test-ItTask $task)) { throw 'The task for this account is not an It launcher owned by this account. It was left unchanged.' }
 $legacy = $tasks | Where-Object { $_.TaskName -eq 'it' }
@@ -421,7 +469,7 @@ foreach ($owned in $ownedTasks) {
   if (([string]$owned.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq ${started}) {
     Stop-ScheduledTask -InputObject $owned -ErrorAction Stop
     Unregister-ScheduledTask -InputObject $owned -Confirm:$false -ErrorAction Stop
-    if (Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop | Where-Object { $_.TaskName -eq $owned.TaskName }) { throw 'Windows still has the task' }
+    if (Get-ItRootTasks | Where-Object { $_.TaskName -eq $owned.TaskName }) { throw 'Windows still has the task' }
   }
 }; exit 0`
 }
@@ -447,8 +495,24 @@ function powershell(script: string, forMs?: number) {
     forMs,
   )
 }
-/** PowerShell, asked something it only has to answer. */
-const powershellAsked = (script: string) => powershell(script, ASKED_WINDOWS_MS)
+/** What a question put to Windows gave: whether it was answered, the answer, and why not where it was not. */
+export type Asked = { ok: boolean; out: string; why?: string }
+/**
+ * PowerShell, asked something it only has to answer. A question it did not answer is put to it
+ * once more, unless it was ended at its time limit, which a second try would only wait out
+ * again: a question changes nothing, and one that failed once, with nothing printed, has been
+ * seen to be answered the next time. Where it fails twice, both failures are said.
+ */
+export function askedTwice(ask: (script: string) => Ran, script: string): Ran {
+  const first = ask(script)
+  if (first.ok || first.timedOut) return first
+  const again = ask(script)
+  if (again.ok) return again
+  return { ...again, why: again.why === first.why ? `${again.why} (twice)` : `${again.why}; asked once before, ${first.why}` }
+}
+const powershellAsked = (script: string): Ran => askedTwice((s) => powershell(s, ASKED_WINDOWS_MS), script)
+/** Why a question was not answered, in words, whoever answered it. */
+const whyNot = (asked: Asked) => asked.why || asked.out || 'nothing was said of why'
 
 /**
  * Every It folder this account's tasks run the service from. Both the account task and an
@@ -458,12 +522,12 @@ const powershellAsked = (script: string) => powershell(script, ASKED_WINDOWS_MS)
  * it in UTF-8, written in base64, and read back from those: a name with a letter outside the
  * code page PowerShell prints in would otherwise come back as the name of some other folder.
  */
-export function windowsRegisteredFolders(ask: (script: string) => { ok: boolean; out: string } = powershellAsked): string[] {
+export function windowsRegisteredFolders(ask: (script: string) => Asked = powershellAsked): string[] {
   const asked = ask(`${windowsTask()}
 foreach ($owned in @($task, $legacy)) {
   if ($owned) { [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($owned.Actions[0].WorkingDirectory)) }
 }`)
-  if (!asked.ok) throw new Error(`reading the registered tasks failed: ${asked.out}`)
+  if (!asked.ok) throw new Error(`reading the registered tasks failed: ${whyNot(asked)}`)
   const folders: string[] = []
   for (const line of asked.out.trim() ? asked.out.trim().split(/\r?\n/) : []) {
     const said = line.trim()
@@ -481,14 +545,14 @@ foreach ($owned in @($task, $legacy)) {
   }
   return folders
 }
-/** This folder's registration when present, otherwise the account's preferred task, or none. */
-export function windowsRegisteredFor(ask: (script: string) => { ok: boolean; out: string } = powershellAsked): string | null {
-  try {
-    const folders = windowsRegisteredFolders(ask)
-    return folders.find((folder) => sameWindowsFolder(folder, home())) ?? folders[0] ?? null
-  } catch {
-    return null
-  }
+/**
+ * This folder's registration when present, otherwise the account's preferred task, or none.
+ * Where Windows could not be asked, that is thrown, with why: a question that failed is not an
+ * answer that there is no task.
+ */
+export function windowsRegisteredFor(ask: (script: string) => Asked = powershellAsked): string | null {
+  const folders = windowsRegisteredFolders(ask)
+  return folders.find((folder) => sameWindowsFolder(folder, home())) ?? folders[0] ?? null
 }
 /** Whether two addresses name the same folder on Windows, where the case of a letter and which way a slash leans make no difference. */
 export const sameWindowsFolder = (a: string, b: string): boolean => {
@@ -529,7 +593,8 @@ export function waitForLaunchdUnload(forMs = STOP_MS): void {
 // whole word, or resolved to the same real folder when setup used a symlink. A percent sign or
 // an ampersand in it is not written there as itself. On Windows the task is asked for its own action, which
 // names the folder it is started in: a launcher left in a folder says only that the folder once
-// registered the task, and another folder may have registered it since.
+// registered the task, and another folder may have registered it since. Where Windows could not
+// be asked, that is thrown, with why: see `installedHereOr` for a caller that can go on without.
 export function installedHere(): boolean {
   if (process.platform === 'win32') {
     const registered = windowsRegisteredFor()
@@ -566,6 +631,19 @@ export function installedHere(): boolean {
 }
 
 /**
+ * Whether this folder's service is registered, as `installedHere` says, or `unknown` where the
+ * system could not be asked, which is only ever so on Windows: the caller says what it goes by
+ * then, which is never that there is no service.
+ */
+export function installedHereOr<T>(unknown: T): boolean | T {
+  try {
+    return installedHere()
+  } catch {
+    return unknown
+  }
+}
+
+/**
  * The settings a definition gives the service, read back out of it as its writer put them in.
  * Each of the three writes some characters as more than themselves, and what each did is undone
  * here. Nothing for a system It registers no service with.
@@ -594,7 +672,8 @@ export function given(definition: string, platform: NodeJS.Platform = process.pl
 export function kept(): Record<string, string> {
   const file =
     process.platform === 'linux' ? unitPath() : process.platform === 'darwin' ? plistPath() : process.platform === 'win32' ? windowsLauncherFile() : null
-  if (!file || !installedHere()) return {}
+  // Where Windows cannot be asked whose the task is, this folder's own launcher is what there is to go by
+  if (!file || !installedHereOr(true)) return {}
   try {
     const { PATH: _path, ...rest } = given(readFileSync(file, 'utf8'))
     return rest
@@ -629,6 +708,19 @@ export function definedFor(): 'this folder' | 'another folder' | 'none' {
 }
 
 /**
+ * Whose the service is, as `definedFor` says, or `unknown` where the system could not be asked,
+ * which is only ever so on Windows. Taking a service away goes on then: on Windows the removal
+ * takes away only a task that is started in this folder, and says why where it cannot.
+ */
+export function definedForOr<T>(unknown: T): ReturnType<typeof definedFor> | T {
+  try {
+    return definedFor()
+  } catch {
+    return unknown
+  }
+}
+
+/**
  * Whether systemd has this user's service down to be started by itself, which is what enabling
  * it does. The definition's file being there does not say so: it is written before systemd is
  * asked to take it, and stays where systemd would not.
@@ -658,8 +750,9 @@ let enabledWhen: { file: string; at: number; enabled: boolean } | undefined
  */
 export function startsByItself(): boolean {
   if (process.platform === 'win32') {
-    registeredOnWindows ??= installedHere()
-    return registeredOnWindows
+    // An answer is kept. A question that failed is not one, and is asked again next time
+    registeredOnWindows ??= installedHereOr(undefined)
+    return registeredOnWindows ?? false
   }
   if (!installedHere()) return false
   if (process.platform !== 'linux') return true
@@ -848,7 +941,7 @@ export function install(): ServiceStatus {
     mkdirSync(path.dirname(windowsLauncherFile()), { recursive: true })
     writeDefinition(windowsLauncherFile(), windowsLauncher(cmd, env))
     const r = powershell(windowsScript(path.dirname(windowsLauncherFile()), path.basename(windowsLauncherFile())))
-    if (!r.ok) throw new Error(`registering the task failed: ${r.out}`)
+    if (!r.ok) throw new Error(`registering the task failed: ${r.why}`)
   } else {
     throw new Error(`It cannot register a background service on ${process.platform}. Run \`it serve\` under your own supervisor.`)
   }
@@ -895,8 +988,7 @@ export function uninstall(patience = STOP_MS): void {
     // could not be asked at all
     const out = powershell(windowsRemoval(path.dirname(windowsLauncherFile())))
     // What it starts stays where it is then: taken away, the task that is still there would start nothing at the next sign-in, with no word of why
-    if (!out.ok)
-      throw new Error(`the background task could not be taken away${out.out ? ` (${out.out.split('\n')[0]})` : ''}, so what it starts was left where it is`)
+    if (!out.ok) throw new Error(`the background task could not be taken away (${out.why.split('\n')[0]}), so what it starts was left where it is`)
     rmSync(windowsLauncherFile(), { force: true })
   }
 }
@@ -940,13 +1032,19 @@ function systemStatus(): ServiceStatus {
  * definition another folder wrote says on Linux and macOS. The folder is asked for as the bytes
  * of its name in UTF-8, written in base64, as it is when the folders are read for installing.
  */
-export function windowsStatus(ask: (script: string) => { ok: boolean; out: string } = powershellAsked): ServiceStatus {
+export function windowsStatus(ask: (script: string) => Asked = powershellAsked): ServiceStatus {
   const asked = ask(`${windowsTask()}
 foreach ($owned in @($task, $legacy)) {
   if ($owned) { $owned.TaskName + ' ' + $owned.State + ' ' + [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$owned.Actions[0].WorkingDirectory)) }
 }`)
   const where = 'Scheduled Task for this Windows account'
-  const tasks = (asked.ok ? asked.out.split(/\r?\n/) : []).map((line) => line.trim().split(' ')).filter(([name]) => name)
+  // A question that failed says nothing of whether there is a task, and is said as that
+  if (!asked.ok)
+    return { registered: false, state: 'unknown', where, note: `Windows could not be asked about this account's scheduled tasks: ${whyNot(asked)}` }
+  const tasks = asked.out
+    .split(/\r?\n/)
+    .map((line) => line.trim().split(' '))
+    .filter(([name]) => name)
   if (!tasks.length) return { registered: false, state: 'not registered', where }
   const launchers = path.dirname(windowsLauncherFile())
   const ours = tasks.find(([, , said]) => {

@@ -147,6 +147,55 @@ try {
   } else
     check('ended from outside, as a crash ends it, it is started again by the system, and its site answers again', false, 'there was no running service to end')
 
+  // ---------- on Windows, stopped and started again from Task Scheduler ----------
+  // Told to stop a task, Task Scheduler ends only the console its launcher runs in. The service
+  // sees that and stops, as it does when it is asked to, and its launcher ends with it: started
+  // again, the task starts one launcher and one service, and nothing is left of the first.
+  if (windows) {
+    const task = "Get-ScheduledTask -TaskPath '\\' -TaskName ('it-' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)"
+    const ps = (script) =>
+      spawnSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command', `$ProgressPreference = 'SilentlyContinue'; $ErrorActionPreference = 'Stop'; ${script}`],
+        {
+          encoding: 'utf8',
+          timeout: 120_000,
+          windowsHide: true,
+        },
+      )
+    /** It's processes on the runner: each launcher, by the file it runs, and the service and the backend program, by It's folder in their command lines. */
+    const ours = () => {
+      const ran = ps(
+        // The question's own PowerShell has both in its command line, and is left out
+        `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and ($_.CommandLine -like '*it-service.cmd*' -or $_.CommandLine.Contains('${home.replace(/'/g, "''")}')) } | ForEach-Object { $_.Name + ' ' + $_.CommandLine }`,
+      )
+      // A question that failed says nothing of what runs, and is never taken for nothing running
+      if (ran.status !== 0) return [`the processes could not be listed: ${ran.error?.code ?? `exit ${ran.status}`} ${(ran.stderr ?? '').trim().slice(0, 300)}`]
+      return (ran.stdout ?? '').split(/\r?\n/).filter((line) => line.trim())
+    }
+    const stopped = ps(`${task} | Stop-ScheduledTask`)
+    const quiet = await until(async () => !(await answers()) && ours().length === 0, 90_000, 1000)
+    check(
+      'stopped from Task Scheduler, It stops: its launcher, the service and the backend program all end, and its site answers nothing',
+      stopped.status === 0 && Boolean(quiet),
+      `${stopped.stderr ?? ''}\nstill running:\n${ours().join('\n')}`,
+    )
+    if (!quiet) why('after the task was stopped from Task Scheduler')
+    const started = ps(`${task} | Start-ScheduledTask`)
+    const back = await until(async () => (await answers()) && stands().running, 240_000, 2000)
+    // A second launcher, where there was one, would be running by now beside the first
+    await sleep(10_000)
+    const running = ours()
+    const launchers = running.filter((line) => /^cmd\.exe /i.test(line)).length
+    const services = running.filter((line) => / serve --supervised /.test(line) && !/^(cmd|conhost)\.exe /i.test(line)).length
+    check(
+      'started again from Task Scheduler, exactly one launcher and one service run, and its site answers',
+      started.status === 0 && Boolean(back) && launchers === 1 && services === 1 && (await answers()),
+      `${started.stderr ?? ''}\n${running.join('\n')}`,
+    )
+    if (!back || launchers !== 1 || services !== 1) why('after the task was started again from Task Scheduler')
+  }
+
   // ---------- a second setup, which is what an update runs ----------
   const second = it(['setup', '--none', '--json'])
   const still = await until(async () => (await answers()) && stands().running, 180_000, 2000)
