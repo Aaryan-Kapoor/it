@@ -73,7 +73,7 @@ The page shows your hand carrying the armchair there. The room is as large as th
 
 ### The whiteboard: `checked`
 
-The person wrote their answer to `sum` on a whiteboard by hand, and `answer` is the right one. `saved` names a picture of the sheet, which It has already written for you in the folder you are in. Read that one file with whatever you read images with, and answer with what you read, whether it is right, the right answer, a hint of a few words, and a sentence:
+The person wrote their answer to `sum` on a whiteboard by hand, and `answer` is the right one. `saved` names a picture of the board, which It has already written for you in the folder you are in. Read that one file with whatever you read images with, and answer with what you read, whether it is right, the right answer, a hint of a few words, and a sentence:
 
 ```sh
 it tour answer <the action's id> '{"read":"124","right":false,"answer":"144","hint":"<a few words>","say":"<one sentence>"}'
