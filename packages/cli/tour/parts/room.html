@@ -1,162 +1,329 @@
-<!-- The room: a floor plan whose armchair the person drags. The agent says where it is to stand, of the free places the page gives it. -->
+<!-- The room: a floor plan whose armchair the person drags. The agent says where it is to stand, of the free places the page gives it, and its hand is seen to carry it there. -->
 <style>
-  [data-part="room"] svg.room { display: block; width: min(100cqw, calc(100cqh * 720 / 520)); height: auto; aspect-ratio: 720 / 520; border-radius: 12px; touch-action: none; user-select: none; -webkit-user-select: none; }
-  #chair { outline: none; cursor: grab; transition: transform .7s cubic-bezier(.22, 1, .36, 1); } #chair:focus-visible .lift > rect:first-child { stroke: var(--green); stroke-width: 3; }
-  #chair.held { cursor: grabbing; transition: none; } #chair.still { cursor: default; }
-  #chair .lift { transition: transform .2s; transform-origin: 39px 39px; } #chair.held .lift { transform: scale(1.06); }
-  #nudge { transition: opacity .3s; } #nudge.off { opacity: 0; }
-  #ghost { opacity: 0; transition: opacity .3s; } #ghost.on { opacity: 1; }
-  .dim { opacity: 0; transition: opacity .4s; } .dim.on { opacity: 1; } .dim line { stroke-dasharray: 400; stroke-dashoffset: 400; transition: stroke-dashoffset .7s ease-out; } .dim.on line { stroke-dashoffset: 0; }
-  #lamp { opacity: 0; transition: opacity .6s .2s; } #lamp.on { opacity: 1; }
-  #tagged { opacity: 0; transition: opacity .3s; } #tagged.on { opacity: 1; }
+  /* The plan is as wide or as tall as the stage: the script gives it the stage's shape, in centimetres */
+  [data-part="room"] .room-frame { position: relative; width: min(100cqw, calc(100cqh * var(--vw, 672) / var(--vh, 514))); aspect-ratio: var(--vw, 672) / var(--vh, 514); }
+  [data-part="room"] svg { display: block; width: 100%; height: 100%; overflow: visible; touch-action: none; user-select: none; -webkit-user-select: none; }
+  [data-part="room"] svg text { font-family: var(--mono); font-size: 11px; letter-spacing: 1.5px; fill: var(--faint); }
+  [data-part="room"] #chair { outline: none; cursor: grab; transition: transform .8s cubic-bezier(.22, 1, .36, 1); }
+  [data-part="room"] #chair:focus-visible .lift > rect:first-child { stroke: var(--green); stroke-width: 3; }
+  [data-part="room"] #chair.held { cursor: grabbing; transition: none; } [data-part="room"] #chair.still { cursor: default; }
+  [data-part="room"] #chair .lift { transition: transform .2s; transform-origin: 39px 39px; } [data-part="room"] #chair.up .lift { transform: scale(1.07); }
+  /* For as long as the move is with the agent, a ring goes out from the armchair where the person left it */
+  [data-part="room"] #chair .ring { opacity: 0; transform-origin: 39px 39px; } [data-part="room"] #chair.sent .ring { animation: room-sent 1.7s ease-out infinite; }
+  @keyframes room-sent { from { opacity: .85; transform: scale(.96); } to { opacity: 0; transform: scale(1.3); } }
+  #room-nudge { transition: opacity .3s; animation: room-bob 1.8s ease-in-out infinite; } #room-nudge.off { opacity: 0; animation: none; }
+  @keyframes room-bob { 50% { transform: translateY(-5px); } }
+  #room-ghost, #room-trail { opacity: 0; transition: opacity .3s; } #room-ghost.on { opacity: 1; } #room-trail.on { opacity: .8; transition-delay: .25s; }
+  #room-dim { opacity: 0; transition: opacity .4s; } #room-dim.on { opacity: 1; } #room-dim line { stroke-dasharray: 1400; stroke-dashoffset: 1400; transition: stroke-dashoffset .9s ease-out; } #room-dim.on line { stroke-dashoffset: 0; }
+  #room-dim text, #room-hand text { font: 600 12.5px/1 var(--mono); letter-spacing: 0; fill: var(--on-green); } #room-hand text { font-family: Text, sans-serif; font-size: 12px; }
+  /* The lamp arrives: it grows where it is put, and then its light comes on */
+  #room-lamp { opacity: 0; transition: opacity .25s; pointer-events: none; } #room-lamp.on { opacity: 1; }
+  #room-lamp .pop { transform: scale(.2); transform-box: fill-box; transform-origin: center; transition: transform .5s cubic-bezier(.34, 1.56, .64, 1); } #room-lamp.on .pop { transform: scale(1); }
+  #room-lamp .glow { opacity: 0; transition: opacity .9s .3s; } #room-lamp.on .glow { opacity: 1; }
+  /* The agent's hand on the page: it comes up from the dock, and goes where the armchair goes */
+  #room-hand { opacity: 0; pointer-events: none; transition: transform .8s cubic-bezier(.22, 1, .36, 1), opacity .25s; } #room-hand.on { opacity: 1; } #room-hand.jump { transition: none; }
+  /* Under the room, beside what is written there */
+  [data-part="room"] .room-under { position: absolute; right: 0; bottom: 0; height: calc(100% * 38 / var(--vh, 514)); display: flex; align-items: center; }
+  [data-part="room"] .room-under .btn { min-height: 0; height: 28px; padding: 0 14px; font-size: 13px; }
 </style>
 <section class="part" data-part="room" data-title="A room" data-line="Drag the armchair anywhere. {agent} checks the spot and moves it to where it fits." hidden>
-  <div class="fill">
-    <svg class="room" id="room-plan" viewBox="0 0 720 520" role="img" aria-label="A floor plan of a living room, seen from above">
-      <defs>
-        <pattern id="wood" width="120" height="48" patternUnits="userSpaceOnUse"><rect width="120" height="48" fill="var(--floor)"/><path d="M0 0h120M0 16h120M0 32h120" stroke="var(--plank)" stroke-width="1"/><path d="M40 0v16M100 16v16M20 32v16M80 32v16" stroke="var(--plank)" stroke-width="1"/><path d="M0 8h120M0 40h120" stroke="var(--sheen)" stroke-width=".8" opacity=".7"/></pattern>
-        <pattern id="weave" width="14" height="14" patternUnits="userSpaceOnUse"><rect width="14" height="14" fill="var(--rug)"/><path d="M0 7h14M7 0v14" stroke="var(--rug-line)" stroke-width="1.4"/></pattern>
-        <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--sun)" stop-opacity=".55"/><stop offset="1" stop-color="var(--sun)" stop-opacity="0"/></linearGradient>
-        <filter id="drop" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#3b2f1c" flood-opacity=".22"/></filter>
-        <filter id="held" x="-40%" y="-40%" width="180%" height="200%"><feDropShadow dx="0" dy="12" stdDeviation="10" flood-color="#3b2f1c" flood-opacity=".3"/></filter>
-        <radialGradient id="glow"><stop offset="0" stop-color="#ffe9a8" stop-opacity=".95"/><stop offset="1" stop-color="#ffe9a8" stop-opacity="0"/></radialGradient>
-      </defs>
-      <rect x="40" y="40" width="640" height="440" fill="url(#wood)"/>
-      <path d="M250 40 L470 40 L560 330 L160 330 Z" fill="url(#sun)"/>
-      <g filter="url(#drop)"><rect x="350" y="150" width="290" height="230" rx="8" fill="url(#weave)"/><rect x="362" y="162" width="266" height="206" rx="4" fill="none" stroke="var(--paper)" stroke-width="2" opacity=".8"/></g>
-      <g filter="url(#drop)"><rect x="566" y="140" width="96" height="250" rx="16" fill="var(--sage-dark)"/><rect x="566" y="152" width="70" height="226" rx="12" fill="var(--sage)"/><path d="M570 228h62M570 304h62" stroke="var(--sage-dark)" stroke-width="2"/><rect x="566" y="140" width="96" height="20" rx="10" fill="var(--sage-dark)"/><rect x="566" y="370" width="96" height="20" rx="10" fill="var(--sage-dark)"/></g>
-      <g filter="url(#drop)"><ellipse cx="470" cy="265" rx="44" ry="68" fill="var(--wood-dark)"/><ellipse cx="470" cy="265" rx="38" ry="62" fill="var(--wood)"/><path d="M448 232c14-10 30-10 44 0M444 266c18-10 36-10 52 0M448 298c14-9 30-9 44 0" stroke="var(--wood-dark)" stroke-width="1.5" fill="none"/><circle cx="476" cy="250" r="9" fill="var(--paper)"/><circle cx="476" cy="250" r="5" fill="#d8c9a8"/></g>
-      <g filter="url(#drop)"><rect x="60" y="48" width="170" height="36" rx="3" fill="var(--wood-dark)"/><g transform="translate(66 53)"><rect width="10" height="26" fill="#cf6f4d"/><rect x="12" width="8" height="26" fill="var(--paper)"/><rect x="22" width="12" height="26" fill="#3d5a52"/><rect x="36" width="7" height="26" fill="#d8b24a"/><rect x="45" width="11" height="26" fill="#5c6e8a"/><rect x="62" width="9" height="26" fill="var(--paper)"/><rect x="73" width="12" height="26" fill="#cf6f4d"/><rect x="87" width="8" height="26" fill="#2f3b36"/><rect x="104" width="12" height="26" fill="#d8b24a"/><rect x="118" width="9" height="26" fill="#9fab93"/><rect x="129" width="11" height="26" fill="var(--paper)"/><rect x="142" width="12" height="26" fill="#3d5a52"/></g></g>
-      <g filter="url(#drop)"><circle cx="642" cy="80" r="17" fill="#a0603d"/><g fill="#4f7d5a"><ellipse cx="642" cy="62" rx="9" ry="20"/><ellipse cx="642" cy="62" rx="9" ry="20" transform="rotate(60 642 80)"/><ellipse cx="642" cy="62" rx="9" ry="20" transform="rotate(120 642 80)"/><ellipse cx="642" cy="62" rx="9" ry="20" transform="rotate(180 642 80)"/><ellipse cx="642" cy="62" rx="9" ry="20" transform="rotate(240 642 80)"/><ellipse cx="642" cy="62" rx="9" ry="20" transform="rotate(300 642 80)"/></g><circle cx="642" cy="80" r="6" fill="#3d6347"/></g>
-      <path d="M140 480 H680 V40 H40 V480" fill="none" stroke="var(--wall)" stroke-width="10" stroke-linejoin="miter"/>
-      <rect x="250" y="34" width="220" height="12" fill="var(--paper)"/><path d="M250 36h220M250 44h220" stroke="var(--wall)" stroke-width="2"/><path d="M360 34v12" stroke="var(--wall)" stroke-width="2"/>
-      <rect x="37" y="380" width="7" height="100" rx="2" fill="var(--wood-dark)"/><path d="M44 380 A100 100 0 0 1 140 480" fill="none" stroke="var(--wall)" stroke-width="1.3" stroke-dasharray="3 6" opacity=".55"/>
-      <text x="52" y="506" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="var(--faint)" letter-spacing="1.5">DOOR</text><text x="326" y="26" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="var(--faint)" letter-spacing="1.5">WINDOW</text>
-      <path d="M580 497v6h100v-6" fill="none" stroke="var(--faint)" stroke-width="1.2"/><text x="630" y="516" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="var(--faint)" letter-spacing="1.5">1 M</text>
-      <rect id="ghost" width="78" height="78" rx="18" fill="none" stroke="var(--faint)" stroke-width="1.6" stroke-dasharray="5 6"/>
-      <g class="dim" id="dim"><line id="dim-line" stroke="var(--green)" stroke-width="1.6"/><g id="dim-label"><rect x="-34" y="-12" width="68" height="24" rx="12" fill="var(--green)"/><text id="dim-text" text-anchor="middle" y="4.5" font-family="ui-monospace, Menlo, monospace" font-size="12.5" font-weight="600" fill="var(--on-green)"></text></g></g>
-      <g id="lamp"><circle r="46" fill="url(#glow)"/><circle r="13" fill="#fffdf8" stroke="#d8b24a" stroke-width="3" filter="url(#drop)"/><circle r="4" fill="#d8b24a"/></g>
-      <g id="chair" tabindex="0" role="button" aria-label="The armchair. Drag it, or move it with the arrow keys and press Enter.">
-        <g class="lift" filter="url(#drop)"><rect width="78" height="78" rx="18" fill="var(--clay-dark)"/><rect x="0" y="0" width="78" height="22" rx="11" fill="var(--clay-dark)"/><rect x="12" y="20" width="54" height="50" rx="12" fill="var(--clay)"/><rect x="0" y="16" width="14" height="56" rx="7" fill="var(--clay-dark)"/><rect x="64" y="16" width="14" height="56" rx="7" fill="var(--clay-dark)"/><path d="M22 44h34" stroke="var(--clay-dark)" stroke-width="2" stroke-linecap="round" opacity=".6"/></g>
-        <g id="nudge"><rect x="-1" y="-34" width="80" height="24" rx="12" fill="var(--ink)"/><text x="39" y="-18" text-anchor="middle" font-family="Text, sans-serif" font-size="12" font-weight="600" fill="var(--paper)">drag me</text><path d="M33 -10l6 6 6-6" fill="var(--ink)"/></g>
-      </g>
-      <g id="tagged"><rect x="0" y="0" width="112" height="24" rx="7" fill="var(--green)"/><rect x="7" y="6" width="12" height="12" rx="4" fill="#fff" opacity=".92"/><rect x="10" y="9" width="6" height="6" rx="2" fill="var(--green)"/><text id="tagged-text" x="25" y="16.5" font-family="Text, sans-serif" font-size="12" font-weight="600" fill="var(--on-green)"></text></g>
-    </svg>
+  <div class="fill" id="room-fill">
+    <div class="room-frame" id="room-frame">
+      <svg id="room-plan" viewBox="0 0 672 514" role="img" aria-label="A floor plan of a living room, seen from above">
+        <defs>
+          <pattern id="room-wood" width="120" height="48" patternUnits="userSpaceOnUse"><rect width="120" height="48" fill="var(--floor)"/><path d="M0 0h120M0 16h120M0 32h120" stroke="var(--plank)" stroke-width="1"/><path d="M40 0v16M100 16v16M20 32v16M80 32v16" stroke="var(--plank)" stroke-width="1"/><path d="M0 8h120M0 40h120" stroke="var(--sheen)" stroke-width=".8" opacity=".7"/></pattern>
+          <pattern id="room-weave" width="14" height="14" patternUnits="userSpaceOnUse"><rect width="14" height="14" fill="var(--rug)"/><path d="M0 7h14M7 0v14" stroke="var(--rug-line)" stroke-width="1.4"/></pattern>
+          <linearGradient id="room-sunlight" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--sun)" stop-opacity=".55"/><stop offset="1" stop-color="var(--sun)" stop-opacity="0"/></linearGradient>
+          <filter id="room-drop" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#3b2f1c" flood-opacity=".22"/></filter>
+          <filter id="room-held" x="-40%" y="-40%" width="180%" height="200%"><feDropShadow dx="0" dy="14" stdDeviation="11" flood-color="#3b2f1c" flood-opacity=".34"/></filter>
+          <radialGradient id="room-glow"><stop offset="0" stop-color="#ffe9a8" stop-opacity=".95"/><stop offset="1" stop-color="#ffe9a8" stop-opacity="0"/></radialGradient>
+          <clipPath id="room-inside"><rect id="room-clip"/></clipPath>
+        </defs>
+        <rect id="room-floor" fill="url(#room-wood)"/>
+        <g id="room-sun" clip-path="url(#room-inside)"></g>
+        <g id="room-rug" filter="url(#room-drop)"><rect rx="8" fill="url(#room-weave)"/><rect x="12" y="12" rx="4" fill="none" stroke="var(--paper)" stroke-width="2" opacity=".8"/></g>
+        <g id="room-sofa" filter="url(#room-drop)"><rect width="96" height="250" rx="16" fill="var(--sage-dark)"/><rect y="12" width="70" height="226" rx="12" fill="var(--sage)"/><path d="M4 88h62M4 164h62" stroke="var(--sage-dark)" stroke-width="2"/><rect width="96" height="20" rx="10" fill="var(--sage-dark)"/><rect y="230" width="96" height="20" rx="10" fill="var(--sage-dark)"/><rect x="16" y="28" width="36" height="36" rx="10" fill="var(--clay)" opacity=".9" transform="rotate(-9 34 46)"/><rect x="18" y="186" width="34" height="34" rx="10" fill="#efe7d6" opacity=".85" transform="rotate(7 35 203)"/></g>
+        <g id="room-table" filter="url(#room-drop)"><ellipse rx="44" ry="68" fill="var(--wood-dark)"/><ellipse rx="38" ry="62" fill="var(--wood)"/><path d="M-22 -33c14-10 30-10 44 0M-26 1c18-10 36-10 52 0M-22 33c14-9 30-9 44 0" stroke="var(--wood-dark)" stroke-width="1.5" fill="none"/><circle cx="6" cy="-15" r="9" fill="#efe7d6"/><circle cx="6" cy="-15" r="5" fill="#d8c9a8"/><rect x="-22" y="14" width="26" height="18" rx="2" fill="#3d5a52" transform="rotate(-14 -9 23)"/></g>
+        <g id="room-shelves" filter="url(#room-drop)"><rect width="170" height="36" rx="3" fill="var(--wood-dark)"/><g transform="translate(6 5)"><rect width="10" height="26" fill="#cf6f4d"/><rect x="12" width="8" height="26" fill="#efe7d6"/><rect x="22" width="12" height="26" fill="#3d5a52"/><rect x="36" width="7" height="26" fill="#d8b24a"/><rect x="45" width="11" height="26" fill="#5c6e8a"/><rect x="62" width="9" height="26" fill="#efe7d6"/><rect x="73" width="12" height="26" fill="#cf6f4d"/><rect x="87" width="8" height="26" fill="#2f3b36"/><rect x="104" width="12" height="26" fill="#d8b24a"/><rect x="118" width="9" height="26" fill="#9fab93"/><rect x="129" width="11" height="26" fill="#efe7d6"/><rect x="142" width="12" height="26" fill="#3d5a52"/></g></g>
+        <g id="room-plant" filter="url(#room-drop)"><circle r="17" fill="#a0603d"/><g fill="#4f7d5a"><ellipse cy="-18" rx="9" ry="20"/><ellipse cy="-18" rx="9" ry="20" transform="rotate(60)"/><ellipse cy="-18" rx="9" ry="20" transform="rotate(120)"/><ellipse cy="-18" rx="9" ry="20" transform="rotate(180)"/><ellipse cy="-18" rx="9" ry="20" transform="rotate(240)"/><ellipse cy="-18" rx="9" ry="20" transform="rotate(300)"/></g><circle r="6" fill="#3d6347"/></g>
+        <g id="room-dining" filter="url(#room-drop)"><g fill="var(--wood-dark)"><circle cy="-78" r="17"/><circle cx="78" r="17"/><circle cy="78" r="17"/><circle cx="-78" r="17"/></g><g fill="var(--wood)"><circle cy="-78" r="13"/><circle cx="78" r="13"/><circle cy="78" r="13"/><circle cx="-78" r="13"/></g><circle r="56" fill="var(--wood-dark)"/><circle r="50" fill="var(--wood)"/><path d="M-34 -22c22-12 46-12 68 0M-40 6c26-12 54-12 80 0M-32 32c20-10 44-10 64 0" stroke="var(--wood-dark)" stroke-width="1.5" fill="none" opacity=".8"/><circle r="15" fill="#efe7d6"/><circle r="10" fill="#d8b24a"/><circle cx="-3" cy="-2" r="4" fill="#cf6f4d"/><circle cx="4" cy="3" r="3.5" fill="#cf6f4d"/></g>
+        <g id="room-side" filter="url(#room-drop)"><rect width="200" height="36" rx="4" fill="var(--wood-dark)"/><rect x="3" y="3" width="194" height="27" rx="3" fill="var(--wood)"/><rect x="14" y="6" width="38" height="22" rx="3" fill="#2f3b36"/><circle cx="30" cy="17" r="8" fill="#15130f"/><circle cx="30" cy="17" r="2.5" fill="#cf6f4d"/><path d="M46 9v9" stroke="var(--paper)" stroke-width="1.6" stroke-linecap="round"/><rect x="128" y="8" width="30" height="18" rx="2" fill="#5c6e8a"/><rect x="132" y="11" width="30" height="18" rx="2" fill="#efe7d6"/><circle cx="180" cy="17" r="8" fill="#a0603d"/><circle cx="180" cy="17" r="5" fill="#4f7d5a"/></g>
+        <path id="room-walls" fill="none" stroke="var(--wall)" stroke-width="10" stroke-linejoin="miter"/>
+        <g id="room-windows"></g>
+        <g id="room-door"><rect x="-3" y="-100" width="7" height="100" rx="2" fill="var(--wood-dark)"/><path d="M4 -100 A100 100 0 0 1 100 0" fill="none" stroke="var(--wall)" stroke-width="1.3" stroke-dasharray="3 6" opacity=".55"/><text x="12" y="26">DOOR</text></g>
+        <text id="room-size" y="15"></text>
+        <g id="room-scale"><path d="M0 -4v6h100v-6" fill="none" stroke="var(--faint)" stroke-width="1.2"/><text x="110" y="4">1 M</text></g>
+        <rect id="room-ghost" width="78" height="78" rx="18" fill="none" stroke="var(--faint)" stroke-width="1.6" stroke-dasharray="5 6"/>
+        <path id="room-trail" fill="none" stroke="var(--green)" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="1 8"/>
+        <g id="room-dim"><line id="room-dim-line" stroke="var(--green)" stroke-width="1.6"/><g id="room-dim-label"><rect x="-34" y="-12" width="68" height="24" rx="12" fill="var(--green)"/><text id="room-dim-text" text-anchor="middle" y="4.5"></text></g></g>
+        <g id="room-lamp"><circle class="glow" r="52" fill="url(#room-glow)"/><g class="pop"><circle r="13" fill="#fffdf8" stroke="#d8b24a" stroke-width="3" filter="url(#room-drop)"/><circle r="4" fill="#d8b24a"/></g></g>
+        <g id="chair" tabindex="0" role="button" aria-label="The armchair. Drag it, or move it with the arrow keys and press Enter.">
+          <rect class="ring" x="-5" y="-5" width="88" height="88" rx="23" fill="none" stroke="var(--green)" stroke-width="2.5"/>
+          <g class="lift" filter="url(#room-drop)"><rect width="78" height="78" rx="18" fill="var(--clay-dark)"/><rect x="0" y="0" width="78" height="22" rx="11" fill="var(--clay-dark)"/><rect x="12" y="20" width="54" height="50" rx="12" fill="var(--clay)"/><rect x="0" y="16" width="14" height="56" rx="7" fill="var(--clay-dark)"/><rect x="64" y="16" width="14" height="56" rx="7" fill="var(--clay-dark)"/><path d="M22 44h34" stroke="var(--clay-dark)" stroke-width="2" stroke-linecap="round" opacity=".6"/></g>
+          <g id="room-nudge"><rect x="-1" y="-34" width="80" height="24" rx="12" fill="var(--ink)"/><text x="39" y="-18" text-anchor="middle" style="font: 600 12px/1 Text, sans-serif; letter-spacing: 0; fill: var(--paper)">drag me</text><path d="M33 -10l6 6 6-6" fill="var(--ink)"/></g>
+        </g>
+        <g id="room-hand"><path d="M0 0 L0 20 L5.4 15.2 L9 23.4 L12.6 21.8 L9.1 13.8 L16 13.8 Z" fill="var(--green)" stroke="var(--on-green)" stroke-width="1.6" stroke-linejoin="round" filter="url(#room-drop)"/><g id="room-tag"><rect id="room-tag-box" height="24" rx="7" fill="var(--green)"/><rect x="7" y="6" width="12" height="12" rx="4" fill="var(--on-green)" opacity=".92"/><rect x="10" y="9" width="6" height="6" rx="2" fill="var(--green)"/><text id="room-tag-text" x="25" y="16.5"></text></g></g>
+      </svg>
+      <div class="room-under"><button class="btn ghost small" type="button" id="room-reset" hidden>Put it back</button></div>
+    </div>
   </div>
-  <div class="foot"><span>Living room · 6.4 × 4.4 m</span><button class="btn ghost small" type="button" id="reset">Put it back</button></div>
 </section>
 <script>
 Shell.part("room", (my) => {
-  var $ = Shell.$;
-  var box = my.box, svg = $("room-plan"), chair = $("chair");
-  // The drawing is in centimetres, from its own corner: the room's inside starts 40 in
-  var O = 40, ROOM = { x: 45, y: 45, w: 630, h: 430 }, SIZE = 78, HINGE = { x: 40, y: 480 }, SWING = 100;
-  var THINGS = [{ x: 566, y: 140, w: 96, h: 250, n: "sofa" }, { x: 426, y: 197, w: 88, h: 136, n: "coffee table" }, { x: 60, y: 48, w: 170, h: 36, n: "shelves" }, { x: 616, y: 52, w: 54, h: 56, n: "plant" }];
-  var START = { x: 250, y: 300 }, HINT = "Drag the armchair anywhere. What " + my.agent + " says of the spot is written here.";
-  var where = { x: START.x, y: START.y }, busy = false, grab = null, dropped = null;
-  var lo = { x: ROOM.x + 4, y: ROOM.y + 4 }, hi = { x: ROOM.x + ROOM.w - SIZE - 4, y: ROOM.y + ROOM.h - SIZE - 4 };
-  var clamp = (p) => ({ x: Math.min(hi.x, Math.max(lo.x, p.x)), y: Math.min(hi.y, Math.max(lo.y, p.y)) });
+  var $ = Shell.$, NS = Shell.SVG, calm = Shell.calm;
+  var box = my.box, svg = $("room-plan"), frame = $("room-frame"), fill = $("room-fill"), chair = $("chair"), hand = $("room-hand"), again = $("room-reset");
+  var lift = chair.querySelector(".lift");
+  // The drawing is in centimetres. The room's inside begins MX in and MT down: outside it are the walls, and what is written beside them
+  var MX = 16, MT = 30, MB = 44, SIZE = 78, SWING = 100;
+  var HINT = "Drag the armchair anywhere. What " + my.agent + " says of the spot is written here.";
+  var R = null, where = { x: 0, y: 0 }, busy = false, grab = null, dropped = null, playing = 0, settle = null;
+  var make = (tag, attrs, into) => { var el = document.createElementNS(NS, tag); Object.keys(attrs).forEach((k) => el.setAttribute(k, attrs[k])); return into.appendChild(el); };
+  var set = (id, attrs) => { var el = $(id); Object.keys(attrs).forEach((k) => el.setAttribute(k, attrs[k])); return el; };
+  var at = (id, x, y, turn) => $(id).setAttribute("transform", "translate(" + x + " " + y + ")" + (turn ? " rotate(" + turn + ")" : ""));
+
+  // ── The room, laid out for the stage it has ──
+  // A wide stage has a wide room and a tall one a tall room. The walls go out to the shape of
+  // the stage, and the furniture keeps its size and stands where it stands by them: the sofa
+  // on the right wall with the rug and the coffee table before it, the door at the lower left.
+  // A room wide enough has a dining table and a sideboard as well. Where the stage's size is
+  // not known, the room is 6.4 by 4.4 metres.
+  function shape() {
+    var w = fill.clientWidth, h = fill.clientHeight, tens = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(v / 10) * 10));
+    if (!(w > 0 && h > 0)) return { tall: false, W: 640, H: 440 };
+    if (w / h < 1.15) return { tall: true, W: 420, H: tens(((420 + 2 * MX) * h) / w - MT - MB, 520, 780) };
+    return { tall: false, W: tens(((440 + MT + MB) * w) / h - 2 * MX, 600, 1300), H: 440 };
+  }
+  function lay(s) {
+    var W = s.W, H = s.H, x = MX, y = MT, VW = W + 2 * MX, VH = H + MT + MB, wide = !s.tall && W >= 900;
+    var sofa = { x: x + W - 114, y: y + (s.tall ? Math.round((H - 250) / 2) : 100), w: 96, h: 250, n: "sofa" };
+    var rug = s.tall ? { x: x + W - 300, y: sofa.y + 10, w: 260, h: 230 } : { x: x + W - 330, y: sofa.y + 10, w: 290, h: 230 };
+    var table = { x: sofa.x - 140, y: sofa.y + 57, w: 88, h: 136, n: "coffee table" };
+    var plant = { x: x + W - 64, y: y + 12, w: 54, h: 56, n: "plant" };
+    var shelves = s.tall ? { x: x + 8, y: y + 70, w: 36, h: 170, n: "shelves" } : { x: x + 20, y: y + 8, w: 170, h: 36, n: "shelves" };
+    var windows = [s.tall ? { x: x + W / 2 - 100, w: 200 } : { x: x + W - 430, w: 220 }], things = [sofa, table, shelves, plant];
+    // Half-way between the shelves and the window over the rug, in a room that has the width for it
+    var mid = x + Math.round((190 + W - 430) / 2);
+    if (wide) {
+      windows.unshift({ x: mid - 110, w: 220 });
+      things.push({ x: mid - 95, y: y + 62, w: 190, h: 190, n: "dining table" }, { x: mid - 100, y: y + H - 44, w: 200, h: 36, n: "sideboard" });
+    }
+    R = {
+      tall: s.tall, W: W, H: H, VW: VW, VH: VH, x: x, y: y, things: things, rug: rug, windows: windows, sofa: sofa,
+      hinge: { x: x, y: y + H }, lo: { x: x + 9, y: y + 9 }, hi: { x: x + W - SIZE - 9, y: y + H - SIZE - 9 },
+      start: s.tall ? { x: x + 170, y: y + H - 130 } : { x: rug.x - 100, y: y + 260 },
+    };
+    svg.setAttribute("viewBox", "0 0 " + VW + " " + VH);
+    frame.style.setProperty("--vw", VW);
+    frame.style.setProperty("--vh", VH);
+    set("room-floor", { x: x, y: y, width: W, height: H });
+    set("room-clip", { x: x, y: y, width: W, height: H });
+    at("room-rug", rug.x, rug.y);
+    var mats = $("room-rug").querySelectorAll("rect");
+    mats[0].setAttribute("width", rug.w); mats[0].setAttribute("height", rug.h);
+    mats[1].setAttribute("width", rug.w - 24); mats[1].setAttribute("height", rug.h - 24);
+    at("room-sofa", sofa.x, sofa.y);
+    at("room-table", table.x + 44, table.y + 68);
+    at("room-plant", plant.x + 26, plant.y + 28);
+    if (s.tall) at("room-shelves", shelves.x + 36, shelves.y, 90); else at("room-shelves", shelves.x, shelves.y);
+    at("room-dining", mid, y + 157);
+    at("room-side", mid - 100, y + H - 44);
+    $("room-dining").style.display = $("room-side").style.display = wide ? "" : "none";
+    // The walls, with the door's opening left out of the lower one
+    $("room-walls").setAttribute("d", "M" + (x + SWING) + " " + (y + H) + " H" + (x + W) + " V" + y + " H" + x + " V" + (y + H));
+    at("room-door", x, y + H);
+    var panes = $("room-windows"), sun = $("room-sun");
+    panes.textContent = sun.textContent = "";
+    windows.forEach((w) => {
+      make("path", { d: "M" + w.x + " " + y + " h" + w.w + " l90 290 h" + -(w.w + 180) + " Z", fill: "url(#room-sunlight)" }, sun);
+      make("rect", { x: w.x, y: y - 6, width: w.w, height: 12, fill: "var(--paper)" }, panes);
+      make("path", { d: "M" + w.x + " " + (y - 4) + "h" + w.w + "M" + w.x + " " + (y + 4) + "h" + w.w + "M" + (w.x + w.w / 2) + " " + (y - 6) + "v12", stroke: "var(--wall)", "stroke-width": 2 }, panes);
+      make("text", { x: w.x + w.w / 2, y: y - 14, "text-anchor": "middle" }, panes).textContent = "WINDOW";
+    });
+    var metres = (W / 100).toFixed(1) + " × " + (H / 100).toFixed(1) + " M";
+    set("room-size", { x: x }).textContent = s.tall ? metres : "LIVING ROOM · " + metres;
+    at("room-scale", x + 130, y + H + 23);
+    put(R.start);
+  }
+
+  // ── Where the armchair may stand ──
+  var clamp = (p) => ({ x: Math.min(R.hi.x, Math.max(R.lo.x, p.x)), y: Math.min(R.hi.y, Math.max(R.lo.y, p.y)) });
   var put = (p) => { where = p; chair.style.transform = "translate(" + p.x + "px, " + p.y + "px)"; };
   var over = (p, t) => p.x < t.x + t.w + 10 && p.x + SIZE > t.x - 10 && p.y < t.y + t.h + 10 && p.y + SIZE > t.y - 10;
   // How far the corner nearest the door is from the door's swing: under nothing, the door hits it
-  var clears = (p) => Math.round(Math.hypot(p.x - HINGE.x, p.y + SIZE - HINGE.y) - SWING);
-  var blocked = (p) => (clears(p) < 6 ? "door" : (THINGS.find((t) => over(p, t)) || {}).n || null);
-  var free = (p) => p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y && !blocked(p);
+  var clears = (p) => Math.round(Math.hypot(p.x - R.hinge.x, p.y + SIZE - R.hinge.y) - SWING);
+  var blocked = (p) => (clears(p) < 6 ? "door" : (R.things.find((t) => over(p, t)) || {}).n || null);
+  var free = (p) => p.x >= R.lo.x && p.x <= R.hi.x && p.y >= R.lo.y && p.y <= R.hi.y && !blocked(p);
   // The free places nearest to one, every ten centimetres, each some way from the others
   function nearest(p, most) {
     var all = [];
-    for (var x = lo.x; x <= hi.x; x += 10) for (var y = lo.y; y <= hi.y; y += 10) { var q = { x: x, y: y }; if (free(q)) all.push({ q: q, d: Math.hypot(x - p.x, y - p.y) }); }
+    for (var x = R.lo.x; x <= R.hi.x; x += 10) for (var y = R.lo.y; y <= R.hi.y; y += 10) { var q = { x: x, y: y }; if (free(q)) all.push({ q: q, d: Math.hypot(x - p.x, y - p.y) }); }
     all.sort((a, b) => a.d - b.d);
     var out = free(p) ? [{ x: Math.round(p.x), y: Math.round(p.y) }] : [];
     for (var i = 0; i < all.length && out.length < most; i++) if (out.every((o) => Math.hypot(o.x - all[i].q.x, o.y - all[i].q.y) >= 40)) out.push(all[i].q);
     return out;
   }
-  var cm = (p) => [Math.round(p.x - O), Math.round(p.y - O)];
-  var sofa = (p) => Math.round(Math.hypot(p.x + SIZE / 2 - 614, p.y + SIZE / 2 - 265));
-  var byWindow = (p) => p.y < 130 && p.x > 220 && p.x < 440;
-  function measure(p) {
-    var from = { x: p.x, y: p.y + SIZE }, far = Math.hypot(from.x - HINGE.x, from.y - HINGE.y) || 1;
-    var to = { x: HINGE.x + ((from.x - HINGE.x) / far) * SWING, y: HINGE.y + ((from.y - HINGE.y) / far) * SWING };
-    var l = $("dim-line");
-    l.setAttribute("x1", from.x); l.setAttribute("y1", from.y); l.setAttribute("x2", to.x); l.setAttribute("y2", to.y);
-    var mid = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 }, short = Math.hypot(from.x - to.x, from.y - to.y) < 90;
-    $("dim-label").setAttribute("transform", short ? "translate(" + Math.max(84, to.x - ((from.x - HINGE.x) / far) * 44) + ", " + Math.min(456, to.y - ((from.y - HINGE.y) / far) * 44) + ")" : "translate(" + (mid.x + 34) + ", " + (mid.y - 16) + ")");
-    $("dim-text").textContent = clears(p) + " cm";
-    $("dim").classList.add("on");
+  var cm = (p) => [Math.round(p.x - R.x), Math.round(p.y - R.y)];
+  var fromSofa = (p) => Math.round(Math.hypot(p.x + SIZE / 2 - (R.sofa.x + 48), p.y + SIZE / 2 - (R.sofa.y + 125)));
+  var byWindow = (p) => p.y < R.y + 90 && R.windows.some((w) => p.x + SIZE / 2 > w.x && p.x + SIZE / 2 < w.x + w.w);
+  // A place in a few words, for the agent's sentence: what it is beside, and whether it is on the rug
+  function spot(p) {
+    var marks = R.things.concat(R.windows.map((w) => ({ x: w.x, y: R.y - 20, w: w.w, h: 20, n: "window" })), [{ x: R.x, y: R.hinge.y - SWING, w: SWING, h: SWING, n: "door" }]);
+    var by = null, least = 90, cx = p.x + SIZE / 2, cy = p.y + SIZE / 2;
+    marks.forEach((t) => {
+      var d = Math.hypot(Math.max(t.x - (p.x + SIZE), p.x - (t.x + t.w), 0), Math.max(t.y - (p.y + SIZE), p.y - (t.y + t.h), 0));
+      if (d < least) { least = d; by = t.n; }
+    });
+    var rug = cx > R.rug.x && cx < R.rug.x + R.rug.w && cy > R.rug.y && cy < R.rug.y + R.rug.h;
+    return (by ? "by the " + by : "in the open") + (rug ? ", on the rug" : "");
   }
-  var marks = (on) => ["ghost", "dim", "lamp", "tagged"].forEach((id) => $(id).classList.toggle("on", !!on && on.indexOf(id) >= 0));
-  var hold = (yes) => { busy = yes; chair.classList.toggle("still", yes); };
-  $("tagged-text").textContent = my.agent.slice(0, 16).toLowerCase();
+  // The first place beside the armchair where a lamp stands clear of everything
+  function lampBy(p) {
+    var places = [[SIZE + 30, 22], [-30, 22], [SIZE + 30, SIZE - 22], [-30, SIZE - 22], [SIZE / 2, -30], [SIZE / 2, SIZE + 30]].map((d) => ({ x: p.x + d[0], y: p.y + d[1] }));
+    var clear = (q) => q.x > R.x + 24 && q.x < R.x + R.W - 24 && q.y > R.y + 24 && q.y < R.y + R.H - 24 && Math.hypot(q.x - R.hinge.x, q.y - R.hinge.y) > SWING + 20 &&
+      R.things.every((t) => q.x < t.x - 18 || q.x > t.x + t.w + 18 || q.y < t.y - 18 || q.y > t.y + t.h + 18);
+    return places.find(clear) || (places[0].x < R.x + R.W - 24 ? places[0] : places[1]);
+  }
+  // What is measured of the place: from the armchair's corner to the door's swing where the door is near, and otherwise the gap to the nearest thing in the room
+  function measure(p) {
+    var from, to, text, lx, ly;
+    if (clears(p) <= 420) {
+      from = { x: p.x, y: p.y + SIZE };
+      var far = Math.hypot(from.x - R.hinge.x, from.y - R.hinge.y) || 1, ux = (from.x - R.hinge.x) / far, uy = (from.y - R.hinge.y) / far, short = far - SWING < 90;
+      to = { x: R.hinge.x + ux * SWING, y: R.hinge.y + uy * SWING };
+      text = clears(p);
+      lx = short ? to.x - ux * 44 : (from.x + to.x) / 2 + 34;
+      ly = short ? to.y - uy * 44 : (from.y + to.y) / 2 - 16;
+    } else {
+      // The nearest points of the two: side by side they are level, and one above the other they are in line
+      var span = (a0, a1, b0, b1) => (a1 < b0 ? [a1, b0] : b1 < a0 ? [a0, b1] : [(Math.max(a0, b0) + Math.min(a1, b1)) / 2, (Math.max(a0, b0) + Math.min(a1, b1)) / 2]);
+      var best = null;
+      R.things.forEach((t) => {
+        var xs = span(p.x, p.x + SIZE, t.x, t.x + t.w), ys = span(p.y, p.y + SIZE, t.y, t.y + t.h), d = Math.hypot(xs[1] - xs[0], ys[1] - ys[0]);
+        if (!best || d < best.d) best = { d: d, from: { x: xs[0], y: ys[0] }, to: { x: xs[1], y: ys[1] } };
+      });
+      from = best.from; to = best.to; text = Math.round(best.d);
+      var flat = Math.abs(to.x - from.x) >= Math.abs(to.y - from.y);
+      lx = (from.x + to.x) / 2 + (flat ? 0 : 46);
+      ly = (from.y + to.y) / 2 - (flat ? 22 : 0);
+    }
+    set("room-dim-line", { x1: from.x, y1: from.y, x2: to.x, y2: to.y });
+    at("room-dim-label", Math.min(R.x + R.W - 44, Math.max(R.x + 44, lx)), Math.min(R.y + R.H - 22, Math.max(R.y + 22, ly)));
+    $("room-dim-text").textContent = text + " cm";
+  }
+
+  // ── What is drawn of an answer ──
+  var MARKS = ["room-ghost", "room-trail", "room-dim", "room-lamp", "room-hand"];
+  var marks = (on) => MARKS.forEach((id) => $(id).classList.toggle("on", !!on && on.indexOf(id) >= 0));
+  var hold = (yes) => { busy = yes; chair.classList.toggle("still", yes); again.disabled = yes; };
+  var raise = (yes) => { chair.classList.toggle("up", yes); lift.setAttribute("filter", "url(#room-" + (yes ? "held" : "drop") + ")"); };
+  // Whatever is being played out of an answer is left where it is, as when the person takes the armchair again
+  var stop = () => { playing++; settle = null; raise(false); };
+  var name = my.agent.slice(0, 16).toLowerCase(), tagWide = Math.round(34 + name.length * 6.7);
+  $("room-tag-text").textContent = name;
+  $("room-tag-box").setAttribute("width", tagWide);
+  // The agent's hand, on the armchair that stands at `p`, or under the drawing, where the dock is
+  function reach(p, under) {
+    var tip = under ? { x: R.VW / 2, y: R.VH + 30 } : { x: p.x + 50, y: p.y + 48 };
+    at("room-tag", tip.x + 14 + tagWide > R.VW - 2 ? -tagWide - 4 : 14, 16);
+    if (under) hand.classList.add("jump");
+    hand.style.transform = "translate(" + tip.x + "px, " + tip.y + "px)";
+    if (under) { void hand.getBoundingClientRect(); hand.classList.remove("jump"); }
+  }
   var asker = my.asker((got) => {
-    var a = got.armchair, wanted = Array.isArray(a) && a.length === 2 && a.every((v) => typeof v === "number" && isFinite(v)) ? { x: Math.round(a[0] + O), y: Math.round(a[1] + O) } : null;
+    var a = got.armchair, wanted = Array.isArray(a) && a.length === 2 && a.every((v) => typeof v === "number" && isFinite(v)) ? { x: Math.round(a[0] + R.x), y: Math.round(a[1] + R.y) } : null;
     // The agent's place is taken where the armchair can stand there, and the nearest free place to where the person put it otherwise
-    var to = wanted && free(wanted) ? wanted : nearest(dropped, 1)[0] || dropped;
-    var far = Math.round(Math.hypot(to.x - dropped.x, to.y - dropped.y)), on = ["dim"];
-    if (far > 6) {
-      $("ghost").setAttribute("x", dropped.x); $("ghost").setAttribute("y", dropped.y);
-      $("tagged").setAttribute("transform", "translate(" + Math.min(to.x, 560) + ", " + (to.y - 32) + ")");
-      on.push("ghost", "tagged");
+    var from = dropped, to = wanted && free(wanted) ? wanted : nearest(from, 1)[0] || from;
+    var moved = Math.hypot(to.x - from.x, to.y - from.y) > 6, lamp = got.lamp === true, on = ["room-dim", "room-hand"];
+    if (moved) {
+      set("room-ghost", { x: from.x, y: from.y });
+      $("room-trail").setAttribute("d", "M" + (from.x + SIZE / 2) + " " + (from.y + SIZE / 2) + " L" + (to.x + SIZE / 2) + " " + (to.y + SIZE / 2));
+      on.push("room-ghost", "room-trail");
     }
-    put(to);
-    if (got.lamp === true) {
-      $("lamp").setAttribute("transform", "translate(" + (to.x + SIZE + 34 > ROOM.x + ROOM.w - 20 ? to.x - 30 : to.x + SIZE + 30) + ", " + (to.y + 22) + ")");
-      on.push("lamp");
-    }
-    marks(on);
+    if (lamp) { var l = lampBy(to); at("room-lamp", l.x, l.y); on.push("room-lamp"); }
     measure(to);
     box.say(got.say);
-    hold(false);
-  }, () => hold(false));
+    // The answer as it stands once it has been played out
+    var end = () => { stop(); chair.classList.remove("sent"); reach(to); put(to); marks(on); hold(false); };
+    if (calm || !my.shown()) return end();
+    // Played out: the agent's hand comes up from the dock, takes the armchair where the person
+    // left it, carries it to its place and sets it down, and then the lamp and the measure come
+    var run = ++playing, t = 0, then = (ms, fn) => { t += ms; setTimeout(() => { if (run === playing) fn(); }, t); };
+    settle = end;
+    chair.classList.remove("sent");
+    reach(from, true);
+    then(30, () => { marks(["room-hand"]); reach(from); });
+    then(780, () => { raise(true); marks(moved ? ["room-hand", "room-ghost"] : ["room-hand"]); });
+    then(240, () => { if (moved) { put(to); reach(to); marks(["room-hand", "room-ghost", "room-trail"]); } });
+    then(moved ? 840 : 120, () => { raise(false); hold(false); });
+    then(200, () => marks(on.filter((id) => id !== "room-dim")));
+    then(lamp ? 450 : 0, end);
+  }, () => { chair.classList.remove("sent"); hold(false); });
+  my.onLeave(() => { if (settle) settle(); });
+
+  // ── What the person does ──
   function drop() {
     if (busy) return;
+    stop();
     dropped = { x: Math.round(where.x), y: Math.round(where.y) };
     var near = nearest(dropped, 3);
     hold(true);
     marks(null);
+    chair.classList.add("sent");
     box.did("moved the chair");
+    // What the answer is made of comes first: what the armchair is on, and the free places with a few words for each
     asker.send("moved", {
-      armchair: cm(dropped),
-      size: SIZE,
-      room: [640, 440],
       in_the_way: blocked(dropped),
       free: near.map(cm),
+      free_is: near.map(spot),
+      armchair: cm(dropped),
+      size: SIZE,
+      room: [R.W, R.H],
       door_clears_by: clears(dropped),
-      from_sofa: sofa(dropped),
+      from_sofa: fromSofa(dropped),
       by_window: byWindow(dropped),
     });
   }
-  var point = (e) => { var r = svg.getBoundingClientRect(); return { x: ((e.clientX - r.left) / (r.width || 720)) * 720, y: ((e.clientY - r.top) / (r.height || 520)) * 520 }; };
-  var lift = chair.querySelector(".lift");
+  var touched = () => { stop(); marks(null); $("room-nudge").classList.add("off"); again.hidden = false; };
+  var point = (e) => { var r = svg.getBoundingClientRect(); return { x: ((e.clientX - r.left) / (r.width || R.VW)) * R.VW, y: ((e.clientY - r.top) / (r.height || R.VH)) * R.VH }; };
   chair.addEventListener("pointerdown", (e) => {
     if (busy) return;
     var p = point(e);
     grab = { dx: p.x - where.x, dy: p.y - where.y };
     try { chair.setPointerCapture(e.pointerId); } catch (err) {}
+    touched();
     chair.classList.add("held");
-    lift.setAttribute("filter", "url(#held)");
-    marks(null);
-    $("nudge").classList.add("off");
+    raise(true);
   });
   chair.addEventListener("pointermove", (e) => { if (!grab) return; var p = point(e); put(clamp({ x: p.x - grab.dx, y: p.y - grab.dy })); });
-  var up = () => { if (!grab) return; grab = null; chair.classList.remove("held"); lift.setAttribute("filter", "url(#drop)"); drop(); };
+  var up = () => { if (!grab) return; grab = null; chair.classList.remove("held"); raise(false); drop(); };
   chair.addEventListener("pointerup", up);
   chair.addEventListener("pointercancel", up);
   chair.addEventListener("keydown", (e) => {
     if (busy) return;
     var step = { ArrowLeft: [-20, 0], ArrowRight: [20, 0], ArrowUp: [0, -20], ArrowDown: [0, 20] }[e.key];
-    if (step) { e.preventDefault(); $("nudge").classList.add("off"); marks(null); put(clamp({ x: where.x + step[0], y: where.y + step[1] })); }
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); drop(); }
+    if (step) { e.preventDefault(); touched(); put(clamp({ x: where.x + step[0], y: where.y + step[1] })); }
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); touched(); drop(); }
   });
-  $("reset").addEventListener("click", () => {
+  again.addEventListener("click", () => {
     if (busy) return;
+    stop();
     asker.forget();
-    put({ x: START.x, y: START.y });
     marks(null);
+    again.hidden = true;
+    lay(shape());
     box.idle();
     box.did("");
     box.hint(HINT);
   });
-  put(where);
+  // The room takes the stage's shape for as long as the person has not touched it. After that it
+  // stays the room that the measurements sent to the agent are of, until the armchair is put back
+  function fit() {
+    var s = shape();
+    if (!busy && !grab && again.hidden && (s.tall !== R.tall || s.W !== R.W || s.H !== R.H)) lay(s);
+  }
+  lay(shape());
+  my.onEnter(fit);
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(fill);
   box.idle();
   box.did("");
   box.hint(HINT);

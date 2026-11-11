@@ -47,7 +47,7 @@ Be quick. Do not deliberate: take the first sound choice from what the action gi
 
 ### The room: `moved`
 
-The person dragged the armchair of a floor plan. `in_the_way` is what they put it on (`null`, `"door"`, `"sofa"`, `"coffee table"`, `"shelves"` or `"plant"`), and `free` lists the places where it can stand, nearest first, each `[x, y]` in centimetres. Answer with one of `free`, the first unless another suits better, whether to put a lamp beside it, and a sentence about the spot:
+The person dragged the armchair of a floor plan. `in_the_way` is what they put it on (`null`, `"door"`, `"sofa"`, `"coffee table"`, `"shelves"`, `"plant"`, `"dining table"` or `"sideboard"`). `free` lists the places where it can stand, nearest first, each `[x, y]` in centimetres, and `free_is` says each of them in a few words, as in `"by the sofa, on the rug"`. Answer with one of `free`, the first unless another suits better, whether to put a lamp beside it, and a sentence about the spot, for which `in_the_way` and `free_is` are all you need:
 
 ```sh
 it tour answer <the action's id> '{"armchair":[419,309],"lamp":true,"say":"<one sentence about where it stands now>"}'
