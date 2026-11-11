@@ -429,7 +429,11 @@ function Test-ItTask($candidate) {
   $action = $candidate.Actions[0]
   return $owner -eq $sid -and $action.Execute -ieq 'conhost.exe' -and $action.Arguments -ieq ${ps('--headless cmd.exe /d /c .\\it-service.cmd')} -and [IO.Path]::IsPathRooted($action.WorkingDirectory) -and [IO.Path]::GetFileName(([string]$action.WorkingDirectory).TrimEnd('\\')) -ieq 'bin'
 }
-$tasks = @(Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop)
+# A folder of the Task Scheduler with no task in it is not found, which is said as an error like any other: it is none
+function Get-ItRootTasks {
+  try { Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop } catch { if ($_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound_TaskPath,*') { throw } }
+}
+$tasks = @(Get-ItRootTasks)
 $task = $tasks | Where-Object { $_.TaskName -eq $name }
 if ($task -and -not (Test-ItTask $task)) { throw 'The task for this account is not an It launcher owned by this account. It was left unchanged.' }
 $legacy = $tasks | Where-Object { $_.TaskName -eq 'it' }
@@ -463,7 +467,7 @@ foreach ($owned in $ownedTasks) {
   if (([string]$owned.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq ${started}) {
     Stop-ScheduledTask -InputObject $owned -ErrorAction Stop
     Unregister-ScheduledTask -InputObject $owned -Confirm:$false -ErrorAction Stop
-    if (Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop | Where-Object { $_.TaskName -eq $owned.TaskName }) { throw 'Windows still has the task' }
+    if (Get-ItRootTasks | Where-Object { $_.TaskName -eq $owned.TaskName }) { throw 'Windows still has the task' }
   }
 }; exit 0`
 }
