@@ -214,8 +214,9 @@ describe('a question to Windows that is not answered (#404)', () => {
         process.env.IT_HOME = path.join(commands, '.it')
         Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
         writeFileSync(fails, '2')
+        // The two answers are said once with "(twice)" where they read the same, and both where their times differ
         expect(() => installedHere()).toThrow(
-          /^reading the registered tasks failed: PowerShell ended with exit code 1 after \d+\.\d seconds, and printed nothing \(twice\)$/,
+          /^reading the registered tasks failed: PowerShell ended with exit code 1 after \d+\.\d seconds, and printed nothing( \(twice\)|; asked once before, PowerShell ended with exit code 1 after \d+\.\d seconds, and printed nothing)$/,
         )
         expect(readFileSync(asked, 'utf8').trim().split('\n')).toHaveLength(2)
         writeFileSync(fails, '2')
