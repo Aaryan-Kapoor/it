@@ -87,9 +87,22 @@ If you cannot view images, do not mark the answer, and do not work it out from `
 it tour answer <the action's id> '{"blind":true,"say":"<one sentence saying that you cannot look at pictures, so you have not marked it>"}'
 ```
 
-### The studio
+### The studio: `design`, `point`
 
-This part sends nothing yet.
+The front page of a made-up festival is on an easel, and `for` says what the festival is. `design` means the person picked a colour on a wheel, and perhaps a mood: `colour_is` and `mood` say which. `pick` is a design that goes with them, already worked out: a `palette`, a `type`, a `shape` and a `picture`, each one of those the action lists. Answer with `pick` as it is unless you see better among what is listed, a headline and the line under it in your own words for that colour and mood, neither longer than `most` says, and a sentence about the design:
+
+```sh
+it tour answer <the action's id> '{"palette":"flood","type":"poster","shape":"sharp","picture":"boats","headline":"<your headline>","line":"<your line under it>","say":"<one sentence>"}'
+```
+
+The page draws itself again in your design, and the tour wears its colour from then on. In place of a palette's name you may give colours of your own, as `["#paper","#ink","#accent"]`: the page takes them only where the ink can be read on the paper.
+
+`point` means the person pointed at one piece of that page, `piece`, and chose a word for what is wrong with it, `wish`. `try` is the change that asks for, already worked out. Answer with what is in `try` and a sentence. Where `try` has `text` the wish is for other words: write your own there, no longer than `most`, to go with the rest of the page, which is in `page`:
+
+```sh
+it tour answer <the action's id> '{"size":3,"say":"<one sentence>"}'
+it tour answer <the action's id> '{"text":"<your words>","say":"<one sentence>"}'
+```
 
 ### The chessboard: `move`, `illegal`
 

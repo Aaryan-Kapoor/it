@@ -270,6 +270,53 @@ describe('the agent’s dock', () => {
   })
 })
 
+describe('the frame in other colours', () => {
+  const WORN = ['--green', '--on-green', '--green-soft', '--paper', '--card', '--line']
+  const worn = (page: Page) => WORN.map((k) => page.w.document.documentElement.style.getPropertyValue(k) as string)
+  const SOUND = { '--green': '#b4530c', '--on-green': '#ffffff', '--green-soft': '#f6e3d2', '--paper': '#f4ece0', '--card': '#fffaf2', '--line': '#e6d6c2' }
+
+  test('a part may dress the frame in an accent and a tint of its own, and put the frame’s own colours back', async () => {
+    const page = await opened()
+    expect(worn(page).join('')).toBe('')
+    expect(page.w.Shell.wear(SOUND)).toBe(true)
+    expect(worn(page)).toEqual(Object.values(SOUND))
+    // The accent alone, where it can be read against the frame's own paper
+    expect(page.w.Shell.wear({ '--green': '#1d4ed8', '--on-green': '#ffffff' })).toBe(true)
+    expect(worn(page)).toEqual(['#1d4ed8', '#ffffff', '', '', '', ''])
+    expect(page.w.Shell.wear(null)).toBe(false)
+    expect(worn(page).join('')).toBe('')
+    expect(page.errors).toEqual([])
+    page.close()
+  })
+
+  test('nothing is worn where a name is not one of the six, a value is not a colour, or what the frame writes could not be read', async () => {
+    const page = await opened()
+    for (const wrong of [
+      { ...SOUND, '--ink': '#000000' },
+      { ...SOUND, color: '#000000' },
+      { ...SOUND, '--paper': 'url(https://example.com/x)' },
+      { ...SOUND, '--green': 'red' },
+      { ...SOUND, '--card': '#fff' },
+      { ...SOUND, '--line': 7 },
+      // White on a pale accent, an accent that is lost on the paper, and a paper the frame's ink is lost on
+      { ...SOUND, '--green': '#f5d0a9' },
+      { ...SOUND, '--green': '#efe6d8', '--on-green': '#1c1a16' },
+      { ...SOUND, '--paper': '#2a2622' },
+      { ...SOUND, '--card': '#55504a' },
+      {},
+      'green',
+      ['#b4530c'],
+    ]) {
+      // Whatever was worn before is taken off, so that a refusal leaves the frame in its own colours
+      page.w.Shell.wear(SOUND)
+      expect(page.w.Shell.wear(wrong), JSON.stringify(wrong)).toBe(false)
+      expect(worn(page).join(''), JSON.stringify(wrong)).toBe('')
+    }
+    expect(page.errors).toEqual([])
+    page.close()
+  })
+})
+
 describe('how the first page is put together', () => {
   const shell = readFileSync(new URL('./pages/start.html', import.meta.url), 'utf8')
   const part = (name: string, more: { section?: string; script?: string; style?: string; extra?: string } = {}) =>
@@ -345,7 +392,7 @@ describe('the guide for the first page', () => {
 
   test('names every action a part sends, in that part’s own section, and the page sends each it names', () => {
     const sends = [...page.matchAll(/(?:asker|my)\.send\("([a-z]+)"/g)].map((m) => m[1]!)
-    expect([...new Set(sends)].sort()).toEqual(['beat', 'checked', 'finish', 'ideas', 'illegal', 'make', 'move', 'moved', 'turned'])
+    expect([...new Set(sends)].sort()).toEqual(['beat', 'checked', 'design', 'finish', 'ideas', 'illegal', 'make', 'move', 'moved', 'point', 'turned'])
     for (const action of new Set(sends)) expect(sectionFor(action), action).toBeDefined()
     for (const heading of part.matchAll(/^### [^\n]*$/gm)) for (const named of heading[0].matchAll(/`([a-z]+)`/g)) expect(sends, named[1]).toContain(named[1])
   })
