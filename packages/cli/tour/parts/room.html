@@ -53,7 +53,7 @@
         <g id="room-door"><rect x="-3" y="-100" width="7" height="100" rx="2" fill="var(--wood-dark)"/><path d="M4 -100 A100 100 0 0 1 100 0" fill="none" stroke="var(--wall)" stroke-width="1.3" stroke-dasharray="3 6" opacity=".55"/><text x="12" y="26">DOOR</text></g>
         <text id="room-size" y="15"></text>
         <g id="room-scale"><path d="M0 -4v6h100v-6" fill="none" stroke="var(--faint)" stroke-width="1.2"/><text x="110" y="4">1 M</text></g>
-        <rect id="room-ghost" width="78" height="78" rx="18" fill="none" stroke="var(--faint)" stroke-width="1.6" stroke-dasharray="5 6"/>
+        <rect id="room-ghost" width="78" height="78" rx="18" fill="var(--card)" fill-opacity=".28" stroke="var(--wall)" stroke-opacity=".7" stroke-width="1.8" stroke-dasharray="5 6"/>
         <path id="room-trail" fill="none" stroke="var(--green)" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="1 8"/>
         <g id="room-dim"><line id="room-dim-line" stroke="var(--green)" stroke-width="1.6"/><g id="room-dim-label"><rect x="-34" y="-12" width="68" height="24" rx="12" fill="var(--green)"/><text id="room-dim-text" text-anchor="middle" y="4.5"></text></g></g>
         <g id="room-lamp"><circle class="glow" r="52" fill="url(#room-glow)"/><g class="pop"><circle r="13" fill="#fffdf8" stroke="#d8b24a" stroke-width="3" filter="url(#room-drop)"/><circle r="4" fill="#d8b24a"/></g></g>
@@ -90,8 +90,8 @@ Shell.part("room", (my) => {
   function shape() {
     var w = fill.clientWidth, h = fill.clientHeight, tens = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(v / 10) * 10));
     if (!(w > 0 && h > 0)) return { tall: false, W: 640, H: 440 };
-    if (w / h < 1.15) return { tall: true, W: 420, H: tens(((420 + 2 * MX) * h) / w - MT - MB, 520, 780) };
-    return { tall: false, W: tens(((440 + MT + MB) * w) / h - 2 * MX, 600, 1300), H: 440 };
+    if (w / h < 0.95) return { tall: true, W: 420, H: tens(((420 + 2 * MX) * h) / w - MT - MB, 460, 780) };
+    return { tall: false, W: tens(((440 + MT + MB) * w) / h - 2 * MX, 520, 1300), H: 440 };
   }
   function lay(s) {
     var W = s.W, H = s.H, x = MX, y = MT, VW = W + 2 * MX, VH = H + MT + MB, wide = !s.tall && W >= 900;
@@ -140,9 +140,14 @@ Shell.part("room", (my) => {
       make("text", { x: w.x + w.w / 2, y: y - 14, "text-anchor": "middle" }, panes).textContent = "WINDOW";
     });
     var metres = (W / 100).toFixed(1) + " × " + (H / 100).toFixed(1) + " M";
-    set("room-size", { x: x }).textContent = s.tall ? metres : "LIVING ROOM · " + metres;
+    // The room's name is written with its size where the word over the first window leaves the room for it
+    set("room-size", { x: x }).textContent = s.tall || windows[0].x + windows[0].w / 2 < x + 260 ? metres : "LIVING ROOM · " + metres;
     at("room-scale", x + 130, y + H + 23);
+    // The armchair is simply at its place in a room that has just been laid out: it does not slide there
+    chair.classList.add("held");
     put(R.start);
+    void chair.getBoundingClientRect();
+    chair.classList.remove("held");
   }
 
   // ── Where the armchair may stand ──
@@ -202,9 +207,10 @@ Shell.part("room", (my) => {
         if (!best || d < best.d) best = { d: d, from: { x: xs[0], y: ys[0] }, to: { x: xs[1], y: ys[1] } };
       });
       from = best.from; to = best.to; text = Math.round(best.d);
+      // The number stands clear of both: over the armchair where they are side by side, and beside it where one is above the other
       var flat = Math.abs(to.x - from.x) >= Math.abs(to.y - from.y);
-      lx = (from.x + to.x) / 2 + (flat ? 0 : 46);
-      ly = (from.y + to.y) / 2 - (flat ? 22 : 0);
+      lx = flat ? (from.x + to.x) / 2 : p.x + SIZE + 44 < R.x + R.W - 44 ? p.x + SIZE + 44 : p.x - 44;
+      ly = flat ? (p.y - 22 > R.y + 22 ? p.y - 22 : p.y + SIZE + 22) : (from.y + to.y) / 2;
     }
     set("room-dim-line", { x1: from.x, y1: from.y, x2: to.x, y2: to.y });
     at("room-dim-label", Math.min(R.x + R.W - 44, Math.max(R.x + 44, lx)), Math.min(R.y + R.H - 22, Math.max(R.y + 22, ly)));
@@ -310,7 +316,9 @@ Shell.part("room", (my) => {
     asker.forget();
     marks(null);
     again.hidden = true;
-    lay(shape());
+    // It goes back across the room it is in, and the room is laid out again only where the stage has changed its shape
+    var s = shape();
+    if (s.tall !== R.tall || s.W !== R.W || s.H !== R.H) lay(s); else put(R.start);
     box.idle();
     box.did("");
     box.hint(HINT);
