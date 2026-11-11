@@ -544,15 +544,33 @@ test('acting in a frame on and on is counted again, once the browser could no lo
   const sent = timedReporter()
   await vi.advanceTimersByTimeAsync(1500)
   // A click every second for twenty seconds
+  let last = 0
   for (let i = 0; i < 20; i++) {
     word.acted()
+    last = Date.now()
     await vi.advanceTimersByTimeAsync(1000)
   }
+  await vi.advanceTimersByTimeAsync(USED_EVERY_MS)
   const uses = usesOf(sent)
-  expect(uses.length).toBeGreaterThanOrEqual(2)
-  // None is said as later than the browser's word can show it to have been
-  for (const u of uses) expect(u.usedAt! - AHEAD).toBeLessThanOrEqual(u.observedAt! - AHEAD)
-  expect(uses.at(-1)!.usedAt! - AHEAD).toBeGreaterThanOrEqual(Date.now() - 20_000 + ACTIVATION_MS)
+  expect(uses.length).toBeGreaterThanOrEqual(3)
+  // None is said as later than the browser's word can show it to have been, and the last is
+  // within what the browser's word and the site's looks can tell of the last click
+  for (const u of uses) expect(u.usedAt!).toBeLessThanOrEqual(u.observedAt!)
+  expect(uses.at(-1)!.usedAt! - AHEAD).toBeGreaterThanOrEqual(last - ACTIVATION_MS - LOOK_EVERY_MS)
+})
+
+test('a second click in a frame, learned only seconds later, is still said once the ten seconds are up', async () => {
+  const word = activationOf()
+  const sent = timedReporter()
+  const start = Date.now()
+  await vi.advanceTimersByTimeAsync(1500)
+  word.acted()
+  await vi.advanceTimersByTimeAsync(2000)
+  // Two seconds later, which the browser's word shows only once the first could no longer explain it
+  word.acted()
+  await vi.advanceTimersByTimeAsync(USED_EVERY_MS * 3)
+  const uses = usesOf(sent)
+  expect(uses.map((u) => u.usedAt! - AHEAD)).toEqual([start, start + LOOK_EVERY_MS])
 })
 
 test('a use said once the ten seconds are up says when it happened, and says nothing of it where the backend does not take that', async () => {

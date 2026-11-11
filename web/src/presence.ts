@@ -150,8 +150,18 @@ export function startReports(
   let untimed = false
   const tab = tabId()
   let sequence = 0
-  /** When the person last used the site here, by a clock that only goes forward, and when the last use that was said happened. */
+  /**
+   * When this tab last learned that the person used the site here, by a clock that only goes
+   * forward, which is what a use is a use of a moment ago by.
+   */
   let usedAt = Number.NEGATIVE_INFINITY
+  /**
+   * How long before it was learned that use can have happened: nothing for one seen on the site,
+   * and up to a few seconds for one learned from the browser's word that the person has just
+   * acted. It is said that much earlier, and is still a use of a moment ago for the ten seconds
+   * after it was learned, so that a use learned late is not too old by the time it is said.
+   */
+  let usedLead = 0
   /**
    * The same, by the browser's own clock. Where the machine sleeps, the clock that only goes
    * forward may stand still, and a use from before the sleep would look as if it were a moment
@@ -184,7 +194,7 @@ export function startReports(
     const used = !untimed && shown && usedAt > saidUseOf && fresh()
     const what = closing ? { phase: 'none' as const } : page
     // When the use was, as long ago as the clock that says longer has it, so never later than it was
-    const when = used && observedAt !== undefined && at.takesUsedAt?.() ? { usedAt: Math.floor(observedAt - age()) } : {}
+    const when = used && observedAt !== undefined && at.takesUsedAt?.() ? { usedAt: Math.floor(observedAt - age() - usedLead) } : {}
     return {
       tab,
       sequence: ++sequence,
@@ -230,9 +240,10 @@ export function startReports(
     const t = now()
     const then = Math.min(when ?? t, t)
     // A use from before the one kept says nothing new
-    if (!spent && then <= usedAt) return
-    usedAt = then
-    usedWallAt = wall() - (t - then)
+    if (!spent && then <= usedAt - usedLead) return
+    usedAt = t
+    usedWallAt = wall()
+    usedLead = t - then
     spent = false
     const wait = toldUsedAt + USED_EVERY_MS - t
     if (wait <= 0) tell()
