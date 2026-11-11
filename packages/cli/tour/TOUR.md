@@ -104,6 +104,8 @@ it tour answer <the action's id> '{"size":3,"say":"<one sentence>"}'
 it tour answer <the action's id> '{"text":"<your words>","say":"<one sentence>"}'
 ```
 
+Write your words and your sentence without an apostrophe: the answer is inside single quotes, and an apostrophe would end it.
+
 ### The chessboard: `move`, `illegal`
 
 The person plays White and you play Black. `good` holds a few sound moves for you, best first, and `legal` every move you may make, each written as `e7e5`. Answer with one of them and a few words about it, which are the only words the page has of your move. Take the first of `good` unless you see a better one at a glance:

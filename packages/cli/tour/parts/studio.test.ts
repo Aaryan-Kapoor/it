@@ -254,7 +254,7 @@ describe('the studio', () => {
         const name = names[n++ % names.length]!
         await asked.accept()
         await page.set({ studio: { request: asked.data.request, palette: name, say: 'x' } })
-        for (const role of ['paper', 'ink', 'accent', 'on', 'second', 'on2', 'tint', 'loud', 'deep', 'dusk', 'pale'])
+        for (const role of ['paper', 'ink', 'accent', 'on', 'second', 'on2', 'tint', 'loud', 'shade', 'deep', 'dusk', 'pale'])
           expect(colour(page, role), role).toMatch(HEX)
         expect(apart(colour(page, 'on'), colour(page, 'accent')), `${name} at ${degrees}, ${out}`).toBeGreaterThanOrEqual(4.5)
         expect(apart(colour(page, 'on2'), colour(page, 'second')), `${name} at ${degrees}, ${out}`).toBeGreaterThanOrEqual(4.5)
