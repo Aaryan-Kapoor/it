@@ -264,6 +264,30 @@ describe('how It’s program is named in a command an agent is told to run', () 
     expect(onWindows('linux')).toBe('')
   })
 
+  test('on Windows, no command that `arrives` gives an agent names a bare it', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const was = process.env.IT_HOME
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-name-'))
+    try {
+      process.env.IT_HOME = folder
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      const said = [
+        arrives({ session: claude, addonHere: false, route: null, slug: 'plan' }),
+        arrives({ session: claude, addonHere: true, route: route(), slug: 'plan' }),
+        arrives({ session: claude, addonHere: true, route: route({ runtime: 'incompatible' }) }),
+        arrives({ session: claude, addonHere: true, route: route({ listening: true, runtime: 'active' }) }),
+      ].map((a) => a.next)
+      for (const next of said) expect(next).not.toMatch(/`it /)
+      expect(said[0]).toContain('`it.exe status`')
+      expect(said[0]).toContain('`it.exe wait --id plan --timeout 100`')
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      if (was === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = was
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
   test('on Windows, by its whole path with forward slashes where both shells take it as it stands, and else as it.exe, never as a bare it', () => {
     const was = process.env.IT_HOME
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-name-'))

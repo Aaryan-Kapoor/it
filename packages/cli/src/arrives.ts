@@ -187,7 +187,7 @@ function arrivesAsIs(f: Facts): Arrives {
   const end = (via: 'addon' | 't3'): Arrives => ({
     byItself: true,
     via,
-    next: `End your turn. What the person does on ${on} arrives in this conversation by itself, ${via === 't3' ? 'through its thread of T3 Code' : 'through It’s add-on'}, as a message that begins [It]. Do not run \`it wait\`.`,
+    next: `End your turn. What the person does on ${on} arrives in this conversation by itself, ${via === 't3' ? 'through its thread of T3 Code' : 'through It’s add-on'}, as a message that begins [It]. Do not run \`${itForAgent()} wait\`.`,
   })
   const unknown = (why: string): Arrives => ({ byItself: 'unknown', next: `${why} ${waitFor(f.slug)}` })
   const not = (why: string): Arrives => ({ byItself: false, next: `${why} ${waitFor(f.slug)}` })
@@ -195,7 +195,7 @@ function arrivesAsIs(f: Facts): Arrives {
     return unknown('It cannot tell which conversation this command runs in, so it cannot tell whether what the person does arrives here by itself.')
   if (!f.route)
     return unknown(
-      'It could not ask its connector, which is what hands what the person does to a conversation, so it cannot tell. `it status` says how It stands.',
+      `It could not ask its connector, which is what hands what the person does to a conversation, so it cannot tell. \`${itForAgent()} status\` says how It stands.`,
     )
   const { harness } = f.session
   const app = harness in KNOWN ? KNOWN[harness as keyof typeof KNOWN].label : 'this agent app'
@@ -218,7 +218,7 @@ function arrivesAsIs(f: Facts): Arrives {
     )
   if (f.route.runtime === 'incompatible')
     return not(
-      `The add-on that ${app} has loaded cannot take clicks from this It, so nothing the person does arrives here by itself. \`it status\` says what to do about it.`,
+      `The add-on that ${app} has loaded cannot take clicks from this It, so nothing the person does arrives here by itself. \`${itForAgent()} status\` says what to do about it.`,
     )
   if (notLoadedHere(f)) {
     // Said word for word, and once: in the tour, where an agent that installed It said it with the
@@ -233,7 +233,7 @@ function arrivesAsIs(f: Facts): Arrives {
   }
   if (harness === 'claude-code' && f.addonHere === true)
     return unknown(
-      'It’s add-on runs in this conversation, and It has not heard from it in the last few seconds: `it status` says why, such as a proxy that keeps the add-on from reaching It.',
+      `It’s add-on runs in this conversation, and It has not heard from it in the last few seconds: \`${itForAgent()} status\` says why, such as a proxy that keeps the add-on from reaching It.`,
     )
   return unknown(
     `It has not heard from It’s add-on in this conversation in the last few seconds, so it cannot tell whether what the person does arrives here by itself.`,

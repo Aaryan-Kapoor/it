@@ -2398,7 +2398,7 @@ async function settingUp(a: Args, joined: boolean) {
       )
     if (!found.length)
       say(
-        '  None was found. Any agent can still use `it` to make pages and `it wait` to hear what is done on them, and `it skill` prints the instructions to give it.',
+        `  None was found. Any agent can still use \`${itForAgent()}\` to make pages and \`${itForAgent()} wait\` to hear what is done on them, and \`${itForAgent()} skill\` prints the instructions to give it.`,
       )
 
     let wanted: Harness[]
@@ -2475,7 +2475,7 @@ async function settingUp(a: Args, joined: boolean) {
       // Registered is not yet running. The connector itself is asked, and given a little while to answer.
       if (!trouble) {
         if (await answering()) say(`It runs in the background (${background.state}).`)
-        else trouble = 'It was registered as a background service, but it is not answering. Run `it service logs` to read why.'
+        else trouble = `It was registered as a background service, but it is not answering. Run \`${itForAgent()} service logs\` to read why.`
       }
       if (trouble) {
         say(trouble)
@@ -2484,12 +2484,12 @@ async function settingUp(a: Args, joined: boolean) {
           const registered = service.installedHereOr(undefined)
           say(
             registered === false
-              ? 'It is running now, from an `it serve` that was started by hand, and stops when that does.'
+              ? `It is running now, from an \`${itForAgent()} serve\` that was started by hand, and stops when that does.`
               : registered
                 ? 'It is running now, from the background service that was registered before, as the version that service started.'
                 : 'It is running now, but whether the background service registered before or an `it serve` started by hand runs it could not be told.',
           )
-        } else say('Until It runs on this machine, nothing done on a page reaches an agent here. Run `it serve` yourself to keep it going.')
+        } else say(`Until It runs on this machine, nothing done on a page reaches an agent here. Run \`${itForAgent()} serve\` yourself to keep it going.`)
       }
       // What the system would not do for the service is said here as well, where a person at a terminal reads it: that It stops when they log out, say
       if ('note' in background && background.note) say(background.note)
