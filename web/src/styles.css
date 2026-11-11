@@ -3404,7 +3404,14 @@ form.row-main {
     grid-column: 1 / -1;
     grid-row: 3;
   }
+  /* A phone has no room for how things stand while all is well, but is told, beside the name,
+     when It cannot be reached, as a desktop is */
   .grid-meta {
+    grid-column: 1;
+    grid-row: 1;
+    justify-self: end;
+  }
+  .grid-meta.online {
     display: none;
   }
   .grid-header-spacer {
