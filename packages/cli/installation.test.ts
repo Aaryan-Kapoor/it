@@ -88,23 +88,6 @@ describe('installation ownership', () => {
     for (const name of ['backend', 'bin', 'content', 'logs']) expect(readFileSync(path.join(at, name, 'source'), 'utf8')).toBe('mine')
   })
 
-  const notes = ['telemetry.json', 'telemetry-off', 'telemetry-sending', 'usage.jsonl', 'usage.jsonl.taken', 'updates-off', 'releases.json']
-  test.each(notes)('setup refuses a project whose only It file is %s, which any command writes before setup', (note) => {
-    const at = folder()
-    put(at, 'logs/source', 'mine')
-    put(at, note, '{}')
-    expect(() => markInstallation(at)).toThrow('contains files but no It records')
-    expect(existsSync(path.join(at, INSTALLATION_FILE))).toBe(false)
-    expect(readFileSync(path.join(at, 'logs', 'source'), 'utf8')).toBe('mine')
-  })
-
-  test('setup takes a folder holding only the notes commands write before setup for an empty one', () => {
-    const at = folder()
-    for (const note of notes) put(at, note, '{}')
-    markInstallation(at)
-    expect(markedInstallation(at)).toBe(true)
-  })
-
   test.each(['machine.json', 'service.json', 'left.json', 'delivery-recovery.json.unreadable', 'addons/pi.json'])(
     'setup can mark an existing home whose only It record is %s',
     (record) => {

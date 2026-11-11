@@ -60,20 +60,16 @@ export function checkInstallationRecord(folder: string): boolean {
   return marked
 }
 
-// Any command writes these notes wherever IT_HOME points, before It is set up there, and the
-// install scripts write where the program came from. So they show nothing of whose a folder is.
-const NOTES = ['telemetry.json', 'telemetry-off', 'telemetry-sending', 'usage.jsonl', 'usage.jsonl.taken', 'updates-off', 'releases.json']
-
 /** Check before setup writes even a lock or a reporting record, so its own writes cannot make a project look like an existing home. */
 export function checkInstallationFolder(folder: string): void {
   if (!lstatSync(folder, { throwIfNoEntry: false })) return
-  const records = ROOT_FILES.filter((name) => name !== 'LICENSE.md' && name !== 'THIRD_PARTY_NOTICES.md' && !NOTES.includes(name))
+  const records = ROOT_FILES.filter((name) => name !== 'LICENSE.md' && name !== 'THIRD_PARTY_NOTICES.md')
   if (
     installationFile(folder, INSTALLATION_FILE) ||
     records.some((name) => installationFile(folder, name)) ||
     HARNESSES.some((name) => installationFile(folder, `addons/${name}.json`)) ||
     legacyInstallation(folder) ||
-    readdirSync(folder).every((name) => NOTES.includes(name) && installationFile(folder, name))
+    readdirSync(folder).length === 0
   )
     return
   throw new Problem(
