@@ -102,7 +102,9 @@ describe('the studio', () => {
     expect(asked.data.picture).toContain(pick.picture)
     // All of it is in what an agent is shown of an action when it arrives
     expect(JSON.stringify(asked.data).length).toBeLessThan(2000)
-    // The page is still the draft, and the wheel is not the person's until the agent has answered
+    // The page is still the draft, with a dab of the colour on its edge, and the wheel is not the person's until the agent has answered
+    expect(page.$('#studio-wash').style.background).not.toBe('')
+    expect(page.$('#studio-wash').style.clipPath).toMatch(/^circle\(2\.1em at /)
     expect([art(page).getAttribute('data-skin'), words(page, 'headline'), waits(page)]).toEqual(['draft', DRAFT, true])
     expect(page.you('studio')).toBe('picked a colour')
     expect(page.state('studio')).toBe('Sending what you did to It')
@@ -413,6 +415,7 @@ describe('the studio', () => {
     await page.advance(SLOW)
     expect(page.state('studio')).toContain('No answer after 40 s')
     expect([waits(page), art(page).getAttribute('data-skin')]).toEqual([false, 'draft'])
+    expect(page.$('#studio-wash').style.clipPath).toMatch(/^circle\(0% at /)
     const second = dragged(page, 210, 0.9)
     await page.set({ studio: { request: first.data.request, palette: 'night', headline: 'Late.', say: 'Late.' } })
     expect([art(page).getAttribute('data-skin'), words(page, 'headline'), page.said('studio')]).toEqual(['draft', DRAFT, ''])
