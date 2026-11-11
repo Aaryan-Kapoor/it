@@ -5881,12 +5881,17 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     }
   })
 
-  test('an agent that asks for the pairing link is told to give it to the person at once, and in a Claude Code conversation without the add-on, with the words to load it', async () => {
+  test('an agent that asks for the pairing link is told to give it to the person at once, and in a Claude Code or Pi conversation without the add-on, with the words to load it', async () => {
     const m = machine(true, true)
     let connected = true
     const b = await backend(m, (asked) =>
       asked.path === 'machines:me'
-        ? { harnesses: [{ id: 'claude-code', addon: connected ? 'connected' : 'not_connected' }] }
+        ? {
+            harnesses: [
+              { id: 'claude-code', addon: connected ? 'connected' : 'not_connected' },
+              { id: 'pi', addon: connected ? 'connected' : 'not_connected' },
+            ],
+          }
         : { code: 'Ab3dEf6hIj9kLm2nOp5q' },
     )
     const url = `${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q`
@@ -5907,9 +5912,17 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
         url,
         tell: `${give} In that same message, tell them this, word for word: “${reloadLine('2.1.321')}”`,
       })
-      // But not where Claude Code's add-on is not connected on this machine, since loading it then does nothing
+      // From a Pi conversation that has not loaded the add-on, the same, with Pi's own words, and not where the add-on runs in it
+      const inPi = { ...b.env, PI_SESSION_ID: 'pi-1' }
+      expect(printed(await run(m, ['site', '--no-open'], inPi))).toEqual({
+        url,
+        tell: `${give} In that same message, tell them this, word for word: “${PI_RELOAD}”`,
+      })
+      expect(printed(await run(m, ['site', '--no-open'], { ...inPi, IT_PI_SESSION: 'pi-1' }))).toEqual({ url, tell: give })
+      // But not where the conversation's add-on is not connected on this machine, since loading it then does nothing
       connected = false
       expect(printed(await run(m, ['site', '--no-open'], claude))).toEqual({ url, tell: give })
+      expect(printed(await run(m, ['site', '--no-open'], inPi))).toEqual({ url, tell: give })
       // Nor where the add-on runs in the conversation already
       connected = true
       expect(printed(await run(m, ['site', '--no-open'], { ...claude, IT_HARNESS: 'claude-code', IT_SESSION: claude.CLAUDE_CODE_SESSION_ID }))).toEqual({
