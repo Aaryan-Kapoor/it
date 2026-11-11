@@ -157,6 +157,7 @@ function run(
   env: Record<string, string> = {},
   runtime = process.execPath,
   before: string[] = [],
+  input = '',
 ): Promise<Ran> {
   return new Promise((resolve) => {
     const child = execFile(
@@ -171,7 +172,7 @@ function run(
           err: String(stderr),
         }),
     )
-    child.stdin?.end()
+    child.stdin?.end(input)
   })
 }
 
@@ -697,7 +698,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       }
       expect(b.asked).toEqual([])
       // An answer whose JSON a shell split at a space is told how to give it whole
-      expect(error(await run(m, ['tour', 'answer', 'action-1', '{"say":"two', 'words"}'], b.env)).hint).toContain('run `it tour answer action-1 --file <path>`')
+      expect(error(await run(m, ['tour', 'answer', 'action-1', '{"say":"two', 'words"}'], b.env)).hint).toContain("give it on standard input: `it tour answer action-1 - <<'EOF'`")
       expect(error(await run(m, ['tour', 'next', 'now'], b.env)).message).toBe('`it tour next` takes nothing after it.')
       expect(error(await run(m, ['tour', 'answer'], b.env)).message).toBe('Say which action.')
       expect(error(await run(m, ['tour', 'answer', 'action-1', '[1]'], b.env)).code).toBe('invalid')
@@ -7907,6 +7908,29 @@ describe('whether what the person does arrives by itself, as a page’s command 
       expect(JSON.parse(String(patched.patch))).toEqual({ board: { read: '144', right: true, say: 'Right.', request } })
       expect(b.asked[3]!.args).toEqual({ id: 'action-1', outcome: 'succeeded' })
       expect([existsSync(path.join(folder, `.it-tour-${request}.png`)), readFileSync(path.join(folder, 'sheet.png'), 'utf8')]).toEqual([false, 'theirs'])
+
+      // On standard input, as a here-document gives it, no apostrophe or quote in the agent's words ends anything
+      const words = `That's it: "144", and it's right'`
+      const answers = () =>
+        b.asked
+          .filter((x) => x.path === 'state:patch')
+          .map((x) => Object.fromEntries(Object.entries(JSON.parse(String(x.args.patch)).board).filter(([, v]) => v !== null)))
+      b.asked.length = 0
+      expect(printed(await run(m, ['tour', 'answer', 'action-1', '-'], env, process.execPath, [], `${JSON.stringify({ read: '144', say: words })}\n`)).answered).toBe('board')
+      // And where the `-` was left out, what was given there is read all the same, and not taken for no answer
+      expect(printed(await run(m, ['tour', 'answer', 'action-1'], env, process.execPath, [], JSON.stringify({ say: words }))).answered).toBe('board')
+      expect(answers()).toEqual([
+        { read: '144', say: words, request },
+        { say: words, request },
+      ])
+      // An empty standard input after `-` is refused, and nothing is set
+      b.asked.length = 0
+      expect(error(await run(m, ['tour', 'answer', 'action-1', '-'], env)).message).toBe('Say the answer, on standard input.')
+      // JSON that an apostrophe cut short on the command line is refused, with the way that cannot be cut
+      expect(error(await run(m, ['tour', 'answer', 'action-1', '{"say":"That'], env)).hint).toContain("`it tour answer action-1 - <<'EOF'`")
+      // And JSON on standard input that is not JSON is said to be that
+      expect(error(await run(m, ['tour', 'answer', 'action-1', '-'], env, process.execPath, [], '{"say":')).message).toBe('The answer on standard input is not valid JSON.')
+      expect(answers()).toEqual([])
     } finally {
       await c.close()
       await b.close()

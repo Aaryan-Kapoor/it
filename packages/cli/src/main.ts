@@ -9,6 +9,7 @@ import {
   appendFileSync,
   chmodSync,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -342,6 +343,46 @@ async function piped(): Promise<string | undefined> {
     throw err
   })
   return all.trim() ? all : undefined
+}
+
+/**
+ * What a here-document or a pipe gave a command that was given no other input, where it was
+ * given one. Nothing where standard input is a terminal or no pipe or file at all, as where a
+ * harness gives a command `/dev/null`. A pipe that has given nothing at all after `grace`
+ * milliseconds is left, and taken for nothing: a harness may leave a command's standard input
+ * open and never write to it, and the command is not to wait on that for ever. A here-document is
+ * whole before the command begins, so it is never taken for nothing.
+ */
+async function pipedIfAny(grace: number): Promise<string | undefined> {
+  let kind: { isFIFO(): boolean; isFile(): boolean; isSocket(): boolean }
+  try {
+    kind = fstatSync(0)
+  } catch {
+    return undefined
+  }
+  if (process.stdin.isTTY || !(kind.isFIFO() || kind.isFile() || kind.isSocket())) return undefined
+  if (kind.isFile()) return piped()
+  let heard = false
+  const first = () => {
+    heard = true
+  }
+  process.stdin.once('data', first)
+  const reading = piped()
+  const quiet = await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(!heard), grace)
+    reading.then(
+      () => (clearTimeout(timer), resolve(false)),
+      () => (clearTimeout(timer), resolve(false)),
+    )
+  })
+  if (quiet) {
+    process.stdin.off('data', first)
+    process.stdin.pause()
+    process.stdin.destroy()
+    reading.catch(() => {})
+    return undefined
+  }
+  return reading
 }
 
 // ---------- pages ----------
@@ -690,7 +731,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   serve: [0, 'serve [--log <file>]'],
   service: [1, 'service install | uninstall | status | logs'],
   skill: [0, 'skill'],
-  tour: [3, "tour [--wait] [show <name> | show next | answer <action-id> ['<json>' | --file <path>] | next | clear]"],
+  tour: [3, "tour [--wait] [show <name> | show next | answer <action-id> [- | '<json>' | --file <path>] | next | clear]"],
   telemetry: [1, 'telemetry [on | off]'],
   upgrade: [0, 'upgrade [--check]'],
   updates: [1, 'updates [on | off]'],
@@ -729,7 +770,7 @@ function noMore(cmd: string, a: Args): void {
       : cmd === 'create' && text(a, 'state') !== undefined
         ? ' If your shell split the JSON of --state at a space, write it to a file and give it with `--state-file <path>`.'
         : cmd === 'tour' && a._[0] === 'answer'
-          ? ` If your shell split the JSON at a space, write it to a file and run \`it tour answer ${a._[1]} --file <path>\`.`
+          ? ` If your shell split the JSON at a space or at an apostrophe in it, give it on standard input: \`it tour answer ${a._[1]} - <<'EOF'\`, then the JSON on a line of its own, then EOF on a line of its own.`
           : ''
   throw new Problem(`It does not know what to do with "${a._[most]}".`, 'invalid', `Usage: it ${usage}${split}`)
 }
@@ -1111,7 +1152,7 @@ function pictureFolders(): (string | undefined)[] {
 }
 
 /**
- * `it tour answer <action-id> ['<json>']` and `it tour next`: what an agent answers the tour's
+ * `it tour answer <action-id> [- | '<json>']` and `it tour next`: what an agent answers the tour's
  * first page with, and how it waits for what the person does there. One command answers: the
  * answer is set under the part of the page the action came from, with the request it waits on,
  * the action is acknowledged, and the picture kept for it is taken away. Then, where what the
@@ -1120,19 +1161,35 @@ function pictureFolders(): (string | undefined)[] {
  * it, with any picture it carried already written to a file, so that the next answer is again
  * one command. `it tour next` is that wait by itself.
  */
+/** How an answer is given where nothing in it can end a shell's quoting. */
+const HEREDOC = (id: string) =>
+  `Give the answer on standard input, where nothing in it ends anything: \`it tour answer ${id} - <<'EOF'\`, then the JSON on a line of its own, then EOF on a line of its own.`
 async function tourAnswer(a: Args, counted: (code?: string) => void) {
-  const USAGE = "tour answer <action-id> ['<json>' | --file <path>] [--wait] [--timeout <seconds>]"
+  const USAGE = "tour answer <action-id> [- | '<json>' | --file <path>] [--wait] [--timeout <seconds>]"
   const me = sessionAsked()?.session
   if (a._[0] === 'answer') {
     const id = need(a._[1], 'which action', USAGE)
     const file = text(a, 'file')
     if (file !== undefined && a._[2] !== undefined)
       throw new Problem('The answer is given once, on the command line or with --file, and this command was given both.', 'invalid', `Usage: it ${USAGE}`)
-    const given = file === undefined ? a._[2] : fileText(file, 'the answer')
-    const answer =
-      given === undefined
-        ? undefined
-        : object(json(given, file === undefined ? 'The answer' : `The answer in ${file}`, `it tour answer ${id} --file <path>`), 'An answer')
+    // The answer is best given on standard input, as `-` and a here-document says, where nothing the
+    // agent writes in it can end the quoting of a shell. Given on the command line it is in quotes
+    // that an apostrophe in the agent's words would end. With neither, a here-document or a pipe
+    // that was given all the same is read, so that an agent that left out the `-` is not taken to
+    // have given no answer
+    const stdin = a._[2] === '-'
+    if (stdin && file !== undefined) throw new Problem('The answer is given once, on standard input or with --file, and this command was given both.', 'invalid', `Usage: it ${USAGE}`)
+    const given =
+      file !== undefined ? fileText(file, 'the answer') : stdin ? need(await piped(), 'the answer, on standard input', USAGE) : (a._[2] ?? (await pipedIfAny(500)))
+    const from = file !== undefined ? `The answer in ${file}` : stdin || a._[2] === undefined ? 'The answer on standard input' : 'The answer'
+    let read: unknown
+    try {
+      read = given === undefined ? undefined : json(given, from)
+    } catch (err) {
+      // Most often an apostrophe in the agent's words, which ended the quotes round the JSON
+      throw err instanceof Problem && from === 'The answer' ? new Problem(err.message, err.code, HEREDOC(id)) : err
+    }
+    const answer = read === undefined ? undefined : object(read, 'An answer')
     const done = await answerAction(id, answer)
     dropPicture(done.request, pictureFolders())
     const answered = { answered: done.part ?? null }
@@ -1164,7 +1221,7 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
  * what comes next is the ending.
  */
 async function tour(a: Args, counted: (code?: string) => void) {
-  const USAGE = "tour [--wait] [show <name> | show next | answer <action-id> ['<json>'] | next | clear]"
+  const USAGE = "tour [--wait] [show <name> | show next | answer <action-id> [- | '<json>'] | next | clear]"
   const what = a._[0]
   if (a.flags.wait === true && what === undefined) return tourWhenAsked(a)
   if (what === undefined) return written(process.stdout, GUIDE)
@@ -3485,12 +3542,13 @@ This machine
   it tour --wait [--timeout <seconds>]
                                  Wait until the person presses "Take the tour" on the site, and
                                  print the tour then. For an agent that has just installed It.
-  it tour answer <action-id> ['<json>']
+  it tour answer <action-id> [- | '<json>']
                                  Answer something done on the tour's first page, for the agent
                                  that gives the tour: set the answer on the page and acknowledge
                                  the action. Where what is done next does not arrive by itself,
-                                 wait for it and print it. The answer may be in a file instead,
-                                 given with --file <path>.
+                                 wait for it and print it. With -, the answer is read from
+                                 standard input, as from a here-document, where no quote in it
+                                 ends anything. It may be in a file instead, with --file <path>.
   it tour next                   Wait for the next thing done on the tour's first page.
   it telemetry [on | off]        Say whether It reports usage counts, or turn that on or off.
                                  It reports them until it is turned off.
