@@ -30,7 +30,7 @@
   .studio-easel { position: relative; min-width: 0; min-height: 0; container: studio-easel / size; }
   .studio-art { position: absolute; inset: 0; overflow: hidden; overflow: clip; isolation: isolate; border-radius: 16px; background: var(--s-ground); color: var(--s-ink); box-shadow: 0 0 0 1px var(--line), 0 34px 60px -38px rgba(28, 26, 22, .6); -webkit-user-select: none; user-select: none;
     /* The colours of a page that has no design yet are the tour's own paper and ink */
-    --s-ground: var(--card); --s-paper: var(--card); --s-ink: var(--ink); --s-accent: var(--ink); --s-on: var(--paper); --s-second: var(--soft); --s-on2: var(--paper); --s-tint: var(--pad); --s-loud: var(--ink); --s-deep: var(--ink); --s-dusk: var(--ink); --s-pale: var(--card);
+    --s-ground: var(--card); --s-paper: var(--card); --s-ink: var(--ink); --s-accent: var(--ink); --s-on: var(--paper); --s-second: var(--soft); --s-on2: var(--paper); --s-tint: var(--pad); --s-loud: var(--ink); --s-shade: var(--soft); --s-deep: var(--ink); --s-dusk: var(--ink); --s-pale: var(--card);
     --btn: .7em; --chip: 1em; --frame: 50% 50% 1.4em 1.4em / 38% 38% 1.4em 1.4em; --h: 3.1em;
     font-size: calc(min(2.02cqw, 3.7cqh) * var(--studio-fit, 1));
     display: grid; grid-template: "name side" auto "copy side" minmax(0, 1fr) "acts side" auto / minmax(0, 1.04fr) minmax(0, .96fr); gap: .8em 2.6em; padding: 1.9em 2.5em 1.7em; }
@@ -82,7 +82,7 @@
   .studio-line[data-tone="quiet"] > span { color: color-mix(in srgb, var(--s-ink) 52%, var(--s-paper)); } .studio-line[data-tone="loud"] > span { color: var(--s-ink); font-weight: 600; }
   .studio-cta { display: inline-flex; align-items: center; gap: .55em; padding: .86em 1.5em; border-radius: var(--btn); background: var(--s-accent); color: var(--s-on); font: 600 calc(1em * var(--z, 1)) / 1 Text; white-space: nowrap; transform-origin: 0 50%; transition: background .7s, color .7s, border-radius .6s cubic-bezier(.3, 1.3, .5, 1), box-shadow .5s; }
   .studio-cta svg { flex: none; width: 1em; height: 1em; }
-  .studio-art[data-shape="sharp"] .studio-cta { box-shadow: .28em .28em 0 var(--s-ink); }
+  .studio-art[data-shape="sharp"] .studio-cta { box-shadow: .28em .28em 0 var(--s-shade); }
   .studio-button[data-tone="quiet"] .studio-cta { background: transparent; color: var(--s-ink); box-shadow: inset 0 0 0 .12em var(--s-ink); }
   .studio-button[data-tone="loud"] .studio-cta { font-weight: 700; letter-spacing: .05em; text-transform: uppercase; box-shadow: 0 0 0 .4em color-mix(in srgb, var(--s-accent) 26%, transparent); }
   .studio-acts { grid-area: acts; justify-self: start; }
@@ -181,7 +181,7 @@
             <g class="studio-scene" data-scene="sun">
               <rect class="k k-sky" width="400" height="400"/>
               <circle class="k k-a" cx="200" cy="222" r="152" opacity=".13"/><circle class="k k-a" cx="200" cy="222" r="118" opacity=".22"/><circle class="k k-a" cx="200" cy="222" r="84"/>
-              <path class="k-li" d="M82 150q9-11 18 0q9-11 18 0M300 126q7-9 14 0q7-9 14 0"/>
+              <path class="k-li" d="M82 152q9-11 18 0q9-11 18 0M300 144q7-9 14 0q7-9 14 0"/>
               <rect class="k k-b" y="222" width="400" height="178"/>
               <path class="k k-i" d="M318 222h36l-8 12h-20zM333 194v26h-12zM336 201v19h10z"/>
               <g class="k k-a"><rect x="138" y="236" width="124" height="9" rx="4.5"/><rect x="160" y="256" width="80" height="9" rx="4.5"/><rect x="178" y="276" width="44" height="9" rx="4.5"/></g>
@@ -190,7 +190,7 @@
             <g class="studio-scene" data-scene="boats">
               <rect class="k k-sky" width="400" height="400"/>
               <circle class="k k-a" cx="316" cy="152" r="30"/>
-              <path class="k-li" d="M66 146q8-10 16 0q8-10 16 0M110 122q6-8 12 0q6-8 12 0"/>
+              <path class="k-li" d="M58 162q8-10 16 0q8-10 16 0M104 146q6-8 12 0q6-8 12 0"/>
               <rect class="k k-b" y="236" width="400" height="164"/>
               <g><path class="k k-i" d="M92 228h172l-24 36H118z"/><path class="k k-i" d="M175 92h6v138h-6z"/><path class="k k-a" d="M171 108v110H96z"/><path class="k k-p" d="M186 126v92h66z"/><path class="k k-a" d="M181 92l28 9-28 9z"/></g>
               <g transform="translate(290 198) scale(.4)"><path class="k k-i" d="M-80 76h172l-24 36H-54z"/><path class="k k-i" d="M3 -60h6v138h-6z"/><path class="k k-p" d="M-1 -44v110h-75z"/><path class="k k-a" d="M14 -26v92h66z"/></g>
@@ -319,9 +319,9 @@ Shell.part("studio", (my) => {
     made.tint = [p, hsl(h, .5, .12), off(h, .45 + .4 * s, .3, p, 5), off(h + 38, .55, .4, p, 3)];
     ink = apart(colourAt(at, r), hsl(h, .5, .07)) >= apart(colourAt(at, r), hsl(h, .4, .96)) ? hsl(h, .5, .07) : hsl(h, .4, .96);
     p = off(picked[0], picked[1], picked[2], ink, 6);
-    // Its button is the lightest or the darkest there is, whichever the ink is not, and the ink's own colour where that would be lost on the paper
-    var block = lum(ink) < .3 ? LIGHT : DARK;
-    made.flood = [p, ink, apart(block, p) >= 2.5 ? block : ink, off(h + 180, .7, .3, p, 3)];
+    // Its button is the lightest or the darkest there is, whichever the ink is not. Where that would be lost on the paper, it is the colour opposite, deep, and the second colour is another deep one
+    var block = lum(ink) < .3 ? LIGHT : DARK, plain = apart(block, p) >= 2.5;
+    made.flood = [p, ink, plain ? block : off(h + 180, .7, .3, p, 3), off(h + (plain ? 180 : 140), plain ? .7 : .6, .3, p, 3)];
     p = hsl(h, .3 + .2 * s, .085);
     made.night = [p, hsl(h, .25, .93), off(h, Math.max(s, .55), .62, p, 6.5), off(h + 40, .5, .6, p, 4.5)];
     p = [246, 239, 226];
@@ -339,7 +339,7 @@ Shell.part("studio", (my) => {
   /** What each colour of a palette is used for on the page, with what is written on the accent and on the second colour. */
   function roles(p) {
     var a = sure(p[2]), b = sure(p[3]), dark = lum(p[0]) < lum(p[1]);
-    return { paper: p[0], ink: p[1], accent: a[0], on: a[1], second: b[0], on2: b[1], tint: mix(p[0], a[0], .16), loud: apart(a[0], p[0]) >= 3 ? a[0] : apart(b[0], p[0]) >= 3 ? b[0] : p[1], deep: dark ? p[0] : p[1], dusk: mix(dark ? p[0] : p[1], a[0], .17), pale: dark ? p[1] : p[0] };
+    return { paper: p[0], ink: p[1], accent: a[0], on: a[1], second: b[0], on2: b[1], tint: mix(p[0], a[0], .16), loud: apart(a[0], p[0]) >= 3 ? a[0] : apart(b[0], p[0]) >= 3 ? b[0] : p[1], shade: apart(p[1], a[0]) >= 1.6 ? p[1] : b[0], deep: dark ? p[0] : p[1], dusk: mix(dark ? p[0] : p[1], a[0], .17), pale: dark ? p[1] : p[0] };
   }
 
   // ── What is on the easel ──
@@ -419,7 +419,7 @@ Shell.part("studio", (my) => {
     void art.offsetWidth;
     art.classList.remove("studio-measured");
   }
-  var VARS = ["paper", "ink", "accent", "on", "second", "on2", "tint", "loud", "deep", "dusk", "pale"];
+  var VARS = ["paper", "ink", "accent", "on", "second", "on2", "tint", "loud", "shade", "deep", "dusk", "pale"];
   function paint(r) {
     VARS.forEach((k) => { if (r) art.style.setProperty("--s-" + k, hex(r[k])); else art.style.removeProperty("--s-" + k); });
   }
@@ -579,7 +579,7 @@ Shell.part("studio", (my) => {
   function place(n) {
     var r = pieces[n].el.getBoundingClientRect(), all = room.getBoundingClientRect(), w = ask.offsetWidth || 300, h = ask.offsetHeight || 108;
     var x = r.left - all.left, y = r.bottom - all.top + 16;
-    if (n === "picture") { x = r.left - all.left + (r.width - w) / 2; y = r.top - all.top + (r.height - h) / 2; }
+    if (n === "picture") { x = r.left - all.left + (r.width - w) / 2; y = r.top - all.top + (r.height - h) / 2 + 18; }
     else if (y + h > all.height) y = r.top - all.top - h - 16;
     ask.style.left = within(x, 0, Math.max(0, all.width - w)).toFixed(0) + "px";
     ask.style.top = within(y, 0, Math.max(0, all.height - h)).toFixed(0) + "px";
