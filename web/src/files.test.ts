@@ -441,8 +441,7 @@ describe('a click with files', () => {
     // The browser takes its time keeping each click's files
     const slow = {
       ...bytes,
-      put: (key: string, files: Blob[], room: { under: string; most: number }) =>
-        new Promise((r) => setTimeout(r, 50)).then(() => bytes.put(key, files, room)),
+      put: (key: string, files: Blob[], room: { under: string; most: number }) => new Promise((r) => setTimeout(r, 50)).then(() => bytes.put(key, files, room)),
     }
     keepBytesIn(slow)
     vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
