@@ -457,8 +457,11 @@ describe('the agent skill', () => {
     const state = rule('stateKilobytesPage')
     expect(skill).toContain(`one page may write ${state.burst / 1024} MB of it at once, and then ${state.perMinute / 1024} MB a minute`)
     const frame = source('../../web/src/mount.tsx')
-    expect(/const PER_SECOND = (\d+)/.exec(frame)![1]).toBe('5')
-    expect(skill).toContain(`The site takes ${/const BURST = (\d+)/.exec(frame)![1]} actions from a page at once, and then five a second`)
+    expect(/const PER_SECOND = (\d+)/.exec(frame)![1]).toBe('15')
+    expect(skill).toContain(`The site takes ${/const BURST = (\d+)/.exec(frame)![1]} actions from a page at once, and then fifteen a second`)
+    // What comes too fast for It waits in the browser, up to so many from one page
+    expect(/const MAX_PER_PAGE = (\d+)/.exec(source('../../web/src/outbox.ts'))![1]).toBe('100')
+    expect(skill).toContain('so its promise resolves late, until 100 actions from the page are waiting')
     // What the page keeps: how often the script in a page writes it, how many values, and that a write coming too fast waits
     expect(1000 / STORE_EVERY_MS).toBe(20)
     expect(skill).toContain('It sends no more than twenty writes a second from one display')
