@@ -41,11 +41,12 @@ import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { BOOLEAN } from './src/args'
-import { CODEX_RESTART, itForAgent, reloadLine, T3_CODEX, t3ClaudeLine } from './src/arrives'
+import { CODEX_RESTART, itForAgent, PI_RELOAD, reloadLine, T3_CODEX, t3ClaudeLine } from './src/arrives'
 import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
 import { VERSION } from './src/lib'
 import { aloneAt } from './src/serve/backend'
 import { instanceName } from './src/serve/config'
+import { afterHermes } from './src/setup'
 import { bases, holdBase } from './test-ports'
 import { standInZsh, zsh } from './test-zsh'
 
@@ -7504,6 +7505,93 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
         'Pi stays connected as well: run from an agent’s conversation, `--only` connects what it names and leaves connected what is connected already.',
       )
       expect(second.err).not.toContain('no longer connected')
+    } finally {
+      await b.close()
+    }
+  })
+
+  // Whichever app an agent installs It from, what it is told to pass on is that app's own note,
+  // whole, in the step that gives the pairing link and again as the last thing setup prints
+  const passedOn = async (setup: { err: string; out: string; code: number | null }, note: string) => {
+    expect(setup.code).toBe(0)
+    expect(printed(setup).next).toBe(AFTER_SETUP_TELLING(`this, word for word: “${note}”`))
+    expect(printed(setup).tell).toBe(`Tell the person this in your next message, word for word: “${note}”`)
+    expect(setup.err).toContain('For the agent that ran this: the person sees only what you say, and not what setup printed.')
+    expect(setup.err.trimEnd().endsWith(`Tell them this in your next message, word for word:\n\n${note.replace(/^/gm, '  ')}`)).toBe(true)
+  }
+  const mine = (m: ReturnType<typeof machine>) => backend(m, (asked) => (asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted: [] } : null))
+
+  test('run from a Pi conversation that has not loaded the add-on, it tells the agent to pass on the words that load it there, /reload, and not only where Pi was just connected', async () => {
+    const m = machine()
+    pi(m)
+    const b = await mine(m)
+    try {
+      // Pi sets PI_SESSION_ID for the commands its agent runs, and It's add-on, once it runs there, IT_PI_SESSION
+      const inPi = { ...b.env, PI_SESSION_ID: 'pi-1' }
+      const first = await run(m, ['setup', '--no-service', '--only', 'pi'], inPi)
+      await passedOn(first, PI_RELOAD)
+      // It takes the place of Pi's general note in what the agent passes on, as Claude Code's and Codex's do
+      expect(printed(first).next).not.toContain(PI_NOTE)
+      // Asked again in the same conversation, which has still not loaded it, the same is said: Pi is connected already, and that changes nothing here
+      await passedOn(await run(m, ['setup', '--no-service', '--only', 'pi'], inPi), PI_RELOAD)
+      // Once the add-on runs in the conversation, nothing is left to say of it
+      const loaded = await run(m, ['setup', '--no-service', '--only', 'pi'], { ...inPi, IT_PI_SESSION: 'pi-1' })
+      expect([loaded.code, printed(loaded).next, printed(loaded).tell]).toEqual([0, AFTER_SETUP, undefined])
+      expect(loaded.err).not.toContain('/reload')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('run from an OpenCode conversation, it tells the agent to pass on OpenCode’s note, whole: to restart it, and to send a message in a saved conversation', async () => {
+    const m = machine()
+    writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.18.32\n', { mode: 0o755 })
+    const b = await mine(m)
+    try {
+      const setup = await run(m, ['setup', '--no-service', '--only', 'opencode'], { ...b.env, OPENCODE_SESSION_ID: 'ses_1' })
+      expect(printed(setup).harnesses).toEqual([{ id: 'opencode', version: '1.18.32', addon: 'connected' }])
+      await passedOn(
+        setup,
+        'OpenCode: If OpenCode is open, restart it: it reads its plugins when it starts.\nA saved conversation you open in OpenCode starts listening once you send a message in it.',
+      )
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('run from a Hermes conversation, it tells the agent to pass on Hermes’s note, whole: to restart it, the command that lets clicks in, and to send a message in a resumed conversation', async () => {
+    const m = machine()
+    // A stand-in for Hermes's own command: it lists It's plugin once its files are in Hermes's folder, as enabled once it was told to enable it
+    writeFileSync(
+      path.join(m.bin, 'hermes'),
+      [
+        '#!/bin/sh',
+        'PATH=/bin:/usr/bin',
+        'folder="${HERMES_HOME:-$HOME/.hermes}"',
+        'case "$*" in',
+        '  --version) echo "Hermes Agent v0.23.1" ;;',
+        '  "plugins enable it-bridge") : > "$HOME/hermes-on" ;;',
+        '  "plugins disable it-bridge") rm -f "$HOME/hermes-on" ;;',
+        '  "plugins list --json --no-bundled")',
+        '    if [ ! -f "$folder/plugins/it-bridge/plugin.yaml" ]; then echo "[]"',
+        '    elif [ -f "$HOME/hermes-on" ]; then echo \'[{"name":"it-bridge","status":"enabled"}]\'',
+        '    else echo \'[{"name":"it-bridge","status":"disabled"}]\'; fi ;;',
+        'esac',
+        'exit 0',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    )
+    const b = await mine(m)
+    try {
+      const setup = await run(m, ['setup', '--no-service', '--only', 'hermes'], { ...b.env, HERMES_SESSION_ID: '20261110_120000_abcd' })
+      expect(printed(setup).harnesses).toEqual([{ id: 'hermes', version: '0.23.1', addon: 'connected' }])
+      const note = `Hermes Agent: ${afterHermes('0.23.1')}`
+      await passedOn(setup, note)
+      // The three things an agent in Hermes was seen to pass on only the first of
+      expect(note).toContain('If Hermes is open, restart it')
+      expect(note).toContain('\n    hermes config set plugins.entries.it-bridge.allow_gateway_injection true\n')
+      expect(note).toContain('A saved conversation you resume in the terminal starts listening once you send a message in it.')
     } finally {
       await b.close()
     }
