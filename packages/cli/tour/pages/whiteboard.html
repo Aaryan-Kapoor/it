@@ -6,61 +6,49 @@
 <title>A whiteboard</title>
 <style>
 /*kit.css*/
-  :root { --field: #f4f1ea; --w: 860px; }
-  .t-wrap { gap: 12px; }
-  .t-card { flex: 1; max-height: 640px; min-height: 0; gap: 14px; padding: 22px 24px 20px; }
-  .top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-right: 150px; }
-  .top .t-h { font-size: clamp(22px, 3vw, 30px); }
-  /* The board: paper with a grid of dots, as the film draws it */
-  .board {
-    position: relative; flex: 1; min-height: 180px; border-radius: 18px; overflow: hidden;
-    background-color: #fbfaf7;
-    background-image: radial-gradient(circle, #d9d4c9 1.2px, transparent 1.4px); background-size: 22px 22px;
-    box-shadow: inset 0 0 0 1px var(--line);
-  }
+  /* The board is a part of the world with a line round it: the dots of the field are its grid.
+     The person draws in white, or in red or blue, and the agent draws in its green. */
+  .t-card { align-items: stretch; justify-content: flex-start; gap: 14px; }
+  .board { position: relative; flex: 1; min-height: 180px; border-radius: 18px; overflow: hidden; border: 1px solid var(--w-line); background: rgba(255, 255, 255, .018); }
   .board canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
   .hint {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none;
-    font-size: 17px; font-weight: 600; color: var(--ink4); transition: opacity .25s;
+    font-family: var(--w-mono); font-size: 13px; color: var(--w-faint); transition: opacity .25s;
   }
   .hint[hidden] { display: flex; opacity: 0; }
-  .tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  /* The pens, as dots of their colour in one pill */
-  .pens { display: inline-flex; align-items: center; gap: 4px; height: 44px; padding: 0 8px; border-radius: 999px; background: var(--paper); }
-  .pen { width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; display: grid; place-items: center; }
-  .pen i { width: 20px; height: 20px; border-radius: 50%; background: var(--c); transition: transform .15s; }
-  .pen[aria-pressed="true"] { box-shadow: inset 0 0 0 2.5px var(--ink4); }
-  .pen[aria-pressed="true"] i { transform: scale(.82); }
-  .pen.rub i { background: #fff; box-shadow: inset 0 0 0 2px var(--ink4); }
-  .tool { height: 44px; padding: 0 14px; border: 0; border-radius: 14px; background: var(--paper); font-size: 14px; font-weight: 600; cursor: pointer; }
-  .tool:disabled { opacity: .4; cursor: default; }
+  .tools { display: flex; align-items: center; gap: 8px 20px; flex-wrap: wrap; }
+  /* The pens, as dots of their colour */
+  .pens { display: inline-flex; align-items: center; gap: 2px; }
+  body.w .pen { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; }
+  .pen i { width: 16px; height: 16px; border-radius: 50%; background: var(--c); transition: transform .15s var(--w-ease); }
+  .pen[aria-pressed="true"] { box-shadow: inset 0 0 0 1.5px var(--w-muted); }
+  .pen[aria-pressed="true"] i { transform: scale(1.15); }
+  .pen.rub i { background: transparent; box-shadow: inset 0 0 0 2px var(--w-muted); }
   .tools .gap { flex: 1; }
-  @media (max-width: 620px) {
-    .top { padding-right: 0; padding-top: 14px; }
-    .tool { padding: 0 11px; }
-  }
+  @media (max-width: 820px) { .t-card { padding-top: 34px; } .tools { gap: 6px 14px; } }
 </style>
 </head>
-<body>
+<body class="w">
   <div class="t-wrap">
+    <div class="t-words">
+      <h1 class="t-h">{{prompt}}</h1>
+      <div class="t-log" aria-live="polite">
+        <p class="t-you" id="t-you"><span>you</span><b></b></p>
+        <p class="t-did" id="t-did"><span></span><b></b></p>
+      </div>
+    </div>
     <div class="t-card">
-      <div class="t-plate" id="t-plate"><i></i><b></b><small></small></div>
-      <div class="top"><h1 class="t-h">{{prompt}}</h1></div>
       <div class="board" id="paper">
         <canvas id="c" aria-label="The whiteboard. Draw on it with a mouse, a finger or a pen."></canvas>
-        <div class="hint" id="hint">Draw here</div>
+        <div class="hint" id="hint">draw here</div>
       </div>
       <div class="tools">
         <div class="pens" id="pens" role="group" aria-label="Pens"></div>
-        <button class="tool" id="undo" type="button">Undo</button>
-        <button class="tool" id="clear" type="button">Clear</button>
+        <button class="t-btn quiet" id="undo" type="button">Undo</button>
+        <button class="t-btn quiet" id="clear" type="button">Clear</button>
         <span class="gap"></span>
         <button class="t-btn" id="send" type="button">Send</button>
       </div>
-    </div>
-    <div class="t-log" aria-live="polite">
-      <p class="t-you" id="t-you"><span>&larr; you</span><b></b></p>
-      <p class="t-did" id="t-did"><span></span><b></b></p>
     </div>
   </div>
 <!--rail-->
@@ -70,18 +58,21 @@
 <script>
   // A board two can draw on. What the person draws is theirs until they send it: the agent is
   // then given the drawing as a picture and as its lines, and what it draws back comes in the
-  // page's state and is drawn on the same board, in green.
+  // page's state and is drawn on the same board, in green, by its hand: the lines appear as a
+  // pen would draw them, with the hand at the pen's tip.
   // Lines are kept as parts of the board (0 to 1 across and down) and not as pixels, so that
   // the board survives being made larger or turned, and so that the agent's lines mean on the
   // way back what the person's meant on the way out.
   Tour.ready(() => {
     var It = Tour.It;
-    var PENS = [["#0e0e10", "Black"], ["#ff5b45", "Red"], ["#3d7bff", "Blue"]];
-    var GREEN = "#1fb877", PAPER = "#fbfaf7";
+    var PENS = [["#ffffff", "White"], ["#ff5b45", "Red"], ["#6ea8ff", "Blue"]];
+    var GREEN = "#34d399", PAPER = "#0b0b0b";
     var paper = document.getElementById("paper"), canvas = document.getElementById("c"), ctx = canvas.getContext("2d");
     var hint = document.getElementById("hint"), pens = document.getElementById("pens");
     var sendBtn = document.getElementById("send"), undoBtn = document.getElementById("undo"), clearBtn = document.getElementById("clear");
     var mine = [], theirs = [], current = null, colour = PENS[0][0], rubbing = false, sent = false;
+    // While the agent's new lines are being drawn: which line the pen is on, the last of its points the pen has passed, and where the tip is
+    var tracing = null;
 
     function tool(label, cls, pick, c) {
       var b = document.createElement("button");
@@ -100,9 +91,12 @@
     tool("Eraser", "rub", () => { rubbing = true; });
     pens.firstChild.setAttribute("aria-pressed", "true");
 
-    function line(target, s, w, h, fallback) {
+    // One line. On the board it has a little light of its own colour round it, and in the picture that is sent it has none
+    function line(target, s, w, h, fallback, plain) {
       var pts = s.points || [];
       if (!pts.length) return;
+      target.shadowBlur = plain || s.erase ? 0 : 14 * (w / 900);
+      target.shadowColor = typeof s.color === "string" && s.color ? s.color : fallback;
       target.beginPath();
       target.lineWidth = Math.max(1, (Number(s.width) || 4) * (w / 900));
       target.lineCap = "round"; target.lineJoin = "round";
@@ -113,11 +107,20 @@
       if (pts.length === 1) target.lineTo(pts[0][0] * w + .01, pts[0][1] * h);
       target.stroke();
       target.globalCompositeOperation = "source-over";
+      target.shadowBlur = 0;
     }
-    function paint(target, w, h) {
-      mine.forEach((s) => line(target, s, w, h, PENS[0][0]));
-      // The agent's lines are green wherever it gave them no colour of their own, and are never rubbed out by its own strokes
-      theirs.forEach((s) => line(target, { points: s.points, width: s.width, color: s.color }, w, h, GREEN));
+    // Everything on the board. `whole` is for the picture that is sent, which has the agent's lines to their ends
+    function paint(target, w, h, whole) {
+      mine.forEach((s) => line(target, s, w, h, PENS[0][0], whole));
+      // The agent's lines are its green, and are never rubbed out by its own strokes
+      theirs.forEach((s, i) => {
+        var points = s.points;
+        if (tracing && !whole) {
+          if (i > tracing.line) return;
+          if (i === tracing.line) points = points.slice(0, tracing.upto + 1).concat([tracing.tip]);
+        }
+        line(target, { points: points, width: s.width }, w, h, GREEN, whole);
+      });
     }
     function redraw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -149,7 +152,7 @@
     ["pointerup", "pointercancel", "pointerleave"].forEach((kind) => canvas.addEventListener(kind, () => { current = null; }));
     undoBtn.addEventListener("click", () => { mine.pop(); sent = false; redraw(); });
     clearBtn.addEventListener("click", () => {
-      mine = []; theirs = []; sent = false;
+      mine = []; theirs = []; sent = false; tracing = null;
       redraw();
       Tour.say("you", "cleared the board");
       It.action("cleared", {}).catch(() => {});
@@ -168,7 +171,7 @@
       // Drawn on a board of their own first: rubbing out takes the paper with it otherwise
       var ink = document.createElement("canvas");
       ink.width = w; ink.height = h;
-      paint(ink.getContext("2d"), w, h);
+      paint(ink.getContext("2d"), w, h, true);
       g.fillStyle = PAPER; g.fillRect(0, 0, w, h);
       g.drawImage(ink, 0, 0);
       return new Promise((resolve) => {
@@ -221,21 +224,69 @@
 
     function lines(value) {
       if (typeof value === "string") { try { value = JSON.parse(value); } catch (err) { return []; } }
-      return Array.isArray(value) ? value.filter((s) => s && Array.isArray(s.points)) : [];
+      // Only a place that is two numbers is drawn: one that is anything else would be traced for ever
+      var place = (p) => Array.isArray(p) && typeof p[0] === "number" && typeof p[1] === "number" && isFinite(p[0]) && isFinite(p[1]);
+      return Array.isArray(value) ? value.filter((s) => s && Array.isArray(s.points)).map((s) => Object.assign({}, s, { points: s.points.filter(place) })) : [];
+    }
+    // Draws the agent's lines from the one numbered `first` on, each from its start to its end, with the hand at the tip
+    function trace(first) {
+      var run = (tracing = { line: first, upto: 0, tip: theirs[first].points[0] || [0, 0] });
+      var on = (p) => { var r = canvas.getBoundingClientRect(); return [r.left + p[0] * r.width, r.top + p[1] * r.height]; };
+      return (async () => {
+        for (var i = first; i < theirs.length; i++) {
+          var pts = theirs[i].points.filter((p) => Array.isArray(p) && p.length > 1);
+          if (!pts.length) continue;
+          if (tracing !== run) return false;
+          run.line = i; run.upto = 0; run.tip = pts[0];
+          // The pen is lifted, and comes down where the line begins
+          await Tour.hand.move(on(pts[0])[0], on(pts[0])[1], 240);
+          var far = [0];
+          for (var j = 1; j < pts.length; j++) far.push(far[j - 1] + Math.hypot(pts[j][0] - pts[j - 1][0], pts[j][1] - pts[j - 1][1]));
+          var long = far[far.length - 1], lasts = Math.max(200, Math.min(1500, long * 1500)), began = performance.now();
+          await new Promise((done) => {
+            World.soon(function step() {
+              if (tracing !== run) return done();
+              var gone = Math.min(1, (performance.now() - began) / lasts) * long, at = 0;
+              while (at < pts.length - 2 && far[at + 1] <= gone) at++;
+              var next = pts[Math.min(at + 1, pts.length - 1)], span = far[Math.min(at + 1, pts.length - 1)] - far[at];
+              var part = span > 0 ? Math.min(1, (gone - far[at]) / span) : 1;
+              run.upto = at;
+              run.tip = [pts[at][0] + (next[0] - pts[at][0]) * part, pts[at][1] + (next[1] - pts[at][1]) * part];
+              redraw();
+              Tour.hand.move(on(run.tip)[0], on(run.tip)[1], 0);
+              if (!(gone < long)) done(); else World.soon(step);
+            });
+          });
+          World.sound.step();
+        }
+        if (tracing !== run) return false;
+        tracing = null;
+        redraw();
+        return true;
+      })();
     }
     var drawn = 0;
+    // Whether the state the page opened with has been shown. Lines that were on the board then are simply there
+    var shown = false;
     function render() {
-      var st = It.state || {};
+      var st = It.state || {}, had = drawn;
+      tracing = null;
       theirs = lines(st.agent_strokes);
-      redraw();
-      if (theirs.length && theirs.length !== drawn) {
-        Tour.plate("drew on yours", false);
-        Tour.say("did", String(st.note || "looked at it, and drew on the same board"));
-      } else if (st.note) Tour.say("did", String(st.note));
       drawn = theirs.length;
+      if (theirs.length && theirs.length !== had) {
+        Tour.say("did", String(st.note || "looked at it, and drew on the same board"));
+        if (shown && !World.calm && theirs.length > had) {
+          Tour.answered("drawing on yours");
+          trace(had).then((whole) => { if (whole) { Tour.answered("drew on yours"); World.sound.land(); } });
+        } else Tour.answered("drew on yours");
+      } else if (st.note) Tour.say("did", String(st.note));
+      redraw();
+      if (Tour.arrived()) shown = true;
     }
     new ResizeObserver(size).observe(paper);
     sendBtn.textContent = Tour.P.agent ? "Send to " + Tour.agent : "Send to your agent";
+    Tour.home(paper, 0);
+    addEventListener("resize", () => { if (!tracing && !drawn) Tour.home(paper, 0); });
     It.onState(render);
     size();
     render();

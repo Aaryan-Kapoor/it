@@ -1,0 +1,278 @@
+  /* ── The world every page of the tour is held in ──
+     One dark screen that the person and their agent share. Behind everything is a field of
+     dots that moves where it is touched. The agent is on the screen as a hand, a pointer with
+     its app's name on it, and green is kept for the agent and for what comes back from it.
+     Amber is for an agent that cannot hear the screen yet. */
+  :root {
+    --w-bg: #060606;
+    --w-fg: #ffffff;
+    --w-muted: #a3a3a3;
+    --w-faint: #6b6b6b;
+    --w-ghost: #2c2c2c;
+    --w-line: rgba(255, 255, 255, 0.12);
+    --w-ok: #34d399;
+    --w-ink: #04130c;
+    --w-amber: #ffc53d;
+    --w-red: #ff5b45;
+    --w-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --w-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  html,
+  body {
+    height: 100%;
+  }
+  html {
+    color-scheme: dark;
+  }
+  body.w {
+    margin: 0;
+    overflow: hidden;
+    background: var(--w-bg);
+    color: var(--w-fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  body.w button {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+  }
+  #w-field,
+  #w-ink {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+  #w-field {
+    z-index: 0;
+  }
+  #w-ink {
+    z-index: 3;
+  }
+  .w-ripple {
+    position: fixed;
+    width: 14px;
+    height: 14px;
+    margin: -7px;
+    border-radius: 50%;
+    border: 2px solid var(--w-fg);
+    pointer-events: none;
+    z-index: 3;
+    animation: w-ripple 0.9s var(--w-ease) forwards;
+  }
+  @keyframes w-ripple {
+    to {
+      transform: scale(7);
+      opacity: 0;
+    }
+  }
+  /* The agent, as it is on the screen: a pointer with its app's name on a plate. Where it is
+     on the screen is set by the script that moves it. Round its tip is a ring that says how it
+     stands: it beats slowly outward while the hand listens, which is how it waits for the
+     person; it turns while something is unanswered or the hand is setting something down; and
+     it stands broken and amber, with the pointer hollow, while the agent cannot hear. */
+  #w-hand {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 6;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.4s;
+    will-change: transform;
+  }
+  #w-hand.on {
+    opacity: 1;
+  }
+  #w-hand svg {
+    display: block;
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.6)) drop-shadow(0 0 10px rgba(52, 211, 153, 0.45));
+  }
+  #w-hand path {
+    fill: var(--w-ok);
+    stroke: var(--w-ink);
+    stroke-width: 1.2;
+    transition:
+      fill 0.3s,
+      stroke 0.3s;
+  }
+  #w-ring {
+    position: absolute;
+    left: -17px;
+    top: -17px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 1.5px solid var(--w-ok);
+    opacity: 0;
+    animation: w-listen 2.8s var(--w-ease) infinite;
+  }
+  #w-hand[data-tone="live"] #w-ring {
+    opacity: 0.9;
+    border-style: dashed;
+    border-color: var(--w-ok) transparent;
+    animation: w-turn 0.9s linear infinite;
+  }
+  #w-hand[data-tone="amber"] #w-ring {
+    opacity: 0.8;
+    border: 1.5px dashed var(--w-amber);
+    animation: w-held 1.8s ease-in-out infinite;
+  }
+  @keyframes w-listen {
+    0% {
+      transform: scale(0.3);
+      opacity: 0.7;
+    }
+    60%,
+    100% {
+      transform: scale(1.5);
+      opacity: 0;
+    }
+  }
+  @keyframes w-turn {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes w-held {
+    50% {
+      opacity: 0.25;
+    }
+  }
+  #w-tag {
+    position: absolute;
+    left: 15px;
+    top: 19px;
+    max-width: min(100vw - 16px, 520px);
+    transform: translateX(var(--shift, 0px));
+    padding: 4px 11px;
+    border-radius: 4px 12px 12px 12px;
+    background: var(--w-ok);
+    color: var(--w-ink);
+    font-size: 12.5px;
+    font-weight: 650;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: background 0.3s;
+  }
+  #w-hand[data-tone="amber"] path {
+    fill: var(--w-bg);
+    stroke: var(--w-amber);
+    stroke-width: 1.8;
+  }
+  #w-hand[data-tone="amber"] svg {
+    filter: drop-shadow(0 0 8px rgba(255, 197, 61, 0.5));
+  }
+  /* The plate above the pointer, for when the hand points at something from its corner */
+  #w-hand.up #w-tag {
+    top: -31px;
+    left: 10px;
+    border-radius: 12px 12px 12px 4px;
+  }
+  /* And to the left of it, for when the hand stands beside something */
+  #w-hand.left #w-tag {
+    top: -4px;
+    left: auto;
+    right: 12px;
+    transform: none;
+    border-radius: 12px 4px 12px 12px;
+  }
+  #w-hand[data-tone="amber"] #w-tag {
+    background: var(--w-amber);
+  }
+  #w-hand[data-tone="live"] #w-tag::before {
+    content: "";
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 7px;
+    border-radius: 50%;
+    background: var(--w-ink);
+    animation: w-blink 0.7s steps(2) infinite;
+  }
+  #w-hand.tap svg {
+    animation: w-tap 0.32s var(--w-ease);
+  }
+  @keyframes w-tap {
+    40% {
+      transform: scale(0.78);
+    }
+  }
+  @keyframes w-blink {
+    50% {
+      opacity: 0;
+    }
+  }
+  .w-caret::after {
+    content: "";
+    display: inline-block;
+    width: 0.08em;
+    height: 0.82em;
+    margin-left: 0.06em;
+    background: var(--w-ok);
+    vertical-align: -0.06em;
+    animation: w-blink 1s steps(2) infinite;
+  }
+  /* The one control the world has of its own: whether it makes a sound */
+  #w-sound {
+    position: fixed;
+    right: 14px;
+    bottom: 12px;
+    z-index: 7;
+    font-family: var(--w-mono);
+    font-size: 11px;
+    color: var(--w-faint);
+    letter-spacing: 0.04em;
+  }
+  body.w #w-sound {
+    padding: 6px 8px;
+  }
+  #w-sound:hover,
+  #w-sound:focus-visible {
+    color: var(--w-fg);
+  }
+  body.w :focus-visible {
+    outline: 2px solid var(--w-ok);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+  /* What a page holds comes up out of the field as the field is let go */
+  body.w > main,
+  body.w > .t-wrap,
+  body.w > .t-rail {
+    animation: w-enter 0.7s 0.25s var(--w-ease) backwards;
+  }
+  @keyframes w-enter {
+    from {
+      opacity: 0;
+      transform: scale(0.985);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .w-ripple,
+    #w-hand.tap svg {
+      animation-duration: 0.01s;
+    }
+    #w-ring,
+    body.w > main,
+    body.w > .t-wrap,
+    body.w > .t-rail {
+      animation: none;
+    }
+    #w-hand[data-tone="live"] #w-ring {
+      animation: none;
+      border-color: var(--w-ok);
+    }
+  }

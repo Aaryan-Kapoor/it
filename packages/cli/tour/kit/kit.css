@@ -1,292 +1,216 @@
-/* ── What every page of the tour is made of ──
-     The look is the launch film's: a field of one colour, one white card in the middle of it
-     with the thing on it, the agent's name on a plate at the card's corner, and under the card
-     what each of the two did, said in a few words. Green is kept for the agent being there
-     and for what comes back from it. */
-:root {
-  --ink: #0e0e10;
-  --ink2: #3a3b40;
-  --ink3: #6e6f76;
-  --ink4: #a3a3a8;
-  --paper: #f4f1ea;
-  --paper2: #ebe6dc;
-  --card: #ffffff;
-  --line: #e3ded4;
-  --coral: #ff5b45;
-  --mint: #1fb877;
-  --sky: #3d7bff;
-  --sun: #ffc53d;
-  --ok: #2fd08a;
-  --field: var(--paper);
-}
-* {
-  box-sizing: border-box;
-}
-html,
-body {
-  height: 100%;
-}
-body {
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--field);
-  color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -webkit-tap-highlight-color: transparent;
-}
-button {
-  font: inherit;
-  color: inherit;
-}
-.t-wrap {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  padding: 34px 20px 92px;
-}
-.t-card {
-  position: relative;
-  width: min(100%, var(--w, 620px));
-  max-height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 26px 28px 24px;
-  border-radius: 28px;
-  background: var(--card);
-  box-shadow:
-    0 34px 70px -34px rgba(14, 14, 16, 0.42),
-    0 2px 6px rgba(14, 14, 16, 0.06);
-}
-.t-card.dark {
-  background: #1b1b1f;
-  color: #fff;
-  box-shadow: 0 34px 70px -34px rgba(0, 0, 0, 0.8);
-}
-.t-h {
-  margin: 0;
-  font-size: clamp(24px, 3.6vw, 34px);
-  font-weight: 750;
-  letter-spacing: -0.04em;
-  line-height: 1.05;
-}
-.t-sub {
-  margin: -8px 0 0;
-  font-size: 15px;
-  line-height: 1.4;
-  color: var(--ink3);
-}
-.t-card.dark .t-sub {
-  color: rgba(255, 255, 255, 0.6);
-}
-
-/* The agent's plate: its name, a green light that beats while it is at work, and a word of what it is doing */
-.t-plate {
-  position: absolute;
-  top: -19px;
-  right: 22px;
-  z-index: 5;
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  height: 38px;
-  padding: 0 16px 0 13px;
-  border-radius: 999px;
-  background: #10231b;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  box-shadow:
-    0 0 0 3px var(--card),
-    0 10px 22px -10px rgba(0, 0, 0, 0.5);
-  white-space: nowrap;
-}
-.t-card.dark .t-plate {
-  background: #fff;
-  color: #0e0e10;
-  box-shadow:
-    0 0 0 3px #1b1b1f,
-    0 10px 22px -10px rgba(0, 0, 0, 0.7);
-}
-.t-plate i {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--ok);
-  flex: none;
-}
-.t-plate[data-busy="1"] i {
-  animation: t-beat 0.9s ease-in-out infinite;
-}
-.t-plate small {
-  font-size: 13.5px;
-  font-weight: 600;
-  opacity: 0.72;
-}
-.t-plate small:empty {
-  display: none;
-}
-/* While the agent has what was done and has not answered, the plate says so in a word: a light that beats says less than it seems to */
-.t-plate[data-busy="1"]:has(small:empty)::after {
-  content: "thinking…";
-  font-size: 13.5px;
-  font-weight: 600;
-  opacity: 0.72;
-}
-@keyframes t-beat {
-  0%,
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(0.55);
-    opacity: 0.55;
-  }
-}
-
-/* What each did, under the card */
-.t-log {
-  width: min(100%, var(--w, 620px));
-  min-height: 76px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-}
-.t-log p {
-  margin: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  max-width: 100%;
-  padding: 8px 13px;
-  border-radius: 12px;
-  background: var(--log, rgba(12, 12, 12, 0.88));
-  color: #fff;
-  font-size: 13.5px;
-  line-height: 1.35;
-  opacity: 0;
-  transform: translateY(8px);
-  transition:
-    opacity 0.35s,
-    transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
-}
-.t-log p.in {
-  opacity: 1;
-  transform: none;
-}
-.t-log p span {
-  flex: none;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.5);
-}
-.t-log p b {
-  font-weight: 550;
-}
-.t-log .t-you span {
-  color: var(--ok);
-}
-
-/* The way on, the same on every page: back to all of them, or the next one */
-.t-rail {
-  position: fixed;
-  left: 50%;
-  bottom: 18px;
-  transform: translateX(-50%);
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px;
-  border-radius: 999px;
-  background: #0e0e10;
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.14),
-    0 14px 34px -12px rgba(0, 0, 0, 0.55);
-}
-.t-rail button {
-  height: 38px;
-  padding: 0 18px;
-  border: 0;
-  border-radius: 999px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 600;
-  white-space: nowrap;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.74);
-}
-.t-rail button:hover {
-  color: #fff;
-}
-.t-rail .t-next {
-  background: #fff;
-  color: #0e0e10;
-}
-.t-rail .t-next:hover {
-  color: #0e0e10;
-  background: #f1f1f1;
-}
-.t-rail button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.t-rail button:focus-visible,
-.t-btn:focus-visible {
-  outline: 2px solid var(--sky);
-  outline-offset: 2px;
-}
-
-/* A button of the card's own */
-.t-btn {
-  height: 44px;
-  padding: 0 20px;
-  border: 0;
-  border-radius: 14px;
-  cursor: pointer;
-  background: var(--ink);
-  color: #fff;
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-.t-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-.t-btn.quiet {
-  background: var(--paper);
-  color: var(--ink);
-}
-.t-card.dark .t-btn {
-  background: #fff;
-  color: #0e0e10;
-}
-
-@media (max-width: 620px) {
+/*world.css*/
+  /* ── What every thing the tour shows is laid out as ──
+     The words are large and to the left, the thing itself stands on the dark of the world
+     beside them with nothing behind it, and under the words is what each of the two did, said
+     in a few words. On a narrow screen the words are above the thing. The two ways on are at
+     the foot of every one. */
   .t-wrap {
-    padding: 30px 12px 86px;
+    position: fixed;
+    inset: 0;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: minmax(0, 30fr) minmax(0, 70fr);
+    grid-template-rows: minmax(0, 1fr);
+    column-gap: 4vw;
+    padding: 11vh 5vw 92px 6.5vw;
+  }
+  .t-words {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+  .t-h {
+    margin: 0;
+    font-size: clamp(32px, 4.4vw, 62px);
+    line-height: 0.98;
+    letter-spacing: -0.045em;
+    font-weight: 700;
+    overflow-wrap: break-word;
+  }
+  .t-sub {
+    margin: 18px 0 0;
+    max-width: 38ch;
+    font-family: var(--w-mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--w-muted);
   }
   .t-card {
-    padding: 22px 18px 18px;
-    border-radius: 22px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    min-width: 0;
+    min-height: 0;
+    padding-top: 46px;
   }
-}
-@media (prefers-reduced-motion: reduce) {
-  .t-plate[data-busy="1"] i {
-    animation: none;
+
+  /* What each did, under the words: whose doing it was, and then what */
+  .t-log {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin-top: 30px;
+    min-width: 0;
   }
   .t-log p {
-    transition: none;
+    margin: 0;
+    max-width: 34ch;
+    opacity: 0;
+    transform: translateY(8px);
+    transition:
+      opacity 0.35s,
+      transform 0.45s var(--w-ease);
   }
-}
+  .t-log p.in {
+    opacity: 1;
+    transform: none;
+  }
+  .t-log p span {
+    display: block;
+    margin-bottom: 3px;
+    font-family: var(--w-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: var(--w-faint);
+  }
+  .t-log p b {
+    display: block;
+    font-size: 17px;
+    font-weight: 500;
+    line-height: 1.35;
+    letter-spacing: -0.01em;
+    overflow-wrap: anywhere;
+  }
+  .t-log .t-did span {
+    color: var(--w-ok);
+  }
+
+  /* The way on, the same on every page: the next one, or back to all of them */
+  .t-rail {
+    position: fixed;
+    left: 6.5vw;
+    bottom: 20px;
+    z-index: 5;
+    display: flex;
+    align-items: baseline;
+    gap: 26px;
+  }
+  body.w .t-rail button {
+    padding: 6px 0 4px;
+    font-family: var(--w-mono);
+    font-size: 12px;
+    color: var(--w-faint);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    white-space: nowrap;
+    transition: color 0.15s;
+  }
+  body.w .t-rail .t-next {
+    order: -1;
+    font-family: inherit;
+    font-size: 21px;
+    font-weight: 650;
+    letter-spacing: -0.03em;
+    color: var(--w-fg);
+    text-decoration: none;
+    border-bottom: 2px solid var(--w-ghost);
+    transition:
+      color 0.15s,
+      border-color 0.15s;
+  }
+  .t-rail button:hover:not(:disabled),
+  .t-rail button:focus-visible,
+  .t-rail button[data-picked] {
+    color: var(--w-ok);
+    border-color: var(--w-ok);
+  }
+  .t-rail button:disabled {
+    cursor: default;
+  }
+  .t-rail button:disabled:not([data-picked]) {
+    opacity: 0.35;
+  }
+
+  /* A button of the thing's own: words with a line under them, as everything pressed in the world is */
+  body.w .t-btn {
+    padding: 6px 0 4px;
+    font-size: 16px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    border-bottom: 2px solid var(--w-ghost);
+    transition:
+      color 0.15s,
+      border-color 0.15s,
+      opacity 0.15s;
+  }
+  .t-btn:hover:not(:disabled),
+  .t-btn:focus-visible {
+    color: var(--w-ok);
+    border-color: var(--w-ok);
+  }
+  .t-btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+  body.w .t-btn.quiet {
+    font-family: var(--w-mono);
+    font-size: 12px;
+    font-weight: 400;
+    letter-spacing: 0;
+    color: var(--w-muted);
+    border-bottom: 0;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  body.w .t-btn.quiet:hover:not(:disabled) {
+    color: var(--w-fg);
+  }
+
+  @media (max-width: 820px) {
+    .t-wrap {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
+      row-gap: 6px;
+      padding: 30px 18px 74px;
+    }
+    .t-h {
+      font-size: clamp(28px, 8.6vw, 44px);
+    }
+    .t-sub {
+      margin-top: 10px;
+    }
+    /* What each did is one line each, so that the thing keeps the room */
+    .t-log {
+      gap: 4px;
+      margin-top: 12px;
+      min-height: 40px;
+    }
+    .t-log p {
+      max-width: none;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .t-log p span,
+    .t-log p b {
+      display: inline;
+      font-size: 12.5px;
+    }
+    .t-log p span::after {
+      content: " · ";
+    }
+    .t-rail {
+      left: 18px;
+      bottom: 14px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .t-log p {
+      transition: none;
+    }
+  }

@@ -18,6 +18,8 @@ async function opened() {
     runScripts: 'dangerously',
     beforeParse(w: any) {
       w.It = It
+      // The stand-in draws nothing, and says so once for every page if it is asked to
+      w.HTMLCanvasElement.prototype.getContext = () => null
       w.matchMedia = () => ({ matches: true })
     },
   })

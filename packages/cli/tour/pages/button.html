@@ -6,35 +6,45 @@
 <title>A big red button</title>
 <style>
 /*kit.css*/
-  :root { --field: #2f4bff; --w: 500px; }
-  .t-card { align-items: center; text-align: center; padding-bottom: 34px; }
-  .well { position: relative; width: min(64vw, 250px); aspect-ratio: 1; margin: 10px 0 2px; }
-  /* The button stands on a base, and goes down into it when it is pressed */
-  .well::before { content: ""; position: absolute; inset: 6% 0 0; border-radius: 50%; background: #e9e4da; box-shadow: inset 0 -10px 0 rgba(14, 14, 16, .08); }
-  .big {
-    position: absolute; inset: 0 7% 14%; border: 0; border-radius: 50%; cursor: pointer;
-    background: radial-gradient(circle at 34% 28%, #ff8a78, #ff3b23 58%, #d92a14);
-    box-shadow: 0 22px 0 #b3200e, 0 34px 38px -8px rgba(160, 30, 12, .55);
-    color: #fff; font-size: clamp(20px, 4.4vw, 28px); font-weight: 800; letter-spacing: -.02em;
-    transition: transform .12s cubic-bezier(.3, .7, .4, 1), box-shadow .12s;
+  /* One button, as large as the screen lets it be, and lit from inside. It goes down when it is
+     pressed and stays down, and turns the agent's green when the agent has done what it was for. */
+  .well { position: relative; width: min(100%, 60vh, 420px); aspect-ratio: 1; display: grid; place-items: center; }
+  .well::before, .well::after { content: ""; position: absolute; border-radius: 50%; pointer-events: none; transition: border-color .5s, opacity .5s; }
+  .well::before { inset: 0; border: 1px solid var(--w-line); }
+  .well::after { inset: 9%; border: 1px dashed rgba(255, 91, 69, .5); animation: turn 40s linear infinite; }
+  body.w .big {
+    position: relative; width: 66%; aspect-ratio: 1; border-radius: 50%; cursor: pointer;
+    background: radial-gradient(circle at 36% 30%, #ff8d7c, var(--w-red) 55%, #d63a25);
+    box-shadow: 0 0 0 10px rgba(255, 91, 69, .14), 0 0 90px 10px rgba(255, 91, 69, .38), inset 0 -14px 30px rgba(120, 20, 8, .45);
+    color: #fff; font-size: clamp(22px, 3.4vw, 40px); font-weight: 750; letter-spacing: -.035em;
+    transition: transform .16s var(--w-ease), box-shadow .3s, background .5s, color .3s;
   }
-  .big:hover { transform: translateY(2px); box-shadow: 0 20px 0 #b3200e, 0 30px 34px -8px rgba(160, 30, 12, .55); }
-  .big:active, .big[data-down="1"] { transform: translateY(18px); box-shadow: 0 4px 0 #b3200e, 0 10px 14px -6px rgba(160, 30, 12, .5); }
+  .big:hover:not(:disabled) { transform: scale(1.03); }
+  .big:active:not(:disabled), .big[data-down="1"] { transform: scale(.9); box-shadow: 0 0 0 4px rgba(255, 91, 69, .2), 0 0 30px 0 rgba(255, 91, 69, .25), inset 0 10px 34px rgba(90, 14, 6, .7); }
   .big:disabled { cursor: default; }
-  .big[data-done="1"] { background: radial-gradient(circle at 34% 28%, #7be6b3, #1fb877 58%, #14935c); box-shadow: 0 4px 0 #0f7347, 0 10px 14px -6px rgba(15, 115, 71, .5); transform: translateY(18px); }
+  body.w .big[data-done="1"] {
+    transform: scale(.9); color: var(--w-ink);
+    background: radial-gradient(circle at 36% 30%, #9af0cd, var(--w-ok) 55%, #1fa377);
+    box-shadow: 0 0 0 10px rgba(52, 211, 153, .16), 0 0 110px 14px rgba(52, 211, 153, .42), inset 0 10px 34px rgba(4, 60, 40, .5);
+  }
+  .well[data-done="1"]::after { border-color: rgba(52, 211, 153, .6); }
+  @keyframes turn { to { transform: rotate(360deg); } }
+  @media (max-width: 820px) { .well { width: min(84%, 46vh); } }
+  @media (prefers-reduced-motion: reduce) { .well::after { animation: none; } .big { transition: none; } }
 </style>
 </head>
-<body class="dark">
+<body class="w">
   <div class="t-wrap">
-    <div class="t-card">
-      <div class="t-plate" id="t-plate"><i></i><b></b><small></small></div>
+    <div class="t-words">
       <h1 class="t-h">{{heading}}</h1>
       <p class="t-sub">{{sub}}</p>
-      <div class="well"><button class="big" id="big" type="button">{{label}}</button></div>
+      <div class="t-log" aria-live="polite">
+        <p class="t-you" id="t-you"><span>you</span><b></b></p>
+        <p class="t-did" id="t-did"><span></span><b></b></p>
+      </div>
     </div>
-    <div class="t-log" aria-live="polite">
-      <p class="t-you" id="t-you"><span>&larr; you</span><b></b></p>
-      <p class="t-did" id="t-did"><span></span><b></b></p>
+    <div class="t-card">
+      <div class="well" id="well"><button class="big" id="big" type="button">{{label}}</button></div>
     </div>
   </div>
 <!--rail-->
@@ -43,29 +53,47 @@
 </script>
 <script>
   // One button. Pressing it tells the agent, and the agent says when it has done what the
-  // button was for: the page then says so, and throws its paper in the air.
+  // button was for: its hand then comes down on the button, which turns green and says so.
   Tour.ready(() => {
-    var It = Tour.It, big = document.getElementById("big");
-    var thrown = false;
+    var It = Tour.It, big = document.getElementById("big"), well = document.getElementById("well");
+    var landed = false;
+    Tour.home(well, 0);
+    addEventListener("resize", () => { if (!landed) Tour.home(well, 0); });
+    function finish(note, moving) {
+      big.setAttribute("data-done", "1");
+      well.setAttribute("data-done", "1");
+      big.textContent = "Done";
+      Tour.answered("did it");
+      Tour.say("did", note);
+      if (!moving) return;
+      var r = big.getBoundingClientRect();
+      Tour.hand.tap();
+      World.sound.land();
+      // The field bursts green from the button, and the hand stands back from it
+      World.burst(r.left + r.width / 2, r.top + r.height / 2);
+      World.wait(700).then(() => Tour.home(well, 600));
+    }
+    // Whether the state the page opened with has been shown. What comes after it is the agent answering now
+    var shown = false;
     function render() {
       var st = It.state || {};
       var done = st.status === "done";
       big.disabled = st.status === "pressed" || done;
-      big.setAttribute("data-down", st.status === "pressed" ? "1" : "0");
-      big.setAttribute("data-done", done ? "1" : "0");
+      big.setAttribute("data-down", st.status === "pressed" || done ? "1" : "0");
       if (st.status === "pressed" || done) Tour.say("you", "pressed it");
-      if (done) {
-        big.textContent = "Done";
-        Tour.plate("", false);
-        Tour.say("did", String(st.note || "did it"));
-        if (!thrown) {
-          thrown = true;
-          var r = big.getBoundingClientRect();
-          Tour.confetti(r.left + r.width / 2, r.top + r.height / 2);
-        }
+      if (done && !landed) {
+        var note = String(st.note || "did it");
+        // A page opened on a button that was pressed and answered before shows it as it stands
+        var moving = shown;
+        landed = true;
+        Tour.hand.to(big, "middle", moving ? 520 : 0).then(() => finish(note, moving));
       }
+      if (Tour.arrived()) shown = true;
     }
     big.addEventListener("click", () => {
+      // The largest wave of all goes through the field from the button
+      var r = big.getBoundingClientRect();
+      World.shock(r.left + r.width / 2, r.top + r.height / 2, false, 3.2);
       big.disabled = true;
       big.setAttribute("data-down", "1");
       Tour.say("you", "pressed it");
