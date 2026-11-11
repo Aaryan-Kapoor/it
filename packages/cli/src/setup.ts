@@ -1052,11 +1052,24 @@ export function codexPluginHash(root: string): string | null {
   }
 }
 
-/** A TOML string at the start of the text, basic or literal, or undefined where none is there. */
+/**
+ * A TOML string at the start of the text, basic or literal, on one line or in three quotation
+ * marks closed on the same line, or undefined where none is there. A string that goes on over
+ * further lines is not read, and is taken as not readable.
+ */
 const tomlString = (text: string): string | undefined => {
+  const triple = /^\s*('''|""")/.exec(text)
+  if (triple) {
+    const inner = new RegExp(`^\\s*${triple[1]}([\\s\\S]*?)${triple[1]}(?!${triple[1]![0]})`).exec(text)?.[1]
+    return inner === undefined ? undefined : triple[1] === '"""' ? inner.replace(/\\(["\\])/g, '$1') : inner
+  }
   const m = /^\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')/.exec(text)
   return m ? (m[1] !== undefined ? m[1].replace(/\\(["\\])/g, '$1') : m[2]) : undefined
 }
+
+/** The key Codex keeps the approved contents under, bare or in either quotation mark. */
+const CONTENT_KEY = /(?:^|\.)\s*(?:trusted_content_hash|"trusted_content_hash"|'trusted_content_hash')\s*$/
+const CONTENT_IN_TABLE = /(?:^|[{,])\s*(?:trusted_content_hash|"trusted_content_hash"|'trusted_content_hash')\s*=/
 
 /**
  * The contents of It's plugin that Codex approved the hooks of, as Codex keeps them for each hook
@@ -1087,12 +1100,13 @@ export function codexApproved(config: string): { noted: boolean; contents: strin
     if (!ours(key)) continue
     noted = true
     const value = pair[2]!
-    if (/(^|\.)\s*trusted_content_hash\s*$/.test(pair[1]!)) {
+    if (CONTENT_KEY.test(pair[1]!)) {
       const said = tomlString(value)
       if (said === undefined) unread = true
       else contents.push(said)
-    } else if (value.trimStart().startsWith('{') && /\btrusted_content_hash\s*=/.test(value)) {
-      const said = tomlString(value.slice(value.search(/\btrusted_content_hash\s*=/)).replace(/^trusted_content_hash\s*=/, ''))
+    } else if (value.trimStart().startsWith('{') && CONTENT_IN_TABLE.test(value)) {
+      const at = CONTENT_IN_TABLE.exec(value)!
+      const said = tomlString(value.slice(at.index + at[0].length))
       if (said === undefined) unread = true
       else contents.push(said)
     }
@@ -1101,14 +1115,17 @@ export function codexApproved(config: string): { noted: boolean; contents: strin
 }
 
 /**
- * The folder Codex runs It's plugin from: the newest of the versions it keeps under its cache.
- * Undefined where it keeps none.
+ * The folder Codex runs It's plugin from: the newest of the versions it keeps under its cache,
+ * each a folder named for its version. Anything else there, such as a file a system leaves in
+ * every folder, is no version. Undefined where it keeps none.
  */
 function codexPluginFolder(home: string): string | undefined {
   const plugin = path.join(home, 'plugins', 'cache', MARKET, PLUGIN)
   let versions: string[] = []
   try {
-    versions = readdirSync(plugin)
+    versions = readdirSync(plugin, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && /^\d+(\.\d+)*([-+].*)?$/.test(entry.name))
+      .map((entry) => entry.name)
   } catch {}
   const newest = versions.reduce<string | undefined>((best, v) => (best === undefined || older(best, v) ? v : best), undefined)
   return newest === undefined ? undefined : path.join(plugin, newest)

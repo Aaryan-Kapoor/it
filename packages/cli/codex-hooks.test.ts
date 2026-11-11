@@ -93,6 +93,10 @@ describe('what Codex’s settings say of its approval of It’s hooks', () => {
       `[hooks.state]\n${key}.trusted_content_hash = "sha256:bb"\n`,
       `[hooks]\nstate.${key} = { trusted_hash = "sha256:aa", trusted_content_hash = "sha256:bb" }\n`,
       `hooks.state.${key}.trusted_content_hash = "sha256:bb"\n`,
+      `[hooks.state]\n${key} = { trusted_hash = "sha256:aa", "trusted_content_hash" = "sha256:bb" }\n`,
+      `[hooks.state.${key}]\n'trusted_content_hash' = "sha256:bb"\n`,
+      `[hooks.state.${key}]\ntrusted_content_hash = '''sha256:bb'''\n`,
+      `[hooks.state.${key}]\ntrusted_content_hash = """sha256:bb"""\n`,
     ])
       expect([config, codexApproved(config)]).toEqual([config, { noted: true, contents: ['sha256:bb'], unread: false }])
   })
@@ -105,6 +109,8 @@ describe('what Codex’s settings say of its approval of It’s hooks', () => {
       unread: false,
     })
     expect(codexApproved(`[hooks.state.${key}]\ntrusted_content_hash = 12\n`)).toEqual({ noted: true, contents: [], unread: true })
+    // A string over several lines is not read, and is said so, rather than taken for an empty one
+    expect(codexApproved(`[hooks.state.${key}]\ntrusted_content_hash = '''\nsha256:bb'''\n`)).toEqual({ noted: true, contents: [], unread: true })
   })
 })
 
@@ -142,6 +148,15 @@ describe('whether Codex has yet to run It’s hooks', () => {
     rmSync(path.join(plugin, 'LICENSE.md'))
     symlinkSync(path.join(newer, 'LICENSE.md'), path.join(plugin, 'LICENSE.md'))
     expect(codexHooksPending(codex)).toBe(false)
+  })
+
+  test('only folders named for a version are versions: a file a system leaves beside them does not hide the one Codex runs', () => {
+    const newer = path.join(path.dirname(plugin), '0.2.0')
+    cpSync(plugin, newer, { recursive: true })
+    writeFileSync(path.join(path.dirname(plugin), '.DS_Store'), 'not a version')
+    writeFileSync(path.join(codex, 'config.toml'), approved(codexPluginHash(plugin)))
+    writeFileSync(path.join(newer, 'LICENSE.md'), 'A newer license.\n')
+    expect(codexHooksPending(codex)).toBe(true)
   })
 
   test('no where an approval of It’s cannot be read, since it cannot then be told to be out of date', () => {
