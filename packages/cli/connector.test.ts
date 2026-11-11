@@ -4233,12 +4233,13 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
       stand.t3.threads.set('thread-8', 't3-thread-h')
     }
     await start()
-    offered({
+    const long = {
       ...click(8),
       name: 'it:message',
       payload: JSON.stringify({ text: 'x'.repeat(5000) }),
-      files: [{ number: 1, name: 'photo.png', type: 'image/png', bytes: 100 }],
-    })
+      files: [{ name: 'photo.png', type: 'image/png', bytes: 100 }],
+    }
+    offered(long)
     await until(() => (via === 't3' ? stand.t3.sent.length === 1 : stand.codex.length === 1))
     const text = via === 't3' ? stand.t3.sent[0]!.text : stand.codex[0]!.args.join(' ')
     expect(text).toContain('it action click-8')

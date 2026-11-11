@@ -1382,7 +1382,7 @@ describe('the file of rules that lets `it` out of Codex’s sandbox', () => {
   }
   test.each([
     ['rules as an earlier It wrote them', `${CODEX_RULE}\n`],
-    ['the earlier 0.1.38 rules', CODEX_RULES.replace(`${CODEX_SAVE_RULE}\n`, '')],
+    ['the earlier 0.1.38 rules', readFileSync(new URL('./fixtures/codex-0138.rules', import.meta.url), 'utf8')],
     ['rules Codex will not load', 'prefix_rule(pattern=["it"], decision="alow")\n'],
   ])('with the add-on’s version unchanged, a file of It’s that holds %s is brought up to date, and Codex is to be started again', async (_, earlier) => {
     const rules = rulesIn(folderOf('codex'))

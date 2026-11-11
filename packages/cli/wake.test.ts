@@ -218,7 +218,7 @@ describe('the command each agent app is carried on with', () => {
       name: 'approve',
       payload: { text: 'x'.repeat(5000) },
       at: 1,
-      files: [{ number: 1, name: 'photo.png', type: 'image/png', bytes: 100 }],
+      files: [{ name: 'photo.png', type: 'image/png', bytes: 100 }],
     })
     const how = carrying('codex', 'thread-1', text, has)
     if (typeof how === 'string') throw new Error(how)

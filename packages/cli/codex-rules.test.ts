@@ -2,7 +2,7 @@
 // Codex's sandbox: what they say, and what Codex itself makes of them where a `codex` command is
 // on this machine. Codex is asked in a folder of its own, so no settings of a person's are read.
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
@@ -86,4 +86,20 @@ describe.skipIf(!codex)('what Codex makes of the file', () => {
   test.each(DECIDED)('%s', (command, decision) => {
     expect(decide(command)).toBe(decision)
   })
+})
+
+test('help, delivery instructions and docs use the separate save command', () => {
+  for (const relative of [
+    'src/main.ts',
+    'src/wait.ts',
+    'tour/TOUR.md',
+    '../protocol/src/index.ts',
+    '../../addons/skill/SKILL.md',
+    '../../addons/skill/more/actions.md',
+    '../../docs/add-ons.md',
+    '../../docs/what-it-protects.md',
+  ]) {
+    const text = readFileSync(new URL(relative, import.meta.url), 'utf8')
+    expect(text, relative).not.toMatch(/it action [^\n]*--save/)
+  }
 })

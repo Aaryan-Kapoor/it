@@ -2050,7 +2050,7 @@ try {
   const shrunk = await newestFiles()
   const shrunkText = shrunk ? (await it(A, ['action', shrunk.id])).text : ''
   const shrunkAt = savedTo('receipt.jpg')
-  const shrunkSaved = shrunk ? (await it(A, ['action', shrunk.id, '--save', shrunkAt])).saved : null
+  const shrunkSaved = shrunk ? (await it(A, ['save', shrunk.id, shrunkAt])).saved : null
   check(
     'a photo put in an action goes with it in one action, made smaller in the page to what a model reads, and the agent is told it is there, by name, kind and size',
     /^accepted /.test(shrunkSaid) &&
@@ -2061,11 +2061,11 @@ try {
       shrunk.files[0].type === 'image/jpeg' &&
       shrunk.files[0].bytes < 1024 * 1024 &&
       shrunkText.includes(`It carries a file beside that: "${PRIVATE_MARK}receipt.jpg" (image/jpeg,`) &&
-      shrunkText.includes(`\`it action ${shrunk.id} --save <file>\``),
+      shrunkText.includes(`\`it save ${shrunk.id} <file>\``),
     JSON.stringify({ said: shrunkSaid, listed: shrunk, text: shrunkText }),
   )
   check(
-    'and `it action --save` writes it as a picture of 1600 pixels on its longer side',
+    'and `it save` writes it as a picture of 1600 pixels on its longer side',
     shrunkSaved?.bytes === shrunk?.files?.[0]?.bytes && existsSync(shrunkAt) && jpegSize(readFileSync(shrunkAt)) === '1600x1200',
     JSON.stringify({ saved: shrunkSaved, size: existsSync(shrunkAt) ? jpegSize(readFileSync(shrunkAt)) : 'no file' }),
   )
@@ -2074,8 +2074,8 @@ try {
   const photoBack = savedTo('receipt.jpg')
   const sheetBack = savedTo('totals.csv')
   if (asItWas) {
-    await it(A, ['action', asItWas.id, '--save', photoBack])
-    await it(A, ['action', asItWas.id, '--save', sheetBack, '--number', '2'])
+    await it(A, ['save', asItWas.id, photoBack])
+    await it(A, ['save', asItWas.id, sheetBack, '--number', '2'])
   }
   check(
     'a page that asks for its files as they are has them arrive byte for byte, several in one action, each by its number',
@@ -2099,7 +2099,7 @@ try {
   const takeSaid = await sentFrom(page, '#original', [takeAt])
   const sentTake = await newestFiles(60_000)
   const takeBack = savedTo('take-3.wav')
-  const takeSaved = sentTake ? await it(A, ['action', sentTake.id, '--save', takeBack]).catch((e) => ({ refused: e.code })) : {}
+  const takeSaved = sentTake ? await it(A, ['save', sentTake.id, takeBack]).catch((e) => ({ refused: e.code })) : {}
   check(
     'a recording of more than 25 MB goes with an action as it is, and the agent saves it byte for byte',
     take.length > 25 * 1024 * 1024 &&
@@ -2165,7 +2165,7 @@ try {
   await reopened.goto(APP)
   const cameBack = await newestFiles(60_000)
   const cameBackAt = savedTo('receipt.jpg')
-  if (cameBack) await it(A, ['action', cameBack.id, '--save', cameBackAt])
+  if (cameBack) await it(A, ['save', cameBack.id, cameBackAt])
   const leftThere = await until(async () => {
     const kept = await keptInBrowser(reopened)
     return kept.clicks === 0 && Array.isArray(kept.files) && kept.files.length === 0 ? kept : undefined
@@ -2245,9 +2245,9 @@ try {
   await crowded.browser.close()
   // The agent may be on another computer: a machine that joined reads the file through the door it joined at
   const onTheOther = savedTo('from-the-other-machine.jpg')
-  const fromTheOther = asItWas ? await it(B, ['action', asItWas.id, '--save', onTheOther]).catch((e) => ({ refused: e.code })) : {}
+  const fromTheOther = asItWas ? await it(B, ['save', asItWas.id, onTheOther]).catch((e) => ({ refused: e.code })) : {}
   const takeOnTheOther = savedTo('take-on-the-other-machine.wav')
-  const takeFromTheOther = sentTake ? await it(B, ['action', sentTake.id, '--save', takeOnTheOther]).catch((e) => ({ refused: e.code })) : {}
+  const takeFromTheOther = sentTake ? await it(B, ['save', sentTake.id, takeOnTheOther]).catch((e) => ({ refused: e.code })) : {}
   check(
     'a machine that joined from elsewhere writes a file an action carried, whole, as the machine It runs on does, one larger than one answer carries among them',
     fromTheOther.saved?.bytes === photo.length &&
@@ -2269,7 +2269,7 @@ try {
   await pageIn(page, { id: slug })
   const fdeleted = await it(A, ['delete', fslug])
   const keptAfter = await until(() => pageFolders().filter((f) => f === 'f').length === 0, 15_000)
-  const savedAfter = asItWas ? await refused(it(A, ['action', asItWas.id, '--save', savedTo('after.jpg')])) : 'none'
+  const savedAfter = asItWas ? await refused(it(A, ['save', asItWas.id, savedTo('after.jpg')])) : 'none'
   check(
     'deleting the page removes its files: the folder each action’s files were kept in is gone, and none can be read',
     keptBefore >= 3 && fdeleted.deleted === fslug && keptAfter && savedAfter === 'not_found' && !existsSync(savedTo('after.jpg')),
