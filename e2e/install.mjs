@@ -561,9 +561,13 @@ try {
         noteOf(byAnAgent) === null,
       `${byAnAgent.said} ${JSON.stringify(noteOf(byAnAgent))}`,
     )
-    // A note the program left before, whatever it holds, is the program's own, and an install leaves it as it is
+    // A note the program left before in It's folder, whatever it holds, is the program's own, and an install leaves it as it is
     const saysOff = `${JSON.stringify({ enabled: false, offBy: 'command', told: 1 }, null, 1)}\n`
     mkdirSync(path.join(tmp, 'note-says-off', '.it'), { recursive: true })
+    writeFileSync(
+      path.join(tmp, 'note-says-off', '.it', 'installation.json'),
+      '{"product":"It","format":1,"about":"This folder holds an installation of It."}\n',
+    )
     writeFileSync(path.join(tmp, 'note-says-off', '.it', 'telemetry.json'), saysOff)
     const noteSaysOff = await install('note-says-off', {}, { terminal: true })
     check(
@@ -801,10 +805,11 @@ try {
     )
 
     // ---------- what is already there, where the install writes ----------
-    // Links where the three files go: one to a file of the person's own, one to a folder, and
-    // one to nowhere, which a write through it would make
+    // Links where the three files go in an It folder: one to a file of the person's own, one to
+    // a folder, and one to nowhere, which a write through it would make
     const linked = path.join(tmp, 'linked')
     mkdirSync(path.join(linked, '.it', 'bin'), { recursive: true })
+    writeFileSync(path.join(linked, '.it', 'installation.json'), '{"product":"It","format":1,"about":"This folder holds an installation of It."}\n')
     mkdirSync(path.join(linked, 'folder'))
     writeFileSync(path.join(linked, 'mine'), 'KEEP THIS\n')
     symlinkSync(path.join(linked, 'mine'), path.join(linked, '.it', 'bin', 'it'))
@@ -1616,6 +1621,154 @@ try {
         readdirSync(path.join(home, '.it', where)).length === 0 &&
         readdirSync(path.join(home, '.it')).every((f) => f === 'bin' || f === where),
       `${r.said}\nasked: ${asked.join(' ')}`,
+    )
+  }
+
+  // ---------- only a folder that is new, empty or It's ----------
+  {
+    // Someone's own folder, named by IT_HOME, with a file under a name that It removes whole
+    const project = path.join(tmp, 'a-project', 'mine')
+    mkdirSync(path.join(project, 'logs'), { recursive: true, mode: 0o755 })
+    chmodSync(project, 0o755)
+    writeFileSync(path.join(project, 'logs', 'irreplaceable.txt'), 'mine')
+    writeFileSync(path.join(project, 'notes.txt'), 'also mine')
+    asked.length = 0
+    const refused = await install('a-project', { IT_HOME: project })
+    check(
+      'a folder that already holds files, none of them It’s, is refused before anything is made in it or asked for',
+      refused.code !== 0 &&
+        /already holds files, and nothing in it shows that it is It's/.test(refused.flat) &&
+        /Nothing was installed/.test(refused.flat) &&
+        asked.length === 0 &&
+        readdirSync(project).sort().join() === 'logs,notes.txt' &&
+        readdirSync(path.join(project, 'logs')).join() === 'irreplaceable.txt' &&
+        (windows || (statSync(project).mode & 0o777) === 0o755),
+      `${refused.said}\nasked: ${asked.join(' ')}\nleft: ${readdirSync(project).join(' ')}`,
+    )
+    // An It installed elsewhere is asked to take It off that folder, and finds nothing of its own there
+    const elsewhereIt = await install('a-project-it')
+    const off = await run(
+      elsewhereIt.it,
+      ['uninstall', '--yes'],
+      { ...plainEnv(), HOME: elsewhereIt.home, USERPROFILE: elsewhereIt.home, IT_HOME: project },
+      elsewhereIt.home,
+    )
+    check(
+      'and uninstall then removes nothing from it',
+      elsewhereIt.code === 0 &&
+        off.status !== 0 &&
+        /Nothing was removed/.test(off.said) &&
+        readFileSync(path.join(project, 'logs', 'irreplaceable.txt'), 'utf8') === 'mine' &&
+        readFileSync(path.join(project, 'notes.txt'), 'utf8') === 'also mine',
+      off.said,
+    )
+
+    // A file of someone's that has the name of a note It keeps is theirs all the same
+    const likeANote = path.join(tmp, 'a-file-named-like-a-note', 'mine')
+    mkdirSync(likeANote, { recursive: true })
+    writeFileSync(path.join(likeANote, 'releases.json'), '{"notes":"mine"}\n')
+    const overNote = await install('a-file-named-like-a-note', { IT_HOME: likeANote })
+    check(
+      'a folder holding only someone’s file named as one of It’s notes is refused, and the file is left as it was',
+      overNote.code !== 0 &&
+        /already holds files/.test(overNote.flat) &&
+        readdirSync(likeANote).join() === 'releases.json' &&
+        read(path.join(likeANote, 'releases.json')) === '{"notes":"mine"}\n',
+      overNote.said,
+    )
+
+    const empty = path.join(tmp, 'an-empty-folder', 'empty')
+    mkdirSync(empty, { recursive: true })
+    const intoEmpty = await install('an-empty-folder', { IT_HOME: empty })
+    check(
+      'an empty folder is installed into',
+      intoEmpty.code === 0 && existsSync(intoEmpty.it) && read(path.join(empty, 'installation.json')) !== null,
+      intoEmpty.said,
+    )
+
+    // What a download that failed leaves behind is no reason to refuse the next install
+    const retried = path.join(tmp, 'a-retried-install', 'it')
+    const failedFirst = await install('a-retried-install', { IT_HOME: retried, IT_VERSION: 'v9.9.9' })
+    const second = await install('a-retried-install', { IT_HOME: retried })
+    check(
+      'a folder holding only what an install that failed left behind is installed into',
+      failedFirst.code !== 0 && existsSync(path.join(retried, 'bin')) && second.code === 0 && existsSync(second.it),
+      `${failedFirst.said}\n${second.said}`,
+    )
+
+    // A file put in a new folder while the downloads come is seen before the record goes in
+    const filling = path.join(tmp, 'a-folder-filled-meanwhile', 'it')
+    reachedHeld = false
+    const meanwhile = install('a-folder-filled-meanwhile', { IT_HOME: filling, IT_VERSION: 'held' })
+    const reachedIt = await until(() => reachedHeld)
+    mkdirSync(path.join(filling, 'logs'))
+    writeFileSync(path.join(filling, 'logs', 'irreplaceable.txt'), 'mine')
+    letGo()
+    const filled = await meanwhile
+    check(
+      'a file put in the folder while the downloads come keeps the record out, and nothing is installed',
+      reachedIt &&
+        filled.code !== 0 &&
+        /already holds files/.test(filled.flat) &&
+        !existsSync(path.join(filling, 'installation.json')) &&
+        !existsSync(filled.it) &&
+        read(path.join(filling, 'logs', 'irreplaceable.txt')) === 'mine',
+      `${filled.said}\n${readdirSync(filling).join(' ')}`,
+    )
+
+    if (!windows) {
+      // The lock of an install that has stopped shows nothing of whose the files beside it are
+      const locked = path.join(tmp, 'a-stale-lock', 'it')
+      mkdirSync(path.join(locked, '.installing'), { recursive: true })
+      writeFileSync(path.join(locked, '.installing', 'owner'), `999999999 ${os.hostname()}\n`)
+      writeFileSync(path.join(locked, 'notes.txt'), 'mine')
+      const overLock = await install('a-stale-lock', { IT_HOME: locked })
+      check(
+        'a folder with someone’s files is refused even where an install that has stopped left its lock there',
+        overLock.code !== 0 && /already holds files/.test(overLock.flat) && !existsSync(path.join(locked, 'installation.json')),
+        overLock.said,
+      )
+      // A file in bin whose name is only a line break is something in bin all the same
+      const oddBin = path.join(tmp, 'an-odd-name-in-bin', 'it')
+      mkdirSync(path.join(oddBin, 'bin'), { recursive: true })
+      writeFileSync(path.join(oddBin, 'bin', '\n'), 'mine')
+      const overOdd = await install('an-odd-name-in-bin', { IT_HOME: oddBin })
+      check(
+        'a bin that holds a file named only with a line break is not taken for an empty one',
+        overOdd.code !== 0 && !existsSync(path.join(oddBin, 'installation.json')) && read(path.join(oddBin, 'bin', '\n')) === 'mine',
+        overOdd.said,
+      )
+    }
+
+    // A folder made by a release from before the installation record: the program, the license
+    // that release published, the notices, and what It kept there once it had run
+    const earlier = (name, license) => {
+      const folder = path.join(tmp, name, '.it')
+      mkdirSync(path.join(folder, 'bin'), { recursive: true })
+      copyFileSync(path.join(built, program), path.join(folder, 'bin', windows ? 'it.exe' : 'it'))
+      writeFileSync(path.join(folder, 'LICENSE.md'), license)
+      writeFileSync(path.join(folder, 'THIRD_PARTY_NOTICES.md'), readFileSync(path.join(built, 'THIRD_PARTY_NOTICES.md')))
+      writeFileSync(path.join(folder, 'service.json'), '{}')
+      mkdirSync(path.join(folder, 'backend'))
+      writeFileSync(path.join(folder, 'backend', 'db.sqlite3'), 'pages')
+      return folder
+    }
+    const older = earlier('an-earlier-release', readFileSync(path.join(built, 'LICENSE.md')))
+    const overOlder = await install('an-earlier-release')
+    check(
+      'a folder that an earlier release made before there was an installation record is installed over, and what It kept there stays',
+      overOlder.code === 0 &&
+        read(path.join(older, 'installation.json')) !== null &&
+        read(path.join(older, 'backend', 'db.sqlite3')) === 'pages' &&
+        read(path.join(older, 'service.json')) === '{}',
+      overOlder.said,
+    )
+    const lookalike = earlier('an-unknown-license', 'Do as you like.\n')
+    const overLookalike = await install('an-unknown-license')
+    check(
+      'one whose license is none that It published is not taken for It’s',
+      overLookalike.code !== 0 && /already holds files/.test(overLookalike.flat) && !existsSync(path.join(lookalike, 'installation.json')),
+      overLookalike.said,
     )
   }
 
