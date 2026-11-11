@@ -1,13 +1,15 @@
 // A stand-in for Tailscale's own server on a machine (`tailscale serve`), as It uses it with
 // `it https on`: it takes a request and hands it to the door on this machine, over plain http,
-// saying that it came over https. Tailscale takes https there and this takes none: what the door
-// is handed is the same either way, and the door is what the checks that use this are about.
+// saying that it came over https. Tailscale takes https there, and this takes it only where it is
+// given a key and a certificate, which a browser needs and a program that asks does not: what the
+// door is handed is the same either way, and the door is what the checks that use this are about.
 //
 // What it hands on is what Tailscale hands on. The request as it was asked, at the path it was
 // asked for, with the Host it was sent to, which is the machine's name on its tailnet and the
 // https port; and three headers it writes itself whatever the caller sent: that the request came
 // over https, the address on the tailnet it came from, and the Host again.
 import http from 'node:http'
+import https from 'node:https'
 
 /** An address on a tailnet, of the kind Tailscale gives a machine: where the stand-in says each request came from. */
 export const TAILNET_CALLER = '100.64.0.7'
@@ -30,12 +32,14 @@ const head = (res) => {
 /**
  * Starts the stand-in on this machine alone, at `listen`, handing everything to the door at
  * `door`, which is a port on this machine too. Resolves with the port it listens on and a way
- * to stop it, and rejects where it cannot listen there.
+ * to stop it, and rejects where it cannot listen there. Given a key and a certificate (`tls`),
+ * it takes https itself, as Tailscale does, which is what a browser needs of it: the site it is
+ * given over https says so in its policy and its cookies. What the door is handed is the same.
  */
-export function standInTailscale({ door, listen = 0 }) {
+export function standInTailscale({ door, listen = 0, tls }) {
   const to = { host: '127.0.0.1', port: door }
   const open = new Set()
-  const server = http.createServer((req, res) => {
+  const server = (tls ? https.createServer.bind(https, tls) : http.createServer)((req, res) => {
     const on = http.request({ ...to, method: req.method, path: req.url, headers: handedOn(req.headers) }, (answer) => {
       res.writeHead(answer.statusCode, answer.statusMessage, answer.rawHeaders)
       answer.pipe(res)

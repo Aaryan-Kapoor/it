@@ -1,7 +1,12 @@
 // The stand-in for Tailscale's own server (e2e/tailscale.mjs): what it hands the door is what
 // Tailscale hands it, whatever the caller said of itself, and a connection the door takes over
 // is joined through it.
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import http from 'node:http'
+import https from 'node:https'
+import os from 'node:os'
+import path from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
 import { askThrough, standInTailscale, TAILNET_CALLER } from './tailscale.mjs'
 
@@ -77,6 +82,49 @@ describe('the stand-in for Tailscale’s own server', () => {
   test('and gives back the door’s refusal of one it does not take over', async () => {
     const { front } = await inFrontOf(undefined, (_req, socket) => socket.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'))
     expect((await askThrough(front.port, HOST, '/api/1.0.0/sync', UPGRADE)).status).toBe(403)
+  })
+
+  // The key and certificate are made by openssl, as the check that uses them makes its own
+  // (e2e/https.mjs), so this is run where there is one
+  const openssl = (() => {
+    try {
+      execFileSync('openssl', ['version'], { stdio: 'ignore' })
+      return true
+    } catch {
+      return false
+    }
+  })()
+  test.skipIf(!openssl)('given a key and a certificate, takes https itself and hands the door the same over plain http', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'it-tailscale-test-'))
+    let tls
+    try {
+      const [key, cert] = ['key.pem', 'cert.pem'].map((file) => path.join(dir, file))
+      execFileSync(
+        'openssl',
+        ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '2', '-subj', '/CN=laptop.tail-e2e.ts.net'],
+        { stdio: 'ignore' },
+      )
+      tls = { key: readFileSync(key), cert: readFileSync(cert) }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+    const { asked, port } = await inFrontOf()
+    const front = await standInTailscale({ door: port, tls })
+    started.push(front.stop)
+    const got = await new Promise((resolve, reject) => {
+      // Who signed the certificate is passed over, as the browser of that check passes it over
+      const req = https.get(
+        { host: '127.0.0.1', port: front.port, path: '/p/plan', headers: { host: HOST }, rejectUnauthorized: false, agent: false },
+        (res) => {
+          res.resume()
+          res.on('end', () => resolve(res.statusCode))
+        },
+      )
+      req.on('error', reject)
+    })
+    expect(got).toBe(200)
+    expect(asked[0].target).toBe('/p/plan')
+    expect(asked[0].headers).toMatchObject({ host: HOST, 'x-forwarded-proto': 'https', 'x-forwarded-for': TAILNET_CALLER })
   })
 
   test('answers 502 where there is no door to hand anything to', async () => {
