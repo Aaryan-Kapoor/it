@@ -39,7 +39,7 @@
   @keyframes chess-beat { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 55%, transparent); } to { box-shadow: 0 0 0 8px transparent; } }
   /* What each has taken, and by how much it is ahead */
   [data-part="chess"] .chess-taken { grid-column: 1 / -1; min-height: 24px; display: flex; align-items: center; flex-wrap: wrap; }
-  [data-part="chess"] .chess-taken .pc { position: static; flex: none; width: 26px; height: 26px; margin-right: -9px; }
+  [data-part="chess"] .chess-taken .pc { position: static; flex: none; width: 26px; height: 26px; } [data-part="chess"] .chess-taken .pc + .pc { margin-left: -9px; }
   [data-part="chess"] .chess-taken b { margin-left: 12px; font: 600 12px/1 var(--mono); color: var(--soft); }
   /* The agent's own words about its move, in its hand */
   [data-part="chess"] .chess-note { grid-column: 1 / -1; margin-top: 6px; padding-left: 12px; border-left: 3px solid var(--green); font: 600 25px/1.15 Hand, cursive; color: var(--ink); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; overflow: hidden; } [data-part="chess"] .chess-note:empty { display: none; }
@@ -72,6 +72,14 @@
     [data-part="chess"] .chess-sheet .btn { align-self: center; min-height: 34px; }
     /* Here a square is a whole number of half dots, which a phone's screen draws whole */
     @supports (width: round(down, 10px, 8px)) { [data-part="chess"] .chess-table { --b: round(down, min(100cqw, calc(100cqh - 116px)), 4px); } }
+    /* Where there is little height as well, the line of moves gives its room to the board, and New game stands beside the person's name */
+    @container (max-height: 440px) {
+      [data-part="chess"] .chess-table { --b: min(100cqw, calc(100cqh - 76px)); grid-template: "black" 26px "board" var(--b) "white" 34px / var(--b); }
+      [data-part="chess"] .chess-moves { display: none; }
+      [data-part="chess"] .chess-sheet { grid-area: white; justify-self: end; }
+      [data-part="chess"] #chess-white { padding-right: 100px; } [data-part="chess"] #chess-white .chess-name { min-width: max-content; }
+      @supports (width: round(down, 10px, 8px)) { [data-part="chess"] .chess-table { --b: round(down, min(100cqw, calc(100cqh - 76px)), 4px); } }
+    }
   }
 </style>
 <section class="part" data-part="chess" data-title="A game of chess" data-line="You play White. Tap a piece and where it goes, and {agent} answers on the board." data-wait="0" hidden>
