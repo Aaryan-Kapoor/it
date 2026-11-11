@@ -11,6 +11,7 @@ import { addonHere, api, call, direct, doorRefusal, inHome, machine, Problem, re
 import { type Profile, profileOf } from './profiles'
 import { aloneAt } from './serve/backend'
 import { makeOnce } from './serve/config'
+import { claimUnclaimed, inUnloadedOpenCode, noteUnclaimed } from './unclaimed'
 import { agentOf, filesBand, record, sizeBand } from './usage'
 
 interface Gathered {
@@ -556,6 +557,9 @@ export async function publish(input: {
   if (bytes > LIMITS.versionBytes) throw new Problem(`A ${NOUN.one} is at most ${sizeSaid(LIMITS.versionBytes)}.`, 'limit')
   const asked = sessionAsked()
   const session = asked?.session
+  // A page this conversation made before OpenCode had loaded It's add-on named no conversation,
+  // and is this conversation's from the first time it publishes it again
+  const claimed = await claimUnclaimed(input.slug, session)
   const request = {
     slug: input.slug,
     title: input.title,
@@ -708,6 +712,8 @@ export async function publish(input: {
       // With whether It's add-on runs in it, where this command can tell: a conversation that
       // publishes without it is told so by the connector, should it not be able to be reopened
       if (session) await noteConversation(session, undefined, undefined, addonHere(session.harness))
+      // Made by an OpenCode that has not loaded It's add-on: noted, so that its conversation can be given it later
+      else if (inUnloadedOpenCode(asked)) noteUnclaimed(done.slug)
       // Counted: which agent app, new or not, how large and of how many files in a few bands, and
       // four things that are each so or not: whether it was given a state to start with, whether it
       // sends anything back, whether it carries a picture, and whether it was brought up at once.
@@ -739,7 +745,9 @@ export async function publish(input: {
         ? `What is done on this ${NOUN.one} goes to another conversation, the one that made it, and not to this one. If the person is to be answered here, publish it again with --take.`
         : done.took
           ? `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.`
-          : undefined
+          : claimed
+            ? `This ${NOUN.one} was made before OpenCode had loaded It’s add-on, and is this conversation’s now: what is done on it comes here.`
+            : undefined
       const said = [stays, note].filter(Boolean).join(' ')
       // The page's address is where the owner chose for links, where It can be reached there, and
       // is otherwise the site's as this machine reaches it. A link at another place says so beside it
