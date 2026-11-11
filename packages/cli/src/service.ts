@@ -708,6 +708,19 @@ export function definedFor(): 'this folder' | 'another folder' | 'none' {
 }
 
 /**
+ * Whose the service is, as `definedFor` says, or `unknown` where the system could not be asked,
+ * which is only ever so on Windows. Taking a service away goes on then: on Windows the removal
+ * takes away only a task that is started in this folder, and says why where it cannot.
+ */
+export function definedForOr<T>(unknown: T): ReturnType<typeof definedFor> | T {
+  try {
+    return definedFor()
+  } catch {
+    return unknown
+  }
+}
+
+/**
  * Whether systemd has this user's service down to be started by itself, which is what enabling
  * it does. The definition's file being there does not say so: it is written before systemd is
  * asked to take it, and stays where systemd would not.

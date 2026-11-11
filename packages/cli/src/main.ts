@@ -1362,9 +1362,11 @@ async function uninstall(a: Args) {
     // nothing left to run.
     // The one service a machine has belongs to the It folder its definition names. One that runs
     // It from another folder is another It's, and is left as it is.
-    if (service.definedFor() === 'another folder') service.passLingerToRegisteredService()
+    // Where Windows cannot be asked whose it is, it is taken away all the same: the removal takes away only this folder's task
+    const defined = service.definedForOr('unknown')
+    if (defined === 'another folder') service.passLingerToRegisteredService()
     else {
-      const was = service.definedFor() === 'this folder'
+      const was = defined === 'this folder'
       try {
         service.uninstall()
         if (was) say('The background service is stopped, and no longer starts by itself.')
@@ -2971,7 +2973,7 @@ async function serviceCommand(a: Args) {
     // The one service a machine has belongs to the It folder its definition names, and is that
     // folder's to take away, whatever the system says of it: whether the system starts it by
     // itself, or has it running, says nothing of whose it is
-    if (service.definedFor() === 'another folder')
+    if (service.definedForOr('unknown') === 'another folder')
       throw new Problem(
         'The background service on this machine runs It from another folder, and is left as it is.',
         'invalid',
