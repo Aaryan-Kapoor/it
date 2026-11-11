@@ -56,6 +56,9 @@ export function ranFor(etime: string): number | undefined {
   return (((Number(d) * 24 + Number(h)) * 60 + Number(min!)) * 60 + Number(sec!)) * 1000
 }
 
+/** How long stopping discovery waits for its children to be gone, so that a child that cannot be killed never holds up shutdown. */
+const STOP_WAIT_MS = 2_000
+
 /** Discovery belongs to one connector lifetime; stopping it cannot stop a later connector. */
 export class ClaudeDiscovery {
   private ended = false
@@ -65,15 +68,24 @@ export class ClaudeDiscovery {
     return this.ended
   }
 
-  /** Kill only discovery's own child PIDs, settle scans as unknown, and wait until the PIDs are gone. */
+  /**
+   * Kill only discovery's own child PIDs, settle scans as unknown, and wait until the PIDs are gone, for at most
+   * STOP_WAIT_MS: a child the system would not kill, or that never says it ended, is left, and stopping goes on.
+   */
   async stop(): Promise<void> {
     this.ended = true
-    const pending = [...this.children]
-    for (const [child, scan] of pending) {
+    const waits: Promise<void>[] = []
+    for (const [child, scan] of [...this.children]) {
       scan.cancel()
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      const running = child.exitCode === null && child.signalCode === null
+      // A kill the system refused leaves nothing to wait for
+      if (!running || child.kill('SIGKILL')) waits.push(scan.exited)
+      else this.children.delete(child)
     }
-    await Promise.all(pending.map(([, scan]) => scan.exited))
+    if (!waits.length) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([Promise.all(waits), new Promise<void>((done) => (timer = setTimeout(done, STOP_WAIT_MS)))])
+    clearTimeout(timer)
   }
 
   output(file: string, args: string[], timeout: number): Promise<string | undefined> {
@@ -89,11 +101,14 @@ export class ClaudeDiscovery {
       // Spawn failures have no PID. Their callback still settles the scan as unknown.
       if (child.pid !== undefined) {
         const exited = new Promise<void>((gone) => {
-          child.once('exit', () => {
+          // A child that fails, a kill refused among them, may say so without ever saying it ended
+          const ended = () => {
             didExit = true
             if (answered) this.children.delete(child)
             gone()
-          })
+          }
+          child.once('exit', ended)
+          child.once('error', ended)
         })
         this.children.set(child, { cancel: () => resolve(undefined), exited })
       }

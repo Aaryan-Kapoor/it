@@ -170,6 +170,78 @@ describe('the Claude Code conversations open at a person’s keyboard', async ()
     }
   })
 
+  test('stopping discovery does not wait without end for a child the system would not kill', async () => {
+    const platform = process.platform
+    const run = childProcess.execFile
+    const discovery = new ClaudeDiscovery()
+    const children: ReturnType<typeof run>[] = []
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      childProcess.execFile = new Proxy(run, {
+        apply(_target, _self, [_file, _args, opts, callback]) {
+          const child = run(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { ...opts, timeout: 60_000 }, callback)
+          // The system refuses the kill, as with EPERM: no exit is ever said
+          child.kill = () => {
+            child.emit('error', Object.assign(new Error('kill EPERM'), { code: 'EPERM' }))
+            return false
+          }
+          children.push(child)
+          return child
+        },
+      })
+      syncBuiltinESMExports()
+      const scan = openClaude([folderWith([session(1)])], alive, undefined, discovery)
+      expect(children).toHaveLength(1)
+      const began = Date.now()
+      await discovery.stop()
+      expect(Date.now() - began).toBeLessThan(3_000)
+      expect(await scan).toEqual([])
+    } finally {
+      childProcess.execFile = run
+      syncBuiltinESMExports()
+      Object.defineProperty(process, 'platform', { value: platform })
+      for (const child of children) {
+        try {
+          process.kill(child.pid!, 'SIGKILL')
+        } catch {}
+      }
+    }
+  })
+
+  test('stopping discovery waits at most a short while for a child that never says it ended', async () => {
+    const platform = process.platform
+    const run = childProcess.execFile
+    const discovery = new ClaudeDiscovery()
+    const children: ReturnType<typeof run>[] = []
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      childProcess.execFile = new Proxy(run, {
+        apply(_target, _self, [_file, _args, opts, callback]) {
+          const child = run(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { ...opts, timeout: 60_000 }, callback)
+          // The kill is taken, and the child goes on as if it had not been sent
+          child.kill = () => true
+          children.push(child)
+          return child
+        },
+      })
+      syncBuiltinESMExports()
+      const scan = openClaude([folderWith([session(1)])], alive, undefined, discovery)
+      const began = Date.now()
+      await discovery.stop()
+      expect(Date.now() - began).toBeLessThan(3_000)
+      expect(await scan).toEqual([])
+    } finally {
+      childProcess.execFile = run
+      syncBuiltinESMExports()
+      Object.defineProperty(process, 'platform', { value: platform })
+      for (const child of children) {
+        try {
+          process.kill(child.pid!, 'SIGKILL')
+        } catch {}
+      }
+    }
+  })
+
   test('pass over a file that is not as Claude Code writes one, and a folder that has none', async () => {
     const folder = folderWith([session(1, { sessionId: 'not an id' }), session(2, { startedAt: 'yesterday' }), session(3)])
     writeFileSync(path.join(folder, 'sessions', '4.json'), '{ cut short')
