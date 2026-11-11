@@ -876,7 +876,7 @@ interface Ffi {
   ): { symbols: { [K in keyof T]: (...args: (number | bigint | ArrayBufferView)[]) => number } }
   FFIType: { ptr: unknown; u64: unknown; u32: unknown; i32: unknown }
 }
-/** How far up the handles of the process are looked through. Windows gives them out in fours from the lowest that is free, so this is room for sixty-five thousand. */
+/** Where the system cannot list the process's handles, how far up they are looked through instead: Windows gives them out in fours from the lowest that is free, so this is room for sixty-five thousand. */
 const HANDLES_MOST = 1 << 18
 
 /**
@@ -893,12 +893,17 @@ const HANDLES_MOST = 1 << 18
  * stopped. Under Node, and on Linux and macOS under Bun, sockets are already made so that no
  * child is given them.
  *
- * Bun gives no way to a socket's handle, so the process's handles are each asked by the system
- * which address they are bound to, and every socket on the port that a child would be given is
- * marked as one that none is. A handle that is no socket is answered that, and left as it is.
- * The buffers the system writes into are handed over as themselves, and never by an address
- * taken from them earlier: the engine moves a small buffer as it sees fit, and an address taken
- * before would by then be somewhere else.
+ * Bun gives no way to a socket's handle, so the system is asked for the process's handles that
+ * a child would be given, each is asked which address it is bound to, and every socket on the
+ * port is marked as one that no child is given. A handle that is no socket is answered that,
+ * and left as it is. Where the system will not list the handles, every one up to HANDLES_MOST is
+ * asked instead. The buffers the system writes into are handed over as themselves, and never by
+ * an address taken from them earlier: the engine moves a small buffer as it sees fit, and an
+ * address taken before would by then be somewhere else.
+ *
+ * A connection the door takes after this is made the same way, and a program started while it
+ * is open is given a copy of it. That keeps the connection open for whoever made it until that
+ * program ends, though the door has closed it, and does not keep the port from being listened on.
  */
 const unsharing: Promise<((port: number) => void) | undefined> | undefined =
   standalone && process.platform === 'win32' ? windowsUnsharing().catch(() => undefined) : undefined
@@ -911,20 +916,56 @@ async function windowsUnsharing(): Promise<(port: number) => void> {
     GetHandleInformation: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
     SetHandleInformation: { args: [FFIType.u64, FFIType.u32, FFIType.u32], returns: FFIType.i32 },
   }).symbols
+  const nt = dlopen('ntdll.dll', {
+    NtQueryInformationProcess: { args: [FFIType.u64, FFIType.u32, FFIType.ptr, FFIType.u32, FFIType.ptr], returns: FFIType.i32 },
+  }).symbols
   const sockets = dlopen('ws2_32.dll', { getsockname: { args: [FFIType.u64, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 } }).symbols
   const name = new Uint8Array(128)
   const length = new Int32Array(1)
   const flags = new Uint32Array(1)
+  const needed = new Uint32Array(1)
+  let table = new Uint8Array(1 << 16)
   /** HANDLE_FLAG_INHERIT */
   const GIVEN = 1
-  return (port) => {
-    for (let at = 4; at < HANDLES_MOST; at += 4) {
-      const handle = BigInt(at)
-      length[0] = name.length
-      if (sockets.getsockname(handle, name, length) !== 0 || boundPort(name) !== port) continue
-      if (kernel.GetHandleInformation(handle, flags) !== 0 && (flags[0]! & GIVEN) !== 0) kernel.SetHandleInformation(handle, GIVEN, 0)
+  /** The process's handles that a child would be given, as the system lists them, or undefined where it will not. */
+  const listed = (): bigint[] | undefined => {
+    for (let tries = 0; tries < 4; tries++) {
+      // The process itself, ProcessHandleInformation
+      const status = nt.NtQueryInformationProcess(0xffff_ffff_ffff_ffffn, 51, table, table.length, needed)
+      if (status === 0) return inheritable(table)
+      // STATUS_INFO_LENGTH_MISMATCH: the list is longer than the room given for it
+      if (status !== -1073741820) return undefined
+      table = new Uint8Array(Math.max(needed[0]! + 4096, table.length * 2))
     }
+    return undefined
   }
+  const unshare = (handle: bigint, port: number) => {
+    length[0] = name.length
+    if (sockets.getsockname(handle, name, length) !== 0 || boundPort(name) !== port) return
+    if (kernel.GetHandleInformation(handle, flags) !== 0 && (flags[0]! & GIVEN) !== 0) kernel.SetHandleInformation(handle, GIVEN, 0)
+  }
+  return (port) => {
+    const handles = listed()
+    if (handles) for (const handle of handles) unshare(handle, port)
+    else for (let at = 4; at < HANDLES_MOST; at += 4) unshare(BigInt(at), port)
+  }
+}
+
+/**
+ * The handles a child would be given, from the list of a process's handles that Windows writes
+ * when asked for ProcessHandleInformation: how many there are, then from the sixteenth byte one
+ * entry of forty bytes for each, which starts with the handle and has its attributes at its
+ * thirty-second byte, where OBJ_INHERIT is the bit of 2. An entry that would run past the end
+ * of what was written is left out.
+ */
+export function inheritable(table: Uint8Array): bigint[] {
+  const view = new DataView(table.buffer, table.byteOffset, table.byteLength)
+  if (table.byteLength < 16) return []
+  const count = view.getBigUint64(0, true)
+  const given: bigint[] = []
+  for (let i = 0n, at = 16; i < count && at + 40 <= table.byteLength; i++, at += 40)
+    if ((view.getUint32(at + 32, true) & 2) !== 0) given.push(view.getBigUint64(at, true))
+  return given
 }
 
 /** The port a socket is bound to, from the address the system wrote for it, or undefined where that is not one of IPv4 or IPv6 as Windows numbers them. */

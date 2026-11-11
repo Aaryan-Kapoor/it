@@ -21,7 +21,7 @@ import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { Problem } from './src/lib'
 import { doorKey } from './src/serve/config'
-import { type Arrival, boundPort, type DoorParts, makeContent, makeDoor, startDoor } from './src/serve/door'
+import { type Arrival, boundPort, type DoorParts, inheritable, makeContent, makeDoor, startDoor } from './src/serve/door'
 import { BRIDGE, isPrivate } from './src/serve/network'
 import { answerSite, type Site } from './src/serve/site'
 import { forgetTailnetName, tailnetName } from './src/serve/tailnet'
@@ -3938,7 +3938,18 @@ describe('Opening and closing', () => {
 
   test('A program started while the door listens does not keep its ports once the door is closed: the door opens again on them at once, for this machine alone and for the network', async () => {
     const first = await open()
-    // A program that runs on, as an agent app's command or server may, started while the door is open
+    // A browser that holds its connection on each port, as an open site and an open page do
+    const agent = new http.Agent({ keepAlive: true })
+    for (const port of [first.base, first.base + 1])
+      await new Promise<void>((resolve, reject) =>
+        http
+          .get({ host: '127.0.0.1', port, agent, headers: { host: `localhost:${port}` } }, (res) => {
+            res.resume()
+            res.on('end', resolve)
+          })
+          .on('error', reject),
+      )
+    // A program that runs on, as an agent app's command or server may, started while the door is open and those are held
     const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
     try {
       await new Promise((resolve, reject) => child.once('spawn', resolve).once('error', reject))
@@ -3955,7 +3966,36 @@ describe('Opening and closing', () => {
       }
     } finally {
       child.kill()
+      agent.destroy()
     }
+  })
+
+  test('The handles a child would be given are read from the list Windows writes of a process’s handles, and an entry past what was written is left out', () => {
+    /** A list as Windows writes it: how many, then forty bytes for each, the handle first and its attributes at the thirty-second byte. */
+    const listOf = (entries: [bigint, number][], count = entries.length) => {
+      const table = new Uint8Array(16 + entries.length * 40)
+      const view = new DataView(table.buffer)
+      view.setBigUint64(0, BigInt(count), true)
+      entries.forEach(([handle, attributes], i) => {
+        view.setBigUint64(16 + i * 40, handle, true)
+        view.setUint32(16 + i * 40 + 32, attributes, true)
+      })
+      return table
+    }
+    // OBJ_INHERIT is 2, and other attributes beside it change nothing; a handle far above sixty-five thousand of them is read as it is
+    expect(
+      inheritable(
+        listOf([
+          [4n, 0],
+          [0x450n, 2],
+          [0x44c0cn, 2 | 0x10],
+          [0x900n, 0x10],
+        ]),
+      ),
+    ).toEqual([0x450n, 0x44c0cn])
+    // A count larger than what was written reads only what was written, and too little to hold the count reads nothing
+    expect(inheritable(listOf([[8n, 2]], 1000))).toEqual([8n])
+    expect(inheritable(new Uint8Array(8))).toEqual([])
   })
 
   test('The port a socket is bound to is read from the address Windows writes for it, under IPv4 and IPv6, and from nothing else', () => {
