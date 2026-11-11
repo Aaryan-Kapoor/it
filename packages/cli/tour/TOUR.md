@@ -93,15 +93,23 @@ it tour answer <the action's id> '{"moves":"back","say":"<one sentence>"}'
 
 To play turns of your own instead, give up to twenty as a list, as in `["F","Ri","D2"]`: U, D, L, R, F or B turns that face a quarter clockwise, `i` after it turns it the other way, and `2` is a half turn. `faces` is the cube as 54 letters, nine for each face in the order U, R, F, D, L, B.
 
-### The drum machine: `beat`, `cleared`
+### The drum machine: `beat`
 
-`pattern` is the person's bar: one string of eight steps for each of `rows`, with `x` where they put a hit. `fits` holds hits that go with it, on steps they left empty. Answer with `fits` as it is, or with your own change of it in the same form, and a few words about what you added:
+The person and you make music on one loop. `ask` says in words what they want of you, and `fits` is an answer to it that is already made: answer with `fits` as it is, or with your own change of it, and a few words about what you played.
 
 ```sh
-it tour answer <the action's id> '{"pattern":["...x.x.x","..x...x.","........","...x...."],"note":"<a few words>"}'
+it tour answer <the action's id> '{"pattern":["...x.x.x","..x...x.","........","...x....","1..1..5."],"note":"<a few words>"}'
 ```
 
-`cleared` means the page has emptied both patterns already, and needs no answer.
+`pattern` in your answer is the whole of your own part: one string for each of `rows`, as long as `steps`. In the four drums `x` is a hit. In the last row, the bass, a digit from 1 to 5 is a note of the scale, low to high, and any five of them sound right together. `pattern` in the action is the person's own hits in the same form, and they stay whatever you answer, so play on the steps they left empty. `yours` is your part as it plays now.
+
+You may also set the tempo with `bpm`, from 50 to 180, and the swing with `swing`, from 0 for straight to 60, where 33 is a shuffle. Give either only when you change it, as `fits` does where the ask is for one:
+
+```sh
+it tour answer <the action's id> '{"pattern":["...x.x.x","..x...x.","........","...x....","1..1..5."],"bpm":96,"swing":33,"note":"<a few words>"}'
+```
+
+Where `steps` is 16 the loop is two bars, and every row is sixteen long: the person wrote the first bar and asks you to answer it with the second.
 
 ### The ending: `finish`
 
