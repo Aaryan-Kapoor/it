@@ -309,7 +309,20 @@ vi.mock('./src/lib', async (original) => {
   }
 })
 
-import { type ConnectorInfo, infoFile, local, mac, NOT_LOADED, notLoadedToo, OPEN_WITHOUT_ADDON, type Route, runConnector, wayOf } from './src/connector'
+import {
+  type ConnectorInfo,
+  infoFile,
+  local,
+  mac,
+  NOT_LOADED,
+  notLoadedToo,
+  OPEN_WITHOUT_ADDON,
+  PI_NOT_LOADED,
+  PI_OPEN_WITHOUT_ADDON,
+  type Route,
+  runConnector,
+  wayOf,
+} from './src/connector'
 import { DeliveryRecovery, eraseDeliveryRecovery } from './src/delivery-recovery'
 import * as files from './src/lib'
 import { readJson } from './src/lib'
@@ -1498,7 +1511,38 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(stand.recorded.find((r) => r.name === 'agent.woken')!.properties).toEqual({ result: 'declined', agent: 'claude-code', why: 'no_folder' })
   })
 
-  test.each(['pi', 'opencode', 'hermes'])('a conversation of %s is reopened as before, whatever is noted of It’s add-on in it', async (harness) => {
+  test('a Pi conversation that published its page without It’s add-on, and has not been heard from since, is never reopened, and its page says to type /reload in it', async () => {
+    await reopensFor('pi', 'conversation-1', { addon: false })
+    offered({ ...click(1), session: { harness: 'pi', id: 'conversation-1' } })
+    await until(() => holds().length > 0)
+    expect(holds()[0]!.args).toEqual({ ids: ['click-1'], why: PI_OPEN_WITHOUT_ADDON })
+    expect(PI_OPEN_WITHOUT_ADDON).toContain('type /reload in it')
+    expect(PI_OPEN_WITHOUT_ADDON).not.toContain('/reload-plugins')
+    expect(PI_OPEN_WITHOUT_ADDON.length).toBeLessThanOrEqual(300)
+    await until(() => said.some((line) => line.includes('is open without It’s add-on, so it is not reopened; its page says to type /reload in it')))
+    await new Promise((r) => setTimeout(r, 2500))
+    expect(holds()).toHaveLength(1)
+    expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+    expect(failures()).toEqual([])
+  })
+
+  test('a Pi conversation whose add-on was heard from since it published without it is reopened as before', async () => {
+    await reopensFor('pi', 'conversation-1', { addon: false }, true)
+    offered({ ...click(1), session: { harness: 'pi', id: 'conversation-1' } })
+    await until(() => failures().length > 0)
+    expect(failures()[0]!.args).toEqual({ for: { harness: 'pi', id: 'conversation-1' }, why: GONE })
+    expect(holds()).toEqual([])
+  })
+
+  test('the reason a Pi conversation could not be reopened is followed by the advice to type /reload, cut to fit', () => {
+    const said = notLoadedToo(`Pi exited with 1, and its last words were: ${'x'.repeat(400)}`, 'pi')
+    expect(said.length).toBeLessThanOrEqual(300)
+    expect(said.endsWith(PI_NOT_LOADED)).toBe(true)
+    expect(PI_NOT_LOADED).toContain('type /reload in it')
+    expect(PI_NOT_LOADED).not.toContain('/reload-plugins')
+  })
+
+  test.each(['opencode', 'hermes'])('a conversation of %s is reopened as before, whatever is noted of It’s add-on in it', async (harness) => {
     await reopensFor(harness, 'conversation-1', { addon: false })
     offered({ ...click(1), session: { harness, id: 'conversation-1' } })
     await until(() => failures().length > 0)
