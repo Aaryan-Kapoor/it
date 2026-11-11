@@ -63,6 +63,8 @@ const STOP_WAIT_MS = 2_000
 export class ClaudeDiscovery {
   private ended = false
   private children = new Map<ChildProcess, { cancel: () => void; exited: Promise<void> }>()
+  /** What the last look at Windows' Claude processes found, when, and for which notes. */
+  private windowsSeen?: { at: number; starts: ReadonlyMap<number, number>; for: ReadonlySet<string>; read: boolean }
 
   get stopped(): boolean {
     return this.ended
@@ -86,6 +88,23 @@ export class ClaudeDiscovery {
     let timer: ReturnType<typeof setTimeout> | undefined
     await Promise.race([Promise.all(waits), new Promise<void>((done) => (timer = setTimeout(done, STOP_WAIT_MS)))])
     clearTimeout(timer)
+  }
+
+  /**
+   * Windows' Claude processes and their starts, for the notes given, each named `pid:startedAt`.
+   * PowerShell is started only where the last look did not cover one of these notes, failed a
+   * while ago, or is older than WINDOWS_FRESH_MS: a process's start never changes, and a note
+   * whose Claude Code has ended is told by `running` on every scan. What a look that is kept
+   * cannot see is a number given to another program after a Claude Code ended without taking
+   * its note away, and that is seen at the next look.
+   */
+  async windowsStarts(notes: readonly string[]): Promise<ReadonlyMap<number, number>> {
+    const seen = this.windowsSeen
+    const now = performance.now()
+    if (seen && now - seen.at < (seen.read ? WINDOWS_FRESH_MS : WINDOWS_RETRY_MS) && notes.every((note) => seen.for.has(note))) return seen.starts
+    const starts = await readWindowsStarts(this)
+    if (!this.ended) this.windowsSeen = { at: performance.now(), starts: starts ?? new Map(), for: new Set(notes), read: starts !== undefined }
+    return starts ?? new Map()
   }
 
   output(file: string, args: string[], timeout: number): Promise<string | undefined> {
@@ -126,16 +145,22 @@ async function beganAt(pid: number, discovery: ClaudeDiscovery): Promise<number 
 /** How much later than its process a Claude Code may say its session began, as the two clocks are read: a few seconds. */
 const SLACK_MS = 5_000
 
-/** Claude processes and their starts, read together as the backend reads Windows process identity. */
-async function windowsStarts(discovery: ClaudeDiscovery): Promise<Map<number, number>> {
+/** How long one look at Windows' Claude processes is gone by while the notes it was taken for are all that is open. */
+export const WINDOWS_FRESH_MS = 5 * 60_000
+/** And how long a look that could not be read is, before PowerShell is tried again. */
+export const WINDOWS_RETRY_MS = 30_000
+
+/** Claude processes and their starts, read together as the backend reads Windows process identity: undefined where they could not be read. */
+async function readWindowsStarts(discovery: ClaudeDiscovery): Promise<Map<number, number> | undefined> {
   const found = new Map<number, number>()
-  const script = "Get-Process -Name claude -ErrorAction SilentlyContinue | ForEach-Object { try { '{0} {1}' -f $_.Id, $_.StartTime.ToFileTimeUtc() } catch {} }"
+  const script =
+    "$ProgressPreference = 'SilentlyContinue'; Get-Process -Name claude -ErrorAction SilentlyContinue | ForEach-Object { try { '{0} {1}' -f $_.Id, $_.StartTime.ToFileTimeUtc() } catch {} }"
   const out = await discovery.output(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
     5000,
   )
-  if (out === undefined) return found
+  if (out === undefined) return undefined
   for (const line of out.split(/\r?\n/)) {
     const m = /^(\d+) (\d+)$/.exec(line.trim())
     if (!m) continue
@@ -166,7 +191,7 @@ export async function sameProcess(
     return began !== undefined && began <= note.startedAt + SLACK_MS
   }
   if (process.platform === 'win32') {
-    const began = (windows ?? (await windowsStarts(discovery))).get(pid)
+    const began = (windows ?? (await readWindowsStarts(discovery)))?.get(pid)
     return began !== undefined && began <= note.startedAt + SLACK_MS
   }
   return false
@@ -185,15 +210,8 @@ export async function openClaude(
   discovery = new ClaudeDiscovery(),
 ): Promise<OpenClaude[]> {
   const open = new Map<string, OpenClaude>()
-  // One fresh snapshot per scan, and only if there is a valid live note to check.
-  let windows: Promise<Map<number, number>> | undefined
-  const check =
-    same === sameProcess
-      ? async (pid: number, note: { procStart?: unknown; startedAt: number }) => {
-          if (process.platform === 'win32') windows ??= windowsStarts(discovery)
-          return sameProcess(pid, note, windows ? await windows : undefined, discovery)
-        }
-      : same
+  // Every note is read first, so that on Windows one look at the processes is taken for all of them, and only where one is live
+  const live: { pid: number; id: string; procStart: unknown; startedAt: number }[] = []
   for (const folder of new Set(folders)) {
     const dir = path.join(folder, 'sessions')
     let names: string[]
@@ -213,14 +231,29 @@ export async function openClaude(
         const pid = Number(name.slice(0, -5))
         if (s.pid !== pid || typeof s.sessionId !== 'string' || !UUID.test(s.sessionId) || typeof s.startedAt !== 'number') continue
         if (s.kind !== 'interactive' || s.entrypoint === 't3-code') continue
-        if (!alive(pid) || !(await check(pid, { procStart: s.procStart, startedAt: s.startedAt }))) continue
-        const id = s.sessionId.toLowerCase()
-        const was = open.get(id)
-        if (!was || was.startedAt < s.startedAt) open.set(id, { id, startedAt: s.startedAt })
+        if (alive(pid)) live.push({ pid, id: s.sessionId.toLowerCase(), procStart: s.procStart, startedAt: s.startedAt })
       } catch {
         // A file being written or removed this moment is read the next time
       }
     }
+  }
+  const windows =
+    same === sameProcess && process.platform === 'win32' && live.length
+      ? await discovery.windowsStarts(live.map((note) => `${note.pid}:${note.startedAt}`))
+      : undefined
+  for (const note of live) {
+    if (discovery.stopped) return []
+    try {
+      const ok =
+        same === sameProcess
+          ? await sameProcess(note.pid, note, windows, discovery)
+          : await same(note.pid, { procStart: note.procStart, startedAt: note.startedAt })
+      if (!ok) continue
+    } catch {
+      continue
+    }
+    const was = open.get(note.id)
+    if (!was || was.startedAt < note.startedAt) open.set(note.id, { id: note.id, startedAt: note.startedAt })
   }
   return discovery.stopped ? [] : [...open.values()]
 }
