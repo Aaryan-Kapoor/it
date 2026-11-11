@@ -21,6 +21,7 @@ Each tool is one `it` command, and does what the command does.
 | `it_say` | `it say` |
 | `it_open` · `it_displays` | `it open` and `it displays`, with a display named or given by its id |
 | `it_list` · `it_read` | `it list` and `it read` |
+| `it_source` | `it read-source`: the HTML of a page's current version, where it is 65536 bytes or fewer |
 | `it_wait` | `it wait`, for 50 seconds at most in one call |
 | `it_actions` · `it_action` · `it_ack` | `it actions`, `it action` and `it ack` |
 

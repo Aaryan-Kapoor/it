@@ -696,6 +696,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   update: [1, 'update <id> (--file f | --dir d | --html "<…>" | pipe)'],
   list: [0, 'list'],
   read: [1, 'read <id>'],
+  'read-source': [1, 'read-source <id> [--max-bytes <n>]'],
   delete: [1, 'delete <id> [--status]'],
   rollback: [2, 'rollback <id> <version>'],
   patch: [2, PATCH_USAGE],
@@ -3309,6 +3310,7 @@ Pages
                                  Without --take, create makes nothing under an id that is
                                  another conversation's ${NOUN.one}, and says whose it is.
   it list | it read <id> | it rollback <id> <version>
+  it read-source <id> [--max-bytes <n>]   Read only published entry HTML, at most 65536 bytes.
   it delete <id> [--status]      Delete a page, or check its last deletion.
 
 State
@@ -3393,9 +3395,10 @@ This machine
                                  its folder with every page in it. It asks first, and --yes
                                  answers for you.
   it skill                       Print the instructions an agent needs to use It.
-  it mcp [--session <name>]      Serve these commands as MCP tools on standard input and output, for an agent that
-                                 cannot run a command here. --session names its conversation, so that its pages
-                                 are its own the next time it is started.
+  it mcp [--session <name>]      Serve these commands as MCP tools on standard input and
+                                 output, for an agent that cannot run a command here.
+                                 --session names its conversation, so that its pages are
+                                 its own the next time it is started.
   it tour [show <name> | clear]  Print the tour an agent gives of It. With show, bring up one of
                                  its pages, or with show next the next one not yet seen, and
                                  with clear, remove them all.
@@ -3843,6 +3846,12 @@ async function main(argv: string[]): Promise<void> {
           ]),
         ),
       ])
+    }
+    case 'read-source': {
+      const slug = need(a._[0], 'which page', 'read-source <id> [--max-bytes <n>]')
+      return out(
+        await call('action', api.artifacts.source, { slug, ...(text(a, 'max-bytes') === undefined ? {} : { maxBytes: Number(text(a, 'max-bytes')) }) }),
+      )
     }
     case 'read': {
       const slug = need(a._[0], `which ${NOUN.one}`, 'read <id>')

@@ -3536,3 +3536,46 @@ describe.each(BROWSERS)('a page as %s shows it', (_name, type) => {
     600_000,
   )
 })
+
+describe('Bounded source reads through the signed control channel', () => {
+  ownService(false)
+  test('The entry document is returned as source without injected scripts or a content grant.', async () => {
+    const prefix = `u/${USER}/source-test/1/`
+    await seedFiles(prefix, { 'index.html': '<p>original source</p>' })
+    const result = await control('read', { prefix, maxBytes: 65536 })
+    expect(result.status).toBe(200)
+    expect(result.json()).toEqual({ html: '<p>original source</p>', bytes: 22, sha256: sha256('<p>original source</p>') })
+  })
+  test('Unsigned requests, nonlocal callers, oversized documents and unsafe prefixes are refused.', async () => {
+    const prefix = `u/${USER}/source-limits/1/`
+    await seedFiles(prefix, { 'index.html': 'x'.repeat(101) })
+    expect((await door('/control/read', { method: 'POST', body: JSON.stringify({ prefix, maxBytes: 65536 }) })).status).toBe(401)
+    expect((await control('read', { prefix, maxBytes: 65536 }, undefined, { address: '203.0.113.4' })).status).toBe(404)
+    expect((await control('read', { prefix, maxBytes: 100 })).status).toBe(413)
+    expect((await control('read', { prefix, maxBytes: 65537 })).status).toBe(400)
+    expect((await control('read', { prefix: '../../etc/', maxBytes: 100 })).status).toBe(400)
+  })
+  test('A deleted version cannot be read with an earlier signed request.', async () => {
+    const prefix = `u/${USER}/source-deleted/1/`
+    await seedFiles(prefix, { 'index.html': 'private' })
+    const body = { prefix, maxBytes: 65536 }
+    const token = await sign('it-control', 'read', { h: sha256(JSON.stringify(body)) })
+    await control('delete', { prefix })
+    expect((await control('read', body, token)).status).toBe(404)
+  })
+})
+
+describe('Source text byte boundaries', () => {
+  ownService(false)
+  test('UTF-8 byte limits include the BOM and reject undecodable bytes.', async () => {
+    const prefix = `u/${USER}/source-utf8/1/`
+    const html = '\ufeff<p>é</p>'
+    await seedFiles(prefix, { 'index.html': html })
+    const bytes = Buffer.byteLength(html)
+    expect((await control('read', { prefix, maxBytes: bytes - 1 })).status).toBe(413)
+    expect((await control('read', { prefix, maxBytes: bytes })).json()).toEqual({ html, bytes, sha256: sha256(html) })
+    const bad = `u/${USER}/source-bad-utf8/1/`
+    await seedFiles(bad, { 'index.html': Buffer.from([0xff, 0xfe]) })
+    expect((await control('read', { prefix: bad, maxBytes: 65536 })).status).toBe(422)
+  })
+})
