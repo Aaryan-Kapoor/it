@@ -155,6 +155,7 @@ On Linux and macOS:
    The last thing they say is "The copy is in place." Where they stop before that, nothing after the command that failed has run, and the message says why.
 
    - If they stopped before stopping the background service, nothing was changed, the service is as it was, and the message says what to put right before you run the lines again.
+   - If they stopped at `it service uninstall` with "The background service on this machine runs It from another folder, and is left as it is.", nothing was changed, and [When the background service is another folder's](#when-the-background-service-is-another-folders) says what to do.
    - If they stopped after stopping it, the last line says that the service is stopped and not registered. Do what the points below say for It's folder, and then either run the lines again or, to stay on the newer It for now, run `it setup` to start the service again.
 
    - If they stopped before saying that It's folder as it was is kept, It's folder has not been changed. Where they had begun copying it, they named the folder they were copying it to, whose name ends in `-after-upgrade.part.` and a few letters, and a copy that was cut short is left there. Look at it and remove it yourself, put right what the message says, and run the lines again. The lines never remove such a folder themselves, and refuse to begin while one is there, since they cannot tell what it holds.
@@ -244,7 +245,7 @@ On Windows, in PowerShell, which may be Windows PowerShell 5.1:
    }
    ```
 
-   Where it stops before saying "The copy is in place.", do as the points for Linux and macOS say, with the PowerShell block in [Putting the kept folder back](#putting-the-kept-folder-back). The block leaves the PowerShell window as it found it, in the same folder and with `IT_HOME` as it was.
+   Where it stops before saying "The copy is in place.", do as the points for Linux and macOS say, with the PowerShell block in [Putting the kept folder back](#putting-the-kept-folder-back). The block leaves the PowerShell window as it found it, in the same folder and with `IT_HOME` as it was. If it stops with "The background service could not be stopped, so nothing was changed.", read the line above that, and [When the background service is another folder's](#when-the-background-service-is-another-folders) where that line says the service runs It from another folder.
 3. Install the older version, naming its release, as `v0.1.36` is named here:
 
    ```powershell
@@ -252,6 +253,14 @@ On Windows, in PowerShell, which may be Windows PowerShell 5.1:
    ```
 
 Once the older It is running, `it status` says that the database is at the older version, with nothing under `behind`, and your pages are there as they were before the upgrade. Where the newer It brought a newer backend program, it removed the older one, so the older It fetches its own again the first time it starts, and that start has to reach GitHub or the place `IT_BACKEND_RELEASES` names. The older It goes on telling you that the newer version is out. Installing that same version again changes the data again in the same way, so wait for a release that fixes what went wrong, or turn the reminder off with `it updates off`.
+
+### When the background service is another folder's
+
+A computer account has one background service for It, and it belongs to one It folder. Someone who keeps a second It folder, and whose background service was last set up from the other one, meets a known limit here. `it service uninstall` then refuses with "The background service on this machine runs It from another folder, and is left as it is.", because it only ever takes away the service of the folder it is run for. On Linux and macOS the lines stop there, with that sentence. On Windows the block prints that sentence and then stops with "The background service could not be stopped, so nothing was changed." Nothing was changed in either case, and the folder you meant to put back is as it was. The second sentence on Windows only means that the service was not stopped, and the line above it says why. The same holds for the lines and the block that put the kept folder back.
+
+The message does not say which folder the service belongs to. Most often it is the folder your It really uses, and the terminal you pasted into was not told so. Set `IT_HOME` to that folder, as the start of this section shows, and run the lines again.
+
+If you do mean to put the copy back in this folder, the service has to be taken from the other one first. Run `it service uninstall` for the other folder, by naming it for that one command: `IT_HOME="/path/to/the/other/folder" it service uninstall` on Linux and macOS, or `$was = $env:IT_HOME; $env:IT_HOME = 'D:\path\to\the\other\folder'; it service uninstall; $env:IT_HOME = $was` in PowerShell. That stops the other It and keeps it from starting by itself, and nothing else of it is touched. Then run the lines again. Setting up the older It in step 3 gives the service to this folder. To give it back to the other folder later, run `it setup` with `IT_HOME` set to that folder, which takes it from this one in turn.
 
 ### Putting the kept folder back
 
