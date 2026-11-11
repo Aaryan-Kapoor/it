@@ -167,7 +167,10 @@ watchTask((why) => {
       path.join(bin, 'it-service.cmd'),
       `@echo off\r\n:again\r\n"${process.execPath}" "${file('watched.mjs')}"\r\nif %errorlevel% equ 0 exit /b 0\r\nping -n 2 127.0.0.1 >nul 2>&1\r\ngoto again\r\n`,
     )
-    const task = spawn('conhost.exe', ['--headless', 'cmd.exe', '/d', '/c', '.\\it-service.cmd'], { cwd: bin, windowsHide: true, stdio: 'ignore' })
+    // Given no handles of its own, a headless console ends at once and starts nothing: Task Scheduler gives it some, and so does this
+    const task = spawn('conhost.exe', ['--headless', 'cmd.exe', '/d', '/c', '.\\it-service.cmd'], { cwd: bin, windowsHide: true, stdio: 'pipe' })
+    task.stdout?.resume()
+    task.stderr?.resume()
     const until = async (what: () => boolean, ms: number) => {
       for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 100))) if (what()) return true
       return false
