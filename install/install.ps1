@@ -10,7 +10,7 @@
 # What it installs goes in ~\.it, or in the folder IT_HOME names instead, and that folder is set
 # so that only you, the system and its administrators can open it. Outside that folder it
 # changes one thing: the program's folder is added to the PATH that Windows keeps for your own
-# account.
+# account, and to the PATH of the PowerShell this is run in, so that `it` typed there next is It.
 #
 # It downloads from It's releases on GitHub, at https://github.com/Aaryan-Kapoor/it/releases.
 # The copy of this script published with a release downloads everything from that release, and
@@ -402,6 +402,7 @@ public static bool LacksSse42() {
     # read and written as it is kept, with a name such as %USERPROFILE% left as a name: read the
     # usual way, every such name comes back as what it stands for today, and writing that back
     # would fix it there for good. It is written back as the kind of value it was.
+    $accountHas = $false
     if (-not $env:IT_INSTALL_NO_PATH) {
       try {
         $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
@@ -433,6 +434,7 @@ public static bool LacksSse42() {
             elseif ($told) { Write-Host "Added $dir to your PATH. Open a new terminal to use it." }
             else { Write-Host "Added $dir to your PATH. Sign out of Windows and in again to use it in a new terminal." }
           }
+          $accountHas = $true
         } finally { $key.Close() }
       } catch {
         if ($led) { Write-Mind "Your PATH could not be changed. Add $dir to it yourself." } else { Write-Host "Your PATH could not be changed. Add $dir to it yourself." }
@@ -441,6 +443,13 @@ public static bool LacksSse42() {
     # Whether this window finds the command by its name already, as it does where the folder
     # was on the PATH before this window was opened
     try { if (@($env:Path -split ';' | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\') }) -contains $dir) { $onPath = '1' } } catch {}
+    # The PowerShell this runs in is given the folder first on its own PATH as well, where the
+    # account's PATH has it, so that `it` typed here next is the program just installed. Until
+    # the folder is on a PATH, Windows PowerShell answers a bare `it` with the `It` command of
+    # Pester, the test framework that comes with Windows, and what that says is about a Describe
+    # block and names neither It nor the PATH. This reaches no other program that is running:
+    # an app that was open before the install runs its commands with the PATH it started with.
+    if ($accountHas -and $onPath -eq '0') { try { $env:Path = "$dir;$env:Path" } catch {} }
     # The program's path as PowerShell reads it back exactly, whatever characters are in it. A
     # command printed for a person to copy must be the command that was meant, and between single
     # quotes nothing is read as more than itself but the quote, which is written twice.
@@ -506,7 +515,8 @@ public static bool LacksSse42() {
   # is read from it. Everything this script made for itself is gone by now, since the setup may
   # be at work for as long as the person takes. The folder is on the PATH of the setup, as it
   # will be in every terminal opened from now on, and the three settings made for it here are
-  # put back as they were when it ends, so that nothing of this session is left changed.
+  # put back as they were just before it when it ends, so that the setup leaves nothing of this
+  # session changed.
   if ($then -or $joining.Count -gt 0) {
     $was = @{ Flow = $env:IT_INSTALL_FLOW; OnPath = $env:IT_INSTALL_ON_PATH; Path = $env:Path }
     try {
