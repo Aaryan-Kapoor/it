@@ -71,6 +71,7 @@
   .studio-copy { grid-area: copy; min-width: 0; min-height: 0; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; justify-content: safe center; gap: 1.05em; }
   .studio-headline > span { display: block; font: 800 calc(var(--h) * var(--z, 1)) / .98 Display; letter-spacing: -.04em; text-wrap: balance; overflow-wrap: anywhere; transform-origin: 0 50%; }
   .studio-art[data-type="poster"] { --h: 3.3em; } .studio-art[data-type="poster"] .studio-headline > span { line-height: .9; letter-spacing: -.05em; text-transform: uppercase; }
+  /* The bookish type is the system's own serif, chosen on purpose as the page's numbers are set in the system's own monospace: the page carries no serif face, and a festival's front page may look a little different from one machine to the next */
   .studio-art[data-type="serif"] { --h: 3.25em; } .studio-art[data-type="serif"] .studio-headline > span { font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Noto Serif", serif; font-weight: 400; line-height: 1.02; letter-spacing: -.025em; }
   .studio-art[data-type="serif"] .studio-name > span { font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Noto Serif", serif; font-weight: 400; font-style: italic; font-size: calc(1.3em * var(--z, 1)); letter-spacing: -.01em; }
   .studio-art[data-type="hand"] { --h: 4.1em; } .studio-art[data-type="hand"] .studio-headline > span { font-family: Hand; font-weight: 600; line-height: .86; letter-spacing: -.01em; }

@@ -8,5 +8,5 @@ own files in web/public/fonts, of the Latin letters and signs the page uses.
 caveat-600: Caveat SemiBold, by the Caveat Project Authors. SIL Open Font
 License 1.1. A subset, of the Latin letters and signs the page writes in it.
 
-The page also carries the site's chess pieces, web/public/fonts/chess.woff2.
+The chessboard draws its pieces as outlines of its own, and carries no face for them.
 The words of each license are in THIRD_PARTY_NOTICES.md.

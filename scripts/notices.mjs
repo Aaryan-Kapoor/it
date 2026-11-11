@@ -382,7 +382,7 @@ if (!Object.hasOwn(BACKEND_LICENSE, release))
 
 // The site also carries typefaces, which no bundle shows: files in web/public/fonts, served as
 // they are. The tour's first page carries typefaces too, set into the page from
-// packages/cli/tour/fonts, and the site's chess pieces. Each is named here with whose it is and
+// packages/cli/tour/fonts. Each is named here with whose it is and
 // what it is under, and every file in those folders has to be one of them: a face that was added
 // and not named would be given out with no word of whose it is.
 const FONTS = [
@@ -403,7 +403,6 @@ const FONTS = [
     by: 'The Noto Project Authors',
     files: ['chess'],
     what: 'the twelve chess pieces, and nothing else of it',
-    tourWhat: 'the same file inside it',
     says: 'Copyright 2017 Google Inc. All Rights Reserved.',
     license: 'SIL Open Font License 1.1',
     source: 'https://github.com/notofonts/symbols',

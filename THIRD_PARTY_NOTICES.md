@@ -6530,7 +6530,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ### Noto Sans Symbols 2 2.003
 
-By The Noto Project Authors. License: SIL Open Font License 1.1. Served as: `chess.woff2`, which hold the twelve chess pieces, and nothing else of it. The tour's first page carries the same file inside it. The files themselves say: "Copyright 2017 Google Inc. All Rights Reserved." Source: <https://github.com/notofonts/symbols>.
+By The Noto Project Authors. License: SIL Open Font License 1.1. Served as: `chess.woff2`, which hold the twelve chess pieces, and nothing else of it. The files themselves say: "Copyright 2017 Google Inc. All Rights Reserved." Source: <https://github.com/notofonts/symbols>.
 
 ```text
 Copyright 2022 The Noto Project Authors (https://github.com/notofonts/symbols)

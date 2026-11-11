@@ -28,21 +28,19 @@ function lifted(name, begin, end, through) {
   if (at < 0 || to < 0) throw new Error(`tour/pages/${name}.html no longer has what tour.mjs lifts out of it, from "${begin.trim()}" to "${end.trim()}"`)
   return html.slice(at, through ? to + end.length : to).trimEnd()
 }
-// Each face is named for its family and weight, as text-400.woff2. The chess pieces are the site's own face of them
+// Each face is named for its family and weight, as text-400.woff2
 const FAMILY = { text: 'Text', display: 'Display', caveat: 'Hand' }
 const face = (family, weight, file) =>
   `  @font-face { font-family: ${family}; font-weight: ${weight}; font-display: swap; src: url(data:font/woff2;base64,${readFileSync(file).toString('base64')}) format("woff2"); }`
-const fonts = [
-  ...readdirSync(path.join(from, 'fonts'))
-    .filter((file) => file.endsWith('.woff2'))
-    .sort()
-    .map((file) => {
-      const [, family, weight] = /^([a-z]+)-(\d+)\.woff2$/.exec(file) ?? []
-      if (!Object.hasOwn(FAMILY, family ?? '')) throw new Error(`tour/fonts/${file} is not named for a family the tour knows`)
-      return face(FAMILY[family], weight, path.join(from, 'fonts', file))
-    }),
-  face('Pieces', 400, path.join(here, '../../web/public/fonts/chess.woff2')),
-].join('\n')
+const fonts = readdirSync(path.join(from, 'fonts'))
+  .filter((file) => file.endsWith('.woff2'))
+  .sort()
+  .map((file) => {
+    const [, family, weight] = /^([a-z]+)-(\d+)\.woff2$/.exec(file) ?? []
+    if (!Object.hasOwn(FAMILY, family ?? '')) throw new Error(`tour/fonts/${file} is not named for a family the tour knows`)
+    return face(FAMILY[family], weight, path.join(from, 'fonts', file))
+  })
+  .join('\n')
 const KIT = {
   '/*kit.css*/': kit('kit.css'),
   '/*kit.js*/': kit('kit.js'),
