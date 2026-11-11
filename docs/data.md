@@ -116,7 +116,7 @@ On Linux and macOS:
      if [ ! -f "$from/data.json" ]; then echo "There is no copy named $copy in $live/backend, so nothing was changed." >&2; exit 1; fi
      parent=$(dirname "$live")
      name=$(basename "$saved")
-     left=$(ls -A "$parent" | while IFS= read -r entry; do case $entry in "$name" | "$name".part.*) echo "$parent/$entry" ;; esac; done)
+     left=$(ls -A "$parent" | while IFS= read -r entry; do case $entry in ("$name" | "$name".part.*) echo "$parent/$entry" ;; esac; done)
      if [ -n "$left" ]; then echo "$left is there already, so nothing was changed. Look at what is in it, remove it yourself if you do not need it, and run these lines again." >&2; exit 1; fi
      for entry in "$live/backend" "$live/content" "$live/content-data" "$from"; do
        if [ -L "$entry" ]; then echo "$entry is a link, so a copy would not hold what it leads to, and nothing was changed." >&2; exit 1; fi
