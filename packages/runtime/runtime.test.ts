@@ -63,12 +63,17 @@ function load(html = '', before: (w: any) => void = () => {}) {
       }
       now = until
     },
-    /** The site answers the hello, as mount.tsx does: from the window that framed the page. A site whose channel says no version (`null`) is one from before it said any. */
-    answer(origin = APP, source: unknown = w.parent, v: number | null = CHANNEL_VERSION) {
+    /**
+     * The site answers the hello, as mount.tsx does: from the window that framed the page. A site
+     * whose channel says no version (`null`) is one from before it said any. `says` is what the
+     * site says it does, as a current one says it: one from before It recorded or opened links for
+     * a page, as 0.1.38 was, says nothing of either (`{}`).
+     */
+    answer(origin = APP, source: unknown = w.parent, v: number | null = CHANNEL_VERSION, says: Record<string, unknown> = { media: true, opens: true }) {
       // A port sends a copy of what it is given, and refuses what cannot be copied: the stand-in does as a real one does
       const port: Port = { sent: [], postMessage: (m) => port.sent.push(structuredClone(m)), onmessage: null, close: () => {} }
       page.port = port
-      const data = v === null ? { type: 'it:port' } : { type: 'it:port', v }
+      const data = v === null ? { type: 'it:port' } : { type: 'it:port', v, ...says }
       w.dispatchEvent(Object.assign(new w.Event('message'), { origin, source, data, ports: [port] }))
       return port
     },
@@ -747,6 +752,51 @@ describe('the script inside a page', () => {
         'tel:+15551234567',
         'sms:+15551234567',
       ])
+    })
+
+    /** A page whose browser writes down each window it is asked for, followed by what It decided of each click on a link: whether the browser was to follow it. */
+    function asking(html: string) {
+      const asked: unknown[][] = []
+      const p = load(html, (w) => {
+        w.open = (...given: unknown[]) => {
+          asked.push(given)
+          return null
+        }
+      })
+      const followed: boolean[] = []
+      p.w.addEventListener('click', (e: Event) => {
+        followed.push(!e.defaultPrevented)
+        e.preventDefault()
+      })
+      const click = (id: string) => p.w.document.getElementById(id).dispatchEvent(new p.w.MouseEvent('click', { bubbles: true, cancelable: true }))
+      return { p, asked, followed, click }
+    }
+
+    test('a site from before It opened links for a page, as 0.1.38 was, says nothing of it and drops what it is sent: a mail, phone or messages link is left to the browser there, and a window or It.open is opened as a tab with no hold', async () => {
+      const { p, asked, followed, click } = asking('<a id="mail" href="mailto:someone@example.com">mail</a>')
+      p.answer(APP, p.w.parent, CHANNEL_VERSION, {})
+      click('mail')
+      expect(p.w.open('tel:+15550000000')).toBeNull()
+      p.It.open('sms:+15551234567')
+      p.It.open('https://elsewhere.invalid/a')
+      expect(followed).toEqual([true])
+      expect(openedFor(p)).toEqual([])
+      expect(asked).toEqual([
+        ['tel:+15550000000', '_blank', 'noopener,noreferrer'],
+        ['sms:+15551234567', '_blank', 'noopener,noreferrer'],
+        ['https://elsewhere.invalid/a', '_blank', 'noopener,noreferrer'],
+      ])
+    })
+
+    test('a site that says it opens links for the page is asked to open them, as before, and the browser opens none itself', async () => {
+      const { p, asked, followed, click } = asking('<a id="mail" href="mailto:someone@example.com">mail</a>')
+      p.answer()
+      click('mail')
+      expect(p.w.open('tel:+15550000000')).toBeNull()
+      p.It.open('sms:+15551234567')
+      expect(followed).toEqual([false])
+      expect(openedFor(p)).toEqual(['mailto:someone@example.com', 'tel:+15550000000', 'sms:+15551234567'])
+      expect(asked).toEqual([])
     })
 
     test('a link aimed at a name that holds no document, such as an embed or an object that shows a picture, opens a tab of its own with no hold either way, and one aimed at a frame that holds a document is followed there', async () => {
@@ -2055,5 +2105,50 @@ describe('the camera, live in a page', () => {
     const port = p.answer()
     await expect(p.It.camera()).rejects.toThrow('This browser cannot make a stream of the camera’s pictures.')
     expect(port.sent).toEqual([])
+  })
+})
+
+describe('the microphone and the camera, on a site that may not record for a page', () => {
+  /** What a page is told where the site that framed it does not record for a page. */
+  const RELOAD = 'Reload It in this browser to use the microphone and camera: It was updated while it was open here.'
+  /** A page whose browser can make a stream of a canvas, as the live camera needs. */
+  const page = () =>
+    load('', (w) => {
+      w.HTMLCanvasElement.prototype.getContext = () => ({ drawImage: () => {} })
+      w.HTMLCanvasElement.prototype.captureStream = () => ({ getTracks: () => [] })
+    })
+  /** Settles at once, or fails: a promise that waits on a site that drops what it is sent never would. */
+  const atOnce = <T>(p: Promise<T>) => Promise.race([p, new Promise<never>((_, no) => setTimeout(() => no(new Error('nothing was said in time')), 100))])
+  const askedOf = (port: { sent: any[] }) => port.sent.map((m) => m.type).filter((t: string) => /^it:(record|photo|camera)/.test(t))
+
+  test('a site from before It recorded for a page, as 0.1.38 was, says nothing of it and drops what it is sent: It.record, It.photo and It.camera are refused at once, saying what to do, and the site is sent none of them', async () => {
+    const p = page()
+    // Asked before the site answered, as a page that records as soon as it opens does, and after
+    const early = p.It.record({ audio: true })
+    const port = p.answer(APP, p.w.parent, CHANNEL_VERSION, {})
+    await expect(atOnce(early)).rejects.toThrow(RELOAD)
+    await expect(atOnce(p.It.record({ audio: true }))).rejects.toThrow(RELOAD)
+    await expect(atOnce(p.It.photo())).rejects.toThrow(RELOAD)
+    await expect(atOnce(p.It.camera())).rejects.toThrow(RELOAD)
+    expect(askedOf(port)).toEqual([])
+  })
+
+  test('a site that says it records for the page is asked as before, before it answered and after, and what it answers is what the page is told', async () => {
+    const p = page()
+    const early = p.It.photo()
+    const port = p.answer()
+    const photo = port.sent.find((m) => m.type === 'it:photo')
+    p.fromSite({ type: 'it:result', requestId: photo.requestId, ok: false, error: 'You did not allow this page to use the camera.' })
+    await expect(atOnce(early)).rejects.toThrow('You did not allow this page to use the camera.')
+    const recording = p.It.record({ audio: true })
+    const record = port.sent.find((m) => m.type === 'it:record')
+    expect([record.audio, record.video]).toEqual([true, false])
+    p.fromSite({ type: 'it:result', requestId: record.requestId, ok: false, error: 'The page was not in front.' })
+    await expect(atOnce(recording)).rejects.toThrow('The page was not in front.')
+    const opening = p.It.camera()
+    const camera = port.sent.find((m) => m.type === 'it:camera')
+    p.fromSite({ type: 'it:result', requestId: camera.requestId, ok: false, error: 'The camera is in use by another app.' })
+    await expect(atOnce(opening)).rejects.toThrow('The camera is in use by another app.')
+    expect(askedOf(port)).toEqual(['it:photo', 'it:record', 'it:camera'])
   })
 })
