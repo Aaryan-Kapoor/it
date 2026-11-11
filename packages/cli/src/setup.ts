@@ -1052,53 +1052,118 @@ export function codexPluginHash(root: string): string | null {
   }
 }
 
+/** A TOML string at the start of the text, basic or literal, or undefined where none is there. */
+const tomlString = (text: string): string | undefined => {
+  const m = /^\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')/.exec(text)
+  return m ? (m[1] !== undefined ? m[1].replace(/\\(["\\])/g, '$1') : m[2]) : undefined
+}
+
 /**
  * The contents of It's plugin that Codex approved the hooks of, as Codex keeps them for each hook
- * in its settings (`trusted_content_hash` under `[hooks.state."it-bridge@it:..."]`), and whether
- * any hook of It's is noted there at all. A Codex before 0.167 noted no contents, and approved a
- * hook by its own text alone.
+ * in its settings (`trusted_content_hash` under `[hooks.state."it-bridge@it:..."]`), whether any
+ * hook of It's is noted there at all, and whether a value of It's could not be read. A Codex
+ * before 0.167 noted no contents, and approved a hook by its own text alone. Codex writes each
+ * hook as a table of its own, and a person may write the same as dotted keys or an inline table,
+ * with either kind of quotation mark: all of those are read.
  */
-export function codexApproved(config: string): { noted: boolean; contents: string[] } {
+export function codexApproved(config: string): { noted: boolean; contents: string[]; unread: boolean } {
   const contents: string[] = []
   let noted = false
-  let ours = false
+  let unread = false
+  let table = ''
+  const ours = (key: string) => /(^|\.)\s*["']it-bridge@it:/.test(key) && /^\s*hooks\s*\.\s*state\s*\./.test(key)
   for (const line of config.split(/\r?\n/)) {
-    const header = /^\s*\[\s*(.*?)\s*\]\s*(#.*)?$/.exec(line)
-    if (header && !line.trim().startsWith('[[')) {
-      ours = /^hooks\.state\."it-bridge@it:/.test(header[1]!)
-      noted ||= ours
+    if (/^\s*(#|$)/.test(line)) continue
+    const header = /^\s*(\[\[?)\s*(.*?)\s*\]\]?\s*(#.*)?$/.exec(line)
+    if (header) {
+      // An array of tables is never It's
+      table = header[1] === '[[' ? '\u0000' : header[2]!
+      noted ||= ours(table)
       continue
     }
-    const value = ours ? /^\s*trusted_content_hash\s*=\s*"([^"]*)"/.exec(line) : null
-    if (value) contents.push(value[1]!)
+    const pair = /^\s*((?:[^=\s"']+|"(?:[^"\\]|\\.)*"|'[^']*'|\s*\.\s*)+?)\s*=\s*(.*)$/.exec(line)
+    if (!pair) continue
+    const key = table ? `${table}.${pair[1]}` : pair[1]!
+    if (!ours(key)) continue
+    noted = true
+    const value = pair[2]!
+    if (/(^|\.)\s*trusted_content_hash\s*$/.test(pair[1]!)) {
+      const said = tomlString(value)
+      if (said === undefined) unread = true
+      else contents.push(said)
+    } else if (value.trimStart().startsWith('{') && /\btrusted_content_hash\s*=/.test(value)) {
+      const said = tomlString(value.slice(value.search(/\btrusted_content_hash\s*=/)).replace(/^trusted_content_hash\s*=/, ''))
+      if (said === undefined) unread = true
+      else contents.push(said)
+    }
   }
-  return { noted, contents }
+  return { noted, contents, unread }
+}
+
+/**
+ * The folder Codex runs It's plugin from: the newest of the versions it keeps under its cache.
+ * Undefined where it keeps none.
+ */
+function codexPluginFolder(home: string): string | undefined {
+  const plugin = path.join(home, 'plugins', 'cache', MARKET, PLUGIN)
+  let versions: string[] = []
+  try {
+    versions = readdirSync(plugin)
+  } catch {}
+  const newest = versions.reduce<string | undefined>((best, v) => (best === undefined || older(best, v) ? v : best), undefined)
+  return newest === undefined ? undefined : path.join(plugin, newest)
+}
+
+/**
+ * Where Codex 0.167 keeps what It's plugin held when a hook approved by its text alone, as a Codex
+ * before 0.167 approved one, first ran: in `.hook-trust` beside its settings, under a name made of
+ * the settings file's path and the plugin's name (`legacy_trust_path` in Codex's hooks engine).
+ * From then on Codex runs the hooks only while the plugin holds the same.
+ */
+export function codexLegacyBaseline(home: string): string {
+  const config = path.resolve(home, 'config.toml')
+  const hash = createHash('sha256')
+  for (const part of [Buffer.from(config), Buffer.from(`${PLUGIN}@${MARKET}`)]) {
+    const length = Buffer.alloc(8)
+    length.writeBigUInt64LE(BigInt(part.length))
+    hash.update(length).update(part)
+  }
+  return path.join(path.dirname(config), '.hook-trust', hash.digest('hex'))
 }
 
 /**
  * Whether Codex has yet to run It's hooks as they are now. Codex runs no hook until the person
  * has approved it, and says nothing when it skips one. Codex 0.167 ties the approval to the
  * contents of the whole plugin, and runs none of its hooks once a file in it is not as it was
- * when they were approved, as after an upgrade that changed one: so where Codex noted those
- * contents, they are held to the plugin as it is now. Otherwise Codex's own note of the
- * approval is the proof, which it writes the moment the person gives it, a turn before any hook
- * runs, and so is a hook of It's having run. Codex asks for the approval only as it starts, so a
- * Codex that was open when It's add-on was put in or changed neither asks nor runs the hooks
- * until it is started again.
+ * when they were approved, as after an upgrade that changed one: so the contents Codex noted with
+ * the approval, or with an approval by the hooks' text alone the contents it kept when they first
+ * ran, are held to the plugin as Codex runs it now. With nothing noted, a hook of It's having run
+ * is the proof. Where the approval or the plugin cannot be read, it cannot be told to be out of
+ * date, and nothing is asked. Codex asks for the approval only as it starts, so a Codex that was
+ * open when It's add-on was put in or changed neither asks nor runs the hooks until it is started
+ * again.
  */
 export function codexHooksPending(home = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')): boolean {
-  const { noted, contents } = codexApproved(codexConfig(home) || '')
+  const { noted, contents, unread } = codexApproved(codexConfig(home) || '')
+  if (unread) return false
+  const folder = codexPluginFolder(home)
+  const now = () => (folder ? codexPluginHash(folder) : null)
   if (contents.length) {
-    const plugin = path.join(home, 'plugins', 'cache', MARKET, PLUGIN)
-    let now: (string | null)[] = []
-    try {
-      now = readdirSync(plugin).map((version) => codexPluginHash(path.join(plugin, version)))
-    } catch {}
-    // Where the plugin cannot be read, it cannot be told to have changed, and nothing is asked
-    if (!now.length || now.some((hash) => hash === null)) return false
-    return !contents.every((hash) => now.includes(hash))
+    const hash = now()
+    return hash !== null && !contents.every((approved) => approved === hash)
   }
-  return !noted && !existsSync(hookSeenFile('codex'))
+  if (noted) {
+    let baseline: string
+    try {
+      baseline = readFileSync(codexLegacyBaseline(home), 'utf8').trim()
+    } catch {
+      // Not there yet, Codex takes the plugin as it finds it when a hook first runs
+      return false
+    }
+    const hash = now()
+    return hash !== null && baseline !== hash
+  }
+  return !existsSync(hookSeenFile('codex'))
 }
 
 /**
