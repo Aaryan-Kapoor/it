@@ -1011,7 +1011,12 @@ describe('the camera, live to a page', () => {
 
     test('ends when what the page is allowed no longer has the microphone, though it still has the camera', async () => {
       const { device, told } = await opened({ sound: {} })
-      anotherTabTookBackAndAllowedAgain(['camera'])
+      // The same grant, as what is kept in the browser then says it, with the microphone no longer in it
+      const key = `it.media.person-1.${displayKey()}`
+      const kept = JSON.parse(localStorage.getItem(key)!) as { kinds: string[] }[]
+      Storage.prototype.setItem.call(localStorage, key, JSON.stringify(kept.map((g) => ({ ...g, kinds: ['camera'] }))))
+      expect(grantFor('person-1', 'page-1', OWNER, ['camera'])).not.toBeNull()
+      window.dispatchEvent(new StorageEvent('storage', { key }))
       expect(told).toHaveBeenCalledWith('ended', 'taken_back')
       expect(device.tracks.map((t) => t.stopped)).toEqual([true, true])
     })
