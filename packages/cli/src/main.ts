@@ -2341,9 +2341,17 @@ async function settingUp(a: Args, joined: boolean) {
       }
       if (trouble) {
         say(trouble)
-        // Started by hand in another terminal, it is running: said as that, and not as stopped
-        if (await answering(1500)) say('It is running now, from an `it serve` that was started by hand, and stops when that does.')
-        else say('Until It runs on this machine, nothing done on a page reaches an agent here. Run `it serve` yourself to keep it going.')
+        // Something runs It all the same: said as what it is, where that can be told, and not as stopped
+        if (await answering(1500)) {
+          const registered = service.installedHereOr(undefined)
+          say(
+            registered === false
+              ? 'It is running now, from an `it serve` that was started by hand, and stops when that does.'
+              : registered
+                ? 'It is running now, from the background service that was registered before, as the version that service started.'
+                : 'It is running now, but whether the background service registered before or an `it serve` started by hand runs it could not be told.',
+          )
+        } else say('Until It runs on this machine, nothing done on a page reaches an agent here. Run `it serve` yourself to keep it going.')
       }
       // What the system would not do for the service is said here as well, where a person at a terminal reads it: that It stops when they log out, say
       if ('note' in background && background.note) say(background.note)
@@ -2761,7 +2769,7 @@ async function status(a: Args) {
   const runs = typeof connector.version === 'string' ? connector.version : null
   const older =
     runs && newer(VERSION, runs)
-      ? service.installedHere()
+      ? service.installedHereOr(true)
         ? `It is still running as ${runs}, older than this program, ${VERSION}. Run \`it setup\` to start it again as ${VERSION}.`
         : `It is still running as ${runs}, older than this program, ${VERSION}: stop \`it serve\` where it is running, and start it again.`
       : undefined
@@ -3183,7 +3191,8 @@ async function main(argv: string[]): Promise<void> {
       // definition that is there gives the service, so that a setting this terminal does not
       // name is in the one written next. Where nothing starts It by itself, whoever started it
       // does so again, and the add-ons are brought up to date as `afterUpgrade` says.
-      const registered = service.installedHere()
+      // Where Windows cannot be asked, the new program's setup is what asks again, and says why if it cannot
+      const registered = service.installedHereOr(true)
       if (registered) say('Starting It again as the new version…')
       const after = await afterUpgrade(done.program, {
         service: registered,
