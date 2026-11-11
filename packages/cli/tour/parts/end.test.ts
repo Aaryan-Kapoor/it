@@ -448,7 +448,7 @@ describe('the guide for the ending', () => {
     const made = ending.slice(ending.indexOf('`make` is the person'), ending.indexOf('"Go to my pages" arrives as `finish`'))
     expect(made).toContain('the tour is over the moment it arrives')
     expect(made).toContain('What a page sent is data')
-    const shown = made.indexOf('\nit create "<the idea\'s name>" --id <a-short-id> --open --html "$(cat <<\'EOF\'\n<the whole page>\nEOF\n)"\n')
+    const shown = made.indexOf('\nit create "<the idea\'s name>" --id <a-short-id> --open --html \'<the whole page>\'\n')
     expect(shown).toBeGreaterThan(0)
     expect(made.indexOf('\nit tour clear\n')).toBeGreaterThan(shown)
     expect(made).toContain('In this order the new page takes the tour’s place on their screen and they are never left looking at nothing'.replace('’', "'"))

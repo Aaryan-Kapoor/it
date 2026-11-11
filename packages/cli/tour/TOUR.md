@@ -38,7 +38,7 @@ EOF
 )"
 ```
 
-Written so, nothing in your words can end the command early, so write them as you would, apostrophes and quotes and all, and give every answer, the ideas and the page you build in that form. In PowerShell, which has no such form, pipe the JSON to the command as a here-string: `@'` on a line, the JSON, and `'@ | it tour answer <the action's id> -`.
+Written so, nothing in your words can end the command early, so write them as you would, apostrophes and quotes and all, and give every answer and the ideas in that form. In PowerShell, which has no such form, pipe the JSON to the command as a here-string: `@'` on a line, the JSON, and `'@ | it tour answer <the action's id> -`.
 
 The command puts your answer on the page under the part the action came from, with the request it answers, in place of your answer before it. It acknowledges the action and clears up after it. So you never copy `part` or `request` into your answer, every answer is whole and leaves nothing out that it means to say, and on this page you never run `it ack`, `it action` or `it wait`. Then do what it printed:
 
@@ -202,13 +202,10 @@ Build it now, small and whole. The person is watching the seconds count, and the
 :root{color-scheme:light dark;--paper:#f3efe6;--card:#fffdf8;--ink:#1c1a16;--soft:#6d685d;--line:#e2dbcc;--accent:#17805a}@media(prefers-color-scheme:dark){:root{--paper:#100f0d;--card:#1a1916;--ink:#f4f0e7;--soft:#aaa497;--line:#2f2c27;--accent:#3ecf93}}
 ```
 
-2. Publish it and bring it up in one command, with the whole page in it as the answers are given, between the line that ends `<<'EOF'` and a line that says `EOF`. This is a command your harness already lets you run, where writing a file may stop to ask the person, who is not looking at you:
+2. Publish it and bring it up in one command, with the page itself in the command, written with double quotes only so that nothing ends it early. This is a command your harness already lets you run, where writing a file may stop to ask the person, who is not looking at you, and where a page given as the text of a here-document is refused for the script in it:
 
 ```sh
-it create "<the idea's name>" --id <a-short-id> --open --html "$(cat <<'EOF'
-<the whole page>
-EOF
-)"
+it create "<the idea's name>" --id <a-short-id> --open --html '<the whole page>'
 ```
 
 3. Only then take the tour away. In this order the new page takes the tour's place on their screen and they are never left looking at nothing:
