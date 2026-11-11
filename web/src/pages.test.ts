@@ -1299,3 +1299,36 @@ test('a refused pre-upgrade request stays visible after reopening without being 
   expect(localStorage.getItem(key)).toBeNull()
   expect(host.querySelector('[role="alert"]')).toBeNull()
 })
+
+describe('what the page’s bar says of clicks that were refused', () => {
+  test('clicks that came too fast and were not sent are said in the bar with how many, and the bar stops saying it after a while', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    const outbox = await shown()
+    expect(allSaid()).toEqual(['Done'])
+    await act(async () => {
+      for (let i = 0; i < 3; i++) outbox.noteRefused('user-1', 'page-1', 'fast')
+    })
+    expect(allSaid()).toEqual(['3 clicks on this page came faster than It can take them, and were not sent.', 'Done'])
+    expect(host.querySelector('.page-request-refused')?.getAttribute('role')).toBe('alert')
+    // Another refused for its own reason is said with that reason
+    await act(async () => outbox.noteRefused('user-1', 'page-1', 'Too many actions on this page are waiting for its agent.'))
+    expect(allSaid()[0]).toBe(
+      '3 clicks on this page came faster than It can take them, and were not sent. 1 more was not sent: Too many actions on this page are waiting for its agent.',
+    )
+    // Nothing of another page's
+    await act(async () => outbox.noteRefused('user-1', 'page-2', 'fast'))
+    expect(allSaid()[0]).toMatch(/^3 clicks/)
+    await pass(31_000)
+    expect(allSaid()).toEqual(['Done'])
+  })
+
+  test.each([
+    [{ fast: 1, other: 0, why: null }, 'A click on this page came faster than It can take it, and was not sent.'],
+    [{ fast: 0, other: 1, why: 'invalid' }, 'A click on this page was not sent: invalid'],
+    [{ fast: 0, other: 2, why: 'invalid' }, '2 clicks on this page were not sent: invalid'],
+  ])('what is said of %o', async (refused, words) => {
+    const { refusedSaid } = await import('./pages')
+    expect(refusedSaid(refused)).toBe(words)
+  })
+})

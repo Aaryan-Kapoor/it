@@ -800,20 +800,38 @@ describe('the frame around a page', () => {
     ])
   })
 
-  test('a page that asks for too much at once is told to slow down before the backend hears of it', async () => {
+  test('a page that asks for too much at once is told to slow down before the backend hears of it, and its bar is told too', async () => {
+    const { refusedLately } = await import('./outbox')
     const page = await show()
     await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
     const port = page.ports()[0]!
     const heard: any[] = []
     port.onmessage = (m) => heard.push(m.data)
-    for (let i = 0; i < 40; i++) port.postMessage(action(`click-1${String(i).padStart(3, '0')}`))
+    for (let i = 0; i < 100; i++) port.postMessage(action(`click-1${String(i).padStart(3, '0')}`))
     await act(() => tick(200))
     const results = heard.filter((m) => m.type === 'it:result')
-    expect(results.length).toBe(40)
-    expect(results.filter((m) => m.ok).length).toBeLessThan(25)
+    expect(results.length).toBe(100)
+    expect(results.filter((m) => m.ok).length).toBeLessThan(70)
     expect(results.filter((m) => !m.ok).every((m) => /too much at once/.test(m.error))).toBe(true)
     expect(submitted().length).toBe(results.filter((m) => m.ok).length)
+    expect(refusedLately('alice', 'page1')?.fast).toBe(results.filter((m) => !m.ok).length)
   })
+
+  test('sixty clicks made as fast as a person clicks are all taken by the frame', async () => {
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    const port = page.ports()[0]!
+    const heard: any[] = []
+    port.onmessage = (m) => heard.push(m.data)
+    // Ten a second for six seconds, as a person plays a pad
+    for (let i = 0; i < 60; i++) {
+      port.postMessage(action(`click-2${String(i).padStart(3, '0')}`))
+      await act(() => tick(100))
+    }
+    await act(() => tick(200))
+    const results = heard.filter((m) => m.type === 'it:result')
+    expect([results.length, results.filter((m) => m.ok).length]).toEqual([60, 60])
+  }, 20_000)
 })
 
 describe('fullscreen, which a page asks the site for', () => {
