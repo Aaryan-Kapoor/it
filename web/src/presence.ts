@@ -235,9 +235,8 @@ export function startReports(
       })
   }
   /** The person used the site here, now or at `when` a moment ago, by the clock that only goes forward. */
-  const used = (when?: number) => {
+  const used = (when?: number, t = now()) => {
     if (!visible()) return
-    const t = now()
     const then = Math.min(when ?? t, t)
     // A use from before the one kept says nothing new
     if (!spent && then <= usedAt - usedLead) return
@@ -288,7 +287,7 @@ export function startReports(
       const since = Math.max(t - ACTIVATION_MS, wasActive ? Number.NEGATIVE_INFINITY : lookedAt)
       if (since >= counted) {
         counted = t
-        used(since)
+        used(since, t)
       }
     }
     wasActive = active

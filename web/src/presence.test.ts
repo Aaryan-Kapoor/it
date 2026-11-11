@@ -606,6 +606,46 @@ test('a frame use said again after the backend did not take it still says when i
   expect(again.observedAt! - again.usedAt!).toBeLessThan(USED_EVERY_MS + ACTIVATION_MS)
 })
 
+test('a use learned from the browser’s word is never said longer before its report than the backend keeps, however the clock moves as it is learned', async () => {
+  const word = activationOf()
+  const c = clockOf()
+  const sent: Report[] = []
+  let refuse = false
+  // The clock that only goes forward, which this test makes jump two seconds once, as the site looks
+  let extra = 0
+  let pause = false
+  const now = () => {
+    const v = Date.now() + extra
+    if (pause) {
+      pause = false
+      extra += 2000
+    }
+    return v
+  }
+  stop = startReports(
+    (r) => {
+      sent.push(r)
+      return Promise.resolve({ accepted: true, used: r.used === true && !refuse })
+    },
+    () => true,
+    { document, window, now, clock: { ...c.clock, at: () => Date.now() + AHEAD }, takesUsedAt: () => true },
+  )
+  await vi.advanceTimersByTimeAsync(1500)
+  word.acted()
+  await vi.advanceTimersByTimeAsync(2000)
+  word.acted()
+  await vi.advanceTimersByTimeAsync(8000 - 3500 - 1)
+  pause = true
+  refuse = true
+  await vi.advanceTimersByTimeAsync(1)
+  await vi.advanceTimersByTimeAsync(12_000 - 8000)
+  refuse = false
+  await vi.advanceTimersByTimeAsync(5500)
+  c.learn(Date.now() + AHEAD)
+  await vi.advanceTimersByTimeAsync(0)
+  for (const u of usesOf(sent)) expect(u.observedAt! - u.usedAt!).toBeLessThan(USED_EVERY_MS + ACTIVATION_MS)
+})
+
 test('a use said once the ten seconds are up says when it happened, and says nothing of it where the backend does not take that', async () => {
   const sent = timedReporter()
   await vi.advanceTimersByTimeAsync(0)
