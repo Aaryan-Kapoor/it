@@ -698,7 +698,9 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       }
       expect(b.asked).toEqual([])
       // An answer whose JSON a shell split at a space is told how to give it whole
-      expect(error(await run(m, ['tour', 'answer', 'action-1', '{"say":"two', 'words"}'], b.env)).hint).toContain("give it in a here-document: `it tour answer action-1 \"$(cat <<'EOF'`")
+      expect(error(await run(m, ['tour', 'answer', 'action-1', '{"say":"two', 'words"}'], b.env)).hint).toContain(
+        "give it in a here-document: `it tour answer action-1 \"$(cat <<'EOF'`",
+      )
       expect(error(await run(m, ['tour', 'next', 'now'], b.env)).message).toBe('`it tour next` takes nothing after it.')
       expect(error(await run(m, ['tour', 'answer'], b.env)).message).toBe('Say which action.')
       expect(error(await run(m, ['tour', 'answer', 'action-1', '[1]'], b.env)).code).toBe('invalid')
@@ -7919,7 +7921,9 @@ describe('whether what the person does arrives by itself, as a page’s command 
           .filter((x) => x.path === 'state:patch')
           .map((x) => Object.fromEntries(Object.entries(JSON.parse(String(x.args.patch)).board).filter(([, v]) => v !== null)))
       b.asked.length = 0
-      expect(printed(await run(m, ['tour', 'answer', 'action-1', '-'], env, process.execPath, [], `${JSON.stringify({ read: '144', say: words })}\n`)).answered).toBe('board')
+      expect(
+        printed(await run(m, ['tour', 'answer', 'action-1', '-'], env, process.execPath, [], `${JSON.stringify({ read: '144', say: words })}\n`)).answered,
+      ).toBe('board')
       // And where the `-` was left out, what was given there is read all the same, and not taken for no answer
       expect(printed(await run(m, ['tour', 'answer', 'action-1'], env, process.execPath, [], JSON.stringify({ say: words }))).answered).toBe('board')
       // With --no-wait the agent is told to do what it has to first, as set the ideas, and then to go on as it would have
@@ -7941,7 +7945,9 @@ describe('whether what the person does arrives by itself, as a page’s command 
       // JSON that an apostrophe cut short on the command line is refused, with the way that cannot be cut
       expect(error(await run(m, ['tour', 'answer', 'action-1', '{"say":"That'], env)).hint).toContain("`it tour answer action-1 \"$(cat <<'EOF'`")
       // And JSON on standard input that is not JSON is said to be that
-      expect(error(await run(m, ['tour', 'answer', 'action-1', '-'], env, process.execPath, [], '{"say":')).message).toBe('The answer on standard input is not valid JSON.')
+      expect(error(await run(m, ['tour', 'answer', 'action-1', '-'], env, process.execPath, [], '{"say":')).message).toBe(
+        'The answer on standard input is not valid JSON.',
+      )
       expect(answers()).toEqual([])
     } finally {
       await c.close()

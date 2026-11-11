@@ -370,10 +370,11 @@ async function pipedIfAny(grace: number): Promise<string | undefined> {
   const reading = piped()
   const quiet = await new Promise<boolean>((resolve) => {
     const timer = setTimeout(() => resolve(!heard), grace)
-    reading.then(
-      () => (clearTimeout(timer), resolve(false)),
-      () => (clearTimeout(timer), resolve(false)),
-    )
+    const ended = () => {
+      clearTimeout(timer)
+      resolve(false)
+    }
+    reading.then(ended, ended)
   })
   if (quiet) {
     process.stdin.off('data', first)
@@ -1184,9 +1185,14 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
     // or a here-document given all the same is read, so that an agent that left out the `-` is not
     // taken to have given no answer
     const stdin = a._[2] === '-'
-    if (stdin && file !== undefined) throw new Problem('The answer is given once, on standard input or with --file, and this command was given both.', 'invalid', `Usage: it ${USAGE}`)
+    if (stdin && file !== undefined)
+      throw new Problem('The answer is given once, on standard input or with --file, and this command was given both.', 'invalid', `Usage: it ${USAGE}`)
     const given =
-      file !== undefined ? fileText(file, 'the answer') : stdin ? need(await piped(), 'the answer, on standard input', USAGE) : (a._[2] ?? (await pipedIfAny(500)))
+      file !== undefined
+        ? fileText(file, 'the answer')
+        : stdin
+          ? need(await piped(), 'the answer, on standard input', USAGE)
+          : (a._[2] ?? (await pipedIfAny(500)))
     const from = file !== undefined ? `The answer in ${file}` : stdin || a._[2] === undefined ? 'The answer on standard input' : 'The answer'
     let read: unknown
     try {

@@ -47,7 +47,7 @@ vi.mock('./src/files', () => ({
   },
 }))
 
-import { answerAction, askedBy, replacing, dropPicture, dropPictures, keepPicture, keepPictureFor, pictureName, START_SLUG } from './src/tour-answer'
+import { answerAction, askedBy, dropPicture, dropPictures, keepPicture, keepPictureFor, pictureName, replacing, START_SLUG } from './src/tour-answer'
 
 const REQUEST = 'ab'.repeat(16)
 const PNG = [{ name: 'sheet.png', type: 'image/png', bytes: 2048 }]
@@ -94,14 +94,22 @@ test('an answer is set under the action’s own part with the action’s own req
 
 test('an answer takes the place of the answer before it, so that nothing an earlier answer said is read as part of this one', async () => {
   stand.action = action({ part: 'board', request: REQUEST })
-  stand.state = { board: { blind: true, hint: 'Count the rows', say: 'I cannot see it.', request: 'cd'.repeat(16), deep: { a: 1, b: 2 } }, room: { lamp: true } }
+  stand.state = {
+    board: { blind: true, hint: 'Count the rows', say: 'I cannot see it.', request: 'cd'.repeat(16), deep: { a: 1, b: 2 } },
+    room: { lamp: true },
+  }
   await answerAction('act1', { read: '144', right: true, say: 'Right.', deep: { a: 3 } })
   const patched = stand.calls.find((c) => c.name === 'state:patch')!.args
   // Held to the revision it was read at, and taking away, at every depth, what the new answer does not say. Another part is not touched
   expect(patched.baseRevision).toBe(6)
-  expect(JSON.parse(patched.patch)).toEqual({ board: { blind: null, hint: null, read: '144', right: true, say: 'Right.', request: REQUEST, deep: { a: 3, b: null } } })
+  expect(JSON.parse(patched.patch)).toEqual({
+    board: { blind: null, hint: null, read: '144', right: true, say: 'Right.', request: REQUEST, deep: { a: 3, b: null } },
+  })
   // Which, merged as the state merges a patch, leaves the new answer and nothing else
-  expect(deepMerge(stand.state, JSON.parse(patched.patch))).toEqual({ board: { read: '144', right: true, say: 'Right.', request: REQUEST, deep: { a: 3 } }, room: { lamp: true } })
+  expect(deepMerge(stand.state, JSON.parse(patched.patch))).toEqual({
+    board: { read: '144', right: true, say: 'Right.', request: REQUEST, deep: { a: 3 } },
+    room: { lamp: true },
+  })
   expect(replacing('text', { a: 1 })).toEqual({ a: 1 })
   expect(replacing({ a: [1, 2] }, { a: [3] })).toEqual({ a: [3] })
   expect(replacing({ a: { b: 1 } }, { a: 'x' })).toEqual({ a: 'x' })
@@ -111,7 +119,17 @@ test('where the state changed between reading it and writing the answer, it is r
   stand.action = action({ part: 'room', request: REQUEST })
   stand.clashes = 2
   await answerAction('act1', { say: 'There.' })
-  expect(stand.calls.map((c) => c.name)).toEqual(['delivery:get', 'state:get', 'state:patch', 'state:get', 'state:patch', 'state:get', 'state:patch', 'delivery:handedOff', 'delivery:settle'])
+  expect(stand.calls.map((c) => c.name)).toEqual([
+    'delivery:get',
+    'state:get',
+    'state:patch',
+    'state:get',
+    'state:patch',
+    'state:get',
+    'state:patch',
+    'delivery:handedOff',
+    'delivery:settle',
+  ])
   // A clash that goes on is given up on in the end, with nothing acknowledged
   stand.calls.length = 0
   stand.clashes = 99
@@ -123,7 +141,9 @@ test('where the state changed between reading it and writing the answer, it is r
 test('an answer that is on the page stands where the action could not be acknowledged', async () => {
   stand.action = action({ part: 'cube', request: REQUEST })
   stand.failAck = true
-  await expect(answerAction('act1', { moves: [{ turn: 'right-column-down', say: 'Pull the right column down' }], say: 'One turn.' })).resolves.toMatchObject({ part: 'cube' })
+  await expect(answerAction('act1', { moves: [{ turn: 'right-column-down', say: 'Pull the right column down' }], say: 'One turn.' })).resolves.toMatchObject({
+    part: 'cube',
+  })
   expect(stand.calls.map((c) => c.name)).toEqual(['delivery:get', 'state:get', 'state:patch', 'delivery:handedOff'])
 })
 

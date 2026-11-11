@@ -370,10 +370,14 @@ describe('how the first page is put together', () => {
 
   test('each id in a part begins with the part’s name, and no two elements have one id, since an element is found by its id from anywhere on the page', () => {
     const ids = (name: string, ...given: string[]) =>
-      part(name, { section: `<section class="part" data-part="${name}" data-title="A" data-line="B" hidden>${given.map((id) => `<p id="${id}">x</p>`).join('')}</section>` })
+      part(name, {
+        section: `<section class="part" data-part="${name}" data-title="A" data-line="B" hidden>${given.map((id) => `<p id="${id}">x</p>`).join('')}</section>`,
+      })
     expect(() => assembled(shell, ['one'], reads({ one: ids('one', 'same') }))).toThrow('tour/parts/one.html gives an element the id "same"')
     expect(() => assembled(shell, ['one'], reads({ one: ids('one', 'two-x') }))).toThrow('gives an element the id "two-x"')
-    expect(() => assembled(shell, ['one', 'two'], reads({ one: ids('one', 'one-x', 'one-x'), two: ids('two', 'two-x') }))).toThrow('two elements with the id "one-x"')
+    expect(() => assembled(shell, ['one', 'two'], reads({ one: ids('one', 'one-x', 'one-x'), two: ids('two', 'two-x') }))).toThrow(
+      'two elements with the id "one-x"',
+    )
     expect(() => assembled(shell, ['one', 'two'], reads({ one: ids('one', 'one-x'), two: ids('two', 'two-x') }))).not.toThrow()
   })
 

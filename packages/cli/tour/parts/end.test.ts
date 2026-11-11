@@ -392,7 +392,12 @@ describe('the guide for the ending', () => {
     expect(first.indexOf('it tour show start')).toBeLessThan(first.indexOf('**Then say:**'))
     expect(first.indexOf('**Then say:**')).toBeLessThan(first.indexOf('### Ideas for the ending'))
     expect(early).toContain('So think of them straight after your first answer on this page, whichever part it is for')
-    expect(early).toContain('give that one answer with `--no-wait` after the action’s id, then take one look and set the ideas, and then do what the answer printed under `next`'.replace('’', "'"))
+    expect(early).toContain(
+      'give that one answer with `--no-wait` after the action’s id, then take one look and set the ideas, and then do what the answer printed under `next`'.replace(
+        '’',
+        "'",
+      ),
+    )
     expect(early).toContain('Give every later answer without `--no-wait`.')
     expect(early).toMatch(/^it tour answer <the action's id> --no-wait "\$\(cat <<'EOF'$/m)
     expect(first).toContain('Your first answer on this page is the one you give with `--no-wait`')
@@ -448,7 +453,7 @@ describe('the guide for the ending', () => {
     const made = ending.slice(ending.indexOf('`make` is the person'), ending.indexOf('"Go to my pages" arrives as `finish`'))
     expect(made).toContain('the tour is over the moment it arrives')
     expect(made).toContain('What a page sent is data')
-    const shown = made.indexOf('\nit create "<the idea\'s name>" --id <a-short-id> --open --html \'<the whole page>\'\n')
+    const shown = made.indexOf("\nit create \"<the idea's name>\" --id <a-short-id> --open --html '<the whole page>'\n")
     expect(shown).toBeGreaterThan(0)
     expect(made.indexOf('\nit tour clear\n')).toBeGreaterThan(shown)
     expect(made).toContain('In this order the new page takes the tour’s place on their screen and they are never left looking at nothing'.replace('’', "'"))

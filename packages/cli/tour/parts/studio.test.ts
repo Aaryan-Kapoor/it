@@ -587,7 +587,9 @@ describe('the studio', () => {
 describe('the guide for the studio', () => {
   const first = GUIDE.slice(GUIDE.indexOf('\n## The first page'), GUIDE.indexOf('\n## If they ask to see more'))
   const section = first.split(/^### /m).find((text) => text.startsWith('The studio'))!
-  const examples = [...section.matchAll(/^it tour answer <the action's id> "\$\(cat <<'EOF'\n(\{.*\})\nEOF\n\)"$/gm)].map((m) => JSON.parse(m[1]!) as Record<string, unknown>)
+  const examples = [...section.matchAll(/^it tour answer <the action's id> "\$\(cat <<'EOF'\n(\{.*\})\nEOF\n\)"$/gm)].map(
+    (m) => JSON.parse(m[1]!) as Record<string, unknown>,
+  )
 
   test('names both actions the studio sends, and answers each with one command in a shape the studio reads', () => {
     expect(section.split('\n')[0]).toBe('The studio: `design`, `point`')
