@@ -91,15 +91,35 @@ describe('whether what the person does arrives by itself', () => {
   })
 
   test('in an OpenCode that has not loaded It’s add-on, the agent is told to have the person start OpenCode again, and how the page becomes the conversation’s', () => {
-    const said = arrives({ session: undefined, addonHere: undefined, route: null, slug: 'ping', unloadedOpenCode: true })
-    expect(said.byItself).toBe(false)
-    expect(said.next).toContain(`word for word: “${OPENCODE_RESTART}”`)
+    const facts = { session: undefined, addonHere: undefined, unloadedOpenCode: true }
+    for (const runtime of ['inactive', 'unverified'] as const) {
+      const said = arrives({ ...facts, route: route({ runtime }), slug: 'ping' })
+      expect(said.byItself).toBe(false)
+      expect(said.next).toContain(`word for word: “${OPENCODE_RESTART}”`)
+      expect(said.next).toContain(`\`${it()} update ping\` or \`${it()} wait --id ping\``)
+      expect(said.next).toContain(`\`${it()} wait --id ping --timeout 100\``)
+    }
     expect(OPENCODE_RESTART).toMatch(/^Quit OpenCode and start it again/)
-    expect(said.next).toContain(`\`${it()} update ping\` or \`${it()} wait --id ping\``)
-    expect(said.next).toContain(`\`${it()} wait --id ping --timeout 100\``)
     // In the tour it is said once, after the ending
-    expect(arrives({ session: undefined, addonHere: undefined, route: null, tour: true, unloadedOpenCode: true }).next).toContain('after the tour’s ending')
-    // A conversation that is named is never told this, whatever else is so
+    expect(arrives({ ...facts, route: route(), tour: true }).next).toContain('after the tour’s ending')
+  })
+
+  test('a command OpenCode ran that names no conversation is not told to start OpenCode again where that would not help', () => {
+    const facts = { session: undefined, addonHere: undefined, unloadedOpenCode: true, slug: 'ping' }
+    // The add-on is not connected on this machine at all
+    const unconnected = arrives({ ...facts, route: route({ connected: false }) })
+    expect(unconnected.byItself).toBe(false)
+    expect(unconnected.next).toContain('It’s add-on for OpenCode is not connected on this machine')
+    // The add-on OpenCode has loaded cannot take clicks
+    const incompatible = arrives({ ...facts, route: route({ runtime: 'incompatible' }) })
+    expect(incompatible.byItself).toBe(false)
+    expect(incompatible.next).toContain(`\`${it()} status\``)
+    // An OpenCode that has loaded the add-on is heard from, which may be this one; or the connector could not be asked
+    const heard = arrives({ ...facts, route: route({ runtime: 'active' }) })
+    const unasked = arrives({ ...facts, route: null })
+    for (const said of [unconnected, incompatible, heard, unasked]) expect(said.next).not.toContain(OPENCODE_RESTART)
+    for (const said of [heard, unasked]) expect(said.byItself).toBe('unknown')
+    // A conversation that is named is never told any of this
     expect(
       arrives({ session: { harness: 'opencode', id: 'ses_1' }, addonHere: undefined, route: route({ listening: true }), unloadedOpenCode: true }).byItself,
     ).toBe(true)

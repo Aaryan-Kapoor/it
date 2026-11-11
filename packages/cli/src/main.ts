@@ -843,8 +843,18 @@ function anothers(slug: string, theirs: Made | null): Problem {
 async function arrivalHere(slug?: string, tour = false): Promise<Arrives | undefined> {
   const asked = sessionAsked()
   const session = asked?.session
-  // An OpenCode that has not loaded It's add-on names no conversation, and is told what to do about that
-  if (!session && inUnloadedOpenCode(asked)) return arrives({ session: undefined, addonHere: undefined, route: null, slug, tour, unloadedOpenCode: true })
+  // A command that OpenCode ran and that names no conversation is told what to do about that. The
+  // connector is asked of OpenCode alone, under a name no conversation has: whether its add-on
+  // is connected here, and whether an OpenCode that has loaded it is heard from.
+  if (!session && inUnloadedOpenCode(asked))
+    return arrives({
+      session: undefined,
+      addonHere: undefined,
+      route: await routeOf({ harness: 'opencode', id: 'unnamed' }),
+      slug,
+      tour,
+      unloadedOpenCode: true,
+    })
   if (!session) return undefined
   const route = await routeOf(session)
   return arrives({
