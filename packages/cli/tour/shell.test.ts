@@ -389,7 +389,7 @@ describe('the guide for the first page', () => {
     expect(GUIDE).toContain("2. **Nothing in the tour touches the person's things.**")
     expect(GUIDE).toContain("Where a part's section asks you to look at something of theirs, you only read it.")
     const board = sectionFor('checked')
-    expect(board).toContain('`saved` names a picture of the sheet, which It has already written for you in the folder you are in')
+    expect(board).toContain('`saved` names a picture of the board, which It has already written for you in the folder you are in')
     expect(board).toContain('The command deletes the picture, so do not delete it yourself')
     expect(part).not.toContain('sheet.png')
   })
