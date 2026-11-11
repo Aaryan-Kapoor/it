@@ -634,6 +634,59 @@ describe('a page an agent brings up on this display', () => {
   })
 })
 
+describe('fullscreen', () => {
+  /** The browser's fullscreen, stood in for, since the stand-in browser has none: what it was asked, and what it has fullscreen. */
+  const browser = { element: null as Element | null, asked: [] as string[] }
+  beforeEach(() => {
+    Object.assign(browser, { element: null, asked: [] })
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: true })
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => browser.element })
+    document.documentElement.requestFullscreen = async () => {
+      browser.asked.push('enter')
+      browser.element = document.documentElement
+      document.dispatchEvent(new Event('fullscreenchange'))
+    }
+    document.exitFullscreen = async () => {
+      browser.asked.push('leave')
+      browser.element = null
+      document.dispatchEvent(new Event('fullscreenchange'))
+    }
+  })
+  afterEach(() => {
+    browser.element = null
+    document.dispatchEvent(new Event('fullscreenchange'))
+    for (const name of ['fullscreenEnabled', 'fullscreenElement', 'exitFullscreen']) delete (document as unknown as Record<string, unknown>)[name]
+    delete (document.documentElement as unknown as Record<string, unknown>).requestFullscreen
+  })
+
+  test('goes on from one page to the next, as an agent brings one up, and ends when the person goes from the page to the rest of the site', async () => {
+    cookie = CODES.ownercode00000000001!
+    watched['artifacts:get'] = {
+      id: 'page-1',
+      slug: 'plan',
+      title: 'Plan',
+      version: 1,
+      updatedAt: Date.now(),
+      agent: 'pi',
+      machine: 'here',
+      run: null,
+      pending: 0,
+    }
+    await start('/p/plan')
+    await press('Fullscreen')
+    expect(browser.asked).toEqual(['enter'])
+    const { navigate } = await import('./lib')
+    await act(async () => navigate('/p/another'))
+    await settle()
+    expect(location.pathname).toBe('/p/another')
+    expect(browser.asked).toEqual(['enter'])
+    expect(button('Leave fullscreen')).toBeDefined()
+    await press('Back to your pages')
+    expect(location.pathname).toBe('/')
+    expect(browser.asked).toEqual(['enter', 'leave'])
+  })
+})
+
 describe('telling the backend that this display is open', () => {
   const beats = () => names().filter((what) => what === 'displays:heartbeat').length
 

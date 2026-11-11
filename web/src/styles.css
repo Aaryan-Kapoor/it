@@ -1237,6 +1237,12 @@ main:has(.modal-overlay) {
   color: var(--fg);
 }
 
+/* In fullscreen the browser's own bars are gone, and a phone held sideways may have its camera where the bar's ends are */
+:root:fullscreen .page-nav {
+  padding-left: max(8px, env(safe-area-inset-left, 0px));
+  padding-right: max(8px, env(safe-area-inset-right, 0px));
+}
+
 .back-btn {
   flex-shrink: 0;
   width: 28px;

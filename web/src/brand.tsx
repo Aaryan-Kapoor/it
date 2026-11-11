@@ -96,6 +96,25 @@ export const IconSend = () => (
   </svg>
 )
 
+/** Four corners pointing out, for going fullscreen. */
+export const IconFullscreen = () => (
+  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" {...stroke} strokeWidth="2">
+    <path d="M4 9V4h5" />
+    <path d="M15 4h5v5" />
+    <path d="M20 15v5h-5" />
+    <path d="M9 20H4v-5" />
+  </svg>
+)
+/** Four corners pointing in, for leaving fullscreen. */
+export const IconLeaveFullscreen = () => (
+  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" {...stroke} strokeWidth="2">
+    <path d="M9 4v5H4" />
+    <path d="M20 9h-5V4" />
+    <path d="M15 20v-5h5" />
+    <path d="M4 15h5v5" />
+  </svg>
+)
+
 export const IconStop = () => (
   <svg viewBox="0 0 24 24" width="9" height="9" aria-hidden="true">
     <rect x="4" y="4" width="16" height="16" rx="3" fill="currentColor" />

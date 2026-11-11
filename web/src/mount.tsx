@@ -9,8 +9,9 @@
 // Whatever is in the frame is generated HTML, in a sandbox: its origin is its own, and it has
 // no cookies and no storage. So a message is known to be from the page by the window it came
 // from, and by nothing else. Nothing a page says is believed beyond "this page wants to submit
-// this action for itself, with these files", and how much it may ask of the site is bounded
-// here, before anything reaches the backend. The site never opens a file a page sent: it keeps
+// this action for itself, with these files", or "this page wants It to go fullscreen, or to
+// leave it", and how much it may ask of the site is bounded here, before anything reaches the
+// backend. The site never opens a file a page sent: it keeps
 // and sends its bytes as they are.
 import {
   CHANNEL_VERSION,
@@ -30,6 +31,7 @@ import {
 import { useConvex } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { askTwice } from './backend'
+import { enterFullscreen, fullscreenAvailable, fullscreenJustLeft, fullscreenOn, leaveFullscreen, NOT_FULLSCREEN, onFullscreenChange } from './fullscreen'
 import { api, displayKey, type Id, note, refusal } from './lib'
 import { useLiveState } from './live'
 import {
@@ -94,6 +96,11 @@ const REFUSED_LOAD_MS = 2000
  * reached at and by the same name, so that a page is reached wherever the site is.
  */
 const pages = () => `${location.protocol}//${location.hostname}:${contentPort(Number(location.port) || (location.protocol === 'https:' ? 443 : 80))}`
+/** What a page is told when it asked for fullscreen other than on the person's own click or key in it. */
+const NOT_FROM_THE_PAGE =
+  'It goes fullscreen for a page only on a click or a key in the page itself, and not just after a click on It or just after fullscreen was left. Ask again on the next click in the page.'
+/** What a page is told of It's fullscreen. */
+const fullscreenSaid = (): SiteToPage => ({ type: 'it:fullscreen', on: fullscreenOn(), enabled: fullscreenAvailable() })
 
 /** What something done for a page was begun under: the conversation that had the page, and the grant that allowed it (media.ts `grantFor`). */
 interface Held {
@@ -756,6 +763,41 @@ export function Mount({
         }, unsure)
         return
       }
+      if (type === 'it:fullscreen') {
+        // The page asks for It's fullscreen, which keeps the bar above it. Asked of the browser
+        // here and now, in the turn the message arrived in: a browser goes fullscreen only just
+        // after a click, and Safari counts a click in the page as the site's own only while the
+        // message it caused is being handled
+        const asked = e.data as { requestId?: unknown; on?: unknown }
+        const to = port.current
+        if (typeof asked.on !== 'boolean' || !to) return
+        const requestId = typeof asked.requestId === 'string' ? asked.requestId.slice(0, 100) : ''
+        // A refusal is followed by what It is, so that a page that took itself to be in or out of
+        // fullscreen ahead of the answer goes by what It is
+        const refuse = (error: string) => {
+          toPage(to, { type: 'it:result', requestId, ok: false, error })
+          toPage(to, fullscreenSaid())
+        }
+        // Going fullscreen is counted with what else the page asks of the site, as asking again and
+        // again would be. Leaving is never refused: it only ever gives the person their screen back
+        if (asked.on && !allowed()) return refuse('This page is asking too much at once. Try again in a moment.')
+        // Going fullscreen is for the person's own click or key in the page, and never for one of
+        // the site's, which the browser counts for the page as well: a page that asked whenever
+        // It left fullscreen would otherwise be let back in by the very click on Leave fullscreen.
+        // So the frame must hold the keyboard, which a click or a key in it gives it, the browser
+        // must say that the person has just acted, and neither a click or key on the site nor the
+        // end of fullscreen may be so recent that it could be what the browser means. That is
+        // timed from the click or key itself, and not from when the page was framed, which can be
+        // seconds later while the browser still reports the click that opened it: a click in the
+        // page after that one has worn off counts. Leaving needs none of this
+        if (asked.on && (!inFrame() || (activation && !activation.isActive) || Date.now() - siteTouchedAt <= SITE_TOUCH_MS || fullscreenJustLeft()))
+          return refuse(NOT_FROM_THE_PAGE)
+        ;(asked.on ? enterFullscreen() : leaveFullscreen()).then(
+          () => toPage(to, { type: 'it:result', requestId, ok: true }),
+          (err) => refuse(err instanceof Error ? err.message : NOT_FULLSCREEN),
+        )
+        return
+      }
       if (type === 'it:hello') {
         if (!ready) {
           // The page's own script is running: the page is there to be seen
@@ -793,6 +835,8 @@ export function Mount({
         ;(e.source as Window).postMessage({ type: 'it:port', v: CHANNEL_VERSION }, '*', [channel.port2])
         const whole = liveState.whole()
         if (whole) toPage(channel.port1, whole)
+        // And whether It is fullscreen, which also tells the page that the site takes its asking for it
+        toPage(channel.port1, fullscreenSaid())
       }
     }
     window.addEventListener('message', onMessage)
@@ -848,6 +892,8 @@ export function Mount({
 
   // State flows down: what changed goes to whatever the frame is showing now
   useEffect(() => liveState.listen((message) => port.current?.postMessage(message)), [liveState])
+  // And so does It going fullscreen or leaving it, however that came about
+  useEffect(() => onFullscreenChange(() => port.current?.postMessage(fullscreenSaid())), [])
 
   // The page has another owner: what is done for it under the one before is let go
   const owner = madeBy?.owner ?? ''

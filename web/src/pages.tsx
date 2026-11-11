@@ -3,7 +3,22 @@
 import { ALIVE, LIMITS, NOUN, TAKES, WAKE_BACK_MS } from '@it/protocol'
 import { useAction, useConvex, useMutation, useQuery } from 'convex/react'
 import { Component, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { copy, IconBack, IconLink, IconLock, IconPin, IconSay, IconSend, IconSettings, IconStop, IconX, Mark } from './brand'
+import {
+  copy,
+  IconBack,
+  IconFullscreen,
+  IconLeaveFullscreen,
+  IconLink,
+  IconLock,
+  IconPin,
+  IconSay,
+  IconSend,
+  IconSettings,
+  IconStop,
+  IconX,
+  Mark,
+} from './brand'
+import { enterFullscreen, escapeLeavesFullscreen, fullscreenAvailable, leaveFullscreen, useFullscreen } from './fullscreen'
 import { agentName, ago, api, dayOf, type Id, NOT_YET_REVOKED, navigate, refusal, useBackendTakes, useNow } from './lib'
 import { ownerOf } from './media'
 import { Mount } from './mount'
@@ -356,11 +371,16 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
   // Offered only where the backend has the lock: one whose functions are older has none
   const takesLock = useBackendTakes(TAKES.displayLock)
   // Escape goes back, from wherever on the site's own part of the screen the keyboard is. With
-  // something open over the page, the notifications among them, it closes that and no more
+  // something open over the page, the notifications among them, it closes that and no more, and
+  // in fullscreen it leaves fullscreen and no more
   useEffect(() => {
     if (lockedHere) return
     const key = (e: KeyboardEvent) =>
-      e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('.modal-overlay, .finder-overlay, .notif-panel') && navigate('/')
+      e.key === 'Escape' &&
+      !e.defaultPrevented &&
+      !escapeLeavesFullscreen() &&
+      !document.querySelector('.modal-overlay, .finder-overlay, .notif-panel') &&
+      navigate('/')
     document.addEventListener('keydown', key)
     return () => document.removeEventListener('keydown', key)
   }, [lockedHere])
@@ -480,6 +500,7 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
           >
             <IconLink />
           </button>
+          <FullscreenButton />
         </div>
       </header>
       {page.version !== null && (
@@ -515,6 +536,30 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
         />
       )}
     </main>
+  )
+}
+
+/**
+ * Makes It fullscreen, with this bar still above the page, and leaves it again. Where the browser
+ * has no fullscreen, as on an iPhone, there is no button.
+ */
+function FullscreenButton() {
+  const on = useFullscreen()
+  if (!fullscreenAvailable()) return null
+  const label = on ? 'Leave fullscreen' : 'Fullscreen'
+  return (
+    <button
+      type="button"
+      className="nav-action"
+      title={label}
+      aria-label={label}
+      onClick={() => {
+        if (on) leaveFullscreen().catch(() => say('This browser did not leave fullscreen.', 'error'))
+        else enterFullscreen().catch(() => say('This browser did not go fullscreen.', 'error'))
+      }}
+    >
+      {on ? <IconLeaveFullscreen /> : <IconFullscreen />}
+    </button>
   )
 }
 

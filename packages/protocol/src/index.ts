@@ -996,6 +996,13 @@ export type PageToSite =
   | { type: 'it:camera-stop'; requestId: string; camera: string }
   /** The page has drawn this picture of the live camera, and the site may send another in its place. */
   | { type: 'it:camera-drawn'; camera: string; frame: number }
+  /**
+   * The page asks It to go fullscreen, or to leave it, and is answered with an `it:result` on its
+   * channel. It is posted on the window and not on the channel: Safari carries the click that
+   * asked across a window's message but not across a channel's, and a browser goes fullscreen
+   * only for a click. Sent only to a site that has said what its fullscreen is.
+   */
+  | { type: 'it:fullscreen'; requestId: string; on: boolean }
 
 /** A picture of the live camera, as a page is given it: an `ImageBitmap`, which is the page's to draw and close. */
 export interface CameraPicture {
@@ -1050,6 +1057,12 @@ export type SiteToPage =
    * when the camera went away.
    */
   | { type: 'it:camera-state'; camera: string; state: 'live' | 'paused' | 'ended'; why?: 'person' | 'taken_back' | 'not_shown' | 'device' | 'taken_over' }
+  /**
+   * Whether It is fullscreen, and whether this browser can make it so: sent once the channel is
+   * made, and again whenever either changes. A site that sends it takes `it:fullscreen` from
+   * the page. It is the site that is fullscreen, with It's bar above the page.
+   */
+  | { type: 'it:fullscreen'; on: boolean; enabled: boolean }
 
 /** The key in a page's state that belongs to the page itself (It.store). */
 export const STORE_KEY = '_page'
