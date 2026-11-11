@@ -83,17 +83,21 @@ A code pairs one browser, once, and works for ten minutes. An address from `it s
 - **Another screen cannot open the address at all.** `it network` says whether the network is on and at which addresses other devices open the site. A firewall on the machine has to let the site's port and the pages' port through, 4700 and 4701 unless you chose others. An address that says `localhost` is for the machine It runs on, and no other device can open it. To have the links agents give at an address another device can open, choose one under Displays, in "Links agents give".
 - **"It does not answer to this name."** It answers to the machine's own names and addresses and to nothing else. Open it by one of the addresses `it network` lists.
 
-## A page that cannot record
+## A page that cannot use the microphone or the camera
 
-A page records only through It, and It tells the page why where it does not, which a page should show:
+A page hears the microphone and sees the camera only through It, and It tells the page why where it does not, which a page should show:
 
-- **"This screen reaches It over plain http."** A browser lets a site record only at `localhost` on the machine It runs on, or at an `https` address. Run `it https on` on that machine, and open It at the address it prints. [Screens](screens.md#over-https-on-your-tailnet) says how.
+- **"This screen reaches It over plain http."** A browser gives a site the microphone and the camera only at `localhost` on the machine It runs on, or at an `https` address. Run `it https on` on that machine, and open It at the address it prints. [Screens](screens.md#over-https-on-your-tailnet) says how.
 - **"The person did not allow this page to use the microphone on this screen."** Someone pressed "Not now" in It's bar. It asks again the next time the page is opened.
 - **"It uses the microphone and the camera for a page only while this screen shows it."** The page asked from a tab that was not shown, or a window that was minimized. It works again once the page is in front.
 - **"It asks the person only while the page is in front, in the window they are using."** The page asked to be allowed from a window that was shown but not the one in use. Ask again from something the person does on the page.
 - **"The screen stopped showing the page, so It closed the camera, and took no photo."** The tab or the window was put behind while a photo was being taken.
 - **"The browser did not let It use that on this screen."** The browser itself was told no for It's site. Allow the microphone or the camera for that address in the browser's site settings, and try again.
 - **"The microphone or the camera is in use by something else on this screen."** Another app, or another tab, has it. Close that and try again.
+- **"It.microphone was not called from a click or a key in the page."** A browser starts sound for a page only once someone has clicked or typed in it, so a page that opens the microphone, or the camera with sound, by itself is refused. Press the page's own button for it.
+- **"The browser did not start the sound for It on this screen."** The browser held It's own sound back. Click once anywhere on It and press the page's button again.
+- **"This browser cannot pass the microphone's sound on to a page."** The browser lacks what It gathers the sound with. A current Chrome, Edge, Firefox or Safari has it.
+- **"It does not record for a page."** The page asked It to record for it, which It does not do. Ask its agent to publish it again: a page hears the microphone or sees the camera live, and records what it is given itself.
 
 `it https on` can fail with `tailscale` where Tailscale would not serve: Tailscale is not running or signed in, MagicDNS or HTTPS Certificates are off for the tailnet in Tailscale's admin console, or on Linux your user may not change what it serves until `sudo tailscale set --operator=$USER` lets it. It fails with `port_taken` where Tailscale already serves something else on one of It's ports. `tailscale serve status` says what Tailscale serves.
 
@@ -165,7 +169,7 @@ Messages you send above a page and answers you choose in notifications are saved
 
 If It says "Reload It before sending new requests", reload the site to use the service's current version. An older site left open during an update cannot safely send a new request without a replay deadline. It can still confirm a request whose receipt the service has kept. Check what your agent received before repeating an older saved request.
 
-If a page says "Reload It in this browser to use the microphone and camera", the site in that browser has been open since before It was updated, and does not record for pages. Reload It there. Until then, a mail, phone or messages link on a page is left to the browser, as it was before It opened such links itself.
+If a page says "Reload It in this browser to use the microphone and camera", the site in that browser has been open since before It was updated, and does not open them for pages, or does not pass a page the microphone's sound. Reload It there. Until then, a mail, phone or messages link on a page is left to the browser, as it was before It opened such links itself.
 
 ## An agent app after It is updated
 
