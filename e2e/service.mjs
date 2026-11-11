@@ -169,6 +169,8 @@ try {
         // The question's own PowerShell has both in its command line, and is left out
         `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and ($_.CommandLine -like '*it-service.cmd*' -or $_.CommandLine.Contains('${home.replace(/'/g, "''")}')) } | ForEach-Object { $_.Name + ' ' + $_.CommandLine }`,
       )
+      // A question that failed says nothing of what runs, and is never taken for nothing running
+      if (ran.status !== 0) return [`the processes could not be listed: ${ran.error?.code ?? `exit ${ran.status}`} ${(ran.stderr ?? '').trim().slice(0, 300)}`]
       return (ran.stdout ?? '').split(/\r?\n/).filter((line) => line.trim())
     }
     const stopped = ps(`${task} | Stop-ScheduledTask`)
