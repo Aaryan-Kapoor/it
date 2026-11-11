@@ -766,11 +766,14 @@ export function Mount({
           return
         }
       }
+      /** Whether the page asks what became of an action it sent before, rather than sending a new one. */
+      let askedAgain = false
       try {
         // An action the page sends again is not new, and is never refused for coming too fast
         const known =
           message.type === 'it:action' ? ledger.get(typeof message.envelope?.clientActionId === 'string' ? message.envelope.clientActionId : '') : undefined
         const again = message.type === 'it:action' && message.again === true
+        askedAgain = known !== undefined || again
         if (message.type === 'it:action' && !known && !(again && forgot) && !actionAllowed()) throw new Error(SENDING_TOO_MUCH)
         if (message.type === 'it:action') {
           const e = message.envelope
@@ -850,8 +853,9 @@ export function Mount({
           toPage(from, { type: 'it:result', requestId, ok: true, revision })
         }
       } catch (err) {
-        // A click refused, whatever refused it, is said in the page's bar too, once
-        if (message.type === 'it:action') noteLost(user, artifactId, err)
+        // A click refused, whatever refused it, is said in the page's bar too, once: not again
+        // when the page asks what became of one it sent before, which was said then if it was lost
+        if (message.type === 'it:action' && !askedAgain) noteLost(user, artifactId, err)
         const said = refusal(err) as ReturnType<typeof refusal> & { retryAfterMs?: unknown }
         toPage(from, {
           type: 'it:result',

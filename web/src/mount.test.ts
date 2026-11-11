@@ -1391,6 +1391,21 @@ describe('players and maps the site hosts over a page', () => {
     expect(asked('actions:replayGrant')).toEqual([])
   })
 
+  test('an action the page asks after again is not counted in the bar as a click refused, which it was not, or was already', async () => {
+    const { refusedLately } = await import('./outbox')
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    const before = { ...(refusedLately('alice', 'page1') ?? { fast: 0, other: 0 }) }
+    const heard = await page.send(page.ports()[0]!, { ...action('never-0002'), again: true }, 200)
+    expect(heard.find((m) => m.type === 'it:result')).toMatchObject({ ok: false })
+    const after = refusedLately('alice', 'page1') ?? { fast: 0, other: 0 }
+    expect([after.fast, after.other]).toEqual([before.fast, before.other])
+    // And one refused when it is first sent is counted, once
+    const refused = await page.send(page.ports()[0]!, { ...action('x'), again: false }, 200)
+    expect(refused.find((m) => m.type === 'it:result')).toMatchObject({ ok: false })
+    expect(refusedLately('alice', 'page1')?.other).toBe(before.other + 1)
+  })
+
   test('an action whose fate is not known here is told so when it is sent again, at once, and is never sent again from here, however long the browser would have waited for another tab first', async () => {
     // A stand-in for the browser's locks, under which a click is sent: another tab holds them until the test lets go
     const nav = navigator as unknown as { locks?: unknown }
