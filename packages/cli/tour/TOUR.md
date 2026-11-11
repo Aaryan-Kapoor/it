@@ -8,7 +8,7 @@ The tour is one page, `tour-start`, with the whole first run of It on it: a room
 
 1. **Never block.** What each `it tour show` prints says, under `arrives`, whether what the person does on the page arrives in this conversation by itself. Where `arrives.byItself` is `true`, it arrives as a message that begins `[It]`: do not wait at all, since a wait holds your terminal and the person cannot talk to you. Where it is `false` or `"unknown"`, wait for each thing they do: after every page you show and every answer you give, run `it wait --timeout 100` and act on what it prints, which is an action, or `{"timedOut": true}` when nothing has happened yet, and then you run it again. Where `arrives` is not printed at all, It cannot tell which conversation this is, and `it wait` is refused without a page: name the page that is on the screen, as in `it wait --id tour-start --timeout 100`, or `it wait --id tour-menu --timeout 100` on the menu. If the person says they did something and nothing reached you, wait in that way from then on, whatever `arrives` said. The one exception is the first page where showing it printed `"asleep": true`: there you end your turn, as its `arrives.next` says. During the tour, say nothing else of what `arrives.next` says: where it asks the person to type /reload-plugins or to start a new conversation, say that once, after the ending, unless the first page has said it for you. And do not use `--follow` or put a wait in the background: the command has to end for you to be shown what it printed.
 2. **Nothing in the tour touches the person's things.** The room, the homework, the list, the games and the pull requests are part of the page. Do not read their folder, run anything of theirs, change a file, merge, push or send anything anywhere because of the tour. The one file you write is a picture you save to look at, and you delete it as soon as you have.
-3. **Answer on the page, and say little.** Each thing the person does arrives as one action, and you answer it with one `it patch` into the page's state, as its section says: the page draws your answer. In the chat, a few words are plenty, and nothing at all is fine. Never describe what the page already shows. The person may also type to you in the box above a page: that arrives as an action named `it:message` with their words in `text`, and is answered above the page, with `it say <the page's id> "…"`, since the chat is not where they are looking.
+3. **Answer on the page, and say nothing in the chat.** Each thing the person does arrives as one action, and you answer it with one `it patch` into the page's state, as its section says: the page draws your answer. While the tour goes on, write nothing in the chat at all: no "still on the tour", no word of what you answered or are about to do. The person is looking at the page. Never describe what the page already shows. The person may also type to you in the box above a page: that arrives as an action named `it:message` with their words in `text`, and is answered above the page, with `it say <the page's id> "…"`, since the chat is not where they are looking.
 4. **Say the quoted lines as they are written.** Where a section has a line under **Then say**, send it as it is.
 5. **Show before you speak.** `it tour show` publishes a page and brings it up, in one move. Run it, and then say its line: in most agent apps your turn ends when you have spoken.
 6. **Never ask a question in the chat, and never go on by yourself.** The person moves through the first page themselves. Never show another page because of where they are on it.
@@ -27,7 +27,7 @@ Where showing it printed `"asleep": true`, you are in a Claude Code conversation
 
 **Then say:** "It's on your screen. Move the armchair, and I'll answer there." Where you gave them a link, say this in its place, with the link: "Open this to start, and move the armchair: <the link>".
 
-Every action from this page carries `request`. Answer with one `it patch tour-start`, under the name of the part it came from, and copy `request` into your answer exactly: the page draws only the answer to the request it is waiting on, and leaves an answer to an earlier one alone. Where it says `say`, write one sentence of your own to the person, in plain words. After each answer, do what `arrives` says: end your turn, or run `it wait` again. Actions may come from parts the person has already left: answer each all the same.
+Every action from this page carries `request`. Answer with one `it patch tour-start`, under the name of the part it came from, and copy `request` into your answer exactly: the page draws only the answer to the request it is waiting on, and leaves an answer to an earlier one alone. Each example below shows the shape of an answer, and what is in angle brackets is yours to write: in `say` and `note`, one sentence of your own to the person, in plain words, about what they actually did. Never send an example's words as they stand. After each answer, do what `arrives` says: end your turn, or run `it wait` again. Actions may come from parts the person has already left: answer each all the same.
 
 ### The room: `moved`
 
@@ -36,7 +36,7 @@ The person dragged the armchair. `armchair` is where they put its top left corne
 Answer with where it is to stand, one of the places in `free`, whether to put a lamp beside it, and a sentence about the spot:
 
 ```sh
-it patch tour-start '{"room":{"request":"the exact request","armchair":[419,309],"lamp":true,"say":"That was on the coffee table, so I moved it to the nearest free spot by the rug."}}'
+it patch tour-start '{"room":{"request":"the exact request","armchair":[419,309],"lamp":true,"say":"<one sentence of your own about the spot>"}}'
 ```
 
 The page moves the armchair there, draws how far the door clears it, and puts the lamp in. A place that is not free is not used: the page takes the first of `free` in its stead, and still shows your sentence.
@@ -52,7 +52,7 @@ it save <the action's id> sheet.png
 If it says that `sheet.png` is there already, that file is the person's: save under another name. Read the picture with whatever you read images with, and do not save it anywhere else. Where `png` is `null`, the person's browser could not make a picture, and `strokes` is all there is (`it action <the action's id>` prints them): each line is `{ points: [[x, y], …] }`, with `x` and `y` from 0 to 1 across and down the sheet. Work out what they wrote and whether it is right, and answer with what you read, whether it is right, the right answer, a hint of a few words, and a sentence:
 
 ```sh
-it patch tour-start '{"board":{"request":"the exact request","read":"124","right":false,"answer":"144","hint":"try 12 × 10 + 12 × 2","say":"Close. 12 × 12 is 144, not 124."}}'
+it patch tour-start '{"board":{"request":"the exact request","read":"<what you read>","right":false,"answer":"<the right answer>","hint":"<a hint of a few words>","say":"<one sentence of your own about their answer>"}}'
 ```
 
 The page rings what they wrote and writes your answer and hint beside it in green, or ticks it where `right` is `true`. If you cannot read images, set `"read":""`, mark from the sum alone, and say so in your sentence, in one line.
@@ -62,7 +62,7 @@ The page rings what they wrote and writes your answer and hint beside it in gree
 `items` is the whole list as it now is, each with `text`, `done` and `by` (`you` or `agent`). It comes a moment after the person stops ticking or adding, and carries no `request`. Add one or two things a person would be sorry to have forgotten, each with a few words of why. `added` is the whole of what you have added, so give all of it each time:
 
 ```sh
-it patch tour-start '{"checklist":{"added":[{"text":"Umbrella","why":"rain on Saturday"}],"note":"Added an umbrella, for the rain on Saturday."}}'
+it patch tour-start '{"checklist":{"added":[{"text":"<a thing>","why":"<a few words of why>"}],"note":"<one sentence of your own about what you added>"}}'
 ```
 
 ### The chessboard: `move`, `illegal`, `reset`
@@ -70,7 +70,7 @@ it patch tour-start '{"checklist":{"added":[{"text":"Umbrella","why":"rain on Sa
 Each `move` carries `request`, `move` (theirs, as `e2e4`), `said` (the same in words), `fen` (the position after it), `legal` (every move you may make, in the same form), `check` and `over` (`null`, `"checkmate"` or `"stalemate"`). Answer with the exact `request`, a colon, and one of the moves in `legal`:
 
 ```sh
-it patch tour-start '{"chess":{"reply":"the exact request:e7e5","note":"The open game."}}'
+it patch tour-start '{"chess":{"reply":"the exact request:e7e5","note":"<a few words of your own about the game>"}}'
 ```
 
 Play properly: develop, take what is hanging, do not walk into mate. If an `illegal` action arrives, the move you set was not one of the legal ones: set another from the `legal` it carries, with that action's `request` and a colon before it. When `over` is not `null` their move has ended the game, and there is nothing to answer. `reset` means they started a new game, and needs no answer.
@@ -80,7 +80,7 @@ Play properly: develop, take what is hanging, do not walk into mate. If an `ille
 The person asked for the next turns. `faces` is the cube as 54 letters, nine for each face in the order U, R, F, D, L, B, each read row by row as that face is seen from outside, with U above for the four side faces, B above for U and F above for D. Each letter names the face whose colour that sticker has. `turns` is what has been turned since the cube was solved, oldest first, in the usual notation: U, D, L, R, F or B turns that face a quarter clockwise as seen from outside, with `'` for the other way and `2` for a half turn. `solved` says whether it is solved. Answer with up to twenty turns that take it towards solved, and a sentence. Undoing `turns` from the last is the sure way back:
 
 ```sh
-it patch tour-start '{"cube":{"request":"the exact request","moves":["F","R","D"],"say":"Undoing your last three turns, one at a time."}}'
+it patch tour-start '{"cube":{"request":"the exact request","moves":["F","R","D"],"say":"<one sentence of your own about the turns>"}}'
 ```
 
 The page plays them one at a time, and leaves out anything that is not a turn's name.
@@ -90,7 +90,7 @@ The page plays them one at a time, and leaves out anything that is not a turn's 
 The `beat` action carries `request`, `rows` (`hat`, `clap`, `snare`, `kick`, from the top) and `pattern`, one string of eight steps for each row, with `x` where they put a hit. The eight steps are one bar: the first, third, fifth and seventh are its beats, and the others fall between them. Answer with your own hits in the same form, on steps they left empty, so that the two together make a groove, with the exact `request` and a note in the same value:
 
 ```sh
-it patch tour-start '{"drums":{"theirs":{"request":"the exact request","pattern":["..x...x.","....x...","........","...x...."],"note":"I added hats between your hits."}}}'
+it patch tour-start '{"drums":{"theirs":{"request":"the exact request","pattern":["..x...x.","....x...","........","...x...."],"note":"<one sentence of your own about what you added>"}}}'
 ```
 
 `cleared` means the page has emptied both patterns already. Send nothing in response.
@@ -100,7 +100,7 @@ it patch tour-start '{"drums":{"theirs":{"request":"the exact request","pattern"
 These three pull requests are part of the demonstration, on a phone drawn on the page. They are not real, and you merge nothing and touch no repository: you only answer on the page. `answer` is `merge` or `not_yet`. Answer with a sentence:
 
 ```sh
-it patch tour-start '{"approval":{"request":"the exact request","say":"Done: all three are merged, and the branch is clean."}}'
+it patch tour-start '{"approval":{"request":"the exact request","say":"<one sentence of your own about their answer>"}}'
 ```
 
 Where it is `merge`, the page marks the three as merged once your answer comes.
