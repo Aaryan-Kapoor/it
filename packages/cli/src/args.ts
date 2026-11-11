@@ -1,5 +1,5 @@
 // Reading a command line, kept apart from the commands so it can be tested by itself.
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs'
+import { type BigIntStats, closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs'
 import { sizeSaid, UPLOAD } from '@it/protocol'
 import { Problem } from './lib'
 
@@ -257,8 +257,10 @@ export function fileText(file: string, what: string): string {
   // It is refused before opening, and by the system itself as the file is opened, in case one was
   // put there in between; and the file is never waited for, as a pipe put there would be
   let fd: number
+  let before: BigIntStats
   try {
-    if (lstatSync(file).isSymbolicLink()) throw link()
+    before = lstatSync(file, { bigint: true })
+    if (before.isSymbolicLink()) throw link()
     fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
   } catch (err) {
     if (err instanceof Problem) throw err
@@ -268,10 +270,13 @@ export function fileText(file: string, what: string): string {
     throw err
   }
   try {
-    const stat = fstatSync(fd)
+    const stat = fstatSync(fd, { bigint: true })
     if (!stat.isFile()) throw new Problem(`${file} is not an ordinary file.`, 'invalid')
+    // Where the system cannot refuse a link as it opens a file, as on Windows, the name may have
+    // been pointed at another file after it was looked at: what was opened must be what was looked at
+    if (stat.ino !== before.ino || stat.dev !== before.dev) throw link()
     const tooLarge = () => new Problem(`${file} is larger than this command reads (${sizeSaid(UPLOAD.requestBytes)}).`, 'limit')
-    if (stat.size > UPLOAD.requestBytes) throw tooLarge()
+    if (stat.size > BigInt(UPLOAD.requestBytes)) throw tooLarge()
     // Read no further than the limit and one byte more, however the file grows while it is read
     const most = UPLOAD.requestBytes + 1
     const pieces: Buffer[] = []
