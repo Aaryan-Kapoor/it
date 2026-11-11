@@ -29,13 +29,13 @@ import { behindMark, MARK, PORTS, TAKES, UPLOAD, WHEN } from '@it/protocol'
 
 // What setup says last to an agent, as the program has it: said here in the program's own words, so that a change of them is a change here
 const AFTER_SETUP =
-  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
+  'If you are an agent installing It for someone, one step of the install guide comes after this one: run `it tour` and do what it prints. It has you put a first page up for the person and then give them the link that `it site --no-open` prints, to open on this computer, which opens on that page. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
 
 /** What setup says Pi's user is to do once Pi is connected, as the program has it. */
 const PI_NOTE = 'Pi: If Pi is open, restart it or run /reload in it: it reads its extensions when it starts.'
 /** What setup says last to an agent where something is left for the person to do: the words, whole, in the step that gives the pairing link. */
 const AFTER_SETUP_TELLING = (words: string) =>
-  `If you are an agent installing It for someone, two steps of the install guide come after this one. First, write the person one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them ${words} Then, only once that message is written and in the same turn, run \`it tour --wait\` and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
+  `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`it tour\` and do what it prints. It has you put a first page up for the person, and then write them one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them ${words} What showing that page printed under \`arrives\` says whether to end your turn then or to wait. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
 
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
@@ -908,6 +908,8 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(given.out).toContain('1. **Wait for each thing they do.**')
       expect(given.out).toContain('run `it wait --timeout 100` and act on what it prints')
       expect(given.out).not.toContain('1. **Never block.**')
+      // It keeps the one exception to waiting: the first page that cannot be heard yet, where the agent ends its turn
+      expect(given.out).toContain('The one exception to waiting is the first page where showing it printed `"asleep": true`')
       expect(given.out).not.toContain('Where what they do does arrive by itself, do not wait at all')
       // And the tour as anyone else is given it still has the rule that is replaced here
       expect((await run(m, ['tour'], env)).out).toContain('1. **Never block.**')
@@ -6849,7 +6851,7 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
     // What is left for the person to do in the app it connected is in that step, word for word
     expect(printed(one.ran).next).toBe(AFTER_SETUP_TELLING(`this, word for word: “${PI_NOTE}”`))
     expect(AFTER_SETUP).toContain('`it site --no-open`')
-    expect(AFTER_SETUP).toContain('`it tour --wait`')
+    expect(AFTER_SETUP).toContain('run `it tour` and do what it prints')
     expect(AFTER_SETUP).toContain('`curl -fsSL https://itcan.do/install.md`')
     // Where nothing was set up, nothing follows
     expect(printed(none.ran).next).toBeUndefined()
@@ -7819,6 +7821,70 @@ describe('whether what the person does arrives by itself, as a page’s command 
     }
   })
 
+  test('the tour’s first page, shown from such a conversation, is put up as one that cannot be heard yet, and its agent is told to give the line to type and end its turn, and not to wait', async () => {
+    const m = machine()
+    b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: args.slug ?? 'tour-start', version: 1, url: 'https://site.example/p/tour-start' }
+      if (fn === 'displays:show') return { displays: ['Desk'] }
+      return null
+    })
+    const c = await connectorSaying(m, { connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    try {
+      const env = { ...b.env, CLAUDE_CODE_SESSION_ID: claude, CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.321' }
+      const said = printed(await run(m, ['tour', 'show', 'start'], env))
+      expect(said).toMatchObject({ id: 'tour-start', asleep: true, arrives: { byItself: false } })
+      expect(said.arrives.next).toContain(`word for word: “${reloadLine('2.1.321')}”`)
+      expect(said.arrives.next).toContain('end your turn')
+      expect(said.arrives.next).toContain('do not run `it wait`')
+      // The page itself is told, so that it says so to the person
+      const begun = b.asked.filter((x) => x.path === 'publish:begin').at(-1)!.args
+      expect(begun.slug).toBe('tour-start')
+      // An agent that says which it is to be is taken at its word
+      const awake = printed(await run(m, ['tour', 'show', 'start', '--param', 'asleep=false'], env))
+      expect(awake.asleep).toBeUndefined()
+      expect(awake.arrives.next).toContain('`it wait --id tour-start --timeout 100`')
+      // And any other page of the tour is told what a page is told there: to wait for what is done on it
+      const other = printed(await run(m, ['tour', 'show', 'button'], env))
+      expect(other.asleep).toBeUndefined()
+      expect(other.arrives.next).toContain('--timeout 100`')
+      expect(other.arrives.next).not.toContain('end your turn')
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
+  test('where the conversation’s add-on is listening, or its Claude Code is too old to load one, the first page is put up awake', async () => {
+    const m = machine()
+    b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: 'tour-start', version: 1, url: 'https://site.example/p/tour-start' }
+      if (fn === 'displays:show') return { displays: ['Desk'] }
+      return null
+    })
+    const env = { ...b.env, CLAUDE_CODE_SESSION_ID: claude }
+    let c = await connectorSaying(m, { connected: true, listening: true, runtime: 'active', thread: 'none' })
+    try {
+      const said = printed(
+        await run(m, ['tour', 'show', 'start'], { ...env, IT_HARNESS: 'claude-code', IT_SESSION: claude, CLAUDE_CODE_EXECPATH: '/x/versions/2.1.321' }),
+      )
+      expect(said.asleep).toBeUndefined()
+      expect(said.arrives).toMatchObject({ byItself: true, via: 'addon' })
+    } finally {
+      await c.close()
+    }
+    c = await connectorSaying(m, { connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    try {
+      const old = printed(await run(m, ['tour', 'show', 'start'], { ...env, CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.280' }))
+      expect(old.asleep).toBeUndefined()
+      expect(old.arrives.next).toContain('Start a new Claude Code chat')
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
   test('one in a Claude Code too old for that is told to ask the person for a new conversation instead', async () => {
     const m = machine()
     b = await publishing(m)
@@ -7983,7 +8049,7 @@ else if (said === 'plugin install it-bridge@it --scope user') {
     const line = reloadLine('2.1.321')
     // The words are in the step that comes next, and not in a condition
     expect(said.next).toContain(
-      `write the person one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${line}” Then, only once that message is written`,
+      `write them one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${line}” Then end your turn`,
     )
     expect(said.next).not.toContain('Where setup said')
     // And they are the last thing it prints, addressed to the agent

@@ -49,11 +49,14 @@ import {
   CODEX_RESTART,
   claudeReloadLine,
   claudeRunning,
+  type Facts,
   itForAgent,
+  notLoadedHere,
   onWindows,
   reloadLine,
   setupLine,
   tellWordForWord,
+  tooOldToReload,
 } from './arrives'
 import { CODEX_SAVE_ESCALATE } from './codex-settings'
 import { choices, conversationIds, local, type Route, refusedFor } from './connector'
@@ -161,7 +164,7 @@ import {
 } from './setup'
 import { printEnv } from './shell-env'
 import { zshDirectory } from './shell-profile'
-import { GUIDE, NAMES, END as TOUR_END, STEPS as TOUR_STEPS, tourPage } from './tour'
+import { GUIDE, NAMES, END as TOUR_END, TOUR_PREFIX, START as TOUR_START, STEPS as TOUR_STEPS, tourPage } from './tour'
 import { finishInstallationRemoval, installationFile, removeInstallationFiles, stepOutOf, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
 import { addonsSaid, afterUpgrade, RELOAD_OPEN, restartLine } from './upgraded'
@@ -840,10 +843,15 @@ function anothers(slug: string, theirs: Made | null): Problem {
  * agent app's that does not say, which the skill tells to wait.
  */
 async function arrivalHere(slug?: string, tour = false): Promise<Arrives | undefined> {
+  const facts = await factsHere(slug, tour)
+  return facts && arrives(facts)
+}
+/** What It knows of the conversation a command runs in, which `arrives` goes by. Nothing where the command cannot tell which conversation that is. */
+async function factsHere(slug?: string, tour = false): Promise<Facts | undefined> {
   const session = sessionAsked()?.session
   if (!session) return undefined
   const route = await routeOf(session)
-  return arrives({
+  return {
     session,
     addonHere: addonHere(session.harness),
     claude: claudeRunning(),
@@ -852,7 +860,7 @@ async function arrivalHere(slug?: string, tour = false): Promise<Arrives | undef
     tour,
     codexPending: session.harness === 'codex' && codexHooksPending(),
     t3: t3Here(),
-  })
+  }
 }
 
 /** What the connector says of the way to a conversation (`/route`), or null where it could not be asked or gave no answer that is one. */
@@ -886,6 +894,20 @@ async function lineHere(connected: (harness: string) => boolean): Promise<string
   if (!setupLine({ ...facts, route: null })) return undefined
   return setupLine({ ...facts, route: await routeOf(session) })
 }
+/**
+ * Whether the conversation is a Claude Code one that has not loaded It's add-on and can load it
+ * with /reload-plugins: the case in which `arrives` has the agent tell the person to type that,
+ * in a Claude Code that is not too old to load an add-on into an open conversation.
+ */
+export const reloadsHere = (f: Facts | undefined): boolean => f !== undefined && notLoadedHere(f) && !tooOldToReload(f.claude)
+/**
+ * What the agent that shows the tour's first page is told to do where its conversation has not
+ * loaded the add-on. The page says so to the person and keeps what they do on it, and the agent
+ * ends its turn: Claude Code loads an add-on that /reload-plugins asks for only once the reply
+ * is over, so an agent that went on waiting would keep it from ever loading.
+ */
+export const asleepNext = (claude: string | undefined, it = itForAgent()): string =>
+  `It’s add-on is not running in this conversation yet, so the page says that it cannot be heard, and It keeps what the person does on it. Write the person one message that gives them the link to the page, and in that same message tell them this, word for word: “${reloadLine(claude)}” Then end your turn, and do not run \`${it} wait\`: Claude Code loads the add-on only once your reply is over. From then on what the person does arrives here by itself, as a message that begins [It], what was kept first.`
 
 async function published(
   done: { slug: string; version: number; url: string; note?: string; urlNote?: string },
@@ -893,8 +915,10 @@ async function published(
   fresh = false,
   tour = false,
   updated = false,
+  /** What is said of how things arrive, where whoever published the page has worked that out already, and what else to say beside it. */
+  worked?: { arrives: Arrives; beside: Record<string, unknown> },
 ): Promise<void> {
-  const arrival = await arrivalHere(done.slug, tour)
+  const arrival = worked?.arrives ?? (await arrivalHere(done.slug, tour))
   const result = {
     id: done.slug,
     version: done.version,
@@ -908,6 +932,7 @@ async function published(
     ...(fresh ? { tell: `Give the user this url in the chat, in one short line that says what is on the ${NOUN.one}.` } : {}),
     // Whether what the person does on it comes back here by itself, and so whether to end the turn or to wait
     ...(arrival ? { arrives: arrival } : {}),
+    ...worked?.beside,
   }
   let said: Record<string, unknown> & { hint?: string }
   if (!a.flags.open)
@@ -953,7 +978,7 @@ const TOUR_ASK_EVERY_MS = 2500
  * What an agent that waited is told before the tour itself, when the person has asked for it
  * on the site.
  */
-const TOUR_ASKED = `The person pressed "Take the tour" on It's site a moment ago, and is looking at that screen now. Give them the tour below, in this conversation, starting now. The tour's menu is what answers their press, so show it before you say anything.`
+const TOUR_ASKED = `The person pressed "Take the tour" on It's site a moment ago, and is looking at that screen now. Give them the tour below, in this conversation, starting now. The tour's first page is what answers their press, so show it before you say anything.`
 /** The words the tour's first rule begins with, by which it is found. */
 const TOUR_RULE_ONE = '1. **Never block.**'
 /**
@@ -963,7 +988,7 @@ const TOUR_RULE_ONE = '1. **Never block.**'
  * in the background, which an app without one runs in front and never hears from again: so
  * here the rule is another, in the place of the first, and not a second word against it.
  */
-const TOUR_RULE_ONE_WAITING = `1. **Wait for each thing they do.** This conversation was most likely open before It's add-on was installed, and then what the person does on a page does not arrive here by itself. What each \`it tour show\` prints says so under \`arrives\`. Where \`arrives.byItself\` is \`true\`, as it is in a thread of T3 Code, what they do arrives as a message that begins \`[It]\`: after each page and each answer, end your turn, and do not wait. Otherwise, after every page you show and every answer you give, run \`it wait --timeout 100\` and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Where it is refused because your harness does not tell \`it\` which conversation this is, add \`--id\` and the id of the page that is on the screen. Do not use \`--follow\`, and do not put the command in the background: it has to end for you to be shown what it printed. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing. During the tour, say nothing else of what \`arrives.next\` says. Where it gives words for the person to type /reload-plugins or to start a new conversation, you told them those words with the pairing link, as setup said to: do not say them again during the tour. If you did not, say them once, word for word, after the ending.`
+const TOUR_RULE_ONE_WAITING = `1. **Wait for each thing they do.** This conversation was most likely open before It's add-on was installed, and then what the person does on a page does not arrive here by itself. What each \`it tour show\` prints says so under \`arrives\`. Where \`arrives.byItself\` is \`true\`, as it is in a thread of T3 Code, what they do arrives as a message that begins \`[It]\`: after each page and each answer, end your turn, and do not wait. Otherwise, after every page you show and every answer you give, run \`it wait --timeout 100\` and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Where it is refused because your harness does not tell \`it\` which conversation this is, add \`--id\` and the id of the page that is on the screen. Do not use \`--follow\`, and do not put the command in the background: it has to end for you to be shown what it printed. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing. During the tour, say nothing else of what \`arrives.next\` says. Where it gives words for the person to type /reload-plugins or to start a new conversation, you told them those words with the pairing link, as setup said to: do not say them again during the tour. If you did not, say them once, word for word, after the ending. The one exception to waiting is the first page where showing it printed \`"asleep": true\`: there you give the person the words that its \`arrives.next\` gives and end your turn, as it says, since the add-on loads only once your reply is over.`
 /** The tour as an agent that waited for the button is given it. */
 function tourForOneThatWaited(guide: string): string {
   const lines = guide.split('\n')
@@ -979,11 +1004,12 @@ function tourForOneThatWaited(guide: string): string {
  * for someone. An agent reads what a command prints whole. The install guide it may not have
  * read at all: an agent app's own tool for fetching a page hands its agent a summary, and in
  * the summaries seen the guide's last step was gone, so the agent installed It, gave the
- * pairing link and stopped, with no tour. So the two steps that follow setup are said here,
- * with how to read the guide itself.
+ * pairing link and stopped, with no tour. So the step that follows setup is said here, with
+ * how to read the guide itself. The tour comes before the link: the agent puts its first page
+ * up, and the browser the person pairs with the link goes to that page.
  */
 export const afterSetup = (it = itForAgent()): string =>
-  `If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that \`${it} site --no-open\` prints, to open on this computer, then run \`${it} tour --wait\` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
+  `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`${it} tour\` and do what it prints. It has you put a first page up for the person and then give them the link that \`${it} site --no-open\` prints, to open on this computer, which opens on that page. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
 
 /**
  * The same, where something is left for the person to do and they have to be told it: in the
@@ -993,14 +1019,13 @@ export const afterSetup = (it = itForAgent()): string =>
  * goes without what the rest would have done. Where Codex is to be started again, which ends the
  * agent's turn, the tour is left until it has been, and the person is told to ask for it then.
  */
-export const afterSetupTelling = (lines: readonly string[], restart = false, it = itForAgent()): string =>
-  `If you are an agent installing It for someone, two steps of the install guide come after this one. First, write the person one message that gives them the link that \`${it} site --no-open\` prints, to open on this computer, and tells them ${
-    lines.length === 1 ? `this, word for word: “${lines[0]}”` : `each of these, word for word:\n\n${lines.map((line) => `“${line}”`).join('\n\n')}\n\n`
-  }${
-    restart
-      ? ` Then end your turn, and do not run \`${it} tour --wait\` yet: Codex has to be started again first, which ends this turn anyway. Once it is back and the person asks for the tour, run \`${it} tour --wait\` and do what it prints.`
-      : ` Then, only once that message is written and in the same turn, run \`${it} tour --wait\` and do what it prints.`
-  } If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
+export const afterSetupTelling = (lines: readonly string[], restart = false, it = itForAgent()): string => {
+  const words = lines.length === 1 ? `this, word for word: “${lines[0]}”` : `each of these, word for word:\n\n${lines.map((line) => `“${line}”`).join('\n\n')}\n\n`
+  const guide = ` If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
+  return restart
+    ? `If you are an agent installing It for someone, one step of the install guide comes after this one, and it waits until Codex has been started again. Write the person one message that gives them the link that \`${it} site --no-open\` prints, to open on this computer, and tells them ${words} Then end your turn, and do not run \`${it} tour\` yet: Codex has to be started again first, which ends this turn anyway. Once it is back and the person asks for the tour, run \`${it} tour\` and do what it prints.${guide}`
+    : `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`${it} tour\` and do what it prints. It has you put a first page up for the person, and then write them one message that gives them the link that \`${it} site --no-open\` prints, to open on this computer, and tells them ${words} What showing that page printed under \`arrives\` says whether to end your turn then or to wait.${guide}`
+}
 
 /** What a person in a Codex conversation is told after setup: to start Codex again, and to ask for the tour once it is back. */
 const CODEX_RESTART_SETUP = `${CODEX_RESTART} Once Codex is back, say “Give me the It tour.”`
@@ -1116,10 +1141,16 @@ async function tour(a: Args) {
     if (eq < 1) throw new Problem('--param is written name=value.', 'invalid')
     given[param.slice(0, eq)] = loose(param.slice(eq + 1))
   }
-  // The agent's plate on the page carries the name of the agent app that is giving the tour, where that is known
   aimedAt(a)
   await canAimById(a, TAKES.showById)
   await canAimEverywhere(a, TAKES.showEverywhere)
+  // The first page is shown as one that cannot be heard yet where the conversation showing it
+  // has not loaded It's add-on and can: the page then tells the person the line to type, and
+  // the agent is told to end its turn. Not where the agent said which it is to be
+  const facts = name === TOUR_START && given.asleep === undefined ? await factsHere(`${TOUR_PREFIX}${name}`, true) : undefined
+  const asleep = reloadsHere(facts)
+  if (asleep) given.asleep = true
+  // The page names the agent app that is giving the tour, where that is known
   const by = sessionAsked()?.session.harness
   const made = tourPage(name, given, text(a, 'agent') ?? (by && Object.hasOwn(KNOWN, by) ? KNOWN[by as Harness].label : undefined))
   // The page is this conversation's from now on, whoever showed it last. An agent app that does
@@ -1138,7 +1169,7 @@ async function tour(a: Args) {
   // Counted as a page of the tour that was shown, by its name, which is It's own
   usage.record('tour.shown', { page: name as usage.TourPage, agent: usage.agentOf(by) })
   a.flags.open = true
-  await published(done, a, false, true)
+  await published(done, a, false, true, false, asleep ? { arrives: { byItself: false, next: asleepNext(facts?.claude) }, beside: { asleep: true } } : undefined)
 }
 
 async function update(a: Args) {
