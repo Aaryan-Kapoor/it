@@ -20,6 +20,7 @@ import {
   sessionNamed,
   TOOLS,
   WAIT_MOST,
+  WATCHED_MOST,
 } from './src/mcp'
 
 type Json = Record<string, any>
@@ -229,6 +230,11 @@ describe('the MCP server', () => {
     expect((await c.ask('resources/subscribe', { uri: 'it://page/--all/actions' })).error.code).toBe(-32002)
     expect((await c.ask('resources/read', { uri: 'file:///etc/passwd' })).error.code).toBe(-32002)
     await c.ask('resources/subscribe', { uri: actionsUri('other') })
+    // Each watched page is a command that goes on running, so there are only so many
+    for (let n = 2; n < WATCHED_MOST; n++) expect((await c.ask('resources/subscribe', { uri: actionsUri(`p${n}`) })).result).toEqual({})
+    expect((await c.ask('resources/subscribe', { uri: actionsUri('one-more') })).error.code).toBe(-32000)
+    for (let n = 2; n < WATCHED_MOST; n++) await c.ask('resources/unsubscribe', { uri: actionsUri(`p${n}`) })
+    following.splice(2)
     await c.ask('resources/unsubscribe', { uri })
     expect(following.map((f) => f.stopped)).toEqual([true, false])
     c.close()

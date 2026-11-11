@@ -19,6 +19,8 @@ export const MCP_REVISIONS = ['2025-06-18', '2025-03-26', '2024-11-05'] as const
 export const MCP_HARNESS = 'mcp'
 /** The longest a tool waits for the person, in seconds: under the minute after which many clients give a tool call up. */
 export const WAIT_MOST = 50
+/** The most pages one client is told the actions of at once: each is a command that goes on running. */
+export const WATCHED_MOST = 16
 /** How long any other command is given before it is stopped. */
 const COMMAND_MS = 120_000
 /** The most a tool hands back of what a command printed, in characters. */
@@ -477,6 +479,8 @@ export function serveMcp(opts: McpOptions): { stop: () => void } {
         const page = pageOf(params.uri)
         if (!page) return fail(id, -32002, 'No such resource.')
         // Watched and never claimed: `it_wait` and `it_actions` go on answering as before
+        if (!watched.has(page) && watched.size >= WATCHED_MOST)
+          return fail(id, -32000, `No more than ${WATCHED_MOST} pages are watched at once. Unsubscribe from one first.`)
         if (!watched.has(page))
           watched.set(
             page,
