@@ -1006,14 +1006,113 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       return withoutSkill(settingsAt(at, 'CODEX_HOME', '.codex'), was, [CODEX_RULES_REL])
     },
     pending() {
-      // Codex runs no hook until the person has approved it, and says nothing when it skips one.
-      // That one has run is the proof; so is Codex's own note of the approval, which it writes
-      // the moment the person gives it, a turn before any hook runs.
-      if (existsSync(hookSeenFile('codex')) || /^\[hooks\.state\."it-bridge@it:/m.test(codexConfig() || '')) return undefined
-      return 'Start Codex once and choose "Trust all and continue" when it says the hooks need review. Until then clicks still arrive, as a new message when Codex is idle.'
+      if (!codexHooksPending()) return undefined
+      return t3Here() ? `${CODEX_APPROVE} ${CODEX_IN_T3}` : CODEX_APPROVE
     },
   },
 }
+
+/**
+ * What Codex takes a plugin's contents to be, as Codex 0.167 reckons them for its approval of the
+ * plugin's hooks (`plugin_content_hash` in Codex's hooks engine): every entry under the plugin's
+ * folder, by its path in the folder, its kind, and a file's length and bytes, in the order of the
+ * entries' names, leaving out what Python makes of itself. Null where the folder cannot be read
+ * whole, or holds something Codex would refuse, such as a link.
+ */
+export function codexPluginHash(root: string): string | null {
+  const length = (n: number) => {
+    const b = Buffer.alloc(8)
+    b.writeBigUInt64LE(BigInt(n))
+    return b
+  }
+  try {
+    if (!lstatSync(root).isDirectory()) return null
+    const hash = createHash('sha256').update('codex-plugin-bundle-v1')
+    const pending = [root]
+    while (pending.length) {
+      const at = pending.pop()!
+      const rel = path.relative(root, at)
+      const name = path.basename(rel)
+      if (rel && (name === '__pycache__' || name === '.venv' || name.endsWith('.pyc') || name.endsWith('.egg-info'))) continue
+      const said = Buffer.from(rel)
+      hash.update(length(said.length)).update(said)
+      const kind = lstatSync(at)
+      if (kind.isDirectory()) {
+        hash.update('directory')
+        const entries = readdirSync(at).sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))
+        for (const entry of entries.reverse()) pending.push(path.join(at, entry))
+      } else if (kind.isFile()) {
+        const bytes = readFileSync(at)
+        hash.update('file').update(length(bytes.length)).update(bytes)
+      } else return null
+    }
+    return `sha256:${hash.digest('hex')}`
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The contents of It's plugin that Codex approved the hooks of, as Codex keeps them for each hook
+ * in its settings (`trusted_content_hash` under `[hooks.state."it-bridge@it:..."]`), and whether
+ * any hook of It's is noted there at all. A Codex before 0.167 noted no contents, and approved a
+ * hook by its own text alone.
+ */
+export function codexApproved(config: string): { noted: boolean; contents: string[] } {
+  const contents: string[] = []
+  let noted = false
+  let ours = false
+  for (const line of config.split(/\r?\n/)) {
+    const header = /^\s*\[\s*(.*?)\s*\]\s*(#.*)?$/.exec(line)
+    if (header && !line.trim().startsWith('[[')) {
+      ours = /^hooks\.state\."it-bridge@it:/.test(header[1]!)
+      noted ||= ours
+      continue
+    }
+    const value = ours ? /^\s*trusted_content_hash\s*=\s*"([^"]*)"/.exec(line) : null
+    if (value) contents.push(value[1]!)
+  }
+  return { noted, contents }
+}
+
+/**
+ * Whether Codex has yet to run It's hooks as they are now. Codex runs no hook until the person
+ * has approved it, and says nothing when it skips one. Codex 0.167 ties the approval to the
+ * contents of the whole plugin, and runs none of its hooks once a file in it is not as it was
+ * when they were approved, as after an upgrade that changed one: so where Codex noted those
+ * contents, they are held to the plugin as it is now. Otherwise Codex's own note of the
+ * approval is the proof, which it writes the moment the person gives it, a turn before any hook
+ * runs, and so is a hook of It's having run. Codex asks for the approval only as it starts, so a
+ * Codex that was open when It's add-on was put in or changed neither asks nor runs the hooks
+ * until it is started again.
+ */
+export function codexHooksPending(home = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')): boolean {
+  const { noted, contents } = codexApproved(codexConfig(home) || '')
+  if (contents.length) {
+    const plugin = path.join(home, 'plugins', 'cache', MARKET, PLUGIN)
+    let now: (string | null)[] = []
+    try {
+      now = readdirSync(plugin).map((version) => codexPluginHash(path.join(plugin, version)))
+    } catch {}
+    // Where the plugin cannot be read, it cannot be told to have changed, and nothing is asked
+    if (!now.length || now.some((hash) => hash === null)) return false
+    return !contents.every((hash) => now.includes(hash))
+  }
+  return !noted && !existsSync(hookSeenFile('codex'))
+}
+
+/**
+ * Whether T3 Code is on this machine, by the folder it keeps its things in. Codex never asks
+ * there whether to trust It's hooks, since T3 Code neither shows Codex's review of them nor runs
+ * them without it, and what is done on a page reaches a thread of T3 Code through T3 Code itself.
+ */
+export const t3Here = (): boolean => existsSync(path.join(process.env.T3CODE_HOME || path.join(os.homedir(), '.t3'), 'userdata'))
+
+/** What is left to do in Codex, wherever it runs, until it has run It's hooks. */
+export const CODEX_APPROVE =
+  'Start Codex again, and choose "Trust all and continue" when it says the hooks need review. Until then a Codex that is already open may ask before every `it` command, runs none of It’s hooks, and gets a click only as a new message once it is idle.'
+/** What is said beside it where T3 Code is on this machine, so that nobody looks there for a review that never comes. */
+export const CODEX_IN_T3 = 'In T3 Code, Codex never asks this, and nothing needs approving there: what you do on a page reaches its threads through T3 Code.'
 
 /** OpenCode's own settings folder, as OpenCode itself reports it. */
 async function opencodeConfig(): Promise<string> {
@@ -1410,20 +1509,25 @@ const found: Partial<Record<Harness, string>> = {}
 /**
  * What a person who has just connected Hermes is told. It depends on the Hermes that was found:
  * up to 0.21.5 a plugin's message reaches the plain terminal and nowhere else. A later Hermes
- * has a setting by which the person allows one in the TUI and the desktop app as well, where a
- * conversation listens from the moment it is open. Not every later Hermes is known to take it,
- * so the person is told what happens where one does not. The plain terminal tells the add-on
- * nothing when a saved conversation is resumed, so the person is told to send a message there.
+ * has a setting by which the person allows one, and 0.23.1 runs every conversation's agent in a
+ * gateway of its own, the plain terminal's as well, where a plugin's message is refused until it
+ * is allowed. So the setting is given for every place Hermes is used, and not for the TUI and
+ * the desktop app alone. In 0.23.1 the turn that a click starts is not shown in the plain
+ * terminal, though the agent has it, and the person is told so. Not every later Hermes is known
+ * to take the setting, so the person is told what happens where one does not. The plain terminal
+ * tells the add-on nothing when a saved conversation is resumed, so the person is told to send a
+ * message there.
  */
 export function afterHermes(version: string | undefined): string {
-  // The one thing everyone has to do comes first and by itself. What follows is for those who
-  // use Hermes elsewhere than its plain terminal, a line to a thought, with the command on a
-  // line of its own so that no terminal breaks it in the middle of a word.
-  const first = 'If Hermes is open, restart it. What you do on a page then arrives by itself in the plain `hermes` terminal.'
+  // The one thing everyone has to do comes first and by itself, a line to a thought, with the
+  // command on a line of its own so that no terminal breaks it in the middle of a word.
   const resumed = 'A saved conversation you resume in the terminal starts listening once you send a message in it.'
   if (!version || !older('0.21.5', version))
-    return `${first}\nIn this Hermes${version ? ` (${version})` : ''} that is the only place it does: in its TUI, its desktop app and its messaging gateway it waits on the page until the agent runs \`it wait\`.\n${resumed}`
-  return `${first}\n${resumed}\nFor the Hermes TUI or desktop app, also run this once, which lets It put what you do into a conversation there from the moment it is open:\n    hermes config set plugins.entries.it-bridge.allow_gateway_injection true\nIf this Hermes (${version}) does not take that setting, what you do waits on the page until the agent runs \`it wait\`, as it does in the messaging gateway.`
+    return `If Hermes is open, restart it. What you do on a page then arrives by itself in the plain \`hermes\` terminal.\nIn this Hermes${version ? ` (${version})` : ''} that is the only place it does: in its TUI, its desktop app and its messaging gateway it waits on the page until the agent runs \`it wait\`.\n${resumed}`
+  const unseen = older(version, '0.23.1')
+    ? ''
+    : '\nIn this Hermes the turn a click starts shows in the TUI and not in the plain terminal, though the agent there has it and answers on the page.'
+  return `If Hermes is open, restart it, and run this once, which lets It put what you do on a page into a Hermes conversation, in the plain \`hermes\` terminal as well as the TUI and the desktop app:\n    hermes config set plugins.entries.it-bridge.allow_gateway_injection true\n${resumed}${unseen}\nIf this Hermes (${version}) does not take that setting, what you do waits on the page until the agent runs \`it wait\`, as it does in the messaging gateway.`
 }
 
 export {
@@ -1445,7 +1549,9 @@ export const AFTER: Partial<Record<Harness, string>> = {
   opencode:
     'If OpenCode is open, restart it: it reads its plugins when it starts.\nA saved conversation you open in OpenCode starts listening once you send a message in it.',
   pi: 'If Pi is open, restart it or run /reload in it: it reads its extensions when it starts.',
-  codex: 'Start Codex once and choose "Trust all and continue" when it says the hooks need review.',
+  get codex() {
+    return t3Here() ? `${CODEX_APPROVE} ${CODEX_IN_T3}` : CODEX_APPROVE
+  },
 }
 
 /**

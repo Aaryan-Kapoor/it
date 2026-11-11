@@ -3449,12 +3449,25 @@ describe('what a person is told about an app', () => {
       // The command stands on a line of its own, so that no terminal breaks it in the middle of a word
       expect(AFTER.hermes!.split('\n')).toContain('    hermes config set plugins.entries.it-bridge.allow_gateway_injection true')
       expect(AFTER.hermes).toContain('If this Hermes (0.22.0) does not take that setting, what you do waits on the page until the agent runs `it wait`')
-      // The TUI and the desktop app say when a conversation is open, and the terminal does not
-      expect(AFTER.hermes).toContain('from the moment it is open')
       expect(AFTER.hermes!.split('\n')).toContain('A saved conversation you resume in the terminal starts listening once you send a message in it.')
     } finally {
       VERSIONS.hermes = 'Hermes Agent v0.21.5'
     }
+  })
+
+  test('for a Hermes that takes the setting, the command is given for the plain terminal as well, which in 0.23.1 needs it too', () => {
+    for (const version of ['0.22.0', '0.23.1', '0.24.0']) {
+      const said = afterHermes(version)
+      // Given to everyone who uses Hermes, and not as something for the TUI alone
+      expect(said.split('\n')[0]).toBe(
+        'If Hermes is open, restart it, and run this once, which lets It put what you do on a page into a Hermes conversation, in the plain `hermes` terminal as well as the TUI and the desktop app:',
+      )
+      expect(said).not.toMatch(/For the Hermes TUI or desktop app/)
+      expect(said).not.toContain('then arrives by itself in the plain')
+    }
+    // Where the turn a click starts was seen not to show in the plain terminal, the person is told
+    expect(afterHermes('0.23.1')).toContain('shows in the TUI and not in the plain terminal')
+    expect(afterHermes('0.22.0')).not.toContain('shows in the TUI and not in the plain terminal')
   })
 
   test('after connecting OpenCode says that a saved conversation listens once a message is sent in it', () => {
