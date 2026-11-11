@@ -1169,10 +1169,12 @@ function pictureFolders(): (string | undefined)[] {
 const HEREDOC = (id: string) =>
   `Give the JSON in a here-document, where nothing in it ends anything: \`it tour answer ${id} "$(cat <<'EOF'\`, then the JSON on a line of its own, then EOF on a line of its own, then \`)"\`.`
 async function tourAnswer(a: Args, counted: (code?: string) => void) {
-  const USAGE = "tour answer <action-id> [- | '<json>' | --file <path>] [--wait] [--timeout <seconds>]"
+  const USAGE = "tour answer <action-id> [- | '<json>' | --file <path>] [--wait | --no-wait] [--timeout <seconds>]"
   const me = sessionAsked()?.session
   if (a._[0] === 'answer') {
     const id = need(a._[1], 'which action', USAGE)
+    if (a.flags.wait === true && a.flags['no-wait'] === true)
+      throw new Problem('`it tour answer` either waits for what is done next or does not, and this command was told both.', 'invalid', `Usage: it ${USAGE}`)
     const file = text(a, 'file')
     if (file !== undefined && a._[2] !== undefined)
       throw new Problem('The answer is given once, on the command line or with --file, and this command was given both.', 'invalid', `Usage: it ${USAGE}`)
@@ -1198,8 +1200,17 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
     dropPicture(done.request, pictureFolders())
     const answered = { answered: done.part ?? null }
     // Told to end its turn only where It knows that the next thing arrives by itself: anywhere else the command waits for it
-    const waits = a.flags.wait === true || (await arrivalHere(START_SLUG, true))?.byItself !== true
-    if (!waits)
+    const byItself = a.flags.wait === true ? false : (await arrivalHere(START_SLUG, true))?.byItself === true
+    // With --no-wait the agent has something to do first, as setting the ideas after its first
+    // answer: it is told what to do once it has, and what is done meanwhile is kept for it
+    if (a.flags['no-wait'] === true)
+      return out({
+        ...answered,
+        next: byItself
+          ? 'Do what you have to do now, and then end your turn. What the person does meanwhile arrives in this conversation by itself, as a message that begins [It].'
+          : 'Do what you have to do now, and then run `it tour next`, which prints what the person did meanwhile, or waits for it.',
+      })
+    if (byItself)
       return out({ ...answered, next: 'End your turn. What the person does next arrives in this conversation by itself, as a message that begins [It].' })
     written(
       process.stdout,
@@ -3550,9 +3561,9 @@ This machine
                                  Answer something done on the tour's first page, for the agent
                                  that gives the tour: set the answer on the page and acknowledge
                                  the action. Where what is done next does not arrive by itself,
-                                 wait for it and print it. With -, the answer is read from
-                                 standard input. It may be in a file instead, with --file
-                                 <path>.
+                                 wait for it and print it, unless told --no-wait. With -, the
+                                 answer is read from standard input. It may be in a file
+                                 instead, with --file <path>.
   it tour next                   Wait for the next thing done on the tour's first page.
   it telemetry [on | off]        Say whether It reports usage counts, or turn that on or off.
                                  It reports them until it is turned off.

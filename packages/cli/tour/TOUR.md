@@ -27,25 +27,6 @@ Where showing it printed `"asleep": true`, you are in a Claude Code conversation
 
 **Then say:** "It's on your screen. Move the armchair, and I'll answer there." Where you gave them a link, say this in its place, with the link: "Open this to start, and move the armchair: <the link>".
 
-### Ideas for the ending, while they find their way in
-
-The page ends on three things that you could build for this person with It, each with a button that has you build it. Thought of at the end, they would be the slowest wait of the tour, so think of them now, while the person is opening the link and finding the armchair. Say your line first, so that neither it nor the link waits for this. Then, in the same turn, before you end it or run `it tour next`, take one look and set the ideas. Where showing the page printed `"asleep": true`, leave this out and end your turn: the page asks you for the ideas when the person gets there.
-
-**What It is for.** This decides whether your ideas are worth pressing. It puts any interface you can write on any screen this person owns, their phone too, and brings back what they do on it. So what you offer is an interface and not text: something to press, drag, tick, point at, fill in or watch. The ideas worth giving take the friction out of something this person does again and again in this very folder: deciding between options, reviewing something before it goes out, comparing, putting things in order, approving a step from another room, watching something that runs for a long time, telling you what you need to know before you begin. Be ambitious and be concrete. Name each idea by the project's own nouns, the things its README, its files and its commits talk about, so that it could belong to no other project: "Triage the failing importers", never "Task board" or "A dashboard for your project". Say in its line what they do on it and what you then do with that. Offer only what you could build in one go, right now, from what is in the folder: one page with real things on it. Make the three different from each other, and let one be something they would press from their phone.
-
-**What you may look at.** The folder you are in, and only to look: its name, its README, the names of its top-level files, the subjects of its recent commits, and what you already have in mind about this person from your own instruction and memory files for this project. That is at most two commands, `ls` and `git log --oneline -8`, run together if you can, and one reading of the README where `ls` showed one. Open no other file and no subfolder. An idea is a name and a line in the project's own words, never the contents of a file: no line of code, no key, no address, nobody's name. Where the folder is empty, or is no project at all, such as a home folder, look no further and give three things people most often use It for (options side by side to pick from, a plan to approve from a phone before a big change, a board to sort the week on, a form that tells you what you need to know), and say in `say` that you do not know yet what they are working on. Never write as though you knew them.
-
-Each idea is a `name` of two to four words, a `line` of at most a hundred characters, and a `kind`, which is the drawing the card gets. Choose the kind from these: `dashboard` (numbers and charts at a glance), `board` (cards to drag between columns), `review` (something to read, with places to point at and a yes or no), `form` (the few things you need to know, filled in), `timeline` (things laid out in time), `monitor` (something long-running, watched live), `game`, `compare` (options side by side, to pick one), `approve` (one big button, pressed from any room), `checklist`, `table` (rows to sort, tick and triage), `sliders` (values to tune, with the result shown as they move). `say` is one sentence of your own about what you went by. Set them with one command, written as the answers below are:
-
-```sh
-it patch tour-start "$(cat <<'EOF'
-{"end":{"ideas":[{"name":"<two to four words>","line":"<what they do on it, and what you do with that>","kind":"board"},{"name":"<another>","line":"<its line>","kind":"review"},{"name":"<a third>","line":"<its line>","kind":"approve"}],"say":"<one sentence about what you went by>"}}
-EOF
-)"
-```
-
-This is the one time you set the state of this page yourself. Say nothing of it in the chat, and then go by `arrives`, as below.
-
 ### One command answers, on every part
 
 Each thing the person does on this page arrives as one action, which ends `[action <id>]`. Everything you need to answer is in the action, so run nothing to find out more. Answer with one command, with your answer as one line of JSON between the line that ends `<<'EOF'` and a line that says `EOF`:
@@ -65,9 +46,35 @@ The command puts your answer on the page under the part the action came from, wi
 - Otherwise it has already waited for what the person does next, and printed that action under its first line: answer it in the same way, with its `id`.
 - `{"timedOut": true}`: nothing has happened yet. Run `it tour next`, which waits again and prints the next action.
 
-Straight after you show the page, go by `arrives` once: where `arrives.byItself` is `true`, end your turn, and anywhere else run `it tour next`.
+Straight after you show the page, go by `arrives` once: where `arrives.byItself` is `true`, end your turn, and anywhere else run `it tour next`. Your first answer on this page is the one you give with `--no-wait`, as the next section says, so that you set the ideas before you go on.
 
 Be quick. Do not deliberate: take the first sound choice from what the action gives you. Where a shape has `say` or `note`, write one short sentence of your own to the person, in plain words. Actions may come from parts the person has already left: answer each all the same.
+
+### Ideas for the ending, after your first answer
+
+The page ends on three things that you could build for this person with It, each with a button that has you build it. Thought of at the end, they would be the slowest wait of the tour, and thought of before your first answer, they would hold that answer up. So think of them straight after your first answer on this page, whichever part it is for, while the person watches it land and goes on: give that one answer with `--no-wait` after the action's id, then take one look and set the ideas, and then do what the answer printed under `next`. Give every later answer without `--no-wait`.
+
+```sh
+it tour answer <the action's id> --no-wait "$(cat <<'EOF'
+{"armchair":[419,309],"lamp":true,"say":"<one sentence about where it stands now>"}
+EOF
+)"
+```
+
+**What It is for.** This decides whether your ideas are worth pressing. It puts any interface you can write on any screen this person owns, their phone too, and brings back what they do on it. So what you offer is an interface and not text: something to press, drag, tick, point at, fill in or watch. The ideas worth giving take the friction out of something this person does again and again in this very folder: deciding between options, reviewing something before it goes out, comparing, putting things in order, approving a step from another room, watching something that runs for a long time, telling you what you need to know before you begin. Be ambitious and be concrete. Name each idea by the project's own nouns, the things its README, its files and its commits talk about, so that it could belong to no other project: "Triage the failing importers", never "Task board" or "A dashboard for your project". Say in its line what they do on it and what you then do with that. Offer only what you could build in one go, right now, from what is in the folder: one page with real things on it. Make the three different from each other, and let one be something they would press from their phone.
+
+**What you may look at.** The folder you are in, and only to look: its name, its README, the names of its top-level files, the subjects of its recent commits, and what you already have in mind about this person from your own instruction and memory files for this project. That is at most two commands, `ls` and `git log --oneline -8`, run together if you can, and one reading of the README where `ls` showed one. Open no other file and no subfolder. An idea is a name and a line in the project's own words, never the contents of a file: no line of code, no key, no address, nobody's name. Where the folder is empty, or is no project at all, such as a home folder, look no further and give three things people most often use It for (options side by side to pick from, a plan to approve from a phone before a big change, a board to sort the week on, a form that tells you what you need to know), and say in `say` that you do not know yet what they are working on. Never write as though you knew them.
+
+Each idea is a `name` of two to four words, a `line` of at most a hundred characters, and a `kind`, which is the drawing the card gets. Choose the kind from these: `dashboard` (numbers and charts at a glance), `board` (cards to drag between columns), `review` (something to read, with places to point at and a yes or no), `form` (the few things you need to know, filled in), `timeline` (things laid out in time), `monitor` (something long-running, watched live), `game`, `compare` (options side by side, to pick one), `approve` (one big button, pressed from any room), `checklist`, `table` (rows to sort, tick and triage), `sliders` (values to tune, with the result shown as they move). `say` is one sentence of your own about what you went by. Set them with one command, written as the answers below are:
+
+```sh
+it patch tour-start "$(cat <<'EOF'
+{"end":{"ideas":[{"name":"<two to four words>","line":"<what they do on it, and what you do with that>","kind":"board"},{"name":"<another>","line":"<its line>","kind":"review"},{"name":"<a third>","line":"<its line>","kind":"approve"}],"say":"<one sentence about what you went by>"}}
+EOF
+)"
+```
+
+This is the one time you set the state of this page yourself. Say nothing of it in the chat.
 
 ### The room: `moved`
 

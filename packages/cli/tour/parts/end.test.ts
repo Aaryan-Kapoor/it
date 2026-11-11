@@ -383,17 +383,19 @@ describe('the ending', () => {
 
 describe('the guide for the ending', () => {
   const first = GUIDE.slice(GUIDE.indexOf('\n## The first page'), GUIDE.indexOf('\n## If they ask to see more'))
-  const early = first.slice(first.indexOf('\n### Ideas for the ending'), first.indexOf('\n### One command answers'))
+  const early = first.slice(first.indexOf('\n### Ideas for the ending'), first.indexOf('\n### The room'))
   const ending = first.slice(first.indexOf('\n### The ending:'))
   const answer = (text: string) =>
     [...text.matchAll(/^it tour answer <the action's id> "\$\(cat <<'EOF'\n(\{.*\})\nEOF\n\)"$/gm)].map((m) => JSON.parse(m[1]!) as Record<string, unknown>)
 
-  test('has the agent say its line first and then set the ideas, in the turn that showed the page, and leave them for the ending where it cannot be heard', () => {
+  test('has the agent set the ideas straight after its first answer, which it gives without waiting, so that neither the page, the link nor that answer waits for them', () => {
     expect(first.indexOf('it tour show start')).toBeLessThan(first.indexOf('**Then say:**'))
     expect(first.indexOf('**Then say:**')).toBeLessThan(first.indexOf('### Ideas for the ending'))
-    expect(early).toContain('Say your line first, so that neither it nor the link waits for this.')
-    expect(early).toContain('Then, in the same turn, before you end it or run `it tour next`, take one look and set the ideas.')
-    expect(early).toContain('Where showing the page printed `"asleep": true`, leave this out and end your turn')
+    expect(early).toContain('So think of them straight after your first answer on this page, whichever part it is for')
+    expect(early).toContain('give that one answer with `--no-wait` after the action’s id, then take one look and set the ideas, and then do what the answer printed under `next`'.replace('’', "'"))
+    expect(early).toContain('Give every later answer without `--no-wait`.')
+    expect(early).toMatch(/^it tour answer <the action's id> --no-wait "\$\(cat <<'EOF'$/m)
+    expect(first).toContain('Your first answer on this page is the one you give with `--no-wait`')
   })
 
   test('sets them with one command, in the shape the page reads, of the kinds the page draws and no others', async () => {

@@ -7922,9 +7922,18 @@ describe('whether what the person does arrives by itself, as a page’s command 
       expect(printed(await run(m, ['tour', 'answer', 'action-1', '-'], env, process.execPath, [], `${JSON.stringify({ read: '144', say: words })}\n`)).answered).toBe('board')
       // And where the `-` was left out, what was given there is read all the same, and not taken for no answer
       expect(printed(await run(m, ['tour', 'answer', 'action-1'], env, process.execPath, [], JSON.stringify({ say: words }))).answered).toBe('board')
+      // With --no-wait the agent is told to do what it has to first, as set the ideas, and then to go on as it would have
+      expect(printed(await run(m, ['tour', 'answer', 'action-1', '--no-wait', '{"say":"There."}'], env))).toEqual({
+        answered: 'board',
+        next: 'Do what you have to do now, and then end your turn. What the person does meanwhile arrives in this conversation by itself, as a message that begins [It].',
+      })
+      // And told both to wait and not to, it sets nothing
+      const both = await run(m, ['tour', 'answer', 'action-1', '--no-wait', '--wait', '{"say":"Both."}'], env)
+      expect(error(both).message).toBe('`it tour answer` either waits for what is done next or does not, and this command was told both.')
       expect(answers()).toEqual([
         { read: '144', say: words, request },
         { say: words, request },
+        { say: 'There.', request },
       ])
       // An empty standard input after `-` is refused, and nothing is set
       b.asked.length = 0
