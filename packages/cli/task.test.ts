@@ -19,9 +19,12 @@ describe('what the service finds above it on Windows (#405)', () => {
     expect(judge([me, shell, console_].join('\r\n'), 300)).toEqual({ launcher })
   })
 
-  test('a launcher or a console that has gone, or whose number another process has since been given, has ended', () => {
-    expect(judge([me, '-', '-'].join('\n'), 300)).toEqual({ ended: 'the launcher that started it has gone' })
-    expect(judge([me, proc(200, 7, 3500, 'notepad.exe', 'notepad'), '-'].join('\n'), 300)).toEqual({ ended: 'the launcher that started it has gone' })
+  test('a parent that has gone, or whose number another process has since been given, proves no launcher, and is no task to stop for', () => {
+    expect('none' in judge([me, '-', '-'].join('\n'), 300)).toBe(true)
+    expect('none' in judge([me, proc(200, 7, 3500, 'notepad.exe', 'notepad'), '-'].join('\n'), 300)).toBe(true)
+  })
+
+  test('a console that has gone from above the launcher, or whose number another process has since been given, is a task that has ended', () => {
     expect(judge([me, shell, '-'].join('\n'), 300)).toEqual({ ended: 'the scheduled task it runs under has ended' })
     expect(judge([me, shell, proc(100, 4, 2500, 'conhost.exe', 'conhost.exe --headless cmd.exe /d /c .\\it-service.cmd')].join('\n'), 300)).toEqual({
       ended: 'the scheduled task it runs under has ended',
@@ -111,6 +114,12 @@ describe('watching the scheduled task (#405)', () => {
 
   test('a console whose number another process has been given is found out when Windows is asked again', async () => {
     const w = watching([{ launcher }, { launcher: { ...launcher, console: { pid: 100, started: 5000n } } }])
+    await settle(100)
+    expect(w.ended).toEqual(['the scheduled task it runs under has ended'])
+  })
+
+  test('a launcher it had found, and that is then seen to have gone when Windows is asked again, has ended', async () => {
+    const w = watching([{ launcher }, { none: 'what started it has gone, and was not seen to be a launcher' }])
     await settle(100)
     expect(w.ended).toEqual(['the scheduled task it runs under has ended'])
   })

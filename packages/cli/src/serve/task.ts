@@ -62,7 +62,10 @@ function seen(line: string | undefined): Seen | null | undefined {
  * started with `--headless`: the very shape the task's action has, which a prompt a person
  * opened never has, since there conhost is started by the shell and is not its parent. A
  * parent that is not there, or that was started after its child, has gone: Windows gives a
- * number that has come free to the next process, which is then no parent of this one.
+ * number that has come free to the next process, which is then no parent of this one. A shell
+ * that has gone says nothing of what it was, so this program is then taken to be under no
+ * launcher, and `watchTask` takes that for the end of a launcher it had already found. A console
+ * that has gone from above the launcher's very shell is a task that has ended.
  */
 export function judge(out: string, pid: number): Found {
   const lines = out.trim().split(/\r?\n/)
@@ -70,7 +73,7 @@ export function judge(out: string, pid: number): Found {
   const [me, shell, console] = lines.map(seen)
   if (me === undefined || shell === undefined || console === undefined) return { failed: 'Windows gave an answer that could not be read' }
   if (!me || me.pid !== pid) return { failed: 'Windows did not know this program' }
-  if (!shell || shell.pid !== me.parent || shell.started > me.started) return { ended: 'the launcher that started it has gone' }
+  if (!shell || shell.pid !== me.parent || shell.started > me.started) return { none: 'what started it has gone, and was not seen to be a launcher' }
   if (shell.name.toLowerCase() !== 'cmd.exe' || !/(^|[\\\s])it-service\.cmd"?\s*$/i.test(shell.line))
     return { none: 'it was not started by the launcher of a scheduled task' }
   if (!console || console.pid !== shell.parent || console.started > shell.started) return { ended: 'the scheduled task it runs under has ended' }
