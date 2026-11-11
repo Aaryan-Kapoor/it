@@ -67,7 +67,7 @@ import {
   writePrivate,
 } from './lib'
 import { incompatible } from './login'
-import { opencodePlugins, opencodeRefusedAt } from './opencode-refused'
+import { opencodePlugins, opencodeRefusedAt, unchangedSince } from './opencode-refused'
 import { profileEnvironment, profileOf, readProfile } from './profiles'
 import { addonMarks, conversationFolder, conversationProfile, forgetAddonMark, noteConversation, publishedWithoutAddon } from './publish'
 import { alone, lockHeld } from './serve/backend'
@@ -4684,7 +4684,13 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   function lookForRefusal() {
     try {
       const data = connected('opencode') ? profileOf('opencode', harnessEnv())?.paths.XDG_DATA_HOME : undefined
-      const at = data ? opencodeRefusedAt(opencodePlugins(readJson(inHome('addons', 'opencode.json'))), [path.join(data, 'opencode', 'log')]) : undefined
+      const plugins = data ? opencodePlugins(readJson(inHome('addons', 'opencode.json'))) : []
+      const before = runtimes.refusedSince('opencode')
+      // A refusal the log no longer shows still stands while It's file is as it was then: the
+      // line may only have gone past the part of the log that is read
+      const at = data
+        ? (opencodeRefusedAt(plugins, [path.join(data, 'opencode', 'log')]) ?? (before !== undefined && unchangedSince(plugins, before) ? before : undefined))
+        : undefined
       if (!runtimes.refused('opencode', at)) return
       // The site is told at once
       say(

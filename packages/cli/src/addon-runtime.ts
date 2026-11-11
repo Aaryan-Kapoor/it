@@ -44,11 +44,14 @@ export class AddonRuntimes {
    * been heard from before was first heard from, both by this machine's clock in milliseconds.
    * Only an add-on that was loaded after a refusal shows that the refusal is over: one that was
    * running before it goes on as it was, since an app that fails to load a plugin again keeps
-   * the copy it had, and says nothing of the copy it refused.
+   * the copy it had, and says nothing of the copy it refused. An add-on that says when it began
+   * (`since`) is gone by that, so that one which was running before the connector started is
+   * not taken for one that has just begun.
    */
   private refusedAt = new Map<string, number>()
   private startedAt = new Map<string, number>()
-  private instances = new Set<string>()
+  /** When each add-on instance was first heard from, for an add-on that does not say when it began. */
+  private firstHeard = new Map<string, number>()
 
   /**
    * The app refused to load It's add-on at this time, or has not since its add-on was put
@@ -64,6 +67,11 @@ export class AddonRuntimes {
     return this.refusal(harness) !== was
   }
 
+  /** When the app last refused the add-on, as it was told, whether or not an add-on loaded since has ended that. */
+  refusedSince(harness: string): number | undefined {
+    return this.refusedAt.get(harness)
+  }
+
   /** The refusal that holds now: one no add-on of the app has been heard from since. */
   private refusal(harness: string): number | undefined {
     const at = this.refusedAt.get(harness)
@@ -73,7 +81,7 @@ export class AddonRuntimes {
   hear(harness: string, instance: unknown, value: unknown, now = performance.now()): AddonRuntime | undefined {
     if (!ADDONS[harness] || typeof instance !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(instance)) return undefined
     if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
-    const v = value as { version?: unknown; api?: unknown; delivery?: unknown; idle?: unknown; missing?: unknown }
+    const v = value as { version?: unknown; api?: unknown; delivery?: unknown; idle?: unknown; missing?: unknown; since?: unknown }
     if (typeof v.version !== 'string' || !/^[a-zA-Z0-9._-]{1,40}$/.test(v.version)) return undefined
     const names: Record<string, string> = {
       session: 'identify a conversation',
@@ -126,12 +134,15 @@ export class AddonRuntimes {
             }
     this.loaded.set(`${harness}:${instance}`, { at: now, runtime, idle: v.idle === true })
     const key = `${harness}:${instance}`
-    if (!this.instances.has(key)) {
-      this.instances.add(key)
+    if (!this.firstHeard.has(key)) {
+      this.firstHeard.set(key, Date.now())
       // Bounded, as `loaded` is: an instance forgotten here and heard from again counts as one that has just started
-      if (this.instances.size > 1000) this.instances.delete(this.instances.values().next().value!)
-      this.startedAt.set(harness, Date.now())
+      if (this.firstHeard.size > 1000) this.firstHeard.delete(this.firstHeard.keys().next().value!)
     }
+    // When the add-on says it began, believed only where that is not in the future of this machine's clock
+    const said = typeof v.since === 'number' && Number.isFinite(v.since) && v.since > 0 && v.since <= Date.now() + 60_000 ? v.since : undefined
+    const began = said ?? this.firstHeard.get(key)!
+    if (began > (this.startedAt.get(harness) ?? -1)) this.startedAt.set(harness, began)
     for (const [key, entry] of this.loaded) if (now - entry.at >= RECENT_MS) this.loaded.delete(key)
     // Keep room for 100 simultaneous app instances, but bound memory and the work of reading
     // their status if a faulty add-on keeps reporting a new instance id. Evicted instances

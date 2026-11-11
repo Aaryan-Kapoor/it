@@ -100,3 +100,23 @@ test('An OpenCode that refused to load the add-on is not taken for one that took
   expect(other.refused('pi', 5)).toBe(false)
   expect(other.blocksWake('pi', 0)).toBe(false)
 })
+
+test('An add-on that says when it began ends a refusal only where it began after it, however recently this connector first heard from it.', () => {
+  const report = { api: ADDON_API, version: ADDONS.opencode!.build, delivery: true, idle: false }
+  const refusedAt = Date.now() - 10_000
+  // A connector started since: it hears for the first time from an add-on that was running before OpenCode refused the new one
+  const seen = new AddonRuntimes()
+  seen.refused('opencode', refusedAt)
+  seen.hear('opencode', 'kept-running', { ...report, since: refusedAt - 60_000 }, 0)
+  expect(seen.status('opencode', 0).state).toBe('incompatible')
+  expect(seen.blocksWake('opencode', 0)).toBe(true)
+  // A time in this machine's future is not believed, and the add-on counts from when it was first heard
+  seen.hear('opencode', 'odd-clock', { ...report, since: Date.now() + 3_600_000 }, 0)
+  expect(seen.status('opencode', 0).state).toBe('active')
+  // One that began after the refusal ends it
+  const other = new AddonRuntimes()
+  other.refused('opencode', refusedAt)
+  other.hear('opencode', 'loaded-since', { ...report, since: refusedAt + 1 }, 0)
+  expect(other.status('opencode', 0).state).toBe('active')
+  expect(other.refusedSince('opencode')).toBe(refusedAt)
+})

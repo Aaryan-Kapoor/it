@@ -1642,10 +1642,19 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       await new Promise((r) => setTimeout(r, 2500))
       expect(failures()).toEqual([])
       expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+      // OpenCode writes on, until the refusal is past the part of its log that is read: It's file is as it was, so the refusal stands
+      writeFileSync(path.join(data, 'opencode', 'log', 'opencode.log'), 'timestamp=2026-11-11T00:00:00.000Z level=INFO message="something else"\n')
+      await new Promise((r) => setTimeout(r, 5500))
+      expect((await opencode())?.state).toBe('incompatible')
+      expect(failures()).toEqual([])
       // Its add-on is heard from after the refusal: OpenCode loaded it after all, and the click is the add-on's
       await local('/addon', {
         method: 'POST',
-        body: { harness: 'opencode', instance: 'loaded', addon: { api: 1, version: ADDONS.opencode!.build, delivery: true, idle: false } },
+        body: {
+          harness: 'opencode',
+          instance: 'loaded',
+          addon: { api: 1, version: ADDONS.opencode!.build, delivery: true, idle: false, since: Date.now() + 2000 },
+        },
       })
       expect((await opencode())?.state).toBe('active')
     } finally {
