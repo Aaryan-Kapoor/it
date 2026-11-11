@@ -42,6 +42,7 @@ import type * as publish from "../publish.js";
 import type * as push from "../push.js";
 import type * as retention from "../retention.js";
 import type * as sessions from "../sessions.js";
+import type * as shared from "../shared.js";
 import type * as state from "../state.js";
 import type * as tour from "../tour.js";
 import type * as turns from "../turns.js";
@@ -87,6 +88,7 @@ declare const fullApi: ApiFromModules<{
   push: typeof push;
   retention: typeof retention;
   sessions: typeof sessions;
+  shared: typeof shared;
   state: typeof state;
   tour: typeof tour;
   turns: typeof turns;

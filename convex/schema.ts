@@ -338,6 +338,16 @@ export default defineSchema({
     stoppedThrough: v.optional(v.number()),
     /** What the page's agent last said above the page, in its own words, and when. */
     said: v.optional(v.object({ text: v.string(), at: v.number() })),
+    /**
+     * The conversations that share this page beside the one it belongs to, each under the name
+     * it joined as, with the machine it runs on (`shared.ts`). The conversation the page belongs
+     * to is a member whether or not it is listed here.
+     */
+    members: v.optional(v.array(v.object({ name: v.string(), machineId: v.id('machines'), session, joinedAt: v.number() }))),
+    /** The conversations a person took off this page, which may not join it again. */
+    removed: v.optional(v.array(v.object({ machineId: v.id('machines'), session, at: v.number() }))),
+    /** The number the last post on this page was given (`posts.seq`). */
+    postSeq: v.optional(v.number()),
   })
     .index('by_user_slug', ['userId', 'slug'])
     .index('by_user_updated', ['userId', 'updatedAt'])
@@ -402,6 +412,19 @@ export default defineSchema({
     'by_artifact',
     ['artifactId'],
   ),
+
+  // What the members of a shared page said to each other on it, in order (`shared.ts`). `from`
+  // and `to` are members' names as they were when it was posted, and `to` is absent where it
+  // was for every member.
+  posts: defineTable({
+    userId: v.id('users'),
+    artifactId: v.id('artifacts'),
+    seq: v.number(),
+    from: v.string(),
+    to: v.optional(v.string()),
+    text: v.string(),
+    at: v.number(),
+  }).index('by_artifact_seq', ['artifactId', 'seq']),
 
   // The state a publish asked for its page to start with, kept with that publish until it is
   // shown: a publish that is given up on, or loses to another, starts nothing.
