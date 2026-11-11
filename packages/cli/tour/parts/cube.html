@@ -685,7 +685,9 @@ Shell.part("cube", (my) => {
     paint();
   });
   my.onLeave(() => { if (walk) walk.auto = false; bits = []; });
-  if (window.ResizeObserver) new ResizeObserver(() => { measure(); wake(); }).observe(el);
+  // The room the cube has changes with the window, and as the lines above and below it grow or shrink
+  var fitted = () => { measure(); wake(); };
+  if (window.ResizeObserver) { var watch = new ResizeObserver(fitted); watch.observe(el); watch.observe(fill); } else window.addEventListener("resize", fitted);
   if (scheme && scheme.addEventListener) scheme.addEventListener("change", wake);
   canvas.addEventListener("focus", wake);
   canvas.addEventListener("blur", wake);
