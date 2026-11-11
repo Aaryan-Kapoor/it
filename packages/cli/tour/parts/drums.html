@@ -392,10 +392,10 @@ Shell.part("drums", (my) => {
     { k: "bass", label: () => "Bassline", ask: () => "add a bassline", did: () => "asked for bass" },
     { k: "more", label: () => "Busier", ask: () => "busier", did: () => "asked for busier" },
     { k: "less", label: () => "Sparser", ask: () => "strip it back", did: () => "asked for less" },
-    { k: "swing", label: () => (swing ? "Straighten" : "Swing it"), ask: () => (swing ? "play it straight" : "make it swing"), did: () => (swing ? "asked: straight" : "asked for swing") },
-    { k: "time", label: () => (bpm < 90 ? "Double time" : "Half time"), ask: () => (bpm < 90 ? "double time" : "half time"), did: () => (bpm < 90 ? "asked for double" : "asked: half time") },
+    { k: "swing", label: () => (swing ? "Straighten" : "Swing it"), ask: () => (swing ? "play it straight" : "make it swing"), did: () => (swing ? "asked for straight" : "asked for swing") },
+    { k: "time", label: () => (bpm < 90 ? "Double time" : "Half time"), ask: () => (bpm < 90 ? "double time" : "half time"), did: () => (bpm < 90 ? "asked for double" : "asked for halftime") },
     { k: "trade", label: () => "Trade bars", ask: () => "answer my bar with the next bar", did: () => "asked for a bar" },
-    { k: "wild", label: () => "Surprise me", ask: () => "surprise me", did: () => "asked: surprise" },
+    { k: "wild", label: () => "Surprise me", ask: () => "surprise me", did: () => "asked for anything" },
   ];
   var BETWEEN = { k: "", ask: () => "play between my hits", did: () => { var n = count(mine); return "put down " + n + (n === 1 ? " hit" : " hits"); } };
   ASKS.forEach((a) => {

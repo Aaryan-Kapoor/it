@@ -291,7 +291,7 @@ describe('the studio', () => {
     })
     expect(JSON.stringify(asked.data).length).toBeLessThan(2000)
     // The words are put away, the piece keeps its line with what was asked of it, and nothing has changed yet
-    expect([page.$('#studio-ask').hidden, waits(page), page.you('studio')]).toEqual([true, true, 'wanted it bigger'])
+    expect([page.$('#studio-ask').hidden, waits(page), page.you('studio')]).toEqual([true, true, 'asked for bigger'])
     expect([
       piece(page, 'headline').classList.contains('studio-asked'),
       piece(page, 'headline').getAttribute('data-tag'),
