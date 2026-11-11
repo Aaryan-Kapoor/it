@@ -692,9 +692,15 @@ function noMore(cmd: string, a: Args): void {
   if (!Object.hasOwn(WORDS, cmd)) return
   const [most, usage] = WORDS[cmd]!
   if (a._.length <= most) return
-  // A patch with more words after it is one a shell split at a space, as Windows PowerShell 5.1
-  // does to JSON whose quotes were written \" and that has a space in a value
-  const split = cmd === 'patch' ? ` If your shell split the JSON at a space, write it to a file and run \`it patch ${a._[0]} --file <path>\`.` : ''
+  // A patch with more words after it, or a page made with --state and more words after its
+  // title, is one whose JSON a shell split at a space, as Windows PowerShell 5.1 does to JSON
+  // whose quotes were written \" and that has a space in a value
+  const split =
+    cmd === 'patch'
+      ? ` If your shell split the JSON at a space, write it to a file and run \`it patch ${a._[0]} --file <path>\`.`
+      : cmd === 'create' && text(a, 'state') !== undefined
+        ? ' If your shell split the JSON of --state at a space, write it to a file and give it with `--state-file <path>`.'
+        : ''
   throw new Problem(`It does not know what to do with "${a._[most]}".`, 'invalid', `Usage: it ${usage}${split}`)
 }
 
