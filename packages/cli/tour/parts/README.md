@@ -31,7 +31,7 @@ The part that is shown has the whole stage: everything between the slim top line
 - `.fill` takes all the room the part has left, and is a container whose size can be asked for. A drawing of a fixed shape is fitted into it by its own width, as in `width: min(100cqw, calc(100cqh * 720 / 520))` for a drawing that is 720 by 520.
 - `.foot` is a row under it for a part's own small buttons and words.
 
-The shell's `.btn`, `.btn.ghost`, `.btn.small` and `.pill` are a part's to use, with the colours and the typefaces of `:root`: `Display` for a heading, `Text` for words, `Hand` for handwriting and `var(--mono)` for numbers. A part writes no headline and no paragraph of explanation: its title and its one line are in the top line, and the agent's words are in the dock. A part makes no sound unless making sound is what it is for. Check a part at 1366 by 768 and at 390 by 844, in light and in dark.
+The shell's `.btn`, `.btn.ghost`, `.btn.small` and `.pill` are a part's to use, with the colours and the typefaces of `:root` (a part draws what is the agent's in `--green`, and its own buttons in `.btn`, which wear the design's accent): `Display` for a heading, `Text` for words, `Hand` for handwriting and `var(--mono)` for numbers. A part writes no headline and no paragraph of explanation: its title and its one line are in the top line, and the agent's words are in the dock. A part makes no sound unless making sound is what it is for. Check a part at 1366 by 768 and at 390 by 844, in light and in dark.
 
 ## What the shell gives a part
 
@@ -51,7 +51,7 @@ The shell's `.btn`, `.btn.ghost`, `.btn.small` and `.pill` are a part's to use, 
 | `my.onEnter(fn)`, `my.onLeave(fn)` | Called as the part is come to and as it is left |
 | `my.shown()` | Whether the part is the one shown |
 
-`Shell` itself has `Shell.$` (an element by its id), `Shell.newId()`, `Shell.tidy(value, most)` (a string or number as one line of at most so many characters, and nothing else as the empty string), `Shell.calm` (whether the person asked for less motion), `Shell.SVG`, `Shell.SLOW` (the forty seconds) and `Shell.go(name)`. `Shell.wear(colours)` dresses the frame in other colours, as the studio does with the agent's design: `--green`, `--on-green`, `--green-soft`, `--paper`, `--card` and `--line`, each as `#rrggbb`. It says whether it took them, and takes none where what the frame writes on the accent or on the paper could not be read. `Shell.wear(null)` puts the frame's own colours back.
+`Shell` itself has `Shell.$` (an element by its id), `Shell.newId()`, `Shell.tidy(value, most)` (a string or number as one line of at most so many characters, and nothing else as the empty string), `Shell.calm` (whether the person asked for less motion), `Shell.SVG`, `Shell.SLOW` (the forty seconds) and `Shell.go(name)`. `Shell.wear(colours)` dresses the frame in other colours, as the studio does with the agent's design: `--accent` and `--on-accent`, which are the person's buttons and the count of parts, and `--paper`, `--card` and `--line`, each as `#rrggbb`. The agent's `--green` is never worn, since it is how every part says what is the agent's. It says whether it took them, and takes none where what the frame writes on the accent or on the paper could not be read, or the agent's green could no longer be seen on the paper. `Shell.wear(null)` puts the frame's own colours back.
 
 ## Asking the agent, and hearing its answer
 

@@ -484,16 +484,18 @@ describe('the studio', () => {
     const page = await opened()
     page.to('studio')
     const root = page.w.document.documentElement
-    const worn = () => ['--green', '--on-green', '--green-soft', '--paper', '--card', '--line'].map((k) => root.style.getPropertyValue(k) as string)
+    const worn = () => ['--accent', '--on-accent', '--paper', '--card', '--line'].map((k) => root.style.getPropertyValue(k) as string)
     expect(worn().join('')).toBe('')
     expect(page.$('#studio-own').hidden).toBe(true)
     await designed(page)
     for (const c of worn()) expect(c).toMatch(HEX)
     // What the frame writes on its accent and on its paper can still be read
-    const [green, onGreen, , paper, card] = worn()
+    const [green, onGreen, paper, card] = worn()
     expect(apart(onGreen!, green!)).toBeGreaterThanOrEqual(4.5)
     expect(apart('#1c1a16', paper!)).toBeGreaterThanOrEqual(7)
     expect(apart(green!, card!)).toBeGreaterThanOrEqual(3)
+    // And the agent's own green is left as it is
+    expect(root.style.getPropertyValue('--green')).toBe('')
     expect([page.$('#studio-own').hidden, page.$('#studio-own').textContent]).toEqual([false, 'Tour’s own colours'])
     // It is worn on the other parts too
     page.to('chess')

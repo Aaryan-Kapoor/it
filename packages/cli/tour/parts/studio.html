@@ -475,7 +475,7 @@ Shell.part("studio", (my) => {
     var chroma = (t) => t[1] * (1 - Math.abs(2 * t[2] - 1)), known = [look.colours.accent, look.colours.paper, look.colours.second].map(tone);
     var key = chroma(known[0]) >= .25 ? known[0] : chroma(known[1]) >= chroma(known[2]) ? known[1] : known[2], dark = lum(paper) < .2;
     var accent = sure(off(key[0], within(key[1], .45, .85), dark ? .62 : .42, dark ? paper : card, 3.6)), tint = hsl(key[0], .7, dark ? .32 : .6);
-    worn = Shell.wear({ "--green": hex(accent[0]), "--on-green": hex(accent[1]), "--green-soft": hex(mix(card, accent[0], .16)), "--paper": hex(mix(paper, tint, .1)), "--card": hex(mix(card, tint, .045)), "--line": hex(mix(line, tint, .16)) });
+    worn = Shell.wear({ "--accent": hex(accent[0]), "--on-accent": hex(accent[1]), "--paper": hex(mix(paper, tint, .1)), "--card": hex(mix(card, tint, .045)), "--line": hex(mix(line, tint, .16)) });
   }
   function unmark() {
     NAMES.forEach((n) => { pieces[n].el.classList.remove("studio-on", "studio-asked", "studio-by", "studio-pop"); pieces[n].el.removeAttribute("data-tag"); });

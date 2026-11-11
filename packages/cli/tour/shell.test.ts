@@ -271,38 +271,44 @@ describe('the agent’s dock', () => {
 })
 
 describe('the frame in other colours', () => {
-  const WORN = ['--green', '--on-green', '--green-soft', '--paper', '--card', '--line']
+  const WORN = ['--accent', '--on-accent', '--paper', '--card', '--line']
   const worn = (page: Page) => WORN.map((k) => page.w.document.documentElement.style.getPropertyValue(k) as string)
-  const SOUND = { '--green': '#b4530c', '--on-green': '#ffffff', '--green-soft': '#f6e3d2', '--paper': '#f4ece0', '--card': '#fffaf2', '--line': '#e6d6c2' }
+  const SOUND = { '--accent': '#b4530c', '--on-accent': '#ffffff', '--paper': '#f4ece0', '--card': '#fffaf2', '--line': '#e6d6c2' }
 
-  test('a part may dress the frame in an accent and a tint of its own, and put the frame’s own colours back', async () => {
+  test('a part may dress the frame in an accent and a tint of its own, and put the frame’s own colours back, and the agent’s green is never worn', async () => {
     const page = await opened()
     expect(worn(page).join('')).toBe('')
     expect(page.w.Shell.wear(SOUND)).toBe(true)
     expect(worn(page)).toEqual(Object.values(SOUND))
+    // The person's buttons are in the accent, and what is the agent's stays in the agent's green
+    expect(tourPage('start').html).toMatch(/\.btn \{[^}]*border: 1px solid var\(--accent\); background: var\(--accent\); color: var\(--on-accent\);/)
+    expect(page.w.document.documentElement.style.getPropertyValue('--green')).toBe('')
     // The accent alone, where it can be read against the frame's own paper
-    expect(page.w.Shell.wear({ '--green': '#1d4ed8', '--on-green': '#ffffff' })).toBe(true)
-    expect(worn(page)).toEqual(['#1d4ed8', '#ffffff', '', '', '', ''])
+    expect(page.w.Shell.wear({ '--accent': '#1d4ed8', '--on-accent': '#ffffff' })).toBe(true)
+    expect(worn(page)).toEqual(['#1d4ed8', '#ffffff', '', '', ''])
     expect(page.w.Shell.wear(null)).toBe(false)
     expect(worn(page).join('')).toBe('')
     expect(page.errors).toEqual([])
     page.close()
   })
 
-  test('nothing is worn where a name is not one of the six, a value is not a colour, or what the frame writes could not be read', async () => {
+  test('nothing is worn where a name is not one of the five, a value is not a colour, what the frame writes could not be read, or the agent’s green would be lost', async () => {
     const page = await opened()
     for (const wrong of [
       { ...SOUND, '--ink': '#000000' },
       { ...SOUND, color: '#000000' },
       { ...SOUND, '--paper': 'url(https://example.com/x)' },
-      { ...SOUND, '--green': 'red' },
+      { ...SOUND, '--accent': 'red' },
+      { ...SOUND, '--green': '#b4530c' },
       { ...SOUND, '--card': '#fff' },
       { ...SOUND, '--line': 7 },
       // White on a pale accent, an accent that is lost on the paper, and a paper the frame's ink is lost on
-      { ...SOUND, '--green': '#f5d0a9' },
-      { ...SOUND, '--green': '#efe6d8', '--on-green': '#1c1a16' },
+      { ...SOUND, '--accent': '#f5d0a9' },
+      { ...SOUND, '--accent': '#efe6d8', '--on-accent': '#1c1a16' },
       { ...SOUND, '--paper': '#2a2622' },
       { ...SOUND, '--card': '#55504a' },
+      // A paper the frame's ink can be read on, and the agent's green cannot
+      { ...SOUND, '--accent': '#2b1a0a', '--paper': '#aaaaaa' },
       {},
       'green',
       ['#b4530c'],

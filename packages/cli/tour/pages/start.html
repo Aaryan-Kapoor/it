@@ -6,9 +6,9 @@
 <title>Getting started with It</title>
 <style>
 /*fonts.css*/
-  :root { color-scheme: light dark; --paper: #f3efe6; --card: #fffdf8; --ink: #1c1a16; --soft: #6d685d; --faint: #a39d8f; --line: #e2dbcc; --green: #17805a; --green-soft: #e3f1e9; --on-green: #ffffff; --clay: #cf6f4d; --clay-dark: #b85c3c; --sage: #9fab93; --sage-dark: #87947b; --wood: #b98c5d; --wood-dark: #8c6238; --floor: #ead9bb; --plank: #d9c49d; --sheen: #f1e4cb; --rug: #cdd5d4; --rug-line: #b9c4c3; --wall: #2a2722; --sun: #ffffff; --sheet: #f6f2e8; --dotc: rgba(28, 26, 22, .13); --bezel: #15130f; --asked: rgba(255, 253, 248, .7); --amber: #9a5b00; --amber-soft: #fbefd6; --amber-line: #ecc98a; --sq: #efe5d2; --sq-dark: #c9a77f; --sq-last: #f2d98a; --pad: #ebe4d6; --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
+  :root { color-scheme: light dark; --paper: #f3efe6; --card: #fffdf8; --ink: #1c1a16; --soft: #6d685d; --faint: #a39d8f; --line: #e2dbcc; --green: #17805a; --green-soft: #e3f1e9; --on-green: #ffffff; --accent: #1c1a16; --on-accent: #f3efe6; --clay: #cf6f4d; --clay-dark: #b85c3c; --sage: #9fab93; --sage-dark: #87947b; --wood: #b98c5d; --wood-dark: #8c6238; --floor: #ead9bb; --plank: #d9c49d; --sheen: #f1e4cb; --rug: #cdd5d4; --rug-line: #b9c4c3; --wall: #2a2722; --sun: #ffffff; --sheet: #f6f2e8; --dotc: rgba(28, 26, 22, .13); --bezel: #15130f; --asked: rgba(255, 253, 248, .7); --amber: #9a5b00; --amber-soft: #fbefd6; --amber-line: #ecc98a; --sq: #efe5d2; --sq-dark: #c9a77f; --sq-last: #f2d98a; --pad: #ebe4d6; --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
   @media (prefers-color-scheme: dark) {
-    :root { --paper: #100f0d; --card: #1a1916; --ink: #f4f0e7; --soft: #aaa497; --faint: #777165; --line: #2f2c27; --green: #3ecf93; --green-soft: #12281f; --on-green: #06150e; --clay: #d97a58; --clay-dark: #b9603f; --sage: #6f7c66; --sage-dark: #56624f; --wood: #8f6a44; --wood-dark: #5e4226; --floor: #2a231a; --plank: #382f23; --sheen: #30281e; --rug: #37403f; --rug-line: #445050; --wall: #ded8cb; --sun: #ffe9b0; --sheet: #1f1d19; --dotc: rgba(244, 240, 231, .12); --bezel: #000000; --asked: rgba(26, 25, 22, .7); --amber: #f5bd5c; --amber-soft: #2a2010; --amber-line: #5c4419; --sq: #b8a98c; --sq-dark: #8a7455; --sq-last: #cdb565; --pad: #26241f; }
+    :root { --paper: #100f0d; --card: #1a1916; --ink: #f4f0e7; --soft: #aaa497; --faint: #777165; --line: #2f2c27; --green: #3ecf93; --green-soft: #12281f; --on-green: #06150e; --accent: #f4f0e7; --on-accent: #100f0d; --clay: #d97a58; --clay-dark: #b9603f; --sage: #6f7c66; --sage-dark: #56624f; --wood: #8f6a44; --wood-dark: #5e4226; --floor: #2a231a; --plank: #382f23; --sheen: #30281e; --rug: #37403f; --rug-line: #445050; --wall: #ded8cb; --sun: #ffe9b0; --sheet: #1f1d19; --dotc: rgba(244, 240, 231, .12); --bezel: #000000; --asked: rgba(26, 25, 22, .7); --amber: #f5bd5c; --amber-soft: #2a2010; --amber-line: #5c4419; --sq: #b8a98c; --sq-dark: #8a7455; --sq-last: #cdb565; --pad: #26241f; }
     body::before { opacity: .25; } .btn { box-shadow: none; }
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -17,7 +17,7 @@
   body::before { content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .5; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .3 0 0 0 0 .22 0 0 0 .09 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E"); }
   button { font: inherit; color: inherit; cursor: pointer; }
   [hidden] { display: none !important; }
-  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 48px; padding: 0 22px; border-radius: 999px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font: 600 15px/1 Text; white-space: nowrap; transition: transform .12s, box-shadow .2s; box-shadow: 0 10px 24px -14px rgba(28, 26, 22, .6); }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 48px; padding: 0 22px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); font: 600 15px/1 Text; white-space: nowrap; transition: transform .12s, box-shadow .2s; box-shadow: 0 10px 24px -14px rgba(28, 26, 22, .6); }
   .btn:hover { transform: translateY(-1px); } .btn:active { transform: translateY(1px); } .btn svg { width: 16px; height: 16px; }
   .btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); box-shadow: none; } .btn.ghost:hover { border-color: var(--ink); }
   .btn.small { min-height: 38px; padding: 0 16px; font-size: 14px; box-shadow: none; }
@@ -32,7 +32,7 @@
   .top, .asleep, .dock { flex: none; }
   .top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px 18px; padding: 8px 16px; min-height: 54px; border-bottom: 1px solid var(--line); }
   .count { display: flex; align-items: center; gap: 5px; color: var(--soft); } .count span { margin-right: 6px; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .count i { width: 16px; height: 3px; border-radius: 2px; background: var(--line); } .count i.on { background: var(--ink); }
+  .count i { width: 16px; height: 3px; border-radius: 2px; background: var(--line); } .count i.on { background: var(--accent); }
   .what { min-width: 0; display: flex; align-items: baseline; gap: 12px; }
   .what h1 { flex: none; font: 700 19px/1.2 Display; letter-spacing: -.02em; }
   .what p { min-width: 0; font-size: 14.5px; line-height: 1.35; color: var(--soft); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -446,9 +446,13 @@ var Shell = (() => {
   }
   // ── The frame in other colours ──
   // A part may dress the frame in an accent and a tint of its own, and put the frame's own back.
-  // Only these six can be given, each as #rrggbb. All are refused together where what is written
-  // on the accent or on the paper could not be read, or the accent could not be seen on the paper.
-  var WORN = ["--green", "--on-green", "--green-soft", "--paper", "--card", "--line"];
+  // The accent is the colour of the person's own buttons and of the count of parts. The agent's
+  // green is never worn: it is how the page says what is the agent's, in the dock, on the board
+  // and in each part, and a design's red or amber there would read as something gone wrong. Only
+  // these five can be given, each as #rrggbb. All are refused together where what is written on
+  // the accent or on the paper could not be read, the accent could not be seen on the paper, or
+  // the agent's green could no longer be seen on it.
+  var WORN = ["--accent", "--on-accent", "--paper", "--card", "--line"];
   function wear(colours) {
     var root = document.documentElement, given = colours && typeof colours === "object" ? colours : null;
     WORN.forEach((k) => root.style.removeProperty(k));
@@ -456,9 +460,10 @@ var Shell = (() => {
     var own = window.getComputedStyle(root), has = (k) => (Object.prototype.hasOwnProperty.call(given, k) ? given[k] : own.getPropertyValue(k).trim());
     var light = (c) => [1, 3, 5].reduce((sum, i, n) => { var v = parseInt(c.slice(i, i + 2), 16) / 255; return sum + [.2126, .7152, .0722][n] * (v <= .03928 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4)); }, 0);
     var apart = (a, b) => { var x = light(has(a)), y = light(has(b)); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); };
-    var keys = Object.keys(given), all = WORN.concat("--ink").every((k) => /^#[0-9a-f]{6}$/i.test(has(k)));
+    var keys = Object.keys(given), all = WORN.concat("--ink", "--green").every((k) => /^#[0-9a-f]{6}$/i.test(has(k)));
     if (!keys.length || !all || keys.some((k) => WORN.indexOf(k) < 0)) return false;
-    if (apart("--on-green", "--green") < 4.5 || apart("--green", "--paper") < 3 || apart("--green", "--card") < 3 || apart("--ink", "--paper") < 7 || apart("--ink", "--card") < 7) return false;
+    if (apart("--on-accent", "--accent") < 4.5 || apart("--accent", "--paper") < 3 || apart("--accent", "--card") < 3 || apart("--ink", "--paper") < 7 || apart("--ink", "--card") < 7) return false;
+    if (apart("--green", "--paper") < 2.5 || apart("--green", "--card") < 2.5) return false;
     keys.forEach((k) => root.style.setProperty(k, given[k]));
     return true;
   }
