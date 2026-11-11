@@ -1037,7 +1037,9 @@ describe('the OpenCode add-on', () => {
       missing: false,
       refuse: 0,
       /** What becomes of each of the next messages taken: delivered, cancelled, nothing heard, or delivered before the answer to the call. */
-      next: [] as ('delivered' | 'cancelled' | 'silent' | 'early')[],
+      next: [] as ('delivered' | 'cancelled' | 'silent' | 'early' | 'pending')[],
+      /** Delivers a message that was admitted and left pending, as OpenCode does at the conversation's next step. */
+      deliver: () => {},
       subscribed: 0,
       unsubscribed: 0,
       disposed: 0,
@@ -1060,7 +1062,7 @@ describe('the OpenCode add-on', () => {
     const run = async (key: string, input: unknown) => {
       for (const callback of hooks[key] ?? []) await callback(input)
     }
-    async function admit(sessionID: string, text: string, what: 'delivered' | 'cancelled' | 'silent' | 'early') {
+    async function admit(sessionID: string, text: string, what: 'delivered' | 'cancelled' | 'silent' | 'early' | 'pending') {
       const id = `msg_${++made}`
       await run('session:prompt', { sessionID, messageID: id, prompt: { text, files: [] }, delivery: 'steer' })
       const item = { type: 'user', payload: { text, files: [] }, delivery: 'steer' }
@@ -1070,6 +1072,11 @@ describe('the OpenCode add-on', () => {
           conversation.push(text)
           announce('session.inbox.delivered', { sessionID, inboxID: id })
         } else if (what === 'cancelled') announce('session.inbox.cancelled', { sessionID, inboxID: id })
+        else if (what === 'pending')
+          state.deliver = () => {
+            conversation.push(text)
+            announce('session.inbox.delivered', { sessionID, inboxID: id })
+          }
       }
       if (what === 'early') {
         // Said to be delivered before the answer to the call, with the enqueued word lost
@@ -1238,6 +1245,29 @@ describe('the OpenCode add-on', () => {
       await seconds(3)
       expect(opencode.state.tried).toBe(1)
       expect(c.state.acked).toEqual(['k1'])
+    })
+
+    it('waits for a click OpenCode admitted to the inbox for as long as the running turn takes, and never hands it over twice', async () => {
+      standIn(true)
+      const c = await connector()
+      const opencode = await load2()
+      await opencode.writes('ses_one')
+      await settled()
+      // Admitted while a long command runs, and delivered only at the turn's next step
+      opencode.state.next = ['pending']
+      c.state.offered = [click('k1')]
+      await seconds(1)
+      await settled()
+      expect(opencode.state.tried).toBe(1)
+      await seconds(90)
+      expect(opencode.state.tried).toBe(1)
+      expect(c.state.acked).toEqual([])
+      opencode.state.deliver()
+      await reached(() => c.state.acked.length > 0, 'the connector has been told')
+      await seconds(5)
+      expect(opencode.state.tried).toBe(1)
+      expect(c.state.acked).toEqual(['k1'])
+      expect(opencode.conversation).toEqual(['hello', click('k1').text])
     })
 
     it('does not report a click OpenCode refused, and tries it again', async () => {

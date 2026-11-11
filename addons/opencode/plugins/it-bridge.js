@@ -46,6 +46,7 @@ const DEADLINE_MS = 3000 // how long one question to the connector may take from
 const MOST_BYTES = 256 * 1024 // an answer longer than this is not read to its end, and counts as no answer
 const PROMPT_MS = 5000 // how long OpenCode is given to say that it will take a message
 const SHOWN_MS = 30_000 // how long it is then given to show that message in the conversation
+const ADMITTED_MS = 30 * 60_000 // how long a message OpenCode 2.x has admitted to a conversation's inbox is waited for before its clicks are tried again
 const AGAIN_MS = [1000, 5000, 30_000, 180_000] // how long to wait before trying a refused click again
 const MOST = 40 // how many conversations are asked about at once, which is as many as the connector watches; the least recently active go first
 
@@ -170,6 +171,8 @@ function exchange(c, method, route, headers, text) {
  *   - `submit(s, text)`: hands the text to the conversation `s.into` as a message on the
  *     person's side. It answers 'took' where OpenCode said it will take it, 'no' where it said
  *     no, 'gone' where the conversation is not there, and null where nothing was heard in time.
+ *   - `admitted(s, clicks)`, where the app has one: whether OpenCode holds a message with these
+ *     clicks that it has taken and not yet put into the conversation or dropped
  *
  * What comes back is how each interface tells the bridge what OpenCode says has happened.
  */
@@ -177,6 +180,9 @@ function bridge(app) {
   // Each bridge is an add-on of its own to the connector: OpenCode 2.x may set the plugin up
   // once for each folder it works in, all in one process
   const INSTANCE = randomBytes(12).toString('hex')
+  // When this bridge began, by this machine's clock: the connector goes by it to tell an add-on
+  // that was loaded after OpenCode refused one from an add-on that had been running since before
+  const SINCE = Date.now()
   let connector = null // { socket | port, token }, read from the connector's own file
   let lookedAt = 0
   let timer = null
@@ -208,7 +214,7 @@ function bridge(app) {
     return connector
   }
 
-  const addon = () => ({ api: 1, version: ADDON_VERSION, delivery: app.missing.length === 0, idle: false, missing: [...app.missing] })
+  const addon = () => ({ api: 1, version: ADDON_VERSION, delivery: app.missing.length === 0, idle: false, missing: [...app.missing], since: SINCE })
 
   /**
    * Asks the connector one thing. The answer is null whenever there was none to be believed:
@@ -358,7 +364,14 @@ function bridge(app) {
     // OpenCode has said that its text is in a message on the person's side of this
     // conversation. Without OpenCode's agreement there is nothing to wait for.
     if (said !== 'took') s.waiting?.(true)
-    const shownThere = await there
+    let shownThere = await there
+    // OpenCode 2.x admits a message to the conversation's inbox, and delivers it at the
+    // conversation's next step, which a long command can put off for minutes. While the message
+    // is admitted and neither delivered nor dropped, the clicks are on their way: handing them
+    // over again would put them into the conversation twice. So they are waited for, for as long
+    // as half an hour, and only then tried again.
+    while (!shownThere && said === 'took' && app.admitted?.(s, clicks) && Date.now() - began < ADMITTED_MS)
+      shownThere = await untilShown(s, clicks, Math.min(Date.now() + SHOWN_MS, began + ADMITTED_MS))
     s.sending = []
     if (shownThere) {
       s.tries = 0
@@ -640,6 +653,8 @@ async function setup(ctx) {
   const b = bridge({
     missing: [],
     ready: () => true,
+    // Admitted to the conversation's inbox, and not yet delivered or dropped: on its way
+    admitted: (s, clicks) => [...inbox.values()].some((m) => m.into === s.into && clicks.every((c) => carries(m.text, c))),
     async submit(s, text) {
       try {
         // Steered: taken at the conversation's next step when a turn is running, and starting a turn when none is
