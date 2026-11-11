@@ -1,6 +1,6 @@
 // The ending of the tour’s first page: the agent’s ideas for this person, the box to ask for anything else, the making of one, and the way out.
 import { describe, expect, test } from 'vitest'
-import { GUIDE } from '../../src/tour'
+import { GUIDE, tourPage } from '../../src/tour'
 import { opened, type Page, SLOW } from '../start-page'
 
 const IDEAS = [
@@ -452,6 +452,21 @@ describe('the guide for the ending', () => {
     expect(made).toContain('In this order the new page takes the tour’s place on their screen and they are never left looking at nothing'.replace('’', "'"))
     expect(made).toContain('Do not answer `make` with `it tour answer`: the page that opens is the answer.')
     expect(answer(made)).toEqual([{ say: '<one sentence about why you could not build it>' }])
+    // The page it builds is given the colours of this one, in light and in dark, as this one has them
+    const css = /^:root\{color-scheme:light dark;([^}]*)\}@media\(prefers-color-scheme:dark\)\{:root\{([^}]*)\}\}$/m.exec(made)!
+    const own = tourPage('start').html
+    const colours = (text: string) => Object.fromEntries(text.split(';').map((pair) => pair.split(':') as [string, string]))
+    const [light, dark] = [
+      own.slice(own.indexOf(':root {'), own.indexOf('@media (prefers-color-scheme: dark)')),
+      own.slice(own.indexOf('@media (prefers-color-scheme: dark)')),
+    ]
+    for (const [given, theirs] of [
+      [colours(css[1]!), light],
+      [colours(css[2]!), dark],
+    ] as const) {
+      expect(Object.keys(given)).toEqual(['--paper', '--card', '--ink', '--soft', '--line', '--accent'])
+      for (const [name, value] of Object.entries(given)) expect(theirs, name).toContain(`${name === '--accent' ? '--green' : name}: ${value};`)
+    }
     // And leaving is as it was
     expect(ending.slice(ending.indexOf('"Go to my pages" arrives as `finish`'))).toContain('\nit tour clear\n')
   })

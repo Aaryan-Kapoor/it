@@ -58,20 +58,31 @@
   .end-foot .end-narrow { display: none; }
   @media (max-width: 760px) {
     .end-wrap { gap: 8px; }
-    /* On a tall screen the cards are rows: the drawing beside the words */
-    .end-cards, .end-cards[data-n] { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-auto-rows: minmax(0, 1fr); row-gap: 8px; }
-    .end-card { grid-row: auto; grid-template-columns: 34% minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; column-gap: 12px; max-height: 190px; padding: 8px 12px 9px 8px; border-radius: 18px; }
-    .end-card > * { grid-column: 2; } .end-card .end-art { grid-column: 1; grid-row: 1 / -1; border-radius: 12px; }
+    /* On a tall screen the cards are rows: the drawing with its button under it, and the words beside them over the whole height */
+    .end-cards, .end-cards[data-n] { container-type: size; grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-auto-rows: minmax(0, 1fr); row-gap: 8px; }
+    .end-card { grid-row: auto; grid-template-columns: 33% minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; column-gap: 12px; max-height: 172px; padding: 8px 12px 8px 8px; border-radius: 18px; }
+    .end-card .end-art { grid-column: 1; grid-row: 1 / 3; border-radius: 11px; }
+    .end-card .end-make { grid-column: 1; grid-row: 3; justify-self: stretch; margin: 6px 0 0; min-height: 32px; padding: 0 4px; gap: 6px; font-size: 13px; box-shadow: none; } .end-card .end-make svg { width: 14px; height: 14px; }
     .end-card .end-kind { display: none; }
-    .end-name { margin: 2px 0 0; font-size: 16.5px; } .end-line { align-self: start; margin: 3px 0 0; font-size: 13px; line-height: 1.36; -webkit-line-clamp: 2; }
-    .end-make { margin: 6px 0 0; min-height: 34px; padding: 0 14px; font-size: 13.5px; box-shadow: none; }
-    .end-card.wait .end-name { margin-top: 8px; height: 18px; } .end-card.wait .end-line { margin-top: 10px; height: 11px; box-shadow: 0 18px 0 -1px var(--line); }
+    .end-card .end-name { grid-column: 2; grid-row: 1; margin: 1px 0 0; font-size: 16px; line-height: 1.18; }
+    .end-card .end-line { grid-column: 2; grid-row: 2 / 4; align-self: start; margin: 3px 0 0; font-size: 13px; line-height: 1.34; }
+    /* As many whole lines of an idea as the three cards have the height for, and never half of one. On a short screen the drawing goes, and the button stands beside the words */
+    @container (max-height: 340px) { .end-card .end-line { -webkit-line-clamp: 2; } }
+    @container (max-height: 292px) {
+      .end-card { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: minmax(0, 1fr) auto auto minmax(0, 1fr); padding: 6px 10px 6px 14px; }
+      .end-card .end-art { display: none; }
+      .end-card .end-name { grid-column: 1; grid-row: 2; margin: 0; }
+      .end-card .end-line { grid-column: 1; grid-row: 3; margin: 2px 0 0; -webkit-line-clamp: 1; }
+      .end-card .end-make { grid-column: 2; grid-row: 1 / -1; align-self: center; justify-self: end; margin: 0; padding: 0 13px; }
+    }
+    @container (max-height: 208px) { .end-card .end-line { display: none; } .end-card .end-name { -webkit-line-clamp: 1; } }
+    .end-card.wait .end-name { margin-top: 6px; height: 17px; } .end-card.wait .end-line { margin-top: 10px; height: 11px; box-shadow: 0 18px 0 -1px var(--line); }
     .end-hero { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 12px; }
     .end-hero .end-art { border-radius: 18px; } .end-hero .end-kind { font-size: 20px; } .end-hero .end-line { margin-top: 6px; font-size: 14.5px; -webkit-line-clamp: 3; }
     .end-hero-name { margin-top: 2px; -webkit-line-clamp: 3; } .end-hero-name.long { -webkit-line-clamp: 5; }
     .end-status { margin-top: 10px; padding: 10px 12px; font-size: 13px; }
-    .end-ask { flex-wrap: wrap; gap: 8px; } .end-field { flex-basis: 100%; height: 48px; padding-left: 15px; } .end-field .btn { min-height: 36px; padding: 0 14px; font-size: 14px; }
-    .end-ask > .btn { flex: 1 1 0; min-height: 40px; padding: 0 10px; font-size: 14px; }
+    .end-ask { flex-wrap: wrap; gap: 8px; } .end-field { flex-basis: 100%; height: 46px; padding-left: 15px; } .end-field .btn { min-height: 34px; padding: 0 14px; font-size: 14px; }
+    .end-ask > .btn { flex: 1 1 0; min-height: 38px; padding: 0 10px; font-size: 14px; }
     .end-foot { margin-top: -2px; font: 400 11.5px/1.3 Text, -apple-system, "Segoe UI", system-ui, sans-serif; } .end-foot .skip { font-size: 12px; }
     .end-foot .end-wide { display: none; } .end-foot .end-narrow { display: inline; }
   }

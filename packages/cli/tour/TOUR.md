@@ -131,7 +131,12 @@ it tour answer <the action's id> '{"ideas":[{"name":"<two to four words>","line"
 
 Build it now, small and whole. The person is watching the seconds count, and the page has told them that a page takes a minute or two.
 
-1. Write one page of plain HTML, CSS and JavaScript that works the moment it opens and fetches nothing from anywhere. `It` is in the page already: `It.action("name", data)` sends you what they do, `It.onState((state) => …)` hears what you set with `it patch`, and `data-it-bind="key"` puts a value of the state into an element. Make it look like the thing it is, put the project's real things on it and not samples, and give it a place for your answers. Keep it under two hundred lines: a small page that works now is worth more than a grand one in five minutes. `it help page` says more, if you need it.
+1. Write one page of plain HTML, CSS and JavaScript that works the moment it opens and fetches nothing from anywhere. `It` is in the page already: `It.action("name", data)` sends you what they do, `It.onState((state) => …)` hears what you set with `it patch`, and `data-it-bind="key"` puts a value of the state into an element. Make it look like the thing it is, put the project's real things on it and not samples, and give it a place for your answers. Give it the colours of the page they have just been on, so that their first page is plainly of a piece with it: begin its style with the line below, set the page on `--paper` and what stands on it on `--card` with a `--line` border and round corners, and make each button a dark pill at least 44 pixels high. Keep it under two hundred lines: a small page that works now is worth more than a grand one in five minutes. `it help page` says more, if you need it.
+
+```css
+:root{color-scheme:light dark;--paper:#f3efe6;--card:#fffdf8;--ink:#1c1a16;--soft:#6d685d;--line:#e2dbcc;--accent:#17805a}@media(prefers-color-scheme:dark){:root{--paper:#100f0d;--card:#1a1916;--ink:#f4f0e7;--soft:#aaa497;--line:#2f2c27;--accent:#3ecf93}}
+```
+
 2. Publish it and bring it up in one command, with the page itself in the command, written with double quotes only so that nothing ends it early. This is a command your harness already lets you run, where writing a file may stop to ask the person, who is not looking at you:
 
 ```sh
