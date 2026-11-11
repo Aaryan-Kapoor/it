@@ -4186,6 +4186,8 @@ describe('displays and machines', () => {
         'delivery.holdBack',
         'displays.lock',
         'artifacts.notLoaded',
+        'turns.say',
+        'machines.notLoaded',
       ],
       now: expect.any(Number),
     })

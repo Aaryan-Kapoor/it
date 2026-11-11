@@ -6349,15 +6349,17 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     expect(told()).toEqual(reported)
   })
 
-  test('an It from before it took any of this is told nothing more once it has said so', async () => {
+  test.each([false, undefined])('an older or unknown backend gets no new reports, capability %s', async (takes) => {
     standIn()
-    stand.answer = (name) => (name === 'turns:say' ? Promise.reject(new Error('Could not find public function for turns:say')) : undefined)
+    stand.takes = takes
+    stand.answer = (name) => (['turns:say', 'machines:notLoaded'].includes(name) ? Promise.reject(new Error('Server Error')) : undefined)
     await start('socket', APPS)
     await asks(false)
     await handed(1, { woke: true, turn: true }, false)
     await asks(true)
     await pass(3)
-    expect(told()).toEqual([{}])
+    expect(told()).toEqual([])
+    expect(stand.calls.filter((c) => c.name === 'machines:notLoaded')).toEqual([])
     expect(said.filter((line) => line.includes('turn'))).toEqual([])
   })
 })
@@ -6592,11 +6594,28 @@ describe('how what is done on a conversation’s pages would reach it, as the co
 
   test('a conversation whose add-on is listening is said to be listening, and one that is not is said not to be', async () => {
     await start()
-    expect(await way('codex', 'thread-1')).toEqual({ connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    expect(await way('codex', 'thread-1')).toEqual({ connected: true, listening: true, runtime: 'inactive', thread: 'none' })
     await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1' } })
     expect(await way('codex', 'thread-1')).toMatchObject({ connected: true, listening: true, thread: 'none' })
     // An app the person has not connected here is said to be not connected
     expect(await way('opencode', 'ses_abc')).toMatchObject({ connected: false, listening: false, thread: 'none' })
+  })
+
+  test('Codex remains reachable after five seconds without a hook', async () => {
+    await start()
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: true } })
+    const real = Date.now
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => real() + 10_000)
+    try {
+      expect(await way('codex', 'thread-1')).toMatchObject({ listening: true })
+      stand.unknown.add('thread-1')
+      expect(await way('codex', 'thread-1')).toMatchObject({ listening: true })
+      stand.closed.add('thread-1')
+      stand.unknown.delete('thread-1')
+      expect(await way('codex', 'thread-1')).toMatchObject({ listening: false })
+    } finally {
+      clock.mockRestore()
+    }
   })
 
   test('a Claude Code conversation that a thread of T3 Code holds is said to be held there, and the thread is noted as a click’s look notes it', async () => {

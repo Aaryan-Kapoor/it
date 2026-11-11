@@ -67,6 +67,10 @@ export const TAKES = {
   displayLock: 'displays.lock',
   /** Conversations needing the reload notice: the site subscribes only where this query is named. */
   reloadReport: 'artifacts.notLoaded',
+  /** Machine reports of conversation turns, sent only when advertised by the backend. */
+  turnReports: 'turns.say',
+  /** Machine reports of open conversations missing the add-on. */
+  notLoadedReports: 'machines.notLoaded',
 } as const
 
 /**
