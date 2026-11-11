@@ -33,10 +33,12 @@ export const PREVIEW_CHOICES: readonly { value: PreviewChoice; label: string }[]
 const DEFAULT_CHOICE: PreviewChoice = 'sixteen'
 /** Kept in this browser, which is the screen: a setting of the screen's, and not of the person's. */
 const CHOICE = 'it.previews'
+let currentChoice: PreviewChoice | undefined
 const choiceWatchers = new Set<() => void>()
 
 /** What this screen was set to show. */
 export function previewChoice(): PreviewChoice {
+  if (currentChoice !== undefined) return currentChoice
   try {
     const kept = localStorage.getItem(CHOICE)
     return PREVIEW_CHOICES.some((c) => c.value === kept) ? (kept as PreviewChoice) : DEFAULT_CHOICE
@@ -45,6 +47,7 @@ export function previewChoice(): PreviewChoice {
   }
 }
 export function choosePreviews(choice: PreviewChoice): void {
+  currentChoice = choice
   try {
     localStorage.setItem(CHOICE, choice)
   } catch {
@@ -55,7 +58,11 @@ export function choosePreviews(choice: PreviewChoice): void {
 const watchChoice = (fn: () => void) => {
   choiceWatchers.add(fn)
   // Set in another tab of the same browser, which is the same screen
-  const fromElsewhere = (e: StorageEvent) => e.key === CHOICE && fn()
+  const fromElsewhere = (e: StorageEvent) => {
+    if (e.key !== CHOICE && e.key !== null) return
+    currentChoice = undefined
+    fn()
+  }
   window.addEventListener('storage', fromElsewhere)
   return () => {
     choiceWatchers.delete(fn)
