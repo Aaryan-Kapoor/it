@@ -278,7 +278,7 @@ export default defineSchema({
       v.array(v.object({ harness: v.string(), sessionId: v.string(), since: v.number(), stop: v.optional(v.boolean()), run: v.optional(v.string()) })),
     ),
     /** The last few conversations a person stopped, and when: what was waiting for one by then is not reopened for. */
-    stops: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number() }))),
+    stops: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), run: v.optional(v.string()) }))),
     /**
      * The Claude Code conversations open at a person's keyboard on this machine whose add-on its
      * connector does not hear, as one that was already open when the add-on was installed or

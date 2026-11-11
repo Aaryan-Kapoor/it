@@ -400,9 +400,14 @@ export const stop = mutation({
     if (run.identity !== expectedRun) return { stopping: false }
     if (run.stopping) return { stopping: true }
     const is = (r: { harness: string; sessionId: string }) => r.harness === a.session?.harness && r.sessionId === a.session?.id
+    const stopped = (machine.runs ?? []).find(is)
     await ctx.db.patch(machine._id, {
       runs: (machine.runs ?? []).map((r) => (is(r) ? { ...r, stop: true } : r)),
-      stops: [...(machine.stops ?? []).filter((r) => !is(r)), { harness: a.session!.harness, sessionId: a.session!.id, at: Date.now() }].slice(-STOPS_KEPT),
+      // Kept with the run's name, so that the machine is told of it whenever it says that run is over, however often it says so
+      stops: [
+        ...(machine.stops ?? []).filter((r) => !is(r)),
+        { harness: a.session!.harness, sessionId: a.session!.id, at: Date.now(), ...(stopped?.run ? { run: stopped.run } : {}) },
+      ].slice(-STOPS_KEPT),
     })
     // What was still waiting for that conversation goes with the stop: the person stopped the
     // agent, and did not mean it to take up, an hour later, what they had done before that.
