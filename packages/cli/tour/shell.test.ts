@@ -22,6 +22,8 @@ const moved = (page: Page) => {
   pointer(page, chair, 'pointerup', 430 + 39, 230 + 39)
   return page.sentOf('moved').at(-1)!
 }
+/** The page with the ending's ideas set already, as the agent sets them at the start: without them, coming to the ending asks for them. */
+const withIdeas = (w: any) => (w.It.state.end = { ideas: [{ name: 'A board', line: 'Drag things on it.', kind: 'board' }] })
 /** How the five stages of the dock stand for a part, as the classes they are drawn with. */
 const stages = (page: Page, step = 'room') => Object.fromEntries(Object.entries(page.read(step).stages).map(([k, v]) => [k, v.cls]))
 
@@ -49,15 +51,15 @@ describe('the frame of the tour’s first page', () => {
     page.to('cube')
     page.$('#skip').click()
     expect(page.shown()).toBe('end')
-    // However long it is left, nothing goes to the agent that the person did not do
+    // However long it is left, nothing goes to the agent that the person did not do: coming to the ending asked for its ideas, once
     await page.advance(5 * 60_000)
-    expect(page.sent).toEqual([])
+    expect(page.sent.map((sent) => sent.name)).toEqual(['ideas'])
     expect(page.errors).toEqual([])
     page.close()
   })
 
   test('has no mark of It’s and no column of words: a title and one line for the part that is shown, and nothing that scrolls', async () => {
-    const page = await opened()
+    const page = await opened({}, withIdeas)
     expect(page.$('.mark')).toBeNull()
     expect(page.$('.lede')).toBeNull()
     expect(page.w.document.querySelectorAll('h1')).toHaveLength(1)
@@ -102,7 +104,7 @@ describe('the frame of the tour’s first page', () => {
 
 describe('the agent’s dock', () => {
   test('names the agent app on every part, and before anything is done shows the five stages as what will happen, none of them reached', async () => {
-    const page = await opened()
+    const page = await opened({}, withIdeas)
     expect(page.$('#dock-who').textContent).toBe('Claude Code')
     expect([...page.w.document.querySelectorAll('#track li b')].map((b: any) => b.textContent)).toEqual(['You', 'It', 'Claude Code', 'Working', 'Answer'])
     for (const step of STEPS) {
@@ -343,7 +345,7 @@ describe('the guide for the first page', () => {
 
   test('names every action a part sends, in that part’s own section, and the page sends each it names', () => {
     const sends = [...page.matchAll(/(?:asker|my)\.send\("([a-z]+)"/g)].map((m) => m[1]!)
-    expect([...new Set(sends)].sort()).toEqual(['beat', 'checked', 'finish', 'illegal', 'move', 'moved', 'turned'])
+    expect([...new Set(sends)].sort()).toEqual(['beat', 'checked', 'finish', 'ideas', 'illegal', 'make', 'move', 'moved', 'turned'])
     for (const action of new Set(sends)) expect(sectionFor(action), action).toBeDefined()
     for (const heading of part.matchAll(/^### [^\n]*$/gm)) for (const named of heading[0].matchAll(/`([a-z]+)`/g)) expect(sends, named[1]).toContain(named[1])
   })
