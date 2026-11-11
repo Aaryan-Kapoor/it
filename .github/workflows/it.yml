@@ -422,7 +422,8 @@ jobs:
         run: node e2e/push.mjs
       # It as it answers its tailnet over https with `it https on`: a stand-in for Tailscale's own
       # server hands each request to the door over plain http, saying that it came over https,
-      # and the site, the pages' port and the live connection are asked through it. It is run
+      # and the site, the pages' port and the live connection are asked through it; then a
+      # browser is paired at the https address and shown a page there. It is run
       # for both commands, and it is the standalone program's run that matters most: inside it
       # the door listens with Bun's server, which hands it each request in another shape than
       # Node's does, and no test that calls the door's own function sees that listener. Run

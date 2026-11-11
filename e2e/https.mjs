@@ -4,15 +4,23 @@
 // (e2e/tailscale.mjs), since a runner is on no tailnet, and the settings of the stack's It are
 // given the name as `it https on` writes it. So the listener itself is asked, as the program
 // under test runs it, with what Tailscale sends it: which is what the standalone program people
-// install got wrong while every test that calls the door's own function passed. It needs the
-// stack running (node e2e/stack.mjs), and leaves its settings as it found them.
+// install got wrong while every test that calls the door's own function passed.
+//
+// The site, the pages' port and the live connection are asked for as a program asks, and then
+// a browser is paired at the https address and shown a page there. For the browser the stand-in
+// takes https itself, with a certificate made for the run by `openssl`, which must be there.
+// It needs the stack running (node e2e/stack.mjs), and leaves its settings as it found them.
 //
 //   node e2e/https.mjs
-import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import os from 'node:os'
 import path from 'node:path'
-import { needsStack, STACK_LOGS, sleep } from './lib.mjs'
+import { chromium } from 'playwright'
+import { it, needsStack, PRIVATE_MARK, STACK_LOGS, sleep } from './lib.mjs'
 import { printCleanly, verdict } from './logs.mjs'
+import { ownerAddress, paired } from './site.mjs'
 import { askThrough, standInTailscale } from './tailscale.mjs'
 
 printCleanly()
@@ -64,9 +72,29 @@ async function until(fn, ms = 20_000, every = 200) {
   }
 }
 
+/**
+ * A key and a certificate for a name, made for this run and signed by nobody: the browser here
+ * is told to pass that over, as it is told nothing else. They are read and the files removed.
+ */
+function selfSigned(name) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'it-e2e-tls-'))
+  try {
+    const [key, cert] = ['key.pem', 'cert.pem'].map((file) => path.join(dir, file))
+    execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '2', '-subj', `/CN=${name}`], {
+      stdio: 'ignore',
+    })
+    return { key: readFileSync(key), cert: readFileSync(cert) }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 // ---------- the checks ----------
 
 const standIns = []
+let browser
+let fixture
+let slug
 const before = { taken: said(TAKEN), dropped: said(DROPPED) }
 let wrote = false
 try {
@@ -134,9 +162,54 @@ try {
   // Not through Tailscale, the same name is one this machine does not answer to
   const direct = await askThrough(site.door, host, '/')
   check('a request that did not come through Tailscale is not taken for one that did', direct.status === 421, `status ${direct.status}`)
+
+  // ---------- in a browser ----------
+
+  // A browser is given the site over https only by something that takes https, so the stand-ins
+  // are started again at the same ports, taking it. The browser is told that the machine's name
+  // on the tailnet is this machine, and to pass over who signed the certificate.
+  for (const standIn of standIns.splice(0)) await standIn.stop()
+  const tls = selfSigned(NAME)
+  standIns.push(await standInTailscale({ door: site.door, listen: site.https, tls }))
+  standIns.push(await standInTailscale({ door: pages.door, listen: pages.https, tls }))
+  const SHOWN = 'shown over https'
+  fixture = mkdtempSync(path.join(os.tmpdir(), 'it-e2e-https-page-'))
+  writeFileSync(path.join(fixture, 'index.html'), `<!doctype html><meta charset="utf-8"><title>Over https</title><p id="over-https">${SHOWN}</p>`)
+  const made = await it(at.home, ['create', `Over https ${PRIVATE_MARK}page`, '--id', `over-https-${Date.now().toString(36)}`, '--dir', fixture])
+  slug = made.id
+  browser = await chromium.launch({ args: [`--host-resolver-rules=MAP ${NAME} 127.0.0.1`] })
+  const context = await browser.newContext({ ignoreHTTPSErrors: true })
+  const tab = await context.newPage()
+  // The address `it site` prints pairs the owner's browser, and is opened here at the https place
+  const pairing = new URL(await ownerAddress({ home: at.home }))
+  await tab.goto(`${origin}${pairing.pathname}${pairing.search}${pairing.hash}`)
+  const isPaired = await until(() => paired(tab), 30_000)
+  check(
+    'a browser that opens the site over https is paired there, which the live connection tells it',
+    isPaired,
+    await tab
+      .locator('body')
+      .innerText()
+      .catch((err) => err.message),
+  )
+  await tab.goto(`${origin}/p/${slug}`)
+  const showings = `https://${NAME}:${pages.https}/s/`
+  let got = 'the site had put no frame there'
+  const shown = await until(async () => {
+    if ((await tab.locator('.mount iframe[data-shown="true"]').count()) !== 1) return undefined
+    got = `the site called its frame shown, and none was at ${showings}`
+    const frame = tab.frames().find((f) => f.url().startsWith(showings))
+    if (!frame) return undefined
+    got = 'a frame was at a showing’s https address, and the page was not in it'
+    return (await frame.locator('#over-https').innerText({ timeout: 2000 })) === SHOWN
+  }, 30_000)
+  check('a page shows there, in a frame at the pages’ own https address', shown, got)
 } catch (err) {
   check(`the run finished (${err.message})`, false, err.stack)
 } finally {
+  await browser?.close().catch(() => {})
+  if (slug) await it(at.home, ['delete', slug]).catch(() => {})
+  if (fixture) rmSync(fixture, { recursive: true, force: true })
   // The settings are left as they were found, and the door as it was opened before
   if (wrote) {
     try {
