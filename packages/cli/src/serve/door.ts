@@ -876,13 +876,13 @@ interface Ffi {
   ): { symbols: { [K in keyof T]: (...args: (number | bigint | ArrayBufferView)[]) => number } }
   FFIType: { ptr: unknown; u64: unknown; u32: unknown; i32: unknown }
 }
-/** Where the system cannot list the process's handles, how far up they are looked through instead: Windows gives them out in fours from the lowest that is free, so this is room for sixty-five thousand. */
-const HANDLES_MOST = 1 << 18
+/** What opens one listening socket, kept to itself: `open` is run, and the socket it made is given to no program the service starts. */
+type KeptToItself = <T>(port: number, open: () => T) => T
 
 /**
- * Inside the standalone program on Windows, what keeps the sockets on one of the door's ports
- * from being handed to a program that the service starts. Nothing is needed anywhere else, and
- * this is undefined there.
+ * Inside the standalone program on Windows, what keeps a socket the door listens on from being
+ * handed to a program that the service starts. Nothing is needed anywhere else, and this is
+ * undefined there.
  *
  * Bun makes its sockets on Windows as ones a child process may be given, and Windows gives each
  * program that is started a copy of every such handle. A copy keeps the port listened on for as
@@ -893,27 +893,31 @@ const HANDLES_MOST = 1 << 18
  * stopped. Under Node, and on Linux and macOS under Bun, sockets are already made so that no
  * child is given them.
  *
- * Bun gives no way to a socket's handle, so the system is asked for the process's handles that
- * a child would be given, each is asked which address it is bound to, and every socket on the
- * port is marked as one that no child is given. A handle that is no socket is answered that,
- * and left as it is. Where the system will not list the handles, every one up to HANDLES_MOST is
- * asked instead. The buffers the system writes into are handed over as themselves, and never by
- * an address taken from them earlier: the engine moves a small buffer as it sees fit, and an
- * address taken before would by then be somewhere else.
+ * Bun gives no way to a socket's handle. Both of its ways of listening make the socket before
+ * they return, so the system is asked for the process's handles that a child would be given
+ * just before the door listens and again just after, which touches none of them, and only a
+ * handle that is new in that moment is asked which address it is bound to. One bound to the
+ * door's port is marked as one that no child is given. A handle the process had before is
+ * never asked anything: asking a handle that is no socket sends it a request, and a pipe that
+ * another program shares with this one, and is reading from, holds such a request up for as
+ * long as it waits. Where the system will not list the handles, nothing is marked, and a door
+ * opened anew waits out a port that is still held (`reopening` in the service). The buffers the
+ * system writes into are handed over as themselves, and never by an address taken from them
+ * earlier: the engine moves a small buffer as it sees fit, and an address taken before would by
+ * then be somewhere else.
  *
- * A connection the door takes after this is made the same way, and a program started while it
- * is open is given a copy of it. That keeps the connection open for whoever made it until that
- * program ends, though the door has closed it, and does not keep the port from being listened on.
+ * A connection the door takes is made the same way, and a program started while it is open is
+ * given a copy of it. That keeps the connection open for whoever made it until that program
+ * ends, though the door has closed it, and does not keep the port from being listened on.
  */
-const unsharing: Promise<((port: number) => void) | undefined> | undefined =
+const unsharing: Promise<KeptToItself | undefined> | undefined =
   standalone && process.platform === 'win32' ? windowsUnsharing().catch(() => undefined) : undefined
 
-async function windowsUnsharing(): Promise<(port: number) => void> {
+async function windowsUnsharing(): Promise<KeptToItself> {
   // Named through a variable, so that the bundle made for Node does not look for it
   const named = 'bun:ffi'
   const { dlopen, FFIType } = (await import(named)) as Ffi
   const kernel = dlopen('kernel32.dll', {
-    GetHandleInformation: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
     SetHandleInformation: { args: [FFIType.u64, FFIType.u32, FFIType.u32], returns: FFIType.i32 },
   }).symbols
   const nt = dlopen('ntdll.dll', {
@@ -922,32 +926,32 @@ async function windowsUnsharing(): Promise<(port: number) => void> {
   const sockets = dlopen('ws2_32.dll', { getsockname: { args: [FFIType.u64, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 } }).symbols
   const name = new Uint8Array(128)
   const length = new Int32Array(1)
-  const flags = new Uint32Array(1)
   const needed = new Uint32Array(1)
   let table = new Uint8Array(1 << 16)
   /** HANDLE_FLAG_INHERIT */
   const GIVEN = 1
   /** The process's handles that a child would be given, as the system lists them, or undefined where it will not. */
-  const listed = (): bigint[] | undefined => {
+  const listed = (): Set<bigint> | undefined => {
     for (let tries = 0; tries < 4; tries++) {
       // The process itself, ProcessHandleInformation
       const status = nt.NtQueryInformationProcess(0xffff_ffff_ffff_ffffn, 51, table, table.length, needed)
-      if (status === 0) return inheritable(table)
+      if (status === 0) return new Set(inheritable(table))
       // STATUS_INFO_LENGTH_MISMATCH: the list is longer than the room given for it
       if (status !== -1073741820) return undefined
       table = new Uint8Array(Math.max(needed[0]! + 4096, table.length * 2))
     }
     return undefined
   }
-  const unshare = (handle: bigint, port: number) => {
-    length[0] = name.length
-    if (sockets.getsockname(handle, name, length) !== 0 || boundPort(name) !== port) return
-    if (kernel.GetHandleInformation(handle, flags) !== 0 && (flags[0]! & GIVEN) !== 0) kernel.SetHandleInformation(handle, GIVEN, 0)
-  }
-  return (port) => {
-    const handles = listed()
-    if (handles) for (const handle of handles) unshare(handle, port)
-    else for (let at = 4; at < HANDLES_MOST; at += 4) unshare(BigInt(at), port)
+  return (port, open) => {
+    const before = listed()
+    const opened = open()
+    if (!before) return opened
+    for (const handle of listed() ?? []) {
+      if (before.has(handle)) continue
+      length[0] = name.length
+      if (sockets.getsockname(handle, name, length) === 0 && boundPort(name) === port) kernel.SetHandleInformation(handle, GIVEN, 0)
+    }
+    return opened
   }
 }
 
@@ -1217,7 +1221,7 @@ function agreement(head: string, key: string): string | null {
  * what is no request at all is told to the door and not answered by what reads requests.
  */
 const listenNode: Listen = async (address, port, door, api, patience) => {
-  const unshare = await unsharing
+  const kept = await unsharing
   const carried = new Set<Duplex>()
   const server = http.createServer({
     // Only a WebSocket is carried on. Any other request that offers to change protocol is answered as the plain request it also is.
@@ -1420,23 +1424,26 @@ const listenNode: Listen = async (address, port, door, api, patience) => {
   })
   return new Promise((resolve, reject) => {
     server.once('error', reject)
-    server.listen({ port, host: address, ipv6Only: address.includes(':') }, () => {
-      unshare?.(port)
-      // Once it listens, the one thing that can still go wrong with the port is that a
-      // connection could not be taken. That is one caller's loss and is written down: the port
-      // is listened on as before, and nothing ends because of it.
-      server.off('error', reject).on('error', () => door.turned('accept_failed'))
-      resolve({
-        // Every connection is closed first and the port after them: asked the other way round,
-        // node:http inside the standalone program waits for whoever still holds a connection
-        stop: () =>
-          new Promise((stopped) => {
-            for (const side of carried) side.destroy()
-            server.closeAllConnections()
-            server.close(() => stopped())
-          }),
+    const listen = () =>
+      server.listen({ port, host: address, ipv6Only: address.includes(':') }, () => {
+        // Once it listens, the one thing that can still go wrong with the port is that a
+        // connection could not be taken. That is one caller's loss and is written down: the port
+        // is listened on as before, and nothing ends because of it.
+        server.off('error', reject).on('error', () => door.turned('accept_failed'))
+        resolve({
+          // Every connection is closed first and the port after them: asked the other way round,
+          // node:http inside the standalone program waits for whoever still holds a connection
+          stop: () =>
+            new Promise((stopped) => {
+              for (const side of carried) side.destroy()
+              server.closeAllConnections()
+              server.close(() => stopped())
+            }),
+        })
       })
-    })
+    // Inside the standalone program on Windows, where the socket is kept to itself: Bun makes it before `listen` returns
+    if (kept) kept(port, listen)
+    else listen()
   })
 }
 
@@ -1614,7 +1621,7 @@ function unfinishedOnFailure(response: Response, cut: () => void): Response {
 
 /** Inside the standalone program, the site's port: Bun's own server, and a WebSocket passed on a message at a time. */
 const listenBun: Listen = async (address, port, door, api, patience) => {
-  const unshare = await unsharing
+  const kept = await unsharing
   /** The WebSockets the backend has not yet agreed to: for each, what gives up on it. */
   const asking = new Set<(said: boolean) => void>()
   /** Asks the backend to say when it has taken everything handed to it so far. One such question is out at a time. */
@@ -1624,166 +1631,167 @@ const listenBun: Listen = async (address, port, door, api, patience) => {
   }
   // Bun has one limit on headers for every server in the program, and this is where it is kept
   ;(http as { maxHeaderSize: number }).maxHeaderSize = HEADERS_MOST
-  const server = Bun!.serve({
-    hostname: address,
-    port,
-    // Said outright: a port that something else holds is a failure here, never a port shared
-    reusePort: false,
-    ipv6Only: address.includes(':'),
-    // Nothing of a fault is ever shown to whoever asked
-    development: false,
-    // A connection on which nothing moves for this many seconds is closed, which is also how
-    // headers that stop arriving are given up on
-    idleTimeout: IDLE_S,
-    maxRequestBodySize: UPLOAD.requestBytes + SMALL,
-    async fetch(request, server) {
-      const body = request.body ? bodyIn(request.body) : null
-      const arrival: Arrival = {
-        method: request.method,
-        target: request.url,
-        headers: request.headers,
-        body: body?.stream ?? null,
-        port,
-        address: addressOf(server.requestIP(request)?.address),
-        signal: request.signal,
-      }
-      // Once an answer has been handed over, nothing more can be done about the connection it
-      // goes out on. So what the caller is still sending is taken off the connection first, for
-      // so many bytes and so long, and then the answer is given. A request that was still
-      // arriving after that is not waited for: its connection is closed, as soon as Bun looks.
-      // So is one that says it carries a body where Bun hands none over, as it does for a
-      // request that only asks for something: nothing tells whether that body has arrived.
-      const answered = async (response: Response): Promise<Response> => {
-        if (body ? await body.letGo() : !carries(request.headers)) return response
-        // And not for longer because its caller is slow to take the answer: what of the answer
-        // has not gone when the moment is over is cut off, which closes the connection too
-        server.timeout(request, UNREAD_S)
-        return hurried(response)
-      }
-      // Only a WebSocket is carried on. Any other request that offers to change protocol is answered as the plain request it also is.
-      if (!/^websocket$/i.test(request.headers.get('upgrade') ?? '') || !namesIn(request.headers.get('connection')).includes('upgrade')) {
-        let response = await door.answer(arrival)
-        if (response.ok && response.body && request.method === 'GET' && new URL(request.url).pathname.startsWith('/session/export/'))
-          response = unfinishedOnFailure(response, () => server.timeout(request, 1))
-        return answered(response)
-      }
-      const live = door.live({ ...arrival, body: null })
-      if ('refuse' in live) return answered(new Response(null, { status: live.refuse, headers: live.says }))
-      // The backend is asked first, on a connection of the door's own, and the browser is
-      // agreed with only once the backend has agreed, within so long. A browser says nothing
-      // until it is agreed with, so there is nothing of its to keep meanwhile, and it is never
-      // told yes with nobody behind the door.
-      return new Promise<Response | undefined>((answer) => {
-        const up = new WebSocket(`ws://${api.host}${live.path}`) as BunClient
-        up.binaryType = 'arraybuffer'
-        const data: BunSocket['data'] = { up, early: [], handed: 0, taken: 0, asked: null, over: false }
-        const settle = (how: Response | undefined) => {
-          clearTimeout(waiting)
-          asking.delete(refuse)
-          answer(how)
+  const serve = () =>
+    Bun!.serve({
+      hostname: address,
+      port,
+      // Said outright: a port that something else holds is a failure here, never a port shared
+      reusePort: false,
+      ipv6Only: address.includes(':'),
+      // Nothing of a fault is ever shown to whoever asked
+      development: false,
+      // A connection on which nothing moves for this many seconds is closed, which is also how
+      // headers that stop arriving are given up on
+      idleTimeout: IDLE_S,
+      maxRequestBodySize: UPLOAD.requestBytes + SMALL,
+      async fetch(request, server) {
+        const body = request.body ? bodyIn(request.body) : null
+        const arrival: Arrival = {
+          method: request.method,
+          target: request.url,
+          headers: request.headers,
+          body: body?.stream ?? null,
+          port,
+          address: addressOf(server.requestIP(request)?.address),
+          signal: request.signal,
         }
-        /** The backend would not, or the door is closing: its connection is closed at once, and the caller is told only that. */
-        const refuse = (said: boolean) => {
-          if (!asking.has(refuse)) return
-          if (said) door.turned('backend_no_websocket')
-          settle(new Response(null, { status: 502 }))
-          try {
-            up.terminate()
-          } catch {}
+        // Once an answer has been handed over, nothing more can be done about the connection it
+        // goes out on. So what the caller is still sending is taken off the connection first, for
+        // so many bytes and so long, and then the answer is given. A request that was still
+        // arriving after that is not waited for: its connection is closed, as soon as Bun looks.
+        // So is one that says it carries a body where Bun hands none over, as it does for a
+        // request that only asks for something: nothing tells whether that body has arrived.
+        const answered = async (response: Response): Promise<Response> => {
+          if (body ? await body.letGo() : !carries(request.headers)) return response
+          // And not for longer because its caller is slow to take the answer: what of the answer
+          // has not gone when the moment is over is cut off, which closes the connection too
+          server.timeout(request, UNREAD_S)
+          return hurried(response)
         }
-        asking.add(refuse)
-        const waiting = setTimeout(() => refuse(true), Math.min(LIVE_OPEN_MS, patience))
-        up.onerror = () => {}
-        up.onclose = () => refuse(true)
-        up.onmessage = (event) => {
-          data.early?.push(event.data as string | ArrayBuffer)
+        // Only a WebSocket is carried on. Any other request that offers to change protocol is answered as the plain request it also is.
+        if (!/^websocket$/i.test(request.headers.get('upgrade') ?? '') || !namesIn(request.headers.get('connection')).includes('upgrade')) {
+          let response = await door.answer(arrival)
+          if (response.ok && response.body && request.method === 'GET' && new URL(request.url).pathname.startsWith('/session/export/'))
+            response = unfinishedOnFailure(response, () => server.timeout(request, 1))
+          return answered(response)
         }
-        up.onopen = () => {
-          if (!asking.has(refuse)) return
-          // A caller that went away meanwhile has no connection left to become a WebSocket
-          let agreed = false
-          try {
-            agreed = server.upgrade(request, { data })
-          } catch {}
-          settle(agreed ? undefined : new Response(null, { status: 400 }))
-          if (!agreed) up.terminate()
-        }
-      })
-    },
-    error: () => new Response(null, { status: 500 }),
-    websocket: {
-      // The backend sends a whole page's state in one message
-      maxPayloadLength: LIVE_MOST,
-      // A browser that takes what it is sent too slowly is cut off, and connects again. Nothing
-      // is ever left out of what it is sent: it would go on with a picture that is wrong.
-      backpressureLimit: LIVE_MOST,
-      closeOnBackpressureLimit: true,
-      open(ws) {
-        const { up } = ws.data
-        for (const said of ws.data.early ?? []) ws.send(said)
-        ws.data.early = null
-        up.onmessage = (event) => {
-          ws.send(event.data as string | ArrayBuffer)
-        }
-        // The backend answers a ping when it has read everything that was sent before it
-        up.addEventListener('pong', (event) => {
-          const d = ws.data
-          if (d.asked === null || Buffer.from((event as MessageEvent).data as ArrayBuffer).toString() !== String(d.asked)) return
-          d.taken = d.asked
-          d.asked = null
-          if (d.handed > d.taken) reached(d)
+        const live = door.live({ ...arrival, body: null })
+        if ('refuse' in live) return answered(new Response(null, { status: live.refuse, headers: live.says }))
+        // The backend is asked first, on a connection of the door's own, and the browser is
+        // agreed with only once the backend has agreed, within so long. A browser says nothing
+        // until it is agreed with, so there is nothing of its to keep meanwhile, and it is never
+        // told yes with nobody behind the door.
+        return new Promise<Response | undefined>((answer) => {
+          const up = new WebSocket(`ws://${api.host}${live.path}`) as BunClient
+          up.binaryType = 'arraybuffer'
+          const data: BunSocket['data'] = { up, early: [], handed: 0, taken: 0, asked: null, over: false }
+          const settle = (how: Response | undefined) => {
+            clearTimeout(waiting)
+            asking.delete(refuse)
+            answer(how)
+          }
+          /** The backend would not, or the door is closing: its connection is closed at once, and the caller is told only that. */
+          const refuse = (said: boolean) => {
+            if (!asking.has(refuse)) return
+            if (said) door.turned('backend_no_websocket')
+            settle(new Response(null, { status: 502 }))
+            try {
+              up.terminate()
+            } catch {}
+          }
+          asking.add(refuse)
+          const waiting = setTimeout(() => refuse(true), Math.min(LIVE_OPEN_MS, patience))
+          up.onerror = () => {}
+          up.onclose = () => refuse(true)
+          up.onmessage = (event) => {
+            data.early?.push(event.data as string | ArrayBuffer)
+          }
+          up.onopen = () => {
+            if (!asking.has(refuse)) return
+            // A caller that went away meanwhile has no connection left to become a WebSocket
+            let agreed = false
+            try {
+              agreed = server.upgrade(request, { data })
+            } catch {}
+            settle(agreed ? undefined : new Response(null, { status: 400 }))
+            if (!agreed) up.terminate()
+          }
         })
-        up.onclose = (event) => {
+      },
+      error: () => new Response(null, { status: 500 }),
+      websocket: {
+        // The backend sends a whole page's state in one message
+        maxPayloadLength: LIVE_MOST,
+        // A browser that takes what it is sent too slowly is cut off, and connects again. Nothing
+        // is ever left out of what it is sent: it would go on with a picture that is wrong.
+        backpressureLimit: LIVE_MOST,
+        closeOnBackpressureLimit: true,
+        open(ws) {
+          const { up } = ws.data
+          for (const said of ws.data.early ?? []) ws.send(said)
+          ws.data.early = null
+          up.onmessage = (event) => {
+            ws.send(event.data as string | ArrayBuffer)
+          }
+          // The backend answers a ping when it has read everything that was sent before it
+          up.addEventListener('pong', (event) => {
+            const d = ws.data
+            if (d.asked === null || Buffer.from((event as MessageEvent).data as ArrayBuffer).toString() !== String(d.asked)) return
+            d.taken = d.asked
+            d.asked = null
+            if (d.handed > d.taken) reached(d)
+          })
+          up.onclose = (event) => {
+            if (ws.data.over) return
+            ws.data.over = true
+            // The backend's own reason goes on to the browser, which decides by it how soon to try again
+            try {
+              if (fromAsked(event.code)) ws.close(event.code, event.reason)
+              else ws.close(1011)
+            } catch {
+              ws.terminate()
+            }
+          }
+        },
+        message(ws, message) {
+          const d = ws.data
+          if (d.over) return
+          // Bun does not say how much of what it was handed is still waiting to be written, so it
+          // is counted here: what was handed over, less what the backend has said it has taken.
+          // No more than one message of the largest size may be waiting. A browser cannot be made
+          // to wait, so past that both ends are closed: the browser's with a word to come back
+          // later, and the backend's at once and with none, since a word would wait behind
+          // everything it has not taken.
+          const size = (typeof message === 'string' ? Buffer.byteLength(message) : message.byteLength) + LIVE_FRAME
+          if (d.handed - d.taken + size > LIVE_MOST + LIVE_FRAME) {
+            d.over = true
+            door.turned('backend_slow')
+            try {
+              d.up.terminate()
+            } catch {}
+            try {
+              ws.close(LIVE_LATER)
+            } catch {
+              ws.terminate()
+            }
+            return
+          }
+          d.up.send(message as string | ArrayBuffer)
+          d.handed += size
+          if (d.asked === null) reached(d)
+        },
+        close(ws, code, reason) {
           if (ws.data.over) return
           ws.data.over = true
-          // The backend's own reason goes on to the browser, which decides by it how soon to try again
           try {
-            if (fromAsked(event.code)) ws.close(event.code, event.reason)
-            else ws.close(1011)
-          } catch {
-            ws.terminate()
-          }
-        }
-      },
-      message(ws, message) {
-        const d = ws.data
-        if (d.over) return
-        // Bun does not say how much of what it was handed is still waiting to be written, so it
-        // is counted here: what was handed over, less what the backend has said it has taken.
-        // No more than one message of the largest size may be waiting. A browser cannot be made
-        // to wait, so past that both ends are closed: the browser's with a word to come back
-        // later, and the backend's at once and with none, since a word would wait behind
-        // everything it has not taken.
-        const size = (typeof message === 'string' ? Buffer.byteLength(message) : message.byteLength) + LIVE_FRAME
-        if (d.handed - d.taken + size > LIVE_MOST + LIVE_FRAME) {
-          d.over = true
-          door.turned('backend_slow')
-          try {
-            d.up.terminate()
+            if (fromOpener(code)) ws.data.up.close(code, reason)
+            else ws.data.up.close()
           } catch {}
-          try {
-            ws.close(LIVE_LATER)
-          } catch {
-            ws.terminate()
-          }
-          return
-        }
-        d.up.send(message as string | ArrayBuffer)
-        d.handed += size
-        if (d.asked === null) reached(d)
+        },
       },
-      close(ws, code, reason) {
-        if (ws.data.over) return
-        ws.data.over = true
-        try {
-          if (fromOpener(code)) ws.data.up.close(code, reason)
-          else ws.data.up.close()
-        } catch {}
-      },
-    },
-  })
-  // Bun listens before it returns, and nothing has been started since
-  unshare?.(port)
+    })
+  // Bun listens before it returns
+  const server = kept ? kept(port, serve) : serve()
   return {
     // Bun closes the port and every connection on it as it is asked to. What it promises is
     // not waited for: it goes on counting a WebSocket that the door itself closed, and so may
