@@ -40,22 +40,19 @@ export class AddonRuntimes {
   private loaded = new Map<string, Loaded>()
   private overflowUntil = new Map<string, number>()
   /**
-   * When an app last refused to load It's add-on, and when an add-on of the app that had not
-   * been heard from before was first heard from, both by this machine's clock in milliseconds.
-   * Only an add-on that was loaded after a refusal shows that the refusal is over: one that was
-   * running before it goes on as it was, since an app that fails to load a plugin again keeps
-   * the copy it had, and says nothing of the copy it refused. An add-on that says when it began
-   * (`since`) is gone by that, so that one which was running before the connector started is
-   * not taken for one that has just begun.
+   * When an app last refused to load It's add-on, and the latest time an add-on of the app says
+   * it began, both by this machine's clock in milliseconds. Only an add-on that began after a
+   * refusal shows that the refusal is over: one that was running before it goes on as it was,
+   * since an app that fails to load a plugin again keeps the copy it had, and says nothing of
+   * the copy it refused. When it was first heard from says nothing of that, since a connector
+   * started since hears from it for the first time all the same.
    */
   private refusedAt = new Map<string, number>()
   private startedAt = new Map<string, number>()
-  /** When each add-on instance was first heard from, for an add-on that does not say when it began. */
-  private firstHeard = new Map<string, number>()
 
   /**
    * The app refused to load It's add-on at this time, or has not since its add-on was put
-   * there (undefined). A refusal holds until an add-on of the app is heard from after it: until
+   * there (undefined). A refusal holds until an add-on of the app that began after it is heard from: until
    * then nothing of It runs in the app, and the app may be open without it, so the add-on is
    * not called connected and Auto-wake does not reopen beside it. Said back: whether this
    * changes what is said of the app.
@@ -133,16 +130,12 @@ export class AddonRuntimes {
                 .join(' '),
             }
     this.loaded.set(`${harness}:${instance}`, { at: now, runtime, idle: v.idle === true })
-    const key = `${harness}:${instance}`
-    if (!this.firstHeard.has(key)) {
-      this.firstHeard.set(key, Date.now())
-      // Bounded, as `loaded` is: an instance forgotten here and heard from again counts as one that has just started
-      if (this.firstHeard.size > 1000) this.firstHeard.delete(this.firstHeard.keys().next().value!)
-    }
-    // When the add-on says it began, believed only where that is not in the future of this machine's clock
+    // When the add-on says it began, believed only where that is not in the future of this
+    // machine's clock. An add-on that does not say, as one of an earlier build does, cannot end
+    // a refusal: heard from for the first time by a connector started since, it may well have
+    // been running from before.
     const said = typeof v.since === 'number' && Number.isFinite(v.since) && v.since > 0 && v.since <= Date.now() + 60_000 ? v.since : undefined
-    const began = said ?? this.firstHeard.get(key)!
-    if (began > (this.startedAt.get(harness) ?? -1)) this.startedAt.set(harness, began)
+    if (said !== undefined && said > (this.startedAt.get(harness) ?? -1)) this.startedAt.set(harness, said)
     for (const [key, entry] of this.loaded) if (now - entry.at >= RECENT_MS) this.loaded.delete(key)
     // Keep room for 100 simultaneous app instances, but bound memory and the work of reading
     // their status if a faulty add-on keeps reporting a new instance id. Evicted instances

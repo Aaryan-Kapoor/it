@@ -1629,10 +1629,12 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
         JSON.stringify({ installs: [{ version: ADDONS.opencode!.version, at: Date.now(), dir: config }] }),
       )
       mkdirSync(path.join(data, 'opencode', 'log'), { recursive: true })
-      writeFileSync(
-        path.join(data, 'opencode', 'log', 'opencode.log'),
-        `timestamp=${new Date(Date.now() + 1000).toISOString()} level=WARN run=9f604eaf message="failed to load plugin" target=${plugin} cause="Cause([Fail(PluginModule.LoadError: Plugin must export a default definition with an id and an effect or setup function.)])"\n`,
-      )
+      const base = Date.now()
+      const refusal = (at: number) =>
+        `timestamp=${new Date(at).toISOString()} level=WARN run=9f604eaf message="failed to load plugin" target=${plugin} cause="Cause([Fail(PluginModule.LoadError: Plugin must export a default definition with an id and an effect or setup function.)])"\n`
+      // An earlier refusal in another of OpenCode's logs, and the latest in its own
+      writeFileSync(path.join(data, 'opencode', 'log', 'earlier.log'), refusal(base + 500))
+      writeFileSync(path.join(data, 'opencode', 'log', 'opencode.log'), refusal(base + 1000))
       const opencode = async () => (await local<{ addons: Record<string, { state: string; detail: string }> }>('/health'))?.addons.opencode
       await until(async () => (await opencode())?.state === 'incompatible', 10_000)
       expect((await opencode())?.detail).toMatch(/^OpenCode refused to load It’s add-on/)
@@ -1642,20 +1644,22 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       await new Promise((r) => setTimeout(r, 2500))
       expect(failures()).toEqual([])
       expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
-      // OpenCode writes on, until the refusal is past the part of its log that is read: It's file is as it was, so the refusal stands
+      // An add-on that began between the two refusals is heard from: the later one still stands
+      const report = (instance: string, since: number) =>
+        local('/addon', {
+          method: 'POST',
+          body: { harness: 'opencode', instance, addon: { api: 1, version: ADDONS.opencode!.build, delivery: true, idle: false, since } },
+        })
+      await report('between', base + 700)
+      expect((await opencode())?.state).toBe('incompatible')
+      // OpenCode writes on, until the refusal is past the part of its log that is read: It's file is as it was, so the refusal
+      // stands, and the earlier one still read does not take its place
       writeFileSync(path.join(data, 'opencode', 'log', 'opencode.log'), 'timestamp=2026-11-11T00:00:00.000Z level=INFO message="something else"\n')
       await new Promise((r) => setTimeout(r, 5500))
       expect((await opencode())?.state).toBe('incompatible')
       expect(failures()).toEqual([])
-      // Its add-on is heard from after the refusal: OpenCode loaded it after all, and the click is the add-on's
-      await local('/addon', {
-        method: 'POST',
-        body: {
-          harness: 'opencode',
-          instance: 'loaded',
-          addon: { api: 1, version: ADDONS.opencode!.build, delivery: true, idle: false, since: Date.now() + 2000 },
-        },
-      })
+      // An add-on that began after the refusal is heard from: OpenCode loaded it after all, and the click is the add-on's
+      await report('loaded', base + 2000)
       expect((await opencode())?.state).toBe('active')
     } finally {
       if (had === undefined) delete process.env.XDG_DATA_HOME

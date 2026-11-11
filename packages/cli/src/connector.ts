@@ -4687,10 +4687,11 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       const plugins = data ? opencodePlugins(readJson(inHome('addons', 'opencode.json'))) : []
       const before = runtimes.refusedSince('opencode')
       // A refusal the log no longer shows still stands while It's file is as it was then: the
-      // line may only have gone past the part of the log that is read
-      const at = data
-        ? (opencodeRefusedAt(plugins, [path.join(data, 'opencode', 'log')]) ?? (before !== undefined && unchangedSince(plugins, before) ? before : undefined))
-        : undefined
+      // line may only have gone past the part of the log that is read, and an older line that
+      // is still read must not take its place. The later of the two is the one that stands.
+      const found = data ? opencodeRefusedAt(plugins, [path.join(data, 'opencode', 'log')]) : undefined
+      const kept = data && before !== undefined && unchangedSince(plugins, before) ? before : undefined
+      const at = found === undefined ? kept : kept === undefined ? found : Math.max(found, kept)
       if (!runtimes.refused('opencode', at)) return
       // The site is told at once
       say(
