@@ -51,8 +51,8 @@
 </style>
 <section class="part" data-part="board" data-title="A whiteboard" data-line="Write your answer on the board, and press Check it. {agent} reads it and marks it in green." hidden>
   <svg width="0" height="0" aria-hidden="true" style="position:absolute">
-    <symbol id="board-m" viewBox="0 0 100 18"><rect x="26" y="2" width="68" height="14" rx="3" fill="#f7f6f2"/><rect class="board-mk" x="39" y="2" width="42" height="14"/><path d="M46 7.2h21M46 11h12" stroke="#fff" stroke-opacity=".8" stroke-width="1.6" stroke-linecap="round"/><rect x="27" y="3" width="66" height="3.2" rx="1.6" fill="#fff" opacity=".5"/><rect x="26" y="12.4" width="68" height="3.6" rx="1.8" opacity=".13"/><rect class="board-mk" x="92" y="3.2" width="8" height="11.6" rx="2.6"/><rect class="board-mk" y="1" width="33" height="16" rx="5"/><path d="M24 2.5v13M27.5 2.5v13" stroke="#000" stroke-opacity=".22" stroke-width="1.2"/><rect x="3.5" y="3.2" width="17" height="3" rx="1.5" fill="#fff" opacity=".34"/><rect x="1" y="12" width="31" height="4.2" rx="2.1" opacity=".17"/></symbol>
-    <symbol id="board-o" viewBox="0 0 124 20"><path class="board-mk" d="M.6 10c0-2.3 3.2-3.8 10-4.2v8.4C3.8 13.8.6 12.3.6 10z"/><path d="M.6 10c0-2.3 3.2-3.8 10-4.2v3C5 9 2 9.4.6 10z" fill="#fff" opacity=".22"/><path d="M10 4.4h9.5a2 2 0 0 1 2 2v7.2a2 2 0 0 1-2 2H10z" fill="#3b3a37"/><rect x="21" y="2" width="92" height="16" rx="3.6" fill="#f7f6f2"/><rect class="board-mk" x="41" y="2" width="50" height="16"/><path d="M49 8h26M49 12.6h15" stroke="#fff" stroke-opacity=".8" stroke-width="1.8" stroke-linecap="round"/><rect x="22" y="3.2" width="90" height="3.6" rx="1.8" fill="#fff" opacity=".5"/><rect x="21" y="13.8" width="92" height="4.2" rx="2.1" opacity=".13"/><rect class="board-mk" x="111" y="3.4" width="12" height="13.2" rx="3"/></symbol>
+    <symbol id="board-m" viewBox="0 0 100 18"><rect x="26" y="2" width="68" height="14" rx="3" fill="#f7f6f2" stroke="#000" stroke-opacity=".2" stroke-width=".8"/><rect class="board-mk" x="39" y="2" width="42" height="14"/><path d="M46 7.2h21M46 11h12" stroke="#fff" stroke-opacity=".8" stroke-width="1.6" stroke-linecap="round"/><rect x="27" y="3" width="66" height="3.2" rx="1.6" fill="#fff" opacity=".5"/><rect x="26" y="12.4" width="68" height="3.6" rx="1.8" opacity=".13"/><rect class="board-mk" x="92" y="3.2" width="8" height="11.6" rx="2.6"/><rect class="board-mk" y="1" width="33" height="16" rx="5"/><path d="M24 2.5v13M27.5 2.5v13" stroke="#000" stroke-opacity=".22" stroke-width="1.2"/><rect x="3.5" y="3.2" width="17" height="3" rx="1.5" fill="#fff" opacity=".34"/><rect x="1" y="12" width="31" height="4.2" rx="2.1" opacity=".17"/></symbol>
+    <symbol id="board-o" viewBox="0 0 124 20"><path class="board-mk" d="M.6 10c0-2.3 3.2-3.8 10-4.2v8.4C3.8 13.8.6 12.3.6 10z"/><path d="M.6 10c0-2.3 3.2-3.8 10-4.2v3C5 9 2 9.4.6 10z" fill="#fff" opacity=".22"/><path d="M10 4.4h9.5a2 2 0 0 1 2 2v7.2a2 2 0 0 1-2 2H10z" fill="#3b3a37"/><rect x="21" y="2" width="92" height="16" rx="3.6" fill="#f7f6f2" stroke="#000" stroke-opacity=".2" stroke-width=".8"/><rect class="board-mk" x="41" y="2" width="50" height="16"/><path d="M49 8h26M49 12.6h15" stroke="#fff" stroke-opacity=".8" stroke-width="1.8" stroke-linecap="round"/><rect x="22" y="3.2" width="90" height="3.6" rx="1.8" fill="#fff" opacity=".5"/><rect x="21" y="13.8" width="92" height="4.2" rx="2.1" opacity=".13"/><rect class="board-mk" x="111" y="3.4" width="12" height="13.2" rx="3"/></symbol>
     <symbol id="board-e" viewBox="0 0 64 24"><rect class="board-wood" x="1" y="1" width="62" height="16" rx="4.6"/><rect x="5" y="3.4" width="54" height="3" rx="1.5" fill="#fff" opacity=".32"/><rect x="1" y="11" width="62" height="6" rx="3" opacity=".12"/><rect x="2" y="14.5" width="60" height="8.5" rx="2.6" fill="#47453f"/><path d="M6 18.8h52" stroke="#fff" stroke-opacity=".16" stroke-width="1.6" stroke-dasharray="1 3.2"/></symbol>
   </svg>
   <div class="fill">
@@ -98,13 +98,13 @@ Shell.part("board", (my) => {
   var FONT = 'Hand, "Segoe Print", "Bradley Hand", cursive', DARK = "#111111";
   // How thick a marker writes and how wide the eraser wipes, in the board's units
   var PEN = 7, RUB = 46;
-  // The garden, as the question's writer drew it: a square with plants in it, and how long a side is under it. It is drawn 100 across
-  var PLOT = "M3 4Q50 1 97 3Q100 50 98 97Q50 100 2 98Q0 50 3 4M20 34l3-10 3 10m5-1l2-8 4 8M60 30l3-10 3 10m5-1l2-8 4 8M38 60l3-10 3 10m5-1l2-8 4 8M72 70l3-10 3 10m5-1l2-8 4 8M16 80l3-10 3 10m5-1l2-8 4 8M3 114H97M3 107v14M97 107v14";
+  // The garden, as the question's writer drew it: a square with seedlings in it, and how long a side is under it. It is drawn 100 across
+  var PLOT = "M3 4Q50 1 97 3Q100 50 98 97Q50 100 2 98Q0 50 3 4M24 38v-13m0 7q-8-1-9-9m9 9q8-1 9-9M64 34v-13m0 7q-8-1-9-9m9 9q8-1 9-9M44 64v-13m0 7q-8-1-9-9m9 9q8-1 9-9M78 76v-13m0 7q-8-1-9-9m9 9q8-1 9-9M22 86v-13m0 7q-8-1-9-9m9 9q8-1 9-9M3 114H97M3 107v14M97 107v14";
   // What is written on the board to begin with, for a wide board and for a tall one: each line with where it is and how large,
   // the sum, the place for the answer, the garden, where a hint goes and how large the agent writes
   var LAY = {
     wide: { w: 900, h: 400, mx: 44, my: 30, ask: [["A square garden has sides of 12 m.", 0, 46, 48], ["What is its area?", 0, 100, 48]], sum: [0, 266, 100], slot: [372, 172, 290, 132], plot: [770, 4, 108], hint: 376, write: 44, label: 28 },
-    tall: { w: 340, h: 548, mx: 16, my: 14, ask: [["A square garden has", 0, 32, 36], ["sides of 12 m.", 0, 71, 36], ["What is its area?", 0, 110, 36]], sum: [0, 216, 80], slot: [0, 238, 340, 136], plot: [264, 50, 64], hint: 470, write: 34, label: 24 },
+    tall: { w: 340, h: 548, mx: 16, my: 14, ask: [["A square garden has", 0, 32, 36], ["sides of 12 m.", 0, 71, 36], ["What is its area?", 0, 110, 36]], sum: [0, 216, 80], slot: [0, 238, 340, 126], plot: [264, 50, 64], hint: 470, write: 34, label: 24 },
   };
   var clamp = (v, low, high) => Math.min(high, Math.max(low, v));
   var make = (tag, attrs, into) => { var el = document.createElementNS(Shell.SVG, tag); Object.keys(attrs).forEach((k) => el.setAttribute(k, attrs[k])); if (into) into.appendChild(el); return el; };
@@ -532,15 +532,19 @@ Shell.part("board", (my) => {
     for (var i = 0; i <= 5; i++) { var a = -Math.PI / 2 + turn + (i % 5) * Math.PI * 0.8, k = r * (0.94 + rnd() * 0.12 + (i === 5 ? 0.06 : 0)); d += (i ? "L" : "M") + n1(cx + Math.cos(a) * k) + " " + n1(cy + Math.sin(a) * k); }
     return d;
   }
-  var hits = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-  // A free place on the board for something of this size: the first of the places tried that is on the board and on nothing
-  // else, and where none is, the first, moved onto the board
+  var over = (a, b) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  // A place on the board for something of this size: the first of the places tried that is on the board and on nothing else,
+  // which is `free`, and where none is, the one that, moved onto the board, lies over the least
   function spot(w, h, tries, used, F) {
+    var best = null;
     for (var i = 0; i < tries.length; i++) {
-      var r = { x: tries[i][0], y: tries[i][1], w: w, h: h };
-      if (r.x >= F.x && r.y >= F.y && r.x + w <= F.x + F.w && r.y + h <= F.y + F.h && !used.some((u) => hits(r, u))) return r;
+      var r = { x: clamp(tries[i][0], F.x, Math.max(F.x, F.x + F.w - w)), y: clamp(tries[i][1], F.y, Math.max(F.y, F.y + F.h - h)), w: w, h: h };
+      r.lies = used.reduce((n, u) => n + over(r, u), 0);
+      r.free = !r.lies && r.x === tries[i][0] && r.y === tries[i][1] && w <= F.w && h <= F.h;
+      if (r.free) return r;
+      if (!best || r.lies < best.lies) best = r;
     }
-    return { x: clamp(tries[0][0], F.x, Math.max(F.x, F.x + F.w - w)), y: clamp(tries[0][1], F.y, Math.max(F.y, F.y + F.h - h)), w: w, h: h };
+    return best;
   }
   // The marking itself: a ring round what the person wrote, an arrow to the right answer and a hint where they are wrong,
   // and a tick, a star and a few words where they are right. Each is put where the board is free
@@ -550,6 +554,7 @@ Shell.part("board", (my) => {
     var b = typed ? typedBox() : inked() || { x: 30, y: 20, w: L.slot[2] - 60, h: L.slot[3] - 40 };
     // Where the question is, which nothing is written over
     var used = L.ask.concat([[SUM].concat(L.sum)]).map((l) => ({ x: l[1] - sx, y: l[2] - l[3] * 0.78 - sy, w: wide(l[0], l[3]), h: l[3] * 1.02 }));
+    var sum = used[used.length - 1];
     used.push({ x: L.plot[0] - sx - 8, y: L.plot[1] - sy - 8, w: L.plot[2] + 16, h: L.plot[2] * 1.22 + L.label + 16 });
     var steps = [], near = [], cx = b.x + b.w / 2, cy = b.y + b.h / 2, low, size = L.write;
     var read = Shell.tidy(got.read, 16), hint = Shell.tidy(got.hint, 44);
@@ -565,7 +570,7 @@ Shell.part("board", (my) => {
       var r = t * 0.3, s = spot(r * 2, r * 2, [[k.x + t + 12, k.y + t * 0.1], [k.x + t * 0.25, k.y + t + 8], [k.x - r * 2 - 12, k.y + t * 0.1], [k.x + t * 0.25, k.y - r * 2 - 8]], used, F);
       steps.push(line("board-star", star(s.x + r, s.y + r, r, rnd), 680));
       used.push(s);
-      near = [[s.x + r * 2 + 20, s.y + r - size * 0.5]];
+      near = [[s.x + r * 2 + 20, s.y + r - size * 0.5], [b.x, Math.max(b.y + b.h, k.y + t, s.y + r * 2) + 14]];
       low = Math.max(b.y + b.h, k.y + t, s.y + r * 2);
     } else {
       var rx = Math.max(50, b.w / 2 + 26), ry = Math.max(42, b.h / 2 + 20), answer = Shell.tidy(got.answer, 8);
@@ -574,7 +579,8 @@ Shell.part("board", (my) => {
       low = cy + ry;
       if (answer) {
         var as = clamp(b.h, 58, L.sum[2]), aw = wide(answer, as), ah = as * 0.78, gap = 74;
-        var a = spot(aw, ah, [[cx + rx + gap, cy - ah / 2], [cx - aw / 2, cy + ry + gap * 0.8], [cx - rx - gap - aw, cy - ah / 2], [cx - aw / 2, cy - ry - gap * 0.8 - ah]], used, F);
+        // Beside the ring, or after the sum where that is free, as it is on a tall board, or under the ring, before it, or over it
+        var a = spot(aw, ah, [[cx + rx + gap, cy - ah / 2], [sum.x + sum.w + 20, sum.y + (sum.h - ah) / 2], [cx - aw / 2, cy + ry + gap * 0.72], [cx - rx - gap - aw, cy - ah / 2], [cx - aw / 2, cy - ry - gap * 0.72 - ah]], used, F);
         steps = steps.concat(arrow(cx, cy, rx, ry, a));
         steps.push(words("board-right", answer, a.x, a.y + ah * 0.94, as));
         used.push(a);
@@ -582,8 +588,14 @@ Shell.part("board", (my) => {
       }
     }
     if (hint) {
-      var lines = wrap(hint, size, Math.min(L.w, F.w)), hw = Math.max.apply(null, lines.map((text) => wide(text, size))), hh = lines.length * size * 1.04;
-      var h = spot(hw, hh, near.concat([[-sx, Math.max(L.hint - sy - size * 0.8, low + 16)], [-sx, low + 16], [-sx, F.y + F.h - hh], [-sx, b.y - hh - 30]]), used, F);
+      // Under everything, at the left of what is written, and smaller where the board has no room for it as large as that
+      for (var small = 1, lines, h; small > 0.6; small -= 0.16) {
+        size = L.write * small;
+        lines = wrap(hint, size, Math.min(L.w, F.w));
+        var hw = Math.max.apply(null, lines.map((text) => wide(text, size))), hh = lines.length * size * 1.04;
+        h = spot(hw, hh, near.concat([[-sx, Math.max(L.hint - sy - size * 0.8, low + 16)], [-sx, low + 16], [b.x, low + 16], [-sx, F.y + F.h - hh], [cx + 60, low + 16]]), used, F);
+        if (h.free) break;
+      }
       lines.forEach((text, i) => steps.push(words(i ? "" : "board-hint", text, h.x, h.y + size * 0.8 + i * size * 1.04, size)));
     }
     perform(steps);

@@ -590,7 +590,9 @@ describe.skipIf('Bun' in globalThis || !existsSync(chromium.executablePath()))('
         expect(picture.dark).toBeGreaterThan(0.01)
         expect(picture.coloured).toBe(0)
         // The marking is drawn by the green marker, which is back in the tray when it is done
-        await tab.evaluate(() => (window as any).answer({ read: '1', right: false, answer: '144', hint: '12 × 10 + 12 × 2', say: 'Not quite.' }))
+        await tab.evaluate(() =>
+          (window as any).answer({ read: '1', right: false, answer: '144', hint: 'one more 4 at the end, as 12 × 10 + 12 × 2', say: 'Not quite.' }),
+        )
         await tab.waitForFunction(() => !document.getElementById('board-hand')!.hidden)
         await tab.waitForFunction(
           () => document.getElementById('board-hint')?.classList.contains('on') && document.getElementById('board-hand')!.hidden,
@@ -605,6 +607,20 @@ describe.skipIf('Bun' in globalThis || !existsSync(chromium.executablePath()))('
           })
         })
         expect(marks).toEqual([true, true, true, true, true])
+        // And none is written over another, however little room the board has. The box of a line of handwriting is taller
+        // than its letters, by the room the face keeps over and under them, so the letters' own part of it is measured
+        const lies = await tab.evaluate(() => {
+          const boxes = ['ring', 'right', 'hint'].map((mark) => {
+            const r = document.getElementById(`board-${mark}`)!.getBoundingClientRect()
+            const spare = mark === 'ring' ? 0 : r.height * 0.24
+            return { left: r.left, right: r.right, top: r.top + spare, bottom: r.bottom - spare }
+          })
+          type Box = (typeof boxes)[number]
+          const over = (a: Box, b: Box) =>
+            Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top))
+          return [over(boxes[0]!, boxes[1]!), over(boxes[0]!, boxes[2]!), over(boxes[1]!, boxes[2]!)].map((area) => Math.round(area))
+        })
+        expect(lies).toEqual([0, 0, 0])
         // Wiped quite clean with the eraser, there is nothing to check
         await tab.locator('[data-tool="eraser"]').click()
         await tab.mouse.move(x - 30, y - 30)
