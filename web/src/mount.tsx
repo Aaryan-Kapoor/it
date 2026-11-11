@@ -57,7 +57,7 @@ import {
   type Why,
   whileTheBrowserAsks,
 } from './media'
-import { noteRefused, onItsWay, outcomeOf, type Sent, settled, submit } from './outbox'
+import { noteLost, onItsWay, outcomeOf, SENDING_TOO_MUCH, type Sent, settled, submit } from './outbox'
 import { reportPage } from './presence'
 
 type Phase = { is: 'loading' } | { is: 'shown' } | { is: 'failed'; why: string }
@@ -771,10 +771,7 @@ export function Mount({
         const known =
           message.type === 'it:action' ? ledger.get(typeof message.envelope?.clientActionId === 'string' ? message.envelope.clientActionId : '') : undefined
         const again = message.type === 'it:action' && message.again === true
-        if (message.type === 'it:action' && !known && !(again && forgot) && !actionAllowed()) {
-          noteRefused(user, artifactId, 'fast')
-          throw new Error('This page is sending too much at once. Try again in a moment.')
-        }
+        if (message.type === 'it:action' && !known && !(again && forgot) && !actionAllowed()) throw new Error(SENDING_TOO_MUCH)
         if (message.type === 'it:action') {
           const e = message.envelope
           // The name of what a person types above a page is the site's own, and no page's to send under
@@ -853,6 +850,8 @@ export function Mount({
           toPage(from, { type: 'it:result', requestId, ok: true, revision })
         }
       } catch (err) {
+        // A click refused, whatever refused it, is said in the page's bar too, once
+        if (message.type === 'it:action') noteLost(user, artifactId, err)
         const said = refusal(err) as ReturnType<typeof refusal> & { retryAfterMs?: unknown }
         toPage(from, {
           type: 'it:result',
