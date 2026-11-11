@@ -14,6 +14,7 @@ import {
   itForAgent,
   loadAddon,
   notLoadedHere,
+  OPENCODE_RESTART,
   onWindows,
   PI_RELOAD,
   piNotLoadedHere,
@@ -87,6 +88,21 @@ describe('whether what the person does arrives by itself', () => {
     const incompatible = arrives({ session: claude, addonHere: true, route: route({ runtime: 'incompatible' }) })
     expect(incompatible.byItself).toBe(false)
     expect(incompatible.next).toContain(`\`${it()} status\``)
+  })
+
+  test('in an OpenCode that has not loaded It’s add-on, the agent is told to have the person start OpenCode again, and how the page becomes the conversation’s', () => {
+    const said = arrives({ session: undefined, addonHere: undefined, route: null, slug: 'ping', unloadedOpenCode: true })
+    expect(said.byItself).toBe(false)
+    expect(said.next).toContain(`word for word: “${OPENCODE_RESTART}”`)
+    expect(OPENCODE_RESTART).toMatch(/^Quit OpenCode and start it again/)
+    expect(said.next).toContain(`\`${it()} update ping\` or \`${it()} wait --id ping\``)
+    expect(said.next).toContain(`\`${it()} wait --id ping --timeout 100\``)
+    // In the tour it is said once, after the ending
+    expect(arrives({ session: undefined, addonHere: undefined, route: null, tour: true, unloadedOpenCode: true }).next).toContain('after the tour’s ending')
+    // A conversation that is named is never told this, whatever else is so
+    expect(
+      arrives({ session: { harness: 'opencode', id: 'ses_1' }, addonHere: undefined, route: route({ listening: true }), unloadedOpenCode: true }).byItself,
+    ).toBe(true)
   })
 
   test('is said to be unknown, with the agent told to wait, wherever It cannot tell', () => {
