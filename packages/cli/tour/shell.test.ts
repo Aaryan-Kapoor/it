@@ -385,7 +385,7 @@ describe('the guide for the first page', () => {
   /** The guide's section for one part of the page, by the name of an action the part sends. */
   const sectionFor = (action: string) => part.split(/^### /m).find((text) => text.split('\n')[0]!.includes(`\`${action}\``))!
   const examples = (text: string) =>
-    [...text.matchAll(/^it tour answer <the action's id> - <<'EOF'\n(\{.*\})\nEOF$/gm)].map((m) => JSON.parse(m[1]!) as Record<string, unknown>)
+    [...text.matchAll(/^it tour answer <the action's id> "\$\(cat <<'EOF'\n(\{.*\})\nEOF\n\)"$/gm)].map((m) => JSON.parse(m[1]!) as Record<string, unknown>)
 
   test('shows the first page before anything else, and before the pairing link where no screen is paired', () => {
     expect([...GUIDE.matchAll(/^it tour show ([a-z]+)/gm)][0]![1]).toBe('start')
@@ -421,8 +421,8 @@ describe('the guide for the first page', () => {
       expect(given.some((example) => 'request' in example || 'part' in example)).toBe(false)
     }
     // The one time the agent sets the state itself is the ideas, once, at the start
-    expect([...part.matchAll(/^it (patch|set) tour-start\b.*$/gm)].map((m) => m[0])).toEqual(["it patch tour-start <<'EOF'"])
-    expect(part.indexOf("it patch tour-start <<'EOF'")).toBeLessThan(part.indexOf('### One command answers'))
+    expect([...part.matchAll(/^it (patch|set) tour-start\b.*$/gm)].map((m) => m[0])).toEqual([`it patch tour-start "$(cat <<'EOF'`])
+    expect(part.indexOf('it patch tour-start "$(cat')).toBeLessThan(part.indexOf('### One command answers'))
     // Every example is given where no apostrophe in the agent's words can end it, and the guide says once why
     expect(part).not.toMatch(/^it tour answer <the action's id> '/m)
     expect(part).toContain('nothing in your words can end the command early, so write them as you would, apostrophes and quotes and all')

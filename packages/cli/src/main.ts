@@ -770,7 +770,7 @@ function noMore(cmd: string, a: Args): void {
       : cmd === 'create' && text(a, 'state') !== undefined
         ? ' If your shell split the JSON of --state at a space, write it to a file and give it with `--state-file <path>`.'
         : cmd === 'tour' && a._[0] === 'answer'
-          ? ` If your shell split the JSON at a space or at an apostrophe in it, give it on standard input: \`it tour answer ${a._[1]} - <<'EOF'\`, then the JSON on a line of its own, then EOF on a line of its own.`
+          ? ` If your shell split the JSON at a space or at an apostrophe in it, give it in a here-document: \`it tour answer ${a._[1]} "$(cat <<'EOF'\`, then the JSON on a line of its own, then EOF on a line of its own, then \`)"\`.`
           : ''
   throw new Problem(`It does not know what to do with "${a._[most]}".`, 'invalid', `Usage: it ${usage}${split}`)
 }
@@ -1161,9 +1161,13 @@ function pictureFolders(): (string | undefined)[] {
  * it, with any picture it carried already written to a file, so that the next answer is again
  * one command. `it tour next` is that wait by itself.
  */
-/** How an answer is given where nothing in it can end a shell's quoting. */
+/**
+ * How an answer is given where nothing in it can end a shell's quoting: in a here-document whose
+ * text is the argument. Claude Code refuses a here-document given to a command as its standard
+ * input where it holds a brace and a quote, as JSON does, and takes it in this form.
+ */
 const HEREDOC = (id: string) =>
-  `Give the answer on standard input, where nothing in it ends anything: \`it tour answer ${id} - <<'EOF'\`, then the JSON on a line of its own, then EOF on a line of its own.`
+  `Give the JSON in a here-document, where nothing in it ends anything: \`it tour answer ${id} "$(cat <<'EOF'\`, then the JSON on a line of its own, then EOF on a line of its own, then \`)"\`.`
 async function tourAnswer(a: Args, counted: (code?: string) => void) {
   const USAGE = "tour answer <action-id> [- | '<json>' | --file <path>] [--wait] [--timeout <seconds>]"
   const me = sessionAsked()?.session
@@ -1172,11 +1176,11 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
     const file = text(a, 'file')
     if (file !== undefined && a._[2] !== undefined)
       throw new Problem('The answer is given once, on the command line or with --file, and this command was given both.', 'invalid', `Usage: it ${USAGE}`)
-    // The answer is best given on standard input, as `-` and a here-document says, where nothing the
-    // agent writes in it can end the quoting of a shell. Given on the command line it is in quotes
-    // that an apostrophe in the agent's words would end. With neither, a here-document or a pipe
-    // that was given all the same is read, so that an agent that left out the `-` is not taken to
-    // have given no answer
+    // The answer is the JSON on the command line, which the guide has the agent write as a
+    // here-document's text, where no apostrophe or quote in its words can end it. With `-` it is
+    // read from standard input, as a here-string piped to it in PowerShell is. With neither, a pipe
+    // or a here-document given all the same is read, so that an agent that left out the `-` is not
+    // taken to have given no answer
     const stdin = a._[2] === '-'
     if (stdin && file !== undefined) throw new Problem('The answer is given once, on standard input or with --file, and this command was given both.', 'invalid', `Usage: it ${USAGE}`)
     const given =
@@ -3547,8 +3551,8 @@ This machine
                                  that gives the tour: set the answer on the page and acknowledge
                                  the action. Where what is done next does not arrive by itself,
                                  wait for it and print it. With -, the answer is read from
-                                 standard input, as from a here-document, where no quote in it
-                                 ends anything. It may be in a file instead, with --file <path>.
+                                 standard input. It may be in a file instead, with --file
+                                 <path>.
   it tour next                   Wait for the next thing done on the tour's first page.
   it telemetry [on | off]        Say whether It reports usage counts, or turn that on or off.
                                  It reports them until it is turned off.
