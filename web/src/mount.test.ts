@@ -177,12 +177,13 @@ describe('where a page is shown', () => {
     expect(page.frame.getAttribute('referrerpolicy')).toBe('no-referrer')
   })
 
-  test('the frame is a sandbox: a page is given no origin, cannot move the tab, and what it opens is held to the same', async () => {
+  test('the frame is a sandbox: a page is given no origin and cannot move the tab, and a window it opens is an ordinary tab', async () => {
     const page = await show()
     // Word for word what the content service says on everything it sends
-    expect(page.frame.getAttribute('sandbox')).toBe('allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock')
-    for (const word of ['allow-same-origin', 'allow-top-navigation', 'allow-popups-to-escape-sandbox'])
-      expect(page.frame.getAttribute('sandbox')).not.toContain(word)
+    expect(page.frame.getAttribute('sandbox')).toBe(
+      'allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock',
+    )
+    for (const word of ['allow-same-origin', 'allow-top-navigation']) expect(page.frame.getAttribute('sandbox')).not.toContain(word)
   })
 
   test('a message is the page’s only if it came from the frame’s own window, whatever origin it names', async () => {
@@ -309,6 +310,44 @@ describe('where a page is shown', () => {
     expect(asked('mounts:create').length).toBe(3)
   })
 
+  for (const order of ['refused, then loaded', 'loaded, then refused'])
+    test(`a page whose frame was taken to another site, which the browser refused and left its error page in place of, is shown again: ${order}`, async () => {
+      const page = await show()
+      /** The browser saying that the site's policy refused something, as it says it to the site's document. */
+      const refuses = (directive: string) =>
+        act(async () => {
+          document.dispatchEvent(Object.assign(new Event('securitypolicyviolation'), { effectiveDirective: directive }))
+          await tick()
+        })
+      const loads = () =>
+        act(async () => {
+          page.frame.dispatchEvent(new Event('load'))
+          await tick()
+        })
+      // Before the page's own script has said hello, the frame is still loading the page
+      await refuses('frame-src')
+      await loads()
+      await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+      // Another of the page's own documents loading, and something else of the site's refused, are neither
+      await act(() => tick(2100))
+      await loads()
+      await refuses('img-src')
+      await act(() => tick(2100))
+      await loads()
+      expect(asked('mounts:create').length).toBe(1)
+      // The frame refused another site, and loads the error page in its place: the page is shown again
+      if (order === 'refused, then loaded') {
+        await refuses('frame-src')
+        await loads()
+      } else {
+        await loads()
+        await refuses('frame-src')
+      }
+      await act(() => tick(50))
+      expect(asked('mounts:create').length).toBe(2)
+      expect(host.querySelector('iframe')?.getAttribute('src')).toBe(`${PAGES}/open/ticket-for-mount-2`)
+    })
+
   test('a frame whose page never says hello is given up on, and the site tries again by itself with a new mount', async () => {
     vi.useFakeTimers()
     const { Mount } = await import('./mount')
@@ -423,6 +462,106 @@ describe('the frame around a page', () => {
     await passes(5600)
     await sent('click-0021')
     expect(submitted().at(-1)).toMatchObject({ clientActionId: 'click-0021', attended: true })
+  })
+
+  test('an address the page asks to have opened is opened in a tab of its own, with no hold either way, only from the page’s own frame, only for the web or the person’s mail, phone or messages, and only from the person’s own click or key in the page', async () => {
+    // The clock is the test's, and is set well past any click on the site an earlier test made
+    await renderHeld()
+    vi.setSystemTime(Date.now() + 3_600_000)
+    const page = framed()
+    // The page's own script has said hello, so the site does not give up on it while the test's clock runs on
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent('message', { data: { type: 'it:hello', doc: 'doc-1' }, origin: 'null', source: page.frame.contentWindow }))
+      await vi.advanceTimersByTimeAsync(20)
+    })
+    const opened: unknown[][] = []
+    vi.spyOn(window, 'open').mockImplementation((...given: unknown[]) => {
+      opened.push(given)
+      return null
+    })
+    const asks = async (url: unknown, source: Window = page.frame.contentWindow as Window) => {
+      window.dispatchEvent(new MessageEvent('message', { data: { type: 'it:open', url }, origin: 'null', source }))
+      await act(() => vi.advanceTimersByTimeAsync(1))
+    }
+    // Nobody has done anything in the page: the frame does not have the keyboard, and the browser says nobody has just acted
+    await asks('https://elsewhere.test/a')
+    page.frame.setAttribute('tabindex', '0')
+    page.frame.focus()
+    await asks('https://elsewhere.test/b')
+    active = true
+    await asks('https://elsewhere.test/c')
+    await asks('mailto:someone@example.com?subject=Hi')
+    await asks('tel:+15551234567')
+    await asks('sms:+15551234567')
+    await asks('HTTP://Elsewhere.test/d')
+    expect(opened).toEqual([
+      ['https://elsewhere.test/c', '_blank', 'noopener,noreferrer'],
+      ['mailto:someone@example.com?subject=Hi', '_blank', 'noopener,noreferrer'],
+      ['tel:+15551234567', '_blank', 'noopener,noreferrer'],
+      ['sms:+15551234567', '_blank', 'noopener,noreferrer'],
+      ['http://elsewhere.test/d', '_blank', 'noopener,noreferrer'],
+    ])
+    // Another window asking, whatever it asks: the site itself, or a frame that is not the page's
+    const other = document.body.appendChild(document.createElement('iframe'))
+    await asks('https://elsewhere.test/e', window)
+    await asks('https://elsewhere.test/e', other.contentWindow as Window)
+    other.remove()
+    // An address of any other kind, one that is not whole, or one that is no address
+    for (const refused of [
+      'javascript:alert(1)',
+      'data:text/html,<p>hi',
+      'blob:http://localhost/0f0',
+      'file:///etc/hosts',
+      'ftp://elsewhere.test/',
+      '/p/another-page',
+      'elsewhere.test',
+      `https://elsewhere.test/${'x'.repeat(16 * 1024)}`,
+      7,
+      { toString: () => 'https://elsewhere.test/' },
+      undefined,
+    ])
+      await asks(refused)
+    expect(opened.length).toBe(5)
+    // A click on the site itself (the card that opened the page, say), which the browser reports
+    // for a few seconds as it reports one in the page. Nothing is opened while it cannot be told
+    // whose click it was, and the browser is asked again once the site's has worn off
+    const passes = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms))
+    window.dispatchEvent(new Event('pointerdown'))
+    await asks('https://elsewhere.test/f')
+    await passes(4000)
+    expect(opened.length).toBe(5)
+    // Nobody clicked in the page: once the site's click has worn off the browser says nobody has just acted, and nothing is opened
+    active = false
+    await passes(1100)
+    expect(opened.length).toBe(5)
+    // The person really does click in the page a moment after a click on the site: the browser is
+    // still reporting that once the site's has worn off, and the address is opened then
+    window.dispatchEvent(new Event('pointerdown'))
+    active = true
+    await asks('https://elsewhere.test/g')
+    await passes(4000)
+    expect(opened.length).toBe(5)
+    await passes(1100)
+    expect(opened.at(-1)).toEqual(['https://elsewhere.test/g', '_blank', 'noopener,noreferrer'])
+    // Another click on the site meanwhile makes it impossible to tell, and nothing is opened
+    await passes(6000)
+    window.dispatchEvent(new Event('pointerdown'))
+    await asks('https://elsewhere.test/h')
+    await passes(2000)
+    window.dispatchEvent(new Event('pointerdown'))
+    await passes(3100)
+    expect(opened.length).toBe(6)
+    // Long after any click on the site, a click in the page opens the address at once
+    await passes(6000)
+    await asks('https://elsewhere.test/i')
+    expect(opened.at(-1)).toEqual(['https://elsewhere.test/i', '_blank', 'noopener,noreferrer'])
+    // Nor while the frame does not have the keyboard, however the browser says the person has just acted
+    const elsewhere = document.body.appendChild(document.createElement('button'))
+    elsewhere.focus()
+    expect(document.activeElement).toBe(elsewhere)
+    await asks('https://elsewhere.test/j')
+    expect(opened.length).toBe(7)
+    elsewhere.remove()
   })
 
   test('a small message that would write out as an enormous one is refused before it is written out', async () => {

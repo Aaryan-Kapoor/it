@@ -25,6 +25,8 @@ function load(html = '', before: (w: any) => void = () => {}) {
     pretendToBeVisual: true,
   })
   const w = dom.window as any
+  // A browser names a frame's window after the frame, which the stand-in does not
+  for (const frame of w.document.querySelectorAll('iframe[name]')) frame.contentWindow.name = frame.getAttribute('name')
   const hellos: any[] = []
   const fetched: { url: string; init: unknown }[] = []
   const page = { keepStatus: 204, port: null as Port | null }
@@ -516,6 +518,635 @@ describe('the script inside a page', () => {
     doc.querySelector('meta[name="Referrer"]').setAttribute('content', 'unsafe-url')
     p.w.open('https://elsewhere.invalid/next')
     expect(saidWhenOpened).toEqual([['https://elsewhere.invalid/next', 'no-referrer']])
+  })
+
+  describe('a way out of the page', () => {
+    const settled = () => new Promise((r) => setTimeout(r, 5))
+    /** What the page asked the site to open, in order. */
+    const openedFor = (p: ReturnType<typeof load>) => p.hellos.filter((m) => m.type === 'it:open').map((m) => m.url)
+    /** Clicks an element as a person would, and keeps the page's frame where it is, as the page itself would have done nothing to: the stand-in browser follows no link. */
+    const click = (p: ReturnType<typeof load>, el: Element, init: MouseEventInit = {}) => {
+      const seen: { target: string | null; rel: string | null }[] = []
+      const note = (e: Event) => {
+        seen.push({ target: el.getAttribute('target'), rel: el.getAttribute('rel') })
+        e.preventDefault()
+      }
+      el.addEventListener('click', note, { once: true })
+      const followed = el.dispatchEvent(new p.w.MouseEvent('click', { bubbles: true, cancelable: true, ...init }))
+      return { followed, seen: seen[0] }
+    }
+
+    test('a link to another site opens in a tab of its own with no hold either way, and a link within the page or to its own files goes where the page aims it, with no hold either', async () => {
+      const p = load(
+        [
+          '<a id="plain" href="https://elsewhere.invalid/a">plain</a>',
+          '<a id="self" href="https://elsewhere.invalid/b" target="_SELF">self</a>',
+          '<a id="top" href="https://elsewhere.invalid/c" target="_top">top</a>',
+          '<a id="named" href="https://elsewhere.invalid/d" target="_new">a window by a name</a>',
+          '<a id="opener" href="https://elsewhere.invalid/e" target="_blank" rel="opener External">with an opener</a>',
+          '<a id="port" href="http://content.test:8080/">another port of the same machine</a>',
+          '<map><area id="area" href="https://elsewhere.invalid/f"></map>',
+          '<svg><a id="drawn" href="https://elsewhere.invalid/g"><text>drawn</text></a></svg>',
+          '<a id="fragment" href="#end">within the page</a>',
+          '<a id="own" href="other.html">another of its own files</a>',
+          '<a id="whole" href="http://content.test/s/a-token/v/3/b.html">the same, written whole</a>',
+          '<a id="ownTab" href="other.html" target="_blank" rel="opener">its own file in a tab</a>',
+          '<iframe name="inside"></iframe><a id="inside" href="https://elsewhere.invalid/h" target="inside">in a frame of the page</a>',
+          '<a id="mail" href="mailto:someone@example.com">mail</a>',
+          '<a id="none">no address</a>',
+        ].join(''),
+      )
+      const doc = p.w.document
+      const said = (id: string) => [doc.getElementById(id).getAttribute('target'), doc.getElementById(id).getAttribute('rel')]
+      const OUT = ['_blank', 'noopener noreferrer']
+      for (const id of ['plain', 'self', 'top', 'named', 'port', 'area', 'drawn']) expect([id, said(id)]).toEqual([id, OUT])
+      expect(said('opener')).toEqual(['_blank', 'External noopener noreferrer'])
+      for (const id of ['fragment', 'own', 'whole', 'inside', 'mail', 'none'])
+        expect([id, said(id)]).toEqual([id, [doc.getElementById(id).getAttribute('target'), 'noopener noreferrer']])
+      expect(said('inside')).toEqual(['inside', 'noopener noreferrer'])
+      expect(said('ownTab')).toEqual(['_blank', 'noopener noreferrer'])
+      // Added later, and changed later by the page's own script
+      doc.body.insertAdjacentHTML('beforeend', '<div><a id="later" href="https://elsewhere.invalid/later">later</a></div>')
+      doc.getElementById('fragment').setAttribute('href', 'https://elsewhere.invalid/now')
+      doc.getElementById('plain').setAttribute('target', '_self')
+      doc.getElementById('opener').setAttribute('rel', 'opener')
+      await settled()
+      for (const id of ['later', 'fragment', 'plain', 'opener']) expect([id, said(id)]).toEqual([id, OUT])
+      // Each address as the page means it, read against where it says its addresses begin
+      doc.head.insertAdjacentHTML('beforeend', '<base href="https://elsewhere.invalid/assets/">')
+      doc.body.insertAdjacentHTML('beforeend', '<a id="based" href="next.html">next</a>')
+      await settled()
+      expect(said('based')).toEqual(OUT)
+    })
+
+    test('a link is set right on its way to a click too, before anything else has seen the change', async () => {
+      const p = load('<a id="a" href="#top">go</a><a id="b" href="other.html">own</a>')
+      const doc = p.w.document
+      // Changed by the page and clicked at once, before the document's watcher has run
+      const a = doc.getElementById('a')
+      a.setAttribute('href', 'https://elsewhere.invalid/')
+      expect(click(p, a).seen).toEqual({ target: '_blank', rel: 'noopener noreferrer' })
+      const b = doc.getElementById('b')
+      b.setAttribute('rel', 'opener')
+      b.setAttribute('target', '_blank')
+      expect(click(p, b, { button: 1 }).seen).toEqual({ target: '_blank', rel: 'noopener noreferrer' })
+      // And from the keyboard, on its way to the click a key gives
+      const c = doc.createElement('a')
+      doc.body.append(c)
+      c.setAttribute('href', 'https://elsewhere.invalid/key')
+      c.dispatchEvent(new p.w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      expect([c.getAttribute('target'), c.getAttribute('rel')]).toEqual(['_blank', 'noopener noreferrer'])
+      // A link the page made and never put in the document is set right on its way as well
+      const loose = doc.createElement('a')
+      loose.href = 'https://elsewhere.invalid/loose'
+      loose.addEventListener('click', (e: Event) => e.preventDefault())
+      loose.click()
+      expect([loose.getAttribute('target'), loose.getAttribute('rel')]).toEqual(['_blank', 'noopener noreferrer'])
+    })
+
+    test('a mail, phone or messages link is opened by the site from the click, and not followed in the frame, unless the page took the click for itself', async () => {
+      const p = load(
+        '<a id="mail" href="mailto:someone@example.com?subject=Hi">mail</a><a id="tel" href="tel:+15551234567"><b id="inner">call</b></a><a id="sms" href="sms:+15551234567">text</a><a id="kept" href="mailto:kept@example.com">kept</a>',
+      )
+      const doc = p.w.document
+      const follow = (el: Element) => el.dispatchEvent(new p.w.MouseEvent('click', { bubbles: true, cancelable: true }))
+      expect([follow(doc.getElementById('mail')), follow(doc.getElementById('inner')), follow(doc.getElementById('sms'))]).toEqual([false, false, false])
+      // The page's own handler took this one, and it is left to the page
+      doc.getElementById('kept').addEventListener('click', (e: Event) => e.preventDefault())
+      follow(doc.getElementById('kept'))
+      // And a link the page made and never put in the document, and a window it asked for
+      const loose = doc.createElement('a')
+      loose.href = 'mailto:loose@example.com'
+      loose.click()
+      expect(p.w.open('tel:+15550000000')).toBeNull()
+      expect(openedFor(p)).toEqual([
+        'mailto:someone@example.com?subject=Hi',
+        'tel:+15551234567',
+        'sms:+15551234567',
+        'mailto:loose@example.com',
+        'tel:+15550000000',
+      ])
+    })
+
+    test('a link that would open a window holding what the page made is not followed, and one followed in the frame is', async () => {
+      const p = load(
+        '<a id="script" href="javascript:void(0)" target="_blank">script</a><a id="data" href="data:text/html,hi" target="w">data</a><a id="blob" href="blob:http://content.test/0f0" target="_top">blob</a><a id="here" href="javascript:void(0)">here</a><a id="saved" href="blob:http://content.test/0f1" target="_blank" download="notes.txt">saved</a>',
+      )
+      const doc = p.w.document
+      // Whether the click was to be followed once It had seen it: a handler of the page's own, after It's, says, and then keeps the stand-in browser from following it
+      const followed: boolean[] = []
+      p.w.addEventListener('click', (e: Event) => {
+        followed.push(!e.defaultPrevented)
+        e.preventDefault()
+      })
+      for (const id of ['script', 'data', 'blob', 'here', 'saved'])
+        doc.getElementById(id).dispatchEvent(new p.w.MouseEvent('click', { bubbles: true, cancelable: true }))
+      // In the frame, `javascript:` is the page's own script, and a download opens no window
+      expect(followed).toEqual([false, false, false, true, true])
+      expect(openedFor(p)).toEqual([])
+    })
+
+    test('a window the page opens is given no opener and no referrer, one to another site opens in a tab of its own, and one of what the page made is not opened', async () => {
+      const asked: unknown[][] = []
+      const p = load('<iframe name="inside"></iframe>', (w) => {
+        w.open = (...given: unknown[]) => {
+          asked.push(given)
+          return null
+        }
+      })
+      const w = p.w
+      w.open('https://elsewhere.invalid/a')
+      w.open('https://elsewhere.invalid/b', '_self', 'popup')
+      w.open(new w.URL('https://elsewhere.invalid/c'), 'help', 'noopener=0, noreferrer=no')
+      w.open('other.html', '_self')
+      w.open('other.html', 'help')
+      w.open()
+      w.open('https://elsewhere.invalid/d', 'inside')
+      for (const refused of [
+        'javascript:alert(1)',
+        ' JAVA\tSCRIPT:alert(1)',
+        'data:text/html,<p>hi',
+        'blob:http://content.test/0f0',
+        'BLOB:http://content.test/0f1',
+      ])
+        expect([refused, w.open(refused)]).toEqual([refused, null])
+      expect(asked.map(([url, ...rest]) => [url === undefined ? url : String(url), ...rest])).toEqual([
+        ['https://elsewhere.invalid/a', '_blank', 'noopener,noreferrer'],
+        ['https://elsewhere.invalid/b', '_blank', 'popup,noopener,noreferrer'],
+        ['https://elsewhere.invalid/c', '_blank', 'noopener=0, noreferrer=no,noopener,noreferrer'],
+        ['other.html', '_self', 'noopener,noreferrer'],
+        ['other.html', 'help', 'noopener,noreferrer'],
+        [undefined, '_blank', 'noopener,noreferrer'],
+        // A frame inside the page is the page's own, and the link is followed there as it asked
+        ['https://elsewhere.invalid/d', 'inside', undefined],
+      ])
+      expect(openedFor(p)).toEqual([])
+    })
+
+    test('a form leaves no hold either way, wherever its answer opens, as it appears and on its way out', async () => {
+      const p = load(
+        '<form id="out" target="_blank" action="https://elsewhere.invalid/"></form><form id="opener" target="_blank" rel="opener"></form><form id="here"><button id="send" formtarget="_blank">send</button></form>',
+      )
+      const doc = p.w.document
+      expect(['out', 'opener', 'here'].map((id) => doc.getElementById(id).getAttribute('rel'))).toEqual([
+        'noopener noreferrer',
+        'noopener noreferrer',
+        'noopener noreferrer',
+      ])
+      // Sent by a button that names a window of its own
+      const here = doc.getElementById('here')
+      let relWhenSent: string | null = 'not sent'
+      here.addEventListener('submit', (e: Event) => {
+        relWhenSent = here.getAttribute('rel')
+        e.preventDefault()
+      })
+      here.requestSubmit(doc.getElementById('send'))
+      expect(relWhenSent).toBe('noopener noreferrer')
+      // Changed later by the page's script
+      doc.getElementById('opener').setAttribute('rel', 'opener')
+      await settled()
+      expect(doc.getElementById('opener').getAttribute('rel')).toBe('noopener noreferrer')
+    })
+
+    test('It.open asks the site to open an address, read as a link would be, and refuses an address of any other kind', async () => {
+      const p = load()
+      p.It.open('https://elsewhere.invalid/a?b=c#d')
+      p.It.open('next.html')
+      p.It.open(new p.w.URL('mailto:someone@example.com'))
+      p.It.open('tel:+15551234567')
+      p.It.open('sms:+15551234567')
+      for (const refused of [
+        'javascript:alert(1)',
+        'data:text/html,hi',
+        'blob:http://content.test/0f0',
+        'file:///etc/hosts',
+        'ftp://elsewhere.invalid/',
+        'http://[not an address',
+      ])
+        expect(() => p.It.open(refused)).toThrow('It.open opens an address of one of these kinds: http, https, mailto, tel, sms.')
+      // Sent to the site alone: the stand-in hears only what is posted to the site's origin
+      expect(openedFor(p)).toEqual([
+        'https://elsewhere.invalid/a?b=c#d',
+        'http://content.test/s/a-token/v/3/next.html',
+        'mailto:someone@example.com',
+        'tel:+15551234567',
+        'sms:+15551234567',
+      ])
+    })
+
+    test('a link aimed at a name that holds no document, such as an embed or an object that shows a picture, opens a tab of its own with no hold either way, and one aimed at a frame that holds a document is followed there', async () => {
+      const asked: unknown[][] = []
+      const p = load(
+        [
+          '<embed name="help" type="image/png"><object name="picture" type="image/png"></object><iframe name="inside"></iframe>',
+          '<a id="embed" href="https://elsewhere.invalid/a" target="help">a named embed</a>',
+          '<a id="picture" href="https://elsewhere.invalid/b" target="picture">a picture in an object</a>',
+          '<a id="own" href="other.html" target="help">its own file, at a named embed</a>',
+          '<a id="global" href="https://elsewhere.invalid/c" target="lookalike">a name the page’s script gave something of its own</a>',
+          '<a id="inside" href="https://elsewhere.invalid/d" target="inside">a frame of the page</a>',
+        ].join(''),
+        (w) => {
+          w.open = (...given: unknown[]) => {
+            asked.push(given)
+            return null
+          }
+          // Something of the page's own under a name, made to look like a frame's window
+          w.lookalike = { parent: w }
+        },
+      )
+      const doc = p.w.document
+      const said = (id: string) => [doc.getElementById(id).getAttribute('target'), doc.getElementById(id).getAttribute('rel')]
+      for (const id of ['embed', 'picture', 'global']) expect([id, said(id)]).toEqual([id, ['_blank', 'noopener noreferrer']])
+      // Its own file opens in a window by that name, with no hold either way
+      expect(said('own')).toEqual(['help', 'noopener noreferrer'])
+      expect(said('inside')).toEqual(['inside', 'noopener noreferrer'])
+      // And a window the page's script opens at such a name is held to the same
+      p.w.open('other.html', 'help')
+      p.w.open('https://elsewhere.invalid/e', 'picture')
+      p.w.open('https://elsewhere.invalid/f', 'inside')
+      expect(asked).toEqual([
+        ['other.html', 'help', 'noopener,noreferrer'],
+        ['https://elsewhere.invalid/e', '_blank', 'noopener,noreferrer'],
+        ['https://elsewhere.invalid/f', 'inside', undefined],
+      ])
+    })
+
+    test('a link that led to another site and leads within the page now, or to one of its files, is followed as the page wrote it', async () => {
+      const p = load(
+        '<a id="a" href="https://elsewhere.invalid/a">a</a><a id="b" href="https://elsewhere.invalid/b" target="_self" rel="author">b</a><a id="c" href="https://elsewhere.invalid/c">c</a><a id="d" href="https://elsewhere.invalid/d" target="_blank" rel="external">d</a>',
+      )
+      const doc = p.w.document
+      const said = (id: string) => [doc.getElementById(id).getAttribute('target'), doc.getElementById(id).getAttribute('rel')]
+      expect(['a', 'b', 'c'].map(said)).toEqual([
+        ['_blank', 'noopener noreferrer'],
+        ['_blank', 'author noopener noreferrer'],
+        ['_blank', 'noopener noreferrer'],
+      ])
+      doc.getElementById('a').setAttribute('href', '#end')
+      doc.getElementById('b').setAttribute('href', 'other.html')
+      // The page's own `_blank` is the page's, and stays
+      doc.getElementById('d').setAttribute('href', 'other.html')
+      await settled()
+      expect(['a', 'b', 'd'].map(said)).toEqual([
+        [null, 'noopener noreferrer'],
+        ['_self', 'author noopener noreferrer'],
+        ['_blank', 'external noopener noreferrer'],
+      ])
+      expect(click(p, doc.getElementById('a')).seen).toEqual({ target: null, rel: 'noopener noreferrer' })
+      // Changed and clicked at once, before the document's watcher has run
+      const c = doc.getElementById('c')
+      c.setAttribute('href', '#top')
+      expect(click(p, c).seen).toEqual({ target: null, rel: 'noopener noreferrer' })
+      // And sent out again once it leads to another site once more
+      c.setAttribute('href', 'https://elsewhere.invalid/again')
+      expect(click(p, c).seen).toEqual({ target: '_blank', rel: 'noopener noreferrer' })
+    })
+
+    test('a link to a data: or blob: address opens no window of its own by any way: the middle button, a click with a key that asks for a new tab or window, its menu, or dragging it out', async () => {
+      const p = load(
+        [
+          '<a id="blob" href="blob:http://content.test/0f0" target="_blank">blob</a>',
+          '<a id="data" href="data:text/html,<script>alert(1)</script>">data</a>',
+          '<a id="script" href="javascript:void(0)">script</a>',
+          '<a id="saved" href="blob:http://content.test/0f1" download="notes.txt">saved</a>',
+          '<a id="out" href="https://elsewhere.invalid/">elsewhere</a>',
+        ].join(''),
+      )
+      const doc = p.w.document
+      // Whether the way was still open by the time the page's own handler on the link heard of it, and once It had seen it after the page's handlers
+      const before: boolean[] = []
+      const after: boolean[] = []
+      for (const type of ['click', 'auxclick', 'contextmenu', 'dragstart']) {
+        for (const link of doc.querySelectorAll('a')) link.addEventListener(type, (e: Event) => before.push(!e.defaultPrevented))
+        p.w.addEventListener(type, (e: Event) => {
+          after.push(!e.defaultPrevented)
+          // The stand-in browser follows no link
+          e.preventDefault()
+        })
+      }
+      const follow = (id: string, type: string, init: MouseEventInit = {}) =>
+        doc.getElementById(id).dispatchEvent(new p.w.MouseEvent(type, { bubbles: true, cancelable: true, ...init }))
+      follow('blob', 'auxclick', { button: 1 })
+      follow('data', 'click', { ctrlKey: true })
+      follow('data', 'click', { metaKey: true })
+      follow('data', 'click', { shiftKey: true })
+      follow('data', 'auxclick', { button: 1 })
+      follow('blob', 'contextmenu', { button: 2 })
+      follow('data', 'dragstart')
+      expect([before, after]).toEqual([Array(7).fill(false), Array(7).fill(false)])
+      // Left as they were: a `javascript:` link's menu and middle button, a download, and a link to another site
+      before.length = 0
+      after.length = 0
+      follow('script', 'contextmenu', { button: 2 })
+      follow('script', 'auxclick', { button: 1 })
+      follow('saved', 'auxclick', { button: 1 })
+      follow('saved', 'click', { ctrlKey: true })
+      follow('out', 'auxclick', { button: 1 })
+      follow('out', 'dragstart')
+      expect([before, after]).toEqual([Array(6).fill(true), Array(6).fill(true)])
+    })
+
+    test('a link aimed at a name that no frame of the page goes by now opens a tab of its own with no hold either way, whatever of the page’s leads to a frame by that name, and one aimed at the name a frame goes by now is followed there', async () => {
+      const asked: unknown[][] = []
+      const p = load(
+        [
+          '<iframe></iframe><iframe name="inside"></iframe><iframe name="before"></iframe>',
+          '<a id="index" href="https://elsewhere.invalid/a" target="0">by the number of an unnamed frame</a>',
+          '<a id="lookalike" href="https://elsewhere.invalid/b" target="lookalike">by a property of the page’s that leads to a frame</a>',
+          '<a id="old" href="https://elsewhere.invalid/c" target="before">by the name a frame went by before</a>',
+          '<a id="new" href="https://elsewhere.invalid/d" target="after">by the name that frame goes by now</a>',
+          '<a id="inside" href="https://elsewhere.invalid/e" target="inside">by a frame’s name</a>',
+        ].join(''),
+        (w) => {
+          w.open = (...given: unknown[]) => {
+            asked.push(given)
+            return null
+          }
+          w.lookalike = w[0]
+          // The document in the frame gives itself another name
+          w.document.querySelector('iframe[name="before"]').contentWindow.name = 'after'
+        },
+      )
+      const doc = p.w.document
+      const said = (id: string) => [doc.getElementById(id).getAttribute('target'), doc.getElementById(id).getAttribute('rel')]
+      for (const id of ['index', 'lookalike', 'old']) expect([id, said(id)]).toEqual([id, ['_blank', 'noopener noreferrer']])
+      expect(said('new')).toEqual(['after', 'noopener noreferrer'])
+      expect(said('inside')).toEqual(['inside', 'noopener noreferrer'])
+      // A frame in a closed shadow root a script made is found by its name too, as a browser finds it
+      const root = doc.body.appendChild(doc.createElement('div')).attachShadow({ mode: 'closed' })
+      root.innerHTML = '<iframe name="shadowed"></iframe>'
+      root.querySelector('iframe').contentWindow.name = 'shadowed'
+      doc.body.insertAdjacentHTML('beforeend', '<a id="shadowed" href="https://elsewhere.invalid/f" target="shadowed">in a shadow root</a>')
+      await settled()
+      expect(said('shadowed')).toEqual(['shadowed', 'noopener noreferrer'])
+      // A window the page's script asks for by such a name is opened with no hold, so the page is
+      // given no handle on it, and nothing of a window of its own, such as its functions, to use
+      p.w.open('', '0')
+      p.w.open('', 'lookalike')
+      p.w.open('', 'before')
+      p.w.open('https://elsewhere.invalid/g', 'after')
+      // And so is one asked of the document, which opens a window as `window.open` does when given an address, a name and features
+      doc.open('', 'lookalike', '')
+      doc.open('https://elsewhere.invalid/h', 'before', 'popup')
+      expect(asked).toEqual([
+        ['', '0', 'noopener,noreferrer'],
+        ['', 'lookalike', 'noopener,noreferrer'],
+        ['', 'before', 'noopener,noreferrer'],
+        ['https://elsewhere.invalid/g', 'after', undefined],
+        ['', 'lookalike', 'noopener,noreferrer'],
+        ['https://elsewhere.invalid/h', '_blank', 'popup,noopener,noreferrer'],
+      ])
+    })
+
+    test('what `window.open` is given is made a string once, and that string is what the browser is given', () => {
+      const asked: unknown[][] = []
+      const p = load('<iframe name="inside"></iframe>', (w) => {
+        w.open = (...given: unknown[]) => {
+          asked.push(given)
+          return null
+        }
+      })
+      // A name that says a frame's name to It and `_blank` to whatever reads it next
+      let reads = 0
+      const shifty = { toString: () => (reads++ === 0 ? 'inside' : '_blank') }
+      let urlReads = 0
+      const address = { toString: () => (urlReads++ === 0 ? 'other.html' : 'https://elsewhere.invalid/x') }
+      p.w.open(address, shifty)
+      expect(asked).toEqual([['other.html', 'inside', undefined]])
+    })
+
+    test('a target is taken as the browser takes it, with nothing trimmed: a name with spaces around a frame’s name, or around a keyword, opens a tab of its own with no hold', () => {
+      const asked: unknown[][] = []
+      const p = load(
+        [
+          '<iframe name="inside"></iframe>',
+          '<a id="spaced" href="https://elsewhere.invalid/a" target=" inside ">a frame’s name with spaces around it</a>',
+          '<a id="self" href="https://elsewhere.invalid/b" target=" _self ">a keyword with spaces around it</a>',
+          '<a id="local" href="other.html" target=" inside ">a file of the page’s, at a name no frame goes by</a>',
+          '<a id="inside" href="https://elsewhere.invalid/c" target="inside">the frame’s own name</a>',
+          '<a id="SELF" href="other.html" target="_SELF">a keyword in capitals</a>',
+        ].join(''),
+        (w) => {
+          w.open = (...given: unknown[]) => {
+            asked.push(given)
+            return null
+          }
+        },
+      )
+      const doc = p.w.document
+      const said = (id: string) => [doc.getElementById(id).getAttribute('target'), doc.getElementById(id).getAttribute('rel')]
+      expect(said('spaced')).toEqual(['_blank', 'noopener noreferrer'])
+      expect(said('self')).toEqual(['_blank', 'noopener noreferrer'])
+      expect(said('local')).toEqual([' inside ', 'noopener noreferrer'])
+      expect(said('inside')).toEqual(['inside', 'noopener noreferrer'])
+      expect(said('SELF')).toEqual(['_SELF', 'noopener noreferrer'])
+      p.w.open('', ' inside ')
+      doc.open('', ' inside ', '')
+      p.w.open('', 'inside')
+      expect(asked).toEqual([
+        ['', ' inside ', 'noopener,noreferrer'],
+        ['', ' inside ', 'noopener,noreferrer'],
+        ['', 'inside', undefined],
+      ])
+    })
+
+    test('a link or a form with no target of its own is followed in the page’s `<base target>`, and is given no hold where that opens a window, even when the base comes later', async () => {
+      const p = load(
+        [
+          '<base target="fresh">',
+          '<a id="out" href="https://elsewhere.invalid/a">another site</a>',
+          '<a id="file" href="other.html">a file of the page’s</a>',
+          '<a id="here" href="other.html" target="">its own empty target, which the base does not stand in for</a>',
+          '<form id="form" action="https://elsewhere.invalid/f"></form>',
+        ].join(''),
+      )
+      const doc = p.w.document
+      const said = (id: string) => [doc.getElementById(id).getAttribute('target'), doc.getElementById(id).getAttribute('rel')]
+      expect(said('out')).toEqual(['_blank', 'noopener noreferrer'])
+      expect(said('file')).toEqual([null, 'noopener noreferrer'])
+      expect(said('here')).toEqual(['', 'noopener noreferrer'])
+      expect(said('form')).toEqual([null, 'noopener noreferrer'])
+      // A base that a script adds, or whose target it changes, sets the page's links right at once
+      const q = load('<a id="file" href="other.html">a file of the page’s</a><form id="form"></form>')
+      const qdoc = q.w.document
+      const base = qdoc.head.appendChild(qdoc.createElement('base'))
+      base.setAttribute('target', 'fresh')
+      expect([qdoc.getElementById('file').getAttribute('rel'), qdoc.getElementById('form').getAttribute('rel')]).toEqual([
+        'noopener noreferrer',
+        'noopener noreferrer',
+      ])
+      await settled()
+    })
+
+    test('what a handler of the page’s writes to a link or a form is set right at once, before the browser follows it, by whatever way it is written and though the event goes no further', () => {
+      const p = load(
+        [
+          '<a id="a" href="https://elsewhere.invalid/a">a</a><a id="b" href="other.html">b</a><a id="c" href="other.html" rel="noopener">c</a>',
+          '<a id="d" href="other.html">d</a><a id="e" href="#below">e</a>',
+          '<form id="form" action="other.html"><button id="send">Send</button></form>',
+        ].join(''),
+      )
+      const doc = p.w.document
+      const el = (id: string) => doc.getElementById(id)
+      const said = (id: string) => [el(id).getAttribute('target'), el(id).getAttribute('rel')]
+      const seen: Record<string, unknown> = {}
+      const rewrites: Record<string, (link: any) => void> = {
+        a: (link) => {
+          link.setAttribute('target', 'fresh')
+          link.setAttribute('rel', 'opener')
+        },
+        b: (link) => {
+          link.target = 'fresh'
+          link.rel = 'opener'
+        },
+        c: (link) => {
+          link.target = 'fresh'
+          link.relList.remove('noopener')
+          link.relList.add('opener')
+        },
+        d: (link) => {
+          link.setAttribute('target', 'x')
+          link.getAttributeNode('target').value = 'fresh'
+          const rel = doc.createAttribute('rel')
+          rel.value = 'opener'
+          link.attributes.setNamedItem(rel)
+        },
+        // Within the page, then to another site, as the handler runs
+        e: (link) => {
+          link.href = 'https://elsewhere.invalid/e'
+        },
+      }
+      for (const [id, rewrite] of Object.entries(rewrites))
+        el(id).addEventListener('click', (e: any) => {
+          rewrite(el(id))
+          e.stopPropagation()
+          e.preventDefault()
+          seen[id] = said(id)
+        })
+      for (const id of Object.keys(rewrites)) el(id).click()
+      // Another site's opens in a tab of its own; a file of the page's opens where the page says, with no hold
+      expect(seen).toEqual({
+        a: ['_blank', 'noopener noreferrer'],
+        b: ['fresh', 'noopener noreferrer'],
+        c: ['fresh', 'noreferrer noopener'],
+        d: ['fresh', 'noopener noreferrer'],
+        e: ['_blank', 'noopener noreferrer'],
+      })
+      // A form whose submit handler aims it at a window and asks for a hold
+      const form = el('form')
+      form.addEventListener('submit', (e: any) => {
+        form.target = 'fresh'
+        form.setAttribute('rel', 'opener')
+        e.stopPropagation()
+        e.preventDefault()
+        seen.form = said('form')
+      })
+      form.requestSubmit()
+      expect(seen.form).toEqual(['fresh', 'noopener noreferrer'])
+      // And a button whose own target a handler changes
+      el('send').addEventListener('click', () => {
+        el('send').formTarget = 'other'
+        seen.button = form.getAttribute('rel')
+      })
+      form.removeAttribute('target')
+      form.setAttribute('rel', '')
+      el('send').click()
+      expect(seen.button).toBe('noopener noreferrer')
+    })
+
+    test('a form in a shadow root a script made, filled and sent at once, and an attribute named by something that only turns into its name, are set right before the browser has them', () => {
+      const p = load('<div id="host"></div><a id="link" href="other.html" target="fresh">a file of the page’s</a>')
+      const doc = p.w.document
+      const seen: Record<string, unknown> = {}
+      // A form written into a closed root and sent before any observer has run: the root hears it go
+      const root = doc.getElementById('host').attachShadow({ mode: 'closed' })
+      root.innerHTML = '<form action="https://elsewhere.invalid/f" target="fresh" rel="opener"></form>'
+      const form = root.querySelector('form')
+      form.addEventListener('submit', (e: any) => {
+        seen.form = form.getAttribute('rel')
+        e.preventDefault()
+      })
+      form.requestSubmit()
+      // A name that turns into `rel` only when the browser makes it a string
+      const link = doc.getElementById('link')
+      link.setAttribute({ toString: () => 'rel' }, 'opener')
+      seen.link = link.getAttribute('rel')
+      // And a `<base>` put in or taken out by a handler changes nothing: every link already leaves no hold
+      doc.head.insertAdjacentHTML('beforeend', '<base target="other">')
+      seen.base = link.getAttribute('rel')
+      expect(seen).toEqual({ form: 'noopener noreferrer', link: 'noopener noreferrer', base: 'noopener noreferrer' })
+    })
+
+    test('a link in a closed shadow root that a handler of the page’s changes is set right again after the handler, where the window cannot see it and where the event goes no further than the root', async () => {
+      const p = load()
+      const doc = p.w.document
+      const host = doc.body.appendChild(doc.createElement('div'))
+      const root = host.attachShadow({ mode: 'closed' })
+      root.innerHTML =
+        '<a id="out" href="https://elsewhere.invalid/a">out</a><a id="in" href="#here">in</a><a id="late" href="https://elsewhere.invalid/d">late</a><a id="kept" href="https://elsewhere.invalid/b">kept</a>'
+      await settled()
+      expect([root.getElementById('out').getAttribute('target'), root.getElementById('out').getAttribute('rel')]).toEqual(['_blank', 'noopener noreferrer'])
+      // The stand-in browser follows no link
+      p.w.addEventListener('click', (e: Event) => e.preventDefault())
+      /** Follows a link as a person does, and gives what it says once every handler has run: what the browser follows it by. */
+      const follow = (link: Element) => {
+        link.dispatchEvent(new p.w.MouseEvent('click', { bubbles: true, cancelable: true, composed: true }))
+        return [link.getAttribute('target'), link.getAttribute('rel'), link.getAttribute('ping'), link.getAttribute('href')]
+      }
+      const out = root.getElementById('out')
+      out.addEventListener('click', () => {
+        out.setAttribute('target', 'fresh')
+        out.setAttribute('rel', 'opener')
+        out.setAttribute('ping', 'https://elsewhere.invalid/ping')
+      })
+      expect(follow(out)).toEqual(['_blank', 'noopener noreferrer', null, 'https://elsewhere.invalid/a'])
+      // A link within the page that its handler sends to another site
+      const inside = root.getElementById('in')
+      inside.addEventListener('click', () => inside.setAttribute('href', 'https://elsewhere.invalid/c'))
+      expect(follow(inside)).toEqual(['_blank', 'noopener noreferrer', null, 'https://elsewhere.invalid/c'])
+      // Changed by a handler outside the root, after the root has heard the event go by
+      const late = root.getElementById('late')
+      const changesLate = () => late.setAttribute('target', 'fresh')
+      doc.addEventListener('click', changesLate)
+      expect(follow(late)).toEqual(['_blank', 'noopener noreferrer', null, 'https://elsewhere.invalid/d'])
+      doc.removeEventListener('click', changesLate)
+      // And where a handler outside the root keeps the event from reaching the window
+      const kept = root.getElementById('kept')
+      kept.addEventListener('click', () => kept.setAttribute('target', 'fresh'))
+      host.addEventListener('click', (e: Event) => {
+        e.stopPropagation()
+        e.preventDefault()
+      })
+      expect(follow(kept)).toEqual(['_blank', 'noopener noreferrer', null, 'https://elsewhere.invalid/b'])
+    })
+
+    test('a link in a shadow root a script makes, open or closed, is set right as it appears and on its way to a click, and one that would open a window of what the page made, or a mail link, is held as any other', async () => {
+      const p = load()
+      const doc = p.w.document
+      const roots = (['open', 'closed'] as const).map((mode) => {
+        const host = doc.body.appendChild(doc.createElement('div'))
+        const root = host.attachShadow({ mode })
+        root.innerHTML = `<a id="out" href="https://elsewhere.invalid/${mode}">out</a><a id="blob" href="blob:http://content.test/${mode}" target="_blank">blob</a><a id="mail" href="mailto:${mode}@example.com">mail</a><a id="later" href="#here">later</a>`
+        return root
+      })
+      await settled()
+      for (const root of roots)
+        expect([root.mode, root.getElementById('out').getAttribute('target'), root.getElementById('out').getAttribute('rel')]).toEqual([
+          root.mode,
+          '_blank',
+          'noopener noreferrer',
+        ])
+      for (const root of roots) {
+        // Changed by the page and clicked at once, before the root's watcher has run
+        const later = root.getElementById('later')
+        later.setAttribute('href', `https://elsewhere.invalid/later-${root.mode}`)
+        expect([root.mode, click(p, later).seen]).toEqual([root.mode, { target: '_blank', rel: 'noopener noreferrer' }])
+        // Followed as a person follows them, with nothing of the page's in the way
+        const follow = (id: string) => root.getElementById(id).dispatchEvent(new p.w.MouseEvent('click', { bubbles: true, cancelable: true, composed: true }))
+        expect([root.mode, follow('blob'), follow('mail')]).toEqual([root.mode, false, false])
+      }
+      expect(openedFor(p)).toEqual(['mailto:open@example.com', 'mailto:closed@example.com'])
+    })
   })
 
   test('what the page’s own script fails with is said to the site, the first few times, and a picture that did not load is not', async () => {

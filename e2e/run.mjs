@@ -765,8 +765,8 @@ const saidTo = (port, bytes, ms = 2500) =>
     socket.on('data', (piece) => pieces.push(piece))
     for (const ending of ['end', 'close', 'error']) socket.on(ending, done)
   })
-/** What a page's frame is allowed, and nothing else: its scripts, its forms, its dialogs, windows it opens, downloads, and holding the pointer. */
-const PAGE_MAY = ['allow-scripts', 'allow-forms', 'allow-modals', 'allow-popups', 'allow-downloads', 'allow-pointer-lock']
+/** What a page's frame is allowed, and nothing else: its scripts, its forms, its dialogs, windows it opens, which leave the sandbox as ordinary tabs, downloads, and holding the pointer. */
+const PAGE_MAY = ['allow-scripts', 'allow-forms', 'allow-modals', 'allow-popups', 'allow-popups-to-escape-sandbox', 'allow-downloads', 'allow-pointer-lock']
 /** The whole policy every answer from where pages are shown carries, for a site reached at this address: the box a page is kept in, and that only that site may frame it. */
 const pagesPolicy = (site) => ({ sandbox: PAGE_MAY, 'frame-ancestors': [site] })
 /** The whole policy every answer of the site carries, for a site reached at this address whose pages are shown at that one. */
@@ -1741,6 +1741,222 @@ try {
   )
   await beside.close()
   await it(A, ['delete', oslug])
+
+  // Links out of a page, as an agent writes them and as a person clicks them. Another site is a
+  // listener of the run's own on this machine, which answers every address with a page. The page
+  // is given a plain link to it, with no target; a link to It's own site in a tab of its own,
+  // which a sandboxed tab refuses to load, since the site sends Cross-Origin-Opener-Policy; a
+  // link to one of its own files in a tab of its own; and a button that asks It to open an
+  // address. Each is clicked in the page as a person clicks.
+  const linkedTo = []
+  const linked = http.createServer((req, res) => {
+    linkedTo.push({ asked: req.url, referer: req.headers.referer ?? null })
+    // A document that gives its frame another name than the page gave it
+    const renames = req.url === '/renames' ? '<script>window.name = "moved"</script>' : ''
+    res
+      .writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      .end(`<!doctype html><title>Another site</title><link rel="icon" href="data:,"><h1>Another site</h1>${renames}`)
+  })
+  await new Promise((resolve) => linked.listen(0, '127.0.0.1', resolve))
+  const out = `http://127.0.0.1:${linked.address().port}`
+  await page.goto(`${APP}/p/${slug}`)
+  const linking = await pageIn(page, { id: slug })
+  await linking.evaluate(
+    ({ out, app }) => {
+      const links = document.createElement('p')
+      links.id = 'links-out'
+      links.innerHTML = `<a id="out-plain" href="${out}/plain">another site</a> <a id="out-site" href="${app}/" target="_blank">It</a> <a id="out-own" href="index.html" target="_blank">its own file</a> <button id="out-open" type="button">open</button>`
+      document.body.append(links)
+      document.getElementById('out-open').addEventListener('click', () => window.It.open(`${out}/opened`))
+    },
+    { out, app: APP },
+  )
+  /** Clicks something in the page as a person would, and gives what the tab that opened shows: where it is, whether that is a showing's address, its origin, and whether it has an opener. */
+  const tabFrom = async (selector) => {
+    const opened = one.context.waitForEvent('page', { timeout: 15_000 }).catch(() => null)
+    await page.frameLocator('.mount iframe').locator(selector).click()
+    const tab = await opened
+    if (!tab) return { opened: false }
+    await tab.waitForLoadState('load').catch(() => {})
+    const seen = await tab
+      .evaluate(() => ({ origin: window.origin, opener: window.opener !== null, title: document.title }))
+      .catch((err) => ({ unread: String(err.message).split('\n')[0] }))
+    const at = tab.url()
+    await tab.close()
+    return { opened: true, at: at.replace(/\/s\/[^/]+\//, '/s/…/'), showing: SHOWING.test(at), ...seen }
+  }
+  const plainTab = await tabFrom('#out-plain')
+  const pageAfter = await linking
+    .evaluate(() => ({
+      links: document.getElementById('links-out') !== null,
+      it: typeof window.It?.action === 'function',
+      rel: document.getElementById('out-plain').getAttribute('rel'),
+    }))
+    .catch((err) => ({ unread: String(err.message).split('\n')[0] }))
+  check(
+    'a plain link in a page to another site, with no target, opens that site in an ordinary tab of its own with no opener, and the page stays as it was',
+    plainTab.at === `${out}/plain` &&
+      plainTab.origin === out &&
+      plainTab.opener === false &&
+      SHOWING.test(frameOf(page).url()) &&
+      pageAfter.links === true &&
+      pageAfter.it === true &&
+      pageAfter.rel === 'noopener noreferrer',
+    JSON.stringify({ plainTab, pageAfter }),
+  )
+  const siteTab = await tabFrom('#out-site')
+  check(
+    'a link in a page to It’s own site opens the site in an ordinary tab, where a sandboxed one would refuse it, with no opener',
+    siteTab.at === `${APP}/` && siteTab.origin === APP && siteTab.opener === false,
+    JSON.stringify(siteTab),
+  )
+  // It's script in the page says hello to the site that framed it, and in a tab by itself there is none: the browser says that its message had nowhere to go
+  const ownTab = await provoking(
+    one,
+    [
+      {
+        says: /^Failed to execute 'postMessage' on 'DOMWindow': The target origin provided \('[^']+'\) does not match the recipient window's origin \('null'\)\.$/,
+        times: 50,
+        may: true,
+        because: 'a page’s own file was opened in a tab of its own, where It’s script in it says hello to a site that is not there',
+      },
+    ],
+    () => tabFrom('#out-own'),
+  )
+  check(
+    'a link in a page to one of its own files, in a tab of its own, opens it there sandboxed as the page is',
+    ownTab.showing === true && ownTab.origin === 'null' && ownTab.opener === false,
+    JSON.stringify(ownTab),
+  )
+  const openTab = await tabFrom('#out-open')
+  check(
+    'It.open, called from a click in the page, opens the address in an ordinary tab of its own with no opener',
+    openTab.at === `${out}/opened` && openTab.origin === out && openTab.opener === false,
+    JSON.stringify(openTab),
+  )
+  // A window the page's own script opens is opened as well, and the page is given no handle on it
+  const handed = one.context.waitForEvent('page', { timeout: 15_000 }).catch(() => null)
+  const handle = await linking.evaluate((to) => window.open(to) === null, `${out}/scripted`)
+  const scripted = await handed
+  await scripted?.close()
+  check(
+    'and a window the page’s own script opens gives the page no handle on it, and every way out tells the other site nothing of where the page is',
+    handle === true &&
+      Boolean(scripted) &&
+      ['/plain', '/opened', '/scripted'].every((asked) => linkedTo.some((left) => left.asked === asked)) &&
+      linkedTo.every((left) => left.referer === null),
+    JSON.stringify({ handle, scripted: Boolean(scripted), linkedTo }),
+  )
+  // Frames of the other site's in the page, as a link's target finds them: by the name each goes
+  // by now, as the browser's own lookup says, which nothing of the page's can stand in for. One
+  // keeps the name the page gave it, one gives itself another, and one has none, and the page
+  // makes a property that leads to the second under the name it gave it
+  await linking.evaluate((out) => {
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      `<iframe name="out-frame" src="${out}/frame"></iframe><iframe name="out-moved" src="${out}/renames"></iframe><iframe id="out-unnamed" src="${out}/unnamed"></iframe>`,
+    )
+  }, out)
+  await until(() => ['/frame', '/renames', '/unnamed'].every((asked) => linkedTo.some((left) => left.asked === asked)), 15_000, 50)
+  await page.waitForTimeout(1500)
+  const aimedAt = await linking.evaluate((out) => {
+    const moved = [...document.querySelectorAll('iframe')].find((frame) => frame.name === 'out-moved').contentWindow
+    Window.prototype['out-moved'] = moved
+    let unnamed = -1
+    for (let n = 0; n < window.length; n++) if (window[n] === document.getElementById('out-unnamed').contentWindow) unnamed = n
+    const aims = {
+      kept: 'out-frame',
+      'renamed, by the name it was given': 'out-moved',
+      'renamed, by the name it took': 'moved',
+      'unnamed, by its number': String(unnamed),
+    }
+    const said = {}
+    for (const [kind, target] of Object.entries(aims)) {
+      const link = Object.assign(document.createElement('a'), { href: `${out}/aimed`, target, textContent: kind })
+      document.body.append(link)
+      // On its way to being followed, from the keyboard
+      link.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      said[kind] = [link.getAttribute('target'), link.getAttribute('rel')]
+      link.remove()
+    }
+    delete Window.prototype['out-moved']
+    for (const frame of document.querySelectorAll('iframe[name="out-frame"], iframe[name="out-moved"], #out-unnamed')) frame.remove()
+    return said
+  }, out)
+  check(
+    'a link aimed at a frame of another site’s in the page is followed there by the name the frame goes by now, with no hold as every link has, and aimed at any other name, a number or a name the page made to lead to a frame, opens a tab of its own with no hold either way',
+    JSON.stringify(aimedAt.kept) === JSON.stringify(['out-frame', 'noopener noreferrer']) &&
+      ['renamed, by the name it was given', 'renamed, by the name it took', 'unnamed, by its number'].every(
+        (kind) => JSON.stringify(aimedAt[kind]) === JSON.stringify(['_blank', 'noopener noreferrer']),
+      ),
+    JSON.stringify(aimedAt),
+  )
+  // A plain link inside a closed shadow root, which hides what is in it from the rest of the
+  // page: one a script made, and one declared in markup, which no script of the page's is given.
+  // Neither can be reached by a locator, so each is clicked where it is drawn.
+  await linking.evaluate((out) => {
+    const made = document.createElement('div')
+    made.id = 'closed-made'
+    document.body.append(made)
+    made.attachShadow({ mode: 'closed' }).innerHTML = `<a href="${out}/closed" style="display:block;padding:12px">inside a closed root</a>`
+    const declared = document.createElement('div')
+    declared.id = 'closed-declared'
+    document.body.append(declared)
+    // A declared root is attached to an element inside the markup, never to the one it is set on
+    declared.setHTMLUnsafe(
+      `<div><template shadowrootmode="closed"><a href="${out}/declared" style="display:block;padding:12px">declared closed</a></template></div>`,
+    )
+  }, out)
+  /** Clicks where something in the page is drawn, as a person would. */
+  const clickOn = async (selector) => {
+    await page.frameLocator('.mount iframe').locator(selector).scrollIntoViewIfNeeded()
+    const box = await page.frameLocator('.mount iframe').locator(selector).boundingBox()
+    await page.mouse.click(box.x + 20, box.y + box.height / 2)
+  }
+  const closedOpened = one.context.waitForEvent('page', { timeout: 15_000 }).catch(() => null)
+  await clickOn('#closed-made')
+  const closedTab = await closedOpened
+  await closedTab?.waitForLoadState('load').catch(() => {})
+  const closedSeen = closedTab
+    ? await closedTab.evaluate(() => ({ at: location.href, opener: window.opener !== null })).catch((err) => ({ unread: String(err.message).split('\n')[0] }))
+    : null
+  await closedTab?.close()
+  const closedAfter = await linking.evaluate(() => document.getElementById('links-out') !== null).catch(() => false)
+  check(
+    'a plain link inside a closed shadow root that a script made opens in an ordinary tab of its own with no opener, and the page stays as it was',
+    closedSeen?.at === `${out}/closed` && closedSeen.opener === false && closedAfter === true && SHOWING.test(frameOf(page).url()),
+    JSON.stringify({ closedSeen, closedAfter }),
+  )
+  // The one declared in markup takes the frame itself to the other site. The site's policy
+  // refuses it, and the browser says so in the site's console
+  const shownBefore = frameOf(page).url()
+  const declaredOpened = one.context.waitForEvent('page', { timeout: 5000 }).catch(() => null)
+  const backAgain = await provoking(
+    one,
+    [
+      {
+        says: againstPolicy(`Framing '${out}/'`, `frame-src ${pages}`),
+        because: 'a link inside a closed shadow root declared in markup took the page’s frame to another site',
+      },
+    ],
+    async () => {
+      await clickOn('#closed-declared')
+      return until(async () => {
+        const now = shownFrame(page)
+        if (!now || now.url() === shownBefore || !SHOWING.test(now.url())) return undefined
+        return (await now.evaluate(() => typeof window.It?.action === 'function').catch(() => false)) ? now.url() : undefined
+      }, 20_000)
+    },
+  )
+  const declaredTab = await declaredOpened
+  await declaredTab?.close()
+  check(
+    'a plain link inside a closed shadow root declared in markup, which no script in the page can see, does not leave the page as an error page: the page is shown again',
+    Boolean(backAgain),
+    JSON.stringify({ backAgain: Boolean(backAgain), openedATab: Boolean(declaredTab) }),
+  )
+  linked.closeAllConnections()
+  await new Promise((resolve) => linked.close(resolve))
 
   // Forty tabs, opened ten at a time and all left open: more than a person is likely to have
   // open at once

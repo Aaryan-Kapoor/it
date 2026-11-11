@@ -2674,7 +2674,8 @@ describe('Pages', () => {
     const careful = await open(false, { content: careless })
     try {
       const port = careful.base + 1
-      const policy = (site: string) => `sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock; frame-ancestors ${site}`
+      const policy = (site: string) =>
+        `sandbox allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock; frame-ancestors ${site}`
       const here = policy(`http://localhost:${careful.base}`)
       const to = (path: string, more: Ask = {}): Ask => ({ host: `localhost:${port}`, path, ...more })
       const kinds: Record<string, { ask: Ask; status: number; policy?: string }> = {
@@ -2711,8 +2712,7 @@ describe('Pages', () => {
         const answer = await ask(port, expected.ask)
         const said = answer.headers['content-security-policy'] ?? ''
         expect([kind, answer.status, said]).toEqual([kind, expected.status, expected.policy ?? here])
-        for (const word of ['allow-same-origin', 'allow-top-navigation', 'allow-popups-to-escape-sandbox'])
-          expect([kind, word, said.includes(word)]).toEqual([kind, word, false])
+        for (const word of ['allow-same-origin', 'allow-top-navigation']) expect([kind, word, said.includes(word)]).toEqual([kind, word, false])
         expect([kind, answer.cookies, 'set-cookie' in answer.headers]).toEqual([kind, [], false])
       }
       // What the content package answered is otherwise as it was
@@ -2736,7 +2736,8 @@ describe('Pages', () => {
   test('Whatever is sent to the pages’ port, down to what is no request at all, an answer from it says that it is a sandboxed document, and where the door cannot say so nothing is answered', async () => {
     const port = door.base + 1
     const host = `Host: 127.0.0.1:${port}\r\n`
-    const sandbox = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock; frame-ancestors '
+    const sandbox =
+      'sandbox allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock; frame-ancestors '
     /** What is sent, and the statuses it may be answered with. A status of 0 is a connection closed with nothing said on it. */
     const sent: Record<string, [string | Buffer, number[]]> = {
       'a plain request': [`GET /missing HTTP/1.1\r\n${host}Connection: close\r\n\r\n`, [200]],
@@ -2801,7 +2802,8 @@ describe('Pages', () => {
 
   test('A caller of the pages’ port that waits to be told to go on is never told so: its request is answered as it stands, as a sandboxed document, and none of its body is waited for', async () => {
     const port = door.base + 1
-    const sandbox = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock; frame-ancestors '
+    const sandbox =
+      'sandbox allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock; frame-ancestors '
     for (const [what, method, more] of [
       ['a body it has yet to send', 'POST', 'Content-Length: 13\r\n'],
       ['a body it will send in pieces', 'PUT', 'Transfer-Encoding: chunked\r\n'],

@@ -20,6 +20,7 @@ import {
   jsonText,
   LIMITS,
   MESSAGE,
+  openedForAPage,
   type PageToSite,
   SANDBOX,
   type SiteToPage,
@@ -64,6 +65,8 @@ const siteTouched = () => {
 for (const kind of ['pointerdown', 'pointerup', 'mouseup', 'touchend', 'click', 'keydown', 'keyup']) window.addEventListener(kind, siteTouched, true)
 /** How long a page has to load and say hello. */
 const READY_MS = 20_000
+/** How close together the browser refuses to show another site in a page's frame and the frame loads what it shows instead, the browser's error page, in either order. */
+const REFUSED_LOAD_MS = 2000
 /**
  * Where pages are shown from: the port after the site's own, on the machine the site itself was
  * reached at and by the same name, so that a page is reached wherever the site is.
@@ -224,20 +227,23 @@ export function Mount({
       storeTokens -= 1
       return 0
     }
+    /** Shows the page again, but not in a loop: one shown again so soon after the last time is shown again when that while has passed. */
+    const showAgain = () => {
+      const remount = () => {
+        lastRemount.current = Date.now()
+        again()
+      }
+      const wait = Math.min(lastRemount.current + REMOUNT_EVERY_MS - Date.now(), REMOUNT_EVERY_MS)
+      if (wait < 0) remount()
+      else later ??= setTimeout(remount, wait)
+    }
     const fromPage = async (from: MessagePort, message: PageToSite) => {
       if (!message || typeof message !== 'object') return
       if (message.type === 'it:lapsed') {
-        // The page's showing is over. Show it again, but not in a loop: one that is over so
-        // soon after the last was begun is shown again when that while has passed. It is not
-        // let go by, since a document says that its showing is over only once, and the page
-        // would stay as it is with nothing under it to load from.
-        const remount = () => {
-          lastRemount.current = Date.now()
-          again()
-        }
-        const wait = Math.min(lastRemount.current + REMOUNT_EVERY_MS - Date.now(), REMOUNT_EVERY_MS)
-        if (wait < 0) remount()
-        else later ??= setTimeout(remount, wait)
+        // The page's showing is over. Show it again. It is not let go by, since a document says
+        // that its showing is over only once, and the page would stay as it is with nothing
+        // under it to load from.
+        showAgain()
         return
       }
       if (message.type === 'it:fault') {
@@ -350,6 +356,30 @@ export function Mount({
       // Only this frame. What is in it has no origin to be known by: the window it came from is what tells
       if (!live || e.source !== frame.current?.contentWindow) return
       const type = (e.data as { type?: unknown } | null)?.type
+      if (type === 'it:open') {
+        // An address the page asks to have opened in a tab of its own: a link to an address only
+        // the person's system can open, which a sandboxed frame cannot hand to it, or It.open.
+        // It is opened only from the person's own click or key in the page: the frame holds the
+        // keyboard, which a click or a key in it gives it, and the browser says that the person
+        // has just acted. It is opened while this message is being handled, which is when WebKit
+        // still counts the person's gesture, and with no hold either way and no referrer: the
+        // window has no opener, and the site no handle on it.
+        const url = openedForAPage((e.data as { url?: unknown }).url)
+        if (!url || !inFrame() || (activation && !activation.isActive) || !allowed()) return
+        const open = () => void window.open(url, '_blank', 'noopener,noreferrer')
+        const unsure = activation ? lastElsewhere() + SITE_TOUCH_MS - Date.now() : 0
+        if (unsure <= 0) return open()
+        // The browser says the person has just acted, but so soon after a click on the site
+        // itself that it cannot yet be told which click it means, and a page could take the
+        // site's for its own. Once the site's has worn off, a click in the page is still being
+        // reported, and the address is opened then. Another click on the site meanwhile makes
+        // it impossible to tell, and then it is not opened at all.
+        const noted = siteTouchedAt
+        setTimeout(() => {
+          if (live && siteTouchedAt === noted && activation?.isActive && inFrame()) open()
+        }, unsure)
+        return
+      }
       if (type === 'it:hello') {
         if (!ready) {
           // The page's own script is running: the page is there to be seen
@@ -379,12 +409,42 @@ export function Mount({
       }
     }
     window.addEventListener('message', onMessage)
+    // The page's frame taken to another site by a way the script in the page cannot see, such as
+    // a link inside a closed shadow root that the page's own markup declares. The browser refuses
+    // it, since the frame may show only the pages' port, and in Chromium leaves its error page in
+    // the frame, which loads in place of the page. The browser tells the site which site it
+    // refused and not the address, so what was asked for cannot be opened from here. The page is
+    // shown again instead, rather than left as an error page. The browser says that it refused a
+    // moment after the error page has loaded, or before, so the two are taken in either order,
+    // and each goes with one of the other at most.
+    let refusedAt = Number.NEGATIVE_INFINITY
+    let loadedAt = Number.NEGATIVE_INFINITY
+    const together = () => {
+      if (!ready || Math.abs(refusedAt - loadedAt) >= REFUSED_LOAD_MS) return
+      refusedAt = Number.NEGATIVE_INFINITY
+      loadedAt = Number.NEGATIVE_INFINITY
+      showAgain()
+    }
+    const refused = (e: Event) => {
+      if ((e as SecurityPolicyViolationEvent).effectiveDirective !== 'frame-src') return
+      refusedAt = Date.now()
+      together()
+    }
+    const framed = frame.current
+    const loaded = () => {
+      loadedAt = Date.now()
+      together()
+    }
+    document.addEventListener('securitypolicyviolation', refused)
+    framed?.addEventListener('load', loaded)
     return () => {
       live = false
       clearTimeout(timer)
       clearTimeout(later)
       clearInterval(looking)
       window.removeEventListener('message', onMessage)
+      document.removeEventListener('securitypolicyviolation', refused)
+      framed?.removeEventListener('load', loaded)
       port.current?.close()
       port.current = null
     }
@@ -420,7 +480,8 @@ export function Mount({
           title={title}
           src={mount.address}
           // The same words the content service says on everything it sends: a page never has the
-          // origin of its address, can never move this tab, and what it opens is held to the same
+          // origin of its address and can never move this tab, and a window it opens is an
+          // ordinary tab, which the script in the page opens with no hold either way
           sandbox={SANDBOX}
           // A page may not take the keyboard by itself, where the browser lets that be said
           allow="fullscreen; clipboard-write; autoplay; focus-without-user-activation 'none'"

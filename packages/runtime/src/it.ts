@@ -11,6 +11,8 @@ import {
   isStoreKey,
   jsonText,
   LIMITS,
+  OPENED_FOR_A_PAGE,
+  openedForAPage,
   type PageToSite,
   SHRINK,
   type SiteToPage,
@@ -498,33 +500,575 @@ function quieten(el: Element): void {
 function quietenWithin(root: ParentNode): void {
   for (const el of root.querySelectorAll('meta[name], [referrerpolicy], a[ping], area[ping]')) quieten(el)
 }
-new MutationObserver((changes) => {
+
+// Where a link leads. The page's frame may show only the pages' port, so a link that would load
+// another site in it turns the page into the browser's error page. A link to another site opens
+// in a tab of its own instead, whatever target the page gave it, unless it names a frame inside
+// the page. A link within the page, or to another of its own files, stays as the page wrote it.
+//
+// A window the page opens leaves the sandbox, so every way out is made to leave no hold either
+// way: the window has no opener, the page is given no handle on it, and no referrer is sent.
+// Where the site is reached at this machine's own name, such as localhost, the browser cuts the
+// opener by itself, since the site sends `Cross-Origin-Opener-Policy` there; anywhere else only
+// this does. A window of a kind that would hold
+// what the page made, `javascript:`, `data:` or `blob:`, is not opened at all. An address that
+// only the person's system can open, a mail, phone or messages link, is one a sandboxed frame
+// cannot hand to the system, so the site is asked to open it.
+//
+// Like the referrer rules above, this is done as links appear and again on the way to a click,
+// and a document the page makes inside itself is not watched.
+
+/** Where this page's own files are, taken before anything of the page's own can name another. */
+const home = new URL(window.location.href).origin
+const XLINK = 'http://www.w3.org/1999/xlink'
+/** The kinds of address a window is never opened to. */
+const REFUSED = new Set(['javascript:', 'data:', 'blob:'])
+/** The kinds of address only the person's system opens. */
+const SYSTEM = new Set(['mailto:', 'tel:', 'sms:'])
+const isLink = (el: Element) => el.localName === 'a' || el.localName === 'area'
+/** An address as the page means it: read against where it says its addresses begin, or `null` where it is none. */
+function addressOf(said: string | null | undefined): URL | null {
+  if (said === null || said === undefined) return null
+  try {
+    return new URL(said, document.baseURI)
+  } catch {
+    return null
+  }
+}
+/** Where a link leads, or `null` where it names nowhere. */
+const leadsTo = (el: Element) => addressOf(el.getAttribute('href') ?? el.getAttributeNS(XLINK, 'href'))
+/** Whether an address is another site's: one on the web that is not where this page's own files are. */
+const elsewhere = (to: URL) => (to.protocol === 'http:' || to.protocol === 'https:') && to.origin !== home
+/** The targets that name the frame a link is in, or one around it: `_parent` and `_top` are refused to a page, which cannot move the tab it is shown in. */
+const IN_PLACE = new Set(['', '_self', '_parent', '_top'])
+/**
+ * The target a link or a form is followed in, as the browser takes it: its own, or else the page's
+ * `<base target>`, as it is written. The browser trims nothing from a name, and compares the
+ * keywords alone without regard to case: ` inside ` is no frame's name `inside`, and ` _self ` is
+ * a name, not `_self`. A name with a line break and a `<` in it is taken as `_blank`, as the
+ * browser takes it.
+ */
+function targetOf(el: Element): string {
+  const said = el.hasAttribute('target') ? el.getAttribute('target') : document.querySelector('base[target]')?.getAttribute('target')
+  const target = said ?? ''
+  return /[\t\n\r]/.test(target) && target.includes('<') ? '_blank' : target
+}
+/** The shadow roots a script made, in which a frame can be as well as in the document. */
+const shadowRoots: WeakRef<ShadowRoot>[] = []
+/**
+ * The browser's own lookup of the page's frames by the names they go by now, which nothing of
+ * the page's can stand in for or change, taken before anything of the page's runs.
+ */
+const BY_NAME: object | null = Object.getPrototypeOf(Window.prototype)
+const describe = Object.getOwnPropertyDescriptor
+/**
+ * Whether a frame of the page's goes by a name now, which is the name a link's target finds it
+ * by. A document of the page's own in the frame has a name that can be read, and may have changed
+ * it since. Another site's document hides it, and the browser's own lookup by name says instead:
+ * it reaches the frames of the document, and a frame of another site's inside a shadow root
+ * cannot be told.
+ */
+function goesBy(frame: Element, target: string, inDocument: boolean): boolean {
+  const shown = (frame as HTMLIFrameElement).contentWindow
+  if (!shown) return false
+  try {
+    return shown.name === target
+  } catch {}
+  if (!inDocument || !BY_NAME) return false
+  try {
+    return describe(BY_NAME, target)?.value === shown
+  } catch {
+    return false
+  }
+}
+/**
+ * Whether a target names a frame inside the page, which the page means a link to be followed
+ * in: a frame of the page's, in the document or in a shadow root a script made, whose document
+ * goes by that name now. An element that merely has the name, such as an `embed` or an `object`
+ * that shows a picture, holds no document, and a property of the page's window that leads to a
+ * frame does not name it: a link aimed at either would open a window instead.
+ */
+function namesAFrame(target: string): boolean {
+  if (target === '' || IN_PLACE.has(target.toLowerCase()) || target.toLowerCase() === '_blank') return false
+  const FRAMES = 'iframe, frame, object'
+  for (const frame of document.querySelectorAll(FRAMES)) if (goesBy(frame, target, true)) return true
+  for (let n = shadowRoots.length - 1; n >= 0; n--) {
+    const root = shadowRoots[n]!.deref()
+    if (!root) {
+      shadowRoots.splice(n, 1)
+      continue
+    }
+    for (const frame of root.querySelectorAll(FRAMES)) if (goesBy(frame, target, false)) return true
+  }
+  return false
+}
+/** The browser's own ways of writing an attribute, which It writes by: the page's are wrapped below, to set right what the page writes. */
+const setAttr = Element.prototype.setAttribute
+const removeAttr = Element.prototype.removeAttribute
+/**
+ * Gives a link or a form `noopener` and `noreferrer`, and takes `opener` away: any window it
+ * opens and the page have no hold on each other. Every link and form has them, whatever its
+ * target, so that no reckoning of which target opens a window, from its own, its button's or the
+ * page's `<base>`, as they are now or as a handler makes them, can leave one with a hold. They
+ * change nothing where a link or a form is followed in place or in a frame of the page's, which
+ * the browser follows as before.
+ */
+function withNoHold(el: Element): void {
+  const said = el.getAttribute('rel')
+  const words = (said ?? '').split(/\s+/).filter(Boolean)
+  const kept = words.filter((word) => word.toLowerCase() !== 'opener')
+  for (const word of ['noopener', 'noreferrer']) if (!kept.some((w) => w.toLowerCase() === word)) kept.push(word)
+  if (said === null || kept.length !== words.length || kept.some((word, n) => word !== words[n])) setAttr.call(el, 'rel', kept.join(' '))
+}
+/** What a link's own target and rel were before It sent it to a tab of its own, to be put back once it leads to another site no longer. */
+const pageSaid = new WeakMap<Element, { target: string | null; rel: string | null }>()
+const put = (el: Element, name: string, value: string | null) => (value === null ? removeAttr.call(el, name) : setAttr.call(el, name, value))
+/** What It does to a link: one to another site opens in a tab of its own, and none leaves a hold. */
+function guide(el: Element): void {
+  if (!isLink(el)) return
+  const to = leadsTo(el)
+  const target = targetOf(el)
+  if (to && elsewhere(to)) {
+    if (target.toLowerCase() !== '_blank' && !namesAFrame(target)) {
+      pageSaid.set(el, { target: el.getAttribute('target'), rel: pageSaid.get(el)?.rel ?? el.getAttribute('rel') })
+      setAttr.call(el, 'target', '_blank')
+    }
+  } else {
+    // It leads within the page now, or to one of its files: it is followed as the page wrote it
+    const said = pageSaid.get(el)
+    if (said) {
+      pageSaid.delete(el)
+      put(el, 'target', said.target)
+      put(el, 'rel', said.rel)
+    }
+  }
+  withNoHold(el)
+}
+/** What It does to a form: wherever its answer opens, it leaves no hold. */
+function guideForm(form: Element): void {
+  if (form.localName !== 'form') return
+  withNoHold(form)
+}
+/** Everything It does to an element of the page as it appears or changes. */
+function tend(el: Element): void {
+  quieten(el)
+  guide(el)
+  guideForm(el)
+}
+function tendWithin(root: ParentNode): void {
+  quietenWithin(root)
+  for (const el of root.querySelectorAll('a, area, form')) {
+    guide(el)
+    guideForm(el)
+  }
+}
+const watcher = new MutationObserver((changes) => {
   for (const change of changes) {
-    if (change.type === 'attributes') quieten(change.target as Element)
+    if (change.type === 'attributes') tend(change.target as Element)
     else
       for (const added of change.addedNodes) {
         if (added.nodeType !== Node.ELEMENT_NODE) continue
-        quieten(added as Element)
-        quietenWithin(added as Element)
+        tend(added as Element)
+        tendWithin(added as Element)
+        reachWithin(added as Element)
       }
   }
-}).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['name', 'content', 'referrerpolicy', 'ping'] })
-quietenWithin(document)
-// A script can activate a link before the observer runs. Check it on the way to its handlers
-// and again after them, including a link followed with the middle button.
-for (const event of ['click', 'auxclick'])
-  for (const capture of [true, false])
-    window.addEventListener(
-      event,
-      (e) => {
-        for (const el of e.composedPath()) if (el instanceof Element) stopAuditing(el)
-      },
-      capture,
-    )
+})
+const WATCHED: MutationObserverInit = {
+  subtree: true,
+  childList: true,
+  attributes: true,
+  attributeFilter: ['name', 'content', 'referrerpolicy', 'ping', 'href', 'target', 'rel'],
+}
+tendWithin(document)
+
+// What the page writes of what It looks after on an element is set right at once, and not only
+// when the observer next runs: a handler of the page's can change a link, a form or the page's
+// `<base>` and have the browser follow it in the same turn, before any observer is told, and
+// whether or not the event goes on to where It hears it. So every way of writing such an
+// attribute tends the element as it returns: the methods and the attribute nodes, the properties
+// that reflect them, and a link's or a form's `relList`.
+const LOOKED_AFTER = new Set([...(WATCHED.attributeFilter ?? []), 'formtarget'])
+const looksAfter = (name: unknown) => typeof name === 'string' && LOOKED_AFTER.has(name.replace(/^.*:/, '').toLowerCase())
+let tendingNow = false
+function tendNow(el: unknown): void {
+  if (tendingNow || !(el instanceof Element)) return
+  tendingNow = true
+  try {
+    if (el.localName === 'base') {
+      tendWithin(document)
+      for (const ref of shadowRoots) {
+        const root = ref.deref()
+        if (root) tendWithin(root)
+      }
+    } else if (el.localName === 'button' || el.localName === 'input') {
+      const form = (el as HTMLButtonElement).form
+      if (form) guideForm(form)
+    } else tend(el)
+  } finally {
+    tendingNow = false
+  }
+}
+type Given = unknown[]
+/** What a browser's prototype holds, read by name. */
+type Loose = any
+/**
+ * Wraps a method so that the element it wrote to is tended as it returns, where it wrote something
+ * It looks after. The attribute name it was given, at `named`, is made a string once, before the
+ * browser's own method has it, so that what It reads is what the browser wrote: a name that says
+ * one thing to It and another to the browser cannot pass by.
+ */
+function afterCalling(
+  owner: Loose,
+  name: string,
+  elementOf: (self: Loose, given: Given) => unknown,
+  wrote: (self: Loose, given: Given) => boolean,
+  named?: number,
+): void {
+  const native = owner?.[name]
+  if (typeof native !== 'function') return
+  owner[name] = function (this: unknown, ...given: Given) {
+    if (named !== undefined && given.length > named) given[named] = `${given[named]}`
+    const out = native.apply(this, given)
+    if (wrote(this, given)) tendNow(elementOf(this, given))
+    return out
+  }
+}
+/** Wraps a property's setter so that the element it wrote to is tended as it returns. */
+function afterSetting(owner: Loose, name: string, elementOf: (self: Loose) => unknown = (self) => self): void {
+  const said = owner && Object.getOwnPropertyDescriptor(owner, name)
+  if (!said?.set) return
+  const set = said.set
+  Object.defineProperty(owner, name, {
+    ...said,
+    set(this: unknown, value: unknown) {
+      set.call(this, value)
+      tendNow(elementOf(this))
+    },
+  })
+}
+/** Whose each attribute map, rel list and SVG link's target or address is, as the page is given it. */
+const ownersOf = new WeakMap<object, Element>()
+function noteOwner(owner: Loose, name: string): void {
+  const said = owner && Object.getOwnPropertyDescriptor(owner, name)
+  if (!said?.get) return
+  const get = said.get
+  Object.defineProperty(owner, name, {
+    ...said,
+    get(this: Element) {
+      const it = get.call(this)
+      if (it && typeof it === 'object') ownersOf.set(it, this)
+      return it
+    },
+  })
+}
+const itself = (it: unknown) => it
+const E = Element.prototype
+afterCalling(E, 'setAttribute', itself, (_, given) => looksAfter(given[0]), 0)
+afterCalling(E, 'setAttributeNS', itself, (_, given) => looksAfter(given[1]), 1)
+afterCalling(E, 'removeAttribute', itself, (_, given) => looksAfter(given[0]), 0)
+afterCalling(E, 'removeAttributeNS', itself, (_, given) => looksAfter(given[1]), 1)
+afterCalling(E, 'toggleAttribute', itself, (_, given) => looksAfter(given[0]), 0)
+for (const name of ['setAttributeNode', 'setAttributeNodeNS', 'removeAttributeNode'])
+  afterCalling(E, name, itself, (_, given) => looksAfter((given[0] as Attr | null)?.name))
+// An attribute node written by itself, or put in or taken out of an element's attributes
+const ownerOfAttr = (it: Loose) => (it?.nodeType === 2 && looksAfter(it.name) ? it.ownerElement : null)
+afterSetting(Attr.prototype, 'value', ownerOfAttr)
+afterSetting(Node.prototype, 'nodeValue', ownerOfAttr)
+afterSetting(Node.prototype, 'textContent', ownerOfAttr)
+noteOwner(E, 'attributes')
+const MAP = typeof NamedNodeMap === 'function' ? NamedNodeMap.prototype : undefined
+const mapOwner = (it: object) => ownersOf.get(it)
+for (const name of ['setNamedItem', 'setNamedItemNS']) afterCalling(MAP, name, mapOwner, (_, given) => looksAfter((given[0] as Attr | null)?.name))
+afterCalling(MAP, 'removeNamedItem', mapOwner, (_, given) => looksAfter(given[0]), 0)
+afterCalling(MAP, 'removeNamedItemNS', mapOwner, (_, given) => looksAfter(given[1]), 1)
+// The properties that reflect them
+const LINKS = ['target', 'rel', 'href', 'protocol', 'username', 'password', 'host', 'hostname', 'port', 'pathname', 'search', 'hash', 'referrerPolicy', 'ping']
+const REFLECTING: [string, string[]][] = [
+  ['HTMLAnchorElement', LINKS],
+  ['HTMLAreaElement', LINKS],
+  ['HTMLFormElement', ['target', 'rel']],
+  ['HTMLBaseElement', ['target', 'href']],
+  ['HTMLButtonElement', ['formTarget']],
+  ['HTMLInputElement', ['formTarget']],
+  ['HTMLMetaElement', ['content', 'name']],
+]
+const kinds = window as unknown as Record<string, { prototype: object } | undefined>
+for (const [kind, names] of REFLECTING) for (const name of names) afterSetting(kinds[kind]?.prototype, name)
+// A link's or a form's rel as a list of words, and an SVG link's target and address
+for (const kind of ['HTMLAnchorElement', 'HTMLAreaElement', 'HTMLFormElement']) noteOwner(kinds[kind]?.prototype, 'relList')
+const TOKENS = typeof DOMTokenList === 'function' ? DOMTokenList.prototype : undefined
+for (const name of ['add', 'remove', 'toggle', 'replace']) afterCalling(TOKENS, name, mapOwner, (it) => ownersOf.has(it))
+afterSetting(TOKENS, 'value', (it) => ownersOf.get(it) ?? null)
+for (const name of ['target', 'href']) noteOwner(kinds.SVGAElement?.prototype, name)
+afterSetting(kinds.SVGAnimatedString?.prototype, 'baseVal', (it) => ownersOf.get(it) ?? null)
+
+/** Asks the site to open an address in a tab of its own. Sent on the window, so that the browser still counts the person's click when the site opens it. */
+function openedBySite(href: string): void {
+  window.parent.postMessage({ type: 'it:open', url: href } satisfies PageToSite, config.app)
+}
+/** The link a click or a key followed, which is the nearest one around what was clicked. */
+const linkIn = (path: EventTarget[]) => path.find((el): el is Element => el instanceof Element && isLink(el))
+/**
+ * Whether a link, followed now, would open a window of a kind that is never opened. `aside` is
+ * a way of following it that opens a window of its own whatever its target says: the middle
+ * button, a click with a key that asks for a new tab or window, the link's menu, and dragging it
+ * out of the page. A `javascript:` link opened so is nothing, and its menu is left to it.
+ */
+function opensRefused(link: Element, aside = false): boolean {
+  const to = leadsTo(link)
+  if (!to || !REFUSED.has(to.protocol) || link.hasAttribute('download')) return false
+  if (aside) return to.protocol !== 'javascript:'
+  const target = targetOf(link)
+  // Followed in the frame, `javascript:` runs the page's own script, as it does on any page. A
+  // refused `_top` or `_parent` is counted with the windows, since WebKit opens one for it
+  return target.toLowerCase() !== '' && target.toLowerCase() !== '_self' && !namesAFrame(target)
+}
+/** Whether an event follows a link aside, in a window of its own whatever its target says. */
+const aside = (e: Event) => e.type !== 'click' || (e instanceof MouseEvent && (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey))
+/** Every way a link is followed, and the key that follows the one that has the focus. */
+const FOLLOWING = ['click', 'auxclick', 'contextmenu', 'dragstart', 'keydown']
+/** The link each of those was on, as deep as It has seen it: a shadow root that hides its inside from the window tells It of the link there itself. */
+const followedIn = new WeakMap<Event, Element>()
+/**
+ * What It does on the way to a link being followed, before the page's own handlers (`capture`)
+ * and again after them, since a script can change a link or activate it before the observer has
+ * run. The window hears of every link in the document, and each shadow root a script makes
+ * hears of its own.
+ */
+function onTheWay(e: Event, capture: boolean, sends = true): void {
+  const path = e.composedPath()
+  for (const el of path)
+    if (el instanceof Element) {
+      stopAuditing(el)
+      guide(el)
+    }
+  // Seen from outside in, so that each listener that sees deeper says which link it was
+  const seen = linkIn(path)
+  if (capture && seen) followedIn.set(e, seen)
+  const link = followedIn.get(e) ?? seen
+  // A closed shadow root hides the link from the window's path: it is set right as it stands now, after the page's handlers too
+  if (link && !path.includes(link)) {
+    stopAuditing(link)
+    guide(link)
+  }
+  if (e.type === 'keydown' || !link) return
+  if (opensRefused(link, aside(e))) {
+    e.preventDefault()
+    return
+  }
+  // After the page's own handlers, which may have taken the click for themselves. Only the
+  // window sends a link to the site, once, and after every handler of the page's
+  if (capture || !sends || e.type !== 'click' || e.defaultPrevented) return
+  const to = leadsTo(link)
+  if (to && SYSTEM.has(to.protocol) && !link.hasAttribute('download')) {
+    e.preventDefault()
+    openedBySite(to.href)
+  }
+}
+/** What hears links followed: in the window, before the page's handlers and after them, and in a root, after the handlers there. Each is one function, so that putting it back where it is already does nothing. */
+const followedBefore = (e: Event) => onTheWay(e, true)
+const followedAfter = (e: Event) => onTheWay(e, false)
+const followedAfterInRoot = (e: Event) => onTheWay(e, false, false)
+/**
+ * A form is checked on its way out too, and again once every handler of the submit event has
+ * run, as its data is gathered, just before the browser reads its target and rel. Neither event
+ * leaves a shadow root, so each root It reaches hears them for its own forms, as the window does
+ * for the document's.
+ */
+const FORMS = ['submit', 'formdata']
+const onItsWayOut = (e: Event) => {
+  if (e.target instanceof Element) guideForm(e.target)
+}
+/** Whatever the page's own markup declares, once it is all parsed. */
+const reachAll = () => reachWithin(document)
+/**
+ * What the window hears of links and forms, what each root It reached hears, and what the
+ * observer watches. Opening a document again, as `document.open` does, and `document.write` once
+ * the page has loaded, takes every listener away from the window and from everything in that
+ * document, its roots too: so they are all put back each time, and putting back one that is there
+ * already does nothing.
+ */
+function listen(): void {
+  for (const event of FOLLOWING) {
+    window.addEventListener(event, followedBefore, true)
+    window.addEventListener(event, followedAfter)
+  }
+  for (const event of FORMS) window.addEventListener(event, onItsWayOut, true)
+  document.addEventListener('DOMContentLoaded', reachAll)
+  watcher.observe(document, WATCHED)
+  for (const ref of shadowRoots) {
+    const root = ref.deref()
+    if (root) hearIn(root)
+  }
+}
+listen()
+/**
+ * A shadow root hides what is in it from the document's observer, and a closed one hides it from
+ * the window's listeners as well. So each root It can reach is watched as the document is and
+ * hears of the links and forms followed in it, before the handlers inside it and again after
+ * them, since a handler there may change a link and keep the event from going further. It reaches
+ * every root a script makes, open or closed, and every open one declared in markup: as the page is
+ * parsed, set with `setHTMLUnsafe`, parsed with `Document.parseHTMLUnsafe` or written. A closed
+ * root declared in markup is given to no script, and is the one It cannot reach.
+ */
+const reached = new WeakSet<ShadowRoot>()
+function reach(root: ShadowRoot): void {
+  if (reached.has(root)) return
+  reached.add(root)
+  shadowRoots.push(new WeakRef(root))
+  hearIn(root)
+  tendWithin(root)
+  reachWithin(root)
+}
+/** What a root hears and how it is watched: put again wherever opening a document took it away. */
+function hearIn(root: ShadowRoot): void {
+  watcher.observe(root, WATCHED)
+  for (const event of FOLLOWING) {
+    root.addEventListener(event, followedBefore, true)
+    root.addEventListener(event, followedAfterInRoot)
+  }
+  for (const event of FORMS) root.addEventListener(event, onItsWayOut, true)
+}
+/** Reaches every open root declared within, and within those, walking the elements once. */
+function reachWithin(within: Node): void {
+  if (within instanceof Element && within.shadowRoot) reach(within.shadowRoot)
+  const walk = document.createTreeWalker(within, NodeFilter.SHOW_ELEMENT)
+  for (let el = walk.nextNode() as Element | null; el; el = walk.nextNode() as Element | null) if (el.shadowRoot) reach(el.shadowRoot)
+}
+const attachShadow = Element.prototype.attachShadow
+Element.prototype.attachShadow = function (this: Element, init: ShadowRootInit) {
+  const root = attachShadow.call(this, init)
+  reach(root)
+  return root
+}
+// Markup with declared roots in it, set into an element or a root, or parsed into a document of its own
+for (const owner of [Element.prototype, typeof ShadowRoot === 'function' ? ShadowRoot.prototype : undefined] as Loose[]) {
+  const native = owner?.setHTMLUnsafe
+  if (typeof native !== 'function') continue
+  owner.setHTMLUnsafe = function (this: ParentNode, ...given: Given) {
+    const out = native.apply(this, given)
+    tendWithin(this)
+    reachWithin(this)
+    return out
+  }
+}
+const parseUnsafe = (Document as Loose).parseHTMLUnsafe
+if (typeof parseUnsafe === 'function')
+  (Document as Loose).parseHTMLUnsafe = function (this: unknown, ...given: Given) {
+    const parsed = parseUnsafe.apply(this, given)
+    tendWithin(parsed)
+    reachWithin(parsed)
+    return parsed
+  }
+// A link or a form the page made and never put in the document is activated with no event
+// reaching the window: it is checked here instead, on its way
+/**
+ * What a script makes follow a link or send a form, by a click it sends, `click()`,
+ * `requestSubmit()` or `submit()`, is set right first: from the element up through every root it
+ * is in, each root is reached, so that it hears what follows, and each link and form on the way,
+ * and the form of a button, is given what It gives them. So nothing a script follows depends on It
+ * having reached the root it was made in, however that root came about, nor on the window's
+ * listeners being there at that moment, as they are not while a document is being written again.
+ */
+function beforeFollowing(target: unknown): void {
+  for (let node = target instanceof Node ? target : null; node; ) {
+    if (node instanceof ShadowRoot) {
+      reach(node)
+      node = node.host
+      continue
+    }
+    if (node instanceof Element) {
+      guide(node)
+      guideForm(node)
+      const form = (node as HTMLButtonElement).form
+      if (form instanceof Element) guideForm(form)
+    }
+    node = node.parentNode
+  }
+}
+const dispatch = EventTarget.prototype.dispatchEvent
+EventTarget.prototype.dispatchEvent = function (this: EventTarget, event: Event) {
+  if (event?.type === 'click') beforeFollowing(this)
+  return dispatch.call(this, event)
+}
+const requestSubmit = HTMLFormElement.prototype.requestSubmit
+if (typeof requestSubmit === 'function')
+  HTMLFormElement.prototype.requestSubmit = function (this: HTMLFormElement, ...given: [HTMLElement?]) {
+    beforeFollowing(this)
+    if (given[0]) beforeFollowing(given[0])
+    return requestSubmit.apply(this, given)
+  }
+const clickElement = HTMLElement.prototype.click
+HTMLElement.prototype.click = function (this: HTMLElement) {
+  beforeFollowing(this)
+  if (!this.isConnected) {
+    if (isLink(this)) {
+      const to = leadsTo(this)
+      if (opensRefused(this)) return
+      if (to && SYSTEM.has(to.protocol) && !this.hasAttribute('download')) return openedBySite(to.href)
+    }
+  }
+  return clickElement.call(this)
+}
+const submitForm = HTMLFormElement.prototype.submit
+HTMLFormElement.prototype.submit = function (this: HTMLFormElement) {
+  beforeFollowing(this)
+  return submitForm.call(this)
+}
+
 const openWindow = window.open
-window.open = function (this: Window, ...given: Parameters<typeof window.open>) {
+function openOut(this: Window, url?: string | URL, target?: string, features?: string): WindowProxy | null {
   quietenWithin(document)
-  return openWindow.apply(this, given)
+  const said = url === undefined || url === null ? '' : String(url)
+  const to = said === '' ? null : addressOf(said)
+  if (to && REFUSED.has(to.protocol)) return null
+  if (to && SYSTEM.has(to.protocol)) {
+    openedBySite(to.href)
+    return null
+  }
+  const named = target === undefined || target === null ? '' : String(target)
+  const asked = features === undefined || features === null ? '' : String(features)
+  // Each is made a string once, and that string is what the browser is given: an address, a name or
+  // features that said one thing to It and another to the browser could not pass by
+  // A frame inside the page is the page's own to follow a link in, as it asked
+  const address = url === undefined ? undefined : said
+  if (namesAFrame(named)) return openWindow.call(this, address, named, features === undefined ? undefined : asked)
+  // One to another site opens in a tab of its own, as a link to one does
+  const where = to && elsewhere(to) ? '_blank' : named || '_blank'
+  // What is said last of a feature is what is taken
+  return openWindow.call(this, address, where, `${asked}${asked.trim() ? ',' : ''}noopener,noreferrer`)
+}
+window.open = openOut
+// Given an address, a name and features, `document.open` opens a window as `window.open` does,
+// and in Firefox hands the page that window, of the page's own origin, with all of its own
+// functions. It is held to the same.
+const openDocument = Document.prototype.open as (...given: unknown[]) => unknown
+Document.prototype.open = function (this: Document, ...given: unknown[]) {
+  if (given.length > 2) return openOut.call(window, given[0] as string | URL, given[1] as string, given[2] as string)
+  const out = openDocument.apply(this, given)
+  // Any document opened again, the page's or one a host was moved into, has lost its listeners
+  listen()
+  return out
+} as typeof Document.prototype.open
+// Writing to a document once it has been parsed may open it again first, which takes every
+// listener away: they are put back as the writing returns, and what was written, roots declared
+// in it too, is set right then, as it is after any writing to a document other than the page's,
+// which the page's observer does not watch. Meanwhile what a script written in it follows is set
+// right as it is followed (beforeFollowing). The browser's own writing is left as it is, writes it
+// ignores included
+for (const name of ['write', 'writeln'] as const) {
+  const native = Document.prototype[name]
+  Document.prototype[name] = function (this: Document, ...given: string[]) {
+    const parsed = this.readyState !== 'loading'
+    const out = native.apply(this, given)
+    if (parsed || this !== document) {
+      listen()
+      tendWithin(this)
+      reachWithin(this)
+    }
+    return out
+  }
 }
 
 // What the page's own script fails with is said to the site, which says it above the page. The
@@ -772,6 +1316,17 @@ const api = {
   clearStaged: () => {
     staged = {}
     for (const key of Object.keys(stagedAt)) delete stagedAt[key]
+  },
+  /**
+   * Opens an address in a tab of its own, as a link to it would: an http or https address, or a
+   * mail, phone or messages link. The site opens it, with no hold either way and no referrer,
+   * and only while the browser counts a click or key of the person's in the page, so call it
+   * from the handler of one.
+   */
+  open(url: string | URL): void {
+    const href = openedForAPage(addressOf(String(url))?.href)
+    if (!href) throw new Error(`It.open opens an address of one of these kinds: ${OPENED_FOR_A_PAGE.map((kind) => kind.slice(0, -1)).join(', ')}.`)
+    openedBySite(href)
   },
   /** Things the page keeps for itself. They follow the page to every display. */
   store: {
