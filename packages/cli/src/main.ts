@@ -64,6 +64,7 @@ import { hook } from './hooks'
 import { checkInstallationFolder, checkInstallationRecord, legacyInstallation, markedInstallation, markInstallation } from './installation'
 import { withInstallerLock } from './installer-lock'
 import {
+  addonHere,
   api,
   askConnectorWith,
   askShell,
@@ -843,7 +844,7 @@ async function arrivalHere(slug?: string, tour = false): Promise<Arrives | undef
   const route = await routeOf(session)
   return arrives({
     session,
-    addonHere: session.harness === 'claude-code' ? claudeAddonHere() : undefined,
+    addonHere: addonHere(session.harness),
     claude: claudeRunning(),
     route,
     slug,
