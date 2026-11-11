@@ -611,15 +611,46 @@ export const keptOut = (e: NodeJS.ProcessEnv = process.env) =>
     outOfTheSandbox(e, 'Run `it` outside that sandbox, as the account It runs as. Do not start It again.'),
   )
 /**
+ * What is said when this command may not write into It's folder, which a sandbox that keeps
+ * every folder but the one being worked in read-only does. Codex's does, also where it gives
+ * commands the network. Nothing was asked of It before the refusal, and nothing was published.
+ */
+export const readOnlyHere = (e: NodeJS.ProcessEnv = process.env) =>
+  new Problem(
+    'It could not be asked from here: this command runs where It’s folder may not be written, as an agent app’s sandbox keeps it. It may well be running.',
+    'blocked',
+    outOfTheSandbox(e, 'Run `it` outside that sandbox. Do not start It again.'),
+  )
+/**
+ * Whether an error is the system refusing a write into It's folder. Node's recursive `mkdir` gives
+ * a folder that may not be written as missing (ENOENT) where the folder it would go in is there,
+ * so that is taken for a refusal as well. A file elsewhere that may not be written is the
+ * command's own to say, with the file's name.
+ */
+export function writeRefused(err: unknown): boolean {
+  const e = err as { code?: unknown; path?: unknown; syscall?: unknown } | null
+  if (typeof e?.path !== 'string') return false
+  const at = path.resolve(e.path)
+  const relative = path.relative(home(), at)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return false
+  if (e.code === 'EROFS' || e.code === 'EACCES' || e.code === 'EPERM') return true
+  return e.code === 'ENOENT' && e.syscall === 'mkdir' && existsSync(home())
+}
+/**
  * What an agent that is kept from It in a sandbox is told to do. Codex is the app that does
  * this as it comes, and the person is the one who can change it: the agent is given the line to
- * tell them, since nothing else can get word out of here.
+ * tell them, since nothing else can get word out of here. Codex runs a command outside its
+ * sandbox when the agent gives it with `sandbox_permissions` set to `require_escalated`, after
+ * asking the person once; an approval asked for any other way runs the command inside it.
  */
 const outOfTheSandbox = (e: NodeJS.ProcessEnv, otherwise: string) =>
   e.CODEX_THREAD_ID
     ? // What is for the agent comes first and what it is to pass on comes last: an agent that is told "say this, in these words" says everything after it
-      `It may well be running: this says nothing of that, so do not start It again, and do not change Codex’s settings yourself. Ask to run this same command outside the sandbox, the way you ask for any command that needs it. If the asking is refused, or you may not ask, tell the user what follows, in these words and no others: ${CODEX_SHUT_SAID}`
+      `It may well be running: this says nothing of that, so do not start It again, and do not change Codex’s settings yourself. ${CODEX_ESCALATE} If the asking is refused, or you may not ask, tell the user what follows, in these words and no others: ${CODEX_SHUT_SAID}`
     : otherwise
+/** How an agent in Codex asks to run a command outside the sandbox, in the words of Codex's own tool. */
+export const CODEX_ESCALATE =
+  'Ask to run this same command outside the sandbox: give it again with `sandbox_permissions` set to `"require_escalated"` and a one-sentence `justification` that says why.'
 /**
  * Whether It's folder, or a record It cannot do without, is there and this command may not read
  * it: the system refused it, which a record that is missing is not.
@@ -669,6 +700,14 @@ export const askConnectorWith = (ask: () => Promise<boolean>) => {
 export const keptFromIt = async (err: unknown): Promise<boolean> => {
   if (notLet(err)) return true
   if (!notReached(err)) return false
+  return shutInByAsking()
+}
+/**
+ * The asking half of `keptFromIt`, for where It's door gave no answer and what went wrong is not
+ * to hand: whether the system keeps this command from the network, or It's own socket answers
+ * while its port does not.
+ */
+export const shutInByAsking = async (): Promise<boolean> => {
   if (await closedToNetwork()) return true
   if (process.env.IT_URL || basePort() === undefined || !connectorThere) return false
   return connectorThere().catch(() => false)

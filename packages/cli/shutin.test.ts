@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, describe, expect, test } from 'vitest'
-import { askConnectorWith, closedToNetwork, keptFromIt, notLet } from './src/lib'
+import { askConnectorWith, closedToNetwork, keptFromIt, notLet, writeRefused } from './src/lib'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const bundle = path.join(here, 'dist', 'it.mjs')
@@ -96,5 +96,38 @@ describe('a command that the system keeps from the network', () => {
     const freely = JSON.parse(free.out) as { blocked?: boolean; running: boolean; hint: string }
     expect(freely.hint).toContain('It is not running on this machine.')
     expect([freely.blocked, freely.running]).toEqual([undefined, false])
+  })
+})
+
+describe('a write into It’s folder that the system refuses', () => {
+  test('is told by the system’s word for it, in It’s folder alone, and by the missing folder Node’s recursive mkdir says where the folder above it is there', () => {
+    const home = path.join(tmp, 'refused')
+    mkdirSync(home, { recursive: true })
+    const before = process.env.IT_HOME
+    process.env.IT_HOME = home
+    try {
+      const refused = (code: string, file: string, syscall = 'open') => writeRefused(Object.assign(new Error(code), { code, syscall, path: file }))
+      const inside = path.join(home, 'publication-pending', 'a.json')
+      expect([
+        refused('EROFS', inside),
+        refused('EACCES', inside),
+        refused('EPERM', inside),
+        refused('ENOENT', path.join(home, 'publication-pending'), 'mkdir'),
+      ]).toEqual([true, true, true, true])
+      // A file that is only missing, a refusal outside It's folder, and an error with no file are not
+      expect([
+        refused('ENOENT', inside),
+        refused('EROFS', path.join(tmp, 'elsewhere.png')),
+        refused('EACCES', `${home}-beside/a`),
+        writeRefused(Object.assign(new Error('EROFS'), { code: 'EROFS' })),
+        writeRefused(null),
+      ]).toEqual([false, false, false, false, false])
+      // Where It's folder itself is not there, a missing folder is only that
+      process.env.IT_HOME = path.join(tmp, 'never-made')
+      expect(refused('ENOENT', path.join(tmp, 'never-made', 'publication-pending'), 'mkdir')).toBe(false)
+    } finally {
+      if (before === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before
+    }
   })
 })
