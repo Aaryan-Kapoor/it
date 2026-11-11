@@ -134,10 +134,8 @@ public static bool LacksSse42() {
   # a record is It's when it holds the program, the license as one of those releases published
   # it, and the notices beside them. What an install that stopped half way leaves behind (its
   # lock, the folders its downloads went to, and an empty bin) is not counted as anything in the
-  # folder, and neither are the notes the program itself keeps before It is set up: whether
-  # usage is reported and updates looked for, and where the program was downloaded from. A link
-  # is never taken for any of those. The folder is looked at again just before the record is
-  # written, since anything may have been put in it while the downloads came.
+  # folder, and a link is never taken for any of those. The folder is looked at again just before
+  # the record is written, since anything may have been put in it while the downloads came.
   $installation = '{"product":"It","format":1,"about":"This folder holds an installation of It."}' + "`n"
   $installationAt = Join-Path $root 'installation.json'
   $licenses = @('06f412e8c0ab7d324b09d1ff1261ff667a4986546a5f38170966eb6542c6b20d', '5c2b54bcb8f96e22f8994364182b4e0f3fa06dfb448378e81ede85bcc9003e09')
@@ -156,7 +154,7 @@ public static bool LacksSse42() {
     foreach ($entry in [IO.Directory]::GetFileSystemEntries($root)) {
       $called = [IO.Path]::GetFileName($entry)
       $kind = Get-Kind $entry
-      if ((Test-Plain $entry) -and (($called -eq '.installing' -and $kind -eq 'file') -or ($called -like '.install.*' -and $kind -eq 'folder') -or ($called -eq 'bin' -and $kind -eq 'folder' -and [IO.Directory]::GetFileSystemEntries($entry).Count -eq 0) -or (($called -like 'telemetry*' -or $called -like 'usage.jsonl*' -or $called -eq 'updates-off' -or $called -eq 'releases.json') -and $kind -eq 'file'))) { continue }
+      if ((Test-Plain $entry) -and (($called -eq '.installing' -and $kind -eq 'file') -or ($called -like '.install.*' -and $kind -eq 'folder') -or ($called -eq 'bin' -and $kind -eq 'folder' -and [IO.Directory]::GetFileSystemEntries($entry).Count -eq 0))) { continue }
       # Where an install of It that is still running holds its lock, the files it has put in so
       # far are its own, and that is what is said. Windows lets go of the lock when its install
       # ends, however it ends, so a lock that can be opened shows nothing.
