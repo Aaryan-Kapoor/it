@@ -2140,6 +2140,30 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('`it patch`, `it set` and `it create` do not read JSON through a link, which could point at any file on the machine', async () => {
+    const m = machine()
+    const b = await backend(m, () => ({ revision: 2 }))
+    try {
+      // A project can carry a state.json that is really a link to a private file elsewhere
+      const secret = path.join(m.home, 'elsewhere', 'secret.json')
+      mkdirSync(path.dirname(secret), { recursive: true })
+      writeFileSync(secret, '{"token":"made-up-private"}')
+      symlinkSync(secret, path.join(m.home, 'state.json'))
+      for (const words of [
+        ['patch', 'plan', '--file', 'state.json'],
+        ['set', 'plan', 'imported', '--file', 'state.json'],
+        ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>', '--state-file', 'state.json'],
+      ]) {
+        b.asked.length = 0
+        const ran = await run(m, words, b.env)
+        expect([words, ran.code, error(ran).code]).toEqual([words, 2, 'invalid'])
+        expect(error(ran).message).toContain('is a link')
+        expect(b.asked.filter((x) => x.path === 'state:patch' || x.path === 'publish:begin')).toEqual([])
+      }
+    } finally {
+      await b.close()
+    }
+  })
   test('a patch from a file is sent without waiting for standard input, which an agent app may hold open', async () => {
     const m = machine()
     const b = await backend(m, () => ({ revision: 2 }))

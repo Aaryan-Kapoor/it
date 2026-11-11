@@ -73,6 +73,7 @@ export const CODEX_ASKED = [
   'telemetry',
   'updates',
   'shell-profile',
+  'https',
 ] as const
 /** Where It keeps the file of its own in Codex's settings folder, with the rules that let `it` out of the sandbox. */
 export const CODEX_RULES_REL = 'rules/it.rules'

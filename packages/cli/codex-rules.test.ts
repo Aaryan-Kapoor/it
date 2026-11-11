@@ -13,7 +13,7 @@ const rules = () => CODEX_RULES.split('\n').filter((line) => line && !line.start
 test('the file holds the one rule that lets `it` out, and one that asks first of every command that can change It itself', () => {
   expect(rules()).toEqual([
     'prefix_rule(pattern=["it"], decision="allow")',
-    'prefix_rule(pattern=["it", ["setup", "uninstall", "upgrade", "login", "logout", "serve", "service", "network", "runs", "telemetry", "updates", "shell-profile"]], decision="prompt", justification="This command can change It on this machine rather than use it.")',
+    'prefix_rule(pattern=["it", ["setup", "uninstall", "upgrade", "login", "logout", "serve", "service", "network", "runs", "telemetry", "updates", "shell-profile", "https"]], decision="prompt", justification="This command can change It on this machine rather than use it.")',
     CODEX_SAVE_RULE,
   ])
   expect(rules()[0]).toBe(CODEX_RULE)
@@ -30,6 +30,7 @@ test('the file holds the one rule that lets `it` out, and one that asks first of
     'telemetry',
     'updates',
     'shell-profile',
+    'https',
   ])
   expect(CODEX_ASKED).not.toContain('action')
   expect(CODEX_RULES).toContain(CODEX_SAVE_RULE)

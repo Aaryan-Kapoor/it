@@ -1,5 +1,5 @@
 // Reading a command line, kept apart from the commands so it can be tested by itself.
-import { readFileSync, statSync } from 'node:fs'
+import { type BigIntStats, closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs'
 import { sizeSaid, UPLOAD } from '@it/protocol'
 import { Problem } from './lib'
 
@@ -250,18 +250,58 @@ export function setValue(value: string, fromFile: string): unknown {
  */
 export function fileText(file: string, what: string): string {
   if (file === '') throw new Problem(`Say which file ${what} is in.`, 'invalid')
-  let bytes: Buffer
+  const link = () =>
+    new Problem(`${file} is a link, and It does not read JSON through a link.`, 'invalid', 'Give the path of the file itself, not of a link to it.')
+  // A link is never followed, as a page's own files are not: a link in a project could point at
+  // any file on the machine, and what is read here goes into a page's state, which the page reads.
+  // It is refused before opening, and by the system itself as the file is opened, in case one was
+  // put there in between; and the file is never waited for, as a pipe put there would be
+  let fd: number
+  let before: BigIntStats
   try {
-    const stat = statSync(file)
-    if (!stat.isFile()) throw new Problem(`${file} is not an ordinary file.`, 'invalid')
-    if (stat.size > UPLOAD.requestBytes) throw new Problem(`${file} is larger than this command reads (${sizeSaid(UPLOAD.requestBytes)}).`, 'limit')
-    bytes = readFileSync(file)
+    before = lstatSync(file, { bigint: true })
+    if (before.isSymbolicLink()) throw link()
+    fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
   } catch (err) {
     if (err instanceof Problem) throw err
-    if ((err as { code?: string })?.code === 'ENOENT') throw new Problem(`No such file: ${file}`, 'invalid')
+    const code = (err as { code?: string })?.code
+    if (code === 'ENOENT') throw new Problem(`No such file: ${file}`, 'invalid')
+    if (code === 'ELOOP' || code === 'EMLINK') throw link()
     throw err
   }
-  return decoded(bytes, file)
+  try {
+    const stat = fstatSync(fd, { bigint: true })
+    if (!stat.isFile()) throw new Problem(`${file} is not an ordinary file.`, 'invalid')
+    // Where the system cannot refuse a link as it opens a file, as on Windows, the name may have
+    // been pointed at another file after it was looked at: what was opened must be what was looked at
+    if (stat.ino !== before.ino || stat.dev !== before.dev) throw link()
+    // Windows may give no usable id for a file: 0 where the file system keeps none, or every bit
+    // set where it cannot make one unique. Two files then look the same, and so where a link
+    // cannot be refused as the file is opened, a file without a usable id is not read at all
+    if (constants.O_NOFOLLOW === undefined && (stat.ino === 0n || stat.ino === 0xffffffffffffffffn))
+      throw new Problem(
+        `It cannot tell on this drive whether ${file} is the file it looked at, so it does not read it.`,
+        'invalid',
+        "Write the JSON to a file in the user's temporary folder, on the system drive, and give that path.",
+      )
+    const tooLarge = () => new Problem(`${file} is larger than this command reads (${sizeSaid(UPLOAD.requestBytes)}).`, 'limit')
+    if (stat.size > BigInt(UPLOAD.requestBytes)) throw tooLarge()
+    // Read no further than the limit and one byte more, however the file grows while it is read
+    const most = UPLOAD.requestBytes + 1
+    const pieces: Buffer[] = []
+    let got = 0
+    while (got < most) {
+      const piece = Buffer.allocUnsafe(Math.min(most - got, 1 << 20))
+      const n = readSync(fd, piece, 0, piece.length, null)
+      if (n === 0) break
+      pieces.push(piece.subarray(0, n))
+      got += n
+    }
+    if (got > UPLOAD.requestBytes) throw tooLarge()
+    return decoded(Buffer.concat(pieces, got), file)
+  } finally {
+    closeSync(fd)
+  }
 }
 /** Bytes as text: UTF-8, or UTF-16 of either order where they begin with its mark. Bytes that are not whole and valid characters in that encoding are refused. */
 export function decoded(bytes: Uint8Array, file: string): string {
