@@ -3133,6 +3133,15 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
     .then(() => recOut(page).textContent())
   // Both said in It's bar at once, each with its own Stop
   const bothChips = { camera: await liveRow.count(), recording: await page.locator('.page-nav .media-rec').count() }
+  // Recorded for a moment before it is stopped, as a person would: a recorder stopped as soon as
+  // it began may have nothing yet to hand over, on a slower machine. The chip says how long. It is
+  // read at once, with no waiting for it, so that the wait below never runs past its own limit
+  const recordedFor = async () => {
+    const said = await page.evaluate(() => document.querySelector('.page-nav .media-rec')?.getAttribute('aria-label') ?? '').catch(() => '')
+    const time = /(\d+):(\d\d)$/.exec(said)
+    return time ? Number(time[1]) * 60 + Number(time[2]) : 0
+  }
+  if (/^recording audio\//.test(soundSaid)) await until(async () => (await recordedFor()) >= 1, 10_000, 100)
   const soundSent = /^recording audio\//.test(soundSaid) ? await recPressed(page, '#stop', /^(accepted|refused)/) : soundSaid
   const soundTake = await until(async () => (await it(A, ['actions', '--id', camSlug])).find((x) => x.action === 'take'), 30_000, 500)
   const picturesAfterSound = await livePictures(picturesBeforeSound)
