@@ -1537,6 +1537,355 @@ describe('what the script writes to the console', () => {
   })
 })
 
+describe('fullscreen', () => {
+  /**
+   * A browser's own fullscreen, stood in for, since the stand-in browser has none. `enabled` is
+   * what the browser says of the page's frame: Safari says no, though the site can go fullscreen.
+   * `webkit` gives it the older names as well, as Safari and Chrome have them.
+   */
+  function browserFullscreen(w: any, { enabled = false, webkit = false } = {}) {
+    const browser = { element: null as unknown, asked: [] as { how: string; of: unknown }[] }
+    const element = w.Element.prototype
+    const document = w.Document.prototype
+    element.requestFullscreen = function () {
+      browser.asked.push({ how: 'requestFullscreen', of: this })
+      browser.element = this
+      return Promise.resolve()
+    }
+    document.exitFullscreen = function () {
+      browser.asked.push({ how: 'exitFullscreen', of: this })
+      browser.element = null
+      return Promise.resolve()
+    }
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => browser.element })
+    Object.defineProperty(document, 'fullscreen', { configurable: true, get: () => browser.element !== null })
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, get: () => enabled })
+    if (webkit) {
+      element.webkitRequestFullscreen = function () {
+        browser.asked.push({ how: 'webkitRequestFullscreen', of: this })
+      }
+      document.webkitExitFullscreen = function () {
+        browser.asked.push({ how: 'webkitExitFullscreen', of: this })
+      }
+      Object.defineProperty(document, 'webkitFullscreenElement', { configurable: true, get: () => browser.element })
+      for (const what of ['change', 'error']) Object.defineProperty(document, `onwebkitfullscreen${what}`, { configurable: true, writable: true, value: null })
+    }
+    return browser
+  }
+  /** A page in a browser with fullscreen, its port from the site, and the site having said what its fullscreen is. */
+  function loaded(options: { enabled?: boolean; webkit?: boolean; site?: { on: boolean; enabled: boolean } | null; also?: (w: any) => void } = {}) {
+    let browser: ReturnType<typeof browserFullscreen> | undefined
+    const p = load('<video id="film"></video>', (w) => {
+      browser = browserFullscreen(w, options)
+      options.also?.(w)
+    })
+    const port = p.answer()
+    const site = options.site === undefined ? { on: false, enabled: true } : options.site
+    if (site) p.fromSite({ type: 'it:fullscreen', ...site })
+    const heard: string[] = []
+    for (const kind of ['fullscreenchange', 'fullscreenerror', 'webkitfullscreenchange', 'webkitfullscreenerror'])
+      p.w.document.addEventListener(kind, (e: Event) =>
+        heard.push(`${kind} at ${e.target === p.w.document ? 'the document' : (e.target as Element).localName}`),
+      )
+    /** What the page asked the site for on the window, which is where a request for fullscreen goes. */
+    const asked = () => p.hellos.filter((m) => m.type === 'it:fullscreen')
+    /** The site answers the last request on the channel. */
+    const answer = (ok = true) => {
+      const last = asked().at(-1)
+      p.fromSite(
+        ok
+          ? { type: 'it:result', requestId: last.requestId, ok: true }
+          : { type: 'it:result', requestId: last.requestId, ok: false, error: 'The browser did not go fullscreen.' },
+      )
+    }
+    return { ...p, browser: browser!, port, asked, answer, heard, d: p.w.document }
+  }
+
+  test('a page’s own request for its document goes to It on the window, and the page then reads It’s fullscreen as its own', async () => {
+    const p = loaded()
+    // The browser would not let the page's frame go fullscreen. The site can, so the page is told it can
+    expect(p.d.fullscreenEnabled).toBe(true)
+    const entered = p.d.documentElement.requestFullscreen()
+    expect(p.asked()).toEqual([{ type: 'it:fullscreen', requestId: expect.any(String), on: true }])
+    expect(p.browser.asked).toEqual([])
+    // Nothing on the channel: Safari would not carry the click across it
+    expect(p.port.sent.filter((m) => m.type === 'it:fullscreen')).toEqual([])
+    expect(p.d.fullscreenElement).toBeNull()
+    p.fromSite({ type: 'it:fullscreen', on: true, enabled: true })
+    p.answer()
+    await expect(entered).resolves.toBeUndefined()
+    expect(p.d.fullscreenElement).toBe(p.d.documentElement)
+    expect(p.d.fullscreen).toBe(true)
+    expect(p.It.isFullscreen).toBe(true)
+    expect(p.heard).toEqual(['fullscreenchange at html'])
+    // And leaving it, which is asked of It as well
+    const left = p.d.exitFullscreen()
+    expect(p.asked().at(-1)).toMatchObject({ on: false })
+    p.answer()
+    await expect(left).resolves.toBeUndefined()
+    expect(p.d.fullscreenElement).toBeNull()
+    expect(p.It.isFullscreen).toBe(false)
+    expect(p.heard).toEqual(['fullscreenchange at html', 'fullscreenchange at html'])
+    expect(p.browser.asked).toEqual([])
+  })
+
+  test('a request for the page’s body goes to It too, and the body is what the page reads as fullscreen', async () => {
+    const p = loaded()
+    const entered = p.d.body.requestFullscreen()
+    p.answer()
+    await entered
+    expect(p.d.fullscreenElement).toBe(p.d.body)
+    expect(p.heard).toEqual(['fullscreenchange at body'])
+    // Whichever order the site's word and its answer come in
+    p.fromSite({ type: 'it:fullscreen', on: true, enabled: true })
+    expect(p.heard).toEqual(['fullscreenchange at body'])
+  })
+
+  test('the page hears of the change before its request resolves, though the site said that it changed after answering', async () => {
+    const p = loaded()
+    const order: string[] = []
+    p.d.addEventListener('fullscreenchange', () => order.push('change'))
+    const entered = p.d.documentElement.requestFullscreen().then(() => order.push('resolved'))
+    p.answer()
+    p.fromSite({ type: 'it:fullscreen', on: true, enabled: true })
+    await entered
+    expect(order).toEqual(['change', 'resolved'])
+  })
+
+  test('a request for any other element, such as a film, goes to It as well, and the element fills the page’s frame until It leaves fullscreen', async () => {
+    const p = loaded()
+    const film = p.d.getElementById('film')
+    const entered = film.requestFullscreen()
+    expect(p.asked()).toEqual([{ type: 'it:fullscreen', requestId: expect.any(String), on: true }])
+    p.answer()
+    await entered
+    // Never the browser's own, which would draw the page's frame over It's bar
+    expect(p.browser.asked).toEqual([])
+    expect(p.d.fullscreenElement).toBe(film)
+    expect(p.heard).toEqual(['fullscreenchange at video'])
+    // Laid over the rest of the page, as large as the frame: the stand-in browser has no top layer for it
+    const laid = p.w.getComputedStyle(film)
+    expect([laid.position, laid.width, laid.height, laid.zIndex]).toEqual(['fixed', '100%', '100%', '2147483647'])
+    const left = p.d.exitFullscreen()
+    p.answer()
+    await left
+    expect(p.d.fullscreenElement).toBeNull()
+    expect(p.w.getComputedStyle(film).position).not.toBe('fixed')
+    expect(p.heard).toEqual(['fullscreenchange at video', 'fullscreenchange at video'])
+  })
+
+  test('where the browser has a top layer for the page, the element is put there to fill the frame, and taken out again', async () => {
+    const shown: string[] = []
+    const p = loaded({
+      also: (w) => {
+        w.HTMLElement.prototype.showPopover = function () {
+          shown.push(`shown ${this.localName} as ${this.getAttribute('popover')}`)
+        }
+        w.HTMLElement.prototype.hidePopover = function () {
+          shown.push(`hidden ${this.localName}`)
+        }
+      },
+    })
+    const film = p.d.getElementById('film')
+    const entered = film.requestFullscreen()
+    p.answer()
+    await entered
+    expect(shown).toEqual(['shown video as manual'])
+    const left = p.d.exitFullscreen()
+    p.answer()
+    await left
+    expect(shown).toEqual(['shown video as manual', 'hidden video'])
+    expect(film.hasAttribute('popover')).toBe(false)
+  })
+
+  test('an element inside a shadow root fills the frame too: its size goes in its own style, and its look in that shadow root, and both go when fullscreen ends', async () => {
+    const p = loaded()
+    const host = p.d.body.appendChild(p.d.createElement('div'))
+    const shadow = host.attachShadow({ mode: 'closed' })
+    const player = shadow.appendChild(p.d.createElement('div'))
+    const entered = player.requestFullscreen()
+    p.answer()
+    await entered
+    expect([player.style.getPropertyValue('position'), player.style.getPropertyValue('width'), player.style.getPropertyValue('height')]).toEqual([
+      'fixed',
+      '100%',
+      '100%',
+    ])
+    expect(player.style.getPropertyPriority('width')).toBe('important')
+    // What a stylesheet of the document cannot reach, one in the shadow root does
+    expect(shadow.querySelector('style')?.textContent).toContain('[data-it-fullscreen]')
+    const left = p.d.exitFullscreen()
+    p.answer()
+    await left
+    expect(shadow.querySelector('style')).toBeNull()
+    expect([player.getAttribute('style'), player.style.length]).toEqual([null, 0])
+  })
+
+  test('an element whose own style says its size with !important fills the frame all the same, and gets exactly that style back', async () => {
+    const p = loaded()
+    const boxed = p.d.body.appendChild(p.d.createElement('div'))
+    boxed.setAttribute('style', 'width: 160px !important; height: 90px !important; color: red; margin-top: 4px')
+    const before = ['width', 'height', 'color', 'margin-top'].map((name) => [name, boxed.style.getPropertyValue(name), boxed.style.getPropertyPriority(name)])
+    const entered = boxed.requestFullscreen()
+    p.answer()
+    await entered
+    expect([boxed.style.getPropertyValue('width'), boxed.style.getPropertyPriority('width')]).toEqual(['100%', 'important'])
+    expect([boxed.style.getPropertyValue('height'), boxed.style.getPropertyPriority('height')]).toEqual(['100%', 'important'])
+    expect(boxed.style.getPropertyValue('margin-top')).toBe('0px')
+    // Nothing It does not need is touched
+    expect(boxed.style.getPropertyValue('color')).toBe('red')
+    const left = p.d.exitFullscreen()
+    p.answer()
+    await left
+    expect(['width', 'height', 'color', 'margin-top'].map((name) => [name, boxed.style.getPropertyValue(name), boxed.style.getPropertyPriority(name)])).toEqual(
+      before,
+    )
+    // And nothing of It's is left in the document
+    expect([...p.d.querySelectorAll('style')].filter((el: Element) => el.textContent?.includes('data-it-fullscreen'))).toEqual([])
+  })
+
+  test('what the browser makes fullscreen in the page by itself is left at once, and asked of It instead', async () => {
+    const p = loaded()
+    p.fromSite({ type: 'it:fullscreen', on: true, enabled: true })
+    const film = p.d.getElementById('film')
+    // As a film's own controls would, with no request of the page's
+    p.browser.element = film
+    p.d.dispatchEvent(new p.w.Event('fullscreenchange'))
+    await new Promise((r) => setImmediate(r))
+    expect(p.browser.asked).toEqual([{ how: 'exitFullscreen', of: p.d }])
+    expect(p.browser.element).toBeNull()
+    // It was fullscreen already, so the film now fills the page's frame beneath It's bar
+    expect(p.d.fullscreenElement).toBe(film)
+    expect(film.hasAttribute('data-it-fullscreen')).toBe(true)
+  })
+
+  test('where It could not leave fullscreen after the page removed its element, the page goes by what the site says It is', async () => {
+    const p = loaded()
+    const film = p.d.getElementById('film')
+    const entered = film.requestFullscreen()
+    p.answer()
+    await entered
+    film.remove()
+    await new Promise((r) => setImmediate(r))
+    // The page was told at once that fullscreen ended, and It was asked to leave
+    expect(p.d.fullscreenElement).toBeNull()
+    expect(p.asked().map((m) => m.on)).toEqual([true, false])
+    // The site could not, and says It is fullscreen still
+    p.answer(false)
+    p.fromSite({ type: 'it:fullscreen', on: true, enabled: true })
+    expect(p.d.fullscreenElement).toBe(p.d.documentElement)
+    expect(p.It.isFullscreen).toBe(true)
+    expect(p.heard).toEqual(['fullscreenchange at video', 'fullscreenchange at the document', 'fullscreenerror at html', 'fullscreenchange at html'])
+  })
+
+  test('a request for another element while It is fullscreen moves fullscreen to it, and the page hears so', async () => {
+    const p = loaded()
+    p.fromSite({ type: 'it:fullscreen', on: true, enabled: true })
+    expect(p.d.fullscreenElement).toBe(p.d.documentElement)
+    await p.d.body.requestFullscreen()
+    expect(p.d.fullscreenElement).toBe(p.d.body)
+    const film = p.d.getElementById('film')
+    await film.requestFullscreen()
+    expect(p.d.fullscreenElement).toBe(film)
+    expect(p.heard).toEqual(['fullscreenchange at html', 'fullscreenchange at body', 'fullscreenchange at video'])
+    // Nothing more was asked of the site, which is fullscreen already
+    expect(p.asked()).toEqual([])
+    // And the same element again changes nothing
+    await film.requestFullscreen()
+    expect(p.heard).toHaveLength(3)
+  })
+
+  test('what the page reads as fullscreen carries an attribute to style it by, since the browser’s :fullscreen never matches in the page', async () => {
+    const p = loaded()
+    const marked = () => [...p.d.querySelectorAll('[data-it-fullscreen]')].map((el: Element) => el.localName)
+    expect(marked()).toEqual([])
+    p.fromSite({ type: 'it:fullscreen', on: true, enabled: true })
+    expect(marked()).toEqual(['html'])
+    await p.d.body.requestFullscreen()
+    expect(marked()).toEqual(['body'])
+    p.fromSite({ type: 'it:fullscreen', on: false, enabled: true })
+    expect(marked()).toEqual([])
+  })
+
+  test('a refusal rejects as a browser’s does, with why, and the page’s listeners hear of it', async () => {
+    const p = loaded()
+    const entered = p.d.documentElement.requestFullscreen()
+    p.answer(false)
+    await expect(entered).rejects.toThrow(p.w.TypeError)
+    await expect(entered).rejects.toThrow('The browser did not go fullscreen.')
+    expect(p.heard).toEqual(['fullscreenerror at html'])
+    expect(p.d.fullscreenElement).toBeNull()
+  })
+
+  test('where the browser has no fullscreen, as on an iPhone, a request is refused at once and the page is told there is none', async () => {
+    const p = loaded({ site: { on: false, enabled: false } })
+    expect(p.d.fullscreenEnabled).toBe(false)
+    await expect(p.It.fullscreen()).rejects.toThrow('This browser has no fullscreen.')
+    await expect(p.d.documentElement.requestFullscreen()).rejects.toThrow(p.w.TypeError)
+    expect(p.asked()).toEqual([])
+  })
+
+  test('before the site has said what its fullscreen is, and where it is a site that never says, the browser is asked', async () => {
+    const p = loaded({ site: null, enabled: true })
+    expect(p.d.fullscreenEnabled).toBe(true)
+    await p.d.documentElement.requestFullscreen()
+    await p.It.fullscreen()
+    expect(p.browser.asked.map((a) => a.how)).toEqual(['requestFullscreen', 'requestFullscreen'])
+    expect(p.It.isFullscreen).toBe(true)
+    await p.It.exitFullscreen()
+    expect(p.browser.asked.at(-1)!.how).toBe('exitFullscreen')
+    expect(p.asked()).toEqual([])
+  })
+
+  test('It.fullscreen and It.exitFullscreen ask It, and leaving where It is not fullscreen asks nothing', async () => {
+    const p = loaded()
+    await p.It.exitFullscreen()
+    expect(p.asked()).toEqual([])
+    const entered = p.It.fullscreen()
+    p.answer()
+    await entered
+    expect(p.It.isFullscreen).toBe(true)
+    // Asked again while It is fullscreen: nothing to ask
+    await p.It.fullscreen()
+    expect(p.asked()).toHaveLength(1)
+    const left = p.It.exitFullscreen()
+    p.answer()
+    await left
+    expect(p.asked().map((m) => m.on)).toEqual([true, false])
+    expect(p.It.isFullscreen).toBe(false)
+  })
+
+  test('fullscreen from It’s bar is the page’s too: the page hears it, reads it, and can leave it', async () => {
+    const p = loaded({ webkit: true })
+    p.fromSite({ type: 'it:fullscreen', on: true, enabled: true })
+    expect(p.heard).toEqual(['fullscreenchange at html', 'webkitfullscreenchange at html'])
+    expect(p.d.fullscreenElement).toBe(p.d.documentElement)
+    expect(p.d.webkitFullscreenElement).toBe(p.d.documentElement)
+    p.d.exitFullscreen()
+    expect(p.asked()).toEqual([{ type: 'it:fullscreen', requestId: expect.any(String), on: false }])
+    p.fromSite({ type: 'it:fullscreen', on: false, enabled: true })
+    expect(p.d.fullscreenElement).toBeNull()
+    expect(p.heard).toHaveLength(4)
+  })
+
+  test('the older names go to It as well, answer nothing, and say what became of the request by their events', async () => {
+    const p = loaded({ webkit: true })
+    expect(p.d.documentElement.webkitRequestFullscreen()).toBeUndefined()
+    p.answer(false)
+    await new Promise((r) => setImmediate(r))
+    expect(p.heard).toEqual(['fullscreenerror at html', 'webkitfullscreenerror at html'])
+    expect(p.d.documentElement.webkitRequestFullscreen()).toBeUndefined()
+    p.answer()
+    expect(p.d.webkitFullscreenElement).toBe(p.d.documentElement)
+    expect(p.d.webkitExitFullscreen()).toBeUndefined()
+    expect(p.asked().map((m) => m.on)).toEqual([true, true, false])
+    expect(p.browser.asked).toEqual([])
+    // Nothing is left unhandled that would be said above the page as its script failing
+    await new Promise((r) => setImmediate(r))
+    expect(p.port.sent.filter((m) => m.type === 'it:fault')).toEqual([])
+  })
+})
+
 describe('the script itself', () => {
   test('says whose it is and under what terms, in its first line', () => {
     expect(RUNTIME.split('\n')[0]).toMatch(/^\/\*! It\. Copyright \(c\) 2026 Aaryan Kapoor\. Source-available under the It License 1\.1\./)

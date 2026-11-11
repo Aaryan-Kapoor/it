@@ -2014,6 +2014,221 @@ try {
   const leftAlone = { url: manyShown.at(-1), since: Date.now() }
 
   // ------------------------------------------------------------------
+  section('Fullscreen')
+  {
+    /** What the site has fullscreen: `site` for the whole of it, `frame` for the page's frame alone, and nothing for neither. */
+    const fullscreenIs = () =>
+      page.evaluate(() => (document.fullscreenElement === document.documentElement ? 'site' : document.fullscreenElement ? 'frame' : null))
+    /** Whether It's bar is what is drawn in the middle of where it stands, and the page's frame what is drawn below it: a frame made fullscreen by itself would be drawn over both. */
+    const barOnTop = () =>
+      page.evaluate(() => {
+        const bar = document.querySelector('.page-nav')?.getBoundingClientRect()
+        if (!bar) return false
+        const atBar = document.elementFromPoint(bar.left + bar.width / 2, bar.top + bar.height / 2)
+        const below = document.elementFromPoint(innerWidth / 2, (bar.bottom + innerHeight) / 2)
+        return Boolean(atBar?.closest('.page-nav')) && below?.matches('.mount iframe') === true
+      })
+    /** Whether the page reads It as fullscreen, by It and by what any web page reads. */
+    const pageSaysFullscreen = () => inShown(() => window.It.isFullscreen && document.fullscreenElement === document.documentElement)
+    /**
+     * A button in the page that does this when it is clicked, and says how it went: `It` calls
+     * It.fullscreen(), `its own` asks for the page's document as any web page does, and `player`
+     * asks for an element of the page.
+     */
+    const pageButton = (id, does) =>
+      inShown(
+        ([id, does]) => {
+          document.getElementById(id)?.remove()
+          let player = document.getElementById('player')
+          if (!player) {
+            player = Object.assign(document.createElement('div'), { id: 'player', textContent: 'player' })
+            player.style.cssText = 'width:160px;height:90px;background:#123'
+            document.body.append(player)
+          }
+          const button = Object.assign(document.createElement('button'), { id, textContent: id })
+          button.addEventListener('click', () => {
+            let asked
+            if (does === 'It') asked = window.It.fullscreen()
+            else if (does === 'its own') asked = document.documentElement.requestFullscreen()
+            else asked = player.requestFullscreen()
+            asked.then(
+              () => (button.dataset.went = 'yes'),
+              (err) => (button.dataset.went = String(err)),
+            )
+          })
+          document.body.append(button)
+        },
+        [id, does],
+      )
+    const went = (id) => inShown((id) => document.getElementById(id)?.dataset.went ?? '', id)
+    /** Whether the page's player is what the page reads as fullscreen, filling the page's frame. */
+    const playerFills = () =>
+      inShown(() => {
+        const player = document.getElementById('player')
+        const box = player.getBoundingClientRect()
+        return document.fullscreenElement === player && box.width === innerWidth && box.height === innerHeight && player.hasAttribute('data-it-fullscreen')
+      })
+    // A page is made fullscreen only on a click in it, and not in the few seconds after a click on
+    // the site itself or the moment after fullscreen ends, which the browser could be reporting instead
+    const pastTheSitesClick = () => sleep(5500)
+    const pastTheEnd = () => sleep(1500)
+    const fullscreenButton = page.locator('.page-nav button[aria-label="Fullscreen"]')
+    check('a page’s bar has a fullscreen button beside its other controls', (await fullscreenButton.count()) === 1 && (await fullscreenButton.isVisible()))
+    await fullscreenButton.click()
+    const byTheBar = (await until(async () => (await fullscreenIs()) === 'site', 5000)) && (await barOnTop()) && (await until(pageSaysFullscreen, 5000))
+    check('the button makes the whole site fullscreen, with the bar still on top of the page, and the page is told', byTheBar, String(await fullscreenIs()))
+    await page.locator('.page-nav button[aria-label="Leave fullscreen"]').click()
+    check(
+      'and pressed again it leaves fullscreen, and the page is told',
+      (await until(async () => (await fullscreenIs()) === null, 5000)) && (await until(async () => !(await inShown(() => window.It.isFullscreen)), 5000)),
+    )
+    await pastTheSitesClick()
+    await pageButton('by-it', 'It')
+    await frame.locator('#by-it').click()
+    check(
+      'It.fullscreen() from a click in the page makes the whole site fullscreen, with the bar still on top',
+      (await until(async () => (await went('by-it')) === 'yes', 5000)) && (await fullscreenIs()) === 'site' && (await barOnTop()),
+      `${await went('by-it')}, ${await fullscreenIs()}`,
+    )
+    await inShown(() => window.It.exitFullscreen())
+    check('and It.exitFullscreen() leaves it', await until(async () => (await fullscreenIs()) === null, 5000))
+    await pastTheEnd()
+    await pageButton('its-own', 'its own')
+    await frame.locator('#its-own').click()
+    check(
+      'a page’s own requestFullscreen() on its document is given It’s fullscreen in place of the frame’s, so the bar stays on top',
+      (await until(async () => (await went('its-own')) === 'yes', 5000)) &&
+        (await fullscreenIs()) === 'site' &&
+        (await barOnTop()) &&
+        (await pageSaysFullscreen()),
+      `${await went('its-own')}, ${await fullscreenIs()}`,
+    )
+    await inShown(() => document.exitFullscreen())
+    check('and its own document.exitFullscreen() leaves It’s', await until(async () => (await fullscreenIs()) === null, 5000))
+    await pastTheEnd()
+    await pageButton('by-player', 'player')
+    await frame.locator('#by-player').click()
+    check(
+      'a page’s request for one of its elements, such as a player, is given It’s fullscreen too, with the element filling the page’s frame below the bar',
+      (await until(async () => (await went('by-player')) === 'yes', 5000)) && (await fullscreenIs()) === 'site' && (await barOnTop()) && (await playerFills()),
+      `${await went('by-player')}, ${await fullscreenIs()}`,
+    )
+    await inShown(() => document.exitFullscreen())
+    check(
+      'and leaving it puts the element back as it was',
+      (await until(async () => (await fullscreenIs()) === null, 5000)) &&
+        (await inShown(() => document.getElementById('player').getBoundingClientRect().width === 160 && !document.fullscreenElement)),
+    )
+    await pastTheEnd()
+    // A player inside a shadow root, whose own style gives its size with the highest priority a page has
+    const shadowed = { width: '160px !important', height: '90px !important' }
+    await inShown((shadowed) => {
+      const host = Object.assign(document.createElement('div'), { id: 'shadowed' })
+      const shadow = host.attachShadow({ mode: 'closed' })
+      const player = shadow.appendChild(document.createElement('div'))
+      player.setAttribute('style', `width: ${shadowed.width}; height: ${shadowed.height}; background: #321`)
+      const button = Object.assign(document.createElement('button'), { id: 'by-shadowed', textContent: 'by-shadowed' })
+      window.shadowedPlayer = player
+      window.shadowedStyle = player.style.cssText
+      button.addEventListener('click', () => {
+        player.requestFullscreen().then(
+          () => (button.dataset.went = 'yes'),
+          (err) => (button.dataset.went = String(err)),
+        )
+      })
+      document.body.append(host, button)
+    }, shadowed)
+    await frame.locator('#by-shadowed').click()
+    const shadowedSize = () =>
+      inShown(() => {
+        const box = window.shadowedPlayer.getBoundingClientRect()
+        return { width: box.width, height: box.height, frame: [innerWidth, innerHeight], style: window.shadowedPlayer.style.cssText, was: window.shadowedStyle }
+      })
+    const filling = (await until(async () => (await went('by-shadowed')) === 'yes', 5000)) && (await shadowedSize())
+    check(
+      'a player inside a shadow root, whose own style gives its size with !important, fills the page’s frame below the bar all the same',
+      filling && filling.width === filling.frame[0] && filling.height === filling.frame[1] && (await fullscreenIs()) === 'site' && (await barOnTop()),
+      JSON.stringify(filling),
+    )
+    await inShown(() => document.exitFullscreen())
+    const putBack = (await until(async () => (await fullscreenIs()) === null, 5000)) && (await shadowedSize())
+    check(
+      'and its own style is exactly as it was afterwards',
+      putBack && putBack.width === 160 && putBack.height === 90 && putBack.style === putBack.was,
+      JSON.stringify(putBack),
+    )
+    await pastTheEnd()
+    // An embed in the page with a fullscreen button of its own, as a player from elsewhere has: It's
+    // script is not in the embed, so the browser makes it fullscreen by itself
+    await inShown(() => {
+      const embed = Object.assign(document.createElement('iframe'), { id: 'embed' })
+      embed.setAttribute('allow', 'fullscreen *')
+      embed.srcdoc = '<button id="go" onclick="document.documentElement.requestFullscreen().catch(() => {})">Full screen</button>'
+      document.body.append(embed)
+      // What the browser itself says of fullscreen in the page, which It's script never stands in for
+      window.grantedByTheBrowser = 0
+      window.notedGrant = (e) => {
+        if (e.isTrusted) window.grantedByTheBrowser++
+      }
+      document.addEventListener('fullscreenchange', window.notedGrant)
+    })
+    await frame.frameLocator('#embed').locator('#go').click()
+    // The browser grants it, the page's frame goes fullscreen over the bar for a moment, and It leaves that at once
+    const neverOver = []
+    for (let n = 0; n < 15; n++) {
+      await sleep(200)
+      neverOver.push(await fullscreenIs())
+    }
+    const settled = await fullscreenIs()
+    const embedFills = () =>
+      inShown(() => {
+        const embed = document.getElementById('embed')
+        const box = embed.getBoundingClientRect()
+        return document.fullscreenElement === embed && box.width === innerWidth && box.height === innerHeight
+      })
+    check(
+      'what the browser makes fullscreen in a page by itself, as an embed with its own fullscreen button, is left at once, so the page’s frame does not stay over the bar, and is replaced by It’s fullscreen with the embed filling the frame below the bar',
+      (await inShown(() => window.grantedByTheBrowser)) > 0 &&
+        neverOver.slice(-5).every((is) => is !== 'frame') &&
+        settled === 'site' &&
+        (await barOnTop()) &&
+        (await embedFills()),
+      JSON.stringify({ granted: await inShown(() => window.grantedByTheBrowser), seen: neverOver }),
+    )
+    await inShown(() => document.exitFullscreen())
+    await until(async () => (await fullscreenIs()) === null, 5000)
+    // A page that asks to be fullscreen again whenever It leaves it
+    await inShown(() => {
+      window.cameBack = []
+      window.comeBack = () => {
+        if (!document.fullscreenElement)
+          document.documentElement.requestFullscreen().then(
+            () => window.cameBack.push('came back'),
+            (err) => window.cameBack.push(String(err)),
+          )
+      }
+      document.addEventListener('fullscreenchange', window.comeBack)
+    })
+    await page.locator('.page-nav button[aria-label="Fullscreen"]').click()
+    await until(async () => (await fullscreenIs()) === 'site', 5000)
+    await page.locator('.page-nav button[aria-label="Leave fullscreen"]').click()
+    await sleep(2000)
+    const cameBack = await inShown(() => window.cameBack)
+    check(
+      'a page that asks to be fullscreen again as soon as the bar’s button leaves it is refused, though that click would let the browser allow it, and It stays out of fullscreen',
+      (await fullscreenIs()) === null && cameBack.length === 1 && /only on a click or a key in the page itself/.test(cameBack[0]),
+      JSON.stringify(cameBack),
+    )
+    await inShown(() => {
+      document.removeEventListener('fullscreenchange', window.comeBack)
+      document.removeEventListener('fullscreenchange', window.notedGrant)
+      for (const id of ['by-it', 'its-own', 'by-player', 'player', 'shadowed', 'by-shadowed', 'embed']) document.getElementById(id)?.remove()
+    })
+    // The keyboard goes back to the site, as it was before the page was clicked
+    await page.locator('.page-title').click()
+  }
+
+  // ------------------------------------------------------------------
   section('State')
   await it(A, ['set', slug, 'status', DEPLOYING])
   check(

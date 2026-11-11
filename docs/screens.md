@@ -71,6 +71,12 @@ A page is asked about once on each screen for each of the two: a page that recor
 
 A browser lets a site record only where it reaches the site securely: on the machine It runs on, at `localhost`, or at an `https` address. A screen that reaches It by plain `http` at another address cannot record at all, and the page and Settings say so. [Over https, on your tailnet](#over-https-on-your-tailnet) says how to give your other screens an `https` address. [What It protects, and what it does not](what-it-protects.md#the-microphone-and-the-camera-are-the-sites-and-a-page-gets-only-what-the-person-allows) says what this keeps closed, and where that stops.
 
+## Fullscreen
+
+The button at the right end of a page's bar makes It fullscreen, and pressing it again, or pressing Escape, leaves fullscreen. It is the whole site that goes fullscreen, so the bar stays above the page with everything on it, and whatever It shows over the page is still seen. Going on to another page, as an agent may bring one up on a display, keeps It fullscreen, and going back to your pages leaves fullscreen.
+
+A page can have a fullscreen button of its own, and a page that asks for fullscreen in the way any web page does is given It's fullscreen in its place, with the bar above it, which is how such a page goes fullscreen in Safari too. A video or anything else that a page makes fullscreen fills the page's area below the bar. Whatever the browser makes fullscreen in a page by itself, such as from a video's own controls, is left at once and given It's fullscreen in the same way, so it covers the bar for no more than a moment. It goes fullscreen for a page only on a click or a key press in the page itself, and not in the few seconds after you click on the bar or just after you leave fullscreen, so a page cannot make It fullscreen by itself or bring it back when you leave. Where a browser has no fullscreen, as on an iPhone, the bar has no button and a page's request is refused. Safari on an iPad or a Mac has fullscreen.
+
 ## Paired browsers
 
 A browser that is used stays paired. Its pairing ends when you end it, or a year after the browser last used it. The Displays page lists every paired browser, the ones that show no display among them, with when each was paired, by whose code, and when it was last used. Each has a button that ends it, and "End all others" ends every one but the browser you are reading on.

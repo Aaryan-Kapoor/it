@@ -277,6 +277,7 @@ function receive(message: SiteToPage): void {
     answer(message)
   } else if (message.type === 'it:recording') heard(message)
   else if (message.type === 'it:camera-frame' || message.type === 'it:camera-state') seen(message)
+  else if (message.type === 'it:fullscreen') fullscreenSaid(message.on === true, message.enabled === true)
 }
 
 // What the page keeps for itself (It.store). What is set within a moment goes to the site as
@@ -1576,6 +1577,463 @@ async function camera(
   return live
 }
 
+// Fullscreen. A page in a sandboxed frame cannot count on going fullscreen by itself: Safari holds
+// such a frame to an origin that no permission names, and refuses it. So It goes fullscreen for
+// the page. The site makes the whole of itself fullscreen, with It's bar above the page, and
+// Escape leaves it as usual. `It.fullscreen()` asks for that, and so does the page's own
+// `requestFullscreen()` on any of its elements, which is what a page written without It in mind
+// calls: such a request goes to the site, and what the page reads of fullscreen says what It's
+// is. An element other than the page's document or its body is made to fill the page's frame,
+// as a browser would fill the screen with it, so that nothing of the page is ever drawn over
+// It's bar. What the browser makes fullscreen in the page by itself, as a film's own controls
+// can, is left at once and asked of It in the same way.
+//
+// A request goes to the site on the window and not on the channel: Safari carries the click that
+// asked across a window's message but not across a channel's, and a browser goes fullscreen only
+// just after a click. The answer comes on the channel. Until the site has said what its
+// fullscreen is, the page's requests are the browser's own, as they are where the site is one
+// from before it took them.
+
+/** What the site last said of its fullscreen: nothing, until it has. */
+let itsFullscreen: { on: boolean; enabled: boolean } | null = null
+/** What the page reads as fullscreen while It is: the element it asked for, which is its document unless it asked for another. */
+let fullElement: Element | null = null
+/** The element a request on its way asked for. */
+let askingFor: Element | null = null
+/** What It's fullscreen was entered for: the page's document, where the bar made It fullscreen. */
+let began: Element | null = null
+/** Whether It's fullscreen is over for the page, as when what was fullscreen left the page, while the site has yet to say so. */
+let over = false
+const NO_FULLSCREEN = 'This browser has no fullscreen.'
+/**
+ * Put on whatever the page reads as fullscreen while It is: its document where It's bar made It
+ * so. The browser's `:fullscreen` never matches inside the page, so this is what a page styles.
+ */
+const FULL_MARK = 'data-it-fullscreen'
+
+/** The browser's own answer to something a document says of fullscreen, which the page reads instead as below. */
+function browsers(name: string): unknown {
+  for (let kind = Object.getPrototypeOf(document); kind; kind = Object.getPrototypeOf(kind)) {
+    const said = Object.getOwnPropertyDescriptor(kind, name)
+    if (said) return said.get ? said.get.call(document) : said.value
+  }
+  return undefined
+}
+const browsersFullscreen = (): Element | null => (browsers('fullscreenElement') ?? browsers('webkitFullscreenElement') ?? null) as Element | null
+const isWhole = (el: unknown) => el === document.documentElement || el === document.body
+/** What the page reads as fullscreen of It's: nothing while It is not. */
+const itsElement = (): Element | null => (itsFullscreen?.on && !over ? (fullElement ?? document.documentElement) : null)
+
+/**
+ * How an element fills the page's frame while it is what the page has fullscreen: over
+ * everything else of the page and as large as the frame, as a browser's own fullscreen makes it.
+ * These are put in the element's own style, with the priority that nothing of the page's can
+ * outweigh, so that they hold wherever the element is, a shadow root included.
+ */
+const FILLS: [string, string][] = [
+  ['position', 'fixed'],
+  ['top', '0'],
+  ['right', '0'],
+  ['bottom', '0'],
+  ['left', '0'],
+  ['width', '100%'],
+  ['height', '100%'],
+  ['min-width', '0'],
+  ['min-height', '0'],
+  ['max-width', 'none'],
+  ['max-height', 'none'],
+  ['margin-top', '0'],
+  ['margin-right', '0'],
+  ['margin-bottom', '0'],
+  ['margin-left', '0'],
+  ['box-sizing', 'border-box'],
+  ['transform', 'none'],
+  ['translate', 'none'],
+  ['rotate', 'none'],
+  ['scale', 'none'],
+  ['z-index', '2147483647'],
+]
+/** What fills the frame in groups: each with the shorthand that can say the whole of it, where there is one. */
+const FILL_GROUPS: [string | null, string[]][] = [
+  ['inset', ['top', 'right', 'bottom', 'left']],
+  ['margin', ['margin-top', 'margin-right', 'margin-bottom', 'margin-left']],
+  ...FILLS.filter(([name]) => !['top', 'right', 'bottom', 'left'].includes(name) && !name.startsWith('margin-')).map(([name]): [string | null, string[]] => [
+    null,
+    [name],
+  ]),
+]
+/**
+ * What the element looks like besides, where the page says nothing of it: a film whole within
+ * it, on black, and nothing of the look a browser gives a popover. Said with no weight at all,
+ * so that anything of the page's comes first, and put where the element is, in the document or
+ * in its shadow root, for as long as it is fullscreen.
+ */
+const LOOKS = `:where([${FULL_MARK}]:not(html):not(body)){background:#000;color:inherit;padding:0;border:none;overflow:visible;object-fit:contain}[${FULL_MARK}]::backdrop{background:#000}`
+/**
+ * The element that fills the frame now. While it does, It holds the properties above in its
+ * style and nothing else of it. What the page writes to those is kept as what it means them to
+ * be once fullscreen ends, and It's are put back at once; whatever else the page writes stays.
+ */
+interface Filling {
+  el: Element
+  style: CSSStyleDeclaration
+  /** The element's own style as the page means it, as text: what it was before, with all the page has written since. */
+  meant: string
+  hadStyle: boolean
+  /** Each property It holds, as the browser reads it back once It has set it. */
+  ours: Map<string, string>
+  looks: HTMLStyleElement
+  lifted: boolean
+  /** Whether it was a popover of the page's own, shown, when it was made fullscreen. */
+  pagesPopover: boolean
+  /** The frame in which It's properties are to be put back, where the page has written over them. */
+  due: number
+  /** What hears the page write to the element's style, and where the element is moved to or taken from. */
+  writes: MutationObserver
+  moves: MutationObserver
+}
+let filling: Filling | null = null
+/** A style that belongs to nothing, which the browser reads and writes as it would an element's own. */
+const loose = (text: string): CSSStyleDeclaration => {
+  const style = document.createElement('div').style
+  style.cssText = text
+  return style
+}
+/** Whether an element is in the top layer as a popover, or where the browser cannot say, taken to be. */
+const shownAbove = (el: Element): boolean => {
+  try {
+    return el.matches(':popover-open')
+  } catch {
+    return true
+  }
+}
+const holds = (f: Filling, name: string) => f.style.getPropertyValue(name) === f.ours.get(name) && f.style.getPropertyPriority(name) === 'important'
+
+/** Puts back whatever of It's the page's style no longer says, and passes over what that writes. */
+function hold(f: Filling): void {
+  for (const [name, value] of FILLS) if (!holds(f, name)) f.style.setProperty(name, value, 'important')
+  f.writes.takeRecords()
+}
+
+/**
+ * Puts It's properties back once the page has written over them: once in a frame at most, before
+ * the frame is drawn, so that nothing is drawn without them. A page that writes them back each
+ * time, as one that watches the element's style may, then costs a write of each in a frame, and
+ * never more: the two do not write at each other without end, and timers and drawing go on. It
+ * does not give up and let the element go, since a page that only animates the element's size,
+ * or writes its whole style again as it draws, writes over them just as often.
+ */
+function holdSoon(f: Filling): void {
+  if (f.due || typeof requestAnimationFrame !== 'function') return
+  f.due = requestAnimationFrame(() => {
+    f.due = 0
+    if (filling === f) hold(f)
+  })
+}
+
+/** The page wrote to the element's style: what it wrote of It's properties is what it means them to be afterwards, and the rest stands. */
+function pageWrote(f: Filling): void {
+  const meant = loose(f.meant)
+  for (const [shorthand, parts] of FILL_GROUPS) {
+    if (parts.every((part) => holds(f, part))) continue
+    // A shorthand the page wrote with a variable in it, whose parts read as nothing by themselves
+    const whole = shorthand ? f.style.getPropertyValue(shorthand) : ''
+    if (shorthand && whole && parts.every((part) => !f.style.getPropertyValue(part))) {
+      meant.setProperty(shorthand, whole, f.style.getPropertyPriority(shorthand))
+      continue
+    }
+    for (const part of parts) {
+      if (holds(f, part)) continue
+      const value = f.style.getPropertyValue(part)
+      if (value) meant.setProperty(part, value, f.style.getPropertyPriority(part))
+      else meant.removeProperty(part)
+    }
+  }
+  // Everything else as the page has it now, and It's properties as the page means them
+  const now = loose(f.style.cssText)
+  for (const [shorthand, parts] of FILL_GROUPS) {
+    const whole = shorthand ? meant.getPropertyValue(shorthand) : ''
+    if (shorthand && whole) {
+      now.setProperty(shorthand, whole, meant.getPropertyPriority(shorthand))
+      continue
+    }
+    for (const part of parts) {
+      const value = meant.getPropertyValue(part)
+      if (value) now.setProperty(part, value, meant.getPropertyPriority(part))
+      else now.removeProperty(part)
+    }
+  }
+  f.meant = now.cssText
+}
+
+/** Where the element is now: its look goes with it into whatever root holds it, and it is shown in the top layer again, which a move takes it out of. */
+function placed(f: Filling, moved: boolean): void {
+  const root = f.el.getRootNode()
+  const home = root instanceof ShadowRoot ? root : (document.head ?? document.documentElement)
+  if (f.looks.parentNode !== home) home.append(f.looks)
+  // A popover of the page's own that the move closed is the page's to show again, and not It's:
+  // It lets the element go, as a browser's fullscreen ends for an element that is moved
+  if (moved && f.pagesPopover && !shownAbove(f.el)) {
+    fullscreenLetGo(f.el)
+    return
+  }
+  if (moved && f.lifted && !shownAbove(f.el))
+    try {
+      ;(f.el as HTMLElement).showPopover()
+    } catch {
+      // The browser would not: it is laid over the page all the same
+    }
+  // Every root between the element and the document, where a move or a removal of it or of what holds it is seen
+  f.moves.disconnect()
+  for (let at: Node = root; ; at = (at as ShadowRoot).host.getRootNode()) {
+    f.moves.observe(at, { childList: true, subtree: true })
+    if (!(at instanceof ShadowRoot)) break
+  }
+}
+
+/**
+ * Makes an element fill the page's frame, or lets it go, putting back its style as the page
+ * means it. Where the browser has a top layer for a page to use, the element is put there too,
+ * above anything the page draws, whatever holds it; where it has none, it is laid over the rest
+ * of the page.
+ */
+function fill(el: Element | null, on: boolean): void {
+  if (!el) return
+  if (!on) {
+    el.removeAttribute(FULL_MARK)
+    const f = filling
+    if (f?.el !== el) return
+    filling = null
+    if (f.due) cancelAnimationFrame(f.due)
+    if (f.writes.takeRecords().length > 0) pageWrote(f)
+    f.writes.disconnect()
+    f.moves.disconnect()
+    f.looks.remove()
+    if (f.lifted) {
+      try {
+        ;(el as HTMLElement).hidePopover()
+      } catch {
+        // Out of the top layer already
+      }
+      el.removeAttribute('popover')
+    }
+    if (f.hadStyle || f.meant) f.style.cssText = f.meant
+    else {
+      // Chromium writes the attribute from the style when it is next read, and would write back
+      // an empty one after it was removed: so it is read first, and then removed
+      el.getAttribute('style')
+      el.removeAttribute('style')
+    }
+    return
+  }
+  el.setAttribute(FULL_MARK, '')
+  const style = (el as Element & { style?: CSSStyleDeclaration }).style
+  if (isWhole(el) || !style) return
+  fill(filling?.el ?? null, false)
+  const f: Filling = {
+    el,
+    style,
+    meant: style.cssText,
+    hadStyle: el.hasAttribute('style'),
+    ours: new Map(),
+    looks: Object.assign(document.createElement('style'), { textContent: LOOKS }),
+    lifted: false,
+    pagesPopover: el.hasAttribute('popover') && shownAbove(el),
+    due: 0,
+    writes: new MutationObserver(() => {
+      if (filling !== f) return
+      pageWrote(f)
+      holdSoon(f)
+    }),
+    moves: new MutationObserver(() => {
+      if (filling !== f) return
+      if (el.isConnected) placed(f, true)
+      else fullscreenLetGo(el)
+    }),
+  }
+  filling = f
+  for (const [name, value] of FILLS) {
+    style.setProperty(name, value, 'important')
+    f.ours.set(name, style.getPropertyValue(name))
+  }
+  f.writes.observe(el, { attributes: true, attributeFilter: ['style'] })
+  // A popover of the page's own is left as the page made it
+  if (el instanceof HTMLElement && typeof el.showPopover === 'function' && !el.hasAttribute('popover'))
+    try {
+      el.setAttribute('popover', 'manual')
+      el.showPopover()
+      f.lifted = true
+    } catch {
+      el.removeAttribute('popover')
+    }
+  placed(f, false)
+}
+
+/** Tells the page's listeners what a browser would have told them, at the element that went fullscreen or left it, or at the document where that element is gone. */
+function fullscreenEvent(at: Node, what: 'change' | 'error'): void {
+  for (const prefix of ['', 'webkit'])
+    if (prefix === '' || `on${prefix}fullscreen${what}` in document)
+      at.dispatchEvent(new Event(`${prefix}fullscreen${what}`, { bubbles: true, composed: true }))
+}
+
+/** What the site says of its fullscreen, from which the page hears that it changed. */
+function fullscreenSaid(on: boolean, enabled: boolean): void {
+  const was = itsFullscreen?.on === true && !over
+  itsFullscreen = { on, enabled }
+  // Over for the page already, which has heard so
+  if (over && !on) {
+    over = false
+    return
+  }
+  over = false
+  if (on === was) return
+  const at = on ? (askingFor ?? document.documentElement) : (fullElement ?? document.documentElement)
+  fill(fullElement, false)
+  fullElement = on ? at : null
+  began = fullElement
+  fill(fullElement, true)
+  fullscreenEvent(at, 'change')
+}
+
+/**
+ * It lets go of what was fullscreen, as a browser's own fullscreen ends for an element that is
+ * removed: at once, with everything It put on the element taken off, and told to the page at the
+ * element, or at its document where the element is no longer in it. That is so when the page
+ * removes the element, and when it moves a popover of its own that the move closed. Where It's
+ * fullscreen began with the page's document, as from the bar, that is fullscreen again; and
+ * otherwise It leaves fullscreen.
+ */
+function fullscreenLetGo(el: Element): void {
+  if (fullElement !== el) return
+  fill(el, false)
+  const at = el.isConnected ? el : document
+  if (began && began !== el && isWhole(began) && began.isConnected) {
+    fullElement = began
+    fill(began, true)
+    fullscreenEvent(at, 'change')
+    return
+  }
+  fullElement = null
+  over = true
+  fullscreenEvent(at, 'change')
+  askFullscreen(false, document.documentElement).catch(() => {})
+}
+
+/** Another element of the page is what it has fullscreen, while It is fullscreen already. */
+function fullscreenMoved(el: Element): void {
+  if (over) {
+    over = false
+    fullElement = null
+  }
+  if (fullElement === el) return
+  fill(fullElement, false)
+  fullElement = el
+  fill(el, true)
+  fullscreenEvent(el, 'change')
+}
+
+/** Asks the site for It's fullscreen, or to leave it, for this element of the page. */
+function askFullscreen(on: boolean, el: Element): Promise<void> {
+  const known = itsFullscreen
+  if (!known) return Promise.reject(new TypeError(NO_FULLSCREEN))
+  if (on && known.on) {
+    fullscreenMoved(el)
+    return Promise.resolve()
+  }
+  if (on === known.on) return Promise.resolve()
+  if (on && !known.enabled) {
+    fullscreenEvent(el, 'error')
+    return Promise.reject(new TypeError(NO_FULLSCREEN))
+  }
+  const requestId = id()
+  if (on) askingFor = el
+  return new Promise((resolve, reject) => {
+    waiting.set(requestId, (result) => {
+      if (result.ok) fullscreenSaid(on, itsFullscreen?.enabled ?? known.enabled)
+      if (askingFor === el) askingFor = null
+      if (result.ok) return resolve()
+      fullscreenEvent(el, 'error')
+      reject(new TypeError(result.error))
+    })
+    window.parent.postMessage({ type: 'it:fullscreen', requestId, on } satisfies PageToSite, config.app)
+  })
+}
+
+// The page's own requests, for any of its elements and by either name a browser gives them. The
+// older name answers with nothing and tells what became of the request by events alone.
+for (const name of ['requestFullscreen', 'webkitRequestFullscreen', 'webkitRequestFullScreen']) {
+  const own = Object.getOwnPropertyDescriptor(Element.prototype, name)
+  if (typeof own?.value !== 'function') continue
+  const theBrowsers = own.value as (...given: unknown[]) => unknown
+  Object.defineProperty(Element.prototype, name, {
+    ...own,
+    value(this: Element, ...given: unknown[]) {
+      if (!itsFullscreen) return theBrowsers.apply(this, given)
+      const asked = askFullscreen(true, this)
+      if (name === 'requestFullscreen') return asked
+      asked.catch(() => {})
+      return undefined
+    },
+  })
+}
+for (const name of ['exitFullscreen', 'webkitExitFullscreen', 'webkitCancelFullScreen']) {
+  const theBrowsers = browsers(name)
+  if (typeof theBrowsers !== 'function') continue
+  Object.defineProperty(document, name, {
+    configurable: true,
+    writable: true,
+    value(...given: unknown[]) {
+      // What the browser made fullscreen itself it leaves itself
+      if (itsElement() === null || browsersFullscreen() !== null) return theBrowsers.apply(document, given)
+      const asked = askFullscreen(false, document.documentElement)
+      if (name === 'exitFullscreen') return asked
+      asked.catch(() => {})
+      return undefined
+    },
+  })
+}
+// What the browser makes fullscreen in the page by itself, which no request of the page's asked
+// for, as a film's own controls or a frame inside the page can: it would be drawn over It's bar.
+// So it is left at once, and It's fullscreen is asked for it instead, on the click that made it.
+// The site leaves it too, should this not.
+function grantedByTheBrowser(): void {
+  const el = browsersFullscreen()
+  if (!el || !itsFullscreen) return
+  const leave = browsers('exitFullscreen') ?? browsers('webkitExitFullscreen')
+  Promise.resolve()
+    .then(() => (typeof leave === 'function' ? leave.call(document) : undefined))
+    .catch(() => {})
+    .then(() => askFullscreen(true, el))
+    .catch(() => {})
+}
+for (const kind of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(kind, grantedByTheBrowser, true)
+// What a page reads of fullscreen: the browser's own where the browser has something
+// fullscreen in the page, and otherwise It's
+const fullscreenReads: [string, () => unknown][] = [
+  ['fullscreenElement', () => browsers('fullscreenElement') ?? itsElement()],
+  ['webkitFullscreenElement', () => browsers('webkitFullscreenElement') ?? itsElement()],
+  ['webkitCurrentFullScreenElement', () => browsers('webkitCurrentFullScreenElement') ?? itsElement()],
+  ['fullscreen', () => Boolean(browsers('fullscreen')) || itsElement() !== null],
+  ['webkitIsFullScreen', () => Boolean(browsers('webkitIsFullScreen')) || itsElement() !== null],
+  // Where the site can go fullscreen, the page can too, though the browser would not let its frame
+  ['fullscreenEnabled', () => Boolean(browsers('fullscreenEnabled')) || itsFullscreen?.enabled === true],
+  ['webkitFullscreenEnabled', () => Boolean(browsers('webkitFullscreenEnabled')) || itsFullscreen?.enabled === true],
+]
+for (const [name, read] of fullscreenReads) if (name in document) Object.defineProperty(document, name, { configurable: true, enumerable: true, get: read })
+
+/** Makes It fullscreen, with It's bar above the page. Before the site has said what its fullscreen is, the browser is asked instead. */
+function fullscreen(): Promise<void> {
+  const whole = document.documentElement
+  if (itsFullscreen) return askFullscreen(true, whole)
+  if (typeof whole.requestFullscreen === 'function') return whole.requestFullscreen()
+  return Promise.reject(new TypeError(NO_FULLSCREEN))
+}
+/** Leaves It's fullscreen, and does nothing where It is not fullscreen. */
+function exitFullscreen(): Promise<void> {
+  if (itsFullscreen) return askFullscreen(false, document.documentElement)
+  return browsersFullscreen() !== null && typeof document.exitFullscreen === 'function' ? document.exitFullscreen() : Promise.resolve()
+}
+
 const api = {
   id: config.id,
   version: config.version,
@@ -1623,6 +2081,13 @@ const api = {
       return Object.hasOwn(kept, key) ? kept[key] : undefined
     },
     set: store,
+  },
+  /** Makes It fullscreen, with It's bar above the page. Call it from a click: a browser allows fullscreen only then. */
+  fullscreen,
+  exitFullscreen,
+  /** Whether It is fullscreen. The page hears `fullscreenchange` on its document whenever this changes. */
+  get isFullscreen() {
+    return itsFullscreen ? itsElement() !== null : browsersFullscreen() !== null
   },
 }
 

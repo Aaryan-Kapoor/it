@@ -1180,6 +1180,100 @@ describe('Escape on a page', () => {
   })
 })
 
+describe('fullscreen from the bar', () => {
+  /** The browser's fullscreen, stood in for, since the stand-in browser has none: what it was asked, and what it has fullscreen. */
+  const browser = { element: null as Element | null, enabled: true, asked: [] as string[] }
+  const changed = () => act(async () => void document.dispatchEvent(new Event('fullscreenchange')))
+  /** The bar's fullscreen button, by what it says it will do. */
+  const fullscreenButton = () => host.querySelector<HTMLButtonElement>('button[aria-label="Fullscreen"], button[aria-label="Leave fullscreen"]')
+  const pressed = () => act(async () => void document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
+  beforeEach(() => {
+    Object.assign(browser, { element: null, enabled: true, asked: [] })
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, get: () => browser.enabled })
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => browser.element })
+    document.documentElement.requestFullscreen = async () => {
+      browser.asked.push('enter')
+      browser.element = document.documentElement
+      document.dispatchEvent(new Event('fullscreenchange'))
+    }
+    document.exitFullscreen = async () => {
+      browser.asked.push('leave')
+      browser.element = null
+      document.dispatchEvent(new Event('fullscreenchange'))
+    }
+  })
+  afterEach(async () => {
+    browser.element = null
+    await changed()
+    for (const name of ['fullscreenEnabled', 'fullscreenElement', 'exitFullscreen']) delete (document as unknown as Record<string, unknown>)[name]
+    delete (document.documentElement as unknown as Record<string, unknown>).requestFullscreen
+    history.replaceState(null, '', '/')
+  })
+
+  test('makes It fullscreen and leaves it again, and says which it will do', async () => {
+    await shown()
+    const button = fullscreenButton()!
+    expect(button.getAttribute('aria-label')).toBe('Fullscreen')
+    // Beside the bar's other controls
+    expect(button.parentElement!.className).toBe('page-nav-actions')
+    await act(async () => button.click())
+    expect(browser.asked).toEqual(['enter'])
+    expect(fullscreenButton()!.getAttribute('aria-label')).toBe('Leave fullscreen')
+    await act(async () => fullscreenButton()!.click())
+    expect(browser.asked).toEqual(['enter', 'leave'])
+    expect(fullscreenButton()!.getAttribute('aria-label')).toBe('Fullscreen')
+  })
+
+  test('says that It is fullscreen however it became so, and that it is not once the browser has left it', async () => {
+    await shown()
+    browser.element = document.documentElement
+    await changed()
+    expect(fullscreenButton()!.getAttribute('aria-label')).toBe('Leave fullscreen')
+    // The browser makes the page's frame fullscreen above It by itself, as a film's own controls can: the site leaves
+    // that at once, the browser going back to It's fullscreen beneath, which the button still says
+    document.exitFullscreen = async () => {
+      browser.asked.push('leave')
+      browser.element = document.documentElement
+      document.dispatchEvent(new Event('fullscreenchange'))
+    }
+    browser.element = document.createElement('iframe')
+    await changed()
+    expect(browser.asked).toContain('leave')
+    expect(browser.element).toBe(document.documentElement)
+    expect(fullscreenButton()!.getAttribute('aria-label')).toBe('Leave fullscreen')
+    browser.element = null
+    await changed()
+    expect(fullscreenButton()!.getAttribute('aria-label')).toBe('Fullscreen')
+  })
+
+  test('is not there where the browser has no fullscreen, as on an iPhone', async () => {
+    browser.enabled = false
+    await shown()
+    expect(fullscreenButton()).toBeNull()
+    // Nor where the browser has no way to ask for it
+    browser.enabled = true
+    delete (document.documentElement as unknown as Record<string, unknown>).requestFullscreen
+    await drawnAgain()
+    expect(fullscreenButton()).toBeNull()
+  })
+
+  test('the Escape that leaves fullscreen stays on the page, whether the site hears it before fullscreen is left or just after', async () => {
+    history.replaceState(null, '', '/p/plan')
+    await shown()
+    await act(async () => fullscreenButton()!.click())
+    await pressed()
+    expect(location.pathname).toBe('/p/plan')
+    browser.element = null
+    await changed()
+    await pressed()
+    expect(location.pathname).toBe('/p/plan')
+    // A moment later Escape goes back, as it does outside fullscreen
+    await act(async () => new Promise<void>((r) => setTimeout(r, 600)))
+    await pressed()
+    expect(location.pathname).toBe('/')
+  })
+})
+
 test('a refused pre-upgrade request stays visible after reopening without being sent again', async () => {
   const outbox = await shown()
   const key = 'it.outbox.user-1.page-1.legacy-request'

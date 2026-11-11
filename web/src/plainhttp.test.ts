@@ -549,7 +549,11 @@ describe('the whole site, paired, on plain http', () => {
     const heard: unknown[] = []
     port.onmessage = (m) => void heard.push(m.data)
     await settle()
-    expect(heard).toEqual([{ type: 'it:state', state: { plan: 'A' }, revision: 1 }])
+    expect(heard).toEqual([
+      { type: 'it:state', state: { plan: 'A' }, revision: 1 },
+      // And whether It is fullscreen, in a browser that has no fullscreen
+      { type: 'it:fullscreen', on: false, enabled: false },
+    ])
 
     // A click that carries a photo, and something the page keeps
     const photo = new File([new Uint8Array(5000).fill(7)], 'receipt.jpg', { type: 'image/jpeg' })
@@ -560,9 +564,9 @@ describe('the whole site, paired, on plain http', () => {
         envelope: { clientActionId: 'click-0001', name: 'approve', payload: { plan: 'B', photo }, contentVersion: 1 },
       })
       port.postMessage({ type: 'it:store', requestId: 'r-2', changes: [['draft', '{"plan":"B"}']] })
-      await vi.waitFor(() => expect(heard).toHaveLength(3))
+      await vi.waitFor(() => expect(heard).toHaveLength(4))
     })
-    expect(heard.slice(1)).toEqual(
+    expect(heard.slice(2)).toEqual(
       expect.arrayContaining([
         { type: 'it:result', requestId: 'r-1', ok: true, actionId: 'action-1' },
         { type: 'it:result', requestId: 'r-2', ok: true, revision: 2 },

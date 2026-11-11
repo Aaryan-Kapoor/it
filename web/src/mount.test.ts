@@ -139,6 +139,13 @@ const submitted = () => calls.filter((c) => c.fn === 'actions:submit').map((c) =
 const asked = (fn: string) => calls.filter((c) => c.fn === fn)
 
 beforeEach(() => {
+  // When the site was last touched is kept by the module for the whole file. A test that moved
+  // the clock ahead and touched the site would leave it in the future, where every page's click
+  // would be taken for the site's: it is put back to long ago, with a touch at time zero
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(0)
+  window.dispatchEvent(new Event('click'))
+  vi.useRealTimers()
   calls.length = 0
   storeRefusal = null
   changed = null
@@ -381,6 +388,8 @@ describe('the frame around a page', () => {
     const heard = await page.send(first, action('click-0001'))
     expect(heard).toEqual([
       { type: 'it:state', state: { n: 1 }, revision: 3 },
+      // And whether It is fullscreen, in a browser that has no fullscreen
+      { type: 'it:fullscreen', on: false, enabled: false },
       { type: 'it:result', requestId: 'r-click-0001', ok: true, actionId: 'action-1' },
     ])
     // The frame goes to another of the page's documents: a new channel, and the old one is closed
@@ -729,6 +738,7 @@ describe('the frame around a page', () => {
     await rerender()
     expect(heard).toEqual([
       { type: 'it:state', state: { n: 1 }, revision: 3 },
+      { type: 'it:fullscreen', on: false, enabled: false },
       { type: 'it:changed', revision: 5, kept: [['stroke-1', { x: 1 }]] },
     ])
     // The agent's part comes whole where it changed, and a value taken away comes as nothing
@@ -741,7 +751,10 @@ describe('the frame around a page', () => {
     const fresh: any[] = []
     page.ports()[1]!.onmessage = (m) => fresh.push(m.data)
     await act(() => tick(20))
-    expect(fresh).toEqual([{ type: 'it:state', state: { n: 2 }, revision: 6 }])
+    expect(fresh).toEqual([
+      { type: 'it:state', state: { n: 2 }, revision: 6 },
+      { type: 'it:fullscreen', on: false, enabled: false },
+    ])
   })
 
   test('a page that asks for too much at once is told to slow down before the backend hears of it', async () => {
@@ -757,6 +770,239 @@ describe('the frame around a page', () => {
     expect(results.filter((m) => m.ok).length).toBeLessThan(25)
     expect(results.filter((m) => !m.ok).every((m) => /too much at once/.test(m.error))).toBe(true)
     expect(submitted().length).toBe(results.filter((m) => m.ok).length)
+  })
+})
+
+describe('fullscreen, which a page asks the site for', () => {
+  /** The browser's fullscreen, stood in for, since the stand-in browser has none: what it was asked, and what it has fullscreen. */
+  const browser = { element: null as Element | null, enabled: true, refuses: false, asked: [] as string[] }
+  const changed = () => document.dispatchEvent(new Event('fullscreenchange'))
+  beforeEach(() => {
+    Object.assign(browser, { element: null, enabled: true, refuses: false, asked: [] })
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, get: () => browser.enabled })
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => browser.element })
+    document.documentElement.requestFullscreen = async () => {
+      browser.asked.push('enter')
+      if (browser.refuses) throw new TypeError('Permissions check failed')
+      browser.element = document.documentElement
+      changed()
+    }
+    document.exitFullscreen = async () => {
+      browser.asked.push('leave')
+      browser.element = null
+      changed()
+    }
+  })
+  afterEach(() => {
+    // What the site knows of fullscreen is put back to none, and the browser to one with no fullscreen, for the next test
+    browser.element = null
+    changed()
+    for (const name of ['fullscreenEnabled', 'fullscreenElement', 'exitFullscreen']) delete (document as unknown as Record<string, unknown>)[name]
+    delete (document.documentElement as unknown as Record<string, unknown>).requestFullscreen
+  })
+  /**
+   * How far both clocks are put on past the machine's own, a minute more for each test, so that
+   * neither a click on the site nor the end of fullscreen in an earlier test is recent.
+   */
+  let later = 0
+  let round = 0
+  const machinesNow = Date.now.bind(Date)
+  const machinesMoment = performance.now.bind(performance)
+  /**
+   * A page whose own script has said hello, and the channel it was given, with what came down it
+   * written down. The person has just clicked in the page: its frame has the keyboard, and the
+   * browser says that the person has just acted.
+   */
+  async function connected() {
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    const heard: any[] = []
+    page.ports()[0]!.onmessage = (m) => heard.push(m.data)
+    await act(() => tick())
+    round += 1
+    later = round * 60_000
+    vi.spyOn(Date, 'now').mockImplementation(() => machinesNow() + later)
+    vi.spyOn(performance, 'now').mockImplementation(() => machinesMoment() + later)
+    page.frame.focus()
+    active = true
+    /** Posts on the window as the page does, and gives back what the browser was asked before the site's handler returned. */
+    const ask = (data: unknown, source: unknown = page.frame.contentWindow) => {
+      window.dispatchEvent(new MessageEvent('message', { data, origin: 'null', source: source as Window }))
+      return [...browser.asked]
+    }
+    return { ...page, heard, ask }
+  }
+  const NOT_THE_PAGES =
+    'It goes fullscreen for a page only on a click or a key in the page itself, and not just after a click on It or just after fullscreen was left. Ask again on the next click in the page.'
+
+  test('the page is told whether It is fullscreen as soon as it has a channel, which also tells it that the site takes its asking', async () => {
+    const page = await connected()
+    expect(page.heard).toEqual([
+      { type: 'it:state', state: { n: 1 }, revision: 3 },
+      { type: 'it:fullscreen', on: false, enabled: true },
+    ])
+  })
+
+  test('the page’s asking is put to the browser in the same turn as its message, and answered on its channel', async () => {
+    const page = await connected()
+    // Asked of the browser before the handler returned: a moment later the click that asked would no longer count
+    expect(page.ask({ type: 'it:fullscreen', requestId: 'f-1', on: true })).toEqual(['enter'])
+    await act(() => tick())
+    expect(page.heard.slice(2)).toEqual([
+      { type: 'it:fullscreen', on: true, enabled: true },
+      { type: 'it:result', requestId: 'f-1', ok: true },
+    ])
+    expect(page.ask({ type: 'it:fullscreen', requestId: 'f-2', on: false })).toEqual(['enter', 'leave'])
+    await act(() => tick())
+    expect(page.heard.slice(4)).toEqual([
+      { type: 'it:fullscreen', on: false, enabled: true },
+      { type: 'it:result', requestId: 'f-2', ok: true },
+    ])
+  })
+
+  test('only the frame’s own window may ask, and only in the words the page’s script uses', async () => {
+    const page = await connected()
+    const elsewhere = window.open() ?? {}
+    for (const source of [window, elsewhere, null]) expect(page.ask({ type: 'it:fullscreen', requestId: 'f-1', on: true }, source)).toEqual([])
+    for (const on of [undefined, 'true', 1]) expect(page.ask({ type: 'it:fullscreen', requestId: 'f-1', on })).toEqual([])
+    await act(() => tick())
+    expect(page.heard).toHaveLength(2)
+  })
+
+  test('a page that asks again and again is told to slow down, and the browser is not asked', async () => {
+    const page = await connected()
+    for (let i = 0; i < 40; i++) page.ask({ type: 'it:fullscreen', requestId: `f-${i}`, on: true })
+    await act(() => tick(100))
+    const results = page.heard.filter((m) => m.type === 'it:result')
+    const tooMuch = results.filter((m) => m.error === 'This page is asking too much at once. Try again in a moment.')
+    expect(results).toHaveLength(40)
+    expect(tooMuch.length).toBeGreaterThan(15)
+    // The rest were answered, and the browser was asked once: It was fullscreen after the first
+    expect(results.filter((m) => m.ok)).toHaveLength(40 - tooMuch.length)
+    expect(browser.asked).toEqual(['enter'])
+  })
+
+  test('leaving is never refused for coming too fast: a page that has used up what it may ask can still give the person their screen back', async () => {
+    const page = await connected()
+    for (let i = 0; i < 40; i++) page.ask({ type: 'it:fullscreen', requestId: `f-${i}`, on: true })
+    await act(() => tick())
+    expect(page.heard.some((m) => m.error === 'This page is asking too much at once. Try again in a moment.')).toBe(true)
+    expect(page.ask({ type: 'it:fullscreen', requestId: 'f-leave', on: false })).toEqual(['enter', 'leave'])
+    await act(() => tick())
+    expect(page.heard.filter((m) => m.requestId === 'f-leave')).toEqual([{ type: 'it:result', requestId: 'f-leave', ok: true }])
+  })
+
+  test('a page may have It go fullscreen only while its frame has the keyboard, which a click in it gives it', async () => {
+    const page = await connected()
+    // The keyboard is on something of the site's, as it is after a click on the bar
+    document.body.appendChild(document.createElement('button')).focus()
+    expect(document.activeElement).not.toBe(page.frame)
+    expect(page.ask({ type: 'it:fullscreen', requestId: 'f-1', on: true })).toEqual([])
+    await act(() => tick())
+    expect(page.heard.slice(-2)).toEqual([
+      { type: 'it:result', requestId: 'f-1', ok: false, error: NOT_THE_PAGES },
+      // And what It is, which the page goes by
+      { type: 'it:fullscreen', on: false, enabled: true },
+    ])
+  })
+
+  test('a page may have It go fullscreen only while the browser says that the person has just acted', async () => {
+    const page = await connected()
+    active = false
+    expect(page.ask({ type: 'it:fullscreen', requestId: 'f-1', on: true })).toEqual([])
+    await act(() => tick())
+    expect(page.heard.at(-2)).toMatchObject({ requestId: 'f-1', ok: false, error: NOT_THE_PAGES })
+  })
+
+  test('a click on the site, such as on the bar, is not taken for the page’s own, and a click in the page after its moment is', async () => {
+    const page = await connected()
+    window.dispatchEvent(new Event('pointerdown'))
+    expect(page.ask({ type: 'it:fullscreen', requestId: 'f-1', on: true })).toEqual([])
+    // The browser stops saying so of the site's click within a few seconds, and goes on saying it of a later click in the page
+    later += 5100
+    expect(page.ask({ type: 'it:fullscreen', requestId: 'f-2', on: true })).toEqual(['enter'])
+    await act(() => tick())
+    expect(page.heard.filter((m) => m.type === 'it:result')).toEqual([
+      { type: 'it:result', requestId: 'f-1', ok: false, error: NOT_THE_PAGES },
+      { type: 'it:result', requestId: 'f-2', ok: true },
+    ])
+  })
+
+  test('the moment after the click that opened a page is timed from that click, and not from when the page was framed seconds later', async () => {
+    round += 1
+    later = round * 60_000
+    vi.spyOn(Date, 'now').mockImplementation(() => machinesNow() + later)
+    vi.spyOn(performance, 'now').mockImplementation(() => machinesMoment() + later)
+    // The click on the page's card
+    window.dispatchEvent(new Event('pointerdown'))
+    // The page is framed four seconds later, while the browser still reports that click
+    later += 4000
+    active = true
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    // Two seconds after that, past the card's click, the person clicks in the page
+    later += 2000
+    page.frame.focus()
+    window.dispatchEvent(
+      new MessageEvent('message', { data: { type: 'it:fullscreen', requestId: 'f-1', on: true }, origin: 'null', source: page.frame.contentWindow }),
+    )
+    expect(browser.asked).toEqual(['enter'])
+  })
+
+  test('a page that asks again as soon as the person leaves fullscreen does not come back, and may leave whenever it likes', async () => {
+    const page = await connected()
+    page.ask({ type: 'it:fullscreen', requestId: 'f-1', on: true })
+    await act(() => tick())
+    // The person leaves, by the bar's button or by Escape, and the page asks again at once
+    browser.element = null
+    changed()
+    expect(page.ask({ type: 'it:fullscreen', requestId: 'f-2', on: true })).toEqual(['enter'])
+    await act(() => tick())
+    expect(page.heard.slice(-2)).toEqual([
+      { type: 'it:result', requestId: 'f-2', ok: false, error: NOT_THE_PAGES },
+      { type: 'it:fullscreen', on: false, enabled: true },
+    ])
+    // Leaving asks nothing of the person: once It is fullscreen again, by the bar, a page that does not have the keyboard may leave
+    browser.element = document.documentElement
+    changed()
+    document.body.appendChild(document.createElement('button')).focus()
+    active = false
+    expect(page.ask({ type: 'it:fullscreen', requestId: 'f-3', on: false })).toEqual(['enter', 'leave'])
+  })
+
+  test('a browser’s refusal is answered with why, in the site’s own words', async () => {
+    const page = await connected()
+    browser.refuses = true
+    page.ask({ type: 'it:fullscreen', requestId: 'f-1', on: true })
+    await act(() => tick())
+    expect(page.heard.slice(2)).toEqual([
+      {
+        type: 'it:result',
+        requestId: 'f-1',
+        ok: false,
+        error: 'The browser did not go fullscreen. It goes fullscreen only just after a click or a key in the page.',
+      },
+      { type: 'it:fullscreen', on: false, enabled: true },
+    ])
+  })
+
+  test('the page is told when It goes fullscreen or leaves it another way, from the bar or by Escape', async () => {
+    const page = await connected()
+    browser.element = document.documentElement
+    await act(async () => changed())
+    browser.element = null
+    await act(async () => changed())
+    await act(() => tick())
+    expect(page.heard.slice(2)).toEqual([
+      { type: 'it:fullscreen', on: true, enabled: true },
+      { type: 'it:fullscreen', on: false, enabled: true },
+    ])
+  })
+
+  test('where the browser has no fullscreen, as on an iPhone, the page is told so', async () => {
+    browser.enabled = false
+    const page = await connected()
+    expect(page.heard.at(-1)).toEqual({ type: 'it:fullscreen', on: false, enabled: false })
   })
 })
 
@@ -1654,11 +1900,12 @@ describe('what records or takes a photo for a page, when the page changes hands 
         full = host.querySelector('iframe')
         await act(async () => document.dispatchEvent(new Event('fullscreenchange')))
         expect(exit).toHaveBeenCalledTimes(2)
-        // Once the camera is closed, the page may fill the screen as it likes
+        // Once the camera is closed, the site still leaves a fullscreen of the page's frame, which
+        // would cover the bar, and gives the page It's own fullscreen instead
         await ask({ type: 'it:camera-stop', requestId: 'c2', camera: 'cam-a' })
         full = host.querySelector('iframe')
         await act(async () => document.dispatchEvent(new Event('fullscreenchange')))
-        expect(exit).toHaveBeenCalledTimes(2)
+        expect(exit).toHaveBeenCalledTimes(3)
       } finally {
         Reflect.deleteProperty(document, 'fullscreenElement')
         Reflect.deleteProperty(document, 'exitFullscreen')

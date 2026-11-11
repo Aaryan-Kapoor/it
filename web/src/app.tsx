@@ -8,6 +8,7 @@ import { askTwice } from './backend'
 import { IconGuide, IconMore, Mark } from './brand'
 import { Copyable } from './dialog'
 import { Finder } from './finder'
+import { leaveFullscreen } from './fullscreen'
 import {
   api,
   backendTakes,
@@ -803,6 +804,20 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
     // there is nothing to say on the pairing screen, which is not where this browser is
     else if (current().paired) sessionStorage.removeItem('it.signout.note')
   }
+  // It's fullscreen is a page's: going from the page to the rest of the site leaves it, and going
+  // on to another page, as an agent may bring one up, keeps it
+  const onPage = /^\/p\/[^/]+$/.test(path)
+  useEffect(
+    () =>
+      onPage
+        ? () =>
+            void leaveFullscreen().catch(() => {
+              // The browser stayed fullscreen, which Escape still leaves
+            })
+        : undefined,
+    [onPage],
+  )
+
   if (leaving) return <Splash note="Signing out…" />
   if (stillIn)
     return (
