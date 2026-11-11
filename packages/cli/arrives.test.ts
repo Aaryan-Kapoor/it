@@ -1,5 +1,8 @@
 // What `it create`, `it update`, `it tour show` and `it status` say to an agent of whether what
 // the person does on its pages arrives in its conversation by itself, and what to do about it.
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, test } from 'vitest'
 import {
   afterSetupForAgent,
@@ -8,8 +11,10 @@ import {
   CODEX_RESTART_OR_T3,
   claudeReloadLine,
   claudeRunning,
+  itForAgent,
   loadAddon,
   notLoadedHere,
+  onWindows,
   RELOAD_PLUGINS_SINCE,
   reloadLine,
   setupLine,
@@ -249,5 +254,34 @@ describe('what a Codex conversation is told with each page while Codex has yet t
     expect(arrives({ session: codex, addonHere: undefined, route: route({ connected: false }), codexPending: true }).next).not.toContain('Codex again')
     // And never in another app's conversation
     expect(arrives({ session: claude, addonHere: false, claude: '2.1.321', route: route(), codexPending: true }).next).not.toContain('Codex again')
+  })
+})
+
+describe('how It’s program is named in a command an agent is told to run', () => {
+  test('as `it` everywhere but Windows, with nothing more said', () => {
+    expect(itForAgent('linux')).toBe('it')
+    expect(itForAgent('darwin')).toBe('it')
+    expect(onWindows('linux')).toBe('')
+  })
+
+  test('on Windows, by its whole path with forward slashes where both shells take it as it stands, and else as it.exe, never as a bare it', () => {
+    const was = process.env.IT_HOME
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-name-'))
+    try {
+      process.env.IT_HOME = folder
+      // Not installed in It's folder: the name that Pester's command does not have
+      expect(itForAgent('win32')).toBe('it.exe')
+      mkdirSync(path.join(folder, 'bin'))
+      writeFileSync(path.join(folder, 'bin', 'it.exe'), '')
+      const slashed = path.join(folder, 'bin', 'it.exe').replace(/\\/g, '/')
+      // A path on a drive, with nothing in it that either shell would read otherwise, is given whole
+      expect(itForAgent('win32')).toBe(/^[A-Za-z]:\/[A-Za-z0-9._~/-]*$/.test(slashed) ? slashed : 'it.exe')
+      expect(itForAgent('win32')).not.toBe('it')
+      expect(onWindows('win32')).toContain('in Windows PowerShell a bare `it` runs Pester’s `It` command instead')
+    } finally {
+      if (was === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = was
+      rmSync(folder, { recursive: true, force: true })
+    }
   })
 })

@@ -2,8 +2,10 @@
 // by which way, and what the agent is to do about it: what `it create`, `it update`, `it tour
 // show` and `it status` print as `arrives`, for the conversation they run in. An agent told that
 // it arrives by itself ends its turn; one told anything else waits for it with `it wait`.
+
+import { existsSync } from 'node:fs'
 import type { Route } from './connector'
-import { claudeAddonHere } from './lib'
+import { claudeAddonHere, inHome } from './lib'
 import { KNOWN, older } from './setup'
 
 export interface Arrives {
@@ -101,9 +103,32 @@ export const t3ClaudeLine = (running: string | undefined): string =>
 /** How an agent is told to pass on what the person is to be told: in its next message, and word for word. */
 export const tellWordForWord = (line: string): string => `Tell the person this in your next message, word for word: “${line}”`
 
+/**
+ * How It's program is named in a command that an agent is told to run. In Windows PowerShell 5.1 a
+ * bare `it` runs the `It` command of Pester, the test framework that comes with Windows, wherever
+ * It's folder is not on the PATH of the app that runs the command, as it is not in an app that
+ * was already open when It was installed. So on Windows the program is named by its whole path,
+ * written with forward slashes, which both PowerShell and the Git Bash that Claude Code runs
+ * commands in take as it stands. A path that one of them would read otherwise, with a space in
+ * it say, is given as `it.exe` instead, which Pester's command is not named, and `onWindows`
+ * says the rest.
+ */
+export function itForAgent(platform: string = process.platform): string {
+  if (platform !== 'win32') return 'it'
+  const file = [inHome('bin', 'it.exe'), inHome('bin', 'it.cmd')].find((f) => existsSync(f))
+  const slashed = file?.replace(/\\/g, '/')
+  return slashed && /^[A-Za-z]:\/[A-Za-z0-9._~/-]*$/.test(slashed) ? slashed : 'it.exe'
+}
+
+/** What an agent on Windows is told beside a command that names It's program, and nothing elsewhere. */
+export const onWindows = (platform: string = process.platform): string =>
+  platform === 'win32'
+    ? ` On Windows, name It’s program as ${itForAgent(platform) === 'it.exe' ? 'it.exe, or by its whole path,' : 'it is written here'} and not as a bare \`it\`: in Windows PowerShell a bare \`it\` runs Pester’s \`It\` command instead, until It’s folder is on the PATH of an app started after It was installed.`
+    : ''
+
 /** What the agent is told to run while nothing arrives by itself. */
 const waitFor = (slug: string | undefined) =>
-  `After you show the ${slug ? 'page' : 'person a page'}, run \`it wait ${slug ? `--id ${slug} ` : ''}--timeout 100\`, act on what it prints, and run it again when it prints {"timedOut": true}: do not put it in the background, since it has to end for you to see what it printed.`
+  `After you show the ${slug ? 'page' : 'person a page'}, run \`${itForAgent()} wait ${slug ? `--id ${slug} ` : ''}--timeout 100\`, act on what it prints, and run it again when it prints {"timedOut": true}: do not put it in the background, since it has to end for you to see what it printed.${onWindows()}`
 
 export interface Facts {
   /** The conversation the command runs in, where its agent app says which. */

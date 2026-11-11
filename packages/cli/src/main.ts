@@ -42,7 +42,19 @@ import {
 } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
 import { type Args, fileText, json, loose, need, nested, OPTIONS, optionsFor, outputArgs, parse, setValue, text } from './args'
-import { type Arrives, afterSetupForAgent, arrives, CODEX_RESTART, claudeReloadLine, claudeRunning, reloadLine, setupLine, tellWordForWord } from './arrives'
+import {
+  type Arrives,
+  afterSetupForAgent,
+  arrives,
+  CODEX_RESTART,
+  claudeReloadLine,
+  claudeRunning,
+  itForAgent,
+  onWindows,
+  reloadLine,
+  setupLine,
+  tellWordForWord,
+} from './arrives'
 import { CODEX_SAVE_ESCALATE } from './codex-settings'
 import { choices, conversationIds, local, type Route, refusedFor } from './connector'
 import { deletePage, deletionStatus } from './delete'
@@ -968,8 +980,8 @@ function tourForOneThatWaited(guide: string): string {
  * pairing link and stopped, with no tour. So the two steps that follow setup are said here,
  * with how to read the guide itself.
  */
-export const AFTER_SETUP =
-  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
+export const afterSetup = (it = itForAgent()): string =>
+  `If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that \`${it} site --no-open\` prints, to open on this computer, then run \`${it} tour --wait\` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
 
 /**
  * The same, where something is left for the person to do and they have to be told it: in the
@@ -979,14 +991,14 @@ export const AFTER_SETUP =
  * goes without what the rest would have done. Where Codex is to be started again, which ends the
  * agent's turn, the tour is left until it has been, and the person is told to ask for it then.
  */
-export const afterSetupTelling = (lines: readonly string[], restart = false): string =>
-  `If you are an agent installing It for someone, two steps of the install guide come after this one. First, write the person one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them ${
+export const afterSetupTelling = (lines: readonly string[], restart = false, it = itForAgent()): string =>
+  `If you are an agent installing It for someone, two steps of the install guide come after this one. First, write the person one message that gives them the link that \`${it} site --no-open\` prints, to open on this computer, and tells them ${
     lines.length === 1 ? `this, word for word: “${lines[0]}”` : `each of these, word for word:\n\n${lines.map((line) => `“${line}”`).join('\n\n')}\n\n`
   }${
     restart
-      ? ' Then end your turn, and do not run `it tour --wait` yet: Codex has to be started again first, which ends this turn anyway. Once it is back and the person asks for the tour, run `it tour --wait` and do what it prints.'
-      : ' Then, only once that message is written and in the same turn, run `it tour --wait` and do what it prints.'
-  } If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
+      ? ` Then end your turn, and do not run \`${it} tour --wait\` yet: Codex has to be started again first, which ends this turn anyway. Once it is back and the person asks for the tour, run \`${it} tour --wait\` and do what it prints.`
+      : ` Then, only once that message is written and in the same turn, run \`${it} tour --wait\` and do what it prints.`
+  } If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
 
 /** What a person in a Codex conversation is told after setup: to start Codex again, and to ask for the tour once it is back. */
 const CODEX_RESTART_SETUP = `${CODEX_RESTART} Once Codex is back, say “Give me the It tour.”`
@@ -2327,7 +2339,7 @@ function disconnectedSaid(found: readonly HarnessStatus[], after: readonly Harne
   const gone = found.filter((h) => on(h) && !wanted.includes(h.id) && after.some((now) => now.id === h.id && now.addon === 'not_connected')).map((h) => h.id)
   if (!gone.length) return null
   const one = gone.length === 1
-  return `${listed(gone.map((id) => KNOWN[id].label))} ${one ? 'is' : 'are'} no longer connected, since \`--only\` did not name ${one ? 'it' : 'them'}: what you do on a page that one of ${one ? 'its' : 'their'} conversations made no longer reaches that conversation. \`it setup --only ${[...wanted, ...gone].join(',')}\` connects ${one ? 'it' : 'them'} again.`
+  return `${listed(gone.map((id) => KNOWN[id].label))} ${one ? 'is' : 'are'} no longer connected, since \`--only\` did not name ${one ? 'it' : 'them'}: what you do on a page that one of ${one ? 'its' : 'their'} conversations made no longer reaches that conversation. \`${itForAgent()} setup --only ${[...wanted, ...gone].join(',')}\` connects ${one ? 'it' : 'them'} again.`
 }
 
 /**
@@ -2405,7 +2417,7 @@ async function settingUp(a: Args, joined: boolean) {
         if (kept.length) {
           wanted = [...wanted, ...kept]
           say(
-            `${listed(kept.map((id) => KNOWN[id].label))} ${kept.length === 1 ? 'stays' : 'stay'} connected as well: run from an agent’s conversation, \`--only\` connects what it names and leaves connected what is connected already. \`it setup\`, run in a terminal, changes which apps are connected.`,
+            `${listed(kept.map((id) => KNOWN[id].label))} ${kept.length === 1 ? 'stays' : 'stay'} connected as well: run from an agent’s conversation, \`--only\` connects what it names and leaves connected what is connected already. \`${itForAgent()} setup\`, run in a terminal, changes which apps are connected.`,
           )
         }
       }
@@ -2418,7 +2430,7 @@ async function settingUp(a: Args, joined: boolean) {
       wanted = [...new Set([...chosen, ...connected])].filter((id): id is Harness => (HARNESSES as readonly string[]).includes(id))
       const left = usable.filter((h) => !wanted.includes(h.id))
       if (left.length) {
-        unasked = `There is no terminal here to ask at, so ${left.length === 1 ? `${KNOWN[left[0]!.id].label} was not connected` : 'none of them was connected that was not connected already'}. Run \`it setup --all\` to connect every agent app that was found, or \`it setup --only ${left.map((h) => h.id).join(',')}\` to connect the ${left.length === 1 ? 'one' : 'ones'} named.`
+        unasked = `There is no terminal here to ask at, so ${left.length === 1 ? `${KNOWN[left[0]!.id].label} was not connected` : 'none of them was connected that was not connected already'}. Run \`${itForAgent()} setup --all\` to connect every agent app that was found, or \`${itForAgent()} setup --only ${left.map((h) => h.id).join(',')}\` to connect the ${left.length === 1 ? 'one' : 'ones'} named.`
         say(unasked)
       }
     } else {
@@ -2514,19 +2526,20 @@ async function settingUp(a: Args, joined: boolean) {
       const add = await pathLine()
       if (add) say(`\n\`it\` is not on your PATH yet, so an agent that runs it by name will not find it. ${add}`)
       // Run from here only for as long as setup took, It stops with it
-      if (begun?.own) say('\nIt is not running in the background. Run `it serve`, in a terminal or under a supervisor of your own, to keep it going.')
+      if (begun?.own)
+        say(`\nIt is not running in the background. Run \`${itForAgent()} serve\`, in a terminal or under a supervisor of your own, to keep it going.`)
       // On a machine that has just joined, nothing of It runs until its service does, which here is what gets a click to an agent
       if (joined && !inBackground)
         say(
-          '\nIt is not running in the background on this machine. Run `it serve` here, in a terminal or under a supervisor of your own, so that what is done on a page reaches the agents on this machine.',
+          `\nIt is not running in the background on this machine. Run \`${itForAgent()} serve\` here, in a terminal or under a supervisor of your own, so that what is done on a page reaches the agents on this machine.`,
         )
       // A page is shown on a display, and a display is a browser with the site open: said
       // last, since nothing so far has sent the person to the site
       const site = siteAddress()
       say(
         site
-          ? `\nIt’s site is at ${site}. No browser is let in until it is paired: \`it site\` opens the site in a browser on this machine and pairs that browser, and \`it site --no-open\` prints the link that does.`
-          : `\nNo browser is let in to It’s site until it is paired: \`it site\` opens the site in a browser on this machine and pairs that browser, and \`it site --no-open\` prints the link that does.`,
+          ? `\nIt’s site is at ${site}. No browser is let in until it is paired: \`${itForAgent()} site\` opens the site in a browser on this machine and pairs that browser, and \`${itForAgent()} site --no-open\` prints the link that does.`
+          : `\nNo browser is let in to It’s site until it is paired: \`${itForAgent()} site\` opens the site in a browser on this machine and pairs that browser, and \`${itForAgent()} site --no-open\` prints the link that does.`,
       )
     }
     // What is left to do in the conversation this ran in, where setup connected its app: in
@@ -2553,7 +2566,7 @@ async function settingUp(a: Args, joined: boolean) {
         // An agent that is installing It reads this whole, whatever it was given of the guide.
         // Said once an agent app is connected: until then the hint above is what comes next
         ...(after.some((h) => h.addon === 'connected' || h.addon === 'needs_approval')
-          ? { next: toTell.length ? afterSetupTelling(toTell, codexRestart) : AFTER_SETUP }
+          ? { next: toTell.length ? afterSetupTelling(toTell, codexRestart) : afterSetup() }
           : {}),
         // And the words themselves, last of all in what it prints
         ...(toTell.length ? { tell: tellWordForWord(toTell.join('\n\n')) } : {}),
