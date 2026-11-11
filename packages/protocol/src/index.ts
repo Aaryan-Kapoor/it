@@ -65,6 +65,8 @@ export const TAKES = {
   heldBack: 'delivery.holdBack',
   /** Locking a display to a page, from a paired browser: the site offers it only where it is named. */
   displayLock: 'displays.lock',
+  /** Conversations needing the reload notice: the site subscribes only where this query is named. */
+  reloadReport: 'artifacts.notLoaded',
 } as const
 
 /**

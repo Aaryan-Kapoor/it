@@ -4185,6 +4185,7 @@ describe('displays and machines', () => {
         'displays.allowAgents',
         'delivery.holdBack',
         'displays.lock',
+        'artifacts.notLoaded',
       ],
       now: expect.any(Number),
     })
