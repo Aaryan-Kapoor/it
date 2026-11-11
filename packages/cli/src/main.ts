@@ -3485,13 +3485,13 @@ This machine
   it tour --wait [--timeout <seconds>]
                                  Wait until the person presses "Take the tour" on the site, and
                                  print the tour then. For an agent that has just installed It.
-  it tour answer <action-id> ['<json>' | --file <path>]
+  it tour answer <action-id> ['<json>']
                                  Answer something done on the tour's first page, for the agent
                                  that gives the tour: set the answer on the page and acknowledge
                                  the action. Where what is done next does not arrive by itself,
-                                 wait for it and print it.
-  it tour next [--timeout <seconds>]
-                                 Wait for the next thing done on the tour's first page.
+                                 wait for it and print it. The answer may be in a file instead,
+                                 given with --file <path>.
+  it tour next                   Wait for the next thing done on the tour's first page.
   it telemetry [on | off]        Say whether It reports usage counts, or turn that on or off.
                                  It reports them until it is turned off.
   it upgrade [--check]           Put the newest It in place of this one, and start it again where

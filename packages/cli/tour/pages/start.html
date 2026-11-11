@@ -188,6 +188,8 @@ var Shell = (() => {
   $("dock-who").textContent = AGENT;
   node.chat.querySelector("b").textContent = AGENT;
   var LEGEND = { you: "do something", it: "takes it", chat: "gets it", work: "works on it", page: "comes here" };
+  // The same in as few letters as a narrow screen has room for under each
+  var BRIEF = { you: "do it", it: "takes it", chat: "gets it", work: "works", page: "lands" };
   // Where what the person did has got to, in a line of the page's own, for as long as it is on its way
   var TEACH = {
     sending: "What you did is on its way to It, the program on your computer that shows this page.",
@@ -212,7 +214,7 @@ var Shell = (() => {
   /** How each stage stands: reached with its time, passed, waited for next, going on now, where it stopped, or not yet. */
   function stagesOf(m) {
     var s = m.stage, a = m.at, out = {}, waited = false;
-    KEYS.forEach((k) => { out[k] = { cls: "", text: LEGEND[k] }; });
+    KEYS.forEach((k) => { out[k] = { cls: "", text: LEGEND[k], short: BRIEF[k] }; });
     if (s === "idle") return out;
     // `short` is what a narrow screen has room for under each: the time alone
     var live = Math.max(1, Math.round((Date.now() - m.t0 - a.work) / 1000)) + " s";
@@ -228,7 +230,7 @@ var Shell = (() => {
       if (waited || out[k].cls) return;
       waited = true;
       if (WAITING[s]) out[k].cls = "next";
-      else if (s === "slow" || s === "refused") out[k] = { cls: "off", text: k === "it" ? "did not take it" : out[k].text };
+      else if (s === "slow" || s === "refused") out[k] = { cls: "off", text: k === "it" ? "did not take it" : out[k].text, short: out[k].short };
     });
     return out;
   }
