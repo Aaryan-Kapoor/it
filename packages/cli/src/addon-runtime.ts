@@ -39,9 +39,16 @@ const REFUSED: Record<string, string> = {
 export class AddonRuntimes {
   private loaded = new Map<string, Loaded>()
   private overflowUntil = new Map<string, number>()
-  /** When an app last refused to load It's add-on, and when one of its add-ons was last heard from, both by this machine's clock in milliseconds. */
+  /**
+   * When an app last refused to load It's add-on, and when an add-on of the app that had not
+   * been heard from before was first heard from, both by this machine's clock in milliseconds.
+   * Only an add-on that was loaded after a refusal shows that the refusal is over: one that was
+   * running before it goes on as it was, since an app that fails to load a plugin again keeps
+   * the copy it had, and says nothing of the copy it refused.
+   */
   private refusedAt = new Map<string, number>()
-  private heardAt = new Map<string, number>()
+  private startedAt = new Map<string, number>()
+  private instances = new Set<string>()
 
   /**
    * The app refused to load It's add-on at this time, or has not since its add-on was put
@@ -60,7 +67,7 @@ export class AddonRuntimes {
   /** The refusal that holds now: one no add-on of the app has been heard from since. */
   private refusal(harness: string): number | undefined {
     const at = this.refusedAt.get(harness)
-    return at !== undefined && REFUSED[harness] && !((this.heardAt.get(harness) ?? -1) > at) ? at : undefined
+    return at !== undefined && REFUSED[harness] && !((this.startedAt.get(harness) ?? -1) > at) ? at : undefined
   }
 
   hear(harness: string, instance: unknown, value: unknown, now = performance.now()): AddonRuntime | undefined {
@@ -118,7 +125,13 @@ export class AddonRuntimes {
                 .join(' '),
             }
     this.loaded.set(`${harness}:${instance}`, { at: now, runtime, idle: v.idle === true })
-    this.heardAt.set(harness, Date.now())
+    const key = `${harness}:${instance}`
+    if (!this.instances.has(key)) {
+      this.instances.add(key)
+      // Bounded, as `loaded` is: an instance forgotten here and heard from again counts as one that has just started
+      if (this.instances.size > 1000) this.instances.delete(this.instances.values().next().value!)
+      this.startedAt.set(harness, Date.now())
+    }
     for (const [key, entry] of this.loaded) if (now - entry.at >= RECENT_MS) this.loaded.delete(key)
     // Keep room for 100 simultaneous app instances, but bound memory and the work of reading
     // their status if a faulty add-on keeps reporting a new instance id. Evicted instances

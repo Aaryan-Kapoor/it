@@ -76,10 +76,14 @@ test('An OpenCode that refused to load the add-on is not taken for one that took
   expect(seen.blocksWake('opencode', 3_600_000)).toBe(true)
   expect(seen.status('opencode', 3_600_000).state).toBe('incompatible')
   expect(seen.wakeHeld('opencode')).toMatch(/^OpenCode refused to load It’s add-on, so It did not start a second copy of a conversation that may be open in it/)
-  // Heard from after it: OpenCode loaded the add-on after all
   const clock = Date.now
   try {
     Date.now = () => refusedAt + 1
+    // An add-on that was running before the refusal goes on being heard from: OpenCode kept the copy it had, and refused the new one
+    seen.hear('opencode', 'before', report, 5)
+    expect(seen.status('opencode', 5).state).toBe('incompatible')
+    expect(seen.blocksWake('opencode', 5)).toBe(true)
+    // One first heard from after it: OpenCode loaded the add-on after all
     seen.hear('opencode', 'after', report, 10)
   } finally {
     Date.now = clock
