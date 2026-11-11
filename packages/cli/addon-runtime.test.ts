@@ -60,3 +60,39 @@ test.each(['idle', 'incompatible'])('Evicting a recent %s report keeps its wake 
   expect(seen.status('opencode', 30_000).state).toBe('active')
   expect(seen.blocksWake('pi', 1000)).toBe(false)
 })
+
+test('An OpenCode that refused to load the add-on is not taken for one that took it, and holds back reopening until its add-on is heard from after the refusal.', () => {
+  const seen = new AddonRuntimes()
+  const report = { api: ADDON_API, version: ADDONS.opencode!.build, delivery: true, idle: false }
+  // Heard from before it refused: that was another add-on, or another start of OpenCode
+  seen.hear('opencode', 'before', report, 0)
+  const refusedAt = Date.now() + 1000
+  expect(seen.refused('opencode', refusedAt)).toBe(true)
+  expect(seen.refused('opencode', refusedAt)).toBe(false)
+  expect(seen.status('opencode', 0)).toMatchObject({ state: 'incompatible' })
+  expect(seen.status('opencode', 0).detail).toMatch(/^OpenCode refused to load It’s add-on, as its log says/)
+  expect(seen.status('opencode', 0).detail).toMatch(/Update It and OpenCode, then restart OpenCode/)
+  // However long ago its last report was, since nothing of It runs in it and it may be open
+  expect(seen.blocksWake('opencode', 3_600_000)).toBe(true)
+  expect(seen.status('opencode', 3_600_000).state).toBe('incompatible')
+  expect(seen.wakeHeld('opencode')).toMatch(/^OpenCode refused to load It’s add-on, so It did not start a second copy of a conversation that may be open in it/)
+  // Heard from after it: OpenCode loaded the add-on after all
+  const clock = Date.now
+  try {
+    Date.now = () => refusedAt + 1
+    seen.hear('opencode', 'after', report, 10)
+  } finally {
+    Date.now = clock
+  }
+  expect(seen.status('opencode', 10)).toMatchObject({ state: 'active' })
+  expect(seen.blocksWake('opencode', 31_000)).toBe(false)
+  expect(seen.wakeHeld('opencode')).toBeUndefined()
+  // And a refusal that is over is said to change what is said of the app
+  const other = new AddonRuntimes()
+  other.refused('opencode', 5)
+  expect(other.refused('opencode', undefined)).toBe(true)
+  expect(other.status('opencode', 0).state).toBe('inactive')
+  // An app that does not say it refused is never taken to have
+  expect(other.refused('pi', 5)).toBe(false)
+  expect(other.blocksWake('pi', 0)).toBe(false)
+})
