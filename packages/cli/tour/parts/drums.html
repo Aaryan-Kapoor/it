@@ -90,7 +90,8 @@
     [data-part="drums"] .drums-names, [data-part="drums"] .drums-bar { gap: 4px; grid-template-rows: 12px repeat(4, minmax(0, 1fr)) 2px repeat(5, minmax(0, .5fr)); } [data-part="drums"] .drums-bar { grid-template-columns: repeat(4, minmax(0, 1fr)) 2px repeat(4, minmax(0, 1fr)); }
     [data-part="drums"] .drums-names { font-size: 8.5px; letter-spacing: .04em; } [data-part="drums"] .drums-names em { display: none; }
     [data-part="drums"] .drums-bars, [data-part="drums"] .drums-box[data-bars="2"] .drums-bars { grid-template-columns: minmax(0, 1fr); gap: 0; transition: none; }
-    [data-part="drums"] .drums-bar:not(.view) { display: none; }
+    /* One bar is shown at a time, and the other is under it, out of sight: it is still there, so that what is coming onto its pads goes on coming */
+    [data-part="drums"] .drums-bar { grid-area: 1 / 1; } [data-part="drums"] .drums-bar:not(.view), [data-part="drums"] .drums-box[data-bars="1"] .drums-bar[data-bar="1"] { visibility: hidden; pointer-events: none; }
     [data-part="drums"] .pad { --sunk: inset 0 -3px 0 var(--dip), inset 0 1px 0 var(--lift); border-radius: 10px; } [data-part="drums"] .pad.theirs::after { right: 5px; top: 5px; width: 9px; height: 9px; border-radius: 3px; } [data-part="drums"] .drums-key { border-radius: 5px; }
     [data-part="drums"] .drums-head { top: 16px; } [data-part="drums"] .drums-start { font-size: 25px; }
     [data-part="drums"] .drums-asks { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; } [data-part="drums"] .drums-to { display: none; }
@@ -221,8 +222,8 @@ Shell.part("drums", (my) => {
     f.frequency.setValueAtTime(hz * 9, t);
     f.frequency.exponentialRampToValueAtTime(hz * 2.2, t + .16);
     g.gain.setValueAtTime(.0001, t);
-    g.gain.exponentialRampToValueAtTime(.42, t + .006);
-    g.gain.exponentialRampToValueAtTime(.2, t + .12);
+    g.gain.exponentialRampToValueAtTime(.3, t + .006);
+    g.gain.exponentialRampToValueAtTime(.14, t + .12);
     g.gain.exponentialRampToValueAtTime(.0001, t + len);
     low.gain.value = .7;
     o.connect(f); f.connect(g); under.connect(low); low.connect(g); g.connect(to);
@@ -302,7 +303,8 @@ Shell.part("drums", (my) => {
   // The line goes from each step to the next in the time between the two
   function glide(now) {
     var a = last && tick[last.step];
-    if (!a || !a.offsetParent) { head.classList.remove("on"); return; }
+    // Where one bar is shown at a time and it is the other that sounds, there is no line to show
+    if (!a || !a.offsetParent || (narrow && narrow.matches && Math.floor(last.step / BAR) !== view)) { head.classList.remove("on"); return; }
     var to = (last.step + 1) % steps, len = stepLen() + late(to) - late(last.step), part = Math.max(0, Math.min(1, (now - last.at) / len));
     var whole = barsEl.getBoundingClientRect(), from = a.getBoundingClientRect(), b = last.step % BAR < BAR - 1 ? tick[last.step + 1].getBoundingClientRect() : null;
     var x = from.left + part * ((b ? b.left : from.right + 6) - from.left) - whole.left;
@@ -391,10 +393,10 @@ Shell.part("drums", (my) => {
     { k: "bass", label: () => "Bassline", ask: () => "add a bassline", did: () => "asked for bass" },
     { k: "more", label: () => "Busier", ask: () => "busier", did: () => "asked for busier" },
     { k: "less", label: () => "Sparser", ask: () => "strip it back", did: () => "asked for less" },
-    { k: "swing", label: () => (swing ? "Straighten" : "Swing it"), ask: () => (swing ? "play it straight" : "make it swing"), did: () => (swing ? "asked for straight" : "asked for swing") },
-    { k: "time", label: () => (bpm < 90 ? "Double time" : "Half time"), ask: () => (bpm < 90 ? "double time" : "half time"), did: () => (bpm < 90 ? "asked: double time" : "asked: half time") },
+    { k: "swing", label: () => (swing ? "Straighten" : "Swing it"), ask: () => (swing ? "play it straight" : "make it swing"), did: () => (swing ? "asked: straight" : "asked for swing") },
+    { k: "time", label: () => (bpm < 90 ? "Double time" : "Half time"), ask: () => (bpm < 90 ? "double time" : "half time"), did: () => (bpm < 90 ? "asked for double" : "asked: half time") },
     { k: "trade", label: () => "Trade bars", ask: () => "answer my bar with the next bar", did: () => "asked for a bar" },
-    { k: "wild", label: () => "Surprise me", ask: () => "surprise me", did: () => "asked: surprise me" },
+    { k: "wild", label: () => "Surprise me", ask: () => "surprise me", did: () => "asked: surprise" },
   ];
   var BETWEEN = { k: "", ask: () => "play between my hits", did: () => { var n = count(mine); return "put down " + n + (n === 1 ? " hit" : " hits"); } };
   ASKS.forEach((a) => {
@@ -452,7 +454,7 @@ Shell.part("drums", (my) => {
 
   // ── Which bar is shown, where a screen shows one at a time ──
   // `held` is the bar the person is keeping in view, by its tab or by tapping in it, and -1 where the bar shown is the one sounding
-  var view = 0, held = -1, heldByTab = false;
+  var view = 0, held = -1, heldByTab = false, narrow = window.matchMedia ? window.matchMedia("(max-width: 760px)") : null;
   function see(bar) {
     if (bar === view || bar * BAR >= steps) return;
     view = bar;
@@ -670,7 +672,7 @@ Shell.part("drums", (my) => {
       return;
     }
     // The bar the person was kept in while they tapped is let go, and the one sounding is shown again
-    if (!heldByTab) held = -1;
+    if (!heldByTab) { held = -1; if (lit >= 0) see(Math.floor(lit / BAR)); }
     // A second bar is asked for as a loop of two, and the pads go to two only when the answer comes
     var loop = a.k === "trade" ? MOST : steps, id = newId(), fits = fitting(a, loop);
     // What the state held before this was asked, so that a tempo or a swing left out of the answer is not taken for one given
@@ -762,6 +764,8 @@ Shell.part("drums", (my) => {
       });
     }
   }
+  // A hit that has come in is a hit like any other
+  barsEl.addEventListener("animationend", (e) => { if (e.animationName === "drums-land") e.target.classList.remove("land"); });
   my.listen(hear);
   dials();
   paint();
