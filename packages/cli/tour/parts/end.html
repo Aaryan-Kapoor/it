@@ -35,7 +35,7 @@
   .end-hero { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 36px; animation: swap .4s ease-out; }
   .end-hero > div:last-child { align-self: center; min-width: 0; }
   .end-hero .end-art { border-radius: 22px; box-shadow: 0 30px 60px -40px rgba(28, 26, 22, .7); }
-  .end-hero .end-art::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(100deg, transparent 38%, color-mix(in srgb, var(--card) 75%, transparent) 50%, transparent 62%) 0 0 / 260% 100%; animation: end-sweep 2.4s linear infinite; }
+  .end-hero .end-art::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(100deg, transparent 40%, color-mix(in srgb, var(--sun) 20%, transparent) 50%, transparent 60%) 0 0 / 260% 100%; animation: end-sweep 2.4s linear infinite; }
   @keyframes end-sweep { from { background-position: 130% 0; } to { background-position: -130% 0; } }
   .end-hero .end-kind { margin: 0; font-size: 24px; white-space: normal; }
   .end-hero-name { margin: 6px 0 0; font: 800 clamp(28px, 3.5vw, 48px)/1.04 Display; letter-spacing: -.035em; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
