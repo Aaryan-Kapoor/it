@@ -17,6 +17,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from 'node:fs'
 import http from 'node:http'
@@ -2092,11 +2093,56 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
         patch: '{"label":"[beta]"}',
         baseRevision: 4,
       })
+      for (const [written, patch] of [
+        ['null', '{"label":null}'],
+        ['true', '{"label":true}'],
+        ['""', '{"label":""}'],
+      ] as const) {
+        writeFileSync(path.join(m.home, 'value.json'), written)
+        expect([written, (await patched(['set', 'plan', 'label', '--file', 'value.json'])).patch]).toEqual([written, patch])
+      }
       // `it create` takes the state it starts with from a file
       const begun = (await sentFor(['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>', '--state-file', 'utf16.json'])).find(
         (x) => x.path === 'publish:begin',
       )!
       expect(JSON.parse(String(begun.args.state))).toEqual(patch)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a patch from a file is sent without waiting for standard input, which an agent app may hold open', async () => {
+    const m = machine()
+    const b = await backend(m, () => ({ revision: 2 }))
+    try {
+      writeFileSync(path.join(m.home, 'patch.json'), '{"a":1}')
+      const ran = await new Promise<Ran>((resolve) => {
+        execFile(
+          process.execPath,
+          [program, 'patch', 'plan', '--file', 'patch.json'],
+          { cwd: m.home, env: { PATH: m.bin, HOME: m.home, IT_HOME: m.it, IT_TELEMETRY_ENABLED: 'false', ...b.env }, timeout: 10_000 },
+          (err, out, stderr) => resolve({ code: err ? ((err as { code?: number }).code ?? null) : 0, signal: null, out, err: stderr }),
+        )
+        // Standard input is left open, and nothing is written to it
+      })
+      expect([ran.code, ran.err]).toEqual([0, ''])
+      expect(b.asked.find((x) => x.path === 'state:patch')!.args).toEqual({ slug: 'plan', patch: '{"a":1}' })
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a file of JSON larger than one request carries is refused for its size, before it is read', async () => {
+    const m = machine()
+    const b = await backend(m, () => ({ revision: 2 }))
+    try {
+      const big = path.join(m.home, 'big.json')
+      writeFileSync(big, '')
+      // A file of that length with nothing written in it, which takes no room on the disk
+      truncateSync(big, UPLOAD.requestBytes + 1)
+      const ran = await run(m, ['patch', 'plan', '--file', 'big.json'], b.env)
+      expect([ran.code, error(ran)]).toEqual([1, { code: 'limit', message: 'big.json is larger than this command reads (25 MB).' }])
+      expect(b.asked.filter((x) => x.path === 'state:patch')).toEqual([])
     } finally {
       await b.close()
     }
@@ -2204,6 +2250,24 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
             code: 'invalid',
             message: `--state is not valid JSON: it has no double quotes, ${SHELL}.`,
             hint: 'Write the JSON to a file and run `it create … --state-file <path>`, which works the same in every shell.',
+          },
+        ],
+        // `it create Plan --state '{\"note\":\"two words\"}'`, split at the space
+        [
+          ['create', 'Plan', '--html', '<p>hi</p>', '--state', '{"note":"two', 'words"}'],
+          {
+            code: 'invalid',
+            message: 'It does not know what to do with "words"}".',
+            hint: 'Usage: it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe) If your shell split the JSON of --state at a space, write it to a file and give it with `--state-file <path>`.',
+          },
+        ],
+        // Text that begins and ends with brackets is refused on every system, and the refusal says how to set it
+        [
+          ['set', 'plan', 'label', '[beta]'],
+          {
+            code: 'invalid',
+            message: `The value [beta] begins and ends as JSON does, but is not JSON and has no double quotes, ${SHELL}. Nothing was changed.`,
+            hint: 'Write the JSON to a file and run `it set plan label --file <path>`, which works the same in every shell. To set this very text, write it in the file as a JSON string.',
           },
         ],
         // `it set plan list '["a","b c"]'`, which would otherwise have put the text "[a,b c]" on the page
