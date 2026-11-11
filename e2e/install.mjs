@@ -1643,7 +1643,12 @@ try {
     )
     // An It installed elsewhere is asked to take It off that folder, and finds nothing of its own there
     const elsewhereIt = await install('a-project-it')
-    const off = await run(elsewhereIt.it, ['uninstall', '--yes'], { ...plainEnv(), HOME: elsewhereIt.home, USERPROFILE: elsewhereIt.home, IT_HOME: project }, elsewhereIt.home)
+    const off = await run(
+      elsewhereIt.it,
+      ['uninstall', '--yes'],
+      { ...plainEnv(), HOME: elsewhereIt.home, USERPROFILE: elsewhereIt.home, IT_HOME: project },
+      elsewhereIt.home,
+    )
     check(
       'and uninstall then removes nothing from it',
       elsewhereIt.code === 0 &&
