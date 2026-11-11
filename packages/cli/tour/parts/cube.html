@@ -1,209 +1,704 @@
-<!-- The cube: a Rubik's cube the person turns or mixes up. The agent is asked for the next turns, and is given the way back to solved. -->
+<!-- The cube: a Rubik's cube in three dimensions, a few turns from solved, that the person holds and turns. The agent is asked how to solve it, is given the way back, and answers with a few turns that the page shows on the cube one at a time. -->
 <style>
-  .cube-views { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .cube-views figure { text-align: center; } .cube-views figcaption { font: 400 11.5px/1 var(--mono); color: var(--faint); margin-top: 6px; letter-spacing: .06em; }
-  svg.cube { display: block; width: 100%; height: auto; max-height: min(34vh, 40cqh); outline: none; }
-  svg.cube .body { fill: #1c1a16; } svg.cube polygon.st { stroke-linejoin: round; transition: fill .28s; }
-  svg.cube:focus-visible .body { stroke: var(--green); stroke-width: .06; }
-  .keys { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-top: 12px; }
-  .key { min-height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); font: 600 15px/1 var(--mono); color: var(--ink); }
-  .key:hover { border-color: var(--ink); } .key:disabled { opacity: .45; cursor: default; }
-  .cube-foot { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
-  .cube-foot .said { margin-left: auto; font: 400 12px/1.3 var(--mono); color: var(--faint); }
-  .key:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
-  [data-part="cube"] .cube-card { width: min(100cqw, 760px); }
-  @media (max-width: 760px) { .cube-foot .said { margin-left: 0; width: 100%; } }
+  #cube-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; cursor: grab; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  #cube-canvas.cube-held { cursor: grabbing; }
+  /* The drawing is under everything else in the part, and takes every press that lands on no button */
+  [data-part="cube"] .fill, [data-part="cube"] .foot { position: relative; pointer-events: none; }
+  [data-part="cube"] .foot { align-items: center; min-height: 58px; }
+  [data-part="cube"] .foot > * { pointer-events: auto; }
+  .cube-turns { display: inline-flex; align-items: center; gap: 8px; font: 500 12.5px/1.2 var(--mono); color: var(--soft); }
+  .cube-turns i { width: 8px; height: 8px; border-radius: 50%; background: var(--clay); } .cube-turns.home i { background: var(--green); }
+  .cube-btns { display: flex; align-items: center; gap: 8px; }
+  /* What the agent says of the turn that is shown, beside the cube where the stage is wide and under it where it is tall */
+  .cube-note { position: absolute; display: grid; gap: 8px; }
+  [data-part="cube"][data-side="1"] .cube-note { left: calc(50% + var(--cube-u, 100px) * 2.72); top: 50%; transform: translateY(-50%); width: min(320px, 50% - var(--cube-u, 100px) * 2.72); justify-items: start; text-align: left; }
+  [data-part="cube"][data-side="0"] .cube-note { left: 0; right: 0; bottom: 0; height: 78px; align-content: center; justify-items: center; text-align: center; gap: 5px; }
+  .cube-count { display: flex; align-items: center; gap: 9px; font: 600 12px/1 var(--mono); color: var(--green); }
+  .cube-dots { display: inline-flex; gap: 5px; } .cube-dots i { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--green); opacity: .35; } .cube-dots i.made { background: var(--green); opacity: 1; } .cube-dots i.now { opacity: 1; }
+  .cube-words { font: 600 38px/1.02 Hand, "Segoe Print", "Bradley Hand", cursive; color: var(--ink); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; animation: cube-in .35s ease-out; }
+  [data-part="cube"][data-side="0"] .cube-words { font-size: 27px; -webkit-line-clamp: 2; }
+  .cube-said { font: 400 12px/1.45 var(--mono); color: var(--soft); max-width: 34ch; } .cube-said:empty { display: none; }
+  .cube-done { display: flex; align-items: center; gap: 12px; font: 800 44px/1 Display; letter-spacing: -.03em; color: var(--ink); animation: cube-pop .55s cubic-bezier(.2, 1.5, .4, 1); }
+  [data-part="cube"][data-side="0"] .cube-done { font-size: 34px; gap: 10px; }
+  .cube-done svg { width: .9em; height: .9em; flex: none; } .cube-done circle { fill: var(--green); } .cube-done path { fill: none; stroke: var(--on-green); stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 24; animation: cube-tick .5s .25s ease-out backwards; }
+  @keyframes cube-in { from { opacity: 0; transform: translateY(6px); } }
+  @keyframes cube-pop { from { opacity: 0; transform: scale(.7); } }
+  @keyframes cube-tick { from { stroke-dashoffset: 24; } }
+  @media (max-width: 760px) {
+    [data-part="cube"] .foot { justify-content: center; gap: 8px 10px; min-height: 0; }
+    .cube-turns { width: 100%; justify-content: center; }
+  }
 </style>
-<section class="part" data-part="cube" data-title="A Rubik’s cube" data-line="Turn the faces or mix it up, then ask for the next turns. {agent} plays them one at a time." hidden>
-  <div class="fill"><div class="cube-card">
-    <p class="foot" style="padding: 0 0 8px"><span>A Rubik’s cube</span><span id="cube-turns">solved</span></p>
-  <div class="cube-views">
-    <figure><svg class="cube" id="cube-front" viewBox="-2.9 -3.1 5.8 6.2" tabindex="0" role="img" aria-label="The cube from the front, top and right. Press U, D, L, R, F or B to turn a face, with Shift to turn it the other way."></svg><figcaption>FRONT, TOP, RIGHT</figcaption></figure>
-    <figure><svg class="cube" id="cube-back" viewBox="-2.9 -3.1 5.8 6.2" role="img" aria-label="The cube from the back, bottom and left"></svg><figcaption>BACK, BOTTOM, LEFT</figcaption></figure>
+<section class="part" data-part="cube" data-title="A Rubik’s cube" data-line="It is nearly solved. Drag a row to turn it, or ask {agent} how." data-side="0" hidden>
+  <canvas id="cube-canvas" tabindex="0" role="application" aria-label="A Rubik’s cube. The arrow keys move over the squares of the face in front, and past its edge to the next face. Shift with an arrow key turns that row or column. Comma and full stop turn the face in front."></canvas>
+  <div class="fill">
+    <div class="cube-note" aria-live="polite">
+      <p class="cube-count" id="cube-count" hidden><span class="cube-dots" id="cube-dots" aria-hidden="true"></span><span id="cube-step"></span></p>
+      <p class="cube-words" id="cube-words" hidden></p>
+      <p class="cube-done" id="cube-done" hidden><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="16"/><path d="M9 16.5l4.8 4.8L23.5 11"/></svg>Solved</p>
+      <p class="cube-said" id="cube-said"></p>
+    </div>
   </div>
-  <div class="keys" id="keys" role="group" aria-label="Turn a face"></div>
-  <div class="cube-foot"><button class="btn small" type="button" id="cube-ask">Ask for the next turns</button><button class="btn ghost small" type="button" id="cube-mix">Mix it up</button><button class="btn ghost small" type="button" id="cube-solve">Start solved</button><span class="said" id="cube-said"></span></div>
-  </div></div>
+  <div class="foot"><span class="cube-turns" id="cube-turns" role="status"><i></i><span id="cube-count-of"></span></span><span class="cube-btns"><button class="btn ghost small" type="button" id="cube-mix">Mix it again</button><button class="btn" type="button" id="cube-ask"></button><button class="btn" type="button" id="cube-auto" hidden><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z"/></svg>Do it for me</button></span></div>
 </section>
 <script>
-// A Rubik's cube, kept as the 54 letters that name each sticker by the face whose colour it
-// has, face by face in the order U, R, F, D, L, B, each read row by row as that face is seen
-// from outside with U above (and B above for D, and F above for U). A turn is named as cubers
-// name it: U, D, L, R, F or B turns that face a quarter clockwise as seen from outside, with '
-// for the other way and 2 for a half turn.
+// A Rubik's cube, drawn in three dimensions and held as a thing is: a drag beside it looks
+// round it, and a drag across its squares turns the row or the column under the finger, which
+// follows the finger and falls home when it is let go.
+//
+// The cube is 54 squares, each kept by the colour it has, and a turn is one layer of the three
+// along one of its axes going a quarter round. It begins two turns from solved, and every turn
+// since it was solved is kept, so that undoing them from the last is a sure way back. Asked
+// how, the agent is sent the next three turns of that way, each by a name that says what a
+// person sees ("top-row-left") and never by a letter. It answers with turns by those names and
+// a few words for each, and the page shows them on the cube one at a time: an arrow round the
+// layer, the agent's words beside it, and the turn itself left to the person, or played where
+// they would sooner watch.
 Shell.part("cube", (my) => {
-  var $ = Shell.$;
-  var box = my.box, calm = Shell.calm, SVG = Shell.SVG;
-  var FACES = "URFDLB", SOLVED = "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
-  var NORMAL = { U: [0, 1, 0], R: [1, 0, 0], F: [0, 0, 1], D: [0, -1, 0], L: [-1, 0, 0], B: [0, 0, -1] };
-  var COLOUR = { U: "#f4f1ea", R: "#c8402e", F: "#1f9d5f", D: "#f2c230", L: "#ec7a24", B: "#2d63c8" };
-  var NAMED = /^[UDLRFB](2|'|i)?$/;
-  // Where each sticker is: the small cube it is on, from -1 to 1 along each way, and the way it faces
-  function where(face, r, c) {
-    return { U: [-1 + c, 1, -1 + r], R: [1, 1 - r, 1 - c], F: [-1 + c, 1 - r, 1], D: [-1 + c, -1, 1 - r], L: [-1, 1 - r, -1 + c], B: [1 - c, 1 - r, -1] }[face];
-  }
-  var STICKERS = [];
-  FACES.split("").forEach((f) => { for (var i = 0; i < 9; i++) STICKERS.push({ at: where(f, Math.floor(i / 3), i % 3), n: NORMAL[f] }); });
-  var dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-  var cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-  // A quarter turn clockwise, seen from outside along `n`
-  var quarter = (n, v) => { var c = cross(n, v), k = dot(n, v); return [n[0] * k - c[0], n[1] * k - c[1], n[2] * k - c[2]]; };
-  var same = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
-  var find = (at, n) => STICKERS.findIndex((s) => same(s.at, at) && same(s.n, n));
-  // Which sticker goes where in each face's quarter turn
-  var MOVES = {};
-  FACES.split("").forEach((f) => {
-    var n = NORMAL[f], to = STICKERS.map((s, i) => (dot(s.at, n) === 1 ? find(quarter(n, s.at), quarter(n, s.n)) : i));
-    MOVES[f] = to;
+  var $ = Shell.$, box = my.box, calm = Shell.calm, tidy = Shell.tidy, AGENT = my.agent;
+  var el = my.el, canvas = $("cube-canvas"), fill = my.$(".fill");
+
+  // ── The cube ──
+  // The six faces by the axis each looks along and which way: top, right, front, bottom, left
+  // and back, with x to the right, y up and z towards the person. A square is where it is, on
+  // the small cube at -1, 0 or 1 along each axis, and the way it faces
+  var FACE = [[1, 1], [0, 1], [2, 1], [1, -1], [0, -1], [2, -1]];
+  var SQUARES = [], INDEX = {};
+  var key = (p, n) => p.join() + "/" + n.join();
+  FACE.forEach((f) => {
+    for (var i = -1; i <= 1; i++) for (var j = -1; j <= 1; j++) {
+      var p = [0, 0, 0], n = [0, 0, 0];
+      p[f[0]] = n[f[0]] = f[1]; p[(f[0] + 1) % 3] = i; p[(f[0] + 2) % 3] = j;
+      INDEX[key(p, n)] = SQUARES.length;
+      SQUARES.push({ p: p, n: n });
+    }
   });
-  function turn(faces, name) {
-    var times = name.length === 1 ? 1 : name.charAt(1) === "2" ? 2 : 3, to = MOVES[name.charAt(0)], out = faces.split("");
-    for (var t = 0; t < times; t++) { var next = out.slice(); to.forEach((j, i) => { next[j] = out[i]; }); out = next; }
+  // A quarter round an axis, the way that takes the front to the right round y, the front down round x, and the right up round z
+  var quarter = (a, v) => (a === 0 ? [v[0], -v[2], v[1]] : a === 1 ? [v[2], v[1], -v[0]] : [-v[1], v[0], v[2]]);
+  // Where each square goes in a quarter turn of each layer of each axis
+  var GOES = [0, 1, 2].map((a) => [-1, 0, 1].map((l) => SQUARES.map((s, i) => (s.p[a] === l ? INDEX[key(quarter(a, s.p), quarter(a, s.n))] : i))));
+  var SOLVED = "000000000111111111222222222333333333444444444555555555";
+  // A turn is `a`, the axis; `l`, the layer along it; and `q`, 1 for the quarter above and -1 for the other way
+  function turned(faces, t) {
+    var to = GOES[t.a][t.l + 1], out = new Array(54);
+    for (var i = 0; i < 54; i++) if (t.q > 0) out[to[i]] = faces.charAt(i); else out[i] = faces.charAt(to[i]);
     return out.join("");
   }
-  window.__cube = { turn: turn, SOLVED: SOLVED };
+  // Solved is every face of one colour, whichever way up the cube has come to be
+  var home = (faces) => /^(?:(\d)\1{8}){6}$/.test(faces);
+  var same = (s, t) => s.a === t.a && s.l === t.l && s.q === t.q;
+  var undone = (t) => ({ a: t.a, l: t.l, q: -t.q });
 
-  // ── Drawing it: two views, from the front, top and right, and from the back, bottom and left ──
-  var VIEWS = [{ el: $("cube-front"), d: [1, 1, 1] }, { el: $("cube-back"), d: [-1, -1, -1] }];
-  VIEWS.forEach((v) => {
-    var len = Math.hypot.apply(null, v.d), d = v.d.map((x) => x / len), r = cross([0, 1, 0], d), rl = Math.hypot.apply(null, r);
-    r = r.map((x) => x / rl);
-    var up = cross(d, r);
-    var flat = (p) => [dot(p, r), -dot(p, up)];
-    var pts = (list) => list.map((p) => flat(p).map((x) => x.toFixed(3)).join(",")).join(" ");
-    v.polys = [];
-    // The body: each face that is seen, as one dark square under its stickers
-    FACES.split("").forEach((f) => {
-      var n = NORMAL[f];
-      if (dot(n, d) <= 0) return;
-      var u = n[0] ? [0, 1, 0] : [1, 0, 0], w = cross(n, u);
-      var c = n.map((x) => x * 1.5), poly = document.createElementNS(SVG, "polygon");
-      poly.setAttribute("class", "body");
-      poly.setAttribute("points", pts([[-1, -1], [1, -1], [1, 1], [-1, 1]].map((k) => [0, 1, 2].map((i) => c[i] + 1.56 * (k[0] * u[i] + k[1] * w[i])))));
-      v.el.appendChild(poly);
+  var faces = SOLVED, way = [];   // the cube, and every turn since it was solved, as few as they are
+  function apply(t) {
+    faces = turned(faces, t);
+    // Turns round one axis may be made in any order, so a turn meets the earlier turns of its own layer across the others of that axis
+    var mine = [];
+    for (var i = way.length - 1; i >= 0 && way[i].a === t.a; i--) if (way[i].l === t.l) mine.push(i);
+    if (mine.length && way[mine[0]].q !== t.q) way.splice(mine[0], 1);
+    // Three quarters one way are one quarter the other way
+    else if (mine.length === 2) { way.splice(mine[0], 1); way.splice(mine[1], 1); way.push(undone(t)); }
+    else way.push(t);
+    if (home(faces)) way = [];
+  }
+
+  // ── What a turn is called ──
+  // A turn is named as it looks from one of the four ways the cube is held upright: `k` says
+  // which side face is in front. Rows go left and right, columns go up and down, and what is
+  // left turns like a clock's hand, as seen from the front.
+  var FRONT = [[2, 1], [0, 1], [2, -1], [0, -1]], RIGHT = [[0, 1], [2, -1], [0, -1], [2, 1]];
+  var ROW = ["bottom", "middle", "top"], COLUMN = ["left", "middle", "right"];
+  var DEEP = [["back-face", "the back face"], ["middle-layer", "the middle layer behind the front face"], ["front-face", "the front face"]];
+  function nameOf(t, k) {
+    if (t.a === 1) return { turn: ROW[t.l + 1] + "-row-" + (t.q > 0 ? "right" : "left"), plain: "the " + ROW[t.l + 1] + " row, to the " + (t.q > 0 ? "right" : "left"), hard: false };
+    var column = RIGHT[k][0] === t.a, s = (column ? RIGHT : FRONT)[k][1], l = t.l * s, q = t.q * s;
+    if (column) return { turn: COLUMN[l + 1] + "-column-" + (q > 0 ? "down" : "up"), plain: "the " + COLUMN[l + 1] + " column, " + (q > 0 ? "down" : "up"), hard: false };
+    var sense = q > 0 ? "anticlockwise" : "clockwise";
+    // Only the front face is seen to turn like a clock. The two behind it are harder to say and to see
+    return { turn: DEEP[l + 1][0] + "-" + sense, plain: DEEP[l + 1][1] + ", " + sense + (l < 1 ? " as seen from the front" : ""), hard: l < 1 };
+  }
+  var EVERY = [];
+  [0, 1, 2].forEach((a) => [-1, 0, 1].forEach((l) => [1, -1].forEach((q) => EVERY.push({ a: a, l: l, q: q }))));
+  /** Every turn there is by its name, as the cube is held with `k` in front. */
+  function turnsBy(k) { var by = {}; EVERY.forEach((t) => { by[nameOf(t, k).turn] = t; }); return by; }
+  var unit = (as) => { var v = [0, 0, 0]; v[as[0]] = as[1]; return v; };
+  var LETTER = "wrgyob";
+  /** The cube's colours as it is held with `k` in front: each face's nine squares, read from outside row by row. */
+  function seen(k) {
+    var f = unit(FRONT[k]), r = unit(RIGHT[k]), u = [0, 1, 0], no = (v) => v.map((x) => -x);
+    var sides = { top: [u, r, f], front: [f, r, no(u)], right: [r, no(f), no(u)], back: [no(f), no(r), no(u)], left: [no(r), f, no(u)], bottom: [no(u), r, no(f)] };
+    var out = {};
+    Object.keys(sides).forEach((name) => {
+      var n = sides[name][0], across = sides[name][1], down = sides[name][2], word = "";
+      for (var i = -1; i <= 1; i++) for (var j = -1; j <= 1; j++) word += LETTER.charAt(faces.charAt(INDEX[key([0, 1, 2].map((x) => n[x] + j * across[x] + i * down[x]), n)]));
+      out[name] = word;
     });
-    STICKERS.forEach((s, i) => {
-      if (dot(s.n, d) <= 0) return;
-      var u = s.n[0] ? [0, 1, 0] : [1, 0, 0], w = cross(s.n, u), c = [0, 1, 2].map((k) => s.at[k] + s.n[k] * 0.5);
-      var poly = document.createElementNS(SVG, "polygon");
-      poly.setAttribute("class", "st");
-      poly.setAttribute("stroke-width", "0.07");
-      poly.setAttribute("points", pts([[-1, -1], [1, -1], [1, 1], [-1, 1]].map((k) => [0, 1, 2].map((j) => c[j] + 0.4 * (k[0] * u[j] + k[1] * w[j])))));
-      poly.setAttribute("data-i", i);
-      v.el.appendChild(poly);
-      v.polys.push({ el: poly, i: i });
+    return out;
+  }
+
+  // ── Looking at it ──
+  // The cube stands upright and is looked round like a thing on a turntable: `yaw` turns it,
+  // and `pitch` tips its top towards the person. It is seen from `FAR` away, so that what is
+  // nearer is larger.
+  var HOME_YAW = -0.66, HOME_PITCH = 0.5, FAR = 11, QUARTER = Math.PI / 2;
+  var yaw = HOME_YAW, pitch = HOME_PITCH, lift = 0;
+  var cosY = 1, sinY = 0, cosP = 1, sinP = 0;
+  var W = 0, H = 0, cx = 0, cy = 0, U = 60, left = 0, top = 0, dpr = 1, ctx = null;
+  function aim() { cosY = Math.cos(yaw); sinY = Math.sin(yaw); cosP = Math.cos(pitch); sinP = Math.sin(pitch); }
+  function toView(v) { var x = v[0] * cosY + v[2] * sinY, z = -v[0] * sinY + v[2] * cosY; return [x, v[1] * cosP - z * sinP, v[1] * sinP + z * cosP]; }
+  function toCube(v) { var y = v[1] * cosP + v[2] * sinP, z = -v[1] * sinP + v[2] * cosP; return [v[0] * cosY - z * sinY, y, v[0] * sinY + z * cosY]; }
+  /** Where a point of the cube is on the drawing, and how many pixels one of its units is there. */
+  function P(v) { var w = toView(v), k = (U * FAR) / (FAR - w[2]); return [cx + w[0] * k, cy - lift - w[1] * k, k]; }
+  var dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  function spin(a, th, v) {
+    var c = Math.cos(th), s = Math.sin(th);
+    return a === 0 ? [v[0], v[1] * c - v[2] * s, v[1] * s + v[2] * c] : a === 1 ? [v[0] * c + v[2] * s, v[1], -v[0] * s + v[2] * c] : [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]];
+  }
+  /** Which side face is in front, as the cube is looked at now. */
+  var frameNow = () => ((Math.round((HOME_YAW - yaw) / QUARTER) % 4) + 4) % 4;
+  /** The drawing's place and size. The cube is as large as the room the part has left allows, with the agent's words beside it or under it. */
+  function measure() {
+    var r = canvas.getBoundingClientRect(), b = fill.getBoundingClientRect();
+    if (!r.width || !b.width) return;
+    var side = (b.width - b.height) / 2 >= 230, band = side ? 0 : 78;
+    W = r.width; H = r.height; left = r.left; top = r.top;
+    U = Math.max(16, Math.min(b.width, b.height - band) / 4.9);
+    cx = b.left - r.left + b.width / 2; cy = b.top - r.top + (b.height - band) / 2;
+    el.setAttribute("data-side", side ? "1" : "0");
+    el.style.setProperty("--cube-u", U.toFixed(1) + "px");
+  }
+
+  // ── Drawing it ──
+  // Each small cube is drawn from the farthest to the nearest: its rounded body, the faces of
+  // it that are seen, and on each outer face its square of colour, lit from above and a little
+  // from the left. The layer that is turning is drawn turned.
+  var CUBIES = [];
+  for (var x = -1; x <= 1; x++) for (var y = -1; y <= 1; y++) for (var z = -1; z <= 1; z++) if (x || y || z) CUBIES.push([x, y, z]);
+  var REACH = 0.48, BEVEL = 0.075, FLAT = REACH - BEVEL, SQUARE = 0.392;
+  var norm = (v) => { var n = Math.hypot(v[0], v[1], v[2]); return [v[0] / n, v[1] / n, v[2] / n]; };
+  var LIGHT = norm([-0.25, 0.6, 0.75]), GLINT = norm([LIGHT[0], LIGHT[1], LIGHT[2] + 1]);
+  var COLOUR = [[244, 241, 234], [203, 58, 44], [26, 152, 94], [246, 198, 44], [240, 122, 32], [42, 98, 204]];
+  var dark = false, scheme = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+  var rgb = (c, b) => "rgb(" + Math.round(Math.min(255, c[0] * b)) + "," + Math.round(Math.min(255, c[1] * b)) + "," + Math.round(Math.min(255, c[2] * b)) + ")";
+  var turning = null;             // the layer that is off its place: its axis, which layer, and how far round it is
+  var walk = null;                // the agent's turns that are being shown: `steps`, and `at`, the one that is next
+  var dim = 0, keys = false, at = { r: 1, c: 1 };
+  var bits = [], ring = 0;        // the paper thrown when the cube comes home, and when the ring on the floor set out
+  var clock = () => performance.now();
+  /** The outline of a square with rounded corners that lies on a face: `o` its middle, `u` and `v` along it, `h` half its side and `r` its corners. */
+  function outline(T, o, u, v, h, r) {
+    var corner = [[1, 1, 0, 1, -1, 0], [-1, 1, -1, 0, 0, -1], [-1, -1, 0, -1, 1, 0], [1, -1, 1, 0, 0, 1]];
+    ctx.beginPath();
+    corner.forEach((c, i) => {
+      // Up to each corner along the side that comes to it, round it, and away along the next
+      var point = (du, dv) => P(T([0, 1, 2].map((x) => o[x] + (c[0] * h + du * r) * u[x] + (c[1] * h + dv * r) * v[x])));
+      var a = point(-c[2], -c[3]), m = point(0, 0), b = point(c[4], c[5]);
+      if (i) ctx.lineTo(a[0], a[1]); else ctx.moveTo(a[0], a[1]);
+      ctx.quadraticCurveTo(m[0], m[1], b[0], b[1]);
     });
-  });
-  var faces = SOLVED, turns = [], busy = false, playing = 0;
-  function paint() {
-    VIEWS.forEach((v) => v.polys.forEach((p) => { var c = COLOUR[faces.charAt(p.i)]; p.el.setAttribute("fill", c); p.el.setAttribute("stroke", c); }));
-    $("cube-turns").textContent = faces === SOLVED ? "solved" : turns.length + (turns.length === 1 ? " turn" : " turns") + " since it was solved";
-    $("cube-ask").disabled = busy || faces === SOLVED;
-    $("cube-mix").disabled = $("cube-solve").disabled = busy;
-    [].forEach.call($("keys").children, (k) => { k.disabled = busy; });
+    ctx.closePath();
   }
-  // The turns since the cube was solved, as few as they are: two turns of one face in a row are one, or none
-  var quarters = (name) => (name.length === 1 ? 1 : name.charAt(1) === "2" ? 2 : 3);
-  function apply(name) {
-    faces = turn(faces, name);
-    var before = turns[turns.length - 1];
-    if (before && before.charAt(0) === name.charAt(0)) {
-      var q = (quarters(before) + quarters(name)) % 4;
-      turns.pop();
-      if (q) turns.push(name.charAt(0) + ["", "", "2", "'"][q]);
-    } else turns.push(name);
-    if (faces === SOLVED) turns = [];
-  }
-  // Every turn since the cube was solved is kept, since undoing them from the last is the agent's
-  // sure way back. So the person's own turns stop at a number that an action still carries with ease
-  var MOST = 200;
-  function full(more) {
-    if (turns.length + more <= MOST) return false;
-    $("cube-said").textContent = "The cube keeps " + MOST + " turns of yours at most. Ask for the next turns, or start solved.";
-    return true;
-  }
-  function mineTurn(name) {
-    if (busy || full(1)) return;
-    asker.forget();
-    apply(name);
-    $("cube-said").textContent = "";
-    paint();
-  }
-  ["U", "R", "F", "D", "L", "B", "U'", "R'", "F'", "D'", "L'", "B'"].forEach((name) => {
-    var b = document.createElement("button");
-    b.type = "button"; b.className = "key"; b.textContent = name;
-    b.setAttribute("aria-label", "Turn " + name);
-    b.addEventListener("click", () => mineTurn(name));
-    $("keys").appendChild(b);
-  });
-  $("cube-front").addEventListener("keydown", (e) => {
-    var k = (e.key || "").toUpperCase();
-    if (FACES.indexOf(k) < 0 || k.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
-    e.preventDefault();
-    mineTurn(e.shiftKey ? k + "'" : k);
-  });
-  $("cube-mix").addEventListener("click", () => {
-    if (busy || full(12)) return;
-    asker.forget();
-    var lastFace = "";
-    for (var i = 0; i < 12; i++) {
-      var f;
-      do f = FACES.charAt(Math.floor(Math.random() * 6)); while (f === lastFace);
-      lastFace = f;
-      apply(f + ["", "'", "2"][Math.floor(Math.random() * 3)]);
+  /** The outline of some points, as a band stretched round them. */
+  function hull(pts) {
+    pts = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    var turn = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]), out = [];
+    for (var pass = 0; pass < 2; pass++) {
+      var start = out.length;
+      pts.forEach((p) => { while (out.length >= start + 2 && turn(out[out.length - 2], out[out.length - 1], p) <= 0) out.pop(); out.push(p); });
+      out.pop();
+      pts.reverse();
     }
-    box.did("mixed the cube up");
-    $("cube-said").textContent = "";
+    return out;
+  }
+  function cubie(c, spun, cam) {
+    var t = turning, T = spun ? (v) => spin(t.a, t.angle, v) : (v) => v, pts = [];
+    for (var i = 0; i < 8; i++) pts.push(P(T([c[0] + (i & 1 ? FLAT : -FLAT), c[1] + (i & 2 ? FLAT : -FLAT), c[2] + (i & 4 ? FLAT : -FLAT)])));
+    // The body: the outline of the small cube's flat middle, drawn with a line as wide as its rounded edges
+    ctx.beginPath();
+    hull(pts).forEach((p, i) => { if (i) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); });
+    ctx.closePath();
+    ctx.fillStyle = ctx.strokeStyle = rgb(dark ? [70, 65, 57] : [54, 50, 44], 1);
+    ctx.lineJoin = "round"; ctx.lineWidth = 2 * BEVEL * P(T(c))[2];
+    ctx.fill(); ctx.stroke();
+    var lit = walk && walk.at < walk.steps.length ? walk.steps[walk.at].turn : null;
+    for (var d = 0; d < 6; d++) {
+      var a = FACE[d][0], n = unit(FACE[d]), nw = T(n), o = [c[0] + n[0] * REACH, c[1] + n[1] * REACH, c[2] + n[2] * REACH], ow = T(o);
+      if (dot(nw, [cam[0] - ow[0], cam[1] - ow[1], cam[2] - ow[2]]) <= 0) continue;
+      var nv = toView(nw), shine = Math.max(0, dot(nv, LIGHT)), u = unit([(a + 1) % 3, 1]), v = unit([(a + 2) % 3, 1]);
+      outline(T, o, u, v, FLAT + 0.01, 0.05);
+      ctx.fillStyle = rgb(dark ? [44, 41, 36] : [30, 28, 24], 0.62 + 0.7 * shine);
+      ctx.fill();
+      if (c[a] !== FACE[d][1]) continue;
+      // The square of colour, less bright where the agent's turn is another layer's
+      var b = (0.66 + 0.38 * shine) * (lit && c[lit.a] !== lit.l ? 1 - 0.13 * dim : 1);
+      outline(T, o, u, v, SQUARE, 0.1);
+      ctx.fillStyle = rgb(COLOUR[faces.charAt(INDEX[key(c, n)])], b);
+      ctx.fill();
+      // A sheen across it from the light, which is brighter as the face comes round to the light
+      var m = P(ow), r = SQUARE * m[2] * 1.25, g = ctx.createLinearGradient(m[0] - r * 0.5, m[1] - r, m[0] + r * 0.5, m[1] + r);
+      g.addColorStop(0, "rgba(255,255,255," + (0.14 + 0.5 * Math.pow(Math.max(0, dot(nv, GLINT)), 20)).toFixed(3) + ")");
+      g.addColorStop(0.5, "rgba(255,255,255,0)");
+      g.addColorStop(1, "rgba(0,0,0,.14)");
+      ctx.fillStyle = g;
+      ctx.fill();
+    }
+  }
+  /** The floor under the cube: its shadow, and the ring that goes out over it as the cube comes home. */
+  function floor(now) {
+    var s = sinP, show = Math.max(0, Math.min(1, s / 0.28));
+    if (show <= 0) return;
+    var w = toView([0, -2.1, 0]), k = (U * FAR) / (FAR - w[2]), r = 2.6 * k, up = 1 - Math.min(1, lift / (U * 0.9)) * 0.35;
+    ctx.save();
+    ctx.translate(cx + w[0] * k, cy - w[1] * k);
+    ctx.scale(1, s);
+    if (dark) {
+      // Where the paper is dark the cube stands in a pool of light
+      var pool = ctx.createRadialGradient(0, 0, 0, 0, 0, r * 1.7);
+      pool.addColorStop(0, "rgba(255,236,196," + (0.1 * show).toFixed(3) + ")"); pool.addColorStop(1, "rgba(255,236,196,0)");
+      ctx.fillStyle = pool; ctx.beginPath(); ctx.arc(0, 0, r * 1.7, 0, 7); ctx.fill();
+    }
+    var g = ctx.createRadialGradient(0, 0, 0, 0, 0, r * up), ink = dark ? "0,0,0," : "70,52,28,";
+    g.addColorStop(0, "rgba(" + ink + ((dark ? 0.7 : 0.4) * show * up).toFixed(3) + ")"); g.addColorStop(0.55, "rgba(" + ink + ((dark ? 0.3 : 0.16) * show * up).toFixed(3) + ")"); g.addColorStop(1, "rgba(" + ink + "0)");
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r * up, 0, 7); ctx.fill();
+    var gone = ring ? (now - ring) / 1100 : 1;
+    if (gone < 1) {
+      ctx.beginPath(); ctx.arc(0, 0, r * (0.6 + 1.5 * gone), 0, 7);
+      ctx.strokeStyle = "rgba(" + (dark ? "62,207,147," : "23,128,90,") + (0.55 * (1 - gone) * show).toFixed(3) + ")";
+      ctx.lineWidth = U * 0.16 * (1 - gone) + 1; ctx.stroke();
+    }
+    ctx.restore();
+  }
+  /**
+   * The arrow for a turn, with a light that runs along it the way the layer goes. A face that
+   * is looked at nearly straight on has it on the face itself, most of the way round. Any other
+   * layer has an arc round it, on the side that is seen.
+   */
+  function arrow(t, cam, now) {
+    var b = (t.a + 1) % 3, c = (t.a + 2) % 3, N = 40, pts = [];
+    var flat = t.l !== 0 && (cam[t.a] * t.l) / FAR > 0.6, mid = flat ? (t.a === 2 ? QUARTER : t.a === 0 ? 0 : Math.atan2(-cam[c], -cam[b])) : Math.atan2(cam[c], cam[b]);
+    var round = flat ? 4.5 : 1.7, out = flat ? 1.0 : 2.3, along = flat ? t.l * (1 + REACH + 0.06) : t.l;
+    for (var i = 0; i <= N; i++) {
+      var phi = mid + t.q * (i / N - 0.5) * round, v = [0, 0, 0];
+      v[t.a] = along; v[b] = out * Math.cos(phi); v[c] = out * Math.sin(phi);
+      pts.push(P(v));
+    }
+    var w = Math.max(3.5, U * 0.05), tip = pts[N], from = pts[N - 2], dx = tip[0] - from[0], dy = tip[1] - from[1], len = Math.hypot(dx, dy) || 1;
+    dx /= len; dy /= len;
+    var line = (upTo) => { ctx.beginPath(); for (var j = 0; j <= upTo; j++) if (j) ctx.lineTo(pts[j][0], pts[j][1]); else ctx.moveTo(pts[j][0], pts[j][1]); };
+    var head = (grow) => {
+      var l = w * 3.3 + grow, h = w * 2.1 + grow * 0.6, x = tip[0] + dx * w * 1.6, y = tip[1] + dy * w * 1.6;
+      ctx.beginPath(); ctx.moveTo(x + dx * grow, y + dy * grow); ctx.lineTo(x - dx * l - dy * h, y - dy * l + dx * h); ctx.lineTo(x - dx * l + dy * h, y - dy * l - dx * h); ctx.closePath();
+    };
+    var green = dark ? "62,207,147" : "23,128,90";
+    ctx.lineCap = ctx.lineJoin = "round";
+    // The glow, from its widest and faintest in; a dark edge that keeps the arrow off a square of its own colour; and the arrow
+    [[5.2, 0.13], [3.2, 0.24]].forEach((g) => { ctx.strokeStyle = ctx.fillStyle = "rgba(" + green + "," + g[1] + ")"; ctx.lineWidth = w * g[0]; line(N - 1); ctx.stroke(); head(w * g[0] * 0.5); ctx.fill(); });
+    ctx.strokeStyle = ctx.fillStyle = "rgba(14,12,9,.55)"; ctx.lineWidth = w + 3; line(N - 1); ctx.stroke(); head(1.5); ctx.fill();
+    ctx.strokeStyle = ctx.fillStyle = dark ? "#5eebb0" : "#27c08a"; ctx.lineWidth = w; line(N - 1); ctx.stroke(); head(0); ctx.fill();
+    if (calm) return;
+    var gone = ((now % 1500) / 1500) * 1.35, lead = Math.min(N - 1, Math.floor(gone * N));
+    ctx.strokeStyle = "rgba(255,255,255," + (0.95 * Math.min(1, (1.35 - gone) / 0.3)).toFixed(3) + ")"; ctx.lineWidth = w * 0.5;
+    ctx.beginPath();
+    for (var j = Math.max(0, lead - 5); j <= lead; j++) if (j > Math.max(0, lead - 5)) ctx.lineTo(pts[j][0], pts[j][1]); else ctx.moveTo(pts[j][0], pts[j][1]);
+    ctx.stroke();
+  }
+  /** The square the keys are on, marked on the face in front. */
+  function marked() {
+    var k = frameNow(), f = unit(FRONT[k]), r = unit(RIGHT[k]), o = [0, 1, 2].map((x) => f[x] * (1 + REACH) + r[x] * (at.c - 1) + (x === 1 ? 1 - at.r : 0));
+    outline((v) => v, o, r, [0, 1, 0], SQUARE + 0.05, 0.12);
+    ctx.lineWidth = 6; ctx.strokeStyle = "#fffdf8"; ctx.stroke();
+    ctx.lineWidth = 3; ctx.strokeStyle = "#17805a"; ctx.stroke();
+  }
+  function thrown(front, now) {
+    bits.forEach((p) => {
+      if (p.front !== front) return;
+      var age = (now - p.born) / 1000;
+      if (age < 0 || age > p.life) return;
+      ctx.save();
+      ctx.translate(p.x + p.vx * age, p.y + p.vy * age + 0.5 * U * 11 * age * age);
+      ctx.rotate(p.turn + p.spin * age);
+      ctx.scale(1, Math.cos(p.flip + age * 9));
+      ctx.globalAlpha = Math.min(1, (p.life - age) / 0.4);
+      ctx.fillStyle = rgb(COLOUR[p.colour], 1);
+      ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      ctx.restore();
+    });
+  }
+  function draw(now) {
+    if (!ctx) ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    var r = Math.min(window.devicePixelRatio || 1, 3);
+    if (r !== dpr || canvas.width !== Math.round(W * r) || canvas.height !== Math.round(H * r)) { dpr = r; canvas.width = Math.round(W * r); canvas.height = Math.round(H * r); }
+    dark = !!scheme && scheme.matches;
+    aim();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    floor(now);
+    thrown(false, now);
+    // From the farthest to the nearest. While a layer turns, the layers of its axis are drawn one after another, the one farthest from the eye first
+    var cam = toCube([0, 0, FAR]), t = turning;
+    CUBIES.map((c) => {
+      var spun = !!t && c[t.a] === t.l, p = spun ? spin(t.a, t.angle, c) : c;
+      return { c: c, spun: spun, far: Math.hypot(cam[0] - p[0], cam[1] - p[1], cam[2] - p[2]), layer: t ? Math.abs(cam[t.a] - c[t.a]) : 0 };
+    }).sort((a, b) => b.layer - a.layer || b.far - a.far).forEach((o) => cubie(o.c, o.spun, cam));
+    if (walk && !walk.auto && walk.at < walk.steps.length) arrow(walk.steps[walk.at].turn, cam, now);
+    if (keys && document.activeElement === canvas) marked();
+    thrown(true, now);
+  }
+
+  // ── What moves ──
+  // Whatever moves is drawn frame by frame while the part is shown, and is over by the clock
+  // whether or not a frame was drawn: a movement's end is never left to the drawing.
+  var moving = [], frame = 0;
+  function wake() { if (!frame && my.shown() && canvas.offsetWidth && window.requestAnimationFrame) frame = requestAnimationFrame(tick); }
+  function tick() {
+    var now = clock(), shown = walk && walk.at < walk.steps.length ? 1 : 0;
+    frame = 0;
+    moving.forEach((m) => m());
+    dim = calm ? shown : dim + (shown - dim) * 0.16;
+    bits = bits.filter((p) => now - p.born < p.life * 1000);
+    draw(now);
+    if (moving.length || bits.length || Math.abs(shown - dim) > 0.01 || (shown && !calm && !walk.auto) || (ring && now - ring < 1100)) wake();
+  }
+  /** Something that moves for `ms`: `to` is given how far along it is, from 0 to 1, and `then` is called when it is over. Where the person asked for less motion it is over at once. */
+  function run(ms, to, then) {
+    if (calm || ms <= 0) { to(1); if (then) then(); return; }
+    var began = clock(), m = () => to(Math.min(1, (clock() - began) / ms));
+    moving.push(m);
+    wake();
+    setTimeout(() => { moving.splice(moving.indexOf(m), 1); to(1); wake(); if (then) then(); }, ms);
+  }
+  var ease = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2), easeOut = (p) => 1 - Math.pow(1 - p, 3);
+  // Home, a little past it, and back, as a layer clicks into its place
+  var spring = (p) => 1 + 2.4 * Math.pow(p - 1, 3) + 1.4 * Math.pow(p - 1, 2);
+  var gliding = null, spinning = false, rounding = false;
+  /** Brings the cube round to be held with `k` in front, the nearer way. */
+  function glide(k) {
+    var y0 = yaw, p0 = pitch, y1 = HOME_YAW - k * QUARTER, mine = (gliding = {});
+    y1 += 2 * Math.PI * Math.round((y0 - y1) / (2 * Math.PI));
+    if (Math.abs(y1 - y0) < 0.002 && Math.abs(p0 - HOME_PITCH) < 0.002) return;
+    run(520, (p) => { if (gliding !== mine) return; yaw = y0 + (y1 - y0) * ease(p); pitch = p0 + (HOME_PITCH - p0) * ease(p); });
+  }
+  /** Shows a layer going a quarter round by itself, once no other layer is off its place, and then says so. The turn is the caller's to make. */
+  function play(t, ms, then) {
+    if (turning) return void setTimeout(() => play(t, ms, then), 60);
+    var mine = (turning = { a: t.a, l: t.l, angle: 0 });
+    run(ms, (p) => { mine.angle = t.q * QUARTER * ease(p); }, () => { turning = null; then(); });
+  }
+
+  // ── What the part shows beside the cube ──
+  var asking = false, playing = false, won = false, asked = null;
+  var askBtn = $("cube-ask"), autoBtn = $("cube-auto"), mixBtn = $("cube-mix");
+  var HINT = "Drag across the cube to turn a row or a column. Drag beside it to look round it.";
+  askBtn.textContent = "Ask " + (AGENT === "Your agent" ? "your agent" : AGENT) + " how";
+  var count = (n) => n + (n === 1 ? " turn" : " turns");
+  var note = (text) => { $("cube-said").textContent = text; };
+  function paint() {
+    var solved = home(faces), step = walk && walk.steps[walk.at];
+    $("cube-count-of").textContent = solved ? "Solved" : count(way.length) + " back to solved";
+    $("cube-turns").classList.toggle("home", solved);
+    // Before its first mix the cube is solved and nothing is made of that
+    var done = solved && !playing && !first;
+    askBtn.hidden = !!walk || done;
+    askBtn.disabled = asking || playing;
+    autoBtn.hidden = !walk;
+    autoBtn.disabled = playing;
+    mixBtn.disabled = asking || playing;
+    // Mixing it again is the thing to do once it is solved, and until then it is the lesser of two
+    mixBtn.className = done ? "btn" : "btn ghost small";
+    $("cube-count").hidden = !step;
+    $("cube-words").hidden = !step || !step.words;
+    $("cube-done").hidden = !won;
+    if (step) {
+      $("cube-step").textContent = AGENT + " · turn " + (walk.at + 1) + " of " + walk.steps.length;
+      // The agent's words for the turn, as text
+      if ($("cube-words").textContent !== step.words) $("cube-words").textContent = step.words;
+      var dots = $("cube-dots");
+      dots.textContent = "";
+      walk.steps.forEach((_, i) => { var d = document.createElement("i"); d.className = i < walk.at ? "made" : i === walk.at ? "now" : ""; dots.appendChild(d); });
+    }
+    my.line(walk ? "Make the turn the arrow shows, or have it done for you." : done ? "Solved. Mix it again for another go." : way.length > 3 ? "Drag a row to turn it, or ask {agent} for the way back." : "");
+    wake();
+  }
+  /** The cube has come home: the page says so, and where things move, the cube leaps and turns once round as paper is thrown. */
+  function finish() {
+    walk = null; won = true; playing = false;
+    note("");
     paint();
-  });
-  $("cube-solve").addEventListener("click", () => {
-    if (busy) return;
+    if (calm || !my.shown() || !canvas.offsetWidth) return;
+    var y0 = yaw, now = clock();
+    spinning = true; gliding = null; ring = now;
+    for (var i = 0; i < 130; i++) {
+      var dir = -Math.PI / 2 + (Math.random() - 0.5) * 2.5, speed = U * (3.2 + Math.random() * 5.2);
+      bits.push({ x: cx + (Math.random() - 0.5) * U * 2, y: cy + (Math.random() - 0.5) * U, vx: Math.cos(dir) * speed, vy: Math.sin(dir) * speed, born: now + Math.random() * 160, life: 1.5 + Math.random() * 1.1,
+        w: U * (0.09 + Math.random() * 0.09), h: U * (0.14 + Math.random() * 0.1), turn: Math.random() * 6.3, spin: (Math.random() - 0.5) * 9, flip: Math.random() * 6.3, colour: Math.floor(Math.random() * 6), front: i % 2 === 0 });
+    }
+    run(1250, (p) => { yaw = y0 + 2 * Math.PI * ease(p); lift = U * 0.55 * Math.sin(Math.PI * p); }, () => { yaw = y0; lift = 0; spinning = false; });
+  }
+  /** What became of the agent's turns, said once they have all been shown and the cube is not home: what was sent, and nothing of what it was worth. */
+  function told(w) {
+    return AGENT + " sent " + count(w.sent) + "." + (w.over ? " Three are shown at a time." : "") + (w.out ? " " + (w.out === 1 ? "One was not a turn of the cube, and was" : w.out + " were not turns of the cube, and were") + " left out." : "");
+  }
+  /** A turn of the agent's has been made, by the person or for them. */
+  function stepped() {
+    walk.at++;
+    note("");
+    if (home(faces)) return finish();
+    if (walk.at >= walk.steps.length) { note(told(walk)); walk = null; playing = false; }
+    paint();
+  }
+  var expected = () => (walk && walk.at < walk.steps.length ? walk.steps[walk.at].turn : null);
+  /** A turn the person made. */
+  function made(t) {
+    var want = expected();
+    apply(t);
+    if (want && same(t, want)) return stepped();
+    // Any other turn leaves the cube another cube than the agent was asked about: its turns are shown no further, and an answer on its way is not shown
+    walk = null;
     asker.forget();
-    faces = SOLVED; turns = [];
-    box.did("");
-    $("cube-said").textContent = "";
-    paint();
+    note("");
+    if (home(faces)) finish(); else paint();
+  }
+  var NOT_THAT = "That was another turn, so it is put back.";
+
+  // ── Holding it ──
+  // A press on a square takes hold of the layers it is on, and the way the finger first goes
+  // says which of the two turns. A press anywhere else looks round the cube. While the agent
+  // is asked, the cube is held as it is: a layer gives a little under the finger and goes back.
+  var grab = null;
+  /** The square under a point of the drawing: the small cube it is on, where on it the point is, and the way it faces. */
+  function under(px, py) {
+    aim();
+    var from = toCube([0, 0, FAR]), dir = toCube([(px - cx) / (U * FAR), -(py - cy + lift) / (U * FAR), -1]), near = -Infinity, far = Infinity, face = -1;
+    for (var a = 0; a < 3; a++) {
+      if (Math.abs(dir[a]) < 1e-9) { if (Math.abs(from[a]) > 1.5) return null; continue; }
+      var t1 = (-1.5 - from[a]) / dir[a], t2 = (1.5 - from[a]) / dir[a], lo = Math.min(t1, t2);
+      if (lo > near) { near = lo; face = a; }
+      far = Math.min(far, Math.max(t1, t2));
+    }
+    if (face < 0 || near > far || near < 0) return null;
+    var hit = [0, 1, 2].map((x) => from[x] + dir[x] * near), s = hit[face] > 0 ? 1 : -1;
+    var c = hit.map((v) => Math.max(-1, Math.min(1, Math.round(v))));
+    c[face] = s;
+    return { hit: hit, c: c, a: face, s: s };
+  }
+  var free = () => !asking && !playing && !turning && !spinning;
+  canvas.addEventListener("pointerdown", (e) => {
+    if (grab || (e.button && e.pointerType === "mouse")) return;
+    measure();
+    var x = e.clientX - left, y = e.clientY - top, on = under(x, y);
+    keys = false;
+    grab = { id: e.pointerId, x: x, y: y, on: on, yaw: yaw, pitch: pitch, when: clock(), mode: spinning ? "none" : !on ? "look" : turning ? "none" : playing ? "look" : "aim" };
+    if (grab.mode === "look") gliding = null;
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    canvas.classList.add("cube-held");
+    canvas.focus({ preventScroll: true });
+    e.preventDefault();
+    wake();
   });
-  // The way back that was sent with what is being asked, which the agent may answer with by its name
-  var wayBack = [];
+  canvas.addEventListener("pointermove", (e) => {
+    var g = grab;
+    if (!g || e.pointerId !== g.id) return;
+    var dx = e.clientX - left - g.x, dy = e.clientY - top - g.y;
+    if (g.mode === "look") {
+      var was = yaw, when = clock();
+      yaw = g.yaw + dx * 0.0085; pitch = Math.max(-0.85, Math.min(1.1, g.pitch + dy * 0.0085));
+      // How fast it is going round, for it to go on a little once it is let go
+      g.speed = when > g.when ? 0.6 * (g.speed || 0) + 0.4 * ((yaw - was) / (when - g.when)) : g.speed || 0;
+      g.when = when;
+    }
+    if (g.mode === "aim" && Math.hypot(dx, dy) > 6 && !turning) {
+      // The two ways along the face, as they lie on the drawing: the finger goes more along one of them, and the layer that turns is the one that carries the square that way
+      var on = g.on, b = (on.a + 1) % 3, c = (on.a + 2) % 3, along = (x) => { var u = unit([x, 0.5]), p = P([0, 1, 2].map((i) => on.hit[i] + u[i])), q = P([0, 1, 2].map((i) => on.hit[i] - u[i])); return [p[0] - q[0], p[1] - q[1]]; };
+      var sb = along(b), sc = along(c), lb = Math.hypot(sb[0], sb[1]) || 1, lc = Math.hypot(sc[0], sc[1]) || 1;
+      var byB = Math.abs(dx * sb[0] + dy * sb[1]) / lb >= Math.abs(dx * sc[0] + dy * sc[1]) / lc, s = byB ? sb : sc, len = byB ? lb : lc;
+      g.mode = "turn";
+      g.axis = byB ? c : b;
+      g.way = [s[0] / len, s[1] / len];
+      g.per = (byB ? on.s : -on.s) / (len * 1.45);
+      turning = { a: g.axis, l: on.c[g.axis], angle: 0 };
+    }
+    if (g.mode === "turn") {
+      var angle = (dx * g.way[0] + dy * g.way[1]) * g.per;
+      turning.angle = asking ? 0.13 * Math.tanh(angle * 2.2) : Math.max(-QUARTER - 0.1, Math.min(QUARTER + 0.1, angle));
+    }
+    wake();
+  });
+  function letGo(e) {
+    var g = grab;
+    if (!g || e.pointerId !== g.id) return;
+    grab = null;
+    canvas.classList.remove("cube-held");
+    // While the agent's turns are shown the cube is looked round and comes back to where its turns are named from. At any other time it goes on round a little, and slows
+    if (g.mode === "look" && walk) glide(walk.frame);
+    else if (g.mode === "look" && !calm && Math.abs(g.speed || 0) > 0.0004 && clock() - g.when < 80) {
+      var speed = Math.max(-0.012, Math.min(0.012, g.speed)), last = clock(), mine = (gliding = {});
+      var coast = () => {
+        var t = clock(), dt = Math.min(40, t - last);
+        last = t;
+        if (gliding !== mine || grab) speed = 0;
+        yaw += speed * dt;
+        speed *= Math.pow(0.996, dt);
+        if (Math.abs(speed) < 0.0002) moving.splice(moving.indexOf(coast), 1);
+      };
+      moving.push(coast);
+    }
+    if (g.mode === "turn") settle();
+    wake();
+  }
+  canvas.addEventListener("pointerup", letGo);
+  canvas.addEventListener("pointercancel", letGo);
+  /** The layer in the hand is let go: it falls to the nearer of where it was and a quarter on, and a quarter on is a turn made. */
+  function settle() {
+    var t = turning, q = asking || Math.abs(t.angle) < 0.42 ? 0 : t.angle > 0 ? 1 : -1, turn = { a: t.a, l: t.l, q: q };
+    var from = t.angle, to = q * QUARTER, want = expected(), wrong = q !== 0 && !!walk && !(want && same(turn, want));
+    run(130 + 150 * Math.abs(to - from), (p) => { t.angle = from + (to - from) * (q ? spring(p) : easeOut(p)); }, () => {
+      if (!q || !wrong) turning = null;
+      if (!q) return;
+      if (!wrong) return made(turn);
+      // Another turn than the one that is shown is put back, and the arrow stays
+      note(NOT_THAT);
+      run(460, (p) => { t.angle = to * (1 - ease(Math.max(0, p * 1.3 - 0.3))); }, () => { turning = null; });
+    });
+  }
+  /** A turn asked for with the keys, which is made as a turn of the hand is. */
+  function keyed(turn) {
+    if (!free()) return;
+    var want = expected();
+    if (walk && !(want && same(turn, want))) {
+      note(NOT_THAT);
+      var t = (turning = { a: turn.a, l: turn.l, angle: 0 });
+      return run(620, (p) => { t.angle = turn.q * QUARTER * Math.sin(Math.PI * ease(p)) * 0.6; }, () => { turning = null; });
+    }
+    play(turn, 240, () => made(turn));
+  }
+  canvas.addEventListener("keydown", (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    var go = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key], clockwise = e.key === "." ? -1 : e.key === "," ? 1 : 0;
+    if (!go && !clockwise) return;
+    e.preventDefault();
+    keys = true;
+    var k = frameNow(), f = FRONT[k], r = RIGHT[k];
+    if (clockwise) keyed({ a: f[0], l: f[1], q: clockwise * f[1] });
+    else if (e.shiftKey) keyed(go[0] ? { a: 1, l: 1 - at.r, q: go[0] } : { a: r[0], l: (at.c - 1) * r[1], q: go[1] * r[1] });
+    else if (at.c + go[0] < 0 || at.c + go[0] > 2) {
+      // Past the edge of the face in front is the next face round, unless the cube is held where the agent's turns are named from
+      if (walk || spinning) return;
+      if (rounding) return;
+      gliding = null; rounding = true;
+      at.c = go[0] < 0 ? 2 : 0;
+      var y0 = yaw, y1 = HOME_YAW - (k + go[0]) * QUARTER + 2 * Math.PI * Math.round((yaw - HOME_YAW + k * QUARTER) / (2 * Math.PI));
+      run(300, (p) => { yaw = y0 + (y1 - y0) * ease(p); }, () => { rounding = false; });
+    } else { at.c += go[0]; at.r = Math.max(0, Math.min(2, at.r + go[1])); }
+    wake();
+  });
+
+  // ── Mixing it ──
+  // A mix starts from solved and is a few turns of the outer layers, each round another axis
+  // than the one before, so that none undoes another and the way back is as long as the mix.
+  function mixed(n, shown) {
+    var out = [];
+    while (out.length < n) {
+      var t = { a: Math.floor(Math.random() * 3), l: Math.random() < 0.5 ? -1 : 1, q: Math.random() < 0.5 ? -1 : 1 }, before = out[out.length - 1];
+      // The first mix is of turns that have an easy name as the cube first stands
+      if ((before && before.a === t.a) || (shown && nameOf(t, 0).hard)) continue;
+      out.push(t);
+    }
+    return out;
+  }
+  /** Plays some turns one after another, quickly. */
+  function each(turns, ms, then) {
+    var i = 0;
+    (function next() { if (i >= turns.length) return then(); var t = turns[i++]; play(t, ms, () => { apply(t); paint(); next(); }); })();
+  }
+  mixBtn.addEventListener("click", () => {
+    if (asking || playing) return;
+    var turns = mixed(3, false), y0 = yaw, swapped = false;
+    asker.forget();
+    walk = null; won = false; playing = true; gliding = null;
+    note("");
+    box.idle();
+    box.hint(HINT);
+    paint();
+    var go = () => each(turns, 210, () => { playing = false; paint(); });
+    var clear = () => { faces = SOLVED; way = []; };
+    if (home(faces)) return go();
+    // A cube that is not solved goes once round, and comes round solved for the mix to start from
+    run(420, (p) => { yaw = y0 + 2 * Math.PI * ease(p); if (p >= 0.5 && !swapped) { swapped = true; clear(); paint(); } }, () => { yaw = y0; go(); });
+  });
+
+  // ── Asking the agent how, and its turns ──
   var asker = my.asker((got) => {
-    var given = got.moves === "back" ? wayBack.slice() : Array.isArray(got.moves) ? got.moves.slice(0, 20) : [];
-    // A turn the other way may be written with an i, which is easier to quote on a command line than a mark
-    var good = given.filter((m) => typeof m === "string" && NAMED.test(m.trim())).map((m) => m.trim().replace(/i$/, "'"));
-    var left = given.length - good.length;
+    asking = false;
     box.say(got.say);
-    // Each turn the agent gives is played one at a time, and only one that is a turn's name. The
-    // cube is the agent's while they are played, an answer that came late too
-    busy = true;
+    var given = Array.isArray(got.moves) ? got.moves.slice(0, 20) : [], steps = [], out = 0;
+    given.forEach((m) => {
+      // A turn is one only by a name the cube has, as the cube was held when the agent was asked. Its words are the agent's own, kept as text
+      var name = tidy(m && typeof m === "object" && !Array.isArray(m) ? m.turn : m, 40).toLowerCase();
+      if (!Object.hasOwn(asked.turns, name)) out++;
+      else if (steps.length < 3) steps.push({ turn: asked.turns[name], words: tidy(m && typeof m === "object" ? m.say : "", 90) });
+    });
+    var sent = { sent: given.length, out: out, over: given.length - out > 3 };
+    if (!steps.length) { note(given.length ? told(sent) : AGENT + " sent no turns."); return paint(); }
+    walk = { steps: steps, at: 0, frame: asked.frame, auto: false, sent: sent.sent, out: out, over: sent.over };
+    note("");
+    glide(walk.frame);
     paint();
-    var run = ++playing, i = 0;
-    (function next() {
-      if (run !== playing) return;
-      if (i >= good.length) {
-        busy = false;
-        $("cube-said").textContent = "Played " + good.length + (good.length === 1 ? " turn" : " turns") + (left ? ". " + left + " " + (left === 1 ? "was not a turn's name, and was" : "were not turns' names, and were") + " left out" : "") + (faces === SOLVED ? ". Solved." : ".");
-        paint();
-        return;
-      }
-      apply(good[i++]);
-      paint();
-      setTimeout(next, calm ? 0 : 450);
-    })();
-  }, () => { busy = false; paint(); });
-  $("cube-ask").addEventListener("click", () => {
-    if (busy || faces === SOLVED) return;
-    busy = true;
-    playing++;
-    $("cube-said").textContent = "";
+  }, () => { asking = false; paint(); });
+  askBtn.addEventListener("click", () => {
+    if (asking || playing || walk || home(faces)) return;
+    // The way back is every turn since the cube was solved, undone from the last, and the agent is given the next three of it
+    var back = way.slice().reverse().map(undone), next = back.slice(0, 3), now = frameNow(), k = now, least = 4;
+    // Their names are as the cube is held now, or as it is held from the side nearest to that from which the fewest of them are hard to say
+    [now, (now + 1) % 4, (now + 3) % 4, (now + 2) % 4].forEach((f) => { var hard = next.filter((t) => nameOf(t, f).hard).length; if (hard < least) { least = hard; k = f; } });
+    asked = { frame: k, turns: turnsBy(k) };
+    asking = true;
+    note("");
     paint();
-    box.did("asked for the next turns");
-    // `back` is the way back to solved as far as the page plays in one answer: the turns since it was solved, undone from the last
-    var undo = turns.slice().reverse().map((t) => t.charAt(0) + (t.length === 1 ? "'" : t.charAt(1) === "2" ? "2" : ""));
-    wayBack = undo.slice(0, 20);
-    asker.send("turned", { back: wayBack.map((t) => t.replace("'", "i")), more: Math.max(0, undo.length - 20), solved: faces === SOLVED, faces: faces, turns: turns.slice() });
+    box.did("asked the way");
+    asker.send("turned", { back: next.map((t) => { var n = nameOf(t, k); return { turn: n.turn, plain: n.plain }; }), more: back.length - next.length, cube: seen(k) });
   });
+  autoBtn.addEventListener("click", () => {
+    if (!walk || playing) return;
+    walk.auto = true; playing = true;
+    paint();
+    (function next() {
+      // The turns are played while the part is shown, and are the person's again where it is left
+      if (!walk || !walk.auto || !my.shown()) { if (walk) walk.auto = false; playing = false; return paint(); }
+      var t = walk.steps[walk.at].turn;
+      play(t, 520, () => { apply(t); stepped(); if (walk) setTimeout(next, calm ? 700 : 320); });
+    })();
+  });
+
+  my.onEnter(() => {
+    measure();
+    if (first) {
+      // The cube is mixed before the person's eyes the first time it is come to, where things move and there is a drawing to see it on
+      var turns = first;
+      first = null;
+      if (canvas.offsetWidth) { playing = true; paint(); setTimeout(() => each(turns, 300, () => { playing = false; paint(); }), 650); }
+      else turns.forEach(apply);
+    }
+    paint();
+  });
+  my.onLeave(() => { if (walk) walk.auto = false; bits = []; });
+  if (window.ResizeObserver) new ResizeObserver(() => { measure(); wake(); }).observe(el);
+  if (scheme && scheme.addEventListener) scheme.addEventListener("change", wake);
+  canvas.addEventListener("focus", wake);
+  canvas.addEventListener("blur", wake);
+
+  // Two turns from solved to begin with, a different two each time
+  var first = mixed(2, true);
+  if (calm) { first.forEach(apply); first = null; }
+  measure();
   paint();
   box.idle();
-  box.hint("Turn a face, or mix it up, and then ask for the next turns.");
+  box.hint(HINT);
+  // What a test needs of the cube: how it turns, how it stands, and where a square is on the page
+  window.__cube = {
+    SOLVED: SOLVED, turned: turned, home: home, nameOf: nameOf,
+    now: () => ({ faces: faces, way: way.slice(), frame: frameNow() }),
+    spot: (c, n) => { measure(); aim(); var p = P([0, 1, 2].map((x) => c[x] + n[x] * 0.5)); return [p[0] + left, p[1] + top]; },
+  };
 });
 </script>

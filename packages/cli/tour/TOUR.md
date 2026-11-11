@@ -85,13 +85,15 @@ it tour answer <the action's id> '{"move":"e7e5","note":"<a few words>"}'
 
 ### The cube: `turned`
 
-The person turned a Rubik's cube and asked for the next turns. `back` is the way back to solved, already worked out, as far as one answer is played. Answer with `"back"` to play it, and a sentence:
+The person has a Rubik's cube that is a few turns from solved, and asked you to show them how. `back` is the way back, already worked out: up to three turns in the order to make them, each with its name in `turn` and what it is in `plain`. Answer with those turns in that order, each with a few words of your own that tell the person what to do, and one sentence:
 
 ```sh
-it tour answer <the action's id> '{"moves":"back","say":"<one sentence>"}'
+it tour answer <the action's id> '{"moves":[{"turn":"right-column-down","say":"<a few words>"},{"turn":"top-row-left","say":"<a few words>"}],"say":"<one sentence>"}'
 ```
 
-To play turns of your own instead, give up to twenty as a list, as in `["F","Ri","D2"]`: U, D, L, R, F or B turns that face a quarter clockwise, `i` after it turns it the other way, and `2` is a half turn. `faces` is the cube as 54 letters, nine for each face in the order U, R, F, D, L, B.
+The page shows your turns on the cube one at a time, each as an arrow round its layer with your words beside it, and the person makes the turn or has it played. Say each turn as a person sees it, as in "pull the right column down", and never by a letter as cubers do. Three turns are shown at most. Where `more` is above 0, the way back is longer than `back`, and they ask again after these.
+
+A turn's name says what it looks like as the cube is held: a row to the left or the right (`top-row-left`, `middle-row-right`, `bottom-row-left`), a column up or down (`left-column-up`, `middle-column-down`, `right-column-up`), or a layer turned like the hand of a clock as seen from the front (`front-face-clockwise`, `middle-layer-anticlockwise`, `back-face-clockwise`). A turn of your own by one of these names is shown as well, and anything else is left out. `cube` is the colours of each face, nine letters row by row, and you need none of it to answer.
 
 ### The drum machine: `beat`, `cleared`
 
