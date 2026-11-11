@@ -10,6 +10,7 @@ import {
   IconLeaveFullscreen,
   IconLink,
   IconLock,
+  IconMore,
   IconPin,
   IconSay,
   IconSend,
@@ -68,6 +69,8 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
   const now = useNow()
   const [sort, setSort] = useState<Sort>('newest')
   const [by, setBy] = useState<string | null>(null)
+  // The card whose actions are open, on a screen that cannot hover to show them
+  const [menu, setMenu] = useState<string | null>(null)
   const organize = useMutation(api.artifacts.organize)
   const remove = useMutation(api.artifacts.remove)
   // The agent apps that made these pages, offered as a filter when there is more than one
@@ -79,10 +82,32 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
       .filter((p) => (!q || p.title.toLowerCase().includes(q) || p.slug.includes(q)) && (filter === null || p.agent === filter))
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || SORTS[sort](a, b))
   }, [pages, query, sort, filter])
+  useEffect(() => {
+    if (menu === null) return
+    // A press anywhere but on the card closes its actions, and so does Escape, which gives the
+    // focus back to the button that opened them
+    const away = (e: PointerEvent) => {
+      if (!(e.target instanceof Element && e.target.closest('.page-card.is-menu-open'))) setMenu(null)
+    }
+    const onEscape = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setMenu(null)
+      document.querySelector<HTMLElement>('.page-card.is-menu-open .card-more')?.focus()
+    }
+    document.addEventListener('pointerdown', away)
+    document.addEventListener('keydown', onEscape)
+    return () => {
+      document.removeEventListener('pointerdown', away)
+      document.removeEventListener('keydown', onEscape)
+    }
+  }, [menu])
 
   if (pages === undefined) return <main className="grid-view" role="status" />
   if (pages.length === 0) return owner ? <DeletionStatus empty /> : <Empty owner={false} />
-  const act = (p: Promise<unknown>) => p.catch((err) => say(refusal(err).message, 'error'))
+  const act = (p: Promise<unknown>) => {
+    setMenu(null)
+    return p.catch((err) => say(refusal(err).message, 'error'))
+  }
   return (
     <main className="grid-view">
       {owner && <DeletionStatus />}
@@ -121,7 +146,11 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
           </li>
         )}
         {shown.map((p, i) => (
-          <li key={p.id} className="card page-card" style={i < 12 ? ({ '--card-delay': `${i * 0.035}s` } as CSSProperties) : undefined}>
+          <li
+            key={p.id}
+            className={`card page-card${menu === p.id ? ' is-menu-open' : ''}`}
+            style={i < 12 ? ({ '--card-delay': `${i * 0.035}s` } as CSSProperties) : undefined}
+          >
             <div className="card-frame-box">
               <a
                 href={`/p/${p.slug}`}
@@ -152,13 +181,16 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
                 )}
               </a>
               {owner && (
-                <span className="tray card-actions">
+                <span className="tray card-actions" id={`card-actions-${p.id}`}>
                   <button
                     type="button"
                     className="card-action"
                     title="Copy link"
                     aria-label="Copy link"
-                    onClick={async () => say((await copy(`${location.origin}/p/${p.slug}`)) ? 'Link copied' : 'Copy failed')}
+                    onClick={async () => {
+                      setMenu(null)
+                      say((await copy(`${location.origin}/p/${p.slug}`)) ? 'Link copied' : 'Copy failed')
+                    }}
                   >
                     <IconLink />
                   </button>
@@ -177,7 +209,9 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
                     className="card-action card-action--danger"
                     title="Delete"
                     aria-label="Delete"
-                    onClick={() => confirm(`Delete “${p.title}”? It will leave every display.`) && act(remove({ artifactId: p.id as Id<'artifacts'> }))}
+                    onClick={() =>
+                      confirm(`Delete “${p.title}”? It will leave every display.`) ? act(remove({ artifactId: p.id as Id<'artifacts'> })) : setMenu(null)
+                    }
                   >
                     <IconX />
                   </button>
@@ -202,6 +236,27 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
                 </a>
                 <span className="card-meta card-sub">{[agentName(p.agent), p.machine, ago(p.updatedAt, now)].filter(Boolean).join(' · ')}</span>
               </div>
+              {/* A screen that cannot hover is shown this in place of the tray, which it opens. Opened from the keyboard, it takes the focus to the first action */}
+              {owner && (
+                <button
+                  type="button"
+                  className="card-more"
+                  title="Actions"
+                  aria-label={`Actions for ${p.title}`}
+                  aria-expanded={menu === p.id}
+                  aria-controls={`card-actions-${p.id}`}
+                  onClick={(e) => {
+                    const opening = menu !== p.id
+                    setMenu(opening ? p.id : null)
+                    if (opening && e.detail === 0) {
+                      const first = e.currentTarget.closest('.page-card')?.querySelector<HTMLElement>('.card-action')
+                      requestAnimationFrame(() => first?.focus())
+                    }
+                  }}
+                >
+                  <IconMore />
+                </button>
+              )}
             </div>
           </li>
         ))}
