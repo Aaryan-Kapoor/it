@@ -291,7 +291,7 @@ describe('the built program as an MCP server', () => {
     folder = mkdtempSync(path.join(os.tmpdir(), 'it-mcp-'))
     // A folder of its own with no It in it: every tool that asks It anything is refused by the command itself
     child = spawn(process.execPath, [cli, 'mcp', '--session', 'test'], {
-      env: { ...process.env, IT_HOME: folder, IT_TELEMETRY: 'off' },
+      env: { ...process.env, IT_HOME: folder, IT_TELEMETRY_ENABLED: 'false' },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     const heard: Json[] = []
