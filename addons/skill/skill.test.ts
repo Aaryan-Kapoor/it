@@ -257,7 +257,8 @@ describe('the agent skill', () => {
   test('tells an agent on Windows to give JSON in a file, which Windows PowerShell 5.1 cannot change, and not to pipe it there', () => {
     expect(more.page).toContain('## Giving JSON on Windows')
     expect(more.page).toContain('`it patch board --file ')
-    expect(more.page).toContain('`--state-file <path>` on `it create`')
+    expect(more.page).toContain('`--state-file "<path>"` on `it create`')
+    expect(more.page).toContain('in double quotes and with forward slashes')
     expect(more.page).toContain('Do not pipe JSON into `it` from Windows PowerShell 5.1')
     // The program names the same form in what it says when it refuses such JSON
     expect(main).toContain('it patch $' + '{slug} --file <path>')
