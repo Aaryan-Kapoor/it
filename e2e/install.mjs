@@ -1678,6 +1678,50 @@ try {
       `${failedFirst.said}\n${second.said}`,
     )
 
+    // A file put in a new folder while the downloads come is seen before the record goes in
+    const filling = path.join(tmp, 'a-folder-filled-meanwhile', 'it')
+    reachedHeld = false
+    const meanwhile = install('a-folder-filled-meanwhile', { IT_HOME: filling, IT_VERSION: 'held' })
+    const reachedIt = await until(() => reachedHeld)
+    mkdirSync(path.join(filling, 'logs'))
+    writeFileSync(path.join(filling, 'logs', 'irreplaceable.txt'), 'mine')
+    letGo()
+    const filled = await meanwhile
+    check(
+      'a file put in the folder while the downloads come keeps the record out, and nothing is installed',
+      reachedIt &&
+        filled.code !== 0 &&
+        /already holds files/.test(filled.flat) &&
+        !existsSync(path.join(filling, 'installation.json')) &&
+        !existsSync(filled.it) &&
+        read(path.join(filling, 'logs', 'irreplaceable.txt')) === 'mine',
+      `${filled.said}\n${readdirSync(filling).join(' ')}`,
+    )
+
+    if (!windows) {
+      // The lock of an install that has stopped shows nothing of whose the files beside it are
+      const locked = path.join(tmp, 'a-stale-lock', 'it')
+      mkdirSync(path.join(locked, '.installing'), { recursive: true })
+      writeFileSync(path.join(locked, '.installing', 'owner'), `999999999 ${os.hostname()}\n`)
+      writeFileSync(path.join(locked, 'notes.txt'), 'mine')
+      const overLock = await install('a-stale-lock', { IT_HOME: locked })
+      check(
+        'a folder with someone’s files is refused even where an install that has stopped left its lock there',
+        overLock.code !== 0 && /already holds files/.test(overLock.flat) && !existsSync(path.join(locked, 'installation.json')),
+        overLock.said,
+      )
+      // A file in bin whose name is only a line break is something in bin all the same
+      const oddBin = path.join(tmp, 'an-odd-name-in-bin', 'it')
+      mkdirSync(path.join(oddBin, 'bin'), { recursive: true })
+      writeFileSync(path.join(oddBin, 'bin', '\n'), 'mine')
+      const overOdd = await install('an-odd-name-in-bin', { IT_HOME: oddBin })
+      check(
+        'a bin that holds a file named only with a line break is not taken for an empty one',
+        overOdd.code !== 0 && !existsSync(path.join(oddBin, 'installation.json')) && read(path.join(oddBin, 'bin', '\n')) === 'mine',
+        overOdd.said,
+      )
+    }
+
     // A folder made by a release from before the installation record: the program, the license
     // that release published, the notices, and what It kept there once it had run
     const earlier = (name, license) => {

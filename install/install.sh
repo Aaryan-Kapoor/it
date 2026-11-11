@@ -248,11 +248,20 @@ no_folder "${HOME_DIR}/THIRD_PARTY_NOTICES.md"
 # and the notices beside them. What an install that stopped half way leaves behind (its lock,
 # the folders its downloads went to, and an empty bin) is not counted as anything in the folder,
 # and neither are the notes the program itself keeps before It is set up: whether usage is
-# reported and updates looked for, and where the program was downloaded from.
+# reported and updates looked for, and where the program was downloaded from. The folder is
+# looked at again just before the record is written, since anything may have been put in it
+# while the downloads came.
 installation='{"product":"It","format":1,"about":"This folder holds an installation of It."}'
 LICENSES="06f412e8c0ab7d324b09d1ff1261ff667a4986546a5f38170966eb6542c6b20d 5c2b54bcb8f96e22f8994364182b4e0f3fa06dfb448378e81ede85bcc9003e09"
 plain_file() { [ -f "$1" ] && [ ! -L "$1" ]; }
 plain_folder() { [ -d "$1" ] && [ ! -L "$1" ]; }
+# Whether a folder holds nothing at all, whatever its files are called
+nothing_in() {
+  for inside in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+    if [ -e "${inside}" ] || [ -L "${inside}" ]; then return 1; fi
+  done
+  return 0
+}
 claimable() {
   # Where there is no folder, or something that is not one, making it below decides
   if [ ! -d "${HOME_DIR}" ]; then return 0; fi
@@ -271,18 +280,35 @@ claimable() {
     if [ ! -e "${entry}" ] && [ ! -L "${entry}" ]; then continue; fi
     case "${entry##*/}" in
       .installing|.installing.taking|.install.*) if plain_folder "${entry}"; then continue; fi ;;
-      bin) if plain_folder "${entry}" && [ -z "$(ls -A "${entry}")" ]; then continue; fi ;;
-      telemetry.json|telemetry-off|telemetry-sending|usage.jsonl|usage.jsonl.taken|updates-off|releases.json) if plain_file "${entry}"; then continue; fi ;;
+      bin) if plain_folder "${entry}" && nothing_in "${entry}"; then continue; fi ;;
+      telemetry*|usage.jsonl*|updates-off|releases.json) if plain_file "${entry}"; then continue; fi ;;
     esac
     return 1
   done
   return 0
 }
-# A folder that holds It's install lock is one an install of It is putting its files in, or
-# was until it stopped: the lock, below, says which, and waits for it or takes over from it
-if ! claimable && ! plain_folder "${HOME_DIR}/.installing"; then
+unclaimed() {
   say "${HOME_DIR} already holds files, and nothing in it shows that it is It's. It is installed only in a folder that is new, empty or It's already, since taking It off again removes It's own folders there whole, such as bin, logs and content. Nothing was installed. Set IT_HOME to a new or empty folder, or move what is in ${HOME_DIR} somewhere else first." >&2
   exit 1
+}
+if ! claimable; then
+  # Where an install of It that is still running holds its lock, the files it has put in so far
+  # are its own, and that is what is said: a lock whose install has stopped shows nothing
+  IFS= read -r held 2>/dev/null < "${HOME_DIR}/.installing/owner" || held=""
+  by="${held%% *}"
+  on="${held#* }"
+  case "${held}" in
+    *" "*)
+      case "${by}" in
+        ''|*[!0-9]*) ;;
+        *)
+          if [ "${on}" != "$(uname -n)" ] || kill -0 "${by}" 2>/dev/null || ps -p "${by}" >/dev/null 2>&1; then
+            say "Another install of It, process ${by} on ${on}, is putting its files in ${HOME_DIR}. Run this again when it has finished." >&2
+            exit 1
+          fi ;;
+      esac ;;
+  esac
+  unclaimed
 fi
 
 mkdir -p -- "${DIR}"
@@ -526,6 +552,8 @@ if [ "${led}" = 1 ]; then did "Downloaded for ${os} ${arch}, and checked"; fi
 # A command moving a file still receives the signal, and cleanup puts back what was there
 # if that command stops. The shell itself stays to finish the replacement or its cleanup.
 trap ':' HUP INT QUIT PIPE TERM
+# Whatever was put in the folder while the downloads came is looked at before the record goes in
+if ! claimable; then unclaimed; fi
 (umask 077; printf '%s\n' "${installation}" > "${stage}/installation")
 # A link where a file is to go is moved aside like anything else and the file put in its place:
 # nothing is written through a link to wherever it leads, and a link to a folder is not a way
