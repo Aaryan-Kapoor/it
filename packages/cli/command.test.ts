@@ -378,7 +378,7 @@ describe('help respects persistent telemetry opt-outs', () => {
       }
     })
   test('a word that names no command is refused before any file is written', async () => {
-    for (const args of [['--save=x', 'action', 'a1'], ['--save', 'x', 'action', 'a1'], ['nonsense']]) {
+    for (const args of [['--save=x', 'action', 'a1'], ['--save', 'x', 'action', 'a1'], ['nonsense'], ['tour show'], ['tour clear'], ['runs clear']]) {
       const m = machine(false)
       const ran = await run(m, args)
       expect(ran.code).toBe(2)

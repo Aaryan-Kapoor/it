@@ -3139,7 +3139,8 @@ async function main(argv: string[]): Promise<void> {
     return
   }
   // A word that names no command is refused before anything is written, the files that count usage among them
-  if (!Object.hasOwn(OPTIONS, cmd)) throw new Problem(`No such command: ${cmd}`, 'invalid', 'Run `it help`.')
+  // The table also names a command with its subcommand, as `tour show`, which is no word a command line can name
+  if (!Object.hasOwn(OPTIONS, cmd) || cmd.includes(' ')) throw new Problem(`No such command: ${cmd}`, 'invalid', 'Run `it help`.')
   noMore(cmd, a)
   if (cmd === 'setup' || cmd === 'login') checkInstallationFolder(home())
   // A rejected command changes no reporting setting either.
