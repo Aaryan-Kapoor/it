@@ -3763,7 +3763,14 @@ describe('Over https, through Tailscale on this machine', () => {
           ],
         })
       expect((await handed(listening.base, '/')).status).toBe(200)
-      expect((await handed(contentPort(listening.base), '/s/x/index.html')).status).not.toBe(400)
+      // A page is handed to the content service at the https address it was asked for
+      const page = await handed(contentPort(listening.base), '/s/x/index.html')
+      expect(page.status).toBe(200)
+      expect(JSON.parse(page.body)).toMatchObject({ which: 'showing', path: '/s/x/index.html', host: `${NAME}:${contentPort(listening.base) + 2}` })
+      // A target written out in full is still held to the place the request was sent to
+      expect((await handed(listening.base, `http://${NAME}:${listening.base + 2}/`)).status).toBe(200)
+      expect((await handed(listening.base, `http://elsewhere.example:${listening.base + 2}/`)).status).toBe(400)
+      expect((await handed(listening.base, `http://${NAME}:${listening.base}/`)).status).toBe(400)
     } finally {
       await listening.stop()
     }
