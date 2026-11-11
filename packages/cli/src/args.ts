@@ -40,6 +40,7 @@ export const VALUED = new Set([
   'button',
   'timeout',
   'if-revision',
+  'max-bytes',
   'only',
   'name',
   'url',
@@ -51,6 +52,7 @@ export const VALUED = new Set([
   'number',
   'after',
   'state-file',
+  'session',
 ])
 export interface Args {
   _: string[]
@@ -63,6 +65,7 @@ export const OPTIONS: Record<string, readonly string[]> = {
   update: ['id', 'file', 'dir', 'html', 'title', 'agent', 'open', 'on', 'on-id', 'everywhere', 'take'],
   list: [],
   read: [],
+  'read-source': ['max-bytes'],
   delete: ['status'],
   rollback: [],
   set: ['if-revision', 'file'],
@@ -89,6 +92,7 @@ export const OPTIONS: Record<string, readonly string[]> = {
   serve: ['log', 'supervised'],
   service: [],
   skill: [],
+  mcp: ['session'],
   tour: ['wait', 'timeout'],
   'tour show': ['agent', 'param', 'on', 'on-id', 'everywhere'],
   'tour clear': [],

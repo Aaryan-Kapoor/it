@@ -257,7 +257,7 @@ A helper that the agent starts, and a run on a schedule, are given no conversati
 - A conversation is reopened when it has been closed only on a machine where Auto-wake is on for its agent app. Where you have turned it off, a click for a closed conversation waits in the inbox.
 - A Claude Code or Pi conversation that It knows to be open without its add-on is never reopened beside the one you have open. Its page says to type `/reload-plugins` in it instead, or `/reload` in Pi.
 - It does not use ACP, which cannot reach a conversation another program owns: the conversation It has to reach is the one you already have open.
-- It ships no MCP server, so it has no add-on for an agent app that could be reached only through one, such as Crush.
+- `it mcp` serves It's commands as MCP tools to an agent app that starts it, and brings nothing into a conversation by itself: the agent asks with `it_wait`. It has no add-on for an agent app that could be reached only through MCP, such as Crush. [It as an MCP server](mcp.md) says more.
 - It builds no add-on on an agent app's undocumented API, or on an interface for add-ons that is not stable, which is why it has none for Copilot CLI. The Hermes add-on is the one that reaches past that line: besides Hermes's interface for plugins it reads a few of Hermes's own fields, to tell whether a turn is running and where to put a message, and a Hermes that changes them can leave clicks waiting. Codex's is told whether a conversation is open by the lock files Codex keeps and the locks it holds on them, which are Codex's own too.
 - It uses no queue but Codex's. Qwen has a queue of the same kind, and It has no add-on for Qwen.
 

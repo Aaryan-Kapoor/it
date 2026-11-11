@@ -5474,7 +5474,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
     const ran = await run(machine(), ['help'])
     // The real parser accepts the options the command's own usage lines advertise.
     for (const line of ran.out.split('\n')) {
-      const cmd = /^ {2}it ([a-z]+)\b/.exec(line)?.[1]
+      const cmd = /^ {2}it ([a-z]+(?:-[a-z]+)*)\b/.exec(line)?.[1]
       if (!cmd) continue
       const flags = [...line.matchAll(/--([a-z]+(?:-[a-z]+)*)/g)].flatMap((m) => (BOOLEAN.has(m[1]!) ? [m[0]] : [m[0], 'value']))
       const accepted = await run(machine(false), [cmd, ...flags, '--help'])
@@ -8018,5 +8018,20 @@ else if (said === 'plugin install it-bridge@it --scope user') {
     expect(held.tell).toBe(`Tell the person this in your next message, word for word: “${t3ClaudeLine('2.1.321')}”`)
     expect(held.next).toContain(`tells them this, word for word: “${t3ClaudeLine('2.1.321')}”`)
     expect(inThread.err).not.toContain(reloadLine('2.1.321'))
+  })
+})
+
+describe('Bounded source command', () => {
+  test('The source command passes a bounded size and never requests a mount ticket.', async () => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn }) => (fn === 'artifacts:source' ? { id: 'plan', version: 2, html: '<p>x</p>', bytes: 8, sha256: 'fixture' } : null))
+    try {
+      const result = await run(m, ['read-source', 'plan', '--max-bytes', '100'], b.env)
+      expect(result.code).toBe(0)
+      expect(JSON.parse(result.out).html).toBe('<p>x</p>')
+      expect(b.asked).toEqual([{ path: 'artifacts:source', args: { slug: 'plan', maxBytes: 100 } }])
+    } finally {
+      await b.close()
+    }
   })
 })

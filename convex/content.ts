@@ -15,6 +15,7 @@ import { type ActionCtx, internalAction, internalMutation, internalQuery, type M
 import { door } from './config'
 import { confirmed } from './deletions'
 import { overClashes } from './lib/clash'
+import { fail } from './lib/errors'
 import { kind, log } from './lib/log'
 import { mint } from './lib/signing'
 import { fileEntry } from './schema'
@@ -84,6 +85,16 @@ export const verify = internalAction({
     if (!r.ok) log('content.verify_failed', { status: r.status }, 'error')
     if (!r.ok) throw new Error(`the content service could not verify: ${r.status}`)
     return (await r.json()) as { ok: boolean; missing: string[] }
+  },
+})
+
+/** Reads a bounded entry document through the same signed control channel as publishing. */
+export const read = internalAction({
+  args: { prefix: v.string(), maxBytes: v.number() },
+  handler: async (ctx, args): Promise<{ html: string; bytes: number; sha256: string }> => {
+    const r = await control(ctx, 'read', JSON.stringify(args))
+    if (!r.ok) fail(r.status === 413 ? 'limit' : r.status === 404 ? 'not_found' : 'conflict', 'The entry document could not be read.')
+    return (await r.json()) as { html: string; bytes: number; sha256: string }
   },
 })
 
