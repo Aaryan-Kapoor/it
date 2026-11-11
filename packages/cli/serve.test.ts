@@ -20,7 +20,7 @@ import { ask, backendAt, Problem, VERSION } from './src/lib'
 import { asAdmin, endOf, fetchProgram, type Running, startBackend } from './src/serve/backend'
 import { cannotRunHere, doorKey, instanceName, makeConfig, noteLoaded, programFile, RELEASE, readConfig, type ServiceConfig } from './src/serve/config'
 import { startDoor } from './src/serve/door'
-import { erasing, opensAnew, standsAs, taker, teller, unless } from './src/serve/index'
+import { erasing, opensAnew, reopening, standsAs, taker, teller, unless } from './src/serve/index'
 import { environment, launchdPlist, logFile, systemdUnit } from './src/service'
 import * as usage from './src/usage'
 import { bases } from './test-ports'
@@ -300,6 +300,67 @@ describe('what the service tells the backend of how it stands', () => {
     // Asked for on the site: tried, though "on" is what the settings said already and what was last tried
     expect(opensAnew(on, on, true)).toBe(true)
     expect(opensAnew(off, off, true)).toBe(true)
+  })
+
+  test('a door opened anew is tried again for a moment where one of its ports is still taken, and any other failure is given at once', async () => {
+    const taken = () => Object.assign(new Error('Port 4700 is already in use on this machine, so It cannot listen on it.'), { code: 'port_taken' })
+    // The ports are let go of after two tries, as the door closed a moment before lets go of them
+    let tries = 0
+    const door = await reopening(
+      async () => {
+        if (++tries < 3) throw taken()
+        return 'door'
+      },
+      2_000,
+      () => false,
+      10,
+    )
+    expect([door, tries]).toEqual(['door', 3])
+    // Another failure is not waited out
+    tries = 0
+    const other = Object.assign(new Error('It could not listen on port 4700.'), { code: 'cannot_listen' })
+    await expect(
+      reopening(
+        async () => {
+          tries++
+          throw other
+        },
+        2_000,
+        () => false,
+        10,
+      ),
+    ).rejects.toBe(other)
+    expect(tries).toBe(1)
+    // A port that stays taken is the answer once the time is up
+    tries = 0
+    const began = Date.now()
+    await expect(
+      reopening(
+        async () => {
+          tries++
+          throw taken()
+        },
+        200,
+        () => false,
+        20,
+      ),
+    ).rejects.toMatchObject({ code: 'port_taken' })
+    expect(tries).toBeGreaterThan(3)
+    expect(Date.now() - began).toBeLessThan(1_000)
+    // And nothing is tried again once the service is stopping
+    tries = 0
+    await expect(
+      reopening(
+        async () => {
+          tries++
+          throw taken()
+        },
+        2_000,
+        () => true,
+        10,
+      ),
+    ).rejects.toMatchObject({ code: 'port_taken' })
+    expect(tries).toBe(1)
   })
 
   test('what a look asks of the backend is waited for only until the door is stopped, so that a backend slow to answer does not hold the stopping up', async () => {

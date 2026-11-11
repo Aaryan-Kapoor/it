@@ -203,6 +203,32 @@ async function here(
 
 /** How often the service looks at whether the network is to be on, and at which addresses this machine has. */
 const LOOK_MS = 1000
+/**
+ * How long a door being opened anew for the network is tried for where one of its ports is
+ * still held, and how long the door for this machine alone that it falls back to. Both together
+ * come to well within the twenty seconds `it network` waits for the service to say how its door
+ * stands, with room for the look that finds the setting and for the telling after it.
+ */
+const REOPEN_MS = { wanted: 3_000, fallback: 10_000 } as const
+
+/**
+ * Opens a door anew, trying again a moment later for as long as `ms` where it could not be
+ * because one of its ports is still taken. The door that was closed a moment before may still
+ * have its ports, or a program may still be holding a copy of them, and it lets go of them by
+ * itself. Any other failure, one that is still there once the time is up, and one met after the
+ * service was asked to stop, are given as they are.
+ */
+export async function reopening<T>(open: () => Promise<T>, ms: number, stopped: () => boolean, wait = 250): Promise<T> {
+  const until = Date.now() + ms
+  for (;;) {
+    try {
+      return await open()
+    } catch (err) {
+      if ((err as { code?: unknown } | null)?.code !== 'port_taken' || stopped() || Date.now() + wait > until) throw err
+    }
+    await new Promise((resolve) => setTimeout(resolve, wait))
+  }
+}
 /** How often the service takes from the backend what it noted for the counts of how It is used. */
 const COLLECT_MS = 20_000
 /** How long the backend is given to say whether something was asked of the network on the site. It is asked again a second later. */
@@ -456,13 +482,26 @@ async function keptDoor(
   const content = makeContent(config, backend, say, erased)
   /** The name the door answers at over https through Tailscale, as the settings last said it, or none. */
   let https = config.https
-  const open = async (network: boolean, tailnet: boolean, internet: boolean) => {
+  /**
+   * Opens the door as asked, or for this machine alone where it cannot listen on the network.
+   * Opened anew (`again`), where the door before it was just closed, a port that is still held
+   * is waited for a moment before that is taken as the answer.
+   */
+  const open = async (network: boolean, tailnet: boolean, internet: boolean, again = false) => {
     const only = network && tailnet
     const wide = network && !only && internet
     const secure = https === undefined ? { https: undefined } : { https }
+    const opened = (asked: ServiceConfig, ms: number) =>
+      again
+        ? reopening(
+            () => startDoor(asked, backend, say, { content, erased }),
+            ms,
+            () => stopped,
+          )
+        : startDoor(asked, backend, say, { content, erased })
     try {
       return {
-        door: await startDoor({ ...config, network, tailnet: only, internet: wide, ...secure }, backend, say, { content, erased }),
+        door: await opened({ ...config, network, tailnet: only, internet: wide, ...secure }, network ? REOPEN_MS.wanted : REOPEN_MS.fallback),
         network,
         tailnet: only,
         internet: wide,
@@ -472,7 +511,7 @@ async function keptDoor(
       if (!network) throw err
       say(`door: could not listen on the network (${why(err)}); it answers this machine only`)
       return {
-        door: await startDoor({ ...config, network: false, tailnet: false, internet: false, ...secure }, backend, say, { content, erased }),
+        door: await opened({ ...config, network: false, tailnet: false, internet: false, ...secure }, REOPEN_MS.fallback),
         network: false,
         tailnet: false,
         internet: false,
@@ -592,7 +631,7 @@ async function keptDoor(
         https = saidHttps
         say(https ? 'door: answers its tailnet over https too, through Tailscale' : 'door: answers over https no more')
         await now.door.stop()
-        now = await open(now.network, now.tailnet, now.internet)
+        now = await open(now.network, now.tailnet, now.internet, true)
       }
       if (
         said !== undefined &&
@@ -608,7 +647,7 @@ async function keptDoor(
         // Whom the door answers is part of how it was opened, so it is opened anew for that too
         if (said !== now.network || saidTailnet !== now.tailnet || saidInternet !== now.internet) {
           await now.door.stop()
-          now = await open(said, saidTailnet, saidInternet)
+          now = await open(said, saidTailnet, saidInternet, true)
         }
       }
       // On for the network the machine is on, the door listens where the machine's private addresses are now
@@ -631,9 +670,12 @@ async function keptDoor(
       // another, and the door would stay open for all of that
       await unless(telling(), halted)
     } catch (err) {
-      say(`door: could not be opened again (${why(err)}); stopping`)
+      // A door that the service was asked to stop while it was being opened anew is no failure of the service's
+      if (!stopped) {
+        say(`door: could not be opened again (${why(err)}); stopping`)
+        lost()
+      }
       stopped = true
-      lost()
     } finally {
       looking = false
     }
