@@ -61,6 +61,31 @@ describe('the chessboard on the first page', () => {
     other.close()
   })
 
+  test('where no answer has come in forty seconds the person has their move back, as the dock says, and a late answer to it is not played', async () => {
+    const page = await chess()
+    const slow = moved(page, 'e2', 'e4')
+    await slow.accept()
+    await page.advance(39_000)
+    expect([piece(page, 'e4') !== '', waits(page)]).toEqual([true, true])
+    await page.advance(1_500)
+    // The pawn is back where it was, the board is the person's, and the dock says so without promising the late answer
+    expect([piece(page, 'e2') !== '', piece(page, 'e4'), waits(page)]).toEqual([true, '', false])
+    expect(page.read('chess').stage).toBe('slow')
+    expect(page.state('chess')).toBe('No answer after 40 s. This is yours again.')
+    await reply(page, `${slow.data.request}:e7e5`, 'Late.')
+    expect([piece(page, 'e7') !== '', piece(page, 'e5')]).toEqual([true, ''])
+    expect(page.said('chess')).toBe('')
+    // And they play on, with a move of their own that waits on an answer of its own
+    const next = moved(page, 'd2', 'd4')
+    expect(next.data.request).not.toBe(slow.data.request)
+    expect(next.data.new_game).toBe(true)
+    await next.accept()
+    await reply(page, `${next.data.request}:d7d5`)
+    expect([piece(page, 'd5') !== '', waits(page)]).toEqual([true, false])
+    expect(page.errors).toEqual([])
+    page.close()
+  })
+
   test('a reply names the pending move, so an old answer cannot play after a new game or another turn', async () => {
     const page = await chess()
     const old = moved(page, 'e2', 'e4')

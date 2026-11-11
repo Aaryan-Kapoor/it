@@ -369,23 +369,27 @@ Shell.part("chess", (my) => {
     if (first) { data.new_game = true; if (before) data.last_game = before; }
     data.fen = C.fen(pos);
     data.legal = now.legal.map(C.uci);
+    // The move is taken back where the agent was not told of it, and where it has not answered in forty seconds: the
+    // person has their move again, and an answer to the move taken back names a request that is gone, and is not played
+    var undo = () => {
+      pos = was.pos; last = was.last; now = C.state(pos); waiting = false; early = null; pendingId = null; turn++;
+      log.pop();
+      around();
+      render();
+    };
     my.send("move", data).then((result) => {
       if (turn !== at) return;
       var kept = early;
       sent = true;
       early = null;
-      box.asked(null, result);
+      box.asked(() => { if (turn === at && waiting) undo(); }, result, { late: false });
       // The agent had answered already: its answer is played now
       if (kept) answer(kept.reply, kept.fresh);
     }, () => {
       if (turn !== at) return;
-      // The agent was not told: the move is taken back, so that the board and the agent do not come apart
-      pos = was.pos; last = was.last; now = C.state(pos); waiting = false; early = null; pendingId = null; turn++;
-      log.pop();
-      around();
+      undo();
       box.did("");
       box.refused();
-      render();
     });
   }
   // The agent's move
