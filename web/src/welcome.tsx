@@ -143,22 +143,39 @@ export function tourPageToOpen(
   const showing = `${first.id}:${first.version}`
   return opened === showing ? null : { showing, slug: first.slug }
 }
-/** Takes a browser that is at its pages to the tour's first page, as `tourPageToOpen` says. */
+/** The showing this tab was last taken to, for a browser that will not keep the note of it. */
+let openedHere: string | null = null
+/**
+ * Where to take a browser that has just come to its pages, by `tourPageToOpen` and by what the
+ * browser has noted, and the note made that it is taken there. A browser that refuses to keep
+ * anything, as a private window may, or whose store is full, is still taken to a showing once:
+ * the tab remembers by itself, until it is loaded again.
+ */
+export function tourOpening(
+  pages: Parameters<typeof tourPageToOpen>[0],
+  tour: Parameters<typeof tourPageToOpen>[1],
+  store: () => Pick<Storage, 'getItem' | 'setItem'>,
+): string | null {
+  let opened = openedHere
+  try {
+    opened = store().getItem(TOUR_OPENED) ?? openedHere
+  } catch {}
+  const first = tourPageToOpen(pages, tour, opened)
+  if (!first || first.showing === openedHere) return null
+  // Noted before it is gone to
+  openedHere = first.showing
+  try {
+    store().setItem(TOUR_OPENED, first.showing)
+  } catch {}
+  return first.slug
+}
+/** Takes a browser that is at its pages to the tour's first page, as `tourOpening` says. */
 export function useTourOpens(pages: { id: string; slug: string; version: number | null; tour?: string | null }[] | undefined, path: string): void {
   const tour = useQuery(api.tour.get, {}) as Tour | undefined
   useEffect(() => {
     if (path !== '/') return
-    let opened: string | null = null
-    try {
-      opened = localStorage.getItem(TOUR_OPENED)
-    } catch {}
-    const first = tourPageToOpen(pages, tour, opened)
-    if (!first) return
-    // Noted before it is gone to. A browser that will not keep the note is taken there each time it comes to its pages while the tour is on
-    try {
-      localStorage.setItem(TOUR_OPENED, first.showing)
-    } catch {}
-    navigate(`/p/${first.slug}`)
+    const slug = tourOpening(pages, tour, () => localStorage)
+    if (slug) navigate(`/p/${slug}`)
   }, [pages, tour, path])
 }
 

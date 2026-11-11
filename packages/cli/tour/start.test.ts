@@ -407,31 +407,34 @@ describe('the whiteboard', () => {
     page.close()
   })
 
-  test.each(['clears the sheet', 'writes more'])('an answer that comes late, after the person has the sheet back and %s, is no answer to what is there, and is not drawn', async (does) => {
-    const page = await opened({}, canvas(PICTURE))
-    page.to('board')
-    written(page, [
-      [330, 220],
-      [345, 290],
-    ])
-    const sent = await checked(page)
-    await sent.accept()
-    await page.advance(SLOW)
-    expect(page.$('#wipe').disabled).toBe(false)
-    if (does === 'clears the sheet') page.$('#wipe').click()
-    else
+  test.each(['clears the sheet', 'writes more'])(
+    'an answer that comes late, after the person has the sheet back and %s, is no answer to what is there, and is not drawn',
+    async (does) => {
+      const page = await opened({}, canvas(PICTURE))
+      page.to('board')
       written(page, [
-        [400, 220],
-        [430, 290],
+        [330, 220],
+        [345, 290],
       ])
-    expect(page.state('board')).toContain('is watching the page')
-    await page.set({ board: { request: sent.data.request, read: '1', right: false, answer: '144', hint: 'try again', say: 'Late.' } })
-    await page.advance(1300)
-    expect([on(page, 'ring'), on(page, 'arrow'), on(page, 'right'), on(page, 'hint'), on(page, 'tick')]).toEqual([false, false, false, false, false])
-    expect(page.said('board')).toBe('')
-    expect(page.errors).toEqual([])
-    page.close()
-  })
+      const sent = await checked(page)
+      await sent.accept()
+      await page.advance(SLOW)
+      expect(page.$('#wipe').disabled).toBe(false)
+      if (does === 'clears the sheet') page.$('#wipe').click()
+      else
+        written(page, [
+          [400, 220],
+          [430, 290],
+        ])
+      expect(page.state('board')).toContain('is watching the page')
+      await page.set({ board: { request: sent.data.request, read: '1', right: false, answer: '144', hint: 'try again', say: 'Late.' } })
+      await page.advance(1300)
+      expect([on(page, 'ring'), on(page, 'arrow'), on(page, 'right'), on(page, 'hint'), on(page, 'tick')]).toEqual([false, false, false, false, false])
+      expect(page.said('board')).toBe('')
+      expect(page.errors).toEqual([])
+      page.close()
+    },
+  )
 
   test('an answer that comes late to a sheet the person left as it was is still drawn', async () => {
     const page = await opened({}, canvas(PICTURE))
@@ -1007,7 +1010,9 @@ describe('a drum answer with no hits in it', () => {
     const beat = page.sentOf('beat')[0]!
     await beat.accept()
     expect(page.state('drums')).toContain('has not answered yet')
-    await page.set({ drums: { theirs: { request: beat.data.request, pattern: ['........', '........', '........', '........'], note: 'Yours stands on its own.' } } })
+    await page.set({
+      drums: { theirs: { request: beat.data.request, pattern: ['........', '........', '........', '........'], note: 'Yours stands on its own.' } },
+    })
     expect(page.state('drums')).toContain('answered')
     expect(page.state('drums')).not.toContain('has not answered')
     expect(page.said('drums')).toBe('Yours stands on its own.')

@@ -381,6 +381,45 @@ describe('the tour’s first page, for a browser that has just come to its pages
     expect(tourPageToOpen([up[0]!, { ...up[1]!, version: 2 }], { doneAt: null }, 'page-2:1')).toEqual({ showing: 'page-2:2', slug: 'tour-start' })
   })
 
+  test('a browser is taken to a showing once where it keeps the note, and once where it will keep nothing or cannot be asked', async () => {
+    const { tourOpening } = await import('./welcome')
+    const show = (id: string, version = 1) => [{ id, slug: 'tour-start', version, tour: 'start' }]
+    const kept = new Map<string, string>()
+    const keeps = () => ({ getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v) })
+    expect(tourOpening(show('kept'), { doneAt: null }, keeps)).toBe('tour-start')
+    expect(kept.get('it.tour.opened')).toBe('kept:1')
+    expect(tourOpening(show('kept'), { doneAt: null }, keeps)).toBeNull()
+    // Where what it keeps throws, as in a browser that lets a site keep nothing
+    const throws = () => ({
+      getItem: () => {
+        throw new Error('no')
+      },
+      setItem: () => {
+        throw new Error('no')
+      },
+    })
+    expect(tourOpening(show('thrown'), { doneAt: null }, throws)).toBe('tour-start')
+    expect(tourOpening(show('thrown'), { doneAt: null }, throws)).toBeNull()
+    expect(tourOpening(show('thrown', 2), { doneAt: null }, throws)).toBe('tour-start')
+    expect(tourOpening(show('thrown', 2), { doneAt: null }, throws)).toBeNull()
+    // Where asking for the store itself throws
+    const none = (): never => {
+      throw new Error('no store')
+    }
+    expect(tourOpening(show('none'), { doneAt: null }, none)).toBe('tour-start')
+    expect(tourOpening(show('none'), { doneAt: null }, none)).toBeNull()
+    // Where the note cannot be written and an older one is read each time
+    const full = () => ({
+      getItem: () => 'older:1',
+      setItem: () => {
+        throw new Error('full')
+      },
+    })
+    expect(tourOpening(show('full'), { doneAt: null }, full)).toBe('tour-start')
+    expect(tourOpening(show('full'), { doneAt: null }, full)).toBeNull()
+    expect(tourOpening(show('full'), { doneAt: NOW }, keeps)).toBeNull()
+  })
+
   test('is not gone to a second time, nor once a tour was finished or declined, nor before the backend has said how things stand, nor where it has nothing published', async () => {
     const { tourPageToOpen } = await import('./welcome')
     expect(tourPageToOpen(up, { doneAt: null }, 'page-2:1')).toBeNull()
