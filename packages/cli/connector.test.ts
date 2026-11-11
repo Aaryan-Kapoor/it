@@ -14,6 +14,7 @@ import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS } from './src/addons.generated'
 import { arrives } from './src/arrives'
+import { KEPT_FOR_NOTICE_MS } from './src/claude-open'
 import { conversationFolder, conversationProfile, noteConversation } from './src/publish'
 import * as wake from './src/wake'
 
@@ -29,6 +30,7 @@ const stand = vi.hoisted(() => ({
   /** The folders Claude Code keeps its settings in where It's add-on was put. */
   claudeFolders: [] as string[],
   claudeScans: 0,
+  claudeKept: [] as (number | undefined)[],
   claudeRealProcesses: false,
   scan: null as null | { started: () => void; completed: () => void; delay: number; timeout?: number; child?: import('node:child_process').ChildProcess },
   /** Every call the connector made to the backend. */
@@ -237,14 +239,16 @@ vi.mock('./src/claude-open', async (original) => {
   const real = await original<typeof import('./src/claude-open')>()
   return {
     ...real,
-    openClaude: (folders: readonly string[], _alive: unknown, _same: unknown, discovery: InstanceType<typeof real.ClaudeDiscovery>) => {
+    openClaude: (folders: readonly string[], _alive: unknown, _same: unknown, discovery: InstanceType<typeof real.ClaudeDiscovery>, keptMs?: number) => {
       stand.claudeScans++
-      if (stand.claudeRealProcesses) return real.openClaude(folders, () => true, undefined, discovery)
+      stand.claudeKept.push(keptMs)
+      if (stand.claudeRealProcesses) return real.openClaude(folders, () => true, undefined, discovery, keptMs)
       return real.openClaude(
         folders,
         () => true,
         () => true,
         discovery,
+        keptMs,
       )
     },
   }
@@ -420,6 +424,7 @@ afterEach(async () => {
   stand.reconciled.length = 0
   stand.claudeFolders.length = 0
   stand.claudeScans = 0
+  stand.claudeKept = []
   stand.claudeRealProcesses = false
   stand.scan = null
   said.length = 0
@@ -6873,6 +6878,8 @@ describe('how what is done on a conversation’s pages would reach it, as the co
         try {
           await until(() => told().length === 2, 10_000)
           expect(told()[1]).toEqual([{ harness: 'claude-code', sessionId: opened, since }])
+          // The notice may go by a look at Windows' processes a few minutes old, which nothing that decides a click does
+          expect(stand.claudeKept[0]).toBe(KEPT_FOR_NOTICE_MS)
           // An upgraded conversation can have pages without the published-without-addon marker,
           // and can even have been heard by an older connector. Live detection must protect it.
           expect(conversationFolder({ harness: 'claude-code', id: opened })).toBeUndefined()
@@ -6881,6 +6888,7 @@ describe('how what is done on a conversation’s pages would reach it, as the co
           await until(() => stand.calls.some((c) => c.name === 'delivery:holdBack'), 3000)
           expect(stand.calls.filter((c) => c.name === 'delivery:holdBack').map((c) => c.args)).toEqual([{ ids: ['click-1'], why: OPEN_WITHOUT_ADDON }])
           expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+          expect(stand.claudeKept).toContain(undefined)
           // Said once, and not again while nothing changes
           await new Promise((r) => setTimeout(r, 5500))
           expect(told()).toHaveLength(2)
