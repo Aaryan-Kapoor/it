@@ -10,7 +10,8 @@
       "!e2e/fixtures",
       "!packages/cli/tour/pages",
       "!packages/cli/tour/kit",
-      "!web/src/film/film.js"
+      "!web/src/film/film.js",
+      "!addons/codex/plugins/it-bridge"
     ]
   },
   "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 160 },

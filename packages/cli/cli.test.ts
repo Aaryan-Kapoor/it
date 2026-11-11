@@ -2218,12 +2218,19 @@ describe('add-ons carried by the CLI', () => {
     // A folder a harness copies carries the license as a file in it
     const at: Record<string, string> = {
       'claude-code': 'it-bridge/LICENSE.md',
-      codex: 'plugins/it-bridge/LICENSE.md',
       pi: 'LICENSE.md',
       openclaw: 'LICENSE.md',
       hermes: 'it-bridge/LICENSE.md',
     }
     for (const [id, file] of Object.entries(at)) expect(ADDONS[id]!.files[file], id).toBe(license)
+    // Codex's plugin folder carries the license committed in it, which a change to the license
+    // leaves as it is, since Codex asks for its hooks to be approved again whenever a file in
+    // that folder changes. The terms as they are now lie beside it, at the marketplace's root.
+    expect(ADDONS.codex!.files['plugins/it-bridge/LICENSE.md']).toBe(
+      readFileSync(path.join(__dirname, '../../addons/codex/plugins/it-bridge/LICENSE.md'), 'utf8'),
+    )
+    expect(ADDONS.codex!.files['plugins/it-bridge/LICENSE.md']).toMatch(/\n## It License\n/)
+    expect(ADDONS.codex!.files['LICENSE.md']).toBe(license)
     // OpenCode is given one file and no folder: its first lines say the terms are in It's own
     // folder, and installing it from there is what puts them there
     unpack('opencode')
@@ -2256,6 +2263,18 @@ describe('add-ons carried by the CLI', () => {
     expect(command).toBe(`${shim()} hook codex`)
     expect(path.isAbsolute(shim())).toBe(true)
     expect(shim().startsWith(home)).toBe(true)
+  })
+  test('unpacking leaves Codex’s plugin folder as it was packed, but for the address of the hook and the It folder', async () => {
+    const { unpack, shim } = await import('./src/setup')
+    const dir = unpack('codex')
+    const prefix = 'plugins/it-bridge/'
+    for (const [name, text] of Object.entries(ADDONS.codex!.files)) {
+      if (!name.startsWith(prefix)) continue
+      const written = readFileSync(path.join(dir, name), 'utf8')
+      if (name.endsWith('hooks.json')) expect(written, name).toBe(text.replaceAll('"it hook codex"', JSON.stringify(`${shim()} hook codex`)))
+      else if (name.endsWith('it-home.json')) expect(written, name).toBe(`${JSON.stringify({ ...JSON.parse(text), home: realpathSync(home) }, null, 1)}\n`)
+      else expect(written, name).toBe(text)
+    }
   })
   test('windows: the launcher finds It’s folder by where it was started from, and a percent sign in a path it names stays one', async () => {
     const { shim } = await import('./src/setup')
