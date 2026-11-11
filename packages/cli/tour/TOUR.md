@@ -79,7 +79,7 @@ The person wrote their answer to `sum` on a whiteboard by hand, and `answer` is 
 it tour answer <the action's id> '{"read":"124","right":false,"answer":"144","hint":"<a few words>","say":"<one sentence>"}'
 ```
 
-The page draws your marking on the board in green: a ring round what they wrote with your answer and hint beside it, or a tick where `right` is `true`. `working` is one way to the answer, which you may give as the hint where they are wrong. The command deletes the picture, so do not delete it yourself. Where the action was printed by a wait, `picture` beside it is the same file by its whole path. If the file is not there, `it save <the action's id> <the name in saved>` writes it.
+The page draws your marking on the board in green: a ring round what they wrote with your answer and hint beside it, or a tick where `right` is `true`. `working` is one way to the answer, which you may give as the hint where they are wrong. Write no apostrophe in `hint` or `say`, since one would end the quoted answer and the command would fail: "That is it", not "That's it". The command deletes the picture, so do not delete it yourself. Where the action was printed by a wait, `picture` beside it is the same file by its whole path. If the file is not there, `it save <the action's id> <the name in saved>` writes it.
 
 If you cannot view images, do not mark the answer, and do not work it out from `strokes` or from anything else: say so. The same goes where `saved` is `null` and the action has no `typed`, which means the person's browser made no picture. Answer with the flag and one sentence of your own that says you cannot see pictures:
 
