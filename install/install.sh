@@ -246,11 +246,9 @@ no_folder "${HOME_DIR}/THIRD_PARTY_NOTICES.md"
 # writes, which must then be exactly that record. One made by a release from before there was a
 # record is It's when it holds the program, the license as one of those releases published it,
 # and the notices beside them. What an install that stopped half way leaves behind (its lock,
-# the folders its downloads went to, and an empty bin) is not counted as anything in the folder,
-# and neither are the notes the program itself keeps before It is set up: whether usage is
-# reported and updates looked for, and where the program was downloaded from. The folder is
-# looked at again just before the record is written, since anything may have been put in it
-# while the downloads came.
+# the folders its downloads went to, and an empty bin) is not counted as anything in the folder.
+# The folder is looked at again just before the record is written, since anything may have been
+# put in it while the downloads came.
 installation='{"product":"It","format":1,"about":"This folder holds an installation of It."}'
 LICENSES="06f412e8c0ab7d324b09d1ff1261ff667a4986546a5f38170966eb6542c6b20d 5c2b54bcb8f96e22f8994364182b4e0f3fa06dfb448378e81ede85bcc9003e09"
 plain_file() { [ -f "$1" ] && [ ! -L "$1" ]; }
@@ -281,7 +279,6 @@ claimable() {
     case "${entry##*/}" in
       .installing|.installing.taking|.install.*) if plain_folder "${entry}"; then continue; fi ;;
       bin) if plain_folder "${entry}" && nothing_in "${entry}"; then continue; fi ;;
-      telemetry*|usage.jsonl*|updates-off|releases.json) if plain_file "${entry}"; then continue; fi ;;
     esac
     return 1
   done

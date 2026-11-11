@@ -561,9 +561,10 @@ try {
         noteOf(byAnAgent) === null,
       `${byAnAgent.said} ${JSON.stringify(noteOf(byAnAgent))}`,
     )
-    // A note the program left before, whatever it holds, is the program's own, and an install leaves it as it is
+    // A note the program left before in It's folder, whatever it holds, is the program's own, and an install leaves it as it is
     const saysOff = `${JSON.stringify({ enabled: false, offBy: 'command', told: 1 }, null, 1)}\n`
     mkdirSync(path.join(tmp, 'note-says-off', '.it'), { recursive: true })
+    writeFileSync(path.join(tmp, 'note-says-off', '.it', 'installation.json'), '{"product":"It","format":1,"about":"This folder holds an installation of It."}\n')
     writeFileSync(path.join(tmp, 'note-says-off', '.it', 'telemetry.json'), saysOff)
     const noteSaysOff = await install('note-says-off', {}, { terminal: true })
     check(
@@ -1657,6 +1658,20 @@ try {
         readFileSync(path.join(project, 'logs', 'irreplaceable.txt'), 'utf8') === 'mine' &&
         readFileSync(path.join(project, 'notes.txt'), 'utf8') === 'also mine',
       off.said,
+    )
+
+    // A file of someone's that has the name of a note It keeps is theirs all the same
+    const likeANote = path.join(tmp, 'a-file-named-like-a-note', 'mine')
+    mkdirSync(likeANote, { recursive: true })
+    writeFileSync(path.join(likeANote, 'releases.json'), '{"notes":"mine"}\n')
+    const overNote = await install('a-file-named-like-a-note', { IT_HOME: likeANote })
+    check(
+      'a folder holding only someone’s file named as one of It’s notes is refused, and the file is left as it was',
+      overNote.code !== 0 &&
+        /already holds files/.test(overNote.flat) &&
+        readdirSync(likeANote).join() === 'releases.json' &&
+        read(path.join(likeANote, 'releases.json')) === '{"notes":"mine"}\n',
+      overNote.said,
     )
 
     const empty = path.join(tmp, 'an-empty-folder', 'empty')
