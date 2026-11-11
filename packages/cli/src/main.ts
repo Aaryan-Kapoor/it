@@ -38,7 +38,7 @@ import {
   withoutFiles,
 } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
-import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
+import { type Args, json, loose, need, nested, OPTIONS, optionsFor, outputArgs, parse, text } from './args'
 import { type Arrives, arrives, claudeAfterSetup, claudeReloadLine, claudeRunning, reloadLine, tellWordForWord } from './arrives'
 import { choices, conversationIds, local, type Route, refusedFor } from './connector'
 import { deletePage, deletionStatus } from './delete'
@@ -3138,6 +3138,8 @@ async function main(argv: string[]): Promise<void> {
     written(process.stdout, more ?? HELP)
     return
   }
+  // A word that names no command is refused before anything is written, the files that count usage among them
+  if (!Object.hasOwn(OPTIONS, cmd)) throw new Problem(`No such command: ${cmd}`, 'invalid', 'Run `it help`.')
   noMore(cmd, a)
   if (cmd === 'setup' || cmd === 'login') checkInstallationFolder(home())
   // A rejected command changes no reporting setting either.

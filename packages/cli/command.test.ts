@@ -377,6 +377,17 @@ describe('help respects persistent telemetry opt-outs', () => {
         expect(existsSync(path.join(m.it, 'usage.jsonl'))).toBe(false)
       }
     })
+  test('a word that names no command is refused before any file is written', async () => {
+    for (const args of [['--save=x', 'action', 'a1'], ['--save', 'x', 'action', 'a1'], ['nonsense']]) {
+      const m = machine(false)
+      const ran = await run(m, args)
+      expect(ran.code).toBe(2)
+      expect(error(ran).message).toBe(`No such command: ${args[0]}`)
+      expect(existsSync(path.join(m.it, 'telemetry.json'))).toBe(false)
+      expect(existsSync(path.join(m.it, 'usage.jsonl'))).toBe(false)
+      expect(existsSync(path.join(m.it, 'telemetry-off'))).toBe(false)
+    }
+  })
   test('invalid options still make no reporting changes', async () => {
     const m = machine(false)
     const ran = await run(m, ['status', '--repalce'], { DO_NOT_TRACK: '1' })

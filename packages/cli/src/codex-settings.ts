@@ -49,7 +49,20 @@ export const CODEX_SAVE_RULE =
  * in `it service --json uninstall`, and a rule that named that word too would not match there.
  * So the forms of these that only say how things are, such as `it service status`, ask as well.
  */
-export const CODEX_ASKED = ['setup', 'uninstall', 'upgrade', 'login', 'logout', 'serve', 'service', 'network', 'runs', 'telemetry', 'updates'] as const
+export const CODEX_ASKED = [
+  'setup',
+  'uninstall',
+  'upgrade',
+  'login',
+  'logout',
+  'serve',
+  'service',
+  'network',
+  'runs',
+  'telemetry',
+  'updates',
+  'shell-profile',
+] as const
 /** Where It keeps the file of its own in Codex's settings folder, with the rules that let `it` out of the sandbox. */
 export const CODEX_RULES_REL = 'rules/it.rules'
 /**
