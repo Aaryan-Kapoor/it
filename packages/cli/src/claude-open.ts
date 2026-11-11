@@ -64,7 +64,7 @@ export class ClaudeDiscovery {
   private ended = false
   private children = new Map<ChildProcess, { cancel: () => void; exited: Promise<void> }>()
   /** What the last look at Windows' Claude processes found, when, and for which notes. */
-  private windowsSeen?: { at: number; starts: ReadonlyMap<number, number>; for: ReadonlySet<string>; read: boolean }
+  private windowsSeen?: { at: number; starts: ReadonlyMap<number, number>; for: Set<string>; read: boolean }
 
   get stopped(): boolean {
     return this.ended
@@ -94,9 +94,10 @@ export class ClaudeDiscovery {
    * Windows' Claude processes and their starts, for the notes given, each named `pid:startedAt`.
    * PowerShell is started only where the last look did not cover one of these notes, failed a
    * while ago, or is older than WINDOWS_FRESH_MS: a process's start never changes, and a note
-   * whose Claude Code has ended is told by `running` on every scan. What a look that is kept
-   * cannot see is a number given to another program after a Claude Code ended without taking
-   * its note away, and that is seen at the next look.
+   * whose Claude Code has ended is told by `running` on every scan, which then takes the note
+   * out of what the look covers (`windowsGone`), so that the number's next program is looked at.
+   * What a look that is kept cannot see is a number given to another program between two scans,
+   * after a Claude Code ended without taking its note away, and that is seen at the next look.
    */
   async windowsStarts(notes: readonly string[]): Promise<ReadonlyMap<number, number>> {
     const seen = this.windowsSeen
@@ -105,6 +106,11 @@ export class ClaudeDiscovery {
     const starts = await readWindowsStarts(this)
     if (!this.ended) this.windowsSeen = { at: performance.now(), starts: starts ?? new Map(), for: new Set(notes), read: starts !== undefined }
     return starts ?? new Map()
+  }
+
+  /** Notes, named as for `windowsStarts`, whose process a scan has found ended: a process given the number later is looked at afresh. */
+  windowsGone(notes: readonly string[]): void {
+    for (const note of notes) this.windowsSeen?.for.delete(note)
   }
 
   output(file: string, args: string[], timeout: number): Promise<string | undefined> {
@@ -212,6 +218,7 @@ export async function openClaude(
   const open = new Map<string, OpenClaude>()
   // Every note is read first, so that on Windows one look at the processes is taken for all of them, and only where one is live
   const live: { pid: number; id: string; procStart: unknown; startedAt: number }[] = []
+  const gone: string[] = []
   for (const folder of new Set(folders)) {
     const dir = path.join(folder, 'sessions')
     let names: string[]
@@ -232,21 +239,21 @@ export async function openClaude(
         if (s.pid !== pid || typeof s.sessionId !== 'string' || !UUID.test(s.sessionId) || typeof s.startedAt !== 'number') continue
         if (s.kind !== 'interactive' || s.entrypoint === 't3-code') continue
         if (alive(pid)) live.push({ pid, id: s.sessionId.toLowerCase(), procStart: s.procStart, startedAt: s.startedAt })
+        else gone.push(`${pid}:${s.startedAt}`)
       } catch {
         // A file being written or removed this moment is read the next time
       }
     }
   }
-  const windows =
-    same === sameProcess && process.platform === 'win32' && live.length
-      ? await discovery.windowsStarts(live.map((note) => `${note.pid}:${note.startedAt}`))
-      : undefined
+  const windows = same === sameProcess && process.platform === 'win32'
+  if (windows) discovery.windowsGone(gone)
+  const starts = windows && live.length ? await discovery.windowsStarts(live.map((note) => `${note.pid}:${note.startedAt}`)) : undefined
   for (const note of live) {
     if (discovery.stopped) return []
     try {
       const ok =
         same === sameProcess
-          ? await sameProcess(note.pid, note, windows, discovery)
+          ? await sameProcess(note.pid, note, starts, discovery)
           : await same(note.pid, { procStart: note.procStart, startedAt: note.startedAt })
       if (!ok) continue
     } catch {

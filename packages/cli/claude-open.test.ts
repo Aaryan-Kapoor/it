@@ -180,6 +180,19 @@ describe('the Claude Code conversations open at a person’s keyboard', async ()
       expect(looks).toHaveLength(1)
     })
 
+    test('a number whose Claude Code a scan found ended, and that runs again later, is looked at afresh', async () => {
+      const discovery = new ClaudeDiscovery()
+      const folder = folderWith([session(1)])
+      expect(await openClaude([folder], alive, undefined, discovery)).toHaveLength(1)
+      // Process 1 ends without taking its note away, and a scan sees that
+      expect(await openClaude([folder], (pid) => pid !== 1, undefined, discovery)).toEqual([])
+      // Another program is given number 1, which PowerShell does not count among Claude's
+      answer = '2 116444736010000000\n'
+      clock += 5_000
+      expect(await openClaude([folder], alive, undefined, discovery)).toEqual([])
+      expect(looks).toHaveLength(2)
+    })
+
     test('the processes are looked at again once the last look is a few minutes old, and what is gone by then is seen', async () => {
       const discovery = new ClaudeDiscovery()
       const folder = folderWith([session(1)])
