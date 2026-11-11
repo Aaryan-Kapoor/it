@@ -76,7 +76,9 @@ const emit = async (value: unknown) => {
  * Blocks until the person acts, then prints what they did. While this runs, the connector on
  * this machine leaves matching clicks alone: an agent that is waiting gets the click here.
  */
-export async function wait(a: Args, counted: (code?: string) => void) {
+export async function wait(a: Args, counted: (code?: string) => void, also?: (c: Listed) => Promise<Record<string, unknown>>) {
+  /** An action as it is printed, with whatever the command that waits says of it beside: the tour says where it kept the action's picture. */
+  const told = async (c: Listed) => ({ ...printed(c), ...(also ? await also(c).catch(() => ({})) : {}) })
   const slug = text(a, 'id')
   const follow = a.flags.follow === true
   const seconds = text(a, 'timeout') === undefined ? 0 : Number(text(a, 'timeout'))
@@ -228,7 +230,7 @@ export async function wait(a: Args, counted: (code?: string) => void) {
         take(c.id)
         continue
       }
-      await emit(printed(c))
+      await emit(await told(c))
       take(c.id)
       printedIds.add(c.id)
       if (printedIds.size > 5000) printedIds.delete(printedIds.values().next().value!)
@@ -271,7 +273,7 @@ export async function wait(a: Args, counted: (code?: string) => void) {
             continue
           }
           // Out of this process first, and only then reported as handed over
-          await emit(printed(c))
+          await emit(await told(c))
           came = 'printed'
           printedIds.add(c.id)
           if (printedIds.size > 5000) printedIds.delete(printedIds.values().next().value!)

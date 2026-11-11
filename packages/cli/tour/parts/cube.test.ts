@@ -72,10 +72,19 @@ describe('the cube', () => {
     page.$('#cube-ask').click()
     const asked = page.sentOf('turned')[0]!
     expect(Object.keys(asked.data).slice(0, 4)).toEqual(['part', 'request', 'back', 'more'])
-    expect(asked.data).toMatchObject({ part: 'cube', turns: ['R', 'U', "F'", 'D2'], back: ['D2', 'F', "U'", "R'"], more: 0, solved: false })
-    // Played as it is given, it solves the cube
+    expect(asked.data).toMatchObject({ part: 'cube', turns: ['R', 'U', "F'", 'D2'], back: ['D2', 'F', 'Ui', 'Ri'], more: 0, solved: false })
+    // Answered by its name, it is played, and solves the cube
     await asked.accept()
-    await page.set({ cube: { request: asked.data.request, moves: asked.data.back, say: 'Back the way you came.' } })
+    await page.set({ cube: { request: asked.data.request, moves: 'back', say: 'Back the way you came.' } })
+    await page.advance(5000)
+    expect(page.$('#cube-turns').textContent).toBe('solved')
+    expect(page.said('cube')).toBe('Back the way you came.')
+    // And so is a list of the agent's own, with a turn the other way written either way
+    for (const name of ['R', 'U']) [...page.$('#keys').children].find((k: any) => k.textContent === name).click()
+    page.$('#cube-ask').click()
+    const again = page.sentOf('turned')[1]!
+    await again.accept()
+    await page.set({ cube: { request: again.data.request, moves: ['Ui', "R'"], say: 'Two turns.' } })
     await page.advance(5000)
     expect(page.$('#cube-turns').textContent).toBe('solved')
     page.close()

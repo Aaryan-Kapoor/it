@@ -128,7 +128,7 @@ import { joinedBefore, login, runsItsOwn } from './login'
 import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
 import { failure, foldRepeats, forPerson } from './output'
 import { keepToOwner } from './owner'
-import { gather, noteConversation, publish, unlinkedNote } from './publish'
+import { conversationFolder, gather, noteConversation, publish, unlinkedNote } from './publish'
 import { alone, asAdmin, nothingLeft, standing, startBackend } from './serve/backend'
 import { HTTPS_NAME, noteHttps, noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
@@ -165,6 +165,7 @@ import {
 import { printEnv } from './shell-env'
 import { zshDirectory } from './shell-profile'
 import { GUIDE, NAMES, END as TOUR_END, TOUR_PREFIX, START as TOUR_START, STEPS as TOUR_STEPS, tourPage } from './tour'
+import { answerAction, dropPicture, dropPictures, keepPicture, START_SLUG } from './tour-answer'
 import { finishInstallationRemoval, installationFile, removeInstallationFiles, stepOutOf, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
 import { addonsSaid, afterUpgrade, RELOAD_OPEN, restartLine } from './upgraded'
@@ -988,7 +989,7 @@ const TOUR_RULE_ONE = '1. **Never block.**'
  * in the background, which an app without one runs in front and never hears from again: so
  * here the rule is another, in the place of the first, and not a second word against it.
  */
-const TOUR_RULE_ONE_WAITING = `1. **Wait for each thing they do.** This conversation was most likely open before It's add-on was installed, and then what the person does on a page does not arrive here by itself. What each \`it tour show\` prints says so under \`arrives\`. Where \`arrives.byItself\` is \`true\`, as it is in a thread of T3 Code, what they do arrives as a message that begins \`[It]\`: after each page and each answer, end your turn, and do not wait. Otherwise, after every page you show and every answer you give, run \`it wait --timeout 100\` and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Where it is refused because your harness does not tell \`it\` which conversation this is, add \`--id\` and the id of the page that is on the screen. Do not use \`--follow\`, and do not put the command in the background: it has to end for you to be shown what it printed. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing. During the tour, say nothing else of what \`arrives.next\` says. Where it gives words for the person to type /reload-plugins or to start a new conversation, you told them those words with the pairing link, as setup said to: do not say them again during the tour. If you did not, say them once, word for word, after the ending. The one exception to waiting is the first page where showing it printed \`"asleep": true\`: there you give the person the words that its \`arrives.next\` gives and end your turn, as it says, since the add-on loads only once your reply is over.`
+const TOUR_RULE_ONE_WAITING = `1. **Wait for each thing they do.** This conversation was most likely open before It's add-on was installed, and then what the person does on a page does not arrive here by itself. What each \`it tour show\` prints says so under \`arrives\`. Where \`arrives.byItself\` is \`true\`, as it is in a thread of T3 Code, what they do arrives as a message that begins \`[It]\`: after each page and each answer, end your turn, and do not wait. Otherwise, after every page you show and every answer you give, run \`it wait --timeout 100\` and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Where it is refused because your harness does not tell \`it\` which conversation this is, add \`--id\` and the id of the page that is on the screen. Do not use \`--follow\`, and do not put the command in the background: it has to end for you to be shown what it printed. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing. During the tour, say nothing else of what \`arrives.next\` says. Where it gives words for the person to type /reload-plugins or to start a new conversation, you told them those words with the pairing link, as setup said to: do not say them again during the tour. If you did not, say them once, word for word, after the ending. On the tour’s first page that waiting is done for you by \`it tour answer\` and \`it tour next\`, as its section says, and you run no \`it wait\` there. The one exception to waiting is the first page where showing it printed \`"asleep": true\`: there you give the person the words that its \`arrives.next\` gives and end your turn, as it says, since the add-on loads only once your reply is over.`
 /** The tour as an agent that waited for the button is given it. */
 function tourForOneThatWaited(guide: string): string {
   const lines = guide.split('\n')
@@ -1101,6 +1102,55 @@ async function tourWhenAsked(a: Args) {
   })
 }
 
+/** The folders a picture of the tour's may have been kept in for this conversation: the one this command runs in, and the one the conversation was last known to work in. */
+function pictureFolders(): (string | undefined)[] {
+  const me = sessionAsked()?.session
+  return [process.cwd(), me ? conversationFolder(me) : undefined]
+}
+
+/**
+ * `it tour answer <action-id> ['<json>']` and `it tour next`: what an agent answers the tour's
+ * first page with, and how it waits for what the person does there. One command answers: the
+ * answer is set under the part of the page the action came from, with the request it waits on,
+ * the action is acknowledged, and the picture kept for it is taken away. Then, where what the
+ * person does next arrives in this conversation by itself, the agent is told to end its turn.
+ * Where it does not, or It cannot tell, the command waits for it as `it wait` does and prints
+ * it, with any picture it carried already written to a file, so that the next answer is again
+ * one command. `it tour next` is that wait by itself.
+ */
+async function tourAnswer(a: Args, counted: (code?: string) => void) {
+  const USAGE = "tour answer <action-id> ['<json>' | --file <path>] [--wait] [--timeout <seconds>]"
+  const me = sessionAsked()?.session
+  if (a._[0] === 'answer') {
+    const id = need(a._[1], 'which action', USAGE)
+    const file = text(a, 'file')
+    if (file !== undefined && a._[2] !== undefined)
+      throw new Problem('The answer is given once, on the command line or with --file, and this command was given both.', 'invalid', `Usage: it ${USAGE}`)
+    const given = file === undefined ? a._[2] : fileText(file, 'the answer')
+    const answer =
+      given === undefined
+        ? undefined
+        : object(json(given, file === undefined ? 'The answer' : `The answer in ${file}`, `it tour answer ${id} --file <path>`), 'An answer')
+    const done = await answerAction(id, answer)
+    dropPicture(done.request, pictureFolders())
+    const answered = { answered: done.part ?? null }
+    // Told to end its turn only where It knows that the next thing arrives by itself: anywhere else the command waits for it
+    const waits = a.flags.wait === true || (await arrivalHere(START_SLUG, true))?.byItself !== true
+    if (!waits)
+      return out({ ...answered, next: 'End your turn. What the person does next arrives in this conversation by itself, as a message that begins [It].' })
+    written(
+      process.stdout,
+      `${JSON.stringify({ ...answered, next: 'Waiting for what the person does next, which is printed below. Answer it with this command again.' })}\n`,
+    )
+  } else if (a._.length > 1) throw new Problem('`it tour next` takes nothing after it.', 'invalid', 'Usage: it tour next [--timeout <seconds>]')
+  // An agent app that does not say which conversation this is waits on the page by its id, as the tour tells it to
+  const waiting: Args = { _: [], flags: { timeout: text(a, 'timeout') ?? '100', ...(me ? {} : { id: START_SLUG }) }, many: {} }
+  return wait(waiting, counted, async (c) => {
+    const picture = await keepPicture(c, process.cwd())
+    return picture ? { picture } : {}
+  })
+}
+
 /**
  * The tour an agent gives of It. With nothing after it, the guide is printed for the agent to
  * follow. `show` publishes one of the tour's pages and brings it up, starting afresh each time,
@@ -1111,13 +1161,16 @@ async function tourWhenAsked(a: Args) {
  * not been: the agent that gives the tour keeps no count of its own. When all have been seen,
  * what comes next is the ending.
  */
-async function tour(a: Args) {
-  const USAGE = 'tour [--wait] [show <name> | show next | clear]'
+async function tour(a: Args, counted: (code?: string) => void) {
+  const USAGE = "tour [--wait] [show <name> | show next | answer <action-id> ['<json>'] | next | clear]"
   const what = a._[0]
   if (a.flags.wait === true && what === undefined) return tourWhenAsked(a)
   if (what === undefined) return written(process.stdout, GUIDE)
+  if (what === 'answer' || what === 'next') return tourAnswer(a, counted)
   if (what === 'clear') {
     const cleared = await call<{ requested: { slug: string; job: string }[]; kept: string[]; seen: number }>('mutation', api.tour.clear, {})
+    // And whatever pictures the tour kept for the agent go with its pages
+    dropPictures(pictureFolders())
     if (cleared.requested.length) usage.record('tour.ended', { seen: String(Math.min(cleared.seen, 5)) as '0' | '1' | '2' | '3' | '4' | '5' })
     const results = await Promise.all(cleared.requested.map(({ slug, job }) => deletionStatus(slug, job)))
     const pending = results.filter((r) => r.state !== 'completed')
@@ -3430,6 +3483,13 @@ This machine
   it tour --wait [--timeout <seconds>]
                                  Wait until the person presses "Take the tour" on the site, and
                                  print the tour then. For an agent that has just installed It.
+  it tour answer <action-id> ['<json>' | --file <path>]
+                                 Answer something done on the tour's first page, for the agent
+                                 that gives the tour: set the answer on the page and acknowledge
+                                 the action. Where what is done next does not arrive by itself,
+                                 wait for it and print it.
+  it tour next [--timeout <seconds>]
+                                 Wait for the next thing done on the tour's first page.
   it telemetry [on | off]        Say whether It reports usage counts, or turn that on or off.
                                  It reports them until it is turned off.
   it upgrade [--check]           Put the newest It in place of this one, and start it again where
@@ -3676,7 +3736,7 @@ async function main(argv: string[]): Promise<void> {
       written(process.stdout, SKILL)
       return
     case 'tour':
-      return tour(a)
+      return tour(a, counted)
     case 'login': {
       /** What a folder is that has nothing to join, or has joined already. */
       const refused = () => {

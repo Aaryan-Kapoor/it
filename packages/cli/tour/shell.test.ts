@@ -2,8 +2,9 @@
 // agent's dock and what it says at each stage, and how the page is put together from its parts.
 // Each part's own tests are beside it, in parts/<name>.test.ts.
 import { readFileSync } from 'node:fs'
+import { LIMITS } from '@it/protocol'
 import { describe, expect, test } from 'vitest'
-import { tourPage } from '../src/tour'
+import { GUIDE, tourPage } from '../src/tour'
 import { opened, type Page, pointer, SLOW, STEPS } from './start-page'
 
 // The module that puts the page together is plain JavaScript, with no types of its own
@@ -323,5 +324,82 @@ describe('how the first page is put together', () => {
     expect(made.section.startsWith('<section class="part" data-part="one"')).toBe(true)
     expect(made.script.startsWith('<script>')).toBe(true)
     expect(made.style).toBe('  [data-part="x"] { color: red; }')
+  })
+})
+
+describe('the guide for the first page', () => {
+  const part = GUIDE.slice(GUIDE.indexOf('\n## The first page'), GUIDE.indexOf('\n## If they ask to see more'))
+  const page = tourPage('start').html
+  /** The guide's section for one part of the page, by the name of an action the part sends. */
+  const sectionFor = (action: string) => part.split(/^### /m).find((text) => text.split('\n')[0]!.includes(`\`${action}\``))!
+  const examples = (text: string) =>
+    [...text.matchAll(/^it tour answer <the action's id> '(\{[^']*)'$/gm)].map((m) => JSON.parse(m[1]!) as Record<string, unknown>)
+
+  test('shows the first page before anything else, and before the pairing link where no screen is paired', () => {
+    expect([...GUIDE.matchAll(/^it tour show ([a-z]+)/gm)][0]![1]).toBe('start')
+    expect(part).toContain('give them the link that `it site --no-open` prints')
+    expect(part).toContain('`"asleep": true`')
+  })
+
+  test('names every action a part sends, in that part’s own section, and the page sends each it names', () => {
+    const sends = [...page.matchAll(/(?:asker|my)\.send\("([a-z]+)"/g)].map((m) => m[1]!)
+    expect([...new Set(sends)].sort()).toEqual(['beat', 'checked', 'cleared', 'finish', 'illegal', 'move', 'moved', 'reset', 'turned'])
+    for (const action of new Set(sends)) expect(sectionFor(action), action).toBeDefined()
+    for (const heading of part.matchAll(/^### [^\n]*$/gm)) for (const named of heading[0].matchAll(/`([a-z]+)`/g)) expect(sends, named[1]).toContain(named[1])
+  })
+
+  test('answers each part with one `it tour answer`, in a shape the part reads, and never has the agent copy the request or patch the page', () => {
+    const shapes = {
+      moved: ['armchair', 'lamp', 'say'],
+      checked: ['read', 'right', 'answer', 'hint', 'say', 'blind'],
+      move: ['move', 'note'],
+      turned: ['moves', 'say'],
+      beat: ['pattern', 'note'],
+    }
+    for (const [action, fields] of Object.entries(shapes)) {
+      const given = examples(sectionFor(action))
+      expect(given.length, action).toBeGreaterThan(0)
+      // Every field an example gives is one the part reads from its answer, and none is the request, which the command sets itself
+      const reads = page.slice(page.indexOf(`Shell.part("${{ moved: 'room', checked: 'board', move: 'chess', turned: 'cube', beat: 'drums' }[action]}"`))
+      for (const example of given)
+        for (const key of Object.keys(example)) {
+          expect(fields, `${action} ${key}`).toContain(key)
+          expect(reads, `${action} reads ${key}`).toMatch(new RegExp(`\\.${key}\\b`))
+        }
+      expect(given.some((example) => 'request' in example || 'part' in example)).toBe(false)
+    }
+    expect(part).not.toMatch(/^it patch tour-start/m)
+    expect(part).not.toMatch(/^it (wait|ack|action|save) /m)
+    expect(part).toContain('you never copy `part` or `request` into your answer')
+    // Every example is small beside what a state may hold
+    for (const example of examples(part)) expect(new TextEncoder().encode(JSON.stringify(example)).length).toBeLessThan(LIMITS.stateBytes / 100)
+  })
+
+  test('tells the agent to be quick, and what to do after each answer by what the command printed', () => {
+    expect(GUIDE).toContain('a good answer now is worth more than a perfect one later')
+    expect(part).toContain('Be quick. Do not deliberate')
+    expect(part).toContain('`{"timedOut": true}`: nothing has happened yet. Run `it tour next`')
+    expect(part).toContain('where `arrives.byItself` is `true`, end your turn, and anywhere else run `it tour next`')
+    // The first rule, which every page of the tour goes by, sends the first page's waiting to those two commands
+    const rule = GUIDE.split('\n').find((line) => line.startsWith('1. **Never block.**'))!
+    expect(rule).toContain('On the first page that waiting is done for you by `it tour answer` and `it tour next`')
+  })
+
+  test('tells the agent that nothing in the tour touches the person’s things, and that the one file the tour makes is It’s to write and to delete', () => {
+    expect(GUIDE).toContain("2. **Nothing in the tour touches the person's things.**")
+    expect(GUIDE).toContain("Where a part's section asks you to look at something of theirs, you only read it.")
+    const board = sectionFor('checked')
+    expect(board).toContain('`saved` names a picture of the sheet, which It has already written for you in the folder you are in')
+    expect(board).toContain('The command deletes the picture, so do not delete it yourself')
+    expect(part).not.toContain('sheet.png')
+  })
+
+  test('has an agent that cannot view images say so with a flag, and neither mark the answer nor work it out from the lines', () => {
+    const board = sectionFor('checked')
+    expect(board).toContain('If you cannot view images, do not mark the answer, and do not work it out from `strokes` or from anything else: say so.')
+    const blind = examples(board).find((example) => example.blind === true)!
+    expect(Object.keys(blind)).toEqual(['blind', 'say'])
+    // And the same where there is no picture to view
+    expect(board).toContain('The same goes where `saved` is `null`')
   })
 })

@@ -92,6 +92,8 @@ export const OPTIONS: Record<string, readonly string[]> = {
   tour: ['wait', 'timeout'],
   'tour show': ['agent', 'param', 'on', 'on-id', 'everywhere'],
   'tour clear': [],
+  'tour answer': ['file', 'wait', 'timeout'],
+  'tour next': ['timeout'],
   telemetry: [],
   upgrade: ['check'],
   runs: [],

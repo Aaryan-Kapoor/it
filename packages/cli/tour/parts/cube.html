@@ -37,7 +37,7 @@ Shell.part("cube", (my) => {
   var FACES = "URFDLB", SOLVED = "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
   var NORMAL = { U: [0, 1, 0], R: [1, 0, 0], F: [0, 0, 1], D: [0, -1, 0], L: [-1, 0, 0], B: [0, 0, -1] };
   var COLOUR = { U: "#f4f1ea", R: "#c8402e", F: "#1f9d5f", D: "#f2c230", L: "#ec7a24", B: "#2d63c8" };
-  var NAMED = /^[UDLRFB](2|')?$/;
+  var NAMED = /^[UDLRFB](2|'|i)?$/;
   // Where each sticker is: the small cube it is on, from -1 to 1 along each way, and the way it faces
   function where(face, r, c) {
     return { U: [-1 + c, 1, -1 + r], R: [1, 1 - r, 1 - c], F: [-1 + c, 1 - r, 1], D: [-1 + c, -1, 1 - r], L: [-1, 1 - r, -1 + c], B: [1 - c, 1 - r, -1] }[face];
@@ -164,9 +164,12 @@ Shell.part("cube", (my) => {
     $("cube-said").textContent = "";
     paint();
   });
+  // The way back that was sent with what is being asked, which the agent may answer with by its name
+  var wayBack = [];
   var asker = my.asker((got) => {
-    var given = Array.isArray(got.moves) ? got.moves.slice(0, 20) : [];
-    var good = given.filter((m) => typeof m === "string" && NAMED.test(m.trim())).map((m) => m.trim());
+    var given = got.moves === "back" ? wayBack.slice() : Array.isArray(got.moves) ? got.moves.slice(0, 20) : [];
+    // A turn the other way may be written with an i, which is easier to quote on a command line than a mark
+    var good = given.filter((m) => typeof m === "string" && NAMED.test(m.trim())).map((m) => m.trim().replace(/i$/, "'"));
     var left = given.length - good.length;
     box.say(got.say);
     // Each turn the agent gives is played one at a time, and only one that is a turn's name. The
@@ -196,7 +199,8 @@ Shell.part("cube", (my) => {
     box.did("asked for the next turns");
     // `back` is the way back to solved as far as the page plays in one answer: the turns since it was solved, undone from the last
     var undo = turns.slice().reverse().map((t) => t.charAt(0) + (t.length === 1 ? "'" : t.charAt(1) === "2" ? "2" : ""));
-    asker.send("turned", { back: undo.slice(0, 20), more: Math.max(0, undo.length - 20), solved: faces === SOLVED, faces: faces, turns: turns.slice() });
+    wayBack = undo.slice(0, 20);
+    asker.send("turned", { back: wayBack.map((t) => t.replace("'", "i")), more: Math.max(0, undo.length - 20), solved: faces === SOLVED, faces: faces, turns: turns.slice() });
   });
   paint();
   box.idle();
