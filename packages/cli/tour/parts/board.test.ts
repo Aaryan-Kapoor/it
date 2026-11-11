@@ -1,6 +1,7 @@
 // The whiteboard of the tour’s first page: what the markers and the eraser write, what Check it sends, how the agent’s marking is drawn, and the typed answer an agent that cannot look at pictures is given.
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { chromium } from 'playwright'
 import { describe, expect, test } from 'vitest'
 import { tourPage } from '../../src/tour'
 import { opened, type Page, pointer, SLOW } from '../start-page'
@@ -499,4 +500,122 @@ describe('the whiteboard', () => {
     expect(page.$('#board-said').textContent).toBe('144')
     page.close()
   })
+})
+
+// Where the marker's ink lands, what the picture looks like and whether the board fills the stage are only known in a browser, so this is run in one, where one is installed
+describe.skipIf('Bun' in globalThis || !existsSync(chromium.executablePath()))('the whiteboard in a browser', () => {
+  // It takes whatever the page sends, and the test answers as the agent would
+  const IT = `window.sent = []; window.It = { state: {}, revision: 1, heard: [], onState(fn) { this.heard.push(fn); return () => {} },
+    action(name, data) { window.sent.push(data); return Promise.resolve({ ok: true, id: 'a' + window.sent.length }) } };
+    window.answer = (answer) => { It.state = { board: { ...answer, request: window.sent.at(-1).request } }; It.heard.forEach((fn) => fn()) }`
+  test.each([
+    [1366, 768],
+    [390, 844],
+  ])(
+    'fills the stage of a %i by %i screen, writes where the marker is, sends a dark picture of a red answer, and has the green marker draw the marking',
+    async (width, height) => {
+      const browser = await chromium.launch({ timeout: 0 })
+      try {
+        const tab = await browser.newPage({ viewport: { width, height } })
+        await tab.setContent(tourPage('start', {}, 'Claude Code').html.replace('<head>', () => `<head><script>${IT}</script>`))
+        await tab.locator('#next').click()
+        await tab.evaluate(() => document.fonts.ready)
+        // Nothing scrolls, and the board has nearly all of the stage
+        const room = await tab.evaluate(() => {
+          const rect = (id: string) => document.getElementById(id)!.getBoundingClientRect()
+          const [stage, face] = [rect('stage'), rect('board-face')]
+          return {
+            scrolls: document.documentElement.scrollHeight > innerHeight || document.documentElement.scrollWidth > innerWidth,
+            part: (face.width * face.height) / (stage.width * stage.height),
+          }
+        })
+        expect(room.scrolls).toBe(false)
+        expect(room.part).toBeGreaterThan(0.72)
+        const slot = (await tab.locator('#board-slot rect').boundingBox())!
+        const [x, y] = [slot.x + slot.width * 0.3, slot.y + slot.height * 0.3]
+        await tab.locator('[data-tool="red"]').click()
+        await tab.mouse.move(x, y)
+        await tab.mouse.down()
+        await tab.mouse.move(x + slot.width * 0.3, y + slot.height * 0.4, { steps: 8 })
+        await tab.mouse.up()
+        /** The colour of the board's ink under a point of the screen. */
+        const inkAt = (px: number, py: number) =>
+          tab.evaluate(
+            ([px, py]) => {
+              const c = document.getElementById('board-ink') as HTMLCanvasElement
+              const r = c.getBoundingClientRect()
+              return [
+                ...c.getContext('2d')!.getImageData(Math.round(((px! - r.left) * c.width) / r.width), Math.round(((py! - r.top) * c.height) / r.height), 1, 1)
+                  .data,
+              ]
+            },
+            [px, py],
+          )
+        expect(await inkAt(x, y)).toEqual([210, 55, 44, 255])
+        expect((await inkAt(slot.x + 4, slot.y + slot.height - 4))[3]).toBe(0)
+        await tab.locator('#board-check').click()
+        await tab.waitForFunction(() => (window as any).sent.length === 1)
+        // The picture holds the question and the answer in dark ink on white, and nothing of the marker's red
+        const picture = await tab.evaluate(async () => {
+          const data = (window as any).sent[0]
+          const bitmap = await createImageBitmap(data.png)
+          const c = document.createElement('canvas')
+          c.width = bitmap.width
+          c.height = bitmap.height
+          const g = c.getContext('2d')!
+          g.drawImage(bitmap, 0, 0)
+          const d = g.getImageData(0, 0, c.width, c.height).data
+          let dark = 0
+          let coloured = 0
+          for (let i = 0; i < d.length; i += 4) {
+            if (d[i]! < 60 && d[i + 1]! < 60 && d[i + 2]! < 60) dark++
+            if (Math.max(d[i]!, d[i + 1]!, d[i + 2]!) - Math.min(d[i]!, d[i + 1]!, d[i + 2]!) > 24) coloured++
+          }
+          return {
+            saved: data.saved,
+            strokes: data.strokes.length,
+            wide: c.width,
+            tall: c.height,
+            corner: [...d.slice(0, 4)],
+            dark: dark / (d.length / 4),
+            coloured,
+          }
+        })
+        expect(picture.saved).toMatch(/^\.it-tour-[0-9a-f]{32}\.png$/)
+        expect(picture.strokes).toBe(0)
+        // As large as a model reads a picture at, and no larger
+      expect(Math.max(picture.wide, picture.tall)).toBeGreaterThan(900)
+      expect(Math.max(picture.wide, picture.tall)).toBeLessThanOrEqual(1280)
+        expect(picture.corner).toEqual([255, 255, 255, 255])
+        expect(picture.dark).toBeGreaterThan(0.01)
+        expect(picture.coloured).toBe(0)
+        // The marking is drawn by the green marker, which is back in the tray when it is done
+        await tab.evaluate(() => (window as any).answer({ read: '1', right: false, answer: '144', hint: '12 × 10 + 12 × 2', say: 'Not quite.' }))
+        await tab.waitForFunction(() => !document.getElementById('board-hand')!.hidden)
+        await tab.waitForFunction(
+          () => document.getElementById('board-hint')?.classList.contains('on') && document.getElementById('board-hand')!.hidden,
+          null,
+          { timeout: 15_000 },
+        )
+        const marks = await tab.evaluate(() => {
+          const face = document.getElementById('board-face')!.getBoundingClientRect()
+          return ['ring', 'arrow', 'head', 'right', 'hint'].map((mark) => {
+            const r = document.getElementById(`board-${mark}`)!.getBoundingClientRect()
+            return r.width > 0 && r.left >= face.left && r.right <= face.right && r.top >= face.top && r.bottom <= face.bottom
+          })
+        })
+        expect(marks).toEqual([true, true, true, true, true])
+        // Wiped quite clean with the eraser, there is nothing to check
+        await tab.locator('[data-tool="eraser"]').click()
+        await tab.mouse.move(x - 30, y - 30)
+        await tab.mouse.down()
+        for (let i = 0; i < 6; i++) await tab.mouse.move(x + (i % 2 ? -30 : slot.width * 0.4), y - 20 + i * slot.height * 0.1, { steps: 6 })
+        await tab.mouse.up()
+        expect(await tab.locator('#board-check').isDisabled()).toBe(true)
+        expect(await tab.locator('#board-marks').evaluate((el) => el.childNodes.length)).toBe(0)
+      } finally {
+        await browser.close()
+      }
+    },
+  )
 })
