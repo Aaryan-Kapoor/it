@@ -46,7 +46,7 @@ const DEADLINE_MS = 3000 // how long one question to the connector may take from
 const MOST_BYTES = 256 * 1024 // an answer longer than this is not read to its end, and counts as no answer
 const PROMPT_MS = 5000 // how long OpenCode is given to say that it will take a message
 const SHOWN_MS = 30_000 // how long it is then given to show that message in the conversation
-const ADMITTED_MS = 30 * 60_000 // how long a message OpenCode 2.x has admitted to a conversation's inbox is waited for before its clicks are tried again
+const ADMITTED_MS = 30 * 60_000 // how long a message OpenCode 2.x has admitted to a conversation's inbox keeps other clicks for that conversation waiting
 const AGAIN_MS = [1000, 5000, 30_000, 180_000] // how long to wait before trying a refused click again
 const MOST = 40 // how many conversations are asked about at once, which is as many as the connector watches; the least recently active go first
 
@@ -346,7 +346,8 @@ function bridge(app) {
   async function handOver(s, clicks) {
     s.sending = clicks
     const began = Date.now()
-    for (const [id, w] of s.watched) if (began - w.since > 10 * SHOWN_MS) s.watched.delete(id)
+    // Clicks OpenCode still holds stay watched however long that takes, so that they are reported when it delivers them
+    for (const [id, w] of s.watched) if (began - w.since > 10 * SHOWN_MS && !app.admitted?.(s, [w.click])) s.watched.delete(id)
     // Watched and waited for from before OpenCode is asked. What it announces about a message
     // can arrive before its answer to the call does, and must not be missed.
     for (const c of clicks) s.watched.set(c.id, { click: c, since: began })
@@ -368,11 +369,14 @@ function bridge(app) {
     // OpenCode 2.x admits a message to the conversation's inbox, and delivers it at the
     // conversation's next step, which a long command can put off for minutes. While the message
     // is admitted and neither delivered nor dropped, the clicks are on their way: handing them
-    // over again would put them into the conversation twice. So they are waited for, for as long
-    // as half an hour, and only then tried again.
+    // over again would put them into the conversation twice. So they are waited for, and are
+    // never handed over again while OpenCode holds them (see `check`). Past half an hour the
+    // conversation is given other clicks meanwhile, and these stay watched until OpenCode
+    // delivers them or drops them.
     while (!shownThere && said === 'took' && app.admitted?.(s, clicks) && Date.now() - began < ADMITTED_MS)
       shownThere = await untilShown(s, clicks, Math.min(Date.now() + SHOWN_MS, began + ADMITTED_MS))
     s.sending = []
+    if (!shownThere && said === 'took' && app.admitted?.(s, clicks)) return
     if (shownThere) {
       s.tries = 0
       s.notBefore = 0
@@ -405,7 +409,8 @@ function bridge(app) {
     if (again.length) void ask('/ack', { ids: again.map((c) => c.id) })
     // Only what the connector offers this very moment is handed over. A click it has stopped
     // offering may have gone to someone else.
-    const fresh = clicks.filter((c) => !given.has(c.id))
+    // Nor what OpenCode holds already, on its way into the conversation
+    const fresh = clicks.filter((c) => !given.has(c.id) && !app.admitted?.(s, [c]))
     if (!fresh.length || s.sending.length || Date.now() < s.notBefore) return
     // Not waited for: the connector goes on being asked while OpenCode takes the message
     void handOver(s, fresh)

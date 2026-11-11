@@ -1262,6 +1262,10 @@ describe('the OpenCode add-on', () => {
       await seconds(90)
       expect(opencode.state.tried).toBe(1)
       expect(c.state.acked).toEqual([])
+      // However long the turn takes: past half an hour, the click is still not handed over again
+      await seconds(40 * 60)
+      expect(opencode.state.tried).toBe(1)
+      expect(c.state.acked).toEqual([])
       opencode.state.deliver()
       await reached(() => c.state.acked.length > 0, 'the connector has been told')
       await seconds(5)
