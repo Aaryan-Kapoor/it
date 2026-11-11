@@ -549,7 +549,7 @@ const waitFor = (err: unknown) =>
   Math.max(250, Number((refusal(err) as { retryAfterMs?: number }).retryAfterMs ?? (refusal(err).code === 'limit' ? 30_000 : 1000)))
 /** Whether a refusal is for good: the same however often it is asked again. */
 export const settled = (err: unknown) => ['invalid', 'not_found', 'conflict'].includes(refusal(err).code)
-/** The longest one wait for It to take a click again may be, whatever It says: one wait more is cheap. */
+/** The longest one sleep is while a page waits for It to take its clicks again: a longer wait is slept a piece at a time. */
 const LONGEST_WAIT_MS = 60_000
 
 /**
@@ -576,10 +576,10 @@ function laneFor(id: string): Lane {
   }
   return lane
 }
-/** It said to wait so long before this page is sent to again. */
+/** It said to wait so long before this page is sent to again: all of it, however long, waited a minute at a time. */
 function slowDown(id: string, ms: number): void {
   const lane = laneFor(id)
-  lane.until = Math.max(lane.until, Date.now() + Math.min(ms, LONGEST_WAIT_MS))
+  lane.until = Math.max(lane.until, Date.now() + ms)
 }
 /**
  * Joins the page's lane, and resolves once every click that joined before has had its turn,
@@ -629,8 +629,9 @@ export const REFUSED_SAID_MS = 30_000
 export function noteRefused(user: string, artifactId: string, why: 'fast' | string): void {
   const id = laneOf(user, artifactId)
   const now = Date.now()
-  const was = refusals.get(id)
-  const last = was && now - was.at < REFUSED_SAID_MS ? was : { fast: 0, other: 0, why: null, at: now }
+  // What is no longer said is let go of, so that only pages refused lately are kept
+  for (const [other, said] of refusals) if (now - said.at >= REFUSED_SAID_MS) refusals.delete(other)
+  const last = refusals.get(id) ?? { fast: 0, other: 0, why: null, at: now }
   refusals.set(id, {
     fast: last.fast + (why === 'fast' ? 1 : 0),
     other: last.other + (why === 'fast' ? 0 : 1),
@@ -741,6 +742,9 @@ const locks = (): Locks | undefined => (typeof navigator === 'undefined' ? undef
 // been answered yet, each by when it was made. They exist only in this tab, and the page's bar
 // says so while there are any.
 const unkept = new Map<string, number[]>()
+/** How many bytes of files the clicks that this browser would not keep hold in this tab's memory, and the most they may. */
+let unkeptBytes = 0
+const MAX_UNKEPT_FILE_BYTES = 256 * 1024 * 1024
 const unkeptKey = (user: string, artifactId: string) => `${user}.${artifactId}`
 /** How many of this person's clicks on one page are on their way with no copy kept in this browser. */
 export const unsaved = (user: string, artifactId: string) => unkept.get(unkeptKey(user, artifactId))?.length ?? 0
@@ -1033,6 +1037,8 @@ async function sendNow(
   // take room of their own: past so many bytes of the person's unsent, counted with what every
   // other tab keeps in the same step as these are kept, the person is told now
   let bytesKept = !what
+  /** What its files come to, which wait in this tab's memory if this browser will not keep them. */
+  const inMemory = what ? files.reduce((n, f) => n + f.size, 0) : 0
   let room: 'kept' | 'full' = 'kept'
   if (what)
     try {
@@ -1066,6 +1072,13 @@ async function sendNow(
       letGoOfBytes(key)
       throw new Error('This could not be saved or sent. Check the connection and try again.')
     }
+    // Files that wait in this tab's memory alone take room there: past so many bytes, the person is told now
+    if (unkeptBytes + inMemory > MAX_UNKEPT_FILE_BYTES) {
+      sending.delete(key)
+      letGoOfBytes(key)
+      throw new Error('Too many files are still waiting to be sent from this tab. Send this again once they have gone.')
+    }
+    unkeptBytes += inMemory
     unkept.set(unkeptKey(user, artifactId), [...(unkept.get(unkeptKey(user, artifactId)) ?? []), entry.at])
     changed()
   }
@@ -1154,6 +1167,7 @@ async function sendNow(
       } catch {}
     }
     if (!kept) {
+      unkeptBytes -= inMemory
       const others = [...(unkept.get(unkeptKey(user, artifactId)) ?? [])]
       const at = others.indexOf(entry.at)
       if (at >= 0) others.splice(at, 1)

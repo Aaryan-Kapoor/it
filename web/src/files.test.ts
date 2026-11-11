@@ -416,6 +416,21 @@ describe('a click with files', () => {
     )
   })
 
+  test('where this browser keeps no files, holds only so many bytes of them in the tab’s memory, and refuses one more past that at once', async () => {
+    const b = it()
+    keepBytesIn({ ...bytes, put: () => Promise.reject(new Error('no room')) })
+    // Their uploads never finish, so what they carry stays in the tab
+    vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
+    void submit(b.client, 'alice', 'page1', envelope('click-memory-1'), () => true, undefined, [sized(200 * MB, 'a.mov')])
+    await vi.waitFor(() => expect(unsaved('alice', 'page1')).toBe(1))
+    await expect(submit(b.client, 'alice', 'page1', envelope('click-memory-2'), () => true, undefined, [sized(100 * MB, 'b.mov')])).rejects.toThrow(
+      'Too many files are still waiting to be sent from this tab.',
+    )
+    expect(unsaved('alice', 'page1')).toBe(1)
+    // A click with no files is not held back by them
+    expect(await submit(b.client, 'alice', 'page1', envelope('click-memory-3'))).toEqual({ actionId: 'a1' })
+  })
+
   test('has its files let go of with everything else when everything is erased, and a file left with no click goes after a while', async () => {
     const key = 'it.outbox.alice.page1.click-erased-1'
     await bytes.put(key, [photo(10)], ANY_ROOM)
