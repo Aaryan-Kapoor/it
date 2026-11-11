@@ -120,15 +120,6 @@ export const IconStop = () => (
     <rect x="4" y="4" width="16" height="16" rx="3" fill="currentColor" />
   </svg>
 )
-/** A bin, for throwing away what was made: the recording that It's bar discards. */
-export const IconBin = () => (
-  <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true" {...stroke} strokeWidth="2.4">
-    <path d="M4 7h16" />
-    <path d="M9.5 3.5h5" />
-    <path d="M6.5 7l1 13h9l1-13" />
-  </svg>
-)
-
 /** Puts text on the clipboard, and says whether it got there. */
 export async function copy(text: string): Promise<boolean> {
   try {

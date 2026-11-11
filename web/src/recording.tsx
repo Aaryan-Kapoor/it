@@ -1,24 +1,22 @@
 // What the person sees of the microphone and the camera (media.ts), all of it inside It's own bar
 // at the top of a page, and none of it over the page: the question It asks before a page may use
-// them on this screen, what the browser is asking about where it asks itself, that a page records
-// or has the camera live and the buttons that stop each, the small view of the camera for a photo,
-// and the button that takes back what was allowed. Under Settings is what this screen has allowed, where it is taken
-// back too.
+// them on this screen, what the browser is asking about where it asks itself, that a page has the
+// camera or the microphone live and the button that stops each, the small view of the camera for
+// a photo, and the button that takes back what was allowed. Under Settings is what this screen
+// has allowed, where it is taken back too.
 import type { MediaKind } from '@it/protocol'
 import { useEffect, useRef, useState } from 'react'
-import { IconBin, IconStop } from './brand'
+import { IconStop } from './brand'
 import { ago, useNow } from './lib'
 import {
   cameraFor,
-  cannotRecord,
-  dismissNote,
+  cannotOpen,
   endsAt,
   grantsOf,
   kindsSaid,
-  type Live,
   type LiveCamera,
-  liveFor,
-  noteFor,
+  type LiveMicrophone,
+  microphoneFor,
   takeBack,
   useAsking,
   useBrowserAsking,
@@ -61,11 +59,6 @@ const IconCamera = () => (
 )
 const IconFor = ({ kinds }: { kinds: MediaKind[] }) => (kinds.includes('mic') ? <IconMic /> : <IconCamera />)
 
-/** How long something has run, as minutes and seconds. */
-const lasted = (ms: number): string => {
-  const s = Math.max(0, Math.floor(ms / 1000))
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
 /** Who made a page, in a few words, for the person to know whose page is asking. */
 const madeBy = (agent: string | null, machine: string | null): string => `${agent ?? 'An agent'}${machine ? ` on ${machine}` : ''}`
 /** The kinds in as few words as the bar has room for. */
@@ -110,10 +103,12 @@ function Ask({ page }: { page: string }) {
   const asking = useAsking()
   const armed = useArmed(asking)
   if (!asking || asking.page !== page) return null
-  // Allowed the camera, a page can see its picture live as well as record and take a photo: said here, since nothing more is asked later
-  const gives = asking.kinds.includes('camera')
-    ? 'With the camera it can record, take a photo, and see the camera’s picture live for as long as it keeps the camera open, and what it records or sees is the page’s to keep or to send anywhere.'
-    : 'What it records is given to the page.'
+  // What a page allowed either can do with it, and that what it is given is its own: said here, since nothing more is asked later
+  const gives = !asking.kinds.includes('camera')
+    ? 'With the microphone it can hear the microphone live for as long as it keeps it open, and what it hears is the page’s to keep, to record or to send anywhere.'
+    : !asking.kinds.includes('mic')
+      ? 'With the camera it can take a photo, and see the camera’s picture live for as long as it keeps the camera open, and what it sees is the page’s to keep, to record or to send anywhere.'
+      : 'With them it can take a photo, and see the camera’s picture and hear the microphone live for as long as it keeps them open, and what it sees or hears is the page’s to keep, to record or to send anywhere.'
   const detail = `${madeBy(asking.agent, asking.machine)} made this page. Allowed, it may use ${kindsSaid(asking.kinds)} on this screen until you take it back, here or under Settings, or until it goes 30 days without using it. ${gives}`
   return (
     <fieldset className="media-bar media-ask" aria-label={`“${asking.title}” asks to use ${kindsSaid(asking.kinds)} on this screen`} title={detail}>
@@ -152,16 +147,6 @@ function BrowserAsks({ page }: { page: string }) {
   )
 }
 
-/** This browser's own clock, read again every second: a recording's start is this browser's moment, and not the backend's. */
-function useTicking(): number {
-  const [now, setNow] = useState(Date.now)
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(t)
-  }, [])
-  return now
-}
-
 /** A camera's picture, in a video element of It's own. */
 function View({ stream, className, onView }: { stream: MediaStream; className: string; onView?: (v: HTMLVideoElement | null) => void }) {
   const view = useRef<HTMLVideoElement | null>(null)
@@ -185,67 +170,71 @@ function View({ stream, className, onView }: { stream: MediaStream; className: s
 }
 
 /**
- * One recording under way, in the bar: a red dot, how long, and Discard, with the camera's
- * picture the size of the dot's row where the camera records, so that what is recorded is seen.
- * Its button says Discard and not Stop: it throws the take away, where the page's own Stop keeps
- * it and the camera's Stop only closes the camera. On a phone, beside something else in the bar,
- * it shows only its bin.
+ * The camera live to a page, in the bar: a red dot, that the page sees the camera as it happens,
+ * and Stop. No picture of the camera is shown here, since the page shows the picture itself.
+ * Opened with sound, it says that the microphone is live with it, and its Stop ends both. On a
+ * phone, beside the microphone's own chip or a question, it says only "Cam".
  */
-function Recording({ l }: { l: Live }) {
-  const now = useTicking()
-  const time = lasted(now - l.since)
-  const paused = l.state === 'paused'
+function CameraLive({ c }: { c: LiveCamera }) {
+  const paused = c.state === 'paused'
+  const sound = c.kinds.includes('mic')
+  const what = sound ? 'The camera and the microphone are' : 'The camera is'
   return (
     <span
-      className="media-bar media-rec"
-      data-state={l.state}
+      className="media-bar media-live media-cam"
+      data-state={c.state}
       role="status"
-      aria-label={`${paused ? 'Paused' : 'Recording'} ${kindsSaid(l.kinds)} for “${l.title}”, ${time}`}
-      title={`${paused ? 'Paused while the screen does not show It' : 'Recording'} ${kindsSaid(l.kinds)} for “${l.title}”`}
+      aria-label={`${what} ${paused ? 'paused' : 'live'} to “${c.title}”`}
+      title={
+        paused
+          ? `${what} paused while the screen does not show It`
+          : `${what} live to “${c.title}”: the page sees the camera’s picture${sound ? ' and hears the microphone' : ''} as it happens`
+      }
     >
-      {l.kinds.includes('camera') && <View stream={l.stream} className="media-thumb" />}
-      <span className="media-rec-dot" aria-hidden="true" />
-      <span className="media-rec-time" aria-hidden="true">
-        {time}
+      <span className="media-live-dot" aria-hidden="true" />
+      <span className="media-live-what" data-short="Cam" aria-hidden="true">
+        {sound ? 'Camera and mic' : 'Camera'} {paused ? 'paused' : 'live'}
       </span>
       <button
         type="button"
-        className="media-rec-discard"
-        title="Stop recording and discard it: what was recorded is thrown away, and is not given to the page. The page's own Stop keeps it."
-        aria-label="Discard the recording"
-        onClick={() => l.end('person')}
+        className="media-live-stop"
+        title={
+          sound ? 'Stop the camera and the microphone. The page sees and hears nothing more from them.' : 'Stop the camera. The page sees nothing more from it.'
+        }
+        aria-label={sound ? 'Stop the camera and the microphone' : 'Stop the camera'}
+        onClick={() => c.end('person')}
       >
-        <IconBin />
-        Discard
+        <IconStop />
+        Stop
       </button>
     </span>
   )
 }
 
 /**
- * The camera live to a page, in the bar: a red dot, that the page sees the camera as it happens,
- * and Stop. No picture of the camera is shown here, since the page shows the picture itself.
+ * The microphone live to a page, in the bar: a red dot, that the page hears the microphone as it
+ * happens, and Stop. On a phone, beside the camera's chip or a question, it says only "Mic".
  */
-function CameraLive({ c }: { c: LiveCamera }) {
-  const paused = c.state === 'paused'
+function MicLive({ m }: { m: LiveMicrophone }) {
+  const paused = m.state === 'paused'
   return (
     <span
-      className="media-bar media-cam"
-      data-state={c.state}
+      className="media-bar media-live media-mic"
+      data-state={m.state}
       role="status"
-      aria-label={`The camera is ${paused ? 'paused' : 'live'} to “${c.title}”`}
-      title={paused ? 'The camera is paused while the screen does not show It' : `The camera is live to “${c.title}”: the page sees its picture as it happens`}
+      aria-label={`The microphone is ${paused ? 'paused' : 'live'} to “${m.title}”`}
+      title={paused ? 'The microphone is paused while the screen does not show It' : `The microphone is live to “${m.title}”: the page hears it as it happens`}
     >
-      <span className="media-cam-dot" aria-hidden="true" />
-      <span className="media-cam-what" aria-hidden="true">
-        Camera {paused ? 'paused' : 'live'}
+      <span className="media-live-dot" aria-hidden="true" />
+      <span className="media-live-what" data-short="Mic" aria-hidden="true">
+        Mic {paused ? 'paused' : 'live'}
       </span>
       <button
         type="button"
-        className="media-cam-stop"
-        title="Stop the camera. The page sees nothing more from it."
-        aria-label="Stop the camera"
-        onClick={() => c.end('person')}
+        className="media-live-stop"
+        title="Stop the microphone. The page hears nothing more from it."
+        aria-label="Stop the microphone"
+        onClick={() => m.end('person')}
       >
         <IconStop />
         Stop
@@ -286,32 +275,12 @@ function Photo({ page }: { page: string }) {
   )
 }
 
-/** What the bar says of a page's last recording where it stopped by itself at the most one file may be, until it is dismissed or the page records again. */
-function Note({ page }: { page: string }) {
-  const note = noteFor(page)
-  if (!note) return null
-  const long =
-    note === 'kept'
-      ? 'The recording stopped at 1 GB, the most one file sent with an action can be. What was recorded is kept, and was given to the page.'
-      : 'The recording stopped: it grew past 1 GB, the most one file sent with an action can be, all at once, and nothing of it could be kept.'
-  return (
-    <span className="media-bar media-note" role="status" title={long}>
-      <span className="media-bar-text">{note === 'kept' ? 'Stopped at 1 GB · kept' : 'Stopped past 1 GB · nothing kept'}</span>
-      <span className="sr-only">{long}</span>
-      <button type="button" className="media-bar-btn" onClick={() => dismissNote(page)}>
-        OK
-      </button>
-    </span>
-  )
-}
-
 /**
  * Everything about the microphone and the camera for the page shown, in It's bar, where nothing
  * on the page can cover it: It's question, or which page the browser is asking about, or the
- * photo being taken, or how the last recording stopped. The camera live to the page, and what
- * records for it, are said beside whichever of those is shown, since each goes on all the while:
- * a page recording sound that asks for the camera still shows its recording, with Discard, while
- * It asks.
+ * photo being taken. The camera and the microphone live to the page are said beside whichever of
+ * those is shown, since each goes on all the while: a page with the microphone live that asks for
+ * the camera still shows that the microphone is live, with its Stop, while It asks.
  */
 export function MediaBar({ page }: { page: string }) {
   useMediaChanges()
@@ -319,20 +288,18 @@ export function MediaBar({ page }: { page: string }) {
   const browser = useBrowserAsking()
   const shooting = useShooting()
   const c = cameraFor(page)
-  const l = liveFor(page)
+  const m = microphoneFor(page)
   return (
     <>
       {c && <CameraLive c={c} />}
-      {l && <Recording l={l} />}
+      {m && <MicLive m={m} />}
       {asking?.page === page ? (
         <Ask page={page} />
       ) : browser?.page === page ? (
         <BrowserAsks page={page} />
       ) : shooting?.page === page ? (
         <Photo page={page} />
-      ) : (
-        !l && <Note page={page} />
-      )}
+      ) : null}
     </>
   )
 }
@@ -345,7 +312,7 @@ export function MediaAllowed({ user, page, title }: { user: string; page: string
   useMediaChanges()
   const [sure, setSure] = useState(false)
   const grant = grantsOf(user).find((g) => g.page === page)
-  if (!grant || liveFor(page) || cameraFor(page)) return null
+  if (!grant || cameraFor(page) || microphoneFor(page)) return null
   if (sure)
     return (
       <fieldset className="media-bar media-takeback" aria-label={`Take back ${kindsSaid(grant.kinds)} from “${title}”?`}>
@@ -385,7 +352,7 @@ export function MediaGrants({ user }: { user: string }) {
   useMediaChanges()
   useNow()
   const grants = grantsOf(user)
-  const cannot = cannotRecord()
+  const cannot = cannotOpen()
   return (
     <section>
       <h3>Microphone and camera</h3>
@@ -407,7 +374,7 @@ export function MediaGrants({ user }: { user: string }) {
           <li className="row">
             <span className="row-main">
               <span className="row-name">No page may use the microphone or the camera here</span>
-              <span className="row-sub">A page that calls for one asks you first in its bar, and records only while It's bar says so.</span>
+              <span className="row-sub">A page that calls for one asks you first in its bar, and has it only while It's bar says so.</span>
             </span>
           </li>
         )}

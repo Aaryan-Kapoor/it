@@ -2,20 +2,21 @@
 //
 // No browser gives either to a page. A page is a sandboxed document with no origin of its own
 // (mount.tsx), and a browser gives the microphone and the camera only to an origin it can ask the
-// person about. So the site records, under its own origin, for a page that asks it to, and hands
-// the page what was recorded as a file. The page sends that where it sends anything: to its
-// agent with an action, which It keeps as it keeps any file an action carries. A page that wants
-// the camera live is sent its pictures as they come, and makes its own stream of them.
+// person about. So the site opens them, under its own origin, for a page that asks it to, and
+// passes the page what they give as it comes: the camera's pictures one by one, and the
+// microphone's sound in small pieces. The page makes a stream of its own from them, to show, to
+// record or to send in a call. A photo is taken by the person in a view of It's own, and the page
+// is given that one picture as a file.
 //
 // The browser asks the person once whether the site may use the microphone, and that would then
 // be for every page there is. So the site asks first, in words of its own, for each page on each
 // screen: which page, which agent made it, and what it would use. What the person allows is kept
 // in this browser, for this pairing, for that page as the conversation that has it now has it: a
 // page taken over by another conversation is asked about again. It is taken back in the page's
-// bar or under Settings. While the site records, It's bar says so and can stop it; while the
-// screen does not show the site, the recording waits, and nothing is recorded.
+// bar or under Settings. While a page has either, It's bar says so and can stop it; while the
+// screen does not show the site, both wait, and the page is given nothing.
 
-import { MEDIA_GRANT, type MediaKind, mediaFor, RECORDING } from '@it/protocol'
+import { MEDIA_GRANT, type MediaKind } from '@it/protocol'
 import { useSyncExternalStore } from 'react'
 import { displayKey } from './lib'
 
@@ -152,13 +153,13 @@ function keep(user: string, grants: Grant[]): void {
   changed()
   closeWhatIsTakenBack()
 }
-/** What records, and a camera open for a photo, that the person no longer allows stops at once. */
+/** A camera open for a photo, and a camera or a microphone live to a page, that the person no longer allows closes at once. */
 function closeWhatIsTakenBack(): void {
   // By the grant each was begun under, and not by whether some grant allows the page now: another
   // tab can take it back and allow it again before this one hears of either
-  for (const l of [...live]) if (grantFor(l.user, l.page, l.owner, l.kinds) !== l.grant) l.end('taken_back')
   if (shooting && grantFor(shooting.user, shooting.page, shooting.owner, ['camera']) !== shooting.grant) shooting.close()
-  for (const c of [...cameras]) if (grantFor(c.user, c.page, c.owner, ['camera']) !== c.grant) c.end('taken_back')
+  for (const c of [...cameras]) if (grantFor(c.user, c.page, c.owner, c.kinds) !== c.grant) c.end('taken_back')
+  for (const m of [...microphones]) if (grantFor(m.user, m.page, m.owner, ['mic']) !== m.grant) m.end('taken_back')
 }
 /** Whether the person allowed this page, as this conversation has it, every one of these on this screen. */
 export function allowed(user: string, page: string, owner: string, kinds: MediaKind[]): boolean {
@@ -177,19 +178,19 @@ export function allow(user: string, grant: Omit<Grant, 'at' | 'id'>): void {
   const id = was?.id ?? Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('')
   keep(user, [{ ...grant, kinds, at: Date.now(), id }, ...before.filter((x) => x.page !== grant.page)])
 }
-/** Takes back what a page was allowed on this screen, and stops what it is recording. */
+/** Takes back what a page was allowed on this screen, and closes what it has open. */
 export function takeBack(user: string, page: string): void {
   keep(
     user,
     grantsOf(user).filter((x) => x.page !== page),
   )
 }
-/** Takes back everything this screen allowed, and stops what records: the browser is signing out, and what it allowed ends with its pairing. */
+/** Takes back everything this screen allowed, and closes what is open: the browser is signing out, and what it allowed ends with its pairing. */
 export function forgetGrants(user: string): void {
   keep(user, [])
-  for (const l of [...live]) l.end('taken_back')
   shooting?.close()
   for (const c of [...cameras]) c.end('taken_back')
+  for (const m of [...microphones]) m.end('taken_back')
 }
 // Another tab of this browser allowed something or took it back: this one goes by that too
 if (typeof window !== 'undefined')
@@ -280,77 +281,33 @@ export function askPerson(about: Omit<Asking, 'answer'>): { answer: Promise<bool
   return { answer, cancel: () => mine.answer(false) }
 }
 
-// ---------- what is recording now ----------
+// ---------- what is open now ----------
 
 /**
- * Why a recording ended without the page asking, in the words the page is told (protocol's
- * `it:recording`). `taken_over`: another conversation took the page over, and the person allowed
- * the one that had it. `too_large`: it reached the most a file an action carries may be.
+ * Why a camera or a microphone live to a page ended without the page asking, in the words the
+ * page is told (protocol's `it:camera-state`). `taken_over`: another conversation took the page
+ * over, and the person allowed the one that had it.
  */
-export type Why = 'person' | 'taken_back' | 'not_shown' | 'device' | 'too_long' | 'taken_over' | 'too_large'
-/** A recording under way, as It's bar shows it. */
-export interface Live {
-  id: string
-  user: string
-  page: string
-  owner: string
-  /** The grant it was begun under (`grantFor`): taken back, by this tab or another, it ends, whatever is allowed since. */
-  grant: string
-  title: string
-  kinds: MediaKind[]
-  since: number
-  state: 'recording' | 'paused'
-  /** What the camera shows, for It's own view of it while it records. */
-  stream: MediaStream
-  /** Ends it without the page asking. What was recorded is the page's only where it ran out of time or room, or the device stopped. */
-  end: (why: Why) => void
-}
-let live: Live[] = []
-/**
- * What the person is to be told on a page's row of its last recording, which stopped by itself at
- * the most a file may be: `kept`, what was recorded went to the page; `lost`, nothing of it could
- * be kept, as when the recorder gave more than the most in one piece.
- */
-const notes = new Map<string, 'kept' | 'lost'>()
-/** What the recording row says of a page's last recording, after it ended by itself, until the person dismisses it or the page records again. */
-export const noteFor = (page: string): 'kept' | 'lost' | undefined => notes.get(page)
-export function dismissNote(page: string): void {
-  if (notes.delete(page)) changed()
-}
-/** The recordings under way on this screen. */
-export const useLive = (): Live[] => useSyncExternalStore(watch, () => live)
-/** A page's recording under way, if it has one. */
-export const liveFor = (page: string): Live | undefined => live.find((l) => l.page === page)
+export type Why = 'person' | 'taken_back' | 'not_shown' | 'device' | 'taken_over'
 
 /**
- * Why this browser cannot record for any page, in words for the page and the person, or nothing
- * where it can. A browser gives the microphone and the camera only to a site it counts as secure:
- * this machine by its own name, or an https address.
+ * Why this browser cannot open the microphone or the camera for any page, in words for the page
+ * and the person, or nothing where it can. A browser gives the microphone and the camera only to
+ * a site it counts as secure: this machine by its own name, or an https address.
  */
-export function cannotRecord(): string | null {
+export function cannotOpen(): string | null {
   if (typeof window === 'undefined' || !window.isSecureContext)
     return 'This screen reaches It over plain http, and a browser gives the microphone and the camera only to an https address or to the machine itself. Open It at its https address on your tailnet: `it https on`, on the machine It runs on, says how.'
-  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') return 'This browser cannot record.'
+  if (!navigator.mediaDevices?.getUserMedia) return 'This browser gives a site no microphone or camera.'
   return null
 }
 
 // ---------- what a page may ask of the device ----------
 
-/** What a page asked to record, held to what the site takes: plain switches and sizes, and nothing that names a device. */
-export interface Spec {
-  audio: boolean | MediaTrackConstraints
-  video: boolean | MediaTrackConstraints
-  audioBitsPerSecond: number
-  videoBitsPerSecond: number
-  mimeType?: string
-}
 const SWITCHES: Record<'audio' | 'video', string[]> = { audio: ['echoCancellation', 'noiseSuppression', 'autoGainControl'], video: [] }
-const SIZES: Record<'audio' | 'video', string[]> = {
-  audio: ['channelCount', 'sampleRate', 'sampleSize'],
-  video: ['width', 'height', 'frameRate', 'aspectRatio'],
-}
-/** One of the two, as the browser is to be asked for it. A page may say plain switches and sizes, and for the camera which way it faces. */
-function asked(given: unknown, kind: 'audio' | 'video', by = 'It.record'): boolean | MediaTrackConstraints {
+const SIZES: Record<'audio' | 'video', string[]> = { audio: [], video: ['width', 'height', 'frameRate', 'aspectRatio'] }
+/** One of the two, as the browser is to be asked for it. A page may say plain switches and sizes, and for the camera which way it faces: nothing that names a device. */
+function asked(given: unknown, kind: 'audio' | 'video', by: string): boolean | MediaTrackConstraints {
   if (given === undefined || given === null || given === false) return false
   if (given === true) return true
   if (typeof given !== 'object' || Array.isArray(given)) throw new Error(`${kind} is true, false, or an object of plain settings.`)
@@ -375,213 +332,18 @@ export function cameraVideoOf(given: unknown): true | MediaTrackConstraints {
     Object.entries(video).map(([name, value]) => [name, typeof value === 'number' && name in most ? Math.min(value, most[name]!) : value]),
   )
 }
-const within = (given: unknown, bounds: { least: number; most: number; given: number }): number =>
-  typeof given === 'number' && Number.isFinite(given) ? Math.min(bounds.most, Math.max(bounds.least, Math.round(given))) : bounds.given
-/** What a page asked to record, as the site takes it, or an error that says what it cannot take. */
-export function specOf(message: { audio: unknown; video: unknown; audioBitsPerSecond?: unknown; videoBitsPerSecond?: unknown; mimeType?: unknown }): Spec {
-  const audio = asked(message.audio, 'audio')
-  const video = asked(message.video, 'video')
-  if (!audio && !video) throw new Error('It.record needs audio, video or both.')
-  const mime = typeof message.mimeType === 'string' && message.mimeType.length <= 100 ? message.mimeType : undefined
-  return {
-    audio,
-    video,
-    audioBitsPerSecond: within(message.audioBitsPerSecond, RECORDING.audioBits),
-    videoBitsPerSecond: within(message.videoBitsPerSecond, RECORDING.videoBits),
-    ...(mime ? { mimeType: mime } : {}),
-  }
-}
-/** The kinds a recording uses. */
-export const kindsOf = (spec: { audio: unknown; video: unknown }): MediaKind[] => mediaFor({ audio: !!spec.audio, video: !!spec.video })
-
-/** The kind of file to record into: the page's choice where the browser makes it, and otherwise the first of these that it does. */
-function fileKind(spec: Spec): string {
-  const supported = (type: string) => {
-    try {
-      return MediaRecorder.isTypeSupported(type)
-    } catch {
-      return false
-    }
-  }
-  if (spec.mimeType && supported(spec.mimeType)) return spec.mimeType
-  const choices = spec.video
-    ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4']
-    : ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus']
-  return choices.find(supported) ?? ''
+/** What a page asked of the microphone it hears live, held to what the site takes: plain switches. */
+export function microphoneAudioOf(given: unknown, by = 'It.microphone'): true | MediaTrackConstraints {
+  if (given === undefined || given === null) return true
+  const audio = asked(given, 'audio', by)
+  if (audio === false) throw new Error(`${by} needs the microphone.`)
+  return audio
 }
 
-// ---------- recording ----------
-
-/** A recording that has begun, as the frame that asked for it holds it. */
-export interface Begun {
-  id: string
-  mimeType: string
-  /** Stops it. With `keep`, what was recorded; without, nothing, and it is thrown away. */
-  stop: (keep: boolean) => Promise<Blob | undefined>
-  /** Ends it without the page asking, and tells the page why, as It's bar does when the person stops it. */
-  end: (why: Why) => void
-}
-/** What a recording is for: the page, as the person was asked about it, and who is told when it pauses, goes on or ends by itself. */
-export interface For {
-  /** The recording's own id, which the page is told it by. */
-  id: string
-  user: string
-  page: string
-  owner: string
-  /** The grant the person allowed it under. */
-  grant: string
-  title: string
-  /** The recording paused, went on, or ended without the page asking, with what was recorded where that is the page's to have. */
-  told: (state: 'recording' | 'paused' | 'ended', why?: Why, file?: Blob) => void
-}
-
-/**
- * Room kept below the most a recording may be, for what the recorder still holds when it is
- * asked to stop: at least this, and twice the largest piece it has given so far.
- */
-const ROOM = 1024 * 1024
-/** The pieces of a recording, the last ones left off until what is left is no more than `most`: what a stop let through is never sent past the limit. */
-export function withinTheMost(pieces: Blob[], most: number): Blob[] {
-  let bytes = pieces.reduce((n, p) => n + p.size, 0)
-  let kept = pieces.length
-  while (kept > 0 && bytes > most) bytes -= pieces[--kept]!.size
-  return pieces.slice(0, kept)
-}
-
-/**
- * Begins recording, for a page that the person allowed on this screen. Rejects with what the
- * browser said where it would not. It stops by itself, keeping what was recorded, before it is
- * larger than `most`, which is the most a file an action carries may be: a longer take would
- * otherwise be recorded only to be refused when the page sends it.
- */
-export async function begin(spec: Spec, page: For, most: number = RECORDING.mostBytes): Promise<Begun> {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: spec.audio, video: spec.video })
-  const mimeType = fileKind(spec)
-  let recorder: MediaRecorder
-  try {
-    recorder = new MediaRecorder(stream, {
-      ...(mimeType ? { mimeType } : {}),
-      ...(spec.audio ? { audioBitsPerSecond: spec.audioBitsPerSecond } : {}),
-      ...(spec.video ? { videoBitsPerSecond: spec.videoBitsPerSecond } : {}),
-    })
-  } catch (err) {
-    for (const t of stream.getTracks()) t.stop()
-    throw err
-  }
-  const pieces: Blob[] = []
-  let bytes = 0
-  let largest = 0
-  recorder.ondataavailable = (e) => {
-    if (e.data.size <= 0) return
-    pieces.push(e.data)
-    bytes += e.data.size
-    largest = Math.max(largest, e.data.size)
-    // Near the most: stopped now, with room for what the recorder still holds
-    if (!over && bytes + Math.max(ROOM, 2 * largest) >= most) end('too_large')
-  }
-  const id = page.id
-  recorders.set(id, { recorder, told: page.told })
-  let over = false
-  /** Ends it, and gives what was recorded where it is kept. */
-  const finish = (keep: boolean): Promise<Blob | undefined> => {
-    if (over) return Promise.resolve(undefined)
-    over = true
-    clearTimeout(longest)
-    recorders.delete(id)
-    live = live.filter((l) => l.id !== id)
-    changed()
-    return new Promise((resolve) => {
-      const done = () => {
-        for (const t of stream.getTracks()) t.stop()
-        const kept = withinTheMost(pieces, most)
-        resolve(keep && kept.length ? new Blob(kept, { type: recorder.mimeType || mimeType || kept[0]!.type }) : undefined)
-      }
-      if (recorder.state === 'inactive') return done()
-      recorder.onstop = done
-      recorder.onerror = done
-      try {
-        recorder.stop()
-      } catch {
-        done()
-      }
-    })
-  }
-  /** Ends it without the page asking, and tells the page why, with what was recorded where that is the page's to have. */
-  const end = (why: Why) => {
-    if (over) return
-    const keep = why === 'device' || why === 'too_long' || why === 'too_large'
-    void finish(keep).then((file) => {
-      if (why === 'too_large') {
-        notes.set(page.page, file ? 'kept' : 'lost')
-        changed()
-      }
-      page.told('ended', why, file)
-    })
-  }
-  const longest = setTimeout(() => end('too_long'), RECORDING.longestMs)
-  // A device that goes away, or that the person turns off from the browser's own controls, ends it
-  for (const t of stream.getTracks()) t.addEventListener('ended', () => end('device'), { once: true })
-  recorder.start(1000)
-  if (notes.delete(page.page)) changed()
-  live = [
-    ...live,
-    {
-      id,
-      user: page.user,
-      page: page.page,
-      owner: page.owner,
-      grant: page.grant,
-      title: page.title,
-      kinds: kindsOf(spec),
-      since: Date.now(),
-      state: 'recording',
-      stream,
-      end,
-    },
-  ]
-  changed()
-  // Begun while the screen does not show the site: it waits at once
-  if (document.visibilityState === 'hidden') pauseAll()
-  return { id, mimeType: recorder.mimeType || mimeType, stop: finish, end }
-}
-
-/** Each recording's recorder, and who is told of it, by its id: what pausing and going on need beside what the bar shows. */
-const recorders = new Map<string, { recorder: MediaRecorder; told: For['told'] }>()
-
-/** Every recording under way waits while the screen does not show the site, and goes on when it does again. */
-function pauseAll(): void {
-  live = live.map((l) => {
-    const r = recorders.get(l.id)
-    if (l.state === 'paused' || !r) return l
-    for (const t of l.stream.getTracks()) t.enabled = false
-    try {
-      if (r.recorder.state === 'recording') r.recorder.pause()
-    } catch {}
-    r.told('paused')
-    return { ...l, state: 'paused' as const }
-  })
-  changed()
-}
-function resumeAll(): void {
-  live = live.map((l) => {
-    const r = recorders.get(l.id)
-    if (l.state === 'recording' || !r) return l
-    for (const t of l.stream.getTracks()) t.enabled = true
-    try {
-      if (r.recorder.state === 'paused') r.recorder.resume()
-    } catch {}
-    r.told('recording')
-    return { ...l, state: 'recording' as const }
-  })
-  changed()
-}
+// A camera open for a photo is closed while the screen does not show It, whose bar is where it is seen
 if (typeof document !== 'undefined')
   document.addEventListener('visibilitychange', () => {
-    // A camera open for a photo is closed while the screen does not show It, whose bar is where it is seen
     if (document.visibilityState === 'hidden') shooting?.close()
-    if (!live.length) return
-    if (document.visibilityState === 'hidden') pauseAll()
-    else resumeAll()
   })
 
 // ---------- a photo ----------
@@ -607,13 +369,13 @@ export const shootingNow = (): Shooting | null => shooting
 /**
  * Shows the person It's own view of the camera, for a page the person allowed it on this screen,
  * and gives the photo they take there as a JPEG, or nothing where they close it. One at a time,
- * and only while nothing records. `cancel` closes the view, as when the page is closed.
+ * and only while no camera is live to a page. `cancel` closes the view, as when the page is closed.
  */
 export async function shoot(
   page: { page: string; title: string; user: string; owner: string; grant: string },
   facing: 'user' | 'environment' | undefined,
 ): Promise<{ photo: Promise<Blob | null>; cancel: () => void }> {
-  if (shooting || live.length || cameras.length) throw new Error('The camera is in use on this screen just now.')
+  if (shooting || cameras.length) throw new Error('The camera is in use on this screen just now.')
   const stream = await navigator.mediaDevices.getUserMedia({ video: facing ? { facingMode: facing } : true, audio: false })
   let given: (photo: Blob | null) => void = () => {}
   const photo = new Promise<Blob | null>((resolve) => {
@@ -653,31 +415,33 @@ export async function shoot(
 // and makes its stream from that, for a video element or a call it makes itself. The site sends
 // a few at a time and no more, and the next only once the page says it has drawn one, so that a
 // page that is slow to draw is given fewer pictures rather than more and more of them waiting.
+// Opened with sound, the microphone is opened with it, and its sound goes to the page as a live
+// microphone's does, under the camera's own name.
 
-/** Why the live camera ended without the page asking: as a recording ends, but never for its length or its size. */
-export type CameraWhy = Exclude<Why, 'too_long' | 'too_large'>
 /** The camera live to a page, as It's bar shows it. */
 export interface LiveCamera {
   id: string
   user: string
   page: string
   owner: string
+  /** What it has open: the camera, and the microphone too where it was opened with sound. */
+  kinds: MediaKind[]
   /** The grant it was opened under (`grantFor`): taken back, by this tab or another, it ends, whatever is allowed since. */
   grant: string
   title: string
   since: number
   state: 'live' | 'paused'
   /** Ends it without the page asking, and tells the page why. */
-  end: (why: CameraWhy) => void
+  end: (why: Why) => void
 }
 let cameras: LiveCamera[] = []
 /** The cameras live to a page on this screen. */
 export const useCameras = (): LiveCamera[] => useSyncExternalStore(watch, () => cameras)
 /** A page's live camera, if it has one. */
 export const cameraFor = (page: string): LiveCamera | undefined => cameras.find((c) => c.page === page)
-/** Each live camera's own word for whether the screen shows the site, by its id. */
+/** Each live camera's and microphone's own word for whether the screen shows the site, by its id. */
 const shown = new Map<string, (hidden: boolean) => void>()
-// While the screen does not show the site the camera waits, and the page is given nothing
+// While the screen does not show the site the camera and the microphone wait, and the page is given nothing
 if (typeof document !== 'undefined')
   document.addEventListener('visibilitychange', () => {
     for (const show of [...shown.values()]) show(document.visibilityState === 'hidden')
@@ -709,39 +473,58 @@ export interface CameraFor {
    * picture is handed on, and every `checkEveryMs` while the camera is open, whatever the page has
    * drawn: a page that draws nothing is sent nothing, and would otherwise never be asked about.
    */
-  still: () => CameraWhy | null
+  still: () => Why | null
   /** One picture for the page, numbered in the order the camera gave it, which is handed on. */
   picture: (frame: number, picture: ImageBitmap) => void
+  /** One piece of the microphone's sound for the page, where the camera is opened with sound. */
+  sound: (chunk: number, sampleRate: number, samples: Float32Array) => void
   /** The camera paused, went on, or ended without the page asking. */
-  told: (state: 'live' | 'paused' | 'ended', why?: CameraWhy) => void
+  told: (state: 'live' | 'paused' | 'ended', why?: Why) => void
 }
 /** The live camera, as the frame that opened it holds it. */
 export interface Opened {
   id: string
+  /** How many samples of its sound there are in a second, where it was opened with sound. */
+  sampleRate?: number
   /** The page has drawn this picture: another may be sent in its place. */
   drawn: (frame: number) => void
+  /** The page has taken every piece of sound up to this one: more may be sent in their place. */
+  heard: (chunk: number) => void
   /** Closes it, as the page asked. */
   stop: () => void
   /** Closes it without the page asking, and tells the page why. */
-  end: (why: CameraWhy) => void
+  end: (why: Why) => void
 }
 
 /**
  * Opens the camera live, for a page that the person allowed it on this screen, and sends the
- * page its pictures until it is closed. Rejects with what the browser said where it would not
- * give the camera.
+ * page its pictures until it is closed. With `audio` the microphone is opened with it, for a page
+ * allowed both, and its sound is sent beside the pictures. Rejects with what the browser said
+ * where it would not give the camera.
  */
-export async function openCamera(video: true | MediaTrackConstraints, page: CameraFor): Promise<Opened> {
-  const stream = await navigator.mediaDevices.getUserMedia({ video, audio: false })
+export async function openCamera(video: true | MediaTrackConstraints, audio: false | true | MediaTrackConstraints, page: CameraFor): Promise<Opened> {
+  const stream = await navigator.mediaDevices.getUserMedia({ video, audio })
   // The camera's picture, in a video element that is never shown: what each picture is taken from
   const view = document.createElement('video')
   view.muted = true
   view.playsInline = true
   view.srcObject = stream
+  let state: 'live' | 'paused' = 'live'
+  let over = false
+  /** The microphone's sound on its way to the page, where the camera was opened with sound. */
+  let sound: Relay | null = null
   try {
     await view.play()
+    if (audio)
+      sound = await relaySound(stream, {
+        still: () => (over ? 'not_shown' : page.still()),
+        waiting: () => state === 'paused',
+        sound: page.sound,
+        end: (why) => end(why),
+      })
   } catch (err) {
     for (const t of stream.getTracks()) t.stop()
+    view.srcObject = null
     throw err
   }
   /** The pictures sent that the page has not said it drew, and how many are being made. */
@@ -750,8 +533,6 @@ export async function openCamera(video: true | MediaTrackConstraints, page: Came
   let frames = 0
   /** When each of the pictures begun in the last second was begun. */
   const begun: number[] = []
-  let state: 'live' | 'paused' = 'live'
-  let over = false
   let usedAt = Date.now()
   const close = (): boolean => {
     if (over) return false
@@ -759,12 +540,13 @@ export async function openCamera(video: true | MediaTrackConstraints, page: Came
     clearInterval(watching)
     cameras = cameras.filter((c) => c.id !== page.id)
     shown.delete(page.id)
+    sound?.close()
     for (const t of stream.getTracks()) t.stop()
     view.srcObject = null
     changed()
     return true
   }
-  const end = (why: CameraWhy) => {
+  const end = (why: Why) => {
     if (close()) page.told('ended', why)
   }
   // Asked whether the page may still have it whatever is sent, paused or not; and while it may, an
@@ -782,6 +564,7 @@ export async function openCamera(video: true | MediaTrackConstraints, page: Came
     state = now
     // A camera whose track gives nothing is one the browser lets go of, and says so to the person
     for (const t of stream.getTracks()) t.enabled = !hidden
+    sound?.wait(hidden)
     cameras = cameras.map((c) => (c.id === page.id ? { ...c, state: now } : c))
     changed()
     page.told(now)
@@ -839,7 +622,18 @@ export async function openCamera(video: true | MediaTrackConstraints, page: Came
   for (const t of stream.getTracks()) t.addEventListener('ended', () => end('device'), { once: true })
   cameras = [
     ...cameras,
-    { id: page.id, user: page.user, page: page.page, owner: page.owner, grant: page.grant, title: page.title, since: Date.now(), state, end },
+    {
+      id: page.id,
+      user: page.user,
+      page: page.page,
+      owner: page.owner,
+      kinds: audio ? ['mic', 'camera'] : ['camera'],
+      grant: page.grant,
+      title: page.title,
+      since: Date.now(),
+      state,
+      end,
+    },
   ]
   shown.set(page.id, show)
   changed()
@@ -848,9 +642,240 @@ export async function openCamera(video: true | MediaTrackConstraints, page: Came
   next()
   return {
     id: page.id,
+    ...(sound ? { sampleRate: sound.sampleRate } : {}),
     drawn: (frame) => {
       sent.delete(frame)
     },
+    heard: (chunk) => sound?.heard(chunk),
+    stop: () => {
+      close()
+    },
+    end,
+  }
+}
+
+// ---------- the microphone, live to a page ----------
+//
+// No browser hands a sandboxed document the microphone's track from the site either. Its samples
+// do arrive. So the site opens the microphone, gathers its sound into small pieces, of one
+// channel, and sends the page each piece as it comes; the page plays the pieces one after
+// another into a stream of its own, for a meter, for captions, to record, or for a call it makes
+// itself. The site sends a few pieces at a time and no more, and more only once the page says it
+// has taken them, so that a page that falls behind is given less sound and never a pile of it.
+
+/**
+ * What the site holds live sound to. `pieceMs`: how much sound goes in one piece. `mostSamples`:
+ * the most samples one piece may hold, whatever the rate of the sound. `atOnce`: how many pieces a
+ * page may have been sent and not yet said it took. `startMs`: how long the browser is given to
+ * start passing the sound on. `checkEveryMs` and `usedEveryMs` are as the live camera's.
+ */
+export const LIVE_MICROPHONE = { pieceMs: 20, mostSamples: 4096, atOnce: 10, startMs: 2000, checkEveryMs: 1000, usedEveryMs: 60 * 60_000 } as const
+/** Where the site keeps what gathers the microphone's sound into pieces: a file of its own, since the site runs no script that is not one of its files. */
+const PIECES = '/sound-worklet.js'
+const NO_SOUND = 'This browser cannot pass the microphone’s sound on to a page.'
+
+/** Sound on its way to a page, as whatever opened the microphone holds it. */
+interface Relay {
+  sampleRate: number
+  /** The page has taken every piece up to this one. */
+  heard: (chunk: number) => void
+  /** Waits while the screen does not show the site, and goes on when it does. */
+  wait: (hidden: boolean) => void
+  close: () => void
+}
+/**
+ * Passes the sound of a stream's microphone on, piece by piece, until it is closed. `still` is
+ * asked before each piece is handed on, and where the page may not have it any more, `end` is
+ * told why and the piece is not sent. Nothing is sent while `waiting`.
+ */
+async function relaySound(
+  stream: MediaStream,
+  to: { still: () => Why | null; waiting: () => boolean; sound: (chunk: number, sampleRate: number, samples: Float32Array) => void; end: (why: Why) => void },
+): Promise<Relay> {
+  const Context = window.AudioContext
+  if (typeof Context !== 'function' || typeof AudioWorkletNode !== 'function') throw new Error(NO_SOUND)
+  const context = new Context()
+  let node: AudioWorkletNode
+  let source: MediaStreamAudioSourceNode
+  try {
+    if (!context.audioWorklet) throw new Error(NO_SOUND)
+    await context.audioWorklet.addModule(PIECES)
+    // A browser may hold sound back until the person has done something on the site. It is given a moment, and not waited on for ever
+    await Promise.race([context.resume(), new Promise((r) => setTimeout(r, LIVE_MICROPHONE.startMs))])
+    if (context.state !== 'running') throw new Error('The browser did not start the sound for It on this screen. Ask again from a click on the page.')
+    const samples = Math.min(LIVE_MICROPHONE.mostSamples, Math.max(1, Math.round((context.sampleRate * LIVE_MICROPHONE.pieceMs) / 1000)))
+    // One channel, mixed down where the microphone gives more
+    node = new AudioWorkletNode(context, 'it-sound-pieces', {
+      channelCount: 1,
+      channelCountMode: 'explicit',
+      channelInterpretation: 'speakers',
+      processorOptions: { samples },
+    })
+    source = context.createMediaStreamSource(stream)
+    source.connect(node)
+  } catch (err) {
+    void context.close().catch(() => {})
+    throw err instanceof Error && /^(This browser cannot|The browser did not start)/.test(err.message) ? err : new Error(NO_SOUND)
+  }
+  let closed = false
+  /** The number of the last piece sent, and of the last the page said it took. */
+  let sent = 0
+  let taken = 0
+  node.port.onmessage = (m: MessageEvent) => {
+    const samples: unknown = m.data
+    if (closed || to.waiting() || !(samples instanceof Float32Array) || samples.length === 0 || samples.length > LIVE_MICROPHONE.mostSamples) return
+    // A page that has not taken what it was sent is sent no more, and this piece is passed over
+    if (sent - taken >= LIVE_MICROPHONE.atOnce) return
+    const not = to.still()
+    if (not) return to.end(not)
+    to.sound(++sent, context.sampleRate, samples)
+  }
+  return {
+    sampleRate: context.sampleRate,
+    heard: (chunk) => {
+      // Of a piece that was never sent, it makes no room
+      if (Number.isInteger(chunk) && chunk > taken && chunk <= sent) taken = chunk
+    },
+    wait: (hidden) => {
+      void (hidden ? context.suspend() : context.resume()).catch(() => {})
+    },
+    close: () => {
+      if (closed) return
+      closed = true
+      node.port.onmessage = null
+      try {
+        source.disconnect()
+      } catch {}
+      void context.close().catch(() => {})
+    },
+  }
+}
+
+/** The microphone live to a page, as It's bar shows it. */
+export interface LiveMicrophone {
+  id: string
+  user: string
+  page: string
+  owner: string
+  /** The grant it was opened under (`grantFor`): taken back, by this tab or another, it ends, whatever is allowed since. */
+  grant: string
+  title: string
+  since: number
+  state: 'live' | 'paused'
+  /** Ends it without the page asking, and tells the page why. */
+  end: (why: Why) => void
+}
+let microphones: LiveMicrophone[] = []
+/** The microphones live to a page on this screen. */
+export const useMicrophones = (): LiveMicrophone[] => useSyncExternalStore(watch, () => microphones)
+/** A page's live microphone, if it has one. */
+export const microphoneFor = (page: string): LiveMicrophone | undefined => microphones.find((m) => m.page === page)
+
+/** What the live microphone is for: the page, as the person was asked about it, and who is given its sound and told of it. */
+export interface MicrophoneFor {
+  /** The microphone's own id, for It's bar. */
+  id: string
+  user: string
+  page: string
+  owner: string
+  /** The grant the person allowed it under. */
+  grant: string
+  title: string
+  /**
+   * Why the page may not have the microphone any more, or nothing where it may. Asked before each
+   * piece of sound is handed on, and every `checkEveryMs` while the microphone is open, whatever
+   * the page has taken: a page that takes nothing is sent nothing, and would otherwise never be
+   * asked about.
+   */
+  still: () => Why | null
+  /** One piece of sound for the page, numbered in the order it was heard, which is handed on. */
+  sound: (chunk: number, sampleRate: number, samples: Float32Array) => void
+  /** The microphone paused, went on, or ended without the page asking. */
+  told: (state: 'live' | 'paused' | 'ended', why?: Why) => void
+}
+/** The live microphone, as the frame that opened it holds it. */
+export interface Hearing {
+  id: string
+  /** How many samples of its sound there are in a second. */
+  sampleRate: number
+  /** The page has taken every piece of sound up to this one: more may be sent in their place. */
+  heard: (chunk: number) => void
+  /** Closes it, as the page asked. */
+  stop: () => void
+  /** Closes it without the page asking, and tells the page why. */
+  end: (why: Why) => void
+}
+
+/**
+ * Opens the microphone live, for a page that the person allowed it on this screen, and sends the
+ * page its sound until it is closed. Rejects with what the browser said where it would not give
+ * the microphone, or with why its sound cannot be passed on.
+ */
+export async function openMicrophone(audio: true | MediaTrackConstraints, page: MicrophoneFor): Promise<Hearing> {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio, video: false })
+  let state: 'live' | 'paused' = 'live'
+  let over = false
+  let usedAt = Date.now()
+  let sound: Relay
+  const end = (why: Why) => {
+    if (close()) page.told('ended', why)
+  }
+  try {
+    sound = await relaySound(stream, {
+      still: () => (over ? 'not_shown' : page.still()),
+      waiting: () => state === 'paused',
+      sound: page.sound,
+      end: (why) => end(why),
+    })
+  } catch (err) {
+    for (const t of stream.getTracks()) t.stop()
+    throw err
+  }
+  function close(): boolean {
+    if (over) return false
+    over = true
+    clearInterval(watching)
+    microphones = microphones.filter((m) => m.id !== page.id)
+    shown.delete(page.id)
+    sound.close()
+    for (const t of stream.getTracks()) t.stop()
+    changed()
+    return true
+  }
+  // Asked whether the page may still have it whatever is sent, paused or not; and while it may, an
+  // open microphone is the page using what it was allowed, noted now and then and not for each piece
+  const watching = setInterval(() => {
+    const not = page.still()
+    if (not) return end(not)
+    if (Date.now() - usedAt < LIVE_MICROPHONE.usedEveryMs) return
+    usedAt = Date.now()
+    usedNow(page.user, page.page)
+  }, LIVE_MICROPHONE.checkEveryMs)
+  const show = (hidden: boolean) => {
+    const now = hidden ? 'paused' : 'live'
+    if (over || state === now) return
+    state = now
+    // A microphone whose track gives nothing is one the browser lets go of, and says so to the person
+    for (const t of stream.getTracks()) t.enabled = !hidden
+    sound.wait(hidden)
+    microphones = microphones.map((m) => (m.id === page.id ? { ...m, state: now } : m))
+    changed()
+    page.told(now)
+  }
+  // A microphone that goes away, or that the person turns off from the browser's own controls, ends it
+  for (const t of stream.getTracks()) t.addEventListener('ended', () => end('device'), { once: true })
+  microphones = [
+    ...microphones,
+    { id: page.id, user: page.user, page: page.page, owner: page.owner, grant: page.grant, title: page.title, since: Date.now(), state, end },
+  ]
+  shown.set(page.id, show)
+  changed()
+  // Opened while the screen does not show the site: it waits at once
+  if (document.visibilityState === 'hidden') show(true)
+  return {
+    id: page.id,
+    sampleRate: sound.sampleRate,
+    heard: sound.heard,
     stop: () => {
       close()
     },
