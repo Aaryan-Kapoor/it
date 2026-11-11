@@ -2494,6 +2494,186 @@ try {
   rmSync(scratch, { recursive: true, force: true })
 
   // ------------------------------------------------------------------
+  section('The microphone and the camera')
+  // A page that records a voice-over, as a page for a demo's narration does. Its call for the
+  // microphone is its asking: published with nothing said of it, the site asks the person in It's
+  // bar, and It records for the page
+  const recSlug = `${slug}-recorder`
+  const recorderDir = path.join(root, 'e2e/fixtures/recorder')
+  await it(A, ['create', marked('Recorder'), '--id', recSlug, '--dir', recorderDir])
+  await it(A, ['create', marked('Camera page'), '--id', `${recSlug}-camera`, '--dir', recorderDir])
+  const recOut = (tab) => tab.frameLocator('.mount iframe').locator('#out')
+  /** Presses one of the page's buttons, as a person does, and says what the page then shows. */
+  const recPressed = async (tab, button, shows) => {
+    await tab.frameLocator('.mount iframe').locator(button).click()
+    await recOut(tab).filter({ hasText: shows }).waitFor({ timeout: 30_000 })
+    return recOut(tab).textContent()
+  }
+  await page.goto(`${APP}/p/${recSlug}`)
+  await pageIn(page, { id: recSlug })
+  await page.frameLocator('.mount iframe').locator('#record').click()
+  const mediaQuestion = page.locator('.media-ask')
+  await mediaQuestion.waitFor({ timeout: 15_000 })
+  const questionSaid = await mediaQuestion.textContent()
+  check(
+    'It asks in its own bar, and nothing covers the page while it asks',
+    (await page.locator('.page-nav .media-ask').count()) === 1 && (await page.locator('[role="dialog"], .modal-overlay').count()) === 0,
+    questionSaid,
+  )
+  check(
+    'a page that asked is not given the microphone until the person allows it, in It’s own words that name the page, its agent and its machine',
+    questionSaid.includes(marked('Recorder')) &&
+      questionSaid.includes('the microphone') &&
+      questionSaid.includes(STACK_MACHINE) &&
+      (await recOut(page).textContent()) === '',
+    questionSaid,
+  )
+  await mediaQuestion.getByRole('button', { name: 'Allow', exact: true }).click()
+  const recSaid = await recOut(page)
+    .filter({ hasText: /^(recording|refused)/ })
+    .waitFor({ timeout: 15_000 })
+    .then(() => recOut(page).textContent())
+  await page.waitForTimeout(2000)
+  // In the bar itself, with nothing over the page: a red dot, how long, and Stop
+  const recordingBar =
+    (await page
+      .locator('.page-nav .media-rec')
+      .getAttribute('aria-label')
+      .catch(() => '')) ?? ''
+  check(
+    'allowed, It records for the page, and It’s own bar says that it is recording',
+    /^recording audio\//.test(recSaid) && /^Recording the microphone for /.test(recordingBar) && (await page.locator('.media-rec-stop').count()) === 1,
+    JSON.stringify({ recSaid, recordingBar }),
+  )
+  const recSent = await recPressed(page, '#stop', /^(accepted|refused)/)
+  const recTake = await until(async () => (await it(A, ['actions', '--id', recSlug])).find((x) => x.action === 'take'), 30_000, 500)
+  const recTakeAt = path.join(tmp, `take-${slug}.recording`)
+  const recTakeSaved = recTake ? (await it(A, ['save', recTake.id, recTakeAt])).saved : null
+  const recTakeBytes = existsSync(recTakeAt) ? readFileSync(recTakeAt) : Buffer.alloc(0)
+  // WebM begins with its own four bytes, and an MP4, as Safari records, says so in its first box
+  const isRecordingFile = recTakeBytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])) || recTakeBytes.subarray(4, 8).toString('latin1') === 'ftyp'
+  check(
+    'what was recorded reaches the agent as a file of the page’s action, and is saved as a recording',
+    /^accepted /.test(recSent) &&
+      (await page.locator('.media-rec').count()) === 0 &&
+      /^audio\/(webm|mp4|ogg)$/.test(recTake?.files?.[0]?.type ?? '') &&
+      recTake.files[0].bytes > 1000 &&
+      recTakeSaved?.bytes === recTake.files[0].bytes &&
+      isRecordingFile,
+    JSON.stringify({ recSent, files: recTake?.files, saved: recTakeSaved, head: recTakeBytes.subarray(0, 8).toString('hex') }),
+  )
+  if (recTake) await it(A, ['ack', recTake.id])
+  rmSync(recTakeAt, { force: true })
+  // Taken back under Settings, the page is asked about again, and has nothing where the person says no
+  await page.goto(`${APP}/settings`)
+  const mediaRow = page.locator('.row', { hasText: marked('Recorder') })
+  const grantListed = await mediaRow.waitFor({ timeout: 15_000 }).then(
+    async () => (await mediaRow.count()) === 1,
+    () => false,
+  )
+  await mediaRow.getByRole('button', { name: 'Take back' }).click()
+  await page.goto(`${APP}/p/${recSlug}`)
+  await pageIn(page, { id: recSlug })
+  await page.frameLocator('.mount iframe').locator('#record').click()
+  const mediaAskedAgain = await mediaQuestion.waitFor({ timeout: 15_000 }).then(
+    () => true,
+    () => false,
+  )
+  if (mediaAskedAgain) await mediaQuestion.getByRole('button', { name: 'Not now' }).click()
+  const mediaSaidNo = await recOut(page)
+    .filter({ hasText: /^(recording|refused)/ })
+    .waitFor({ timeout: 15_000 })
+    .then(() => recOut(page).textContent())
+  check(
+    'what was allowed is listed under Settings and taken back there, and the page is then asked about again, and refused where the person says no',
+    grantListed && mediaAskedAgain && /did not allow this page/.test(mediaSaidNo) && (await page.locator('.media-rec').count()) === 0,
+    JSON.stringify({ grantListed, mediaAskedAgain, mediaSaidNo }),
+  )
+  // What the person allowed was for the conversation that had the page. Another conversation
+  // opening it takes it over, and what was recording for the one before stops, and is thrown away
+  const otherConversation = { extraEnv: { IT_HARNESS: 'claude-code', IT_SESSION: `${slug}-another-conversation` } }
+  await page.goto(`${APP}/p/${recSlug}`)
+  await pageIn(page, { id: recSlug })
+  await page.frameLocator('.mount iframe').locator('#record').click()
+  await mediaQuestion.waitFor({ timeout: 15_000 })
+  await mediaQuestion.getByRole('button', { name: 'Allow', exact: true }).click()
+  const recordingBefore = await recOut(page)
+    .filter({ hasText: /^(recording|refused)/ })
+    .waitFor({ timeout: 15_000 })
+    .then(() => recOut(page).textContent())
+  await it(A, ['open', recSlug], otherConversation)
+  const recordingAfter = await recOut(page)
+    .filter({ hasText: /^ended/ })
+    .waitFor({ timeout: 30_000 })
+    .then(
+      () => recOut(page).textContent(),
+      () => recOut(page).textContent(),
+    )
+  await page.waitForTimeout(1500)
+  const recTakenOver = {
+    recordingBefore,
+    recordingAfter,
+    barStillRecording: await page.locator('.media-rec').count(),
+    askedAnything: await page.locator('.media-ask').count(),
+    takesSent: (await it(A, ['actions', '--id', recSlug])).filter((x) => x.action === 'take').length,
+  }
+  check(
+    'a recording under way stops, and what was recorded is thrown away, when another conversation takes the page over, and nothing is asked for that one',
+    /^recording audio\//.test(recordingBefore) &&
+      /^ended: Another conversation took this page over/.test(recordingAfter) &&
+      recTakenOver.barStillRecording === 0 &&
+      recTakenOver.askedAnything === 0 &&
+      recTakenOver.takesSent === 0,
+    JSON.stringify(recTakenOver),
+  )
+  // A camera open for a photo closes when what the page was allowed is taken back, from another tab of this browser
+  const camSlug = `${recSlug}-camera`
+  const cameraView = page.locator('.page-nav .media-photo')
+  /** The camera page asks for a photo, the person allows it, and It's own view of the camera opens. */
+  const photoOpen = async () => {
+    await page.goto(`${APP}/p/${camSlug}`)
+    await pageIn(page, { id: camSlug })
+    await page.frameLocator('.mount iframe').locator('#photo').click()
+    await mediaQuestion.waitFor({ timeout: 15_000 })
+    await mediaQuestion.getByRole('button', { name: 'Allow', exact: true }).click()
+    return cameraView.waitFor({ timeout: 15_000 }).then(
+      () => true,
+      () => false,
+    )
+  }
+  const viewOpened = await photoOpen()
+  const otherTab = await page.context().newPage()
+  await otherTab.goto(`${APP}/settings`)
+  const cameraRow = otherTab.locator('.row', { hasText: marked('Camera page') })
+  await cameraRow.waitFor({ timeout: 15_000 })
+  await cameraRow.getByRole('button', { name: 'Take back' }).click()
+  await otherTab.close()
+  const photoTakenBack = await recOut(page)
+    .filter({ hasText: /^(photo|refused)/ })
+    .waitFor({ timeout: 15_000 })
+    .then(() => recOut(page).textContent())
+  check(
+    'a camera open for a photo closes when the person takes back what the page was allowed, from another tab, and the page is given no photo',
+    viewOpened && /^refused: The person took back what they had allowed this page/.test(photoTakenBack) && (await cameraView.count()) === 0,
+    JSON.stringify({ viewOpened, photoTakenBack, viewStillOpen: await cameraView.count() }),
+  )
+  // And when another conversation takes the page over while the camera is open
+  const viewOpenedAgain = await photoOpen()
+  await it(A, ['open', camSlug], otherConversation)
+  const photoTakenOver = await recOut(page)
+    .filter({ hasText: /^(photo|refused)/ })
+    .waitFor({ timeout: 30_000 })
+    .then(() => recOut(page).textContent())
+  check(
+    'a camera open for a photo closes when another conversation takes the page over, and the page is given no photo',
+    viewOpenedAgain && /^refused: Another conversation took this page over/.test(photoTakenOver) && (await cameraView.count()) === 0,
+    JSON.stringify({ viewOpenedAgain, photoTakenOver, viewStillOpen: await cameraView.count() }),
+  )
+  await page.goto(`${APP}/p/${slug}`)
+  await pageIn(page, { id: slug })
+  for (const gone of [recSlug, camSlug]) await it(A, ['delete', gone])
+
+  // ------------------------------------------------------------------
   section('Large files')
   // A page with a film in it, as a demonstration is: one file of more than 100 MB, which the
   // command sends in parts and the browser plays a part at a time, from wherever it is skipped to
@@ -3088,7 +3268,8 @@ try {
       offered.pinOrDelete === 0 &&
       offered.machines === 'the pages' &&
       offered.displays === 'the pages' &&
-      offered.settings === 'This browser' &&
+      // What this screen allowed pages to record is its own to see and take back
+      offered.settings === 'This browser,Microphone and camera' &&
       !/Download|Erase|Forget|Revoke|Add a display/.test(offered.buttons),
     JSON.stringify(offered),
   )

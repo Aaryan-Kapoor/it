@@ -20,6 +20,7 @@ import {
   jsonText,
   LIMITS,
   MESSAGE,
+  type MediaKind,
   openedForAPage,
   type PageToSite,
   SANDBOX,
@@ -31,6 +32,24 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { askTwice } from './backend'
 import { api, displayKey, type Id, note, refusal } from './lib'
 import { useLiveState } from './live'
+import {
+  allow,
+  askPerson,
+  type Begun,
+  begin,
+  browserWillAsk,
+  cannotRecord,
+  dismissNote,
+  grantFor,
+  grantsOf,
+  kindsOf,
+  kindsSaid,
+  shoot,
+  specOf,
+  usedNow,
+  type Why,
+  whileTheBrowserAsks,
+} from './media'
 import { type Sent, submit } from './outbox'
 import { reportPage } from './presence'
 
@@ -73,15 +92,33 @@ const REFUSED_LOAD_MS = 2000
  */
 const pages = () => `${location.protocol}//${location.hostname}:${contentPort(Number(location.port) || (location.protocol === 'https:' ? 443 : 80))}`
 
+/** What something done for a page was begun under: the conversation that had the page, and the grant that allowed it (media.ts `grantFor`). */
+interface Held {
+  owner: string
+  grant: string
+  /** Which of the documents the frame has shown asked for it: what one asked for is not the next one's. */
+  doc: number
+}
+
+/** Who made a page, as the person is told when it asks for the microphone or the camera, and the conversation a grant is held to. */
+export interface MadeBy {
+  agent: string | null
+  machine: string | null
+  /** The conversation that has the page now (media.ts `ownerOf`). */
+  owner: string
+}
+
 export function Mount({
   artifactId,
   title,
   user,
+  madeBy,
   onFault,
 }: {
   artifactId: Id<'artifacts'>
   title: string
   user: string
+  madeBy?: MadeBy
   /** Told what the page's own script failed with, each time it says so. */
   /** The page's own script failed, with what it failed with; and again once its agent has been told. */
   onFault?: (message: string, agentTold: boolean) => void
@@ -96,9 +133,22 @@ export function Mount({
   /** These outlive a remount, so a page cannot reset them by asking to be shown again. */
   const lastRemount = useRef(0)
   const failures = useRef(0)
+  /**
+   * The person said no to the page's asking for the microphone or the camera, in this showing:
+   * it is not asked again until it is opened again, however often it asks or has its frame shown
+   * afresh. A page another conversation takes over is asked about for that one.
+   */
+  const refused = useRef(false)
   /** Whoever is told of the page's faults now: kept apart from the channel, which is set up once for a showing. */
   const told = useRef(onFault)
   told.current = onFault
+  /** Who made the page, as it is now: kept apart from the channel, as `told` is. */
+  const maker = useRef(madeBy)
+  maker.current = madeBy
+  /** The showing's word that the page has another owner now: what records or is asked for it under the one before is let go. */
+  const ownerMoved = useRef<((owner: string) => void) | null>(null)
+  const titled = useRef(title)
+  titled.current = title
   /** The version of the page whose agent this showing has told that its script failed: it is told once for a version. */
   const faulted = useRef<number | null>(null)
   const liveState = useLiveState(artifactId)
@@ -209,6 +259,232 @@ export function Mount({
       }
     }
     const toPage = (to: MessagePort, message: SiteToPage) => to.postMessage(message)
+
+    // The microphone and the camera (media.ts). The site records for the page, one thing at a
+    // time, when the page calls for it, and only once the person at this screen has allowed it.
+    // A call is the page's only if it came over the channel of the document the frame shows now.
+    // What the person said no to is not asked again in this showing.
+    let recording: Begun | null = null
+    let question: { cancel: () => void } | null = null
+    let photo: { cancel: () => void } | null = null
+    /** A recording or a photo is being begun: the person or the browser is being asked, and nothing is under way yet to say so. */
+    let beginning = false
+    /** A question taken away because the document that asked is gone: its going is not the person's no. */
+    let letGo: unknown = null
+    /** Which document the frame shows now, counted from the first: one that loads in its place is another, and what the one before began or asked for is not its. */
+    let docs = 0
+    // Each thing done for the page is held to the conversation the page had when it was asked for:
+    // what the person allowed is that one's, and no other's. Each keeps its own, so that something
+    // asked for later, under another conversation, cannot stand in for what an earlier one began with.
+    /** Whose the question the person is being asked about is, whose the camera open for a photo, and whose the recording under way. */
+    let questionBy = ''
+    let photoBy = ''
+    let recordingBy: Held = { owner: '', grant: '', doc: -1 }
+    const OWNER_MOVED =
+      'Another conversation took this page over, so It stopped what it was doing for it. The person is asked again for the conversation that has it now.'
+    const TAKEN_BACK = 'The person took back what they had allowed this page.'
+    const HIDDEN = 'The screen stopped showing the page, so It closed the camera, and took no photo.'
+    /** Why what is being done for the page may not go on, or nothing where it may: the page is gone, it has another owner, or what was allowed was taken back. */
+    const whyNot = (kinds: MediaKind[], by: Held): 'not_shown' | 'taken_over' | 'taken_back' | null =>
+      !live || by.doc !== docs
+        ? 'not_shown'
+        : (maker.current?.owner ?? '') !== by.owner
+          ? 'taken_over'
+          : grantFor(user, artifactId, by.owner, kinds) !== by.grant
+            ? 'taken_back'
+            : null
+    const SAID = { not_shown: 'The page was closed.', taken_over: OWNER_MOVED, taken_back: TAKEN_BACK } as const
+    /** The same, in words for the page. */
+    const mayNotGoOn = (kinds: MediaKind[], by: Held): string | null => {
+      const why = whyNot(kinds, by)
+      return why ? SAID[why] : null
+    }
+    /** What the recording under way records, for asking again whether the page may have what it gives. */
+    let recordingKinds: MediaKind[] = []
+    // Another conversation took the page over: whatever records, is asked for or is open for a
+    // photo under the one before stops, and what was recorded is thrown away. The person allowed
+    // that conversation, and the new one has to be allowed for itself.
+    ownerMoved.current = (owner) => {
+      // A no from the person was about the conversation before: the one that has the page now is asked for itself
+      refused.current = false
+      if (question && questionBy !== owner) question.cancel()
+      if (photo && photoBy !== owner) photo.cancel()
+      if (recording && recordingBy.owner !== owner) recording.end('taken_over')
+    }
+    /**
+     * Leaves the frame in It's own place while the microphone or the camera is asked about, records
+     * or is open for a photo: a frame that fills the screen would hide It's bar, which asks, says
+     * that it records, and has the buttons that stop it and take the photo.
+     */
+    const inSight = () => {
+      if ((beginning || recording || photo) && document.fullscreenElement && document.fullscreenElement === frame.current)
+        void document.exitFullscreen().catch(() => {})
+    }
+    document.addEventListener('fullscreenchange', inSight)
+    /**
+     * Settles whether the page may use these here, asking the person where they have not said:
+     * once, in It's bar, for what this call wants that the page is not allowed yet on this
+     * screen, as the conversation that has it now. Nothing but the page's own call asks, and only
+     * while the person can see the page. Throws, in words for the page, where it may not.
+     */
+    const mayUse = async (kinds: MediaKind[]): Promise<Held> => {
+      const cannot = cannotRecord()
+      if (cannot) throw new Error(cannot)
+      const doc = docs
+      // Nothing is begun for a page the screen does not show, where It's bar, which says what records, cannot be seen
+      if (document.visibilityState === 'hidden')
+        throw new Error('It uses the microphone and the camera for a page only while this screen shows it. Ask again once the page is in front.')
+      const by = maker.current
+      const owner = by?.owner ?? ''
+      const already = grantFor(user, artifactId, owner, kinds)
+      if (already) {
+        usedNow(user, artifactId)
+        return { owner, grant: already, doc }
+      }
+      if (refused.current) throw new Error(`The person did not allow this page to use ${kindsSaid(kinds)} on this screen.`)
+      // Asked only of someone who has the page in front of them: a window behind another, shown or not, is not asked from
+      if (!document.hasFocus())
+        throw new Error('It asks the person only while the page is in front, in the window they are using. Ask again from something they do on the page.')
+      // What this call wants beyond what the page is allowed already, which stays as it is
+      const had = grantsOf(user).find((g) => g.page === artifactId && g.owner === owner)
+      const asking = kinds.filter((k) => !had?.kinds.includes(k))
+      const asked = askPerson({ page: artifactId, title: titled.current, agent: by?.agent ?? null, machine: by?.machine ?? null, kinds: asking })
+      question = asked
+      questionBy = owner
+      const yes = await asked.answer
+      if (question === asked) question = null
+      if (!live) throw new Error('The page was closed.')
+      if (letGo === asked) throw new Error('The page loaded another document, which asks for itself.')
+      // Taken over while the person was asked: what they answered was about the conversation before
+      if ((maker.current?.owner ?? '') !== owner) throw new Error(OWNER_MOVED)
+      if (!yes) {
+        refused.current = true
+        throw new Error(`The person did not allow this page to use ${kindsSaid(kinds)} on this screen.`)
+      }
+      if (doc !== docs) throw new Error('The page loaded another document, which asks for itself.')
+      allow(user, { page: artifactId, title: titled.current, agent: by?.agent ?? null, machine: by?.machine ?? null, owner, kinds: asking })
+      const grant = grantFor(user, artifactId, owner, kinds)
+      if (!grant) throw new Error(TAKEN_BACK)
+      return { owner, grant, doc }
+    }
+    /**
+     * Gets the device for what the page may use, through `get`. Where the browser asks about it
+     * itself, the first time on this screen, It's bar says which page the browser's question is
+     * for, while it is asked; It asks nothing more of its own.
+     */
+    const withDevice = async <T,>(kinds: MediaKind[], get: (held: Held) => Promise<T>): Promise<{ held: Held; got: T }> => {
+      const held = await mayUse(kinds)
+      const shown = (await browserWillAsk(kinds)).length ? whileTheBrowserAsks({ page: artifactId, title: titled.current, kinds }) : undefined
+      try {
+        return { held, got: await get(held) }
+      } catch (err) {
+        throw deviceRefused(err)
+      } finally {
+        shown?.()
+      }
+    }
+    /** What the browser said when it would not give the device, in words for the page and the person. */
+    const deviceRefused = (err: unknown): Error => {
+      const name = (err as { name?: unknown } | null)?.name
+      if (name === 'NotAllowedError' || name === 'SecurityError')
+        return new Error('The browser did not let It use that on this screen. Allow it for It’s site in the browser’s settings, and try again.')
+      if (name === 'NotFoundError' || name === 'OverconstrainedError') return new Error('This screen has no microphone or camera that does what was asked.')
+      if (name === 'NotReadableError' || name === 'AbortError') return new Error('The microphone or the camera is in use by something else on this screen.')
+      return err instanceof Error ? err : new Error('It could not record.')
+    }
+    const onMedia = async (from: MessagePort, message: Extract<PageToSite, { type: 'it:record' | 'it:record-stop' | 'it:photo' }>) => {
+      if (message.type === 'it:record-stop') {
+        const was = recording
+        if (!was || was.id !== message.recording) throw new Error('That recording is not under way.')
+        // Whose it was, and what it records, as it was begun: the page may begin another while this one finishes
+        const wasBy = recordingBy
+        const wasKinds = recordingKinds
+        recording = null
+        if (message.keep !== true) {
+          await was.stop(false)
+          return {}
+        }
+        const file = await was.stop(true)
+        // Taken over, or taken back, while the recorder was finishing: what it gives is not the page's
+        const cannot = mayNotGoOn(wasKinds, wasBy)
+        if (cannot) throw new Error(cannot)
+        return { file }
+      }
+      if (beginning || recording || question || photo) throw new Error('This page is using the microphone or the camera already. Stop that first.')
+      // Taken at once, before anything is waited for: a second asking that arrives while the
+      // person or the browser is asked about the first is refused, and is not begun beside it
+      beginning = true
+      // And It's bar is seen, which asks and says what is under way
+      inSight()
+      try {
+        return message.type === 'it:photo' ? await takePhoto(message) : await beginRecording(from, message)
+      } finally {
+        beginning = false
+      }
+    }
+    const takePhoto = async (message: Extract<PageToSite, { type: 'it:photo' }>) => {
+      const facing = message.facing === 'user' || message.facing === 'environment' ? message.facing : undefined
+      const { held, got: taking } = await withDevice(['camera'], (h) =>
+        shoot({ page: artifactId, title: titled.current, user, owner: h.owner, grant: h.grant }, facing),
+      )
+      const owner = held.owner
+      // The page was closed, left for another document, taken over, or what it was allowed taken
+      // back while the browser was asked, or the screen stopped showing it: the camera is closed again at once
+      const before = mayNotGoOn(['camera'], held) ?? (document.visibilityState === 'hidden' ? HIDDEN : null)
+      if (before) {
+        taking.cancel()
+        throw new Error(before)
+      }
+      photo = taking
+      photoBy = owner
+      // Nothing more is being begun: what is open now is the person's to finish
+      beginning = false
+      inSight()
+      const made = await taking.photo
+      photo = null
+      // And again before the photo is handed over: one taken as the camera was being closed for any of these is not the page's
+      const after = mayNotGoOn(['camera'], held)
+      if (after) throw new Error(after)
+      if (!made) throw new Error(document.visibilityState === 'hidden' ? HIDDEN : 'The person closed the camera without taking a photo.')
+      return { file: made }
+    }
+    const beginRecording = async (from: MessagePort, message: Extract<PageToSite, { type: 'it:record' }>) => {
+      const spec = specOf(message)
+      let held: Held = { owner: '', grant: '', doc: -1 }
+      const id = crypto.getRandomValues(new Uint32Array(2)).join('-')
+      const tell = (state: 'recording' | 'paused' | 'ended', said?: Why, given?: Blob) => {
+        if (state === 'ended' && recording?.id === id) recording = null
+        let why = said
+        let file = given
+        // A recording that ended by itself gives what it recorded only to a page that may still have it: one
+        // taken over, or whose leave was taken back, while the recorder was finishing is told that instead, and given nothing
+        const not = file ? whyNot(kindsOf(spec), held) : null
+        if (not) {
+          why = not
+          file = undefined
+          dismissNote(artifactId)
+        }
+        if (live && port.current === from) toPage(from, { type: 'it:recording', recording: id, state, ...(why ? { why } : {}), ...(file ? { file } : {}) })
+      }
+      recording = (
+        await withDevice(kindsOf(spec), (h) => {
+          held = h
+          return begin(spec, { id, user, page: artifactId, owner: h.owner, grant: h.grant, title: titled.current, told: tell })
+        })
+      ).got
+      // The page was closed, taken over, or what it was allowed taken back while the browser was
+      // asked: nothing is recorded for a page that is gone, that another conversation has now, or that may not
+      const cannot = mayNotGoOn(kindsOf(spec), held)
+      if (cannot) {
+        void recording.stop(false)
+        recording = null
+        throw new Error(cannot)
+      }
+      recordingBy = held
+      recordingKinds = kindsOf(spec)
+      inSight()
+      return { recording: { id, mimeType: recording.mimeType } }
+    }
     const allowed = () => {
       const now = Date.now()
       // Never less than nothing: a browser's clock that was set back would otherwise take an hour's worth away, and the page would be refused for an hour
@@ -279,6 +555,17 @@ export function Mount({
           told.current?.(text, true)
         } catch {
           // Refused, or too many at once: the bar has said it, which is what the person needs
+        }
+        return
+      }
+      if (message.type === 'it:record' || message.type === 'it:record-stop' || message.type === 'it:photo') {
+        const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 100) : ''
+        try {
+          // Stopping is never refused for asking too often: a page that cannot stop would go on recording
+          if (message.type !== 'it:record-stop' && !allowed()) throw new Error('This page is sending too much at once. Try again in a moment.')
+          toPage(from, { type: 'it:result', requestId, ok: true, ...(await onMedia(from, message)) })
+        } catch (err) {
+          toPage(from, { type: 'it:result', requestId, ok: false, error: err instanceof Error ? err.message.slice(0, 500) : 'It could not record.' })
         }
         return
       }
@@ -397,6 +684,15 @@ export function Mount({
         if (!doc || doc === answered) return
         if (!allowed()) return
         answered = doc
+        docs += 1
+        // What the document before asked for, or began, is that document's: it is let go, and the new one asks for itself
+        if (question) {
+          letGo = question
+          question.cancel()
+        }
+        photo?.cancel()
+        recording?.end('not_shown')
+        recording = null
         port.current?.close()
         const channel = new MessageChannel()
         port.current = channel.port1
@@ -425,7 +721,7 @@ export function Mount({
       loadedAt = Number.NEGATIVE_INFINITY
       showAgain()
     }
-    const refused = (e: Event) => {
+    const frameRefused = (e: Event) => {
       if ((e as SecurityPolicyViolationEvent).effectiveDirective !== 'frame-src') return
       refusedAt = Date.now()
       together()
@@ -435,7 +731,7 @@ export function Mount({
       loadedAt = Date.now()
       together()
     }
-    document.addEventListener('securitypolicyviolation', refused)
+    document.addEventListener('securitypolicyviolation', frameRefused)
     framed?.addEventListener('load', loaded)
     return () => {
       live = false
@@ -443,8 +739,15 @@ export function Mount({
       clearTimeout(later)
       clearInterval(looking)
       window.removeEventListener('message', onMessage)
-      document.removeEventListener('securitypolicyviolation', refused)
+      document.removeEventListener('securitypolicyviolation', frameRefused)
       framed?.removeEventListener('load', loaded)
+      // A page that is no longer shown records nothing, and is asked nothing
+      document.removeEventListener('fullscreenchange', inSight)
+      ownerMoved.current = null
+      question?.cancel()
+      photo?.cancel()
+      void recording?.stop(false)
+      recording = null
       port.current?.close()
       port.current = null
     }
@@ -452,6 +755,10 @@ export function Mount({
 
   // State flows down: what changed goes to whatever the frame is showing now
   useEffect(() => liveState.listen((message) => port.current?.postMessage(message)), [liveState])
+
+  // The page has another owner: what is done for it under the one before is let go
+  const owner = madeBy?.owner ?? ''
+  useEffect(() => ownerMoved.current?.(owner), [owner])
 
   // A display nobody is standing at puts itself right: a failed showing is tried again, less and
   // less often, and at once when the connection or the tab comes back

@@ -22,12 +22,21 @@ async function chromiumAsShipped(extra = [], channel) {
     .filter((f) => f !== 'ThirdPartyStoragePartitioning')
   return { ...(channel ? { channel } : {}), ignoreDefaultArgs: [flag], args: [`--disable-features=${kept.join(',')}`, ...extra] }
 }
-const FIREFOX_SHIPPED = { 'network.cookie.cookieBehavior': 5, 'network.cookie.CHIPS.enabled': true }
+// A microphone and a camera of the browser's own making, which give a tone and a moving picture,
+// and a browser that lets the site use them as a person who allows it would: the run records
+// through It's own question, which is the one that stands between a page and the device
+const FAKE_DEVICES = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream']
+const FIREFOX_SHIPPED = {
+  'network.cookie.cookieBehavior': 5,
+  'network.cookie.CHIPS.enabled': true,
+  'media.navigator.streams.fake': true,
+  'media.navigator.permission.disabled': true,
+}
 export const BROWSERS = {
-  chromium: async () => chromium.launch(await chromiumAsShipped()),
-  'chromium-blocked': async () => chromium.launch(await chromiumAsShipped(['--test-third-party-cookie-phaseout'])),
-  chrome: async () => chromium.launch(await chromiumAsShipped([], 'chrome')),
-  'chrome-blocked': async () => chromium.launch(await chromiumAsShipped(['--test-third-party-cookie-phaseout'], 'chrome')),
+  chromium: async () => chromium.launch(await chromiumAsShipped(FAKE_DEVICES)),
+  'chromium-blocked': async () => chromium.launch(await chromiumAsShipped(['--test-third-party-cookie-phaseout', ...FAKE_DEVICES])),
+  chrome: async () => chromium.launch(await chromiumAsShipped(FAKE_DEVICES, 'chrome')),
+  'chrome-blocked': async () => chromium.launch(await chromiumAsShipped(['--test-third-party-cookie-phaseout', ...FAKE_DEVICES], 'chrome')),
   firefox: () => firefox.launch({ firefoxUserPrefs: FIREFOX_SHIPPED }),
   'firefox-strict': () =>
     firefox.launch({

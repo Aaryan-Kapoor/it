@@ -196,10 +196,12 @@ const ASKED_MS = 5_000
  * the computer It runs on can know, which the owner's settings then say as they are: whether It
  * is registered with the system to start by itself from this folder (`background`), and whether
  * counts of its use are being sent at this moment (`usage`). With them, the machine's name on
- * its tailnet where the door answers to it (`tailnetName`), which the links agents give can be at.
+ * its tailnet where the door answers to it (`tailnetName`), which the links agents give can be at,
+ * and that name where the door answers it over https through Tailscale (`https`), whether or not
+ * the network is on.
  */
 export const standsAs = (
-  door: { network: boolean; tailnet?: boolean; internet?: boolean },
+  door: { network: boolean; tailnet?: boolean; internet?: boolean; https?: string },
   wanted: boolean,
   port: number,
   named: () => string | undefined = tailnetName,
@@ -222,6 +224,7 @@ export const standsAs = (
     ...(internet ? { internet: true } : {}),
     ...(onTheInternet() ? { exposed: onTheInternet()!.why } : {}),
     ...(name ? { tailnetName: name } : {}),
+    ...(door.https ? { https: door.https } : {}),
   }
 }
 type Stands = ReturnType<typeof standsAs>
@@ -432,24 +435,29 @@ async function keptDoor(
 ): Promise<{ stop(): Promise<void> } | null> {
   const erased = erasing(say)
   const content = makeContent(config, backend, say, erased)
+  /** The name the door answers at over https through Tailscale, as the settings last said it, or none. */
+  let https = config.https
   const open = async (network: boolean, tailnet: boolean, internet: boolean) => {
     const only = network && tailnet
     const wide = network && !only && internet
+    const secure = https === undefined ? { https: undefined } : { https }
     try {
       return {
-        door: await startDoor({ ...config, network, tailnet: only, internet: wide }, backend, say, { content, erased }),
+        door: await startDoor({ ...config, network, tailnet: only, internet: wide, ...secure }, backend, say, { content, erased }),
         network,
         tailnet: only,
         internet: wide,
+        ...secure,
       }
     } catch (err) {
       if (!network) throw err
       say(`door: could not listen on the network (${why(err)}); it answers this machine only`)
       return {
-        door: await startDoor({ ...config, network: false, tailnet: false, internet: false }, backend, say, { content, erased }),
+        door: await startDoor({ ...config, network: false, tailnet: false, internet: false, ...secure }, backend, say, { content, erased }),
         network: false,
         tailnet: false,
         internet: false,
+        ...secure,
       }
     }
   }
@@ -552,12 +560,21 @@ async function keptDoor(
       let said: boolean | undefined
       let saidTailnet = false
       let saidInternet = false
+      let saidHttps = https
       try {
         const kept = readConfig()
         said = kept?.network
         saidTailnet = kept?.network === true && kept.tailnet === true
         saidInternet = kept?.network === true && !saidTailnet && kept.internet === true
+        if (kept) saidHttps = kept.https
       } catch {}
+      // The name It answers at over https is part of how the door was opened, and it is opened anew for that alone
+      if (saidHttps !== https) {
+        https = saidHttps
+        say(https ? 'door: answers its tailnet over https too, through Tailscale' : 'door: answers over https no more')
+        await now.door.stop()
+        now = await open(now.network, now.tailnet, now.internet)
+      }
       if (
         said !== undefined &&
         opensAnew(

@@ -30,6 +30,7 @@ import { LinkChoice, NetworkSwitch, NoAddress, OtherAddresses, PhoneNote, useNet
 import { thisPairing } from './outbox'
 import { goesAlong, type Paired, PairedBrowsers } from './paired'
 import { pushSupport, turnOffPush, turnOnPush } from './push'
+import { MediaGrants } from './recording'
 import { current, signOut as endSession, recheck, spaced } from './session'
 import { choosePreviews, PREVIEW_CHOICES, type PreviewChoice, usePreviewChoice } from './slots'
 
@@ -612,6 +613,7 @@ export function Settings({ user, owner, display, onSignOut }: { user: string; ow
           </li>
         </ul>
       </section>
+      <MediaGrants user={user} />
       {owner && (
         <>
           <section>
