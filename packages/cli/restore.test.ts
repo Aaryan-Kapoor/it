@@ -9,9 +9,9 @@
 //
 // The older It is this source. A newer one is this source too, under a later version number,
 // with functions whose schema gives every display two optional fields the older schema does not
-// have, `usedAt` and `reports`, and a module that writes them. Some of them also say that they
-// run a newer release of the backend program, as a release may, and one has functions that the
-// data refuses. All run the real backend program, on ports of this file's own, in a folder of
+// have, `restoreProbeAt` and `restoreProbes`, named so that no real schema has them, and a module
+// that writes them. Some of them also say that they run a newer release of the backend program,
+// as a release may, and one has functions that the data refuses. All run the real backend program, on ports of this file's own, in a folder of
 // each test's own.
 //
 // What this does not cover: two real releases from GitHub, a backend program that is in truth
@@ -97,13 +97,13 @@ const RESTORING = `
     args: {},
     handler: async (ctx) => {
       const all = await ctx.db.query('displays').collect()
-      for (const d of all) await ctx.db.patch(d._id, { usedAt: Date.now(), reports: [{ at: Date.now(), visible: true }] })
+      for (const d of all) await ctx.db.patch(d._id, { restoreProbeAt: Date.now(), restoreProbes: [{ at: Date.now(), visible: true }] })
       return all.length
     },
   })
   export const seen = internalQueryGeneric({
     args: {},
-    handler: async (ctx) => (await ctx.db.query('displays').collect()).map((d) => ({ key: d.key, usedAt: d.usedAt, reports: d.reports })),
+    handler: async (ctx) => (await ctx.db.query('displays').collect()).map((d) => ({ key: d.key, restoreProbeAt: d.restoreProbeAt, restoreProbes: d.restoreProbes })),
   })
 `
 
@@ -136,7 +136,7 @@ async function later(name: string, version: string, release: string, functions: 
     request.appDefinition.schema.source = schema.replace(
       /generatedName:\s*(\w+)\.string\(\),/,
       (whole, v: string) =>
-        `${whole} usedAt: ${v}.optional(${v}.number()), reports: ${v}.optional(${v}.array(${v}.object({ at: ${v}.number(), visible: ${v}.boolean() }))),`,
+        `${whole} restoreProbeAt: ${v}.optional(${v}.number()), restoreProbes: ${v}.optional(${v}.array(${v}.object({ at: ${v}.number(), visible: ${v}.boolean() }))),`,
     )
     const restoring = await build({
       stdin: { contents: RESTORING, resolveDir: __dirname, loader: 'js' },
@@ -432,7 +432,7 @@ describe.skipIf(!program || windows)('going back to an older It by putting back 
       const backend = { api: backendAt(port).api, adminKey: json(path.join(folder, 'service.json')).adminKey as string }
       expect(await asAdmin(backend, 'restoring:mark', {})).toBe(1)
       expect(await asAdmin(backend, 'restoring:seen', {})).toEqual([
-        { key: first.key, usedAt: expect.any(Number), reports: [{ at: expect.any(Number), visible: true }] },
+        { key: first.key, restoreProbeAt: expect.any(Number), restoreProbes: [{ at: expect.any(Number), visible: true }] },
       ])
       expect(await said(newer.program, ['set', 'plan', 'step', '3'])).toMatchObject({ revision: 3 })
       expect(await said(newer.program, ['create', 'Later', '--id', 'later', '--html', '<p>later</p>'])).toMatchObject({ id: 'later' })
