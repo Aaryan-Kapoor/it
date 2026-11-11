@@ -1221,13 +1221,16 @@ function statOf(pid: number): { ppid: number; pgrp: number; session: number; tic
 /**
  * Whether a process of this person's whose environment cannot be read, begun since a run began,
  * may be that run's, by what Linux shows of every process. It may be where it is in the run's
- * own group or session, which a run is started with and what it starts keeps, or descends from
- * the run or from a process that carries the run's name. It is not where it is in another
- * control group than the one the run was started in, since a process starts in its parent's;
- * nor where its parent, in the same control group as it is, was running before the run began,
- * since such a parent made it and is not the run's. Anything else may be the run's: one whose
- * parent has gone, or has taken it in after its own parent went, as systemd and the first
- * process of the system take in every process left without one, is not shown to be anybody's.
+ * own group or session, which a run is started with and what it starts keeps, or where any of
+ * its parents, as far up as they are there, is the run itself or carries the run's name. It is
+ * not where it is in a session that was made before the run began: a process stays in the
+ * session it was started in, or one it makes for itself, and can join no other, so a session
+ * older than the run holds nothing the run started. Who its parent is now proves nothing of the
+ * kind, since a process that outlives its parent is taken in by another (systemd, the first
+ * process of the system, or any program that asks to take such processes in). Nor is it the
+ * run's where it is in another control group than the one the run was started in, since a
+ * process starts in its parent's: a command of the run's that is moved out of it, and lets
+ * nobody read it, is not found, as `docs/what-it-protects.md` says. Anything else may be.
  */
 function mayBeTheRuns(pid: number, near: Near, since: string, mark: string): boolean {
   if (!/^tick \d+$/.test(since)) return true
@@ -1236,26 +1239,30 @@ function mayBeTheRuns(pid: number, near: Near, since: string, mark: string): boo
   if (first === null) return false
   if (first === undefined) return true
   if (first.pgrp === near.leader || first.session === near.leader) return true
-  const group = cgroupOf(pid)
-  if (near.cgroup !== undefined && group !== undefined && group !== near.cgroup && !group.startsWith(`${near.cgroup}/`)) return false
-  let at = { stat: first, group }
+  // Up through its parents, while they are there and began since the run: one that is the run, or carries its name
+  let at = first
   for (let step = 0; step < 64; step++) {
-    const parent = at.stat.ppid
-    if (parent === near.leader || parent <= 1) return true
+    const parent = at.ppid
+    if (parent === near.leader) return true
+    if (parent <= 1) break
     const its = statOf(parent)
-    if (!its) return true
-    const theirs = cgroupOf(parent)
-    // A parent in another control group may have taken it in, and not have made it
-    if (theirs === undefined || at.group === undefined || theirs !== at.group) return true
-    if (its.tick < began) return false
-    // Begun since the run, it may be one of the run's, which says so where it can be read
+    if (!its || its.tick < began) break
     try {
       if (readFileSync(`/proc/${parent}/environ`, 'utf8').split('\0').includes(mark)) return true
     } catch {}
-    at = { stat: its, group: theirs }
+    at = its
+  }
+  const group = cgroupOf(pid)
+  if (near.cgroup !== undefined && group !== undefined && !within(group, near.cgroup)) return false
+  // The session's number is its first process's, which no other process is given while the session is there
+  if (first.session > 1 && first.session !== pid) {
+    const leader = statOf(first.session)
+    if (leader && leader.tick < began) return false
   }
   return true
 }
+/** Whether one control group is another, or inside it. */
+const within = (group: string, of: string): boolean => group === of || group.startsWith(of.endsWith('/') ? of : `${of}/`)
 
 /**
  * Which of these processes there are now, each with when it was started: the two together are

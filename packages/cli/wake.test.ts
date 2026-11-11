@@ -1433,14 +1433,32 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
         // gpg-agent, started by systemd or from a terminal while the run went on: in a control group of its own
         expect(await judged({ [U]: { ppid: L + 9, tick: 2000, cgroup: '/user.slice/app.slice/gpg-agent.service' } })).toBe('gone')
         // A helper of a program that was running before the run began, beside it in the same control group, as a
-        // browser's or a test runner's is where It runs from a terminal
+        // browser's or a test runner's is where It runs from a terminal: it is in that program's session, which is older than the run
         expect(
           await judged({
-            [U]: { ppid: L + 2, tick: 2000, cgroup: '/user.slice/it.service' },
-            [L + 2]: { ppid: L + 3, tick: 1500, cgroup: '/user.slice/it.service', env: ['PATH=/bin'] },
+            [U]: { ppid: L + 2, session: L + 3, tick: 2000, cgroup: '/user.slice/it.service' },
+            [L + 2]: { ppid: L + 3, session: L + 3, tick: 1500, cgroup: '/user.slice/it.service', env: ['PATH=/bin'] },
             [L + 3]: { ppid: 1, tick: 500, cgroup: '/user.slice/it.service', env: ['PATH=/bin'] },
           }),
         ).toBe('gone')
+        // Taken in by an older program in the same control group after its own parent went, in a session of its own
+        // that is newer than the run: who its parent is now proves nothing, and it may be a command the run left
+        expect(
+          await judged({
+            [U]: { ppid: L + 3, tick: 2000, cgroup: '/user.slice/it.service' },
+            [L + 3]: { ppid: 1, tick: 500, cgroup: '/user.slice/it.service', env: ['PATH=/bin'] },
+          }),
+        ).toBe('unknown')
+        // Started by the run, or by something the run started, and moved into another control group since: still the run's
+        expect(await judged({ [U]: { ppid: L, tick: 2000, cgroup: '/user.slice/app.slice/elsewhere.scope' } })).toBe('unknown')
+        expect(
+          await judged({
+            [U]: { ppid: L + 6, tick: 2000, cgroup: '/user.slice/app.slice/elsewhere.scope' },
+            [L + 6]: { ppid: L, tick: 1500, cgroup: '/user.slice/it.service', env: ['PATH=/bin'] },
+          }),
+        ).toBe('unknown')
+        // A run started in the root of what can be seen, as in a container: everything is inside it
+        expect(await judged({ [U]: { ppid: 1, tick: 2000, cgroup: '/child.scope' } }, { ...of, cgroup: '/' })).toBe('unknown')
         // In the run's own session or group, which what the run starts keeps: it may be the run's
         expect(await judged({ [U]: { ppid: 1, session: L, tick: 2000, cgroup: '/user.slice/it.service' } })).toBe('unknown')
         expect(await judged({ [U]: { ppid: 1, pgrp: L, tick: 2000, cgroup: '/user.slice/other.scope' } })).toBe('unknown')
