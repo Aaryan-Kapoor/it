@@ -7,7 +7,20 @@ import path from 'node:path'
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
-import { actionsUri, conversationEnv, type Follow, MCP_REVISIONS, pageOf, type Ran, type Run, result, serveMcp, sessionNamed, TOOLS, WAIT_MOST } from './src/mcp'
+import {
+  actionsUri,
+  conversationEnv,
+  type Follow,
+  MCP_REVISIONS,
+  pageOf,
+  type Ran,
+  type Run,
+  result,
+  serveMcp,
+  sessionNamed,
+  TOOLS,
+  WAIT_MOST,
+} from './src/mcp'
 
 type Json = Record<string, any>
 
@@ -243,7 +256,14 @@ describe('the MCP server', () => {
   })
 
   it("marks its commands as its own conversation's and takes off every other app's mark", () => {
-    const env = conversationEnv('desk', { PATH: '/bin', CODEX_THREAD_ID: 'c', CLAUDE_CODE_SESSION_ID: 's', IT_HARNESS: 'claude-code', IT_SESSION: 's', IT_HOME: '/h' })
+    const env = conversationEnv('desk', {
+      PATH: '/bin',
+      CODEX_THREAD_ID: 'c',
+      CLAUDE_CODE_SESSION_ID: 's',
+      IT_HARNESS: 'claude-code',
+      IT_SESSION: 's',
+      IT_HOME: '/h',
+    })
     expect(env).toEqual({ PATH: '/bin', IT_HOME: '/h', IT_HARNESS: 'mcp', IT_SESSION: 'desk' })
     expect(['desk', 'dot.work-1', 'a_b'].map(sessionNamed)).toEqual([true, true, true])
     expect(['', '-x', 'a b', 'a/b', 'x'.repeat(101)].map(sessionNamed)).toEqual([false, false, false, false, false])
@@ -264,7 +284,10 @@ describe('the built program as an MCP server', () => {
   it('speaks the protocol on its standard output and nothing else, and ends when its input does', async () => {
     folder = mkdtempSync(path.join(os.tmpdir(), 'it-mcp-'))
     // A folder of its own with no It in it: every tool that asks It anything is refused by the command itself
-    child = spawn(process.execPath, [cli, 'mcp', '--session', 'test'], { env: { ...process.env, IT_HOME: folder, IT_TELEMETRY: 'off' }, stdio: ['pipe', 'pipe', 'pipe'] })
+    child = spawn(process.execPath, [cli, 'mcp', '--session', 'test'], {
+      env: { ...process.env, IT_HOME: folder, IT_TELEMETRY: 'off' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
     const heard: Json[] = []
     const lines: string[] = []
     const waiting: (() => void)[] = []

@@ -122,8 +122,8 @@ import {
   written,
 } from './lib'
 import { joinedBefore, login, runsItsOwn } from './login'
-import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
 import { newSession, runner, serveMcp, sessionNamed } from './mcp'
+import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
 import { failure, foldRepeats, forPerson } from './output'
 import { keepToOwner } from './owner'
 import { gather, noteConversation, publish, unlinkedNote } from './publish'
