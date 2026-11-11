@@ -89,6 +89,8 @@ export class EmbedLayer {
   private drawing: number | null = null
   /** Whether every shield stays up until it is let go, while the site is not yet sure which document the frame shows. */
   private holding = false
+  /** The player laid over the whole of the page, in It's fullscreen, which the player's own fullscreen button asked for. */
+  private full: Frame | null = null
   private readonly layer: HTMLElement
   private readonly pageFrame: () => HTMLIFrameElement | null
   private readonly toPage: (message: SiteToPage) => void
@@ -149,6 +151,47 @@ export class EmbedLayer {
     if (!this.holding) return
     this.holding = false
     for (const hosted of this.frames.values()) if (!hosted.shield.hidden) this.shield(hosted)
+  }
+
+  /** Whether a frame is one of the players hosted here. */
+  owns(frame: Element): boolean {
+    return [...this.frames.values()].some((hosted) => hosted.frame === frame)
+  }
+
+  /**
+   * Lays one of the players hosted here over the whole of the layer, and so of the page under
+   * It's bar, above the other players, while It is fullscreen for it: what its own fullscreen
+   * button asked for, which the site gives it this way (fullscreen.ts). What the page says of
+   * where it is meanwhile is kept for when it is let go. It has just grown under the pointer, so
+   * its shield takes a click for a moment, as after any other move.
+   */
+  fill(frame: Element): void {
+    const hosted = [...this.frames.values()].find((h) => h.frame === frame)
+    if (!hosted || hosted === this.full) return
+    if (this.full) this.unfill()
+    this.full = hosted
+    const style = hosted.box.style
+    style.transform = 'none'
+    style.width = '100%'
+    style.height = '100%'
+    style.clipPath = ''
+    style.zIndex = '1'
+    style.visibility = ''
+    hosted.frame.style.borderRadius = ''
+    this.shield(hosted)
+  }
+
+  /** Lets go of the player laid over the page: it goes back where the page last said, cut as the page last said, or hides where the page last said it is hidden. */
+  unfill(): void {
+    const hosted = this.full
+    if (!hosted) return
+    this.full = null
+    hosted.box.style.zIndex = ''
+    if (hosted.wanted || hosted.hide) {
+      // What the page said while it lay over the page is laid on the site's next frame, as anything the page says is
+      if (this.drawing === null) this.drawing = this.nextFrame(() => this.draw())
+    } else this.place(hosted, hosted.at)
+    this.shield(hosted)
   }
 
   /** Takes every embed away: the page's document or its showing has ended. */
@@ -260,6 +303,8 @@ export class EmbedLayer {
     this.drawing = null
     let offset: { dx: number; dy: number } | null = null
     for (const hosted of this.frames.values()) {
+      // Laid over the page, it stays there: what the page said is kept for when it is let go
+      if (hosted === this.full) continue
       if (hosted.hide) {
         hosted.hide = false
         hosted.box.style.visibility = 'hidden'
@@ -296,14 +341,27 @@ export class EmbedLayer {
         was.cut.every((n, i) => n === place.cut[i])
       if (!still) this.shield(hosted)
       hosted.at = place
-      const style = hosted.box.style
-      style.transform = `translate(${place.x}px, ${place.y}px)`
-      style.width = `${place.width}px`
-      style.height = `${place.height}px`
-      style.clipPath = `inset(${place.cut[0]}px ${place.cut[1]}px ${place.cut[2]}px ${place.cut[3]}px)`
-      hosted.frame.style.borderRadius = place.round > 0 ? `${place.round}px` : ''
-      style.visibility = ''
+      this.place(hosted, place)
     }
+  }
+
+  /** Lays a frame where it is to lie, cut and rounded as it is to be; or, with nowhere to lie, hides it. */
+  private place(hosted: Frame, place: Laid | null): void {
+    const style = hosted.box.style
+    if (!place) {
+      style.transform = ''
+      style.width = ''
+      style.height = ''
+      style.clipPath = ''
+      style.visibility = 'hidden'
+      return
+    }
+    style.transform = `translate(${place.x}px, ${place.y}px)`
+    style.width = `${place.width}px`
+    style.height = `${place.height}px`
+    style.clipPath = `inset(${place.cut[0]}px ${place.cut[1]}px ${place.cut[2]}px ${place.cut[3]}px)`
+    hosted.frame.style.borderRadius = place.round > 0 ? `${place.round}px` : ''
+    style.visibility = ''
   }
 
   /** Puts the shield over a frame that has just appeared, moved or been cut otherwise, until it has been still for a moment. */
@@ -359,6 +417,7 @@ export class EmbedLayer {
     const hosted = this.frames.get(id)
     if (!hosted) return
     this.frames.delete(id)
+    if (this.full === hosted) this.full = null
     clearTimeout(hosted.lowering)
     hosted.box.remove()
   }

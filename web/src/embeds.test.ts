@@ -472,4 +472,61 @@ describe('the layer the site hosts embeds in', () => {
     late.dispatchEvent(new Event('load'))
     expect(told.filter((m) => m.type === 'it:embed-loaded')).toEqual([])
   })
+
+  test('a player given It’s fullscreen lies over the whole layer, above the other players, until it is let go, and then goes back where the page last said', () => {
+    vi.useFakeTimers()
+    const { take, framed, layer, draw } = host()
+    take({ type: 'it:embed', id: 'e1', url: 'https://www.youtube.com/embed/a' })
+    take({ type: 'it:embed', id: 'e2', url: 'https://www.youtube.com/embed/b' })
+    take(at('e1', { cut: [10, 0, 0, 0], round: 12 }))
+    take(at('e2', { y: 500 }))
+    const [one, two] = framed() as [HTMLIFrameElement, HTMLIFrameElement]
+    const placed = one.parentElement as HTMLElement
+    const shield = placed.querySelector('.embed-shield') as HTMLElement
+    vi.advanceTimersByTime(EMBED.shieldMs)
+    // Only its own players are the layer's to lay over the page
+    expect(layer.owns(one)).toBe(true)
+    expect(layer.owns(document.createElement('iframe'))).toBe(false)
+    layer.fill(document.createElement('iframe'))
+    expect(placed.style.transform).toBe('translate(40px, 100px)')
+    layer.fill(one)
+    expect(placed.style.transform).toBe('none')
+    expect([placed.style.width, placed.style.height]).toEqual(['100%', '100%'])
+    expect(placed.style.clipPath).toBe('')
+    expect(placed.style.visibility).toBe('')
+    expect(placed.style.zIndex).toBe('1')
+    expect(one.style.borderRadius).toBe('')
+    expect((two.parentElement as HTMLElement).style.transform).toBe('translate(40px, 500px)')
+    // It has just grown under the pointer, which is a move like any other: a click waits a moment
+    expect(shield.hidden).toBe(false)
+    // What the page says of it meanwhile, where it is or that it is hidden, does not move it
+    take(at('e1', { y: 20 }))
+    take(at('e1', { shown: false }))
+    expect([placed.style.transform, placed.style.visibility]).toEqual(['none', ''])
+    take(at('e1', { x: 0, y: 30 }))
+    expect(placed.style.transform).toBe('none')
+    // Let go, it goes where the page last said, as the page last cut it
+    vi.advanceTimersByTime(EMBED.shieldMs)
+    layer.unfill()
+    draw()
+    expect(placed.style.transform).toBe('translate(0px, 30px)')
+    expect([placed.style.width, placed.style.height, placed.style.clipPath, placed.style.zIndex]).toEqual(['560px', '315px', 'inset(0px 0px 0px 0px)', ''])
+    expect(shield.hidden).toBe(false)
+    // Where the page said nothing meanwhile, it goes back where it was; and where the page last said it is hidden, it hides
+    layer.fill(one)
+    layer.unfill()
+    draw()
+    expect(placed.style.transform).toBe('translate(0px, 30px)')
+    layer.fill(one)
+    take(at('e1', { shown: false }))
+    layer.unfill()
+    draw()
+    expect(placed.style.visibility).toBe('hidden')
+    // A player that goes while it lies over the page takes nothing of that with it to the next
+    take(at('e1'))
+    layer.fill(one)
+    take({ type: 'it:embed-end', id: 'e1' })
+    layer.unfill()
+    expect((two.parentElement as HTMLElement).style.transform).toBe('translate(40px, 500px)')
+  })
 })
