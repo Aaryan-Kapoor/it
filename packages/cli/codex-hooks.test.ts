@@ -61,8 +61,13 @@ describe('the contents of It’s plugin, as Codex reckons them', () => {
 
   test('are what Codex itself reckons them to be', () => {
     // What Codex 0.167.0's own `hooks/list` gave as the contents of this very plugin, installed
-    // from a marketplace with `codex plugin add` in a Codex folder of its own
-    expect(codexPluginHash(plugin)).toBe('sha256:9889302441f571ce0f10531aaec2a0624214cb1ddb016eac96225a3a0c4745c9')
+    // from a marketplace with `codex plugin add` in a Codex folder of its own: on Linux, and on
+    // Windows, where Codex reckons each file by its path as Windows writes it, with backslashes
+    expect(codexPluginHash(plugin)).toBe(
+      process.platform === 'win32'
+        ? 'sha256:56b468e4bc56924e8a0a9cd6604944a7e0479120187b76d4c148cd7ae2acd131'
+        : 'sha256:9889302441f571ce0f10531aaec2a0624214cb1ddb016eac96225a3a0c4745c9',
+    )
   })
 
   test.skipIf(process.platform === 'win32')('are not reckoned where the folder holds a link, which Codex refuses', () => {

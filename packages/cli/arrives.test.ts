@@ -25,6 +25,8 @@ import {
 import type { Route } from './src/connector'
 
 const claude = { harness: 'claude-code', id: '11111111-2222-4333-8444-555555555555' }
+/** It's program as a command names it here: `it`, and on Windows its whole path or `it.exe` (`itForAgent`). */
+const it = () => itForAgent()
 const route = (r: Partial<Route> = {}): Route => ({ connected: true, listening: false, runtime: 'inactive', thread: 'none', ...r })
 
 describe('whether what the person does arrives by itself', () => {
@@ -32,7 +34,7 @@ describe('whether what the person does arrives by itself', () => {
     const said = arrives({ session: claude, addonHere: true, route: route({ listening: true, runtime: 'active' }), slug: 'plan' })
     expect(said).toMatchObject({ byItself: true, via: 'addon' })
     expect(said.next).toMatch(/^End your turn\./)
-    expect(said.next).toContain('Do not run `it wait`')
+    expect(said.next).toContain(`Do not run \`${it()} wait\``)
     expect(arrives({ session: { harness: 'codex', id: 'thread-1' }, addonHere: undefined, route: route({ listening: true }) })).toMatchObject({
       byItself: true,
       via: 'addon',
@@ -52,7 +54,7 @@ describe('whether what the person does arrives by itself', () => {
     expect(said.via).toBeUndefined()
     expect(said.next).toContain(`tell them this in your next message, word for word: “${reloadLine('2.1.321')}”`)
     expect(said.next).toContain('Unless you have told the person already in this conversation')
-    expect(said.next).toContain('`it wait --id plan --timeout 100`')
+    expect(said.next).toContain(`\`${it()} wait --id plan --timeout 100\``)
   })
 
   test('on a page of the tour, the words are said once, after its ending, unless they were said with the pairing link', () => {
@@ -74,7 +76,7 @@ describe('whether what the person does arrives by itself', () => {
   test('not at all where the app is not connected here, though a thread of T3 Code holds the conversation or its add-on was heard from a moment ago, since the connector hands a disconnected app nothing', () => {
     expect(arrives({ session: claude, addonHere: false, route: route({ connected: false, thread: 'held' }) })).toMatchObject({ byItself: false })
     expect(arrives({ session: claude, addonHere: true, route: route({ connected: false, listening: true }) })).toMatchObject({ byItself: false })
-    expect(arrives({ session: claude, addonHere: true, route: route({ connected: false, listening: true }) }).next).toContain('`it wait')
+    expect(arrives({ session: claude, addonHere: true, route: route({ connected: false, listening: true }) }).next).toContain(`\`${it()} wait`)
   })
 
   test('not at all where the app’s add-on is not connected here, or the add-on it loaded cannot take clicks from this It', () => {
@@ -82,7 +84,7 @@ describe('whether what the person does arrives by itself', () => {
     expect(arrives({ session: claude, addonHere: false, route: route({ connected: false }) }).next).not.toContain('/reload-plugins')
     const incompatible = arrives({ session: claude, addonHere: true, route: route({ runtime: 'incompatible' }) })
     expect(incompatible.byItself).toBe(false)
-    expect(incompatible.next).toContain('`it status`')
+    expect(incompatible.next).toContain(`\`${it()} status\``)
   })
 
   test('is said to be unknown, with the agent told to wait, wherever It cannot tell', () => {
@@ -103,7 +105,7 @@ describe('whether what the person does arrives by itself', () => {
     ]) {
       expect(said.byItself).toBe('unknown')
       expect(said.via).toBeUndefined()
-      expect(said.next).toContain('`it wait')
+      expect(said.next).toContain(`\`${it()} wait`)
     }
   })
 

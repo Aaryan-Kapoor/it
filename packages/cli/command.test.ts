@@ -41,7 +41,7 @@ import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { BOOLEAN } from './src/args'
-import { reloadLine, t3ClaudeLine } from './src/arrives'
+import { itForAgent, reloadLine, t3ClaudeLine } from './src/arrives'
 import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
 import { VERSION } from './src/lib'
 import { aloneAt } from './src/serve/backend'
@@ -330,6 +330,21 @@ const pi = (m: { home: string; bin: string }) => {
   )
   chmodSync(path.join(m.bin, 'pi'), 0o755)
   return () => (existsSync(path.join(m.home, 'pi-was-run')) ? readFileSync(path.join(m.home, 'pi-was-run'), 'utf8').trim().split('\n') : [])
+}
+
+/**
+ * It's program as a command that the program gives an agent names it, on a machine of a test's:
+ * `it`, and on Windows its whole path in that machine's It folder or `it.exe` (`itForAgent`).
+ */
+const itOn = (m: { it: string }): string => {
+  const was = process.env.IT_HOME
+  process.env.IT_HOME = m.it
+  try {
+    return itForAgent()
+  } finally {
+    if (was === undefined) delete process.env.IT_HOME
+    else process.env.IT_HOME = was
+  }
 }
 
 /** Python, where it is on this machine: it gives a command a terminal to print to, which is how a person reads one. */
@@ -5511,7 +5526,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
     try {
       const ran = await run(m, ['setup', '--yes', '--no-service'], b.env)
       expect(ran.err).toContain(
-        'None was found. Any agent can still use `it` to make pages and `it wait` to hear what is done on them, and `it skill` prints the instructions to give it.',
+        `None was found. Any agent can still use \`${itOn(m)}\` to make pages and \`${itOn(m)} wait\` to hear what is done on them, and \`${itOn(m)} skill\` prints the instructions to give it.`,
       )
     } finally {
       await b.close()
@@ -7751,7 +7766,7 @@ describe('whether what the person does arrives by itself, as a page’s command 
       expect(said).toMatchObject({ id: 'plan', tell: TELL, arrives: { byItself: false } })
       expect(said.arrives.next).toContain('Type /reload-plugins in this chat')
       expect(said.arrives.next).toContain('word for word')
-      expect(said.arrives.next).toContain('`it wait --id plan --timeout 100`')
+      expect(said.arrives.next).toContain(`\`${itOn(m)} wait --id plan --timeout 100\``)
       expect(c.asked).toEqual([`/route?harness=claude-code&session=${claude}`])
       // And the conversation's note says that it published without the add-on, for the connector to tell its page
       expect(notes(m)[`claude-code:${claude}`]).toMatchObject({ addon: false })
@@ -7837,7 +7852,7 @@ describe('whether what the person does arrives by itself, as a page’s command 
     try {
       const without = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], { ...b.env, CODEX_THREAD_ID: 'thread-1' })
       expect(printed(without).arrives).toMatchObject({ byItself: 'unknown' })
-      expect(printed(without).arrives.next).toContain('`it wait --id plan --timeout 100`')
+      expect(printed(without).arrives.next).toContain(`\`${itOn(m)} wait --id plan --timeout 100\``)
       const c = await connectorSaying(m, null)
       try {
         const older = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], { ...b.env, CODEX_THREAD_ID: 'thread-1' })
