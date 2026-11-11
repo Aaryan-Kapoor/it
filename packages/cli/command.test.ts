@@ -7470,6 +7470,56 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
     }
   })
 
+  test('run from an agent’s conversation, `--only` keeps an app the person chose though its command was not found this once', async () => {
+    const m = machine()
+    writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.18.32\n', { mode: 0o755 })
+    const chose: string[][] = []
+    const b = await backend(m, (asked) => {
+      if (asked.path === 'machines:choose') chose.push(asked.args.harnesses as string[])
+      // Pi was chosen on this machine, and its command is not on the PATH the agent runs with
+      return asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted: ['pi'] } : null
+    })
+    try {
+      const setup = await run(m, ['setup', '--no-service', '--only', 'opencode'], { ...b.env, OPENCODE_SESSION_ID: 'ses_1' })
+      expect(setup.code).toBe(0)
+      // It is told that Pi is still chosen, so that the service does not take Pi's add-on out
+      expect(chose.map((c) => [...c].sort())).toEqual([['opencode', 'pi']])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('an app that could not be looked at after `--only` took it out is not said to be disconnected', async () => {
+    const m = machine()
+    pi(m)
+    writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.18.32\n', { mode: 0o755 })
+    const b = await backend(m, (asked) => (asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted: [] } : null))
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)).code).toBe(0)
+      // A Pi whose command stops answering once it is asked to remove the add-on, which it keeps
+      writeFileSync(
+        path.join(m.bin, 'pi'),
+        [
+          '#!/bin/sh',
+          'PATH=/bin:/usr/bin',
+          '[ -f "$HOME/pi-broken" ] && exit 1',
+          'case "$1" in',
+          '  --version) echo 0.82.0 ;;',
+          '  remove) touch "$HOME/pi-broken" ;;',
+          '  list) [ -f "$HOME/pi-has" ] && cat "$HOME/pi-has" ;;',
+          'esac',
+          'exit 0',
+          '',
+        ].join('\n'),
+      )
+      const narrower = await run(m, ['setup', '--no-service', '--only', 'opencode'], b.env)
+      expect(narrower.err).not.toContain('Pi is no longer connected')
+      expect(narrower.out).not.toContain('Pi is no longer connected')
+    } finally {
+      await b.close()
+    }
+  })
+
   test('run anywhere else, `--only` takes out an app it does not name, and says what that means for the person and how to have it back', async () => {
     const m = machine()
     const ran = pi(m)

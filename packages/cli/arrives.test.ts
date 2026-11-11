@@ -5,6 +5,7 @@ import {
   afterSetupForAgent,
   arrives,
   CODEX_RESTART,
+  CODEX_RESTART_OR_T3,
   claudeReloadLine,
   claudeRunning,
   loadAddon,
@@ -144,7 +145,7 @@ describe('the Claude Code a command runs inside', () => {
 describe('what setup says of the conversation it ran in, where it has just connected that conversation’s app', () => {
   const inClaude = { CLAUDE_CODE_SESSION_ID: '11111111-2222-4333-8444-555555555555' }
   const codex = { harness: 'codex', id: 'thread-1' }
-  const facts = { session: claude, addonHere: false, claude: '2.1.321', route: null, connected: true, codexPending: false }
+  const facts = { session: claude, addonHere: false, claude: '2.1.321', route: null, connected: true, codexPending: false, t3: false }
 
   test('in a Claude Code conversation that has not loaded the add-on: to type /reload-plugins, or in one too old for that, to start a new conversation', () => {
     expect(setupLine(facts)).toBe(reloadLine('2.1.321'))
@@ -178,6 +179,16 @@ describe('what setup says of the conversation it ran in, where it has just conne
     expect(said).toBe(T3_CODEX)
     expect(T3_CODEX).not.toContain('Trust all')
     expect(T3_CODEX).toContain('nothing to approve')
+  })
+
+  test('in a Codex conversation where T3 Code is on the machine and It cannot tell whether a thread holds it: what to do in each case, and no outright restart', () => {
+    const codexFacts = { ...facts, session: codex, addonHere: undefined, codexPending: true, t3: true }
+    for (const r of [null, route({ thread: 'unknown' })]) expect(setupLine({ ...codexFacts, route: r })).toBe(CODEX_RESTART_OR_T3)
+    // The connector found no thread holding it: said outright
+    expect(setupLine({ ...codexFacts, route: route({ thread: 'none' }) })).toBe(CODEX_RESTART)
+    // T3 Code is not on this machine: no thread can hold it, whatever the connector could say
+    expect(setupLine({ ...codexFacts, t3: false, route: null })).toBe(CODEX_RESTART)
+    expect(CODEX_RESTART_OR_T3).toContain('In a T3 Code thread there’s nothing to approve')
   })
 
   test('nothing where the conversation’s app is not connected, where nothing is left to do in it, or where no conversation is known', () => {
@@ -222,6 +233,12 @@ describe('what a Codex conversation is told with each page while Codex has yet t
     }
     const tour = arrives({ session: codex, addonHere: undefined, route: route(), slug: 'it-tour-menu', tour: true, codexPending: true })
     expect(tour.next).toContain(`after the tour’s ending: “${CODEX_RESTART}”`)
+  })
+
+  test('where T3 Code is on the machine and the connector cannot tell whether a thread holds it, what to do in each case is said, and not an outright restart', () => {
+    const said = arrives({ session: codex, addonHere: undefined, route: route({ thread: 'unknown' }), slug: 'plan', codexPending: true, t3: true })
+    expect(said.next).toContain(`word for word: “${CODEX_RESTART_OR_T3}”`)
+    expect(said.next).not.toContain(CODEX_RESTART)
   })
 
   test('in a thread of T3 Code, once its hooks have run, or where Codex is not connected here, nothing of it is said', () => {

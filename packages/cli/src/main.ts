@@ -143,6 +143,7 @@ import {
   shim,
   stampFile,
   supported,
+  t3Here,
   whyHeldBack,
 } from './setup'
 import { printEnv } from './shell-env'
@@ -836,6 +837,7 @@ async function arrivalHere(slug?: string, tour = false): Promise<Arrives | undef
     slug,
     tour,
     codexPending: session.harness === 'codex' && codexHooksPending(),
+    t3: t3Here(),
   })
 }
 
@@ -865,6 +867,7 @@ async function lineHere(connected: (harness: string) => boolean): Promise<string
     claude: claudeRunning(),
     connected: true,
     codexPending: session.harness === 'codex' && codexHooksPending(),
+    t3: t3Here(),
   }
   if (!setupLine({ ...facts, route: null })) return undefined
   return setupLine({ ...facts, route: await routeOf(session) })
@@ -2301,25 +2304,27 @@ const listed = (names: readonly string[]): string => (names.length > 1 ? `${name
 /**
  * The apps that an agent's `--only` leaves connected beside the ones it names: each that is
  * connected here, its hooks waiting on the person or not, and each that the person chose and
- * It has on record, as a setup with nobody to ask keeps them. Where It cannot be asked what was
- * chosen, what is connected here is kept.
+ * It has on record, as a setup with nobody to ask keeps them, whether or not it was found just
+ * now: an app whose command failed this once, or is not on the agent's PATH, stays chosen, and
+ * putting its add-on right is left to the connecting, as it is everywhere else. Where It cannot
+ * be asked what was chosen, what is connected here is kept.
  */
 async function keptConnected(found: readonly HarnessStatus[], named: readonly Harness[]): Promise<Harness[]> {
   const chosen = (await call<{ wanted?: string[] } | null>('query', api.machines.me).catch(() => null))?.wanted ?? []
   const connected = found.filter((h) => h.addon === 'connected' || h.addon === 'needs_approval').map((h) => h.id)
-  return [...new Set([...connected, ...chosen])].filter(
-    (id): id is Harness => (HARNESSES as readonly string[]).includes(id) && !named.includes(id as Harness) && found.some((h) => h.id === id),
-  )
+  return [...new Set([...connected, ...chosen])].filter((id): id is Harness => (HARNESSES as readonly string[]).includes(id) && !named.includes(id as Harness))
 }
 
 /**
- * What a person is told of the apps that were connected before a setup with `--only` and are not
- * now, since it did not name them: that what they do on a page one of those apps' conversations
- * made no longer reaches it, and the command that connects them all again. Null where none was.
+ * What a person is told of the apps that were connected before a setup with `--only` and are
+ * seen now not to be, since it did not name them: that what they do on a page one of those apps'
+ * conversations made no longer reaches it, and the command that connects them all again. An app
+ * that could not be looked at afterwards is not said to be disconnected, since its add-on may
+ * still be in it: what went wrong with it was said as it happened. Null where none was.
  */
 function disconnectedSaid(found: readonly HarnessStatus[], after: readonly HarnessStatus[], wanted: readonly Harness[]): string | null {
   const on = (h: HarnessStatus) => h.addon === 'connected' || h.addon === 'needs_approval'
-  const gone = found.filter((h) => on(h) && !wanted.includes(h.id) && !after.some((now) => now.id === h.id && on(now))).map((h) => h.id)
+  const gone = found.filter((h) => on(h) && !wanted.includes(h.id) && after.some((now) => now.id === h.id && now.addon === 'not_connected')).map((h) => h.id)
   if (!gone.length) return null
   const one = gone.length === 1
   return `${listed(gone.map((id) => KNOWN[id].label))} ${one ? 'is' : 'are'} no longer connected, since \`--only\` did not name ${one ? 'it' : 'them'}: what you do on a page that one of ${one ? 'its' : 'their'} conversations made no longer reaches that conversation. \`it setup --only ${[...wanted, ...gone].join(',')}\` connects ${one ? 'it' : 'them'} again.`

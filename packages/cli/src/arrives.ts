@@ -68,6 +68,19 @@ export const CODEX_RESTART =
   'Quit Codex and start it again now, then choose “Trust all and continue” when it asks to review hooks. Until then, Codex may ask you to approve every `it` command I run, and It’s hooks don’t run. In a terminal, `codex resume --last` brings this chat back.'
 
 /**
+ * What a person in a Codex conversation is told where T3 Code is on the machine and It cannot
+ * tell whether one of its threads holds the conversation: what to do in each case.
+ */
+export const CODEX_RESTART_OR_T3 =
+  'If you’re using Codex in a terminal or its desktop app, quit it and start it again now, then choose “Trust all and continue” when it asks to review hooks: until then it may ask you to approve every `it` command I run. In a T3 Code thread there’s nothing to approve: what you do on It’s pages reaches the thread through T3 Code.'
+
+/**
+ * Whether a conversation is known to be held in no thread of T3 Code: the connector found none
+ * holding it, or T3 Code is not on this machine at all and the connector has not said otherwise.
+ */
+const heldNowhere = (route: Route | null, t3: boolean | undefined): boolean => route?.thread === 'none' || (t3 === false && route?.thread !== 'held')
+
+/**
  * What a person in a Codex conversation held in a thread of T3 Code is told: what they do on a
  * page reaches the thread through T3 Code, idle or in the middle of a turn, and T3 Code never
  * shows Codex's review of It's hooks, so nothing there is to be approved.
@@ -107,6 +120,8 @@ export interface Facts {
   tour?: boolean
   /** Whether Codex has yet to run It's hooks on this machine (`codexHooksPending`). */
   codexPending?: boolean
+  /** Whether T3 Code is on this machine (`t3Here`). */
+  t3?: boolean
 }
 
 /**
@@ -134,9 +149,11 @@ export const notLoadedHere = (f: Facts): boolean =>
 export function arrives(f: Facts): Arrives {
   const said = arrivesAsIs(f)
   if (f.session?.harness !== 'codex' || !f.codexPending || f.route?.thread === 'held' || f.route?.connected === false) return said
+  // Said outright only where no thread of T3 Code holds the conversation, which never asks to approve the hooks
+  const line = heldNowhere(f.route, f.t3) ? CODEX_RESTART : CODEX_RESTART_OR_T3
   const tell = f.tour
-    ? `Unless you told the person this with the pairing link, tell them this once, word for word, after the tour’s ending: “${CODEX_RESTART}”`
-    : `Unless you have told the person already in this conversation, tell them this in your next message, word for word: “${CODEX_RESTART}”`
+    ? `Unless you told the person this with the pairing link, tell them this once, word for word, after the tour’s ending: “${line}”`
+    : `Unless you have told the person already in this conversation, tell them this in your next message, word for word: “${line}”`
   return { ...said, next: `${said.next} Codex has not run It’s hooks in this conversation, which it does only once it is started again. ${tell}` }
 }
 
@@ -229,11 +246,13 @@ export function setupLine(f: {
   connected: boolean
   /** Whether Codex has yet to run It's hooks (`codexHooksPending`). */
   codexPending: boolean
+  /** Whether T3 Code is on this machine (`t3Here`). */
+  t3?: boolean
 }): string | undefined {
   if (!f.connected || !f.session) return undefined
   const held = f.route?.thread === 'held'
   if (f.session.harness === 'claude-code' && f.addonHere === false) return held ? t3ClaudeLine(f.claude) : reloadLine(f.claude)
-  if (f.session.harness === 'codex' && f.codexPending) return held ? T3_CODEX : CODEX_RESTART
+  if (f.session.harness === 'codex' && f.codexPending) return held ? T3_CODEX : heldNowhere(f.route, f.t3) ? CODEX_RESTART : CODEX_RESTART_OR_T3
   return undefined
 }
 
