@@ -21,7 +21,11 @@ const help = /const HELP = `([\s\S]*?)`\n/.exec(main)![1]!
 /** Everything the skill writes as code: what stands between backticks, and the lines of its examples. */
 const code = [...skill.matchAll(/```[a-z]*\n([\s\S]*?)```|`([^`\n]+)`/g)].flatMap((m) => (m[1] ?? m[2]!).split('\n'))
 /** The `it` commands among it, each as its words. */
-const commands = code.filter((line) => /^it [a-z]/.test(line)).map((line) => line.split(/\s+/))
+// A command written for Windows as `it.exe` is the same command, and is read as `it`
+const commands = code
+  .map((line) => line.replace(/^it\.exe /, 'it '))
+  .filter((line) => /^it [a-z]/.test(line))
+  .map((line) => line.split(/\s+/))
 
 /** The skill's examples of a page, each as it is written in `it help page`. */
 const examples = [...more.page!.matchAll(/```html\n([\s\S]*?)```/g)].map((m) => m[1]!)
@@ -254,6 +258,24 @@ describe('the agent skill', () => {
     expect(source('../../packages/protocol/src/index.ts')).toContain('[It] The user typed this to you in the box above the ')
   })
 
+  test('tells an agent on Windows to run It as it.exe, which Pester’s own It command never answers to, and by its full path where it is not found', () => {
+    expect(more.page).toContain('Run It as `it.exe` on Windows, as in `it.exe state board`, and never as a bare `it`.')
+    expect(more.page).toContain('"The It command may only be used inside a Describe block"')
+    expect(more.page).toContain('`C:/Users/ana/.it/bin/it.exe state board`')
+    expect(more.page).toContain('`& "C:/Users/Ana Lee/.it/bin/it.exe" state board`')
+    expect(more.page).toContain('in cmd write it in quotes with backslashes')
+  })
+
+  test('tells an agent on Windows to give JSON in a file, which Windows PowerShell 5.1 cannot change, and not to pipe it there', () => {
+    expect(more.page).toContain('## On Windows')
+    expect(more.page).toContain('`it.exe patch board --file ')
+    expect(more.page).toContain('`--state-file "<path>"` on `it.exe create`')
+    expect(more.page).toContain('in double quotes and with forward slashes')
+    expect(more.page).toContain('Do not pipe JSON into It from Windows PowerShell 5.1')
+    // The program names the same form in what it says when it refuses such JSON
+    expect(main).toContain('it patch $' + '{slug} --file <path>')
+  })
+
   test('names only commands that the `it` command has', () => {
     const named = [...new Set(commands.map((words) => words[1]!))].sort()
     expect(named.length).toBeGreaterThan(15)
@@ -270,7 +292,7 @@ describe('the agent skill', () => {
         const flag = /^[[(]?(--[a-z-]+)/.exec(word)?.[1]
         if (flag) flags.set(words[1]!, (flags.get(words[1]!) ?? new Set()).add(flag))
       }
-    expect([...flags.keys()].sort()).toEqual(['ack', 'actions', 'create', 'delete', 'notify', 'open', 'patch', 'save', 'update', 'wait'])
+    expect([...flags.keys()].sort()).toEqual(['ack', 'actions', 'create', 'delete', 'notify', 'open', 'patch', 'save', 'set', 'update', 'wait'])
     for (const [command, taken] of flags) {
       // What the program's own help says of that command
       const said = help

@@ -1,4 +1,6 @@
 // Reading a command line, kept apart from the commands so it can be tested by itself.
+import { readFileSync, statSync } from 'node:fs'
+import { sizeSaid, UPLOAD } from '@it/protocol'
 import { Problem } from './lib'
 
 export const BOOLEAN = new Set([
@@ -48,6 +50,7 @@ export const VALUED = new Set([
   'save',
   'number',
   'after',
+  'state-file',
 ])
 export interface Args {
   _: string[]
@@ -56,14 +59,14 @@ export interface Args {
 }
 /** The options each command can honour. JSON and help apply to every public command. */
 export const OPTIONS: Record<string, readonly string[]> = {
-  create: ['id', 'file', 'dir', 'html', 'state', 'agent', 'open', 'on', 'on-id', 'everywhere', 'take'],
+  create: ['id', 'file', 'dir', 'html', 'state', 'state-file', 'agent', 'open', 'on', 'on-id', 'everywhere', 'take'],
   update: ['id', 'file', 'dir', 'html', 'title', 'agent', 'open', 'on', 'on-id', 'everywhere', 'take'],
   list: [],
   read: [],
   delete: ['status'],
   rollback: [],
-  set: ['if-revision'],
-  patch: ['replace', 'if-revision'],
+  set: ['if-revision', 'file'],
+  patch: ['replace', 'if-revision', 'file'],
   state: [],
   say: [],
   open: ['on', 'on-id', 'everywhere'],
@@ -190,11 +193,96 @@ export function need(value: string | undefined, what: string, usage: string): st
   if (value === undefined || value === '') throw new Problem(`Say ${what}.`, 'invalid', `Usage: it ${usage}`)
   return value
 }
-export function json(value: string, what: string): unknown {
+/**
+ * Whether a value is what a shell leaves of a JSON object or array once it has taken every
+ * double quote out of it. Windows PowerShell 5.1 does that to each argument it hands to a
+ * program, so that `{"number":4}` arrives as `{number:4}`. Such a value is never made back into
+ * JSON, since where the quotes were cannot be known: `{note:a,b}` was `{"note":"a,b"}` as
+ * easily as `{"note":"a","b":…}`.
+ */
+export function quotesTakenOut(value: string): boolean {
+  const t = value.trim()
+  if (t.includes('"') || !((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']')))) return false
+  try {
+    JSON.parse(t)
+    return false
+  } catch {
+    return true
+  }
+}
+/** What a refusal of JSON from the command line says to do instead: give it in a file, which no shell changes. */
+const inAFile = (fromFile: string) => `Write the JSON to a file and run \`${fromFile}\`, which works the same in every shell.`
+const SHELL_TOOK = 'as when a shell takes them out of an argument, which Windows PowerShell 5.1 does'
+/**
+ * Reads JSON. `fromFile` is the command that reads the same JSON from a file, where it was given
+ * on the command line: a refusal names it, since a file is the way that works in every shell.
+ */
+export function json(value: string, what: string, fromFile?: string): unknown {
   try {
     return JSON.parse(value)
   } catch {
-    throw new Problem(`${what} is not valid JSON.`, 'invalid')
+    const instead = fromFile === undefined ? undefined : inAFile(fromFile)
+    if (fromFile !== undefined && quotesTakenOut(value))
+      throw new Problem(`${what} is not valid JSON: it has no double quotes, ${SHELL_TOOK}.`, 'invalid', instead)
+    throw new Problem(`${what} is not valid JSON.`, 'invalid', instead)
+  }
+}
+/**
+ * The value `it set` was given on its command line: JSON where it parses as JSON, and text
+ * otherwise. A value that is what a shell leaves of a JSON object or array is neither taken for
+ * text nor made back into JSON, but refused, with the way that works: as text it would put
+ * `[a,b c]` on the page where the agent wrote `["a","b c"]`, and say nothing.
+ */
+export function setValue(value: string, fromFile: string): unknown {
+  if (quotesTakenOut(value))
+    throw new Problem(
+      `The value ${value} begins and ends as JSON does, but is not JSON and has no double quotes, ${SHELL_TOOK}. Nothing was changed.`,
+      'invalid',
+      `${inAFile(fromFile)} To set this very text, write it in the file as a JSON string.`,
+    )
+  return loose(value)
+}
+/**
+ * The text of a file that a command was given JSON in, in place of an argument. Its bytes are
+ * read as UTF-8, or as UTF-16 where they begin with the mark that says so, as Windows
+ * PowerShell 5.1 writes a file with Out-File. A mark of UTF-8 at the start is passed over. Any
+ * other bytes are refused, and no other encoding is guessed at.
+ */
+export function fileText(file: string, what: string): string {
+  if (file === '') throw new Problem(`Say which file ${what} is in.`, 'invalid')
+  let bytes: Buffer
+  try {
+    const stat = statSync(file)
+    if (!stat.isFile()) throw new Problem(`${file} is not an ordinary file.`, 'invalid')
+    if (stat.size > UPLOAD.requestBytes) throw new Problem(`${file} is larger than this command reads (${sizeSaid(UPLOAD.requestBytes)}).`, 'limit')
+    bytes = readFileSync(file)
+  } catch (err) {
+    if (err instanceof Problem) throw err
+    if ((err as { code?: string })?.code === 'ENOENT') throw new Problem(`No such file: ${file}`, 'invalid')
+    throw err
+  }
+  return decoded(bytes, file)
+}
+/** Bytes as text: UTF-8, or UTF-16 of either order where they begin with its mark. Bytes that are not whole and valid characters in that encoding are refused. */
+export function decoded(bytes: Uint8Array, file: string): string {
+  const [a, b, c] = bytes
+  try {
+    if (a === 0xef && b === 0xbb && c === 0xbf) return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(3))
+    if (a === 0xff && b === 0xfe) return new TextDecoder('utf-16le', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(2))
+    if (a === 0xfe && b === 0xff) {
+      // Read as UTF-16 of the other order once each pair of bytes is turned round
+      const rest = bytes.subarray(2)
+      if (rest.length % 2) throw new Error('odd')
+      const turned = new Uint8Array(rest.length)
+      for (let i = 0; i < rest.length; i += 2) {
+        turned[i] = rest[i + 1]!
+        turned[i + 1] = rest[i]!
+      }
+      return new TextDecoder('utf-16le', { fatal: true, ignoreBOM: true }).decode(turned)
+    }
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+  } catch {
+    throw new Problem(`${file} is not text in UTF-8 or UTF-16.`, 'invalid', 'Write the file again in UTF-8.')
   }
 }
 /** `it set page a.b.c value` is the patch {a:{b:{c:value}}}. A value that parses as JSON is JSON. */
