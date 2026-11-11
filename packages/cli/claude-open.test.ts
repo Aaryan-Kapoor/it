@@ -229,8 +229,10 @@ describe('the Claude Code conversations open at a person’s keyboard', async ()
       writeFileSync(path.join(folder, 'sessions', '2.json'), JSON.stringify(session(2)))
       answer = undefined
       expect(await openClaude([folder], alive, undefined, discovery, KEPT_FOR_NOTICE_MS)).toEqual([])
-      answer = '1 116444736010000000\n2 116444736010000000\n'
-      expect((await openClaude([folder], alive, undefined, discovery, KEPT_FOR_NOTICE_MS)).map((c) => c.id)).toEqual([id(1), id(2)])
+      // Note 2 goes again, so only what the first look covered is open, and it is looked at again all the same
+      rmSync(path.join(folder, 'sessions', '2.json'))
+      answer = '1 116444736010000000\n'
+      expect(await openClaude([folder], alive, undefined, discovery, KEPT_FOR_NOTICE_MS)).toEqual([{ id: id(1), startedAt: 1_001 }])
       expect(looks).toHaveLength(3)
     })
 
