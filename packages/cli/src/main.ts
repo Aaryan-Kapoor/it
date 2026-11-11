@@ -585,7 +585,7 @@ function shownAs(shown: Shown): {
     said.push(
       shown.chosen === 'open'
         ? `No display was named, so it is shown on ${named(where)} alone: the most recently used unlocked display with It’s site open.`
-        : `No display was named and none has It’s site open now, so it was sent to ${named(where)} alone, the most recently used unlocked display. A display whose site is closed does not bring a page up by itself, so the user needs the link${shown.url ? ': give them `url` in the chat' : ''}.`,
+        : `No display was named and no unlocked display has It’s site open now, so it was sent to ${named(where)} alone, the most recently used unlocked display. A display whose site is closed does not bring a page up by itself, so the user needs the link${shown.url ? ': give them `url` in the chat' : ''}.`,
       ELSEWHERE,
     )
   else {
