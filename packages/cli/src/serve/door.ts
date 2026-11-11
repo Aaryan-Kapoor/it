@@ -868,6 +868,71 @@ type Listen = (address: string, port: number, door: Door, api: URL, patience: nu
 /** Whether this is the standalone program, which Bun runs. */
 const standalone = 'Bun' in globalThis
 
+/** What of `bun:ffi` the door uses, as far as it uses it. */
+interface Ffi {
+  dlopen<T extends Record<string, { args: unknown[]; returns: unknown }>>(
+    library: string,
+    symbols: T,
+  ): { symbols: { [K in keyof T]: (...args: (number | bigint | ArrayBufferView)[]) => number } }
+  FFIType: { ptr: unknown; u64: unknown; u32: unknown; i32: unknown }
+}
+/** How far up the handles of the process are looked through. Windows gives them out in fours from the lowest that is free, so this is room for sixty-five thousand. */
+const HANDLES_MOST = 1 << 18
+
+/**
+ * Inside the standalone program on Windows, what keeps the sockets on one of the door's ports
+ * from being handed to a program that the service starts. Nothing is needed anywhere else, and
+ * this is undefined there.
+ *
+ * Bun makes its sockets on Windows as ones a child process may be given, and Windows gives each
+ * program that is started a copy of every such handle. A copy keeps the port listened on for as
+ * long as that program runs, after the door itself has closed it. The door could then not be
+ * opened again on its own ports while any command the service had started was still running,
+ * as one that asks an agent app for its version is in the first seconds after It starts, and a
+ * program that runs on, as an agent app's server may, would hold It's ports after It had
+ * stopped. Under Node, and on Linux and macOS under Bun, sockets are already made so that no
+ * child is given them.
+ *
+ * Bun gives no way to a socket's handle, so the process's handles are each asked by the system
+ * which address they are bound to, and every socket on the port that a child would be given is
+ * marked as one that none is. A handle that is no socket is answered that, and left as it is.
+ * The buffers the system writes into are handed over as themselves, and never by an address
+ * taken from them earlier: the engine moves a small buffer as it sees fit, and an address taken
+ * before would by then be somewhere else.
+ */
+const unsharing: Promise<((port: number) => void) | undefined> | undefined =
+  standalone && process.platform === 'win32' ? windowsUnsharing().catch(() => undefined) : undefined
+
+async function windowsUnsharing(): Promise<(port: number) => void> {
+  // Named through a variable, so that the bundle made for Node does not look for it
+  const named = 'bun:ffi'
+  const { dlopen, FFIType } = (await import(named)) as Ffi
+  const kernel = dlopen('kernel32.dll', {
+    GetHandleInformation: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
+    SetHandleInformation: { args: [FFIType.u64, FFIType.u32, FFIType.u32], returns: FFIType.i32 },
+  }).symbols
+  const sockets = dlopen('ws2_32.dll', { getsockname: { args: [FFIType.u64, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 } }).symbols
+  const name = new Uint8Array(128)
+  const length = new Int32Array(1)
+  const flags = new Uint32Array(1)
+  /** HANDLE_FLAG_INHERIT */
+  const GIVEN = 1
+  return (port) => {
+    for (let at = 4; at < HANDLES_MOST; at += 4) {
+      const handle = BigInt(at)
+      length[0] = name.length
+      if (sockets.getsockname(handle, name, length) !== 0 || boundPort(name) !== port) continue
+      if (kernel.GetHandleInformation(handle, flags) !== 0 && (flags[0]! & GIVEN) !== 0) kernel.SetHandleInformation(handle, GIVEN, 0)
+    }
+  }
+}
+
+/** The port a socket is bound to, from the address the system wrote for it, or undefined where that is not one of IPv4 or IPv6 as Windows numbers them. */
+export function boundPort(address: Uint8Array): number | undefined {
+  const family = address[0]! | (address[1]! << 8)
+  return family === 2 || family === 23 ? (address[2]! << 8) | address[3]! : undefined
+}
+
 /** A request's headers as they were sent, every one of them, or null when one of them is not a header at all. */
 function headersOf(req: http.IncomingMessage): Headers | null {
   const headers = new Headers()
@@ -1110,7 +1175,8 @@ function agreement(head: string, key: string): string | null {
  * expects something the door does not know of, is the door's to answer like any other, and
  * what is no request at all is told to the door and not answered by what reads requests.
  */
-const listenNode: Listen = (address, port, door, api, patience) => {
+const listenNode: Listen = async (address, port, door, api, patience) => {
+  const unshare = await unsharing
   const carried = new Set<Duplex>()
   const server = http.createServer({
     // Only a WebSocket is carried on. Any other request that offers to change protocol is answered as the plain request it also is.
@@ -1314,6 +1380,7 @@ const listenNode: Listen = (address, port, door, api, patience) => {
   return new Promise((resolve, reject) => {
     server.once('error', reject)
     server.listen({ port, host: address, ipv6Only: address.includes(':') }, () => {
+      unshare?.(port)
       // Once it listens, the one thing that can still go wrong with the port is that a
       // connection could not be taken. That is one caller's loss and is written down: the port
       // is listened on as before, and nothing ends because of it.
@@ -1506,6 +1573,7 @@ function unfinishedOnFailure(response: Response, cut: () => void): Response {
 
 /** Inside the standalone program, the site's port: Bun's own server, and a WebSocket passed on a message at a time. */
 const listenBun: Listen = async (address, port, door, api, patience) => {
+  const unshare = await unsharing
   /** The WebSockets the backend has not yet agreed to: for each, what gives up on it. */
   const asking = new Set<(said: boolean) => void>()
   /** Asks the backend to say when it has taken everything handed to it so far. One such question is out at a time. */
@@ -1673,6 +1741,8 @@ const listenBun: Listen = async (address, port, door, api, patience) => {
       },
     },
   })
+  // Bun listens before it returns, and nothing has been started since
+  unshare?.(port)
   return {
     // Bun closes the port and every connection on it as it is asked to. What it promises is
     // not waited for: it goes on counting a WebSocket that the door itself closed, and so may

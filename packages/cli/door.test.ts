@@ -21,7 +21,7 @@ import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { Problem } from './src/lib'
 import { doorKey } from './src/serve/config'
-import { type Arrival, type DoorParts, makeContent, makeDoor, startDoor } from './src/serve/door'
+import { type Arrival, boundPort, type DoorParts, makeContent, makeDoor, startDoor } from './src/serve/door'
 import { BRIDGE, isPrivate } from './src/serve/network'
 import { answerSite, type Site } from './src/serve/site'
 import { forgetTailnetName, tailnetName } from './src/serve/tailnet'
@@ -3934,6 +3934,39 @@ describe('Opening and closing', () => {
         await new Promise((resolve) => holder.close(resolve))
       }
     }
+  })
+
+  test('A program started while the door listens does not keep its ports once the door is closed: the door opens again on them at once, for this machine alone and for the network', async () => {
+    const first = await open()
+    // A program that runs on, as an agent app's command or server may, started while the door is open
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
+    try {
+      await new Promise((resolve, reject) => child.once('spawn', resolve).once('error', reject))
+      await first.stop()
+      expect(await refusedAt(first.base)).toBe(true)
+      expect(await refusedAt(first.base + 1)).toBe(true)
+      const again = await startDoor(config(first.base), backend, () => {}, parts())
+      expect((await ask(first.base)).status).toBe(200)
+      await again.stop()
+      if (mayOpen) {
+        const wide = await startDoor(config(first.base, true, { tailnet: true }), backend, () => {}, parts())
+        expect((await ask(first.base)).status).toBe(200)
+        await wide.stop()
+      }
+    } finally {
+      child.kill()
+    }
+  })
+
+  test('The port a socket is bound to is read from the address Windows writes for it, under IPv4 and IPv6, and from nothing else', () => {
+    // AF_INET is 2 and AF_INET6 is 23 on Windows, written in the machine's order, and the port after it in the network's
+    const four = new Uint8Array([2, 0, 0x18, 0x6a, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0])
+    const six = new Uint8Array(28)
+    six.set([23, 0, 0x18, 0x6b])
+    expect(boundPort(four)).toBe(6250)
+    expect(boundPort(six)).toBe(6251)
+    expect(boundPort(new Uint8Array([1, 0, 0x18, 0x6a]))).toBeUndefined()
+    expect(boundPort(new Uint8Array([10, 0, 0x18, 0x6a]))).toBeUndefined()
   })
 
   test('Whoever connects to the door’s look at which addresses this machine has, and holds on, does not keep the door from opening', async () => {
