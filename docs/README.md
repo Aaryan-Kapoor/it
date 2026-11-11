@@ -3,6 +3,7 @@
 - [Installing It, and the first run](install.md): what you need, installing, `it setup`, running in the background, a newer It, and stopping and removing It.
 - [Screens](screens.md): opening the site, pairing a phone, a tablet or a TV, and turning the network on and off.
 - [Agents](agents.md): connecting the agent apps you use, agents on another computer, and revoking a machine.
+- [It as an MCP server](mcp.md): `it mcp`, for an agent that cannot run a command on your machine, the tools it gets, and how it hears what you do.
 - [Add-ons](add-ons.md): what to expect of each agent app, and what It does not do.
 - [What It keeps](data.md): where everything is kept, backing it up, a newer It on the same data, how long things are kept, how much It takes, and erasing everything.
 - [Network and privacy](network-and-privacy.md): what leaves the machine, what It fetches from the internet, usage counts and how to turn them off, and the ports It uses.

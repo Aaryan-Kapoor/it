@@ -4,6 +4,8 @@ It connects the agents you already run, and brings none of its own. It reaches e
 
 An agent drives It with one command, `it`, and learns how from the agent skill, which every add-on carries and `it skill` prints. The skill is read whole each time an agent uses It, so it holds what every page needs and no more, and names four parts it leaves for when they are needed, which `it help showing`, `it help page`, `it help waiting` and `it help actions` print. It writes a page, publishes it with `it create`, and asks the display you are using to show it, or the one you named. [Screens](screens.md#which-display-a-page-goes-to) says how that display is chosen, and how you close a display to agents. What you do on the page goes back to the conversation that made it.
 
+An agent that cannot run a command on your machine, and can be given an MCP server, uses the same commands as tools through `it mcp`. [It as an MCP server](mcp.md) says how.
+
 ## Connecting agents
 
 An add-on is how what you do on a page gets back into an open conversation in one agent app, by itself. `it setup` finds the apps on the machine and installs the add-on for each one you choose: with the app's own commands for installing a plugin where it has them, and by putting its files where the app reads plugins from where it has none (OpenCode and Hermes). Run it again to change which apps are connected: `--all`, `--only claude-code,codex` and `--none` say which, as [Installing It](install.md#the-first-run) describes.
