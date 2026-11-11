@@ -670,10 +670,11 @@ describe('the frame around a page', () => {
     expect(calls.some((c) => c.fn === 'state:store')).toBe(false)
   })
 
-  test('a page’s channel says that it takes several stored values at once and that the site hosts embeds, and what the page keeps goes to the backend as one write', async () => {
+  test('a page’s channel says that it takes several stored values at once, that the site hosts embeds, records for the page and opens its links, and what the page keeps goes to the backend as one write', async () => {
     const page = await show()
     await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
-    expect(page.posted.find((p) => p.data.type === 'it:port')?.data).toEqual({ type: 'it:port', v: CHANNEL_VERSION, embeds: true })
+    // A page's script refuses to record, and opens its links itself, where the site does not say these: a site from before them would drop what it was sent
+    expect(page.posted.find((p) => p.data.type === 'it:port')?.data).toEqual({ type: 'it:port', v: CHANNEL_VERSION, embeds: true, media: true, opens: true })
     const port = page.ports()[0]!
     const heard = await page.send(port, {
       type: 'it:store',

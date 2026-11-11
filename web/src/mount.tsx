@@ -1023,7 +1023,8 @@ export function Mount({
         channel.port1.onmessage = (m) => void fromPage(channel.port1, m.data as PageToSite)
         // Sent to whatever document the page has put in its frame. The channel is for this one
         // showing, and gives a document there nothing the page did not already have.
-        ;(e.source as Window).postMessage({ type: 'it:port', v: CHANNEL_VERSION, embeds: embeds !== null }, '*', [channel.port2])
+        // With what the site does for a page beyond what every site has done: a page's script does none of these where a site does not say so, as one open since before It was updated does not
+        ;(e.source as Window).postMessage({ type: 'it:port', v: CHANNEL_VERSION, embeds: embeds !== null, media: true, opens: true }, '*', [channel.port2])
         const whole = liveState.whole()
         if (whole) toPage(channel.port1, whole)
         // A document that says hello while the frame is being asked is there to be asked again, as the one this channel is for
