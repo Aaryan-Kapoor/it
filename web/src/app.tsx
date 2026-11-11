@@ -63,7 +63,7 @@ import { ReloadNotice } from './reload'
 import { ServiceNotice } from './service'
 import { codeSeen, current, signOut as endSession, heldToken, pair, pairAsScreen, recheck, useSession } from './session'
 import { Displays, Settings } from './settings'
-import { TourDialog } from './welcome'
+import { TourDialog, useTourOpens } from './welcome'
 
 export function App() {
   const { loaded, paired, user, session } = useSession()
@@ -469,6 +469,8 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const key = displayKey()
   const display = useQuery(api.displays.mine, { key })
   const pages = useQuery(api.artifacts.list, {})
+  // The tour's first page, put up before this browser was paired, is gone to as the browser first comes to its pages
+  useTourOpens(pages, path)
   const [leaving, setLeaving] = useState(false)
   const [stillIn, setStillIn] = useState(false)
   // What is typed into the search, the finder and the tour's dialog, which the bar opens and the shell shows

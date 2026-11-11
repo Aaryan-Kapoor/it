@@ -367,3 +367,36 @@ describe('the film on the first screen', () => {
     expect(film.told).toEqual([true, false])
   })
 })
+
+describe('the tour’s first page, for a browser that has just come to its pages', () => {
+  const up = [
+    { id: 'page-1', slug: 'notes', version: 2, tour: null },
+    { id: 'page-2', slug: 'tour-start', version: 1, tour: 'start' },
+  ]
+
+  test('is gone to where it is up, no tour is over, and this browser has not been taken to this showing of it', async () => {
+    const { tourPageToOpen } = await import('./welcome')
+    expect(tourPageToOpen(up, { doneAt: null }, null)).toEqual({ showing: 'page-2:1', slug: 'tour-start' })
+    // Put up again, it is another showing of the same page, and is gone to once more
+    expect(tourPageToOpen([up[0]!, { ...up[1]!, version: 2 }], { doneAt: null }, 'page-2:1')).toEqual({ showing: 'page-2:2', slug: 'tour-start' })
+  })
+
+  test('is not gone to a second time, nor once a tour was finished or declined, nor before the backend has said how things stand, nor where it has nothing published', async () => {
+    const { tourPageToOpen } = await import('./welcome')
+    expect(tourPageToOpen(up, { doneAt: null }, 'page-2:1')).toBeNull()
+    expect(tourPageToOpen(up, { doneAt: NOW }, null)).toBeNull()
+    expect(tourPageToOpen(up, undefined, null)).toBeNull()
+    expect(tourPageToOpen(undefined, { doneAt: null }, null)).toBeNull()
+    expect(tourPageToOpen([{ id: 'page-2', slug: 'tour-start', version: null, tour: 'start' }], { doneAt: null }, null)).toBeNull()
+    expect(tourPageToOpen([up[0]!], { doneAt: null }, null)).toBeNull()
+  })
+
+  test('a page under the tour’s id that is not the tour’s own is gone to by nobody: one someone published or took, another of the tour’s pages there, and any from a backend that does not say', async () => {
+    const { tourPageToOpen } = await import('./welcome')
+    expect(tourPageToOpen([{ id: 'page-2', slug: 'tour-start', version: 1, tour: null }], { doneAt: null }, null)).toBeNull()
+    expect(tourPageToOpen([{ id: 'page-2', slug: 'tour-start', version: 1, tour: 'menu' }], { doneAt: null }, null)).toBeNull()
+    expect(tourPageToOpen([{ id: 'page-2', slug: 'tour-start', version: 1 }], { doneAt: null }, null)).toBeNull()
+    // The menu, which a person reaches only by asking for more, is no page a browser is taken to
+    expect(tourPageToOpen([{ id: 'page-3', slug: 'tour-menu', version: 1, tour: 'menu' }], { doneAt: null }, null)).toBeNull()
+  })
+})
