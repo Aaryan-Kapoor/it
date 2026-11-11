@@ -551,6 +551,13 @@ describe.skipIf('Bun' in globalThis || !existsSync(chromium.executablePath()))('
             },
             [px, py],
           )
+        // Under the mouse the red marker is in the hand, and so not in the tray
+        expect(
+          await tab.evaluate(() => [
+            document.getElementById('board-held')!.hidden,
+            document.querySelector('[data-tool="red"]')!.classList.contains('board-out'),
+          ]),
+        ).toEqual([false, true])
         expect(await inkAt(x, y)).toEqual([210, 55, 44, 255])
         expect((await inkAt(slot.x + 4, slot.y + slot.height - 4))[3]).toBe(0)
         await tab.locator('#board-check').click()
