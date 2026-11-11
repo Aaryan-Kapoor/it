@@ -1024,7 +1024,8 @@ async function sendNow(
   const waitingHere = waiting.filter(([, e]) => e.artifactId === artifactId).length + unsaved(user, artifactId)
   if (waiting.length >= MAX || waitingHere >= MAX_PER_PAGE)
     throw new Error(
-      convex.connectionState().isWebSocketConnected && lanes.has(laneOf(user, artifactId))
+      // With It there, the page has sent faster than It answers, and the connection is not to blame
+      convex.connectionState().isWebSocketConnected
         ? TOO_MANY_WAITING
         : 'Too many actions are still waiting to be sent from this browser. Check the connection.',
     )

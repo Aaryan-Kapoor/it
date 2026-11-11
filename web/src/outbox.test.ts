@@ -11,6 +11,7 @@ import {
   outboxBelongsTo,
   outcomeOf,
   recoverLeftovers,
+  refusedLately,
   type Sent,
   seenGivenUp,
   submit,
@@ -302,7 +303,6 @@ describe('the outbox', () => {
   })
 
   test('a click that is refused and not kept is said in its page’s bar, and one kept for later is not', async () => {
-    const { refusedLately } = await import('./outbox')
     const bad = backend([refuse('invalid')])
     await expect(submit(bad.client, 'alice', 'page-said', envelope('click-0060'))).rejects.toBeInstanceOf(ConvexError)
     expect(refusedLately('alice', 'page-said')).toMatchObject({ fast: 0, other: 1, why: 'invalid' })
@@ -725,7 +725,7 @@ describe('the outbox', () => {
 
   test('with far too many unanswered already, one more is refused and none is pushed out', async () => {
     for (let i = 0; i < 200; i++) keep('alice', `old-${String(i).padStart(5, '0')}`, Date.now() - 60_000, `page${i % 4}`)
-    await expect(submit(backend([]).client, 'alice', 'page9', envelope('click-0022'))).rejects.toThrow(/Too many/)
+    await expect(submit(backend([]).client, 'alice', 'page9', envelope('click-0022'))).rejects.toThrow(/too many/i)
     expect(stored().length).toBe(200)
     // Another person on the same browser is not affected by that
     outboxBelongsTo('bob')
@@ -737,7 +737,12 @@ describe('the outbox', () => {
     // A page has room for a hundred, more than It takes from a page at once
     expect(await submit(backend([{ actionId: 'p1' }]).client, 'alice', 'page1', envelope('click-0029'))).toEqual({ actionId: 'p1' })
     keep('alice', 'old-00099', Date.now() - 60_000, 'page1')
-    await expect(submit(backend([]).client, 'alice', 'page1', envelope('click-0030'))).rejects.toThrow(/Too many/)
+    // With It there, the page is told it sends faster than It takes clicks, and its bar counts the click as one that came too fast
+    await expect(submit(backend([]).client, 'alice', 'page1', envelope('click-0030'))).rejects.toThrow(/sends faster than It takes clicks/)
+    expect(refusedLately('alice', 'page1')?.fast).toBe(1)
+    // Without It, the connection is what to check
+    connected = false
+    await expect(submit(backend([]).client, 'alice', 'page1', envelope('click-0032'))).rejects.toThrow(/Check the connection/)
     expect(await submit(backend([{ actionId: 'p2' }]).client, 'alice', 'page2', envelope('click-0031'))).toEqual({ actionId: 'p2' })
   })
 
