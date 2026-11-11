@@ -271,13 +271,13 @@ function fakeOpenCode(parents: Record<string, string> = {}) {
   }
 }
 
-type Hooks = Awaited<ReturnType<typeof addon.ItBridge>>
+type Hooks = Awaited<ReturnType<typeof addon.default.server>>
 const texts = (prompts: { body: any }[]) => prompts.map((p) => p.body.parts.map((x: any) => x.text).join(''))
 
 describe('the OpenCode add-on', () => {
   it('adds when a page is the answer to the agent’s instructions, last and once, in the words every add-on says', async () => {
     const opencode = fakeOpenCode()
-    const hooks = await addon.ItBridge({ client: opencode.client } as any)
+    const hooks = await addon.default.server({ client: opencode.client } as any)
     const output = { system: ['You are OpenCode.'] }
     await hooks['experimental.chat.system.transform']({ model: {} }, output)
     await hooks['experimental.chat.system.transform']({ model: {} }, output)
@@ -296,7 +296,7 @@ describe('the OpenCode add-on', () => {
 
   async function load(parents: Record<string, string> = {}) {
     const opencode = fakeOpenCode(parents)
-    const hooks = await addon.ItBridge({ client: opencode.client } as any)
+    const hooks = await addon.default.server({ client: opencode.client } as any)
     opencode.attach(hooks)
     loaded.push(hooks)
     return { hooks, ...opencode }
@@ -365,9 +365,14 @@ describe('the OpenCode add-on', () => {
     rmSync(home, { recursive: true, force: true })
   })
 
-  it('exports nothing but the plugin, since OpenCode loads every export as one', () => {
-    expect(Object.keys(addon)).toEqual(['ItBridge'])
-    expect(typeof addon.ItBridge).toBe('function')
+  it('exports one definition that OpenCode 1.x and 2.x each load, and nothing else', () => {
+    // OpenCode 1.x takes a default export with an id for the definition, and loads its `server`;
+    // where there is none it would load every export as a plugin of its own
+    expect(Object.keys(addon)).toEqual(['default'])
+    expect(addon.default.id).toBe('it-bridge')
+    expect(typeof addon.default.server).toBe('function')
+    // OpenCode 2.x takes a default export with an id and a `setup` function
+    expect(typeof addon.default.setup).toBe('function')
   })
 
   it('sets IT_HARNESS and IT_SESSION for the commands a conversation runs', async () => {
@@ -891,7 +896,7 @@ describe('the OpenCode add-on', () => {
     // A harness started from a shell that knows nothing of It's folder
     delete process.env.IT_HOME
     const opencode = fakeOpenCode()
-    const hooks = (await filled.ItBridge({ client: opencode.client })) as Hooks
+    const hooks = (await filled.default.server({ client: opencode.client })) as Hooks
     opencode.attach(hooks)
     loaded.push(hooks)
     await begin(hooks, 'ses_one')
@@ -903,7 +908,7 @@ describe('the OpenCode add-on', () => {
     try {
       process.env.IT_HOME = elsewhere
       const other = fakeOpenCode()
-      const otherHooks = (await filled.ItBridge({ client: other.client })) as Hooks
+      const otherHooks = (await filled.default.server({ client: other.client })) as Hooks
       other.attach(otherHooks)
       loaded.push(otherHooks)
       const asked = c.state.asked.length
@@ -976,7 +981,7 @@ describe('the OpenCode add-on', () => {
   it('reports a missing host API while no conversation is selected', async () => {
     standIn()
     const c = await connector()
-    const hooks = await addon.ItBridge({ client: { session: {} } } as any)
+    const hooks = await addon.default.server({ client: { session: {} } } as any)
     loaded.push(hooks)
     await seconds(2)
     expect(c.state.runtimes[0]).toMatchObject({ harness: 'opencode', addon: { api: 1, delivery: false, idle: false } })
@@ -985,7 +990,7 @@ describe('the OpenCode add-on', () => {
 
   it('throws nothing when OpenCode itself cannot be asked about a conversation', async () => {
     standIn()
-    const hooks = await addon.ItBridge({
+    const hooks = await addon.default.server({
       client: {
         session: {
           get: async () => {
@@ -1010,6 +1015,364 @@ describe('the OpenCode add-on', () => {
     expect(c.state.runtimes[0]).toMatchObject({ harness: 'opencode', addon: { api: 1, delivery: true, idle: false } })
     expect(c.state.asked).toEqual([])
     expect(rejections).toEqual([])
+  })
+
+  /**
+   * What OpenCode 2.x hands a plugin's `setup`, cut down to what the add-on uses, and what it
+   * then announces. As the real one does (seen in OpenCode 2.2.7): `session.prompt` shows the
+   * message to every plugin's prompt hook, admits it to the conversation's inbox and answers
+   * with it, and OpenCode then announces it as enqueued, and as delivered once it is in the
+   * conversation or cancelled if it is dropped. An unknown conversation is refused with a
+   * `Session.NotFoundError`.
+   */
+  function fakeOpenCode2(parents: Record<string, string> = {}) {
+    const hooks: Record<string, ((input: any) => unknown)[]> = {}
+    const prompts: { sessionID: string; text: string; delivery?: string }[] = []
+    const conversation: string[] = []
+    const events: any[] = []
+    let wake: (() => void) | null = null
+    let made = 0
+    const state = {
+      tried: 0,
+      missing: false,
+      refuse: 0,
+      /** What becomes of each of the next messages taken: delivered, cancelled, nothing heard, or delivered before the answer to the call. */
+      next: [] as ('delivered' | 'cancelled' | 'silent' | 'early' | 'pending')[],
+      /** Delivers a message that was admitted and left pending, as OpenCode does at the conversation's next step. */
+      deliver: () => {},
+      subscribed: 0,
+      unsubscribed: 0,
+      disposed: 0,
+    }
+    const announce = (type: string, data: unknown) => {
+      events.push({ type, data })
+      wake?.()
+    }
+    const hookOf = (domain: string) => async (name: string, callback: (input: any) => unknown) => {
+      const key = `${domain}:${name}`
+      hooks[key] ??= []
+      hooks[key]!.push(callback)
+      return {
+        dispose: async () => {
+          state.disposed++
+          hooks[key] = hooks[key]!.filter((c) => c !== callback)
+        },
+      }
+    }
+    const run = async (key: string, input: unknown) => {
+      for (const callback of hooks[key] ?? []) await callback(input)
+    }
+    async function admit(sessionID: string, text: string, what: 'delivered' | 'cancelled' | 'silent' | 'early' | 'pending') {
+      const id = `msg_${++made}`
+      await run('session:prompt', { sessionID, messageID: id, prompt: { text, files: [] }, delivery: 'steer' })
+      const item = { type: 'user', payload: { text, files: [] }, delivery: 'steer' }
+      const after = () => {
+        announce('session.inbox.enqueued', { sessionID, inboxID: id, item })
+        if (what === 'delivered') {
+          conversation.push(text)
+          announce('session.inbox.delivered', { sessionID, inboxID: id })
+        } else if (what === 'cancelled') announce('session.inbox.cancelled', { sessionID, inboxID: id })
+        else if (what === 'pending')
+          state.deliver = () => {
+            conversation.push(text)
+            announce('session.inbox.delivered', { sessionID, inboxID: id })
+          }
+      }
+      if (what === 'early') {
+        // Said to be delivered before the answer to the call, with the enqueued word lost
+        conversation.push(text)
+        announce('session.inbox.delivered', { sessionID, inboxID: id })
+      } else setImmediate(after)
+      return { id, sessionID, type: 'user', payload: { text }, delivery: 'steer' }
+    }
+    const ctx = {
+      session: {
+        hook: hookOf('session'),
+        get: async ({ sessionID }: { sessionID: string }) => {
+          if (sessionID.startsWith('ses_gone')) throw Object.assign(new Error('Session.NotFoundError'), { _tag: 'Session.NotFoundError', sessionID })
+          return { id: sessionID, ...(parents[sessionID] ? { parentID: parents[sessionID] } : {}) }
+        },
+        prompt: async ({ sessionID, text, delivery }: { sessionID: string; text: string; delivery?: string }) => {
+          state.tried++
+          if (state.missing) throw Object.assign(new Error('Session.NotFoundError'), { _tag: 'Session.NotFoundError', sessionID })
+          if (state.refuse > 0) {
+            state.refuse--
+            throw Object.assign(new Error('Session.ConflictError'), { _tag: 'Session.ConflictError' })
+          }
+          prompts.push({ sessionID, text, delivery })
+          return admit(sessionID, text, state.next.shift() ?? 'delivered')
+        },
+      },
+      shell: { hook: hookOf('shell') },
+      event: {
+        subscribe: ({ types, signal }: { types?: string[]; signal?: AbortSignal } = {}) => ({
+          async *[Symbol.asyncIterator]() {
+            state.subscribed++
+            let at = events.length
+            try {
+              while (!signal?.aborted) {
+                while (at < events.length) {
+                  const event = events[at++]
+                  if (!types || types.includes(event.type)) yield event
+                }
+                await new Promise<void>((resolve) => {
+                  wake = resolve
+                  signal?.addEventListener('abort', () => resolve(), { once: true })
+                })
+              }
+            } finally {
+              state.unsubscribed++
+            }
+          },
+        }),
+      },
+    }
+    return {
+      ctx,
+      prompts,
+      conversation,
+      state,
+      announce,
+      /** The person writes in a conversation. */
+      writes: (sessionID: string, text = 'hello') => admit(sessionID, text, 'delivered'),
+      /** The agent's instructions for one request, as OpenCode puts them together. */
+      context: async (system: { type: string; text: string }[]) => {
+        const input = { sessionID: 'ses_one', agent: 'build', system, messages: [], options: {}, tools: {} }
+        await run('session:context', input)
+        return input.system
+      },
+      /** A command the agent runs, with what OpenCode would start it with before it says which conversation it is in. */
+      shell: async (env: Record<string, string | undefined>) => {
+        const input = { command: 'it status', cwd: home, timeout: 0, shell: '/bin/sh', env: { ...env } }
+        await run('shell:create.before', input)
+        return input.env
+      },
+    }
+  }
+
+  describe('as OpenCode 2.x loads it', () => {
+    async function load2(parents: Record<string, string> = {}) {
+      const opencode = fakeOpenCode2(parents)
+      const cleanup = (await addon.default.setup(opencode.ctx as any)) as () => Promise<void>
+      loaded.push({ dispose: cleanup } as any)
+      return { cleanup, ...opencode }
+    }
+
+    it('adds when a page is the answer to the agent’s instructions, last and once', async () => {
+      const opencode = await load2()
+      const first = [{ type: 'text', text: 'You are an AI agent running in OpenCode.' }]
+      const once = await opencode.context([...first])
+      expect(once).toEqual([...first, { type: 'text', text: WHEN }])
+      expect(await opencode.context([...once])).toEqual([...first, { type: 'text', text: WHEN }])
+    })
+
+    it('tells the commands the agent runs where the `it` command is, and takes away a pair of It’s own they would inherit', async () => {
+      const opencode = await load2()
+      const bin = path.join(home, 'bin')
+      const env = await opencode.shell({ PATH: ['/usr/bin'].join(path.delimiter), IT_HARNESS: 'claude-code', IT_SESSION: 'someone-else', TERM: 'xterm' })
+      // OpenCode itself says which conversation the command is in, as OPENCODE_SESSION_ID, once the plugins have had their say
+      expect(env).toEqual({ PATH: ['/usr/bin', bin].join(path.delimiter), TERM: 'xterm' })
+    })
+
+    it('asks about a conversation once a message reaches it, and hands it a click that the agent then has', async () => {
+      standIn()
+      const c = await connector()
+      const opencode = await load2()
+      await opencode.writes('ses_one')
+      await settled()
+      expect(c.polls().map((a) => a.session)).toEqual(['ses_one'])
+      expect(c.polls()[0]).toMatchObject({ method: 'POST', harness: 'opencode', token: TOKEN })
+      c.state.offered = [click('k1')]
+      await seconds(1)
+      await reached(() => c.state.acked.length > 0, 'the connector has been told')
+      expect(opencode.prompts).toEqual([{ sessionID: 'ses_one', text: click('k1').text, delivery: 'steer' }])
+      expect(opencode.conversation).toEqual(['hello', click('k1').text])
+      expect(c.state.acked).toEqual(['k1'])
+      expect(c.state.runtimes.concat(c.state.asked.map((a) => a.body)).find((b) => b?.addon)?.addon).toMatchObject({ api: 1, delivery: true, idle: false })
+    })
+
+    it('reports a click only once OpenCode says it was delivered into the conversation, even when that is said before its answer', async () => {
+      standIn()
+      const c = await connector()
+      const opencode = await load2()
+      await opencode.writes('ses_one')
+      await settled()
+      opencode.state.next = ['early']
+      c.state.offered = [click('k1')]
+      await seconds(1)
+      await reached(() => c.state.acked.length > 0, 'the connector has been told')
+      expect(c.state.acked).toEqual(['k1'])
+      expect(opencode.state.tried).toBe(1)
+    })
+
+    it('does not report a click that OpenCode dropped from the inbox, and tries it again', async () => {
+      standIn()
+      const c = await connector()
+      const opencode = await load2()
+      await opencode.writes('ses_one')
+      await settled()
+      opencode.state.next = ['cancelled']
+      c.state.offered = [click('k1')]
+      await seconds(1)
+      await reached(() => opencode.state.tried === 1, 'OpenCode has been given the click')
+      await settled()
+      expect(c.state.acked).toEqual([])
+      // Tried again after the usual wait, and this time it gets in
+      await seconds(1)
+      await reached(() => c.state.acked.length > 0, 'the connector has been told')
+      expect(opencode.state.tried).toBe(2)
+      expect(opencode.conversation).toEqual(['hello', click('k1').text])
+    })
+
+    it('does not report a click when nothing more is heard of it, and reports it without giving it again if it turns up late', async () => {
+      standIn(true)
+      const c = await connector()
+      const opencode = await load2()
+      await opencode.writes('ses_one')
+      await settled()
+      opencode.state.next = ['silent']
+      c.state.offered = [click('k1')]
+      await seconds(1)
+      await settled()
+      expect(opencode.state.tried).toBe(1)
+      await seconds(29)
+      expect(c.state.acked).toEqual([])
+      expect(opencode.state.tried).toBe(1)
+      // The message is delivered after all: the agent has the click, and is not given it again
+      opencode.announce('session.inbox.enqueued', { sessionID: 'ses_one', inboxID: 'msg_2', item: { type: 'user', payload: { text: click('k1').text } } })
+      opencode.announce('session.inbox.delivered', { sessionID: 'ses_one', inboxID: 'msg_2' })
+      await reached(() => c.state.acked.length > 0, 'the connector has been told')
+      await seconds(3)
+      expect(opencode.state.tried).toBe(1)
+      expect(c.state.acked).toEqual(['k1'])
+    })
+
+    it('waits for a click OpenCode admitted to the inbox for as long as the running turn takes, and never hands it over twice', async () => {
+      standIn(true)
+      const c = await connector()
+      const opencode = await load2()
+      await opencode.writes('ses_one')
+      await settled()
+      // Admitted while a long command runs, and delivered only at the turn's next step
+      opencode.state.next = ['pending']
+      c.state.offered = [click('k1')]
+      await seconds(1)
+      await settled()
+      expect(opencode.state.tried).toBe(1)
+      await seconds(90)
+      expect(opencode.state.tried).toBe(1)
+      expect(c.state.acked).toEqual([])
+      // However long the turn takes: past half an hour, the click is still not handed over again
+      await seconds(40 * 60)
+      expect(opencode.state.tried).toBe(1)
+      expect(c.state.acked).toEqual([])
+      opencode.state.deliver()
+      await reached(() => c.state.acked.length > 0, 'the connector has been told')
+      await seconds(5)
+      expect(opencode.state.tried).toBe(1)
+      expect(c.state.acked).toEqual(['k1'])
+      expect(opencode.conversation).toEqual(['hello', click('k1').text])
+    })
+
+    it('does not report a click OpenCode refused, and tries it again', async () => {
+      standIn()
+      const c = await connector()
+      const opencode = await load2()
+      await opencode.writes('ses_one')
+      await settled()
+      opencode.state.refuse = 1
+      c.state.offered = [click('k1')]
+      await seconds(1)
+      await settled()
+      expect(opencode.state.tried).toBe(1)
+      expect(c.state.acked).toEqual([])
+      await seconds(1)
+      await reached(() => c.state.acked.length > 0, 'the connector has been told')
+      expect(opencode.state.tried).toBe(2)
+    })
+
+    it('stops asking about a conversation OpenCode says is not there, or that the person deleted', async () => {
+      standIn()
+      const c = await connector()
+      const opencode = await load2()
+      await opencode.writes('ses_one')
+      await opencode.writes('ses_two')
+      await settled()
+      opencode.state.missing = true
+      c.state.offered = [click('k1')]
+      await seconds(1)
+      await settled()
+      opencode.state.missing = false
+      c.state.offered = []
+      opencode.announce('session.deleted', { sessionID: 'ses_two' })
+      await settled()
+      c.state.asked.length = 0
+      await seconds(2)
+      expect(c.polls()).toEqual([])
+      expect(c.state.acked).toEqual([])
+    })
+
+    it('asks about a subagent’s own conversation too, and hands its clicks to the conversation that started it', async () => {
+      standIn()
+      const c = await connector()
+      const opencode = await load2({ ses_child: 'ses_parent', ses_grandchild: 'ses_child' })
+      await opencode.writes('ses_parent')
+      await opencode.writes('ses_grandchild', 'Look into the tests.')
+      await settled()
+      c.state.asked.length = 0
+      await seconds(1)
+      expect(
+        c
+          .polls()
+          .map((a) => a.session)
+          .sort(),
+      ).toEqual(['ses_grandchild', 'ses_parent'])
+      c.state.offered = [click('k1')]
+      await seconds(1)
+      await reached(() => c.state.acked.length > 0, 'the connector has been told')
+      // Offered under both ids here, since the stand-in connector offers every click to whoever asks: handed over once, to the parent
+      expect(opencode.prompts).toEqual([{ sessionID: 'ses_parent', text: click('k1').text, delivery: 'steer' }])
+    })
+
+    it('says that this OpenCode is open before any conversation is known', async () => {
+      standIn()
+      const c = await connector()
+      await load2()
+      await seconds(2)
+      expect(c.state.runtimes[0]).toMatchObject({ harness: 'opencode', addon: { api: 1, delivery: true, idle: false, missing: [] } })
+      expect(c.polls()).toEqual([])
+    })
+
+    it('does nothing at all where OpenCode calls it with a context that cannot hand a message over, as OpenCode 1.x’s copy of the 2.x host does', async () => {
+      standIn()
+      const c = await connector()
+      const opencode = fakeOpenCode2()
+      // As OpenCode 1.18.32 calls it: its own `server` is what takes clicks there, and this must not say that OpenCode cannot
+      const cleanup = await addon.default.setup({ ...opencode.ctx, session: { hook: opencode.ctx.session.hook } } as any)
+      expect(cleanup).toBeUndefined()
+      await seconds(3)
+      expect(c.state.runtimes).toEqual([])
+      expect(c.state.asked).toEqual([])
+      expect(opencode.state.subscribed).toBe(0)
+    })
+
+    it('lets go of everything it set up when OpenCode unloads it', async () => {
+      standIn()
+      const c = await connector()
+      const opencode = await load2()
+      await opencode.writes('ses_one')
+      await settled()
+      expect(opencode.state.subscribed).toBe(1)
+      await opencode.cleanup()
+      await settled()
+      expect(opencode.state.unsubscribed).toBe(1)
+      expect(opencode.state.disposed).toBe(3)
+      c.state.asked.length = 0
+      c.state.runtimes.length = 0
+      await seconds(3)
+      expect(c.state.asked).toEqual([])
+      expect(c.state.runtimes).toEqual([])
+    })
   })
 })
 
@@ -1051,8 +1414,8 @@ describe.skipIf(process.platform === 'win32')('the OpenCode add-on, in an OpenCo
    * and a message the add-on hands over is said, stored and announced as OpenCode announces one.
    */
   const OPENCODE = `
-    import { ItBridge } from ${JSON.stringify(pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), 'plugins/it-bridge.js')).href)}
-    const hooks = await ItBridge({
+    import plugin from ${JSON.stringify(pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), 'plugins/it-bridge.js')).href)}
+    const hooks = await plugin.server({
       client: {
         session: {
           get: async ({ path: { id } }) => ({ data: { id }, response: { ok: true, status: 200 } }),

@@ -6,9 +6,11 @@
 //   - conversation idle  -> a turn starts with the click
 //   - turn running       -> the click joins the turn at its next step (nothing is interrupted)
 //
-// OpenCode gives both of those through one call, `client.session.promptAsync`, which returns
-// as soon as OpenCode has agreed to try. Whether the message then got into the conversation
-// is told by what OpenCode announces afterwards: see `handOver`. One OpenCode holds many
+// OpenCode has two plugin interfaces, and this one file serves both. OpenCode 1.x loads the
+// `server` function of the default export and hands it a client of OpenCode's HTTP API; OpenCode
+// 2.x loads the `setup` function and hands it OpenCode's own domains. Each runs the same bridge
+// (`bridge`), and differs only in how it learns of a conversation, how it hands a message over,
+// and how it learns that the message got into the conversation. One OpenCode holds many
 // conversations, so this add-on asks the connector about each conversation that has had a
 // message here since OpenCode started. It asks once a second and never holds a request open.
 // Ownership, retries and receipts live in the connector.
@@ -17,8 +19,10 @@
 // leave the first as it was. So the connector is never told that an id has changed, and a
 // click on a page goes to the conversation that made it, whichever one is on screen.
 //
-// This file must export the plugin and nothing else: OpenCode treats every export of a plugin
-// file as a plugin and refuses the file if one of them is not a function.
+// This file must export the plugin definition as its default export and nothing else. OpenCode
+// 1.x refuses a file whose default export has an id and no `server` function, and treats every
+// export as a plugin where there is no such default. OpenCode 2.x refuses a file whose default
+// export has no id or no `setup` function.
 import { createHmac, randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import net from 'node:net'
@@ -30,7 +34,6 @@ import path from 'node:path'
 const IT_HOME_AT_SETUP = null
 
 const ADDON_VERSION = 'IT_ADDON_BUILD'
-const INSTANCE = randomBytes(12).toString('hex')
 const HARNESS = 'opencode'
 // What the agent is told of It among its own instructions, which this add-on adds: when a page
 // is the answer. The skill says how, and an agent reads it only once it has decided to use It.
@@ -43,6 +46,7 @@ const DEADLINE_MS = 3000 // how long one question to the connector may take from
 const MOST_BYTES = 256 * 1024 // an answer longer than this is not read to its end, and counts as no answer
 const PROMPT_MS = 5000 // how long OpenCode is given to say that it will take a message
 const SHOWN_MS = 30_000 // how long it is then given to show that message in the conversation
+const ADMITTED_MS = 30 * 60_000 // how long a message OpenCode 2.x has admitted to a conversation's inbox keeps other clicks for that conversation waiting
 const AGAIN_MS = [1000, 5000, 30_000, 180_000] // how long to wait before trying a refused click again
 const MOST = 40 // how many conversations are asked about at once, which is as many as the connector watches; the least recently active go first
 
@@ -158,19 +162,39 @@ function exchange(c, method, route, headers, text) {
   })
 }
 
-export const ItBridge = async ({ client }) => {
+/**
+ * What both of OpenCode's plugin interfaces share: finding the connector, asking it about each
+ * conversation, and handing the clicks it offers over to OpenCode. What differs between them is
+ * given as `app`:
+ *   - `missing`: which of the calls a click needs this OpenCode lacks ('session', 'submit')
+ *   - `ready(s)`: whether a click can be handed to this conversation yet
+ *   - `submit(s, text)`: hands the text to the conversation `s.into` as a message on the
+ *     person's side. It answers 'took' where OpenCode said it will take it, 'no' where it said
+ *     no, 'gone' where the conversation is not there, and null where nothing was heard in time.
+ *   - `admitted(s, clicks)`, where the app has one: whether OpenCode holds a message with these
+ *     clicks that it has taken and not yet put into the conversation or dropped
+ *
+ * What comes back is how each interface tells the bridge what OpenCode says has happened.
+ */
+function bridge(app) {
+  // Each bridge is an add-on of its own to the connector: OpenCode 2.x may set the plugin up
+  // once for each folder it works in, all in one process
+  const INSTANCE = randomBytes(12).toString('hex')
+  // When this bridge began, by this machine's clock: the connector goes by it to tell an add-on
+  // that was loaded after OpenCode refused one from an add-on that had been running since before
+  const SINCE = Date.now()
   let connector = null // { socket | port, token }, read from the connector's own file
   let lookedAt = 0
   let timer = null
   let asking = false // one round of questions to the connector is in progress
-  // The conversations asked about, by id. Each one remembers the agent and model its last
-  // message used, the clicks being handed over now, the clicks OpenCode was given and has not
-  // yet shown in the conversation, and how many times in a row a click for it came to nothing.
-  // No click is kept for handing over between one answer of the connector and the next.
+  // The conversations asked about, by the id the connector knows each one's pages by. `into` is
+  // the conversation its clicks are handed to, which is the one the person sees: the same id,
+  // or for a subagent's own conversation the one that started it. Each one remembers the clicks
+  // being handed over now, the clicks OpenCode was given and has not yet shown in the
+  // conversation, and how many times in a row a click for it came to nothing. No click is kept
+  // for handing over between one answer of the connector and the next.
   const sessions = new Map()
-  const roots = new Map() // a conversation's id -> the id of the conversation the person sees
   const given = new Set() // clicks the agent already has, which must never be handed over a second time
-  const users = new Set() // ids of messages on the person's side of a conversation, which is where a click arrives
 
   async function find() {
     if (Date.now() - lookedAt < (connector ? 30000 : 3000)) return connector
@@ -190,18 +214,13 @@ export const ItBridge = async ({ client }) => {
     return connector
   }
 
+  const addon = () => ({ api: 1, version: ADDON_VERSION, delivery: app.missing.length === 0, idle: false, missing: [...app.missing], since: SINCE })
+
   /**
    * Asks the connector one thing. The answer is null whenever there was none to be believed:
    * none at all, one that took too long or was too long, or one over a port that was not sealed
    * with the token.
    */
-  const addon = () => ({
-    api: 1,
-    version: ADDON_VERSION,
-    delivery: typeof client?.session?.get === 'function' && typeof client?.session?.promptAsync === 'function',
-    idle: false,
-    missing: [...(typeof client?.session?.get === 'function' ? [] : ['session']), ...(typeof client?.session?.promptAsync === 'function' ? [] : ['submit'])],
-  })
   async function ask(pathname, body) {
     if (pathname === '/session' || pathname.startsWith('/clicks?')) body = { ...body, instance: INSTANCE, addon: addon() }
 
@@ -227,41 +246,10 @@ export const ItBridge = async ({ client }) => {
   }
 
   /**
-   * The conversation the person sees. A subagent runs in a conversation of its own, which is
-   * over when its task is done, so a page a subagent makes belongs to the conversation that
-   * started it, and a click on that page goes there.
-   *
-   * Null when that conversation is not known for sure: OpenCode could not be asked, or did not
-   * answer in time, or the chain of who started whom was longer than is followed here. Taking
-   * the conversation that asked for its own root would then make a subagent's page the
-   * subagent's own. Nothing is remembered about a failure, so it is looked up again next time.
+   * From now on this conversation is one of those asked about, and its clicks are handed to
+   * `into`. The asking itself starts once a click could be handed to it: see `round`.
    */
-  async function rootOf(id) {
-    const known = roots.get(id)
-    if (known) return known
-    let at = id
-    try {
-      for (let hops = 0; hops < 8; hops++) {
-        const res = await within(ANSWER_MS, client.session.get({ path: { id: at } }))
-        if (!res || res.error || res.data?.id !== at) return null
-        const parent = res.data.parentID
-        if (typeof parent !== 'string' || !parent) {
-          // Nobody started this one: it is the conversation the person is in
-          roots.set(id, at)
-          if (roots.size > 500) roots.delete(roots.keys().next().value)
-          return at
-        }
-        at = parent
-      }
-    } catch {}
-    return null
-  }
-
-  /**
-   * From now on this conversation is one of those asked about. The asking itself starts once
-   * its agent is known: see `round`.
-   */
-  function listen(id) {
+  function listen(id, into = id) {
     const known = sessions.get(id)
     if (known) {
       // Put back at the end, so that the conversations used least recently are the first to go
@@ -269,15 +257,19 @@ export const ItBridge = async ({ client }) => {
       sessions.set(id, known)
       return known
     }
-    const s = { id, agent: undefined, model: undefined, variant: undefined, sending: [], watched: new Map(), waiting: null, tries: 0, notBefore: 0 }
+    const s = { id, into, sending: [], watched: new Map(), waiting: null, tries: 0, notBefore: 0 }
     sessions.set(id, s)
     while (sessions.size > MOST) sessions.delete(sessions.keys().next().value)
-    if (!timer) {
-      timer = setInterval(() => void round(), EVERY_MS)
-      // The timer alone must not keep OpenCode running once its own work is done
-      timer.unref?.()
-    }
+    start()
     return s
+  }
+
+  /** Asking begins, if it has not: once a second, about every conversation listened for, or else to say that this OpenCode is open. */
+  function start() {
+    if (timer) return
+    timer = setInterval(() => void round(), EVERY_MS)
+    // The timer alone must not keep OpenCode running once its own work is done
+    timer.unref?.()
   }
 
   /** The agent has these now. The connector is told, and told again on a later check if that fails. */
@@ -287,35 +279,48 @@ export const ItBridge = async ({ client }) => {
     void ask('/ack', { ids: clicks.map((c) => c.id) })
   }
 
-  /** Whether an answer of OpenCode's says that it will take the message. */
-  const took = (res) => Boolean(res) && !res.error && (!res.response || res.response.ok)
-
-  /** A message on the person's side of a conversation. Its id is how a piece of text is known to be theirs and not the agent's. */
-  function person(id) {
-    if (typeof id !== 'string' || !id) return
-    users.add(id)
-    if (users.size > 500) for (const old of [...users].slice(0, 250)) users.delete(old)
-  }
+  /** Every conversation whose clicks are handed to this one, the one the person sees. */
+  const handedTo = (into) => [...sessions.values()].filter((s) => s.into === into)
 
   /**
-   * OpenCode has put a piece of text into a conversation. If it is in a message on the
-   * person's side and carries clicks that were handed over, the agent has those clicks now,
-   * and only now are they reported.
+   * OpenCode has put this text into the conversation `into`, on the person's side. Clicks that
+   * were handed over and that it carries are with the agent now, and only now are they reported.
    */
-  function shown(part) {
-    if (part?.type !== 'text' || typeof part.text !== 'string' || !users.has(part.messageID)) return
-    const s = sessions.get(part.sessionID)
-    if (!s) return
-    // OpenCode has just stored a message for this conversation, so whatever made a click come
-    // to nothing before may be over (the person may have chosen another model, for one). A
-    // click that is waiting is tried again at once.
-    s.tries = 0
-    s.notBefore = 0
-    const here = [...s.watched.values()].map((w) => w.click).filter((c) => carries(part.text, c))
-    if (!here.length) return
-    for (const c of here) s.watched.delete(c.id)
-    gave(here)
-    s.waiting?.(false)
+  function shown(into, text) {
+    if (typeof into !== 'string' || typeof text !== 'string') return
+    for (const s of handedTo(into)) {
+      // OpenCode has just stored a message for this conversation, so whatever made a click come
+      // to nothing before may be over (the person may have chosen another model, for one). A
+      // click that is waiting is tried again at once.
+      s.tries = 0
+      s.notBefore = 0
+      const here = [...s.watched.values()].map((w) => w.click).filter((c) => carries(text, c))
+      if (!here.length) continue
+      for (const c of here) s.watched.delete(c.id)
+      gave(here)
+      s.waiting?.(false)
+    }
+  }
+
+  /** Whatever was on its way into the conversation `into` may not have got there: whoever waits for it stops waiting. */
+  function failed(into) {
+    for (const s of handedTo(into)) s.waiting?.(true)
+  }
+
+  /** OpenCode dropped this text on its way into the conversation `into`. Only clicks it carries stop being waited for. */
+  function dropped(into, text) {
+    if (typeof text !== 'string') return
+    for (const s of handedTo(into)) if ([...s.watched.values()].some((w) => carries(text, w.click))) s.waiting?.(true)
+  }
+
+  /** The conversation is gone. Nothing is asked about it again, nor handed to it. */
+  function gone(id) {
+    if (typeof id !== 'string') return
+    for (const s of [...sessions.values()])
+      if (s.id === id || s.into === id) {
+        s.waiting?.(true)
+        sessions.delete(s.id)
+      }
   }
 
   /**
@@ -341,40 +346,37 @@ export const ItBridge = async ({ client }) => {
   async function handOver(s, clicks) {
     s.sending = clicks
     const began = Date.now()
-    for (const [id, w] of s.watched) if (began - w.since > 10 * SHOWN_MS) s.watched.delete(id)
+    // Clicks OpenCode still holds stay watched however long that takes, so that they are reported when it delivers them
+    for (const [id, w] of s.watched) if (began - w.since > 10 * SHOWN_MS && !app.admitted?.(s, [w.click])) s.watched.delete(id)
     // Watched and waited for from before OpenCode is asked. What it announces about a message
     // can arrive before its answer to the call does, and must not be missed.
     for (const c of clicks) s.watched.set(c.id, { click: c, since: began })
     const there = untilShown(s, clicks, began + SHOWN_MS)
-    let res = null
+    let said = null
     try {
       // Not waited on for long, so that an OpenCode that never answers cannot keep this
-      // conversation from ever being given anything again
-      res = await within(
-        PROMPT_MS,
-        client.session.promptAsync({
-          path: { id: s.id },
-          body: {
-            // The same agent and model as the conversation's last message. Left out, OpenCode
-            // would switch to its default agent, which may be allowed more than the one in use.
-            agent: s.agent,
-            ...(s.model ? { model: s.model } : {}),
-            ...(s.variant ? { variant: s.variant } : {}),
-            // One wording, made by the connector, which names each click so a repeat can be told apart
-            parts: [{ type: 'text', text: clicks.map((c) => c.text).join('\n') }],
-          },
-        }),
-      )
+      // conversation from ever being given anything again. One wording, made by the connector,
+      // which names each click so a repeat can be told apart.
+      said = await within(PROMPT_MS, app.submit(s, clicks.map((c) => c.text).join('\n')))
     } catch {}
     // OpenCode answers as soon as it has agreed to try, and only then does its work: other
     // add-ons may still refuse the message, and storing it may still fail. So its answer is
-    // not taken as proof. The proof is the message itself: OpenCode announces every piece of
-    // text it stores, and the click counts as handed over once its text has been announced
-    // in a message on the person's side of this conversation. Without OpenCode's agreement
-    // there is nothing to wait for.
-    if (!took(res)) s.waiting?.(true)
-    const shownThere = await there
+    // not taken as proof. The proof is the message itself: the click counts as handed over once
+    // OpenCode has said that its text is in a message on the person's side of this
+    // conversation. Without OpenCode's agreement there is nothing to wait for.
+    if (said !== 'took') s.waiting?.(true)
+    let shownThere = await there
+    // OpenCode 2.x admits a message to the conversation's inbox, and delivers it at the
+    // conversation's next step, which a long command can put off for minutes. While the message
+    // is admitted and neither delivered nor dropped, the clicks are on their way: handing them
+    // over again would put them into the conversation twice. So they are waited for, and are
+    // never handed over again while OpenCode holds them (see `check`). Past half an hour the
+    // conversation is given other clicks meanwhile, and these stay watched until OpenCode
+    // delivers them or drops them.
+    while (!shownThere && said === 'took' && app.admitted?.(s, clicks) && Date.now() - began < ADMITTED_MS)
+      shownThere = await untilShown(s, clicks, Math.min(Date.now() + SHOWN_MS, began + ADMITTED_MS))
     s.sending = []
+    if (!shownThere && said === 'took' && app.admitted?.(s, clicks)) return
     if (shownThere) {
       s.tries = 0
       s.notBefore = 0
@@ -383,8 +385,8 @@ export const ItBridge = async ({ client }) => {
     // OpenCode said no outright, so nothing will appear. In every other case the clicks stay
     // watched for a while: should their text turn up after this add-on has stopped waiting,
     // the agent has them all the same, and they are reported then and not given again.
-    if (res && !took(res)) for (const c of clicks) s.watched.delete(c.id)
-    if (res?.response?.status === 404) {
+    if (said === 'no' || said === 'gone') for (const c of clicks) s.watched.delete(c.id)
+    if (said === 'gone') {
       // The conversation is gone. It is not asked about again, and the connector lets
       // the click wait where the person can see it.
       if (sessions.get(s.id) === s) sessions.delete(s.id)
@@ -407,7 +409,8 @@ export const ItBridge = async ({ client }) => {
     if (again.length) void ask('/ack', { ids: again.map((c) => c.id) })
     // Only what the connector offers this very moment is handed over. A click it has stopped
     // offering may have gone to someone else.
-    const fresh = clicks.filter((c) => !given.has(c.id))
+    // Nor what OpenCode holds already, on its way into the conversation
+    const fresh = clicks.filter((c) => !given.has(c.id) && !app.admitted?.(s, [c]))
     if (!fresh.length || s.sending.length || Date.now() < s.notBefore) return
     // Not waited for: the connector goes on being asked while OpenCode takes the message
     void handOver(s, fresh)
@@ -418,7 +421,7 @@ export const ItBridge = async ({ client }) => {
     if (asking) return
     asking = true
     try {
-      if (!addon().delivery || ![...sessions.values()].some((s) => s.agent)) {
+      if (!addon().delivery || ![...sessions.values()].some((s) => app.ready(s))) {
         await ask('/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
         return
       }
@@ -426,12 +429,10 @@ export const ItBridge = async ({ client }) => {
       for (const s of [...sessions.values()]) {
         // Asking tells the connector that someone is listening, and it then sets the
         // conversation's clicks aside for this add-on. So a conversation is only asked about
-        // once a click could be handed to it, which takes knowing the agent it is in: a click
-        // handed over without one could move the conversation to OpenCode's default agent.
-        // And one that has refused twice running is not asked about while it is being left
-        // alone: asking would keep its click set aside here, where `it wait` and the site
-        // cannot have it.
-        if (sessions.get(s.id) === s && s.agent && !(s.tries >= 2 && Date.now() < s.notBefore)) {
+        // once a click could be handed to it. And one that has refused twice running is not
+        // asked about while it is being left alone: asking would keep its click set aside
+        // here, where `it wait` and the site cannot have it.
+        if (sessions.get(s.id) === s && app.ready(s) && !(s.tries >= 2 && Date.now() < s.notBefore)) {
           polled = true
           await check(s)
         }
@@ -444,9 +445,110 @@ export const ItBridge = async ({ client }) => {
     }
   }
 
+  function dispose() {
+    if (timer) clearInterval(timer)
+    timer = null
+    for (const s of sessions.values()) s.waiting?.(true)
+    sessions.clear()
+  }
+
   // No supported event identifies a selected saved session. Report the host without guessing one.
-  timer = setInterval(() => void round(), EVERY_MS)
-  timer.unref?.()
+  start()
+
+  return { sessions, listen, round, shown, failed, dropped, gone, dispose }
+}
+
+/**
+ * The conversation the person sees. A subagent runs in a conversation of its own, which is
+ * over when its task is done, so a page a subagent makes belongs to the conversation that
+ * started it, and a click on that page goes there.
+ *
+ * Null when that conversation is not known for sure: OpenCode could not be asked, or did not
+ * answer in time, or the chain of who started whom was longer than is followed here. Taking
+ * the conversation that asked for its own root would then make a subagent's page the
+ * subagent's own. Nothing is remembered about a failure, so it is looked up again next time.
+ * `parentOf` answers the conversation that started one, '' for none, or null where that could
+ * not be told.
+ */
+function roots(parentOf) {
+  const known = new Map()
+  return async (id) => {
+    const found = known.get(id)
+    if (found) return found
+    let at = id
+    try {
+      for (let hops = 0; hops < 8; hops++) {
+        const parent = await within(ANSWER_MS, parentOf(at))
+        if (parent === null || parent === undefined) return null
+        if (!parent) {
+          // Nobody started this one: it is the conversation the person is in
+          known.set(id, at)
+          if (known.size > 500) known.delete(known.keys().next().value)
+          return at
+        }
+        at = parent
+      }
+    } catch {}
+    return null
+  }
+}
+
+/** Puts It's folder of programs last on a command's PATH, where it is not there already, so that an `it` already on the PATH comes first. */
+function withIt(env) {
+  // The commands the agent runs are told where It's folder is too, when it is not the usual place: the `it` command they run must use the same one as this add-on
+  if (!process.env.IT_HOME && typeof IT_HOME_AT_SETUP === 'string' && IT_HOME_AT_SETUP) env.IT_HOME = IT_HOME_AT_SETUP
+  // An OpenCode started from the terminal It was installed in has a PATH from before It was on it
+  const bin = path.join(itHome(), 'bin')
+  const now = env.PATH ?? process.env.PATH ?? ''
+  if (!now.split(path.delimiter).includes(bin)) env.PATH = now ? `${now}${path.delimiter}${bin}` : bin
+}
+
+/**
+ * The add-on as OpenCode 1.x loads it. Its client is OpenCode's HTTP API: `session.promptAsync`
+ * returns as soon as OpenCode has agreed to try, and whether the message then got into the
+ * conversation is told by what OpenCode announces afterwards, each piece of text it stores.
+ */
+async function server({ client }) {
+  const session = typeof client?.session?.get === 'function'
+  const submit = typeof client?.session?.promptAsync === 'function'
+  const rootOf = roots(async (id) => {
+    const res = await client.session.get({ path: { id } })
+    if (!res || res.error || res.data?.id !== id) return null
+    const parent = res.data.parentID
+    return typeof parent === 'string' && parent ? parent : ''
+  })
+  const users = new Set() // ids of messages on the person's side of a conversation, which is where a click arrives
+  /** Whether an answer of OpenCode's says that it will take the message. */
+  const took = (res) => Boolean(res) && !res.error && (!res.response || res.response.ok)
+  const b = bridge({
+    missing: [...(session ? [] : ['session']), ...(submit ? [] : ['submit'])],
+    // A click handed over without the agent the conversation is in could move the conversation
+    // to OpenCode's default agent, which may be allowed more than the one in use
+    ready: (s) => Boolean(s.agent),
+    async submit(s, text) {
+      const res = await client.session.promptAsync({
+        path: { id: s.into },
+        body: {
+          // The same agent and model as the conversation's last message. Left out, OpenCode
+          // would switch to its default agent, which may be allowed more than the one in use.
+          agent: s.agent,
+          ...(s.model ? { model: s.model } : {}),
+          ...(s.variant ? { variant: s.variant } : {}),
+          parts: [{ type: 'text', text }],
+        },
+      })
+      if (took(res)) return 'took'
+      if (res?.response?.status === 404) return 'gone'
+      return res ? 'no' : null
+    },
+  })
+
+  /** A message on the person's side of a conversation. Its id is how a piece of text is known to be theirs and not the agent's. */
+  function person(id) {
+    if (typeof id !== 'string' || !id) return
+    users.add(id)
+    if (users.size > 500) for (const old of [...users].slice(0, 250)) users.delete(old)
+  }
 
   return {
     // Said last among the agent's instructions, once, each time OpenCode puts them together
@@ -462,7 +564,7 @@ export const ItBridge = async ({ client }) => {
         if (typeof id !== 'string' || !id) return
         const root = await rootOf(id)
         if (!root) return // whose message this is cannot be told, so nothing is learned from it
-        const s = listen(root)
+        const s = b.listen(root)
         if (root !== id) return // a subagent's own agent and model are not the conversation's
         const said = output?.message
         const unknown = !s.agent
@@ -472,11 +574,11 @@ export const ItBridge = async ({ client }) => {
           s.model = { providerID: m.providerID, modelID: m.modelID }
           s.variant = typeof m.variant === 'string' && m.variant ? m.variant : undefined
         }
-        if (unknown && s.agent) void round()
+        if (unknown && s.agent) void b.round()
       } catch {}
     },
     // Every command the agent runs says which conversation it belongs to, which is how the
-    // `it` command knows whose page it is making. OpenCode does not say so by itself.
+    // `it` command knows whose page it is making. OpenCode 1.x does not say so by itself.
     'shell.env': async (input, output) => {
       try {
         const id = input?.sessionID
@@ -489,14 +591,8 @@ export const ItBridge = async ({ client }) => {
         if (!root) return
         output.env.IT_HARNESS = HARNESS
         output.env.IT_SESSION = root
-        // The commands the agent runs are told where It's folder is too, when it is not the usual place: the `it` command they run must use the same one as this add-on
-        if (!process.env.IT_HOME && typeof IT_HOME_AT_SETUP === 'string' && IT_HOME_AT_SETUP) output.env.IT_HOME = IT_HOME_AT_SETUP
-        // And where the `it` command is: an OpenCode started from the terminal It was installed
-        // in has a PATH from before It was on it. Put last, so that an `it` already on the PATH comes first.
-        const bin = path.join(itHome(), 'bin')
-        const now = output.env.PATH ?? process.env.PATH ?? ''
-        if (!now.split(path.delimiter).includes(bin)) output.env.PATH = now ? `${now}${path.delimiter}${bin}` : bin
-        listen(root)
+        withIt(output.env)
+        b.listen(root)
       } catch {}
     },
     // Everything OpenCode announces passes here. Four things matter: a message on the person's
@@ -508,24 +604,150 @@ export const ItBridge = async ({ client }) => {
         if (event?.type === 'message.updated') {
           if (about?.info?.role === 'user') person(about.info.id)
         } else if (event?.type === 'message.part.updated') {
-          shown(about?.part)
+          const part = about?.part
+          if (part?.type === 'text' && users.has(part.messageID)) b.shown(part.sessionID, part.text)
         } else if (event?.type === 'session.error') {
-          // Whatever was on its way into this conversation may not have got there
-          sessions.get(about?.sessionID)?.waiting?.(true)
+          b.failed(about?.sessionID)
         } else if (event?.type === 'session.deleted') {
-          const id = about?.info?.id
-          if (typeof id !== 'string') return
-          sessions.get(id)?.waiting?.(true)
-          sessions.delete(id)
-          roots.delete(id)
+          b.gone(about?.info?.id)
         }
       } catch {}
     },
-    dispose: async () => {
-      if (timer) clearInterval(timer)
-      timer = null
-      for (const s of sessions.values()) s.waiting?.(true)
-      sessions.clear()
-    },
+    dispose: async () => b.dispose(),
   }
 }
+
+/**
+ * The add-on as OpenCode 2.x loads it, given OpenCode's own domains. `session.prompt` admits a
+ * message to a conversation's inbox and answers with it; OpenCode then says when the message
+ * has been delivered into the conversation (`session.inbox.delivered`), or that it was dropped
+ * (`session.inbox.cancelled`). A conversation keeps its own agent and model, so a message
+ * handed over moves it to no other.
+ *
+ * OpenCode 2.x tells every command the agent runs which conversation it is in, as
+ * OPENCODE_SESSION_ID, and gives a plugin no way to see which conversation a command belongs
+ * to. So a page a subagent makes belongs to the subagent's own conversation, and this add-on
+ * asks about that conversation too and hands its clicks to the conversation that started it.
+ */
+async function setup(ctx) {
+  // OpenCode 1.x carries an early copy of the 2.x plugin host beside its own, which loads this
+  // file too and calls `setup` with a context that cannot hand a message over. That OpenCode runs
+  // `server` as well, which can. So where the context lacks any call a click needs, this does
+  // nothing at all: it says nothing to the connector, which would otherwise take OpenCode for one
+  // that cannot take clicks.
+  const can = (domain, name) => typeof ctx?.[domain]?.[name] === 'function'
+  if (!(can('session', 'get') && can('session', 'prompt') && can('session', 'hook') && can('shell', 'hook') && can('event', 'subscribe'))) return
+  const rootOf = roots(async (id) => {
+    try {
+      const got = await ctx.session.get({ sessionID: id })
+      if (got?.id !== id) return null
+      return typeof got.parentID === 'string' && got.parentID ? got.parentID : ''
+    } catch {
+      return null
+    }
+  })
+  // The messages on their way into a conversation, by the id OpenCode gives each one, with
+  // their text: what is delivered or dropped is told by that id alone
+  const inbox = new Map()
+  const delivered = new Set() // what was said to be delivered before this add-on knew its text
+  const note = (map, id, value) => {
+    if (value === undefined) map.add(id)
+    else map.set(id, value)
+    if (map.size > 500) map.delete(map.keys().next().value)
+  }
+  const b = bridge({
+    missing: [],
+    ready: () => true,
+    // Admitted to the conversation's inbox, and not yet delivered or dropped: on its way
+    admitted: (s, clicks) => [...inbox.values()].some((m) => m.into === s.into && clicks.every((c) => carries(m.text, c))),
+    async submit(s, text) {
+      try {
+        // Steered: taken at the conversation's next step when a turn is running, and starting a turn when none is
+        const got = await ctx.session.prompt({ sessionID: s.into, text, delivery: 'steer' })
+        if (typeof got?.id === 'string' && got.id) {
+          if (delivered.delete(got.id)) b.shown(s.into, text)
+          else if (!inbox.has(got.id)) note(inbox, got.id, { into: s.into, text })
+        }
+        return 'took'
+      } catch (err) {
+        return err?._tag === 'Session.NotFoundError' ? 'gone' : 'no'
+      }
+    },
+  })
+
+  /** A message has reached this conversation: it is listened for from now on, and a subagent's own conversation for the conversation that started it. */
+  async function heard(id) {
+    try {
+      if (typeof id !== 'string' || !id) return
+      const root = await rootOf(id)
+      if (!root) return // whose conversation this is cannot be told, so nothing is learned from it
+      const fresh = !b.sessions.has(root) || !b.sessions.has(id)
+      b.listen(root)
+      if (root !== id) b.listen(id, root)
+      // A conversation heard of for the first time is asked about at once, and not a second later
+      if (fresh) void b.round()
+    } catch {}
+  }
+
+  const registrations = []
+  const stop = new AbortController()
+  // Every message on the person's side of a conversation passes here, whoever sent it. Not
+  // waited on, so that OpenCode's taking of the message is held up by nothing here.
+  registrations.push(await ctx.session.hook('prompt', (input) => void heard(input?.sessionID)))
+  // Said last among the agent's instructions, once, each time OpenCode puts them together
+  registrations.push(
+    await ctx.session.hook('context', (input) => {
+      if (Array.isArray(input?.system) && !input.system.some((part) => part?.text === WHEN)) input.system.push({ type: 'text', text: WHEN })
+    }),
+  )
+  // Every command the agent runs is told where the `it` command is. Which conversation it is in,
+  // OpenCode says itself; a pair of It's own that the command would otherwise inherit from
+  // whatever started OpenCode would name another app's conversation, and is taken away.
+  registrations.push(
+    await ctx.shell.hook('create.before', (input) => {
+      if (!input?.env) return
+      delete input.env.IT_HARNESS
+      delete input.env.IT_SESSION
+      withIt(input.env)
+    }),
+  )
+  // Four things OpenCode announces matter: a message being admitted to a conversation, being
+  // delivered into it or dropped, and a conversation being deleted.
+  ;(async () => {
+    const types = ['session.inbox.enqueued', 'session.inbox.delivered', 'session.inbox.cancelled', 'session.deleted']
+    for await (const event of ctx.event.subscribe({ types, signal: stop.signal })) {
+      try {
+        const about = event?.data
+        if (event.type === 'session.inbox.enqueued') {
+          const item = about?.item
+          if (item?.type === 'user' && typeof about.inboxID === 'string' && typeof item.payload?.text === 'string')
+            note(inbox, about.inboxID, { into: about.sessionID, text: item.payload.text })
+        } else if (event.type === 'session.inbox.delivered') {
+          const was = inbox.get(about?.inboxID)
+          if (was) {
+            inbox.delete(about.inboxID)
+            b.shown(was.into, was.text)
+          } else if (typeof about?.inboxID === 'string') note(delivered, about.inboxID)
+        } else if (event.type === 'session.inbox.cancelled') {
+          const was = inbox.get(about?.inboxID)
+          inbox.delete(about?.inboxID)
+          if (was) b.dropped(was.into, was.text)
+        } else if (event.type === 'session.deleted') {
+          b.gone(about?.sessionID)
+        }
+      } catch {}
+    }
+  })().catch(() => {})
+
+  return async () => {
+    stop.abort()
+    b.dispose()
+    for (const r of registrations) {
+      try {
+        await r?.dispose?.()
+      } catch {}
+    }
+  }
+}
+
+export default { id: 'it-bridge', server, setup }

@@ -30,14 +30,55 @@ export const ADDON_API = 1
 // closed app stop holding back Auto-wake even when it could not report that it was closing.
 const RECENT_MS = 30_000
 
+/** What a person is told of an app that refused to load It's add-on: OpenCode alone says so, in its log (see `opencode-refused.ts`). */
+const REFUSED: Record<string, string> = {
+  opencode:
+    'OpenCode refused to load It’s add-on, as its log says, so what is done on a page does not reach an open OpenCode conversation by itself, and Auto-wake does not reopen one that may be open. Update It and OpenCode, then restart OpenCode. Until then clicks wait in the inbox, where `it wait` and the site take them.',
+}
+
 export class AddonRuntimes {
   private loaded = new Map<string, Loaded>()
   private overflowUntil = new Map<string, number>()
+  /**
+   * When an app last refused to load It's add-on, and the latest time an add-on of the app says
+   * it began, both by this machine's clock in milliseconds. Only an add-on that began after a
+   * refusal shows that the refusal is over: one that was running before it goes on as it was,
+   * since an app that fails to load a plugin again keeps the copy it had, and says nothing of
+   * the copy it refused. When it was first heard from says nothing of that, since a connector
+   * started since hears from it for the first time all the same.
+   */
+  private refusedAt = new Map<string, number>()
+  private startedAt = new Map<string, number>()
+
+  /**
+   * The app refused to load It's add-on at this time, or has not since its add-on was put
+   * there (undefined). A refusal holds until an add-on of the app that began after it is heard from: until
+   * then nothing of It runs in the app, and the app may be open without it, so the add-on is
+   * not called connected and Auto-wake does not reopen beside it. Said back: whether this
+   * changes what is said of the app.
+   */
+  refused(harness: string, at: number | undefined): boolean {
+    const was = this.refusal(harness)
+    if (at === undefined) this.refusedAt.delete(harness)
+    else this.refusedAt.set(harness, at)
+    return this.refusal(harness) !== was
+  }
+
+  /** When the app last refused the add-on, as it was told, whether or not an add-on loaded since has ended that. */
+  refusedSince(harness: string): number | undefined {
+    return this.refusedAt.get(harness)
+  }
+
+  /** The refusal that holds now: one no add-on of the app has been heard from since. */
+  private refusal(harness: string): number | undefined {
+    const at = this.refusedAt.get(harness)
+    return at !== undefined && REFUSED[harness] && !((this.startedAt.get(harness) ?? -1) > at) ? at : undefined
+  }
 
   hear(harness: string, instance: unknown, value: unknown, now = performance.now()): AddonRuntime | undefined {
     if (!ADDONS[harness] || typeof instance !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(instance)) return undefined
     if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
-    const v = value as { version?: unknown; api?: unknown; delivery?: unknown; idle?: unknown; missing?: unknown }
+    const v = value as { version?: unknown; api?: unknown; delivery?: unknown; idle?: unknown; missing?: unknown; since?: unknown }
     if (typeof v.version !== 'string' || !/^[a-zA-Z0-9._-]{1,40}$/.test(v.version)) return undefined
     const names: Record<string, string> = {
       session: 'identify a conversation',
@@ -89,6 +130,12 @@ export class AddonRuntimes {
                 .join(' '),
             }
     this.loaded.set(`${harness}:${instance}`, { at: now, runtime, idle: v.idle === true })
+    // When the add-on says it began, believed only where that is not in the future of this
+    // machine's clock. An add-on that does not say, as one of an earlier build does, cannot end
+    // a refusal: heard from for the first time by a connector started since, it may well have
+    // been running from before.
+    const said = typeof v.since === 'number' && Number.isFinite(v.since) && v.since > 0 && v.since <= Date.now() + 60_000 ? v.since : undefined
+    if (said !== undefined && said > (this.startedAt.get(harness) ?? -1)) this.startedAt.set(harness, said)
     for (const [key, entry] of this.loaded) if (now - entry.at >= RECENT_MS) this.loaded.delete(key)
     // Keep room for 100 simultaneous app instances, but bound memory and the work of reading
     // their status if a faulty add-on keeps reporting a new instance id. Evicted instances
@@ -107,6 +154,7 @@ export class AddonRuntimes {
     const entries = [...this.loaded].filter(([key, v]) => key.startsWith(`${harness}:`) && now - v.at < RECENT_MS).map(([, v]) => v.runtime)
     // One working process cannot conceal another process with stale or incompatible code.
     return (
+      (this.refusal(harness) !== undefined ? { state: 'incompatible' as const, detail: REFUSED[harness]! } : undefined) ??
       entries.find((r) => r.state === 'incompatible') ??
       ((this.overflowUntil.get(harness) ?? 0) > now
         ? {
@@ -126,8 +174,16 @@ export class AddonRuntimes {
 
   blocksWake(harness: string, now = performance.now()): boolean {
     return (
+      this.refusal(harness) !== undefined ||
       (this.overflowUntil.get(harness) ?? 0) > now ||
       [...this.loaded].some(([key, v]) => key.startsWith(`${harness}:`) && now - v.at < RECENT_MS && (!v.idle || v.runtime.state === 'incompatible'))
     )
+  }
+
+  /** Why Auto-wake does not reopen a conversation of this app, where that is the app's refusal of the add-on. */
+  wakeHeld(harness: string): string | undefined {
+    return this.refusal(harness) !== undefined
+      ? `${harness === 'opencode' ? 'OpenCode' : 'the app'} refused to load It’s add-on, so It did not start a second copy of a conversation that may be open in it: update It and OpenCode, then restart OpenCode, and what you did reaches it`
+      : undefined
   }
 }

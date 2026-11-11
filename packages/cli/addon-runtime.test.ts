@@ -60,3 +60,64 @@ test.each(['idle', 'incompatible'])('Evicting a recent %s report keeps its wake 
   expect(seen.status('opencode', 30_000).state).toBe('active')
   expect(seen.blocksWake('pi', 1000)).toBe(false)
 })
+
+test('An OpenCode that refused to load the add-on is not taken for one that took it, and holds back reopening until its add-on is heard from after the refusal.', () => {
+  const seen = new AddonRuntimes()
+  const report = { api: ADDON_API, version: ADDONS.opencode!.build, delivery: true, idle: false }
+  // Heard from before it refused: that was another add-on, or another start of OpenCode
+  seen.hear('opencode', 'before', report, 0)
+  const refusedAt = Date.now() + 1000
+  expect(seen.refused('opencode', refusedAt)).toBe(true)
+  expect(seen.refused('opencode', refusedAt)).toBe(false)
+  expect(seen.status('opencode', 0)).toMatchObject({ state: 'incompatible' })
+  expect(seen.status('opencode', 0).detail).toMatch(/^OpenCode refused to load It’s add-on, as its log says/)
+  expect(seen.status('opencode', 0).detail).toMatch(/Update It and OpenCode, then restart OpenCode/)
+  // However long ago its last report was, since nothing of It runs in it and it may be open
+  expect(seen.blocksWake('opencode', 3_600_000)).toBe(true)
+  expect(seen.status('opencode', 3_600_000).state).toBe('incompatible')
+  expect(seen.wakeHeld('opencode')).toMatch(/^OpenCode refused to load It’s add-on, so It did not start a second copy of a conversation that may be open in it/)
+  const clock = Date.now
+  try {
+    Date.now = () => refusedAt + 1
+    // An add-on that was running before the refusal goes on being heard from: OpenCode kept the copy it had, and refused the new one
+    seen.hear('opencode', 'before', report, 5)
+    expect(seen.status('opencode', 5).state).toBe('incompatible')
+    expect(seen.blocksWake('opencode', 5)).toBe(true)
+    // One that began after it: OpenCode loaded the add-on after all
+    seen.hear('opencode', 'after', { ...report, since: refusedAt + 1 }, 10)
+  } finally {
+    Date.now = clock
+  }
+  expect(seen.status('opencode', 10)).toMatchObject({ state: 'active' })
+  expect(seen.blocksWake('opencode', 31_000)).toBe(false)
+  expect(seen.wakeHeld('opencode')).toBeUndefined()
+  // And a refusal that is over is said to change what is said of the app
+  const other = new AddonRuntimes()
+  other.refused('opencode', 5)
+  expect(other.refused('opencode', undefined)).toBe(true)
+  expect(other.status('opencode', 0).state).toBe('inactive')
+  // An app that does not say it refused is never taken to have
+  expect(other.refused('pi', 5)).toBe(false)
+  expect(other.blocksWake('pi', 0)).toBe(false)
+})
+
+test('An add-on that says when it began ends a refusal only where it began after it, however recently this connector first heard from it.', () => {
+  const report = { api: ADDON_API, version: ADDONS.opencode!.build, delivery: true, idle: false }
+  const refusedAt = Date.now() - 10_000
+  // A connector started since: it hears for the first time from an add-on that was running before OpenCode refused the new one
+  const seen = new AddonRuntimes()
+  seen.refused('opencode', refusedAt)
+  seen.hear('opencode', 'kept-running', { ...report, since: refusedAt - 60_000 }, 0)
+  expect(seen.status('opencode', 0).state).toBe('incompatible')
+  expect(seen.blocksWake('opencode', 0)).toBe(true)
+  // Nor does one that does not say when it began, as an add-on of an earlier build does, nor one that says a time in this machine's future
+  seen.hear('opencode', 'earlier-build', report, 0)
+  seen.hear('opencode', 'odd-clock', { ...report, since: Date.now() + 3_600_000 }, 0)
+  expect(seen.status('opencode', 0).state).toBe('incompatible')
+  // One that began after the refusal ends it
+  const other = new AddonRuntimes()
+  other.refused('opencode', refusedAt)
+  other.hear('opencode', 'loaded-since', { ...report, since: refusedAt + 1 }, 0)
+  expect(other.status('opencode', 0).state).toBe('active')
+  expect(other.refusedSince('opencode')).toBe(refusedAt)
+})

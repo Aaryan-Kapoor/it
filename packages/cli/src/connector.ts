@@ -67,7 +67,8 @@ import {
   writePrivate,
 } from './lib'
 import { incompatible } from './login'
-import { profileEnvironment, readProfile } from './profiles'
+import { opencodePlugins, opencodeRefusedAt, unchangedSince } from './opencode-refused'
+import { profileEnvironment, profileOf, readProfile } from './profiles'
 import { addonMarks, conversationFolder, conversationProfile, forgetAddonMark, noteConversation, publishedWithoutAddon } from './publish'
 import { alone, lockHeld } from './serve/backend'
 import * as service from './service'
@@ -625,6 +626,8 @@ const NOT_ASKED = new Problem('Whether this machine and the It it joined fit has
 const HELD_LOOKED_AT_MS = 60_000
 /** How often a machine that does not fit the It it joined asks again whether it does, and one that fits whether it still does. */
 const FITS_EVERY_MS = 60_000
+// How often OpenCode's log is read for a refusal of It's add-on: often enough that a click made just after OpenCode refused it is not reopened for, since Auto-wake waits twenty seconds and more
+const REFUSED_EVERY_MS = 5_000
 
 /** Everything the connector does once the folder's lock is its own. */
 async function connecting(say: (line: string) => void, discovery: ClaudeDiscovery): Promise<void> {
@@ -2469,7 +2472,9 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     const now = { harness: session.harness, id: key.slice(key.indexOf(':') + 1) }
     const cwd = conversationFolder(now) ?? conversationFolder(session)
     if (runtimes.blocksWake(now.harness))
-      return 'an open app cannot confirm which idle conversations it holds; send a message in the conversation to start listening'
+      return (
+        runtimes.wakeHeld(now.harness) ?? 'an open app cannot confirm which idle conversations it holds; send a message in the conversation to start listening'
+      )
     if (!cwd) return 'the folder its conversation was held in is not known on this machine, or is gone'
     // With what the person's shell gives a program, where this is the background service: an
     // app that takes its key from there cannot be reopened without it
@@ -4666,6 +4671,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         .catch((err) => say(`add-ons: ${why(err)}`))
         .then(() => report(true))
         .then(makeWay)
+        .then(lookForRefusal)
     },
     (err) => say(`settings: ${why(err)}`),
   )
@@ -4730,6 +4736,31 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   }, 1000)
   // Which open Claude Code conversations have not loaded It's add-on, looked at every few seconds
   const looksOpen = setInterval(() => void reportNotLoaded(), 5_000)
+  // Whether OpenCode refused to load It's add-on, which only its log says: looked at every few
+  // seconds while OpenCode is connected, and as soon as the apps have been looked at
+  function lookForRefusal() {
+    try {
+      const data = connected('opencode') ? profileOf('opencode', harnessEnv())?.paths.XDG_DATA_HOME : undefined
+      const plugins = data ? opencodePlugins(readJson(inHome('addons', 'opencode.json'))) : []
+      const before = runtimes.refusedSince('opencode')
+      // A refusal the log no longer shows still stands while It's file is as it was then: the
+      // line may only have gone past the part of the log that is read, and an older line that
+      // is still read must not take its place. The later of the two is the one that stands.
+      const found = data ? opencodeRefusedAt(plugins, [path.join(data, 'opencode', 'log')]) : undefined
+      const kept = data && before !== undefined && unchangedSince(plugins, before) ? before : undefined
+      const at = found === undefined ? kept : kept === undefined ? found : Math.max(found, kept)
+      if (!runtimes.refused('opencode', at)) return
+      // The site is told at once
+      say(
+        at === undefined
+          ? 'OpenCode no longer refuses It’s add-on'
+          : 'OpenCode refused to load It’s add-on, as its log says; its clicks wait, and its conversations are not reopened',
+      )
+      void report()
+    } catch {}
+  }
+  lookForRefusal()
+  const looksRefused = setInterval(lookForRefusal, REFUSED_EVERY_MS)
   // Said this often and no less: the site takes a machine that has been quiet for a few of these to be off
   const alive = setInterval(() => void report(), ALIVE.everyMs)
   // Whether this machine still fits the It it joined is asked for as long as this runs: that
@@ -4780,6 +4811,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   })
   clearInterval(tick)
   clearInterval(looksOpen)
+  clearInterval(looksRefused)
   clearInterval(beat)
   clearInterval(alive)
   clearTimeout(firstLook)
