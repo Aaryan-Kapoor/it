@@ -249,17 +249,73 @@ describe('the outbox', () => {
   })
 
   test('a click the page is told has failed is not kept to be sent later behind the person’s back', async () => {
-    const slow = backend(Array.from({ length: 10 }, () => refuse('rate_limited', { retryAfterMs: 250 })))
-    await expect(submit(slow.client, 'alice', 'page1', envelope('click-0003'))).rejects.toBeInstanceOf(ConvexError)
-    expect(slow.calls.length).toBe(4)
+    const full = backend(Array.from({ length: 10 }, () => refuse('limit', { retryAfterMs: 250 })))
+    await expect(submit(full.client, 'alice', 'page1', envelope('click-0003'))).rejects.toBeInstanceOf(ConvexError)
+    expect(full.calls.length).toBe(4)
     expect(stored()).toEqual([])
     const bad = backend([refuse('invalid')])
     await expect(submit(bad.client, 'alice', 'page1', envelope('click-0004'))).rejects.toBeInstanceOf(ConvexError)
     expect(stored()).toEqual([])
-    // Told to wait a long time: not waited for at all
-    const long = backend([refuse('rate_limited', { retryAfterMs: 60_000 })])
+    // Told to wait a long time for its agent: not waited for at all
+    const long = backend([refuse('limit', { retryAfterMs: 60_000 })])
     await expect(submit(long.client, 'alice', 'page1', envelope('click-0005'))).rejects.toBeInstanceOf(ConvexError)
     expect(long.calls.length).toBe(1)
+  })
+
+  test('told it came too fast, a click waits its turn as often as it is told to, and is sent', async () => {
+    const slow = backend([...Array.from({ length: 8 }, () => refuse('rate_limited', { retryAfterMs: 250 })), { actionId: 'late' }])
+    expect(await submit(slow.client, 'alice', 'page1', envelope('click-0050'))).toEqual({ actionId: 'late' })
+    expect(slow.calls.length).toBe(9)
+    expect(stored()).toEqual([])
+  })
+
+  test('clicks that come faster than It takes them are all sent, one at a time and in the order they were made, and not each sent again and again', async () => {
+    // It takes three at once, and then one each 200 milliseconds
+    let tokens = 3
+    let filled = Date.now()
+    const taken: string[] = []
+    let refused = 0
+    const mutation = vi.fn((fn: unknown, args: { envelope: Sent }) => {
+      if (getFunctionName(fn as never) === 'actions:replayGrant') return Promise.resolve({ until: Date.now() + 6 * 86400_000 })
+      tokens = Math.min(3, tokens + (Date.now() - filled) / 200)
+      filled = Date.now()
+      if (tokens < 1) {
+        refused++
+        return Promise.reject(refuse('rate_limited', { retryAfterMs: Math.ceil((1 - tokens) * 200) }))
+      }
+      tokens -= 1
+      taken.push(args.envelope.clientActionId)
+      return Promise.resolve({ actionId: args.envelope.clientActionId })
+    })
+    const client = { mutation, connectionState: () => ({ isWebSocketConnected: true }) } as never
+    const ids = Array.from({ length: 12 }, (_, i) => `click-01${String(i).padStart(2, '0')}`)
+    const sent = []
+    for (const id of ids) {
+      sent.push(submit(client, 'alice', 'page1', envelope(id)))
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    expect((await Promise.all(sent)).map((r) => r.actionId)).toEqual(ids)
+    expect(taken).toEqual(ids)
+    // Each click that waited was refused about once, and not once for each other click that waited with it
+    expect(refused).toBeLessThan(2 * ids.length)
+    expect(stored()).toEqual([])
+  })
+
+  test('a click that is refused and not kept is said in its page’s bar, and one kept for later is not', async () => {
+    const { refusedLately } = await import('./outbox')
+    const bad = backend([refuse('invalid')])
+    await expect(submit(bad.client, 'alice', 'page-said', envelope('click-0060'))).rejects.toBeInstanceOf(ConvexError)
+    expect(refusedLately('alice', 'page-said')).toMatchObject({ fast: 0, other: 1, why: 'invalid' })
+    expect(refusedLately('alice', 'another-page')).toBeNull()
+    expect(refusedLately('bob', 'page-said')).toBeNull()
+    // Refused while the page that sent it had gone: kept, and sent later, and nothing is said of it
+    const gone = backend([refuse('rate_limited', { retryAfterMs: 250 }), 'never'])
+    await expect(submit(gone.client, 'alice', 'page-kept', envelope('click-0061'), () => false)).rejects.toBeInstanceOf(ConvexError)
+    await new Promise((r) => setTimeout(r, 400))
+    expect(gone.calls.length).toBe(2)
+    expect(refusedLately('alice', 'page-kept')).toBeNull()
+    // And it is said for a while, and then not
+    expect(refusedLately('alice', 'page-said', Date.now() + 31_000)).toBeNull()
   })
 
   test('a click nobody ever answered is sent on that person’s next visit, and nobody else’s', async () => {
@@ -668,16 +724,19 @@ describe('the outbox', () => {
   })
 
   test('with far too many unanswered already, one more is refused and none is pushed out', async () => {
-    for (let i = 0; i < 100; i++) keep('alice', `old-${String(i).padStart(5, '0')}`)
-    await expect(submit(backend([]).client, 'alice', 'page1', envelope('click-0022'))).rejects.toThrow(/Too many/)
-    expect(stored().length).toBe(100)
+    for (let i = 0; i < 200; i++) keep('alice', `old-${String(i).padStart(5, '0')}`, Date.now() - 60_000, `page${i % 4}`)
+    await expect(submit(backend([]).client, 'alice', 'page9', envelope('click-0022'))).rejects.toThrow(/Too many/)
+    expect(stored().length).toBe(200)
     // Another person on the same browser is not affected by that
     outboxBelongsTo('bob')
     expect(await submit(backend([{ actionId: 'b1' }]).client, 'bob', 'page2', envelope('click-0023'))).toEqual({ actionId: 'b1' })
   })
 
   test('one page can hold only part of what the browser keeps, so it cannot crowd out the others', async () => {
-    for (let i = 0; i < 30; i++) keep('alice', `old-${String(i).padStart(5, '0')}`, Date.now() - 60_000, 'page1')
+    for (let i = 0; i < 99; i++) keep('alice', `old-${String(i).padStart(5, '0')}`, Date.now() - 60_000, 'page1')
+    // A page has room for a hundred, more than It takes from a page at once
+    expect(await submit(backend([{ actionId: 'p1' }]).client, 'alice', 'page1', envelope('click-0029'))).toEqual({ actionId: 'p1' })
+    keep('alice', 'old-00099', Date.now() - 60_000, 'page1')
     await expect(submit(backend([]).client, 'alice', 'page1', envelope('click-0030'))).rejects.toThrow(/Too many/)
     expect(await submit(backend([{ actionId: 'p2' }]).client, 'alice', 'page2', envelope('click-0031'))).toEqual({ actionId: 'p2' })
   })
