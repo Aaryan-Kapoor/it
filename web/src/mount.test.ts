@@ -800,20 +800,38 @@ describe('the frame around a page', () => {
     ])
   })
 
-  test('a page that asks for too much at once is told to slow down before the backend hears of it', async () => {
+  test('a page that asks for too much at once is told to slow down before the backend hears of it, and its bar is told too', async () => {
+    const { refusedLately } = await import('./outbox')
     const page = await show()
     await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
     const port = page.ports()[0]!
     const heard: any[] = []
     port.onmessage = (m) => heard.push(m.data)
-    for (let i = 0; i < 40; i++) port.postMessage(action(`click-1${String(i).padStart(3, '0')}`))
+    for (let i = 0; i < 100; i++) port.postMessage(action(`click-1${String(i).padStart(3, '0')}`))
     await act(() => tick(200))
     const results = heard.filter((m) => m.type === 'it:result')
-    expect(results.length).toBe(40)
-    expect(results.filter((m) => m.ok).length).toBeLessThan(25)
+    expect(results.length).toBe(100)
+    expect(results.filter((m) => m.ok).length).toBeLessThan(70)
     expect(results.filter((m) => !m.ok).every((m) => /too much at once/.test(m.error))).toBe(true)
     expect(submitted().length).toBe(results.filter((m) => m.ok).length)
+    expect(refusedLately('alice', 'page1')?.fast).toBe(results.filter((m) => !m.ok).length)
   })
+
+  test('sixty clicks made as fast as a person clicks are all taken by the frame', async () => {
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    const port = page.ports()[0]!
+    const heard: any[] = []
+    port.onmessage = (m) => heard.push(m.data)
+    // Ten a second for six seconds, as a person plays a pad
+    for (let i = 0; i < 60; i++) {
+      port.postMessage(action(`click-2${String(i).padStart(3, '0')}`))
+      await act(() => tick(100))
+    }
+    await act(() => tick(200))
+    const results = heard.filter((m) => m.type === 'it:result')
+    expect([results.length, results.filter((m) => m.ok).length]).toEqual([60, 60])
+  }, 20_000)
 })
 
 describe('fullscreen, which a page asks the site for', () => {
@@ -1371,6 +1389,21 @@ describe('players and maps the site hosts over a page', () => {
     })
     expect(submitted()).toEqual([])
     expect(asked('actions:replayGrant')).toEqual([])
+  })
+
+  test('an action the page asks after again is not counted in the bar as a click refused, which it was not, or was already', async () => {
+    const { refusedLately } = await import('./outbox')
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    const before = { ...(refusedLately('alice', 'page1') ?? { fast: 0, other: 0 }) }
+    const heard = await page.send(page.ports()[0]!, { ...action('never-0002'), again: true }, 200)
+    expect(heard.find((m) => m.type === 'it:result')).toMatchObject({ ok: false })
+    const after = refusedLately('alice', 'page1') ?? { fast: 0, other: 0 }
+    expect([after.fast, after.other]).toEqual([before.fast, before.other])
+    // And one refused when it is first sent is counted, once
+    const refused = await page.send(page.ports()[0]!, { ...action('x'), again: false }, 200)
+    expect(refused.find((m) => m.type === 'it:result')).toMatchObject({ ok: false })
+    expect(refusedLately('alice', 'page1')?.other).toBe(before.other + 1)
   })
 
   test('an action whose fate is not known here is told so when it is sent again, at once, and is never sent again from here, however long the browser would have waited for another tab first', async () => {

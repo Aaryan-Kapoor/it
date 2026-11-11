@@ -57,7 +57,7 @@ import {
   type Why,
   whileTheBrowserAsks,
 } from './media'
-import { onItsWay, outcomeOf, type Sent, settled, submit } from './outbox'
+import { noteLost, onItsWay, outcomeOf, SENDING_TOO_MUCH, type Sent, settled, submit } from './outbox'
 import { reportPage } from './presence'
 
 type Phase = { is: 'loading' } | { is: 'shown' } | { is: 'failed'; why: string }
@@ -65,6 +65,12 @@ const REMOUNT_EVERY_MS = 10_000
 /** A page that asks for more than this is told to slow down, without the backend hearing of it. */
 const BURST = 20
 const PER_SECOND = 5
+/**
+ * What it sends as actions is counted apart, and allowed more than a person clicks at their
+ * fastest, so that only a page sending by itself meets it.
+ */
+const ACTION_BURST = 60
+const ACTION_PER_SECOND = 15
 /**
  * What a page keeps for itself is counted apart, and allowed more: twice what the script in a
  * page sends at its fastest, which is one write each STORE_EVERY_MS, each with whatever was set
@@ -216,6 +222,8 @@ export function Mount({
     let answered = ''
     let tokens = BURST
     let filled = Date.now()
+    let actionTokens = ACTION_BURST
+    let actionFilled = Date.now()
     let storeTokens = STORE_BURST
     let storeFilled = Date.now()
     const timer = setTimeout(() => live && setPhase({ is: 'failed', why: 'The page did not load. Check the connection.' }), READY_MS)
@@ -590,6 +598,14 @@ export function Mount({
       tokens -= 1
       return true
     }
+    const actionAllowed = () => {
+      const now = Date.now()
+      actionTokens = Math.min(ACTION_BURST, actionTokens + (Math.max(0, now - actionFilled) / 1000) * ACTION_PER_SECOND)
+      actionFilled = now
+      if (actionTokens < 1) return false
+      actionTokens -= 1
+      return true
+    }
     /** Whether the page may keep something now, or else how long until it may. */
     const storeAllowed = (): number => {
       const now = Date.now()
@@ -750,13 +766,15 @@ export function Mount({
           return
         }
       }
+      /** Whether the page asks what became of an action it sent before, rather than sending a new one. */
+      let askedAgain = false
       try {
         // An action the page sends again is not new, and is never refused for coming too fast
         const known =
           message.type === 'it:action' ? ledger.get(typeof message.envelope?.clientActionId === 'string' ? message.envelope.clientActionId : '') : undefined
         const again = message.type === 'it:action' && message.again === true
-        if (message.type === 'it:action' && !known && !(again && forgot) && !allowed())
-          throw new Error('This page is sending too much at once. Try again in a moment.')
+        askedAgain = known !== undefined || again
+        if (message.type === 'it:action' && !known && !(again && forgot) && !actionAllowed()) throw new Error(SENDING_TOO_MUCH)
         if (message.type === 'it:action') {
           const e = message.envelope
           // The name of what a person types above a page is the site's own, and no page's to send under
@@ -835,6 +853,9 @@ export function Mount({
           toPage(from, { type: 'it:result', requestId, ok: true, revision })
         }
       } catch (err) {
+        // A click refused, whatever refused it, is said in the page's bar too, once: not again
+        // when the page asks what became of one it sent before, which was said then if it was lost
+        if (message.type === 'it:action' && !askedAgain) noteLost(user, artifactId, err)
         const said = refusal(err) as ReturnType<typeof refusal> & { retryAfterMs?: unknown }
         toPage(from, {
           type: 'it:result',

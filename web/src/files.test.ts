@@ -416,6 +416,49 @@ describe('a click with files', () => {
     )
   })
 
+  test('where this browser keeps no files, holds only so many bytes of them in the tab’s memory, and refuses one more past that at once', async () => {
+    const b = it()
+    keepBytesIn({ ...bytes, put: () => Promise.reject(new Error('no room')) })
+    // Their uploads never finish, so what they carry stays in the tab
+    vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
+    void submit(b.client, 'alice', 'page1', envelope('click-memory-1'), () => true, undefined, [sized(200 * MB, 'a.mov')])
+    await vi.waitFor(() => expect(unsaved('alice', 'page1')).toBe(1))
+    await expect(submit(b.client, 'alice', 'page1', envelope('click-memory-2'), () => true, undefined, [sized(100 * MB, 'b.mov')])).rejects.toThrow(
+      'Too many files are still waiting to be sent from this tab.',
+    )
+    expect(unsaved('alice', 'page1')).toBe(1)
+    // A click with no files is not held back by them
+    expect(await submit(b.client, 'alice', 'page1', envelope('click-memory-3'))).toEqual({ actionId: 'a1' })
+  })
+
+  test('clicks with files sent at once each take their place before their files are kept, so that together they cannot go past what a page may have waiting', async () => {
+    const b = it()
+    for (let i = 0; i < 98; i++)
+      localStorage.setItem(
+        `it.outbox.alice.page-race.old-${String(i).padStart(5, '0')}`,
+        JSON.stringify({ user: 'alice', artifactId: 'page-race', envelope: envelope(`old-${String(i).padStart(5, '0')}`), at: Date.now() - 60_000 }),
+      )
+    // The browser takes its time keeping each click's files
+    const slow = {
+      ...bytes,
+      put: (key: string, files: Blob[], room: { under: string; most: number }) => new Promise((r) => setTimeout(r, 50)).then(() => bytes.put(key, files, room)),
+    }
+    keepBytesIn(slow)
+    vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
+    const sent = ['click-race-1', 'click-race-2', 'click-race-3', 'click-race-4'].map((id) =>
+      Promise.race([
+        submit(b.client, 'alice', 'page-race', envelope(id), () => true, undefined, [photo(10)]).then(
+          () => 'sent',
+          (e: Error) => e.message,
+        ),
+        new Promise((resolve) => setTimeout(() => resolve('still on its way'), 1000)),
+      ]),
+    )
+    const said = await Promise.all(sent)
+    expect(said.filter((s) => s === 'still on its way')).toHaveLength(2)
+    expect(said.filter((s) => /too many are still waiting/.test(String(s)))).toHaveLength(2)
+  })
+
   test('has its files let go of with everything else when everything is erased, and a file left with no click goes after a while', async () => {
     const key = 'it.outbox.alice.page1.click-erased-1'
     await bytes.put(key, [photo(10)], ANY_ROOM)

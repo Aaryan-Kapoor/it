@@ -9,9 +9,12 @@ import { log } from './log'
 /** perMinute: how fast the bucket refills. burst: how much it holds. */
 const RULES = {
   // What a person does on pages. One page gets less than all the person's pages together, so a
-  // page that misbehaves cannot use up what every other page needs.
-  submitActionPage: { perMinute: 60, burst: 30 },
-  submitAction: { perMinute: 120, burst: 60 },
+  // page that misbehaves cannot use up what every other page needs. What a page takes at once is
+  // as many as a person makes in half a minute of quick play on a game or a pad, and the browser
+  // keeps what comes faster and sends it as this allows. What is taken over time stays low, since
+  // each click goes into the agent's conversation and a page that sends by itself is held to it.
+  submitActionPage: { perMinute: 60, burst: 120 },
+  submitAction: { perMinute: 120, burst: 240 },
   /** In kilobytes of click data, so that the largest clicks cannot be sent at the fastest rate. */
   actionKilobytes: { perMinute: 512, burst: 4096 },
   /** Clicks whose files are taken, by page, and the kilobytes of those files, by person: they are kept on the disk, and the largest are sent the least often. */

@@ -24,7 +24,21 @@ import { agentName, ago, api, dayOf, type Id, NOT_YET_REVOKED, navigate, refusal
 import { ownerOf } from './media'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
-import { dismissMessage, message, onItsWayUntil, outboxChanges, pendingMessage, refusedClick, thisSession, unsaved, unsent, watchOutbox } from './outbox'
+import {
+  dismissMessage,
+  message,
+  onItsWayUntil,
+  outboxChanges,
+  pendingMessage,
+  REFUSED_SAID_MS,
+  type Refused,
+  refusedClick,
+  refusedLately,
+  thisSession,
+  unsaved,
+  unsent,
+  watchOutbox,
+} from './outbox'
 import { holdPending } from './pending'
 import { Preview } from './preview'
 import { type PageConnection, reportedConnection } from './readiness'
@@ -494,6 +508,7 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
           </span>
         )}
         <RefusedClick user={user} artifactId={page.id} />
+        <RefusedLately user={user} artifactId={page.id} />
         {/* What became of what was done on the page is said aloud too, to whoever cannot see it change */}
         <span className="page-nav-said" role="status">
           {page.run ? (
@@ -636,6 +651,38 @@ function RefusedClick({ user, artifactId }: { user: string; artifactId: string }
       {refused}
     </span>
   ) : null
+}
+
+/**
+ * What was done on the page and refused, which the page was told and may not have said: so many
+ * clicks that came faster than It takes them, or one refused for another reason. Said for a while
+ * after the last of them, since what was refused is gone and the person may want to do it again.
+ */
+function RefusedLately({ user, artifactId }: { user: string; artifactId: string }) {
+  useSyncExternalStore(watchOutbox, outboxChanges)
+  const refused = refusedLately(user, artifactId)
+  // Gone by itself once the while has passed
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    if (!refused) return
+    const t = setTimeout(() => setTick((n) => n + 1), Math.max(0, refused.at + REFUSED_SAID_MS - Date.now()) + 50)
+    return () => clearTimeout(t)
+  }, [refused])
+  return refused ? (
+    <span className="status page-request-refused" data-tone="bad" role="alert">
+      {refusedSaid(refused)}
+    </span>
+  ) : null
+}
+/** What the bar says of clicks that were refused. */
+export function refusedSaid({ fast, other, why }: Pick<Refused, 'fast' | 'other' | 'why'>): string {
+  const clicks = (n: number) => (n === 1 ? 'A click' : `${n} clicks`)
+  const said: string[] = []
+  if (fast > 0)
+    said.push(`${clicks(fast)} on this ${NOUN.one} came faster than It can take ${fast === 1 ? 'it' : 'them'}, and ${fast === 1 ? 'was' : 'were'} not sent.`)
+  const was = other === 1 ? 'was' : 'were'
+  if (other > 0) said.push(`${fast > 0 ? `${other} more` : `${clicks(other)} on this ${NOUN.one}`} ${was} not sent: ${(why ?? '').slice(0, 200)}`)
+  return said.join(' ')
 }
 
 /** How long after something was done on a page it is still shown as under way, where nothing has come of it. */
