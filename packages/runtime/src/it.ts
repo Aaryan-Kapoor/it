@@ -7,6 +7,7 @@
 // down. The site decides who the person is.
 import {
   type ActionEnvelope,
+  type ActionProgress,
   CHANNEL_VERSION,
   isStoreKey,
   jsonText,
@@ -311,6 +312,31 @@ function receive(message: SiteToPage): void {
   } else if (message.type === 'it:recording') heard(message)
   else if (message.type === 'it:camera-frame' || message.type === 'it:camera-state') seen(message)
   else if (message.type === 'it:fullscreen') fullscreenSaid(message.on === true, message.enabled === true)
+  else if (message.type === 'it:progress') progressed(message.actions)
+}
+
+// Where the things done on the page have got to, where the site says: whether each was handed to
+// the agent's conversation, and what is known of the agent's turn for it. The site says it to a
+// page of It's own tour, and to no other, so on any other page nothing is ever heard here.
+let progress: { actions: ActionProgress[] } | null = null
+const progressHearers: ((said: { actions: ActionProgress[] }) => void)[] = []
+function progressed(actions: unknown): void {
+  if (!Array.isArray(actions)) return
+  // Only what is shaped as it is to be: a page is given nothing here that it would have to check
+  progress = {
+    actions: actions
+      .filter((a): a is ActionProgress => typeof a === 'object' && a !== null && typeof (a as ActionProgress).id === 'string')
+      .map((a) => ({ id: a.id, handed: a.handed === true, turn: a.turn === 'running' || a.turn === 'ended' ? a.turn : null })),
+  }
+  for (const hear of [...progressHearers]) tellProgress(hear)
+}
+function tellProgress(hear: (said: { actions: ActionProgress[] }) => void): void {
+  if (!progress) return
+  try {
+    hear(progress)
+  } catch {
+    console.error('[It] an onProgress handler threw')
+  }
 }
 
 // What the page keeps for itself (It.store). What is set within a moment goes to the site as
@@ -2138,6 +2164,20 @@ const api = {
     }
   },
   action,
+  /**
+   * Hears where the things done on the page have got to, each time the site says: for each of
+   * the last few, by the `id` that `It.action` resolved with, whether it was `handed` to the
+   * agent's conversation and what is known of the agent's `turn` for it. Only a page of It's own
+   * tour is told. Returns how to stop hearing.
+   */
+  onProgress(cb: (said: { actions: ActionProgress[] }) => void) {
+    progressHearers.push(cb)
+    if (progress) queueMicrotask(() => tellProgress(cb))
+    return () => {
+      const i = progressHearers.indexOf(cb)
+      if (i !== -1) progressHearers.splice(i, 1)
+    }
+  },
   record,
   photo,
   camera,

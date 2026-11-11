@@ -1034,6 +1034,40 @@ describe('the line that moves under a page’s bar', () => {
     expect(inHand([{ ...handed[0]!, outcome: 'failed' }], null, false, NOW, running)).toBe(false)
   })
 
+  test('the tour’s first page is told where what was done on it has got to, by what the bar goes by, and no other page is told anything', async () => {
+    await shown()
+    const { progressFor } = await import('./progress')
+    const at = NOW - 60_000
+    const running = { turn: { since: at + 2000, endedAt: null }, machineSeenAt: NOW - 20_000 }
+    const recent = [
+      { id: 'c', at: at + 9000, delivery: 'pending', outcome: null, handedAt: null },
+      { id: 'b', at, delivery: 'handed_off', outcome: 'running', handedAt: at + 1000 },
+      { id: 'a', at: at - 9000, delivery: 'handed_off', outcome: 'succeeded', handedAt: at - 8000 },
+    ]
+    // Not yet handed over; handed over with the agent's turn running; and answered, of which no turn is said
+    expect(progressFor('start', recent, running, NOW)).toEqual({
+      type: 'it:progress',
+      actions: [
+        { id: 'c', handed: false, turn: null },
+        { id: 'b', handed: true, turn: 'running' },
+        { id: 'a', handed: true, turn: null },
+      ],
+    })
+    // A turn that ended once the click had been handed over is said to have ended, and one whose machine has gone quiet is not said at all
+    expect(progressFor('start', [recent[1]!], { ...running, turn: { since: at + 2000, endedAt: at + 30_000 } }, NOW)?.actions).toEqual([
+      { id: 'b', handed: true, turn: 'ended' },
+    ])
+    expect(progressFor('start', [recent[1]!], { ...running, machineSeenAt: NOW - 10 * 60_000 }, NOW)?.actions).toEqual([{ id: 'b', handed: true, turn: null }])
+    expect(progressFor('start', [recent[1]!], undefined, NOW)?.actions).toEqual([{ id: 'b', handed: true, turn: null }])
+    // Only the newest few, since a part of the page waits on one at a time
+    const many = Array.from({ length: 30 }, (_, i) => ({ id: `n${i}`, at: at - i, delivery: 'handed_off', outcome: 'succeeded', handedAt: at }))
+    expect(progressFor('start', many, running, NOW)?.actions.map((a) => a.id)).toEqual(['n0', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7'])
+    // Nothing done yet is nothing to say, and a page that is not the tour's first is told nothing whatever was done on it
+    expect(progressFor('start', [], running, NOW)).toBeNull()
+    expect(progressFor('start', undefined, running, NOW)).toBeNull()
+    for (const tour of [null, undefined, 'menu', 'chess', '']) expect(progressFor(tour, recent, running, NOW)).toBeNull()
+  })
+
   test('stops when the turn ends, whether or not the page was changed, and not for a turn that ended before the click was handed over', async () => {
     await shown()
     const { inHand } = await import('./pages')

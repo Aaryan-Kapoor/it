@@ -41,6 +41,7 @@ import {
 } from './outbox'
 import { holdPending } from './pending'
 import { Preview } from './preview'
+import { progressFor } from './progress'
 import { type PageConnection, reportedConnection } from './readiness'
 import { MediaAllowed, MediaBar } from './recording'
 import { useSession } from './session'
@@ -430,14 +431,14 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
   // answered: shown as a line that moves under the bar, which is seen where the few words
   // beside the title are not
   const recent = useQuery(api.actions.forArtifact, page ? { artifactId: page.id as Id<'artifacts'> } : 'skip')
-  const underWay = page
-    ? inHand(recent, page.answeredAt ?? null, page.run !== null && page.run !== undefined, now, {
-        // Functions from before they said it, kept while this program's would not load, say nothing of a turn
-        turn: (page as { turn?: Turn | null }).turn ?? null,
-        machineSeenAt: page.machineSeenAt,
-        stoppedAt: page.stoppedAt,
-      })
-    : false
+  /** What is known of whether the page's agent is at work. Functions from before they said it, kept while this program's would not load, say nothing of a turn. */
+  const work: Work | undefined = page
+    ? { turn: (page as { turn?: Turn | null }).turn ?? null, machineSeenAt: page.machineSeenAt, stoppedAt: page.stoppedAt }
+    : undefined
+  const underWay = page ? inHand(recent, page.answeredAt ?? null, page.run !== null && page.run !== undefined, now, work) : false
+  // The tour's first page shows where what was done on it has got to, and is told what the bar goes by. As text, so that it is sent on only when it changes
+  const progress = page ? progressFor((page as { tour?: string | null }).tour, recent, work, now) : null
+  const progressSaid = progress ? JSON.stringify(progress) : null
   useEffect(() => {
     if (page) document.title = `${page.title} · It`
     return () => {
@@ -610,6 +611,7 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
           title={page.title}
           user={user}
           madeBy={{ agent: agentName(page.agent), machine: page.machine, owner: ownerOf(page) }}
+          progress={progressSaid}
           // Said of the version that failed, and of no other: a new version is a new page
           onFault={(message, agentTold) => setFault({ of: `${page.id}:${page.version}`, message, agentTold })}
         />
