@@ -1990,6 +1990,10 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
           stand.watching.get('machines:me')!(on)
           offered({ ...click(1), id: 'new-click' })
           await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'))
+          // Said on the page whole, with what to do: It keeps 300 characters of it
+          const why = String(stand.calls.find((c) => c.name === 'machines:wakeFailed')!.args.why)
+          expect(why.length).toBeLessThanOrEqual(300)
+          expect(why).toMatch(/`it runs clear` there$/)
           expect(stand.calls.filter((c) => c.name === 'machines:runBegan')).toEqual([])
           expect(await local('/runs', { method: 'POST', body: { clear: true, of: ['codex:thread-1'] } })).toEqual({ cleared: 1 })
         } else {

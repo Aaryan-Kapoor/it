@@ -2467,7 +2467,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     // (Seen to once, before this turn's message was written: not again here, where settling
     // it would make a note that the message could no longer carry)
     if (unsettled.has(key) || pendingStops.has(key))
-      return `a turn of it from before may still be running on its machine, and could not be checked on or ended. It is reopened again once It sees that nothing of that turn is left, which it looks for every minute, or once that machine has been started again. To let it be reopened sooner, run \`it runs\` there, look that nothing of it is running, and run \`it runs clear\`${listsProcesses() ? '' : `. ${NO_PS}`}`
+      return `a turn of it from before may still be running on its machine, and could not be checked on or ended. It is reopened once nothing of that turn is left, which It looks for every minute. To reopen it sooner, look that nothing of it runs there, then run \`it runs clear\` there${listsProcesses() ? '' : `. ${NO_PS}`}`
     if (closing || unfitting) return NOT_STARTED
     const stop = new AbortController()
     reopenedNow.set(key, stop)
