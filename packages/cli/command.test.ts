@@ -5912,7 +5912,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     const said = (await atTerminal(m, ['network', 'on'])).shown.split('\n')
     // Where there is an address to open, the tailnet is said to be the way for a phone, in a line of its own before the last; the internet is never said to reach It
     const PHONE =
-      /^On shared Wi-Fi, such as a venue’s or a café’s, anyone on it can open It’s pairing screen, .* For a phone, `it network tailscale` is better: /
+      /^On shared Wi-Fi, such as a venue’s or a café’s, this is plain http that others on the network can read, .* Pair phones and screens there over Tailscale with `it network tailscale`, .* or over your phone’s own hotspot\.$/
     const on = said.filter((line) => !PHONE.test(line))
     expect(said.length - on.length).toBe(said.some((line) => /^ {2}http/.test(line)) ? 1 : 0)
     expect(said.join('\n')).not.toContain('reached from the internet')

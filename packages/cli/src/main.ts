@@ -2738,9 +2738,14 @@ const PHONE_ON_NETWORK = [
   'everyone there. Shared Wi-Fi also often keeps devices from reaching each other, and',
   'then the address does not open at all. For a phone, `it network tailscale` is better.',
 ]
-/** The same, said in sentences, after the addresses `it network` gives. */
+/**
+ * The same, said in sentences, after the addresses `it network` gives, with what matters most on
+ * shared Wi-Fi first: what passes over it in plain http can be read by others there, the pairing
+ * code and a paired browser's session among it, so a phone or a screen is paired over the tailnet
+ * or the phone's own hotspot.
+ */
 const PHONE_SAID =
-  'On shared Wi-Fi, such as a venue’s or a café’s, anyone on it can open It’s pairing screen, and such networks often keep devices from reaching each other, so that the address does not open at all. For a phone, `it network tailscale` is better: only your own devices that are signed in to Tailscale can reach It, wherever they are.'
+  'On shared Wi-Fi, such as a venue’s or a café’s, this is plain http that others on the network can read, anyone on it can open It’s pairing screen, and the address often does not open at all. Pair phones and screens there over Tailscale with `it network tailscale`, which only your own devices that are signed in to it can reach, or over your phone’s own hotspot.'
 
 /**
  * `it network on` lets anyone on the network this machine is on reach It, at its private
