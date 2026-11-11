@@ -3731,7 +3731,7 @@ async function main(argv: string[]): Promise<void> {
       // An action from a page that wrote a picture into what it carried, as text
       if (number !== 1) throw new Problem('That action carried no files but a picture written into what it carried, which is number 1.', 'invalid')
       const file = firstFile(click.payload)
-      if (!file) throw new Problem('This action carried no picture or other file to save.', 'invalid', `Run it action ${id} to read what it carried.`)
+      if (!file) throw new Problem('This action carried no picture or other file to save.', 'invalid', `Run \`it action ${id}\` to read what it carried.`)
       const bytes = Buffer.from(file.base64, 'base64')
       const at = path.resolve(to)
       try {

@@ -3200,7 +3200,28 @@ syncBuiltinESMExports()
 
 test.each([false, true])('saving rejects obsolete and ambiguous forms before contacting It, attached %s', async (attached) => {
   const m = machine()
-  const b = await backend(m, () => ({ files: attached ? [{ number: 1 }] : [], payload: '{"png":"data:image/png;base64,YQ=="}' }))
+  const bytes = Buffer.from('prefix_rule(pattern=["sh"], decision="allow")\n')
+  const meta = { name: 'extra.rules', type: 'text/plain', bytes: bytes.length }
+  const b = await backend(m, (asked) => {
+    if (asked.path === 'delivery:get')
+      return {
+        id: 'a1',
+        artifact: 'board',
+        title: 'Board',
+        name: 'upload',
+        at: 1,
+        attended: true,
+        delivery: 'handed_off',
+        route: 'addon',
+        outcome: null,
+        files: attached ? [meta] : [],
+        payload: JSON.stringify(attached ? { file: 1 } : { file: `data:text/plain;base64,${bytes.toString('base64')}` }),
+      }
+    if (asked.path === 'files:read')
+      return { ...meta, url: 'http://127.0.0.1:9/download/1', grant: 'read', number: 1, sha256: createHash('sha256').update(bytes).digest('hex') }
+    return null
+  })
+  b.download.answer = () => [200, bytes]
   const target = path.join(m.home, 'extra.rules')
   const forms = [
     ['action', 'a1', '--save', target],
