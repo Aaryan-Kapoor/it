@@ -8103,7 +8103,9 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
 
     // In a thread of T3 Code, which the connector says holds the conversation, Codex never asks: nothing is to be approved or started again
     const inThread = await joining({ CODEX_THREAD_ID: 'thread-1' }, (url) =>
-      url.startsWith('/route?harness=codex&session=thread-1') ? JSON.stringify({ connected: true, listening: false, runtime: 'inactive', thread: 'held' }) : '{"ok":true}',
+      url.startsWith('/route?harness=codex&session=thread-1')
+        ? JSON.stringify({ connected: true, listening: false, runtime: 'inactive', thread: 'held' })
+        : '{"ok":true}',
     )
     const held = printed(inThread.ran)
     expect(held.tell).toBe(`Tell the person this in your next message, word for word: “${T3_CODEX}”`)
