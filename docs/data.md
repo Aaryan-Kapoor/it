@@ -66,9 +66,309 @@ A newer version of It may bring a newer backend program, newer functions, or bot
 - **Functions that do not fit the data are not forced onto it.** If what the database holds does not fit the functions of the newer version, It keeps the functions that were loaded before and goes on serving with them, and everything you had is still there. Only the functions are the earlier version's. The site, the `it` command and the rest of the service are the newer version's, and where the two do not fit each other, something on the site or a command may fail. `it status` says so before anything else, and its JSON has it under `database` as `behind` and in its `hint`. The version of It that those functions came with starts on the data again and puts the two in step, as long as the newer It did not also bring a newer backend program: where it did, that program has run on the data, and the older It is refused as the next point but one says.
 - **A newer backend program is fetched before it is started.** A version of It that runs a newer release of the backend program fetches it the first time it starts, so that start has to reach the program's releases, or the place `IT_BACKEND_RELEASES` names. Where it cannot, It does not start: `offline`.
 - **Functions that stay are held to their port.** What a backend believes of its own address is fixed with its functions. So where the newer functions could not be loaded and It was also given another port than the one the functions in the database were loaded for, it stops: `port_changed`. Put the port back with `IT_PORT`, and it says which.
-- **An older It does not start on data that is a newer one's.** The data is a newer It's once that It's functions are in it, or once a newer backend program has run on it, and from then an older It refuses it with `backend_older` and names the version to install. A loading of a newer It's functions that was cut short counts as done, since it may have been. To go back to the older It, put back the copy from before the newer one changed the database. A copy holds the database and not the files of your pages, which are kept beside it and are not copied: a page that was deleted, or versions of one that were let go, since the copy was made come back in the list with their files gone.
+- **An older It does not start on data that is a newer one's.** The data is a newer It's once that It's functions are in it, or once a newer backend program has run on it, and from then an older It refuses it with `backend_older` and names the version to install. A loading of a newer It's functions that was cut short counts as done, since it may have been. The way on is a newer It still. As a last resort, the copy from before the newer one changed the database can be put back, and [Going back to an older It](#going-back-to-an-older-it) says how and what is lost.
 - **A copy made soon after everything was erased does not last.** A copy of the database that It makes before the backend program has run for about two and a half hours since everything was erased still holds what was erased, as the database's own file does for that long. It removes such a copy once that time is over, whether or not a later copy exists, so the way back that copy gave lasts only until then. The time is counted while the backend program runs, which is the only time it clears anything out of its file, and erasing everything again starts it again.
 - **A newer It that changes nothing in the database leaves no copy.** A copy is made before a newer backend program and before other functions. A newer version of It that brings neither makes none, since it changes nothing there. The data is that newer It's all the same, so the older It refuses it, and for that case there is no copy to put back: the way on is the newer It.
+
+## Going back to an older It
+
+When a newer It does not work with your data, the way on is a release newer still. Install the newest one, with the install command or `it upgrade`, and say what went wrong at the project's issues: a fix is made in a newer release, which then runs on the data as it stands, with nothing lost. Going back to the older It is a last resort, for when no newer release helps and you cannot wait for one. It works by putting back the copy that the newer It kept before it changed anything, and it loses everything that was done since that copy was made.
+
+### What a copy holds
+
+Each copy is a folder in `~/.it/backend/`, or in `backend/` in the folder `IT_HOME` names, whose name begins with `before-`. It holds everything the backend needs to be as it was, taken together while nothing had the database open:
+
+- `db.sqlite3`, and `db.sqlite3-wal` and `db.sqlite3-shm` where they were there, which are the database: your pages, their state and the record of what was done on them, actions, displays, paired browsers and machines, and the rest of It's records.
+- `storage/`, the files the backend program keeps for that database.
+- `data.json`, which is what It notes of the database. It says which version of It's functions are in it, under `functionsOf`, and which release of the backend program last ran on it. This is what lets the older It start on the copy, because it says that the data is that older It's.
+- `copy.json`, which says which copy this is and when it was made, under `made`, in milliseconds since 1970. It belongs to the copy and is not put back.
+
+A copy does not hold the files of your pages, which are in `content/`, nor the records of the part of It that serves them, in `content-data/`, nor It's settings in `service.json` and this machine's identity. Those stay where they are, and the older It goes on with them.
+
+It keeps the two copies made last. To choose between them, open `data.json` inside each and look at `it`, which is the version of It that last ran on that data, and with it the release of the backend program that version runs. The copy to put back is the one whose `it` is the version you want to go back to, and that exact version is the one to install. Going by `functionsOf` alone is not enough. A newer It whose functions the data refused runs its own backend program on the data all the same, while `functionsOf` still names the older version. A later copy can then say `functionsOf` is the older version while its `it` is the newer one, and the older It refuses that copy with `backend_older`. Where the copy's `data.json` has `loading` or `unsettled` in it, that is a loading of functions the same version began and never saw the end of, and it loads them again when it starts.
+
+### What is lost
+
+Everything that was done after the copy was made is gone once it is back, because the database is the one from before the upgrade. That is every page published, every version published, every change to a page's state, every click and answer, every display or machine paired, every name changed and every setting changed on the site, from the moment the newer It first started until you stopped it. It cannot be brought across, since only the newer It reads the newer data.
+
+Some of what comes back is not quite as it was. A page that was deleted since the upgrade, and earlier versions of a page that were let go since, come back in the list, but their files were removed from `content/`, so they do not open. That includes a page on which ten or more versions were published since, whose version from before the upgrade has been let go. A browser or machine whose pairing you ended since the upgrade is paired again once the copy is back, so end it again. A browser paired since the upgrade, and a machine that joined since, have to be paired or joined again.
+
+A display that was signed out since the upgrade does not open pages once the copy is back. The part of It that serves pages remembers the sign-out for about a day, in `content-data/`, and refuses the display's older sign-out number until then. That record is part of what keeps a page from being opened by a display that was signed out, so leave it in place. To use the display again sooner, forget it on the site's Displays page and pair that browser again, which makes it a new display that has never been signed out.
+
+The newer data is not thrown away. Before the copy is put back, the whole of It's folder is copied aside as it stands, into a folder beside it whose name ends in `-after-upgrade`, so that you can go forward to it again with the newer It.
+
+### Putting the copy back
+
+The lines below work on It's folder: the one `IT_HOME` names, where that is set in the terminal you paste them into, and `~/.it` otherwise. If your It keeps its folder somewhere else and `IT_HOME` is not set in that terminal, set it there first, as in `export IT_HOME="/path/to/its/folder"` on Linux and macOS, or `$env:IT_HOME = 'D:\path\to\its\folder'` in PowerShell. A relative `IT_HOME` is taken from the folder the terminal is in, as It takes it, so paste the lines where you would run `it`. Where It's folder is a link to another folder, the lines work on the folder it leads to, and keep the copy beside that one. The disk needs room for a second copy of the whole folder, files of pages included.
+
+On Linux and macOS:
+
+1. Where you started It yourself with `it serve`, stop that with Ctrl-C.
+2. Put the name of the copy's folder after `copy=` in these lines, and paste them into a terminal that runs bash, zsh or sh. In fish, type `sh` first. They look first at what they are about to do, then stop the background service and keep it from starting again by itself, copy It's folder aside, and put the copy in place of the database. They stop at the first command that fails, and they delete nothing. They change nothing where the copy is not there, It is still running, a folder kept aside or a copy cut short by an earlier run is there already, or a part of It's folder or of the copy that matters is a link, since a copy of a link would not hold what it leads to. They copy It's folder into a new folder of their own, and give that folder its name only once the copy is whole. The database files the copy replaces are moved into a new folder in `backend/` whose name begins with `replaced.`, and once the older It runs you can delete that folder yourself.
+
+   ```sh
+   (
+     set -e
+     live=$(cd -P "${IT_HOME:-$HOME/.it}" && pwd -P)
+     saved="$live-after-upgrade"
+     copy=before-...
+     from="$live/backend/$copy"
+     if [ ! -f "$from/data.json" ]; then echo "There is no copy named $copy in $live/backend, so nothing was changed." >&2; exit 1; fi
+     parent=$(dirname "$live")
+     name=$(basename "$saved")
+     left=$(ls -A "$parent" | while IFS= read -r entry; do case $entry in ("$name" | "$name".part.*) echo "$parent/$entry" ;; esac; done)
+     if [ -n "$left" ]; then echo "$left is there already, so nothing was changed. Look at what is in it, remove it yourself if you do not need it, and run these lines again." >&2; exit 1; fi
+     for entry in "$live/backend" "$live/content" "$live/content-data" "$from"; do
+       if [ -L "$entry" ]; then echo "$entry is a link, so a copy would not hold what it leads to, and nothing was changed." >&2; exit 1; fi
+     done
+     for file in db.sqlite3 db.sqlite3-wal db.sqlite3-shm db.sqlite3-journal data.json storage; do
+       for entry in "$live/backend/$file" "$from/$file"; do
+         if [ -L "$entry" ]; then echo "$entry is a link, so a copy would not hold what it leads to, and nothing was changed." >&2; exit 1; fi
+       done
+     done
+     it service uninstall
+     trap 'if [ $? -ne 0 ]; then echo "The background service is stopped and not registered. Once the folder is as you want it, run it setup to start it again." >&2; fi' EXIT
+     if [ -e "$live/backend/lock" ]; then echo "It is still running, so nothing in its folder was changed. Stop it, and run these lines again." >&2; exit 1; fi
+     part=$(mktemp -d "$saved.part.XXXXXX")
+     echo "Copying It's folder to $part."
+     cp -Rp "$live"/. "$part"
+     for file in db.sqlite3 db.sqlite3-wal db.sqlite3-shm db.sqlite3-journal data.json; do
+       if [ -e "$live/backend/$file" ]; then
+         if [ ! -f "$part/backend/$file" ] || [ -L "$part/backend/$file" ] || [ "$part/backend/$file" -ef "$live/backend/$file" ]; then echo "$part is not a whole copy of its own, so nothing in It's folder was changed. Remove it yourself." >&2; exit 1; fi
+       fi
+     done
+     mv "$part" "$saved"
+     echo "It's folder as it was is kept in $saved."
+     aside=$(mktemp -d "$live/backend/replaced.XXXXXX")
+     for file in db.sqlite3 db.sqlite3-wal db.sqlite3-shm db.sqlite3-journal data.json storage; do
+       if [ -e "$live/backend/$file" ]; then mv "$live/backend/$file" "$aside/"; fi
+     done
+     echo "What the copy replaced is in $aside."
+     for file in db.sqlite3 db.sqlite3-wal db.sqlite3-shm db.sqlite3-journal data.json; do
+       if [ -e "$from/$file" ]; then cp -p "$from/$file" "$live/backend/"; fi
+     done
+     cp -Rp "$from/storage" "$live/backend/"
+     echo "The copy is in place."
+   )
+   ```
+
+   The last thing they say is "The copy is in place." Where they stop before that, nothing after the command that failed has run, and the message says why.
+
+   - If they stopped before stopping the background service, nothing was changed, the service is as it was, and the message says what to put right before you run the lines again.
+   - If they stopped at `it service uninstall` with "The background service on this machine runs It from another folder, and is left as it is.", nothing was changed, and [When the background service is another folder's](#when-the-background-service-is-another-folders) says what to do.
+   - If they stopped after stopping it, the last line says that the service is stopped and not registered. Do what the points below say for It's folder, and then either run the lines again or, to stay on the newer It for now, run `it setup` to start the service again.
+
+   - If they stopped before saying that It's folder as it was is kept, It's folder has not been changed. Where they had begun copying it, they named the folder they were copying it to, whose name ends in `-after-upgrade.part.` and a few letters, and a copy that was cut short is left there. Look at it and remove it yourself, put right what the message says, and run the lines again. The lines never remove such a folder themselves, and refuse to begin while one is there, since they cannot tell what it holds.
+   - If they stopped after saying so, put the kept folder back first, with the lines in [Putting the kept folder back](#putting-the-kept-folder-back). Then run these lines again.
+   - If It ended without tidying up after itself, the lines say that it is still running when it is not. Start it once with `it serve`, stop it with Ctrl-C, and run them again.
+3. Install the older version, naming its release, as `v0.1.36` is named here:
+
+   ```sh
+   curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/download/v0.1.36/install.sh | IT_VERSION=v0.1.36 sh
+   ```
+
+   Run at a terminal, the script goes on into `it setup`, which registers the background service again and starts it. Where it does not, run `it setup` yourself.
+
+On Windows, in PowerShell, which may be Windows PowerShell 5.1:
+
+1. Where you started It yourself with `it serve`, stop that with Ctrl-C.
+2. Put the name of the copy's folder between the quotes after `$copy =`, and paste the whole block at once. The braces make it stop at the first error, where separate lines would go on past it. It does what the lines for Linux and macOS do, and stops and changes nothing in the same cases.
+
+   ```powershell
+   & {
+     $ErrorActionPreference = 'Stop'
+     $copy = 'before-...'
+     function Get-RealPath($path) {
+       $item = Get-Item -LiteralPath $path -Force
+       while ($item.LinkType) {
+         $path = [IO.Path]::GetFullPath([IO.Path]::Combine((Split-Path -Parent $item.FullName), @($item.Target)[0]))
+         $item = Get-Item -LiteralPath $path -Force
+       }
+       $item.FullName
+     }
+     function Get-Entry($path) {
+       Get-ChildItem -LiteralPath (Split-Path -Parent $path) -Force | Where-Object { $_.Name -eq (Split-Path -Leaf $path) }
+     }
+     function Test-Link($entry) {
+       ([bool]$entry.LinkType) -or (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+     }
+     $given = $env:IT_HOME
+     $folder = if ($given) { [IO.Path]::GetFullPath([IO.Path]::Combine((Get-Location -PSProvider FileSystem).ProviderPath, $given)) } else { Join-Path $HOME '.it' }
+     Push-Location $env:TEMP
+     try {
+       if ($given) { $env:IT_HOME = $folder }
+       $live = Get-RealPath $folder
+       $saved = "$live-after-upgrade"
+       $backend = Join-Path $live 'backend'
+       $from = Join-Path $backend $copy
+       if (-not (Test-Path -LiteralPath (Join-Path $from 'data.json') -PathType Leaf)) { throw "There is no copy named $copy in $backend, so nothing was changed." }
+       $name = Split-Path -Leaf $saved
+       $left = @(Get-ChildItem -LiteralPath (Split-Path -Parent $live) -Force | Where-Object { $_.Name -eq $name -or $_.Name -like "$name.part.*" })
+       if ($left.Count -gt 0) { throw "$($left[0].FullName) is there already, so nothing was changed. Look at what is in it, remove it yourself if you do not need it, and run this again." }
+       $watched = @(Get-ChildItem -LiteralPath $live -Force | Where-Object { $_.Name -in 'backend', 'content', 'content-data' })
+       $watched += @(Get-ChildItem -LiteralPath $backend -Force | Where-Object { $_.Name -like 'db.sqlite3*' -or $_.Name -in 'data.json', 'storage', $copy })
+       $watched += @(Get-ChildItem -LiteralPath $from -Force | Where-Object { $_.Name -like 'db.sqlite3*' -or $_.Name -in 'data.json', 'storage' })
+       foreach ($entry in $watched) {
+         if (Test-Link $entry) { throw "$($entry.FullName) is a link, so a copy would not hold what it leads to, and nothing was changed." }
+       }
+       it service uninstall
+       if ($LASTEXITCODE -ne 0) { throw 'The background service could not be stopped, so nothing was changed.' }
+       try {
+         if (Get-Entry (Join-Path $backend 'lock')) { throw 'It is still running, so nothing in its folder was changed. Stop it, and run this again.' }
+         $part = "$saved.part." + [guid]::NewGuid().ToString('N')
+         New-Item -ItemType Directory -Path $part | Out-Null
+         "Copying It's folder to $part."
+         Get-ChildItem -LiteralPath $live -Force | Copy-Item -Destination $part -Recurse -Force
+         foreach ($file in @(Get-ChildItem -LiteralPath $backend -Force | Where-Object { $_.Name -like 'db.sqlite3*' -or $_.Name -eq 'data.json' } | ForEach-Object { $_.Name })) {
+           $copied = Get-Entry (Join-Path (Join-Path $part 'backend') $file)
+           if (-not $copied -or $copied.PSIsContainer -or (Test-Link $copied)) { throw "$part is not a whole copy of its own, so nothing in It's folder was changed. Remove it yourself." }
+         }
+         [IO.Directory]::Move($part, $saved)
+         "It's folder as it was is kept in $saved."
+         $aside = Join-Path $backend ('replaced.' + [guid]::NewGuid().ToString('N'))
+         New-Item -ItemType Directory -Path $aside | Out-Null
+         foreach ($item in @(Get-ChildItem -LiteralPath $backend -Force | Where-Object { $_.Name -like 'db.sqlite3*' -or $_.Name -in 'data.json', 'storage' })) {
+           $to = Join-Path $aside $item.Name
+           if ($item.PSIsContainer) { [IO.Directory]::Move($item.FullName, $to) } else { [IO.File]::Move($item.FullName, $to) }
+         }
+         "What the copy replaced is in $aside."
+         Get-ChildItem -LiteralPath $from -Force | Where-Object { $_.Name -like 'db.sqlite3*' -or $_.Name -eq 'data.json' } | Copy-Item -Destination $backend
+         Copy-Item -LiteralPath (Join-Path $from 'storage') -Destination $backend -Recurse
+         'The copy is in place.'
+       } catch {
+         throw "$($_.Exception.Message) The background service is stopped and not registered. Once the folder is as you want it, run it setup to start it again."
+       }
+     } finally {
+       $env:IT_HOME = $given
+       Pop-Location
+     }
+   }
+   ```
+
+   Where it stops before saying "The copy is in place.", do as the points for Linux and macOS say, with the PowerShell block in [Putting the kept folder back](#putting-the-kept-folder-back). The block leaves the PowerShell window as it found it, in the same folder and with `IT_HOME` as it was. If it stops with "The background service could not be stopped, so nothing was changed.", read the line above that, and [When the background service is another folder's](#when-the-background-service-is-another-folders) where that line says the service runs It from another folder.
+3. Install the older version, naming its release, as `v0.1.36` is named here:
+
+   ```powershell
+   $env:IT_VERSION = 'v0.1.36'; irm https://github.com/Aaryan-Kapoor/it/releases/download/v0.1.36/install.ps1 | iex
+   ```
+
+Once the older It is running, `it status` says that the database is at the older version, with nothing under `behind`, and your pages are there as they were before the upgrade. Where the newer It brought a newer backend program, it removed the older one, so the older It fetches its own again the first time it starts, and that start has to reach GitHub or the place `IT_BACKEND_RELEASES` names. The older It goes on telling you that the newer version is out. Installing that same version again changes the data again in the same way, so wait for a release that fixes what went wrong, or turn the reminder off with `it updates off`.
+
+### When the background service is another folder's
+
+A computer account has one background service for It, and it belongs to one It folder. Someone who keeps a second It folder, and whose background service was last set up from the other one, meets a known limit here. `it service uninstall` then refuses with "The background service on this machine runs It from another folder, and is left as it is.", because it only ever takes away the service of the folder it is run for. On Linux and macOS the lines stop there, with that sentence. On Windows the block prints that sentence and then stops with "The background service could not be stopped, so nothing was changed." Nothing was changed in either case, and the folder you meant to put back is as it was. The second sentence on Windows only means that the service was not stopped, and the line above it says why. The same holds for the lines and the block that put the kept folder back.
+
+The message does not say which folder the service belongs to. Most often it is the folder your It really uses, and the terminal you pasted into was not told so. Set `IT_HOME` to that folder, as the start of this section shows, and run the lines again.
+
+If you do mean to put the copy back in this folder, the service has to be taken from the other one first. Run `it service uninstall` for the other folder, by naming it for that one command: `IT_HOME="/path/to/the/other/folder" it service uninstall` on Linux and macOS, or `$was = $env:IT_HOME; $env:IT_HOME = 'D:\path\to\the\other\folder'; it service uninstall; $env:IT_HOME = $was` in PowerShell. That stops the other It and keeps it from starting by itself, and nothing else of it is touched. Then run the lines again. Setting up the older It in step 3 gives the service to this folder. To give it back to the other folder later, run `it setup` with `IT_HOME` set to that folder, which takes it from this one in turn.
+
+### Putting the kept folder back
+
+These lines put the folder that was kept aside back in the place of It's folder, whole. They are how you go forward to the newer data again, and how you undo the steps above where they stopped partway. The folder they replace is not deleted: it is moved beside the kept one, under a name that ends in `-replaced`. Each folder is moved whole or not at all. If the kept folder then cannot be moved into place, they move It's folder back and say so, and if even that fails, they say where each folder is and how to move It's folder back once nothing has a file open in it.
+
+Going forward this way loses everything that was published, changed or deleted while you were on the older It, because the folder comes back whole, with the newer It's database and the files of its pages together. Putting back only the database would not do: a page published again on the older It can have written its files where the newer database expects others, and the newer It would then show the older bytes under the newer version.
+
+On Linux and macOS, stop It with Ctrl-C where you started it with `it serve`, and paste these lines in the same way as the ones above:
+
+```sh
+(
+  set -e
+  live=$(cd -P "${IT_HOME:-$HOME/.it}" && pwd -P)
+  saved="$live-after-upgrade"
+  if [ ! -d "$saved" ] || [ -L "$saved" ]; then echo "There is no folder $saved to put back, so nothing was changed." >&2; exit 1; fi
+  if [ -e "$live-replaced" ] || [ -L "$live-replaced" ]; then echo "$live-replaced is there already, so nothing was changed." >&2; exit 1; fi
+  disk() { stat -c %d "$1" 2>/dev/null || stat -f %d "$1"; }
+  quoted() { printf "'"; printf '%s' "$1" | sed "s/'/'\\\\''/g"; printf "'"; }
+  for folder in "$live" "$saved"; do
+    if [ "$(disk "$folder")" != "$(disk "$(dirname "$live")")" ]; then echo "$folder is on a disk of its own, apart from the folder it is in, so it cannot be moved whole, and nothing was changed. Move the folders yourself." >&2; exit 1; fi
+  done
+  it service uninstall
+  trap 'if [ $? -ne 0 ]; then echo "The background service is stopped and not registered. Once the folder is as you want it, run it setup to start it again." >&2; fi' EXIT
+  if [ -e "$live/backend/lock" ]; then echo "It is still running, so nothing in its folder was changed. Stop it, and run these lines again." >&2; exit 1; fi
+  cd /
+  if ! mv "$live" "$live-replaced"; then echo "It's folder could not be moved aside, so nothing in it was changed. Close whatever has a file open in $live, and run these lines again." >&2; exit 1; fi
+  if ! mv "$saved" "$live"; then
+    if [ -e "$live" ] || [ -L "$live" ]; then echo "The kept folder could not be moved into place, and something is now at $live, so It's folder was left at $live-replaced and the kept folder at $saved. Look at what is at $live before you move anything." >&2
+    elif mv "$live-replaced" "$live"; then echo "The kept folder could not be moved into place, so It's folder was moved back and nothing in it was changed. Close whatever has a file open in $saved, and run these lines again." >&2
+    else printf '%s\n' "The kept folder could not be moved into place, and It's folder could not be moved back either. It's folder is now $live-replaced, and the kept folder is still $saved. Once nothing has a file open in it, move It's folder back with: mv $(quoted "$live-replaced") $(quoted "$live")" >&2; fi
+    exit 1
+  fi
+  echo "It's folder is the one that was kept, and the one it replaced is in $live-replaced."
+)
+```
+
+On Windows, stop It with Ctrl-C where you started it with `it serve`, and paste this block whole:
+
+```powershell
+& {
+  $ErrorActionPreference = 'Stop'
+  function Get-RealPath($path) {
+    $item = Get-Item -LiteralPath $path -Force
+    while ($item.LinkType) {
+      $path = [IO.Path]::GetFullPath([IO.Path]::Combine((Split-Path -Parent $item.FullName), @($item.Target)[0]))
+      $item = Get-Item -LiteralPath $path -Force
+    }
+    $item.FullName
+  }
+  function Get-Entry($path) {
+    Get-ChildItem -LiteralPath (Split-Path -Parent $path) -Force | Where-Object { $_.Name -eq (Split-Path -Leaf $path) }
+  }
+  function Test-Link($entry) {
+    ([bool]$entry.LinkType) -or (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+  }
+  $given = $env:IT_HOME
+  $folder = if ($given) { [IO.Path]::GetFullPath([IO.Path]::Combine((Get-Location -PSProvider FileSystem).ProviderPath, $given)) } else { Join-Path $HOME '.it' }
+  Push-Location $env:TEMP
+  try {
+    if ($given) { $env:IT_HOME = $folder }
+    $live = Get-RealPath $folder
+    $saved = "$live-after-upgrade"
+    $replaced = "$live-replaced"
+    $kept = Get-Entry $saved
+    if (-not $kept -or -not $kept.PSIsContainer -or (Test-Link $kept)) { throw "There is no folder $saved to put back, so nothing was changed." }
+    if (Get-Entry $replaced) { throw "$replaced is there already, so nothing was changed." }
+    it service uninstall
+    if ($LASTEXITCODE -ne 0) { throw 'The background service could not be stopped, so nothing was changed.' }
+    try {
+      if (Get-Entry (Join-Path $live 'backend\lock')) { throw 'It is still running, so nothing in its folder was changed. Stop it, and run this again.' }
+      try { [IO.Directory]::Move($live, $replaced) } catch { throw "It's folder could not be moved aside ($($_.Exception.Message)), so nothing in it was changed. Close whatever has a file open in $live, and run this again." }
+      try {
+        [IO.Directory]::Move($saved, $live)
+      } catch {
+        $why = $_.Exception.Message
+        if (Get-Entry $live) { throw "The kept folder could not be moved into place ($why), and something is now at $live, so It's folder was left at $replaced and the kept folder at $saved. Look at what is at $live before you move anything." }
+        try { [IO.Directory]::Move($replaced, $live) } catch {
+          $back = "[IO.Directory]::Move('{0}', '{1}')" -f $replaced.Replace("'", "''"), $live.Replace("'", "''")
+          throw "The kept folder could not be moved into place ($why), and It's folder could not be moved back either. It's folder is now $replaced, and the kept folder is still $saved. Once nothing has a file open in it, move It's folder back with: $back"
+        }
+        throw "The kept folder could not be moved into place ($why), so It's folder was moved back and nothing in it was changed. Close whatever has a file open in $saved, and run this again."
+      }
+      "It's folder is the one that was kept, and the one it replaced is in $replaced."
+    } catch {
+      throw "$($_.Exception.Message) The background service is stopped and not registered. Once the folder is as you want it, run it setup to start it again."
+    }
+  } finally {
+    $env:IT_HOME = $given
+    Pop-Location
+  }
+}
+```
+
+To go forward, start the newer It from the folder that is back, which registers the background service again. On Linux and macOS:
+
+```sh
+"${IT_HOME:-$HOME/.it}/bin/it" setup
+```
+
+On Windows:
+
+```powershell
+& (Join-Path $(if ($env:IT_HOME) { $env:IT_HOME } else { Join-Path $HOME '.it' }) 'bin\it.exe') setup
+```
+
+When you no longer need the folder whose name ends in `-replaced`, or the one whose name ends in `-after-upgrade` once you have settled on the older It, delete it yourself. It never removes a folder it did not make.
+
+The steps on Linux are tested as they are written here, by a test of It's own, which pastes them into sh, bash and zsh. It keeps a copy as an upgrade does, loads newer functions with fields the older ones do not know and writes data that uses them, and runs the lines above unchanged: once where the background service cannot be stopped, once where It's folder cannot be copied whole, once more to see that the copy cut short is refused and left as it is, once to put the copy back, once more to see that a second run refuses and changes nothing, and once where It's folder is reached through a link in a folder with a space in its name. It then starts the older It on the copy, opens the page that was there, pairs again a display that was signed out since the upgrade, and puts the kept folder back to find the newer pages as they were. It also picks between two copies by the rule above, sees the lines refuse a folder whose stored files or whose database's journal are a link, refuse a copy that is not there before the background service is touched, and say how to start the service again where It is found still running, runs them with a relative `IT_HOME`, and sees the folders fail to move: It's folder held where it is, the kept folder failing so that It's folder is moved back, the kept folder moved only in part so that It's folder is left aside rather than moved into what was left, and both left where the lines say. The steps on macOS and Windows, and installing an older release from GitHub, are not run by that test.
 
 ## How long things are kept
 
