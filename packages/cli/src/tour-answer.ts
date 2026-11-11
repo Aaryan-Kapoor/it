@@ -5,10 +5,10 @@
 // An agent on a slow model pays for every command it runs and for everything it has to work
 // out. So `it tour answer` takes the action's id and the answer alone: which part of the page
 // the action came from and which request it waits on are read from the action itself, the
-// answer is set under that part in the page's state, the action is acknowledged, the picture
-// It saved for it is taken away, and, where what the person does next does not arrive in the
-// conversation by itself, the command waits for it and prints it. `it tour next` is that wait
-// alone.
+// answer is put under that part in the page's state in place of the answer before it, the
+// action is acknowledged, the picture It saved for it is taken away, and, where what the person
+// does next does not arrive in the conversation by itself, the command waits for it and prints
+// it. `it tour next` is that wait alone.
 import { lstatSync, readdirSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { parseJson, TOUR } from '@it/protocol'
@@ -111,10 +111,25 @@ export function keepPictureFor(
   void keepPicture(c, folder).catch(() => {})
 }
 
+const plain = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x)
 /**
- * Answers an action of the tour's first page: sets `answer` under the part the action came from,
- * with the request the action waits on, and acknowledges the action. With no answer, as for an
- * action that waits for none, it is acknowledged alone.
+ * What, merged into `was` as the state merges a patch, leaves `now` and nothing else: each name
+ * `was` has and `now` has not is taken away, at every depth. `now` comes from JSON, so a `null`
+ * in it is a value taken away, as it is in any patch.
+ */
+export function replacing(was: unknown, now: unknown): unknown {
+  if (!plain(now) || !plain(was)) return now
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(was)) if (!Object.hasOwn(now, key)) out[key] = null
+  for (const [key, value] of Object.entries(now)) out[key] = replacing(was[key], value)
+  return out
+}
+
+/**
+ * Answers an action of the tour's first page: puts `answer` under the part the action came from,
+ * with the request the action waits on, in place of whatever an earlier answer left there, and
+ * acknowledges the action. With no answer, as for an action that waits for none, it is
+ * acknowledged alone.
  */
 export async function answerAction(id: string, answer: Record<string, unknown> | undefined): Promise<{ part?: string; request?: string; revision?: number }> {
   const c = await call<Carried>('query', api.delivery.get, { id })
@@ -134,8 +149,27 @@ export async function answerAction(id: string, answer: Record<string, unknown> |
         'It needs no answer. Run `it tour answer` with its id alone to acknowledge it.',
       )
     // The request is the action's own, whatever the answer says of one: the page draws only the answer to the request it waits on
-    const patch = { [part]: { ...answer, ...(request ? { request } : {}) } }
-    revision = (await call<{ revision?: number }>('mutation', api.state.patch, { slug: START_SLUG, patch: JSON.stringify(patch) }))?.revision
+    const whole = { ...answer, ...(request ? { request } : {}) }
+    // The answer to a request is the whole answer: nothing an earlier answer said stays under it,
+    // to be read as part of this one. So the part's object as it is now is read, and the patch
+    // takes away what is not in this answer, held to the revision it was read at. Where the state
+    // changed in between, it is read again
+    for (let tries = 0; ; tries++) {
+      const now = await call<{ json: string; revision: number }>('query', api.state.get, { slug: START_SLUG })
+      const was = (parseJson(now?.json ?? '{}') as Record<string, unknown> | null)?.[part]
+      try {
+        revision = (
+          await call<{ revision?: number }>('mutation', api.state.patch, {
+            slug: START_SLUG,
+            patch: JSON.stringify({ [part]: replacing(was, whole) }),
+            ...(typeof now?.revision === 'number' ? { baseRevision: now.revision } : {}),
+          })
+        )?.revision
+        break
+      } catch (err) {
+        if (tries >= 4 || (err as { code?: string })?.code !== 'conflict') throw err
+      }
+    }
   }
   // Acknowledged as `it ack` does it. The answer is on the page by now, and stands whatever becomes of this
   await call('mutation', api.delivery.handedOff, { id, route: 'manual' })

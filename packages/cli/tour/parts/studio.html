@@ -608,8 +608,7 @@ Shell.part("studio", (my) => {
     chosen = null;
     p.el.setAttribute("data-tag", LABEL[n] + " · " + w.wish);
     p.el.classList.add("studio-on", "studio-asked");
-    // The words of the last answer are kept beside what is asked, so that they are never taken for the words of this one
-    pending = { kind: "point", piece: n, wish: w.wish, key: w.key, change: w.change, was: my.answers().text };
+    pending = { kind: "point", piece: n, wish: w.wish, key: w.key, change: w.change };
     hold(true);
     box.did(DID[w.wish]);
     var data = { piece: n, wish: w.wish, try: w.change }, page = {};
@@ -631,7 +630,7 @@ Shell.part("studio", (my) => {
     if (q.key === "picture") { v = SCENES.indexOf(got.picture) >= 0 && got.picture !== scene ? got.picture : q.change.picture; art.setAttribute("data-picture", scene = v); }
     if (q.key === "show") p.show = got.show === true;
     // A piece is given other words only where the answer has words of its own for it: the page writes none
-    v = q.key === "text" && got.text !== q.was ? tidy(got.text, MOST[n]) : "";
+    v = q.key === "text" ? tidy(got.text, MOST[n]) : "";
     if (!p.show) {
       // It goes, and then the page closes up over where it was
       p.el.classList.add("studio-gone");

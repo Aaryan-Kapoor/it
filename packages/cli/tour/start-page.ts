@@ -145,6 +145,13 @@ export async function opened(given: Record<string, unknown> = {}, before: (w: an
       for (const fn of listeners) fn()
       await settled()
     },
+    /** The agent answers in one part, as `it tour answer` does: what it gives takes the place of whatever was under the part's name. */
+    async answer(part: string, answer: Record<string, unknown>) {
+      It.state = { ...It.state, [part]: answer }
+      It.revision++
+      for (const fn of listeners) fn()
+      await settled()
+    },
     /** Moves the clock on, running whatever comes due, and what that sets in turn. */
     async advance(ms: number) {
       const until = now + ms

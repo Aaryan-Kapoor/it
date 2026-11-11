@@ -674,8 +674,7 @@ Shell.part("drums", (my) => {
     if (!heldByTab) { held = -1; if (lit >= 0) see(Math.floor(lit / BAR)); }
     // A second bar is asked for as a loop of two, and the pads go to two only when the answer comes
     var loop = a.k === "trade" ? MOST : steps, id = newId(), fits = fitting(a, loop);
-    // What the state held before this was asked, so that a tempo or a swing left out of the answer is not taken for one given
-    req = { id: id, ask: a.k, steps: loop, fits: fits, was: holders().map((h) => ({ bpm: seen(h, "bpm"), swing: seen(h, "swing") })), answered: false, back: false, taken: null };
+    req = { id: id, ask: a.k, steps: loop, answered: false, back: false, taken: null };
     asked = true;
     box.did(a.did());
     box.sending();
@@ -719,12 +718,9 @@ Shell.part("drums", (my) => {
     // A part that is left out is the part as it stands
     var first = !req.answered, said = [], was = theirs, part = got.pattern === undefined ? null : read(got.pattern, req.steps);
     req.answered = true;
-    // A tempo or a swing counts where it is new since the ask, or is the one the ask was offered, and is within what the faders reach
-    var given = (name, low, high) => {
-      var at = seen(got, name), v = within(got[name], low, high);
-      return v !== null && (at !== req.was[which][name] || got[name] === req.fits[name]) ? v : null;
-    };
-    var tempo = given("bpm", SLOWEST, FASTEST), lilt = given("swing", 0, LILT), heard = false;
+    // A tempo or a swing is taken where the answer gives one within what the faders reach. The answer is the whole of what
+    // the agent said to this ask, so one left out is one not changed
+    var tempo = within(got.bpm, SLOWEST, FASTEST), lilt = within(got.swing, 0, LILT), heard = false;
     if (tempo !== null && tempo !== bpm) { setTempo(tempo, true); said.push("set the tempo to " + tempo); heard = true; }
     if (lilt !== null && lilt !== swing) { setSwing(lilt, true); said.push("set the swing to " + lilt); heard = true; }
     if (part) {

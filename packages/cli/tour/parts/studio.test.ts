@@ -125,7 +125,7 @@ describe('the studio', () => {
       picks[mood] = asked.data.pick
       // The mood stays with the next colour
       await asked.accept()
-      await page.set({ studio: { request: asked.data.request, say: 'There.' } })
+      await page.answer('studio', { request: asked.data.request, say: 'There.' })
       expect(dragged(page, 200, 0.5).data).toMatchObject({ mood, colour_is: 'a soft sky blue' })
       page.close()
     }
@@ -183,7 +183,7 @@ describe('the studio', () => {
       page.to('studio')
       const asked = dragged(page, 0, 0.9)
       await asked.accept()
-      await page.set({ studio: { request: asked.data.request, ...wrong, headline: ['no'], line: { no: 1 }, say: 'There.' } })
+      await page.answer('studio', { request: asked.data.request, ...wrong, headline: ['no'], line: { no: 1 }, say: 'There.' })
       const { pick } = asked.data
       expect(made(page), JSON.stringify(wrong)).toEqual([pick.type, pick.shape, pick.picture])
       expect(colour(page, 'paper')).toBe(asked.data.palettes[pick.palette][0])
@@ -253,7 +253,7 @@ describe('the studio', () => {
         // Each is drawn in its turn, and the page's own colours for it are held to the same
         const name = names[n++ % names.length]!
         await asked.accept()
-        await page.set({ studio: { request: asked.data.request, palette: name, say: 'x' } })
+        await page.answer('studio', { request: asked.data.request, palette: name, say: 'x' })
         for (const role of ['paper', 'ink', 'accent', 'on', 'second', 'on2', 'tint', 'loud', 'shade', 'deep', 'dusk', 'pale'])
           expect(colour(page, role), role).toMatch(HEX)
         expect(apart(colour(page, 'on'), colour(page, 'accent')), `${name} at ${degrees}, ${out}`).toBeGreaterThanOrEqual(4.5)
@@ -298,7 +298,7 @@ describe('the studio', () => {
       piece(page, 'headline').getAttribute('data-size'),
     ]).toEqual([true, 'headline · bigger', '2'])
     await asked.accept()
-    await page.set({ studio: { request: asked.data.request, size: 4, say: 'As big as it goes.' } })
+    await page.answer('studio', { request: asked.data.request, size: 4, say: 'As big as it goes.' })
     expect([piece(page, 'headline').getAttribute('data-size'), page.said('studio'), waits(page)]).toEqual(['4', 'As big as it goes.', false])
     // It is that piece alone, and it says who changed it
     for (const other of ['name', 'line', 'button', 'date', 'acts', 'picture']) expect(piece(page, other).getAttribute('data-size'), other).toBe('2')
@@ -316,7 +316,7 @@ describe('the studio', () => {
     const answer = async (name: string, word: string, given: Record<string, unknown>) => {
       const asked = wished(page, name, word)
       await asked.accept()
-      await page.set({ studio: { request: asked.data.request, say: 'Done.', ...given } })
+      await page.answer('studio', { request: asked.data.request, say: 'Done.', ...given })
       return asked
     }
     // Calmer, and then louder once it is as calm as it goes
@@ -373,7 +373,7 @@ describe('the studio', () => {
     const answer = async (name: string, word: string, given: Record<string, unknown>) => {
       const asked = wished(page, name, word)
       await asked.accept()
-      await page.set({ studio: { request: asked.data.request, say: 'Done.', ...given } })
+      await page.answer('studio', { request: asked.data.request, say: 'Done.', ...given })
     }
     // A size that is none of the page's steps, or the size the piece has already, is the next step up
     for (const [name, size] of Object.entries({ name: 9, headline: 2.5, line: '4', acts: null, date: 2 })) {
@@ -417,15 +417,15 @@ describe('the studio', () => {
     expect([waits(page), art(page).getAttribute('data-skin')]).toEqual([false, 'draft'])
     expect(page.$('#studio-wash').style.clipPath).toMatch(/^circle\(0% at /)
     const second = dragged(page, 210, 0.9)
-    await page.set({ studio: { request: first.data.request, palette: 'night', headline: 'Late.', say: 'Late.' } })
+    await page.answer('studio', { request: first.data.request, palette: 'night', headline: 'Late.', say: 'Late.' })
     expect([art(page).getAttribute('data-skin'), words(page, 'headline'), page.said('studio')]).toEqual(['draft', DRAFT, ''])
     // The answer to this one comes before the page hears that It took it
-    await page.set({ studio: { request: second.data.request, palette: 'tint', headline: 'In time.', say: 'In time.' } })
+    await page.answer('studio', { request: second.data.request, palette: 'tint', headline: 'In time.', say: 'In time.' })
     expect(art(page).getAttribute('data-skin')).toBe('draft')
     await second.accept()
     expect([words(page, 'headline'), page.said('studio'), colour(page, 'paper')]).toEqual(['In time.', 'In time.', second.data.palettes.tint[0]])
     // And it is drawn once only
-    await page.set({ studio: { request: second.data.request, palette: 'night', headline: 'Again.', say: 'Again.' } })
+    await page.answer('studio', { request: second.data.request, palette: 'night', headline: 'Again.', say: 'Again.' })
     expect([words(page, 'headline'), colour(page, 'paper')]).toEqual(['In time.', second.data.palettes.tint[0]])
     page.close()
   })
@@ -439,7 +439,7 @@ describe('the studio', () => {
     await page.advance(SLOW)
     expect([waits(page), piece(page, 'headline').classList.contains('studio-asked')]).toEqual([false, false])
     await page.advance(5000)
-    await page.set({ studio: { request: asked.data.request, size: 4, say: 'Late, and here.' } })
+    await page.answer('studio', { request: asked.data.request, size: 4, say: 'Late, and here.' })
     expect([piece(page, 'headline').getAttribute('data-size'), page.said('studio')]).toEqual(['4', 'Late, and here.'])
     expect(page.state('studio')).toBe('Claude Code answered in 45.0 s')
     // The same, but the person is choosing another colour when it comes
@@ -447,7 +447,7 @@ describe('the studio', () => {
     await slow.accept()
     await page.advance(SLOW)
     pointer(page, page.$('#studio-wheel'), 'pointerdown', 400, 100)
-    await page.set({ studio: { request: slow.data.request, size: 4, say: 'Too late.' } })
+    await page.answer('studio', { request: slow.data.request, size: 4, say: 'Too late.' })
     expect([piece(page, 'line').getAttribute('data-size'), page.said('studio')]).toEqual(['2', 'Late, and here.'])
     page.close()
   })
@@ -459,7 +459,7 @@ describe('the studio', () => {
     await asked.refuse()
     expect(page.state('studio')).toBe('It did not take that. Do it again.')
     expect(waits(page)).toBe(false)
-    await page.set({ studio: { request: asked.data.request, palette: 'night', headline: 'No.', say: 'No.' } })
+    await page.answer('studio', { request: asked.data.request, palette: 'night', headline: 'No.', say: 'No.' })
     expect([art(page).getAttribute('data-skin'), words(page, 'headline'), page.said('studio')]).toEqual(['draft', DRAFT, ''])
     expect(dragged(page, 40, 0.9).data.request).not.toBe(asked.data.request)
     page.close()
@@ -475,7 +475,7 @@ describe('the studio', () => {
     expect(page.sent).toHaveLength(1)
     expect([page.$('#studio-ask').hidden, page.$('[data-mood="bold"]').disabled]).toEqual([true, true])
     await asked.accept()
-    await page.set({ studio: { request: asked.data.request, say: 'There.' } })
+    await page.answer('studio', { request: asked.data.request, say: 'There.' })
     expect(page.$('[data-mood="bold"]').disabled).toBe(false)
     page.close()
   })
@@ -525,7 +525,7 @@ describe('the studio', () => {
     await asked.accept()
     page.$('#studio-again').click()
     expect([waits(page), page.read('studio').stage]).toEqual([false, 'idle'])
-    await page.set({ studio: { request: asked.data.request, palette: 'night', headline: 'After.', say: 'After.' } })
+    await page.answer('studio', { request: asked.data.request, palette: 'night', headline: 'After.', say: 'After.' })
     await page.advance(SLOW * 2)
     expect([art(page).getAttribute('data-skin'), words(page, 'headline'), page.said('studio'), page.read('studio').stage]).toEqual(['draft', DRAFT, '', 'idle'])
     page.close()
@@ -567,7 +567,7 @@ describe('the studio', () => {
     key(wheel, 'Enter')
     const asked = page.sentOf('design').at(-1)!
     await asked.accept()
-    await page.set({ studio: { request: asked.data.request, say: 'There.' } })
+    await page.answer('studio', { request: asked.data.request, say: 'There.' })
     // Every piece is a button, and Escape puts the words away
     for (const name of ['name', 'headline', 'line', 'button', 'date', 'acts', 'picture'])
       expect([piece(page, name).tagName, piece(page, name).getAttribute('aria-label')]).toEqual([

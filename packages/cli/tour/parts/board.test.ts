@@ -229,7 +229,7 @@ describe('the whiteboard', () => {
     page.close()
   })
 
-  test('a hint that the state still holds from the last marking is not written beside a tick the agent gave no hint with', async () => {
+  test('a tick the agent gave no hint with has no hint beside it, though the marking before it had one', async () => {
     const page = await opened({}, canvas(PICTURE))
     page.to('board')
     written(page, [
@@ -238,12 +238,11 @@ describe('the whiteboard', () => {
     ])
     const wrong = await checked(page)
     await wrong.accept()
-    await page.set({ board: { request: wrong.data.request, read: '1', right: false, answer: '144', hint: '12 × 10 + 12 × 2', say: 'Not quite.' } })
+    await page.answer('board', { request: wrong.data.request, read: '1', right: false, answer: '144', hint: '12 × 10 + 12 × 2', say: 'Not quite.' })
     expect(drawn(page)).toEqual(['ring', 'arrow', 'head', 'right', 'hint'])
     const right = await checked(page)
     await right.accept()
-    await page.set({ board: { request: right.data.request, read: '144', right: true, say: 'Right.' } })
-    expect(page.w.It.state.board.hint).toBe('12 × 10 + 12 × 2')
+    await page.answer('board', { request: right.data.request, read: '144', right: true, say: 'Right.' })
     expect(drawn(page)).toEqual(['tick', 'star'])
     page.close()
   })
@@ -441,7 +440,7 @@ describe('the whiteboard', () => {
     ])
     const unread = await checked(page)
     await unread.accept()
-    await page.set({ board: { request: unread.data.request, blind: true, say: 'I cannot look at pictures.' } })
+    await page.answer('board', { request: unread.data.request, blind: true, say: 'I cannot look at pictures.' })
     typed(page, ' 144  ')
     expect(page.$('#board-said').textContent).toBe('144')
     expect(page.$('#board-said').getAttribute('fill')).toBe('#2450c8')
@@ -453,9 +452,9 @@ describe('the whiteboard', () => {
     expect(page.you('board')).toBe('typed an answer')
     expect(page.$('#board-typed').disabled).toBe(true)
     await sent.accept()
-    // The state goes on saying `blind` under an answer that does not say it again, as `it tour answer` merges it in
-    await page.set({ board: { request: sent.data.request, read: '144', right: true, hint: 'that is it', say: 'Right: 144 square metres.' } })
-    expect(page.w.It.state.board.blind).toBe(true)
+    // The answer to what was typed takes the place of the one that said it could not look, as `it tour answer` puts it
+    await page.answer('board', { request: sent.data.request, read: '144', right: true, hint: 'that is it', say: 'Right: 144 square metres.' })
+    expect('blind' in page.w.It.state.board).toBe(false)
     expect(page.errors).toEqual([])
     expect(drawn(page)).toEqual(['tick', 'star', 'hint'])
     // Nothing was read from a picture, so nothing is said to have been

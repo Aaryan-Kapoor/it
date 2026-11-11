@@ -400,9 +400,6 @@ Shell.part("board", (my) => {
   // tray. Taking them off also stops those that have not come yet, so that none is drawn on a board that was cleared or
   // written on since. `playing` is the marks that are on their way, and `kept` those that came while the part was not shown
   var marking = 0, playing = null, kept = null, clips = 0;
-  // What the last check sent: whether it was typed, and what the agent's last answer said, which stays in the state under
-  // whatever the next one does not say again
-  var last = { typed: false, was: {} };
   var live = typeof window.requestAnimationFrame === "function" && typeof document.createElementNS(Shell.SVG, "path").getTotalLength === "function";
   function rest() { hand.hidden = true; hand.classList.add("board-lying"); hand.classList.remove("board-up"); theirPen.classList.remove("board-out"); }
   function clean() { marking++; playing = kept = null; rest(); marks.textContent = ""; }
@@ -564,8 +561,6 @@ Shell.part("board", (my) => {
     used.push({ x: L.plot[0] - sx - 8, y: L.plot[1] - sy - 8, w: L.plot[2] + 16, h: L.plot[2] * 1.22 + L.label + 16 });
     var steps = [], near = [], cx = b.x + b.w / 2, cy = b.y + b.h / 2, low, size = L.write;
     var read = Shell.tidy(got.read, 16), hint = Shell.tidy(got.hint, 44);
-    // A hint in the very words of the last one, under the other verdict, is the last one's
-    if (hint && got.hint === last.was.hint && typeof last.was.right === "boolean" && (got.right === true) !== (last.was.right === true)) hint = "";
     if (read && !typed) make("title", {}, marks).textContent = my.agent + " read this as " + read;
     if (got.right === true) {
       var t = clamp(b.h, 64, 118);
@@ -609,10 +604,9 @@ Shell.part("board", (my) => {
   var asker = my.asker((got) => {
     clean();
     busy = false;
-    // An agent that cannot look at pictures says so, and marks nothing: its sentence is shown, the board is left as the
-    // person wrote it, and from then on they may type their answer under it. Once it has said so, the state goes on
-    // saying so under its later answers, so an answer to something typed that says whether it is right is a marking
-    if (got.blind === true && !(last.typed && typeof got.right === "boolean")) {
+    // An agent that cannot look at pictures says so, and marks nothing, whatever else it says: its sentence is shown, the
+    // board is left as the person wrote it, and from then on they may type their answer under it
+    if (got.blind === true) {
       typeRow.hidden = false;
       my.line("Type your answer under the board, and press Check it. {agent} marks what you typed.");
     } else marked(got);
@@ -627,7 +621,6 @@ Shell.part("board", (my) => {
     ready();
     box.sending(began);
     // A typed answer goes as it is, with no picture: the agent marks it as it would one it had read
-    last = { typed: !!typed, was: my.answers() };
     if (typed) {
       box.did("typed an answer");
       asker.send("checked", { answer: ANSWER, typed: typed, saved: null, question: QUESTION, sum: SUM, working: WORKING, png: null, strokes: [] }, began);

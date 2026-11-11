@@ -7885,6 +7885,7 @@ describe('whether what the person does arrives by itself, as a page’s command 
           attended: true,
           session: null,
         }
+      if (fn === 'state:get') return { json: JSON.stringify({ board: { blind: true, say: 'Earlier.' } }), revision: 3 }
       if (fn === 'state:patch') return { revision: 4 }
       if (fn === 'delivery:handedOff') return { already: false, at: 1, harness: 'claude-code' }
       return null
@@ -7902,11 +7903,13 @@ describe('whether what the person does arrives by itself, as a page’s command 
         answered: 'board',
         next: 'End your turn. What the person does next arrives in this conversation by itself, as a message that begins [It].',
       })
-      expect(b.asked.map((x) => x.path)).toEqual(['delivery:get', 'state:patch', 'delivery:handedOff', 'delivery:settle'])
-      const patched = b.asked[1]!.args
+      expect(b.asked.map((x) => x.path)).toEqual(['delivery:get', 'state:get', 'state:patch', 'delivery:handedOff', 'delivery:settle'])
+      const patched = b.asked[2]!.args
       expect(patched.slug).toBe('tour-start')
-      expect(JSON.parse(String(patched.patch))).toEqual({ board: { read: '144', right: true, say: 'Right.', request } })
-      expect(b.asked[3]!.args).toEqual({ id: 'action-1', outcome: 'succeeded' })
+      // In place of the answer before it, at the revision it was read at
+      expect(JSON.parse(String(patched.patch))).toEqual({ board: { blind: null, read: '144', right: true, say: 'Right.', request } })
+      expect(patched.baseRevision).toBe(3)
+      expect(b.asked[4]!.args).toEqual({ id: 'action-1', outcome: 'succeeded' })
       expect([existsSync(path.join(folder, `.it-tour-${request}.png`)), readFileSync(path.join(folder, 'sheet.png'), 'utf8')]).toEqual([false, 'theirs'])
 
       // On standard input, as a here-document gives it, no apostrophe or quote in the agent's words ends anything

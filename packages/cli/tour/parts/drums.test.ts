@@ -289,7 +289,7 @@ describe('more to make music with than four drums', () => {
       .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] - b[1]))
       .map(([lane, step]) => `${lane}:${step}`)
   /** The agent answers the last thing sent, as `it tour answer` does: its answer beside the request. */
-  const answered = (page: Page, answer: Record<string, unknown>) => page.set({ drums: { ...answer, request: page.sent.at(-1)!.data.request } })
+  const answered = (page: Page, answer: Record<string, unknown>) => page.answer('drums', { ...answer, request: page.sent.at(-1)!.data.request })
   /** A beat of one kick, sent, taken by It and answered with a hat. */
   const begun = async () => {
     const page = await drums()
@@ -506,7 +506,7 @@ describe('more to make music with than four drums', () => {
     expect(page.sent).toHaveLength(sent)
     expect(shown(page)).toEqual(['124', '20'])
     expect(page.$('#drums-tempo-box').classList.contains('theirs')).toBe(false)
-    // The state still holds the tempo of the earlier answer, since an answer is merged into what is there. It is not taken for one given now
+    // An answer that leaves the tempo and the swing out changes neither
     page.$('[data-ask="more"]').click()
     const more = page.sent.at(-1)!
     expect([more.data.bpm, more.data.swing]).toEqual([124, 20])

@@ -3,6 +3,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { deepMerge } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 
@@ -12,6 +13,9 @@ const stand = vi.hoisted(() => ({
   saved: [] as { id: string; number: number; to: string }[],
   save: null as null | ((to: string) => void),
   failAck: false,
+  state: {} as Record<string, unknown>,
+  revision: 6,
+  clashes: 0,
 }))
 vi.mock('./src/lib', async (original) => ({
   ...(await original<typeof import('./src/lib')>()),
@@ -19,7 +23,17 @@ vi.mock('./src/lib', async (original) => ({
     const name = getFunctionName(fn)
     stand.calls.push({ name, args })
     if (name === 'delivery:get') return stand.action
-    if (name === 'state:patch') return { revision: 7 }
+    if (name === 'state:get') return { json: JSON.stringify(stand.state), revision: stand.revision }
+    if (name === 'state:patch') {
+      // Held to the revision it was read at, as the backend holds it, and refused as a clash a set number of times
+      if (stand.clashes > 0) {
+        stand.clashes--
+        stand.revision++
+        throw Object.assign(new Error('The state changed since you read it.'), { code: 'conflict' })
+      }
+      if (args.baseRevision !== stand.revision) throw Object.assign(new Error('The state changed since you read it.'), { code: 'conflict' })
+      return { revision: 7 }
+    }
     if (name === 'delivery:handedOff' && stand.failAck) throw new Error('offline')
     return null
   },
@@ -33,7 +47,7 @@ vi.mock('./src/files', () => ({
   },
 }))
 
-import { answerAction, askedBy, dropPicture, dropPictures, keepPicture, keepPictureFor, pictureName, START_SLUG } from './src/tour-answer'
+import { answerAction, askedBy, replacing, dropPicture, dropPictures, keepPicture, keepPictureFor, pictureName, START_SLUG } from './src/tour-answer'
 
 const REQUEST = 'ab'.repeat(16)
 const PNG = [{ name: 'sheet.png', type: 'image/png', bytes: 2048 }]
@@ -47,6 +61,9 @@ afterEach(() => {
   stand.calls.length = stand.saved.length = 0
   stand.action = stand.save = null
   stand.failAck = false
+  stand.state = {}
+  stand.revision = 6
+  stand.clashes = 0
 })
 const flush = async () => {
   for (let i = 0; i < 20; i++) await Promise.resolve()
@@ -67,19 +84,47 @@ test('an answer is set under the action’s own part with the action’s own req
   stand.action = action({ part: 'room', request: REQUEST })
   const done = await answerAction('act1', { armchair: [419, 309], lamp: true, say: 'There.', request: 'someone-elses' })
   expect(done).toEqual({ part: 'room', request: REQUEST, revision: 7 })
-  expect(stand.calls.map((c) => c.name)).toEqual(['delivery:get', 'state:patch', 'delivery:handedOff', 'delivery:settle'])
-  const patched = stand.calls[1]!.args
+  expect(stand.calls.map((c) => c.name)).toEqual(['delivery:get', 'state:get', 'state:patch', 'delivery:handedOff', 'delivery:settle'])
+  const patched = stand.calls[2]!.args
   expect(patched.slug).toBe('tour-start')
   expect(JSON.parse(patched.patch)).toEqual({ room: { armchair: [419, 309], lamp: true, say: 'There.', request: REQUEST } })
-  expect(stand.calls[2]!.args).toEqual({ id: 'act1', route: 'manual' })
-  expect(stand.calls[3]!.args).toEqual({ id: 'act1', outcome: 'succeeded' })
+  expect(stand.calls[3]!.args).toEqual({ id: 'act1', route: 'manual' })
+  expect(stand.calls[4]!.args).toEqual({ id: 'act1', outcome: 'succeeded' })
+})
+
+test('an answer takes the place of the answer before it, so that nothing an earlier answer said is read as part of this one', async () => {
+  stand.action = action({ part: 'board', request: REQUEST })
+  stand.state = { board: { blind: true, hint: 'Count the rows', say: 'I cannot see it.', request: 'cd'.repeat(16), deep: { a: 1, b: 2 } }, room: { lamp: true } }
+  await answerAction('act1', { read: '144', right: true, say: 'Right.', deep: { a: 3 } })
+  const patched = stand.calls.find((c) => c.name === 'state:patch')!.args
+  // Held to the revision it was read at, and taking away, at every depth, what the new answer does not say. Another part is not touched
+  expect(patched.baseRevision).toBe(6)
+  expect(JSON.parse(patched.patch)).toEqual({ board: { blind: null, hint: null, read: '144', right: true, say: 'Right.', request: REQUEST, deep: { a: 3, b: null } } })
+  // Which, merged as the state merges a patch, leaves the new answer and nothing else
+  expect(deepMerge(stand.state, JSON.parse(patched.patch))).toEqual({ board: { read: '144', right: true, say: 'Right.', request: REQUEST, deep: { a: 3 } }, room: { lamp: true } })
+  expect(replacing('text', { a: 1 })).toEqual({ a: 1 })
+  expect(replacing({ a: [1, 2] }, { a: [3] })).toEqual({ a: [3] })
+  expect(replacing({ a: { b: 1 } }, { a: 'x' })).toEqual({ a: 'x' })
+})
+
+test('where the state changed between reading it and writing the answer, it is read again, and a refusal of another kind is not tried again', async () => {
+  stand.action = action({ part: 'room', request: REQUEST })
+  stand.clashes = 2
+  await answerAction('act1', { say: 'There.' })
+  expect(stand.calls.map((c) => c.name)).toEqual(['delivery:get', 'state:get', 'state:patch', 'state:get', 'state:patch', 'state:get', 'state:patch', 'delivery:handedOff', 'delivery:settle'])
+  // A clash that goes on is given up on in the end, with nothing acknowledged
+  stand.calls.length = 0
+  stand.clashes = 99
+  await expect(answerAction('act1', { say: 'There.' })).rejects.toThrow('The state changed since you read it.')
+  expect(stand.calls.filter((c) => c.name === 'state:patch')).toHaveLength(5)
+  expect(stand.calls.some((c) => c.name.startsWith('delivery:') && c.name !== 'delivery:get')).toBe(false)
 })
 
 test('an answer that is on the page stands where the action could not be acknowledged', async () => {
   stand.action = action({ part: 'cube', request: REQUEST })
   stand.failAck = true
-  await expect(answerAction('act1', { moves: 'back' })).resolves.toMatchObject({ part: 'cube' })
-  expect(stand.calls.map((c) => c.name)).toEqual(['delivery:get', 'state:patch', 'delivery:handedOff'])
+  await expect(answerAction('act1', { moves: [{ turn: 'right-column-down', say: 'Pull the right column down' }], say: 'One turn.' })).resolves.toMatchObject({ part: 'cube' })
+  expect(stand.calls.map((c) => c.name)).toEqual(['delivery:get', 'state:get', 'state:patch', 'delivery:handedOff'])
 })
 
 test('with no answer an action is acknowledged alone, and an answer with nowhere to go is refused before anything is set', async () => {
