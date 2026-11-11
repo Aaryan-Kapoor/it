@@ -6429,13 +6429,13 @@ It runs Convex's backend program, `convex-local-backend`, on the person's own ma
 
 The program is Convex's work and stays under Convex's terms. In the description of its own API, which it carries, it names its license as `LicenseRef-FSL-1.1-Apache-2.0`. The terms themselves are in its repository, <https://github.com/get-convex/convex-backend>.
 
-## Typefaces the site carries
+## Typefaces the site and the tour carry
 
-The pictures on the first screen of the site are drawn in typefaces that the site serves from `/fonts/`, as files converted to WOFF2. Each remains under its own license, which is given here in full.
+The pictures on the first screen of the site are drawn in typefaces that the site serves from `/fonts/`, and the tour's first page is set in typefaces it carries inside it, all as files converted to WOFF2. Each remains under its own license, which is given here in full.
 
 ### Inter and Inter Display 4.000
 
-By The Inter Project Authors (Rasmus Andersson). License: SIL Open Font License 1.1. Served as: `display-600.woff2`, `display-700.woff2`, `display-800.woff2`, `text-400.woff2`, `text-500.woff2`, `text-600.woff2`, `text-700.woff2`, which hold Latin subsets of seven weights. The files themselves say: "Copyright 2016 The Inter Project Authors" Source: <https://github.com/rsms/inter>.
+By The Inter Project Authors (Rasmus Andersson). License: SIL Open Font License 1.1. Served as: `display-600.woff2`, `display-700.woff2`, `display-800.woff2`, `text-400.woff2`, `text-500.woff2`, `text-600.woff2`, `text-700.woff2`, which hold Latin subsets of seven weights. Carried in the tour's first page as `display-700.woff2`, `display-800.woff2`, `text-400.woff2`, `text-500.woff2`, `text-600.woff2`, which hold smaller subsets of five of those weights. The files themselves say: "Copyright 2016 The Inter Project Authors" Source: <https://github.com/rsms/inter>.
 
 ```text
 Copyright 2016 The Inter Project Authors
@@ -6530,10 +6530,110 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ### Noto Sans Symbols 2 2.003
 
-By The Noto Project Authors. License: SIL Open Font License 1.1. Served as: `chess.woff2`, which hold the twelve chess pieces, and nothing else of it. The files themselves say: "Copyright 2017 Google Inc. All Rights Reserved." Source: <https://github.com/notofonts/symbols>.
+By The Noto Project Authors. License: SIL Open Font License 1.1. Served as: `chess.woff2`, which hold the twelve chess pieces, and nothing else of it. The tour's first page carries the same file inside it. The files themselves say: "Copyright 2017 Google Inc. All Rights Reserved." Source: <https://github.com/notofonts/symbols>.
 
 ```text
 Copyright 2022 The Noto Project Authors (https://github.com/notofonts/symbols)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+https://scripts.sil.org/OFL
+
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded, 
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+```
+
+### Caveat SemiBold 2.000
+
+By The Caveat Project Authors. License: SIL Open Font License 1.1. Carried in the tour's first page as `caveat-600.woff2`, which hold the Latin letters and signs the page writes in it, and nothing else of it. The files themselves say: "Copyright 2014 The Caveat Project Authors (https://github.com/googlefonts/caveat)" Source: <https://github.com/googlefonts/caveat>.
+
+```text
+Copyright 2014 The Caveat Project Authors (https://github.com/googlefonts/caveat)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
