@@ -165,6 +165,8 @@ Messages you send above a page and answers you choose in notifications are saved
 
 If It says "Reload It before sending new requests", reload the site to use the service's current version. An older site left open during an update cannot safely send a new request without a replay deadline. It can still confirm a request whose receipt the service has kept. Check what your agent received before repeating an older saved request.
 
+If a page says "Reload It in this browser to use the microphone and camera", the site in that browser has been open since before It was updated, and does not record for pages. Reload It there. Until then, a mail, phone or messages link on a page is left to the browser, as it was before It opened such links itself.
+
 ## An agent app after It is updated
 
 `it status` names each agent app's add-on as the app has loaded it, and the Machines page does the same beside the app.

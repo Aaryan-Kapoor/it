@@ -74,6 +74,25 @@ for (const name of ['localStorage', 'sessionStorage'] as const) {
 let port: MessagePort | null = null
 /** What the site's channel says it speaks: see CHANNEL_VERSION. */
 let channel = 0
+/**
+ * What the site that framed the page says it does, as it hands over the channel: null until it
+ * has. A site from before It recorded or opened links for a page, as 0.1.38 was, says neither,
+ * and drops what it does not know, so a page that waited on its answer would wait for ever. A
+ * site open on a screen since before It was updated is one, since nothing reloads it.
+ */
+let siteDoes: { media: boolean; opens: boolean } | null = null
+/** What a page is told where the site that framed it does not record for a page. */
+const RELOAD_FOR_MEDIA = 'Reload It in this browser to use the microphone and camera: It was updated while it was open here.'
+/** What begins a recording, a photo or the live camera, which such a site would never answer: each is refused there instead. */
+const BEGINS_MEDIA: ReadonlySet<string> = new Set(['it:record', 'it:photo', 'it:camera'])
+/** Whether the site opens the mail, phone, messages and other links a page sends it. Until it has said, it is taken to, as a current site does. */
+const siteOpens = () => siteDoes?.opens !== false
+/** Answers a request that begins a recording, a photo or the live camera, which the site does not take, with what to do. */
+function refuseMedia(requestId: string): void {
+  const answer = waiting.get(requestId)
+  waiting.delete(requestId)
+  answer?.({ type: 'it:result', requestId, ok: false, error: RELOAD_FOR_MEDIA })
+}
 /** The state as It last sent it. */
 let sent: State = {}
 /** What the page sees: that, with the values the page has set and It has not yet sent back over what the page keeps. */
@@ -238,6 +257,8 @@ function send(message: PageToSite): void {
 function ask(message: PageToSite & { requestId: string }): Promise<Result> {
   return new Promise((answered) => {
     waiting.set(message.requestId, answered)
+    // A site that has said it does not record for a page is not asked: it would never answer
+    if (siteDoes && !siteDoes.media && BEGINS_MEDIA.has(message.type)) return refuseMedia(message.requestId)
     if (message.type === 'it:action') actionsOnTheirWay.set(message.requestId, message)
     send(message)
   })
@@ -497,8 +518,13 @@ window.addEventListener('message', (e) => {
   if (type !== 'it:port' || !e.ports[0] || port) return
   port = e.ports[0]
   channel = typeof e.data.v === 'number' ? e.data.v : 0
+  siteDoes = { media: e.data.media === true, opens: e.data.opens === true }
   port.onmessage = (m) => receive(m.data as SiteToPage)
-  for (const m of unsent.splice(0)) post(port, m)
+  // What was asked before the site answered goes now, but for what it has said it does not take
+  for (const m of unsent.splice(0)) {
+    if (!siteDoes.media && BEGINS_MEDIA.has(m.type) && 'requestId' in m) refuseMedia(m.requestId)
+    else post(port, m)
+  }
   players.hosted(e.data.embeds === true)
   flush()
 })
@@ -921,7 +947,8 @@ function onTheWay(e: Event, capture: boolean, sends = true): void {
   // window sends a link to the site, once, and after every handler of the page's
   if (capture || !sends || e.type !== 'click' || e.defaultPrevented) return
   const to = leadsTo(link)
-  if (to && SYSTEM.has(to.protocol) && !link.hasAttribute('download')) {
+  // Left to the browser where the site does not open links, as before it did
+  if (to && SYSTEM.has(to.protocol) && !link.hasAttribute('download') && siteOpens()) {
     e.preventDefault()
     openedBySite(to.href)
   }
@@ -1066,7 +1093,7 @@ HTMLElement.prototype.click = function (this: HTMLElement) {
     if (isLink(this)) {
       const to = leadsTo(this)
       if (opensRefused(this)) return
-      if (to && SYSTEM.has(to.protocol) && !this.hasAttribute('download')) return openedBySite(to.href)
+      if (to && SYSTEM.has(to.protocol) && !this.hasAttribute('download') && siteOpens()) return openedBySite(to.href)
     }
   }
   return clickElement.call(this)
@@ -1084,8 +1111,12 @@ function openOut(this: Window, url?: string | URL, target?: string, features?: s
   const to = said === '' ? null : addressOf(said)
   if (to && REFUSED.has(to.protocol)) return null
   if (to && SYSTEM.has(to.protocol)) {
-    openedBySite(to.href)
-    return null
+    if (siteOpens()) {
+      openedBySite(to.href)
+      return null
+    }
+    // A site that does not open links leaves it to the browser, in a tab of its own with no hold
+    return openWindow.call(this, said, '_blank', 'noopener,noreferrer')
   }
   const named = target === undefined || target === null ? '' : String(target)
   const asked = features === undefined || features === null ? '' : String(features)
@@ -2126,7 +2157,9 @@ const api = {
   open(url: string | URL): void {
     const href = openedForAPage(addressOf(String(url))?.href)
     if (!href) throw new Error(`It.open opens an address of one of these kinds: ${OPENED_FOR_A_PAGE.map((kind) => kind.slice(0, -1)).join(', ')}.`)
-    openedBySite(href)
+    // A site that does not open links leaves it to the browser, in a tab of its own with no hold
+    if (!siteOpens()) openWindow.call(window, href, '_blank', 'noopener,noreferrer')
+    else openedBySite(href)
   },
   /** Things the page keeps for itself. They follow the page to every display. */
   store: {
