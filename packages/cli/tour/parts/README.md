@@ -89,6 +89,8 @@ The dock is the shell's, and shows where what the person last did in the part th
 | `my.box.sending()`, `.asked(back, result)`, `.got()`, `.refused()` | The stages, for a part that does not use `my.asker` |
 | `my.box.waiting()` | Whether something the person did is still on its way or with the agent |
 
+A part that asks for something that takes longer than forty seconds, as the ending does when a page is to be built, says so with a third thing given to `my.box.asked`: `{ most: <milliseconds>, line: "<why, in the page's words>" }`. The dock then waits that long before it gives the part back, shows the line for as long as it waits, and says the same seconds if nothing came.
+
 Nothing in a part moves by a timer in the agent's place. While the agent has not answered, the part shows what the person did and nothing of the agent's.
 
 ## Left, and come back to

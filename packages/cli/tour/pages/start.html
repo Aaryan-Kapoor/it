@@ -207,7 +207,7 @@ var Shell = (() => {
     if (s === "reached") return [m.ended ? AGENT + "’s turn ended, and no answer has come here yet" : AGENT + " has it, in its own conversation", whole];
     if (s === "working") return [AGENT + " is working on it", whole];
     if (s === "answered") return [AGENT + " answered" + (m.at.page === undefined ? "" : " in " + took(m.at.page)), ""];
-    if (s === "slow") return ["No answer after " + Math.round(SLOW / 1000) + " s. This is yours again, and a late answer is still shown.", ""];
+    if (s === "slow") return ["No answer after " + Math.round((m.long ? m.long.most : SLOW) / 1000) + " s. This is yours again, and a late answer is still shown.", ""];
     if (s === "refused") return ["It did not take that. Do it again.", ""];
     return [m.idle || (asleep ? AGENT + " cannot hear this page yet" : AGENT + " hears what you do here"), ""];
   }
@@ -239,7 +239,8 @@ var Shell = (() => {
     dock.setAttribute("data-stage", m.stage);
     $("dock-state").textContent = words[0];
     $("dock-secs").textContent = words[1] ? " · " + words[1] : "";
-    var waiting = !!WAITING[m.stage], told = waiting ? TEACH[m.stage] : m.stage === "slow" || m.stage === "refused" ? m.hint : m.typed || m.hint;
+    // A wait that a part has said is a long one says why it is, once It has what was done
+    var waiting = !!WAITING[m.stage], told = waiting ? (m.long && m.stage !== "sending" && m.long.line) || TEACH[m.stage] : m.stage === "slow" || m.stage === "refused" ? m.hint : m.typed || m.hint;
     KEYS.forEach((k) => {
       node[k].className = stages[k].cls;
       node[k].querySelector(".long").textContent = stages[k].text;
@@ -255,7 +256,7 @@ var Shell = (() => {
   var boxes = [];
   /** The dock as one part has it. It is drawn while that part is the one shown, and kept while it is not. */
   function Box(name) {
-    var m = { stage: "idle", idle: "", did: "", words: "", typed: "", typing: false, hint: "", t0: -1, at: {}, action: null, ended: false };
+    var m = { stage: "idle", idle: "", did: "", words: "", typed: "", typing: false, hint: "", t0: -1, at: {}, action: null, ended: false, long: null };
     var tick = 0, quiet = 0, typing = 0;
     var mine = () => shown() !== null && shown().box === box;
     var show = () => { if (mine()) draw(m); };
@@ -294,14 +295,17 @@ var Shell = (() => {
       said: () => m.typed,
       /** What the person can do here, in the page's words, where the agent has said nothing yet. */
       hint(t) { ++typing; m.words = m.typed = ""; m.typing = false; m.hint = t || ""; show(); },
-      idle(t) { stopClock(); m.stage = "idle"; m.idle = t || ""; m.t0 = -1; m.at = {}; m.action = null; m.ended = false; show(); },
-      sending(when) { stopClock(); m.stage = "sending"; m.t0 = typeof when === "number" ? when : Date.now(); m.at = { you: 0 }; m.action = null; m.ended = false; show(); clock(); },
+      idle(t) { stopClock(); m.stage = "idle"; m.idle = t || ""; m.t0 = -1; m.at = {}; m.action = null; m.ended = false; m.long = null; show(); },
+      sending(when) { stopClock(); m.stage = "sending"; m.t0 = typeof when === "number" ? when : Date.now(); m.at = { you: 0 }; m.action = null; m.ended = false; m.long = null; show(); clock(); },
       /**
        * It took what was done: `result` is what `It.action` answered with, which names the action.
-       * Where nothing has come a while after, `back` gives the person their part again.
+       * Where nothing has come a while after, `back` gives the person their part again. That while
+       * is the forty seconds, unless the part says in `long` that what it asked takes longer, as a
+       * page that is to be built does: `most` is how long, and `line` is the page's sentence of why.
        */
-      asked(back, result) {
+      asked(back, result, long) {
         stopClock();
+        m.long = long && typeof long.most === "number" && long.most > SLOW ? { most: long.most, line: tidy(long.line, 200) } : null;
         if (m.t0 < 0) { m.t0 = Date.now(); m.at = { you: 0 }; }
         m.stage = "took"; m.ended = false;
         if (m.at.it === undefined) m.at.it = since();
@@ -314,7 +318,7 @@ var Shell = (() => {
           m.stage = "slow";
           show();
           if (back) back();
-        }, SLOW);
+        }, m.long ? m.long.most : SLOW);
       },
       got() {
         stopClock();
