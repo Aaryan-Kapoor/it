@@ -2974,6 +2974,9 @@ span.card-fallback {
   .page-activity > header {
     flex-wrap: wrap;
   }
+  .page-activity h2 {
+    flex: 1;
+  }
   .page-activity-note {
     order: 3;
     flex-basis: 100%;
