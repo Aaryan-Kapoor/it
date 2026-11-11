@@ -131,7 +131,7 @@ import { HTTPS_NAME, noteHttps, noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
 import { serve } from './serve/index'
 import { onTheInternet, reachable } from './serve/network'
-import { servedAs, tailnetAddresses, tailnetName } from './serve/tailnet'
+import { funnelPorts, funnelWarning, inspectFunnel, publicFunnel, servedAs, tailnetAddresses, tailnetName } from './serve/tailnet'
 import * as service from './service'
 import {
   type AddonOutcome,
@@ -2586,18 +2586,21 @@ async function settingUp(a: Args, joined: boolean) {
 const TAKEN_MS = 20_000
 
 /** Whether the network is on in this machine's settings, and where another device then reaches It. Off, with no address, on a machine that only joined an It. */
-function networkNow(): { on: boolean; addresses: string[]; tailnet?: true; internet?: true; unable?: true } {
+function networkNow(): { on: boolean; addresses: string[]; tailnet?: true; internet?: true; unable?: true; funnel?: 'off' | 'public' | 'unknown' } {
   try {
     const config = elsewhere() ? null : readConfig()
     const on = config?.network ?? false
     const tailnet = on && config?.tailnet === true
     const internet = on && !tailnet && config?.internet === true
+    const found = config ? publicFunnel([config.port, contentPort(config.port)]) : undefined
+    const funnel = found === undefined ? 'unknown' : found.length ? 'public' : 'off'
     // Kept to the tailnet, the door answers at this machine's addresses there and at no other:
     // an address on the home network would be one that nothing opens. On for the network the
     // machine is on, it answers at none of the internet's addresses either. The tailnet's address
     // over https comes first where It answers there, whether or not the network is on
     return {
       on,
+      funnel,
       addresses: [
         ...(config?.https ? [`https://${config.https}:${httpsPort(config.port)}`] : []),
         ...(on && config ? reachable(config.port, undefined, tailnet, tailnetName, internet) : []),
@@ -2618,12 +2621,17 @@ function networkNow(): { on: boolean; addresses: string[]; tailnet?: true; inter
  */
 async function networkAsItStands(running: boolean): Promise<ReturnType<typeof networkNow>> {
   const asked = networkNow()
+  const local = elsewhere() ? null : readConfig()
+  if (local) {
+    const found = await inspectFunnel([local.port, contentPort(local.port)])
+    asked.funnel = found === undefined ? 'unknown' : found.length ? 'public' : 'off'
+  }
   if (!asked.on || !running || elsewhere()) return asked
   try {
     const config = readConfig()
     const stands = config ? await doorStands(config) : undefined
     // The address over https is Tailscale's to take, and stands whether or not the door could listen on the network
-    if (stands?.wanted && !stands.on) return { on: false, addresses: asked.addresses.filter((a) => a.startsWith('https:')), unable: true }
+    if (stands?.wanted && !stands.on) return { funnel: asked.funnel, on: false, addresses: asked.addresses.filter((a) => a.startsWith('https:')), unable: true }
   } catch {}
   return asked
 }
@@ -2789,6 +2797,8 @@ async function network(a: Args) {
     throw notSetUp()
   }
   const config = readConfig()!
+  const inspected = await inspectFunnel([config.port, contentPort(config.port)])
+  const funnel = inspected === undefined ? 'unknown' : inspected.length ? 'public' : 'off'
   const on = to === undefined ? config.network : to !== 'off'
   const tailnet = on && (to === undefined ? config.tailnet === true : to === 'tailscale')
   const internet = on && !tailnet && (to === undefined ? config.internet === true : to === 'internet')
@@ -2812,9 +2822,9 @@ async function network(a: Args) {
       if (stands?.wanted && !stands.on) {
         const could =
           'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'
-        if (forPerson(a)) return tell([could])
-        say(could)
-        return out({ network: false, addresses: [] })
+        if (forPerson(a)) return tell([funnelWarning(funnel) ?? could])
+        say(funnelWarning(funnel) ?? could)
+        return out({ network: false, funnel, addresses: [] })
       }
     }
     // Off, the door answers this machine alone. Kept to the tailnet, an earlier It did as this one does, and says so. On for the
@@ -2858,14 +2868,15 @@ async function network(a: Args) {
   const phone = on && !tailnet && !internet && addresses.length ? PHONE_SAID : undefined
   // To a person the sentence is what is printed, with the addresses under it. Anywhere else it is said beside the JSON
   const stale = earlier ? EARLIER : !internet && !confirmed ? UNCONFIRMED : undefined
-  if (forPerson(a)) return tell([said, ...addresses.map((address) => `  ${address}`), stale, toAll, phone, later])
-  say(addresses.length ? `${said} ${addresses.join(', ')}` : said)
+  if (forPerson(a)) return tell([funnelWarning(funnel) ?? said, ...addresses.map((address) => `  ${address}`), stale, toAll, phone, later])
+  say(funnelWarning(funnel) ?? (addresses.length ? `${said} ${addresses.join(', ')}` : said))
   if (stale) say(stale)
   if (toAll) say(toAll)
   if (phone) say(phone)
   if (later) say(later)
   return out({
     network: on,
+    funnel,
     ...(tailnet ? { tailnet: true } : {}),
     ...(internet ? { internet: true } : {}),
     addresses,
@@ -2950,7 +2961,15 @@ async function httpsCommand(a: Args) {
     let served: unknown = {}
     try {
       served = status.out.trim() ? JSON.parse(status.out) : {}
-    } catch {}
+    } catch {
+      throw new Problem('Tailscale returned an unreadable Serve status. HTTPS was not enabled.', 'tailscale')
+    }
+    if (funnelPorts(served, [config.port, contentPort(config.port)]).length)
+      throw new Problem(
+        'Tailscale Funnel already makes It public. HTTPS was not enabled.',
+        'funnel_public',
+        'Turn off the Funnel for It in Tailscale, then run `it https on` again.',
+      )
     const taken = ports.filter(({ port, at }) => servedAs(served, name, at, port) === 'other').map(({ at }) => at)
     if (taken.length)
       throw new Problem(
@@ -2963,6 +2982,9 @@ async function httpsCommand(a: Args) {
       const ran = tailscaleRun(['serve', '--bg', `--https=${at}`, `http://127.0.0.1:${port}`])
       if (!ran.ok) throw tailscaleRefused(`serve https on port ${at}`, ran)
     }
+    const verified = await inspectFunnel([config.port, contentPort(config.port)])
+    if (verified === undefined || verified.length)
+      throw new Problem('It could not confirm that Tailscale keeps HTTPS private. Check Tailscale Funnel before using It.', 'funnel_unconfirmed')
     noteHttps(name)
   } else if (to === 'off') {
     const name = config.https ?? tailnetName()
@@ -3128,17 +3150,19 @@ async function status(a: Args) {
     refused ? undefined : enrolled ? `This machine is enrolled${name ? ` as “${name}”` : ''}.` : running ? undefined : 'This machine is not enrolled.',
     !here
       ? undefined
-      : network.unable
-        ? 'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'
-        : !network.on
-          ? 'The network is off, so It answers this machine only. `it network tailscale` lets your own devices reach it over your tailnet, and `it network on` lets anyone on this network reach it.'
-          : first === undefined
-            ? 'The network is on, and this machine has no address on a network just now.'
-            : network.tailnet
-              ? `The network is on, for your tailnet only. Your devices on it open the site at ${first}.${others.length ? ` This machine’s other addresses there are ${others.join(' and ')}.` : ''}`
-              : network.internet
-                ? `The network is on, for every address this machine has, the internet’s included. Whoever can reach one opens the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`
-                : `The network is on, for anyone on this network. Devices on it open the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`,
+      : funnelWarning(network.funnel)
+        ? funnelWarning(network.funnel)
+        : network.unable
+          ? 'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'
+          : !network.on
+            ? 'The network is off, so It answers this machine only. `it network tailscale` lets your own devices reach it over your tailnet, and `it network on` lets anyone on this network reach it.'
+            : first === undefined
+              ? 'The network is on, and this machine has no address on a network just now.'
+              : network.tailnet
+                ? `The network is on, for your tailnet only. Your devices on it open the site at ${first}.${others.length ? ` This machine’s other addresses there are ${others.join(' and ')}.` : ''}`
+                : network.internet
+                  ? `The network is on, for every address this machine has, the internet’s included. Whoever can reach one opens the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`
+                  : `The network is on, for anyone on this network. Devices on it open the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`,
     ...appsSaid(stands.harnesses),
     ...(stands.harnesses.some((h) => 'proxied' in h) ? [PROXIED] : []),
     reload,

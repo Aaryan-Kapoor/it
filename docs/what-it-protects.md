@@ -257,3 +257,5 @@ Every answer for the site tells the browser what the site may load, and the only
 ### The backend program remembers its last calls
 
 One record is not It's own, and holds more than It's own logs do. The backend program keeps its last thousand function runs in its memory, and nowhere else. They can be read only at the backend program's own port, with the key in `service.json`, and they are gone when the program stops. Of a call from someone who is not paired, that record keeps the name of the function that was asked for, and, where the arguments were not of the shape the function takes, the value that was wrong, as it was sent. The caller is answered nothing that quotes it, and nothing of It's writes any of it down.
+
+Tailscale Funnel can publish a proxy to It independently of It's network setting. `it https on` refuses a Funnel pointing to It, and the network page and commands warn about the Funnel independently of the network setting. If It cannot check Tailscale, they say so. It does not change your Funnel settings.

@@ -5,7 +5,7 @@
 //
 // A device's addresses on a tailnet are known by their ranges, which Tailscale gives out of and
 // nothing else on a network does: 100.64.0.0/10 under IPv4, and fd7a:115c:a1e0::/48 under IPv6.
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import os from 'node:os'
 
 type Listed = Pick<os.NetworkInterfaceInfo, 'address' | 'family' | 'internal'>
@@ -75,4 +75,70 @@ export function servedAs(status: unknown, name: string, at: number, to: number):
   const proxies = Object.entries(handlers)
   const its = tcp.HTTPS === true && proxies.length === 1 && proxies[0]![0] === '/' && proxies[0]![1].Proxy === `http://127.0.0.1:${to}`
   return its ? 'its' : 'other'
+}
+
+/** Public Funnel listeners that forward to one of It's ports, regardless of their external port. */
+export function funnelPorts(status: unknown, ports: number[]): number[] {
+  const s = status as {
+    AllowFunnel?: Record<string, unknown>
+    Web?: Record<string, { Handlers?: Record<string, { Proxy?: unknown }> }>
+    TCP?: Record<string, { TCPForward?: unknown }>
+    Foreground?: Record<string, unknown>
+  } | null
+  const found = Object.entries(s?.AllowFunnel ?? {})
+    .filter(([host, allowed]) => {
+      if (allowed !== true) return false
+      const at = host.slice(host.lastIndexOf(':') + 1)
+      const targets = [...Object.values(s?.Web?.[host]?.Handlers ?? {}).map((handler) => handler.Proxy), s?.TCP?.[at]?.TCPForward]
+      return targets.some((target) => {
+        if (typeof target !== 'string') return false
+        try {
+          const url = new URL(target.includes('://') ? target : `tcp://${target}`)
+          return ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) && ports.includes(Number(url.port || (url.protocol === 'https:' ? 443 : 80)))
+        } catch {
+          return false
+        }
+      })
+    })
+    .map(([host]) => Number(host.slice(host.lastIndexOf(':') + 1)))
+  return [...new Set([...found, ...Object.values(s?.Foreground ?? {}).flatMap((entry) => funnelPorts(entry, ports))])]
+}
+
+/** Read-only inspection. Never changes the person's Tailscale configuration. */
+export async function inspectFunnel(ports: number[]): Promise<number[] | undefined> {
+  return new Promise((resolve) => {
+    execFile('tailscale', ['serve', 'status', '--json'], { encoding: 'utf8', timeout: 2000, windowsHide: true }, (error, stdout) => {
+      if (error) return resolve(undefined)
+      try {
+        const status: unknown = JSON.parse(stdout)
+        if (!status || typeof status !== 'object' || Array.isArray(status)) return resolve(undefined)
+        resolve(funnelPorts(status, ports))
+      } catch {
+        resolve(undefined)
+      }
+    })
+  })
+}
+let inspection: { key: string; at: number; value?: number[]; pending: boolean } | undefined
+/** Refresh without blocking the service, with at most one inspection in flight. */
+export function publicFunnel(ports: number[]): number[] | undefined {
+  const key = ports.join(',')
+  if (!inspection || (!inspection.pending && (inspection.key !== key || Date.now() - inspection.at > 5000))) {
+    const next = { key, at: Date.now(), value: inspection?.key === key ? inspection.value : undefined, pending: true }
+    inspection = next
+    void inspectFunnel(ports).then((value) => {
+      next.value = value
+      next.at = Date.now()
+      next.pending = false
+    })
+  }
+  return inspection.key === key ? inspection.value : undefined
+}
+
+export function funnelWarning(funnel: 'off' | 'public' | 'unknown' | undefined): string | undefined {
+  return funnel === 'public'
+    ? 'Tailscale Funnel makes It public, even with the network off. Turn off the Funnel in Tailscale to keep It private.'
+    : funnel === 'unknown'
+      ? 'It could not check Tailscale Funnel. Check Tailscale before relying on the network setting to keep It private.'
+      : undefined
 }
