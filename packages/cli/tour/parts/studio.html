@@ -55,6 +55,7 @@
   .studio-piece.studio-on::before, .studio-piece.studio-by::before { opacity: 1; }
   .studio-piece.studio-by::before { background: var(--green); color: var(--on-green); }
   .studio-name::before { bottom: auto; top: calc(100% + .5em + 5px); }
+  .studio-pic::before { left: .7em; bottom: auto; top: .7em; }
   .studio-piece.studio-gone { opacity: 0; transform: scale(.9); }
   .studio-piece.studio-pop > * { animation: studio-pop .5s cubic-bezier(.3, 1.5, .5, 1); }
   @keyframes studio-pop { from { transform: scale(.82); opacity: .3; } }
@@ -212,7 +213,7 @@
               <path class="k-li" d="M-4 96Q100 150 214 142M214 142Q320 150 404 96"/>
               <path class="k k-a" d="M18 107h19l-7 21z"/><path class="k k-b" d="M60 124h19l-8 21z"/><path class="k k-i" d="M103 134h19l-9 21z"/><path class="k k-a" d="M148 140h19l-10 21z"/><path class="k k-b" d="M256 140h19l-9 21z"/><path class="k k-a" d="M296 135h19l-9 21z"/><path class="k k-i" d="M334 125h19l-11 21z"/><path class="k k-b" d="M369 108h19l-12 21z"/>
               <path class="k k-pale" d="M214 164l-94 62v42h188v-42z"/><path class="k k-a" d="M214 164l-94 62v42h47v-42zM214 164v104h47v-42z"/>
-              <path class="k k-i" d="M202 268v-22a12 12 0 0 1 24 0v22z"/><path class="k-li" d="M214 164v-22"/><path class="k k-a" d="M214 140l24 7-24 8z"/>
+              <path class="k k-deep" d="M202 268v-22a12 12 0 0 1 24 0v22z"/><path class="k-li" d="M214 164v-22"/><path class="k k-a" d="M214 140l24 7-24 8z"/>
               <g class="k k-a"><circle cx="318" cy="196" r="4"/><circle cx="58" cy="238" r="3.4"/></g><g class="k k-b"><circle cx="344" cy="228" r="3.6"/><circle cx="160" cy="196" r="3.4"/></g>
             </g>
           </svg></span></button>
@@ -324,7 +325,7 @@ Shell.part("studio", (my) => {
     p = hsl(h, .3 + .2 * s, .085);
     made.night = [p, hsl(h, .25, .93), off(h, Math.max(s, .55), .62, p, 6.5), off(h + 40, .5, .6, p, 4.5)];
     p = [246, 239, 226];
-    made.duo = [p, [29, 26, 22], off(h, Math.max(s, .6), .5, p, 3.4), off(h + 180, .6, .4, p, 3.4)];
+    made.duo = [p, [29, 26, 22], off(h, Math.max(s, .6), .5, p, 3.4), off(h + 180, .65, .5, p, 2)];
     return made;
   }
   /** Colours the agent gave of its own, as a paper, an ink, an accent and perhaps a second: taken only where each is a colour, the ink is read on the paper, and the accent is seen on it. */
