@@ -3273,6 +3273,148 @@ test.each([false, true])('saving rejects obsolete and ambiguous forms before con
   }
 })
 
+describe.skipIf(process.platform === 'win32')('a command that runs where It’s folder may not be written, as an agent app’s sandbox keeps it', () => {
+  /** A file the runtime loads ahead of the program, which has the system refuse what `refuse` names as Codex’s sandbox on Linux refuses it. */
+  const sandboxed = (m: { home: string }, refuse: { mkdir?: boolean; network?: boolean }) => {
+    const preload = path.join(m.home, 'sandbox.mjs')
+    writeFileSync(
+      preload,
+      `import fs from 'node:fs'
+import net from 'node:net'
+import path from 'node:path'
+import { syncBuiltinESMExports } from 'node:module'
+const inside = (file) => !path.relative(process.env.IT_HOME, path.resolve(String(file))).startsWith('..')
+${
+  refuse.mkdir
+    ? `const make = fs.mkdirSync
+// A folder that may not be written, made with Node's recursive mkdir, is said to be missing
+fs.mkdirSync = (dir, options) => {
+  if (inside(dir) && !fs.existsSync(dir)) throw Object.assign(new Error('ENOENT: no such file or directory, mkdir ' + JSON.stringify(String(dir))), { code: 'ENOENT', syscall: 'mkdir', path: String(dir) })
+  return make(dir, options)
+}
+const open = fs.openSync
+fs.openSync = (file, flags, mode) => {
+  if (inside(file) && /[wa+]/.test(String(flags ?? 'r'))) throw Object.assign(new Error('EROFS: read-only file system, open ' + JSON.stringify(String(file))), { code: 'EROFS', syscall: 'open', path: String(file) })
+  return open(file, flags, mode)
+}`
+    : ''
+}
+${
+  refuse.network
+    ? `net.Socket.prototype.connect = function () {
+  queueMicrotask(() => this.destroy(Object.assign(new Error('connect EPERM'), { code: 'EPERM', syscall: 'connect' })))
+  return this
+}
+net.Server.prototype.listen = function () {
+  queueMicrotask(() => this.emit('error', Object.assign(new Error('listen EPERM'), { code: 'EPERM', syscall: 'listen' })))
+  return this
+}`
+    : ''
+}
+syncBuiltinESMExports()
+`,
+    )
+    return ['--import', pathToFileURL(preload).href]
+  }
+  const page = (m: { home: string }) => {
+    const file = path.join(m.home, 'p.html')
+    writeFileSync(file, '<h1>A page</h1>')
+    return file
+  }
+
+  test('`it create` answers `blocked`, asks It nothing, and names no folder, where the system refuses It’s folder', async () => {
+    const m = machine()
+    const b = await backend(m, () => ({ artifactId: 'a1', slug: 'p', version: 1, upload: { url: '', grant: '' } }))
+    try {
+      const ran = await run(m, ['create', 'A page', '--id', 'p', '--file', page(m)], b.env, process.execPath, sandboxed(m, { mkdir: true }))
+      const said = error(ran)
+      expect([ran.code, said.code]).toEqual([1, 'blocked'])
+      expect(said.message).toBe(
+        'It could not be asked from here: this command runs where It’s folder may not be written, as an agent app’s sandbox keeps it. It may well be running.',
+      )
+      expect(said.hint).toBe('Run `it` outside that sandbox. Do not start It again.')
+      expect(ran.err).not.toContain(m.it)
+      expect(ran.err).not.toMatch(/ENOENT|EROFS/)
+      expect(b.asked).toEqual([])
+      // The same with the folder there already, where what is refused is the file written in it
+      mkdirSync(path.join(m.it, 'publication-pending'))
+      const again = await run(m, ['create', 'A page', '--id', 'p', '--file', page(m)], b.env, process.execPath, sandboxed(m, { mkdir: true }))
+      expect([again.code, error(again).code, b.asked]).toEqual([1, 'blocked', []])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test.skipIf(process.getuid?.() === 0)('`it create` answers `blocked` where It’s folder is closed to writing by its permissions', async () => {
+    const m = machine()
+    const b = await backend(m)
+    chmodSync(m.it, 0o500)
+    try {
+      const ran = await run(m, ['create', 'A page', '--id', 'p', '--file', page(m)], b.env)
+      expect([ran.code, error(ran).code, b.asked]).toEqual([1, 'blocked', []])
+      expect(ran.err).not.toContain('EACCES')
+    } finally {
+      chmodSync(m.it, 0o700)
+      await b.close()
+    }
+  })
+
+  test('in Codex, the answer tells the agent the words of Codex’s own tool for running the command outside the sandbox', async () => {
+    const m = machine()
+    const b = await backend(m)
+    try {
+      const ran = await run(
+        m,
+        ['create', 'A page', '--id', 'p', '--file', page(m)],
+        { ...b.env, CODEX_THREAD_ID: 'thread-1' },
+        process.execPath,
+        sandboxed(m, { mkdir: true }),
+      )
+      const said = error(ran)
+      expect(said.code).toBe('blocked')
+      expect(said.hint).toContain('give it again with `sandbox_permissions` set to `"require_escalated"` and a one-sentence `justification`')
+      expect(said.hint).toContain('prefix_rule(pattern=["it", "save"], decision="prompt"')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('in Codex, `it save` stopped by the sandbox says to give every `it save` outside it from the start, and `it action` does not', async () => {
+    const m = machine()
+    // A token is at hand, so that what the system refuses is the asking itself
+    const b = await backend(m)
+    try {
+      const env = { ...b.env, CODEX_THREAD_ID: 'thread-1' }
+      const saved = await run(m, ['save', 'k1', path.join(m.home, 'x.png')], env, process.execPath, sandboxed(m, { network: true }))
+      const said = error(saved)
+      expect(said.code).toBe('blocked')
+      expect(said.hint).toMatch(
+        /^Codex asks the user before every `it save`, and runs the command they approve inside its sandbox, where `it` cannot reach It, unless you asked for it outside\. Give every `it save` with `sandbox_permissions` set to `"require_escalated"` and a `justification` from the start, and the user is asked once\. It may well be running/,
+      )
+      expect(existsSync(path.join(m.home, 'x.png'))).toBe(false)
+      const read = error(await run(m, ['action', 'k1'], env, process.execPath, sandboxed(m, { network: true })))
+      expect(read.code).toBe('blocked')
+      expect(read.hint).not.toContain('Codex asks the user before every `it save`')
+      // Outside Codex nothing of Codex is said
+      const plain = error(await run(m, ['save', 'k1', path.join(m.home, 'x.png')], b.env, process.execPath, sandboxed(m, { network: true })))
+      expect(plain.code).toBe('blocked')
+      expect(plain.hint).not.toContain('Codex')
+      expect(b.asked).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it actions --id` and `it runs` say that they could not ask, and not that It is stopped, where the system keeps them from the network', async () => {
+    const m = machine(true, true)
+    for (const args of [['actions', '--id', 'p'], ['runs']]) {
+      const said = error(await run(m, args, {}, process.execPath, sandboxed(m, { network: true })))
+      expect([args, said.code]).toEqual([args, 'blocked'])
+      expect(said.hint).not.toContain('it serve')
+    }
+  })
+})
+
 describe.skipIf(process.platform === 'win32')('a picture an action carried', () => {
   test('`it save` writes it to the file as the picture it is, and prints the action without its text', async () => {
     const m = machine()
@@ -3305,6 +3447,11 @@ describe.skipIf(process.platform === 'win32')('a picture an action carried', () 
       })
       // Without the switch it prints everything it carried, as before
       expect(printed(await run(m, ['action', 'k57'], b.env)).data).toEqual(carried)
+      // In Codex, reading it says how to save it with the one approval Codex asks for, and only there
+      expect(printed(await run(m, ['action', 'k57'], b.env))).not.toHaveProperty('saveInCodex')
+      expect(printed(await run(m, ['action', 'k57'], { ...b.env, CODEX_THREAD_ID: 'thread-1' })).saveInCodex).toContain(
+        'Give every `it save` with `sandbox_permissions` set to `"require_escalated"`',
+      )
       // A file of that name that is there already is the person's: it is not written over, and is as it was
       writeFileSync(to, 'the person’s own drawing')
       const over = await run(m, ['save', 'k57', to], b.env)
@@ -3322,6 +3469,8 @@ describe.skipIf(process.platform === 'win32')('a picture an action carried', () 
       const none = await run(m, ['save', 'k57', path.join(m.home, 'nothing.png')], b.env)
       expect([none.code, existsSync(path.join(m.home, 'nothing.png'))]).toEqual([2, false])
       expect(none.err).toContain('This action carried no picture or other file to save.')
+      // And has nothing to save in Codex either
+      expect(printed(await run(m, ['action', 'k57'], { ...b.env, CODEX_THREAD_ID: 'thread-1' }))).not.toHaveProperty('saveInCodex')
     } finally {
       await b.close()
     }

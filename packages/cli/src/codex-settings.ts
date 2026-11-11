@@ -39,6 +39,17 @@ export const CODEX_RULE = 'prefix_rule(pattern=["it"], decision="allow")'
 export const CODEX_SAVE_RULE =
   'prefix_rule(pattern=["it", "save"], decision="prompt", justification="This command writes a file a page sent to a path on this machine.")'
 /**
+ * What an agent in Codex is told where `it save` was stopped by the sandbox. A rule that asks
+ * runs what the person approves inside the sandbox, and Codex 0.167 has no form of rule that
+ * asks and then runs a command outside it: only the agent's asking for that, with
+ * `sandbox_permissions` set to `require_escalated`, does. Given that way the first time, the
+ * person is asked once, and the command runs where it can reach It. The rule still decides that
+ * the person is asked: an `it save` given that way is not run unasked, and since the rule matches
+ * it, Codex offers no "don't ask again" for it.
+ */
+export const CODEX_SAVE_ESCALATE =
+  'Codex asks the user before every `it save`, and runs the command they approve inside its sandbox, where `it` cannot reach It, unless you asked for it outside. Give every `it save` with `sandbox_permissions` set to `"require_escalated"` and a `justification` from the start, and the user is asked once.'
+/**
  * The commands of `it` that change It on this machine, rather than use it: its installation, its
  * service, whom it answers, what it reports, and the hold it keeps on conversations it cannot tell
  * are over. An agent has no need to run them unasked. Codex takes the strictest of the rules a

@@ -40,6 +40,7 @@ import {
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, OPTIONS, optionsFor, outputArgs, parse, text } from './args'
 import { type Arrives, arrives, claudeAfterSetup, claudeReloadLine, claudeRunning, reloadLine, tellWordForWord } from './arrives'
+import { CODEX_SAVE_ESCALATE } from './codex-settings'
 import { choices, conversationIds, local, type Route, refusedFor } from './connector'
 import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
@@ -85,10 +86,12 @@ import {
   plainWord,
   proxiedForClaude,
   readJson,
+  readOnlyHere,
   sessionAsked,
   sessionNote,
   settingsFile,
   shutIn,
+  shutInByAsking,
   siteAddress,
   textOf,
   throughDoor,
@@ -99,6 +102,7 @@ import {
   windowsPathRemoval,
   withoutTables,
   writePrivate,
+  writeRefused,
   written,
 } from './lib'
 import { joinedBefore, login, runsItsOwn } from './login'
@@ -3250,6 +3254,7 @@ async function main(argv: string[]): Promise<void> {
       const sub = a._[0]
       if (sub !== undefined && sub !== 'clear') throw new Problem('It is `it runs` or `it runs clear`.', 'invalid')
       const now = await local<Held>('/runs')
+      if (!now && (await shutInByAsking())) throw shutIn()
       if (!now)
         throw new Problem(
           'It is not running on this machine, so there is nothing to ask about what it reopened.',
@@ -3712,7 +3717,13 @@ async function main(argv: string[]): Promise<void> {
     case 'save': {
       // One action in full, by the id an agent was given: for data too long to have been shown, or to check a repeat
       const id = need(a._[0], 'which action', 'action <action-id>')
-      const c = await call<Listed & { delivery: string; route: string | null; outcome: string | null }>('query', api.delivery.get, { id })
+      const c = await call<Listed & { delivery: string; route: string | null; outcome: string | null }>('query', api.delivery.get, { id }).catch((err) => {
+        // Codex asks the person before every `it save`, and runs what they approve inside its
+        // sandbox unless the agent asked for it outside: told so, the agent asks that way from then on
+        if (cmd === 'save' && process.env.CODEX_THREAD_ID && err instanceof Problem && err.code === 'blocked')
+          throw new Problem(err.message, err.code, `${CODEX_SAVE_ESCALATE} ${err.hint ?? ''}`.trim())
+        throw err
+      })
       const click = {
         id: c.id,
         artifact: c.artifact,
@@ -3728,7 +3739,9 @@ async function main(argv: string[]): Promise<void> {
         ...(c.files?.length ? { files: c.files } : {}),
       }
       const all = { ...printed(c), delivery: c.delivery, route: c.route, outcome: c.outcome, text: describeClick(click, Number.MAX_SAFE_INTEGER) }
-      if (cmd === 'action') return out(all)
+      // In Codex, how to save what it carried with one approval, said where there is something to save
+      const carries = Boolean(c.files?.length) || firstFile(click.payload) !== undefined
+      if (cmd === 'action') return out(process.env.CODEX_THREAD_ID && carries ? { ...all, saveInCodex: CODEX_SAVE_ESCALATE } : all)
       const to = a._[1]!
       const number = text(a, 'number') === undefined ? 1 : Number(text(a, 'number'))
       if (c.files?.length) return out({ ...all, saved: await saveAttached(id, number, to) })
@@ -3815,7 +3828,8 @@ main(process.argv.slice(2)).then(
   },
   (err) => {
     clearInterval(whileItRuns)
-    const p = err instanceof Problem ? err : new Problem(String((err as Error)?.message ?? err))
+    // A write into It's folder that the system refused is a sandbox's doing, and is said as that, never in the system's own words
+    const p = err instanceof Problem ? err : writeRefused(err) ? readOnlyHere() : new Problem(String((err as Error)?.message ?? err))
     counted(p.code)
     failure(p, outputArgs(process.argv.slice(3)))
     return end(p.code === 'invalid' ? 2 : 1)
