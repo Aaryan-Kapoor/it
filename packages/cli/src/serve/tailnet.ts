@@ -106,7 +106,7 @@ export function funnelPorts(status: unknown, ports: number[]): number[] {
 
 /** Read-only inspection. Never changes the person's Tailscale configuration. */
 export async function inspectFunnel(ports: number[]): Promise<number[] | undefined> {
-  return new Promise((resolve) => {
+  return new Promise<number[] | undefined>((resolve) => {
     execFile('tailscale', ['serve', 'status', '--json'], { encoding: 'utf8', timeout: 2000, windowsHide: true }, (error, stdout) => {
       if (error) return resolve(undefined)
       try {
@@ -117,7 +117,7 @@ export async function inspectFunnel(ports: number[]): Promise<number[] | undefin
         resolve(undefined)
       }
     })
-  })
+  }).catch(() => undefined)
 }
 let inspection: { key: string; at: number; value?: number[]; pending: boolean } | undefined
 /** Refresh without blocking the service, with at most one inspection in flight. */
@@ -141,4 +141,10 @@ export function funnelWarning(funnel: 'off' | 'public' | 'unknown' | undefined):
     : funnel === 'unknown'
       ? 'It could not check Tailscale Funnel. Check Tailscale before relying on the network setting to keep It private.'
       : undefined
+}
+
+/** An unknown proxy policy qualifies the listener's report without dropping it. */
+export function funnelSaid(funnel: 'off' | 'public' | 'unknown' | undefined, said: string): string {
+  const warning = funnelWarning(funnel)
+  return funnel === 'unknown' ? `${warning}\n${said}` : (warning ?? said)
 }

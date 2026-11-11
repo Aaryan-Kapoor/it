@@ -131,7 +131,7 @@ import { HTTPS_NAME, noteHttps, noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
 import { serve } from './serve/index'
 import { onTheInternet, reachable } from './serve/network'
-import { funnelPorts, funnelWarning, inspectFunnel, publicFunnel, servedAs, tailnetAddresses, tailnetName } from './serve/tailnet'
+import { funnelPorts, funnelSaid, funnelWarning, inspectFunnel, servedAs, tailnetAddresses, tailnetName } from './serve/tailnet'
 import * as service from './service'
 import {
   type AddonOutcome,
@@ -2592,8 +2592,7 @@ function networkNow(): { on: boolean; addresses: string[]; tailnet?: true; inter
     const on = config?.network ?? false
     const tailnet = on && config?.tailnet === true
     const internet = on && !tailnet && config?.internet === true
-    const found = config ? publicFunnel([config.port, contentPort(config.port)]) : undefined
-    const funnel = found === undefined ? 'unknown' : found.length ? 'public' : 'off'
+    const funnel = 'unknown' as const
     // Kept to the tailnet, the door answers at this machine's addresses there and at no other:
     // an address on the home network would be one that nothing opens. On for the network the
     // machine is on, it answers at none of the internet's addresses either. The tailnet's address
@@ -2619,12 +2618,16 @@ function networkNow(): { on: boolean; addresses: string[]; tailnet?: true; inter
  * listen on the network and could not answers this machine only, whatever its settings say,
  * and to say that the network is on would send the person to addresses that nothing answers at.
  */
-async function networkAsItStands(running: boolean): Promise<ReturnType<typeof networkNow>> {
+async function networkAsItStands(running: boolean, inspect = true): Promise<ReturnType<typeof networkNow>> {
   const asked = networkNow()
-  const local = elsewhere() ? null : readConfig()
-  if (local) {
-    const found = await inspectFunnel([local.port, contentPort(local.port)])
-    asked.funnel = found === undefined ? 'unknown' : found.length ? 'public' : 'off'
+  try {
+    const local = inspect && !elsewhere() ? readConfig() : null
+    if (local) {
+      const found = await inspectFunnel([local.port, contentPort(local.port)])
+      asked.funnel = found === undefined ? 'unknown' : found.length ? 'public' : 'off'
+    }
+  } catch {
+    asked.funnel = 'unknown'
   }
   if (!asked.on || !running || elsewhere()) return asked
   try {
@@ -2822,8 +2825,8 @@ async function network(a: Args) {
       if (stands?.wanted && !stands.on) {
         const could =
           'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'
-        if (forPerson(a)) return tell([funnelWarning(funnel) ?? could])
-        say(funnelWarning(funnel) ?? could)
+        if (forPerson(a)) return tell([funnelSaid(funnel, could)])
+        say(funnelSaid(funnel, could))
         return out({ network: false, funnel, addresses: [] })
       }
     }
@@ -2868,8 +2871,8 @@ async function network(a: Args) {
   const phone = on && !tailnet && !internet && addresses.length ? PHONE_SAID : undefined
   // To a person the sentence is what is printed, with the addresses under it. Anywhere else it is said beside the JSON
   const stale = earlier ? EARLIER : !internet && !confirmed ? UNCONFIRMED : undefined
-  if (forPerson(a)) return tell([funnelWarning(funnel) ?? said, ...addresses.map((address) => `  ${address}`), stale, toAll, phone, later])
-  say(funnelWarning(funnel) ?? (addresses.length ? `${said} ${addresses.join(', ')}` : said))
+  if (forPerson(a)) return tell([funnelSaid(funnel, said), ...addresses.map((address) => `  ${address}`), stale, toAll, phone, later])
+  say(funnelSaid(funnel, addresses.length ? `${said} ${addresses.join(', ')}` : said))
   if (stale) say(stale)
   if (toAll) say(toAll)
   if (phone) say(phone)
@@ -3110,7 +3113,7 @@ async function status(a: Args) {
     enrolled,
     machine,
     site: siteAddress() ?? null,
-    network: await networkAsItStands(running && !blocked),
+    network: await networkAsItStands(running && !blocked, !blocked),
     ...(database ? { database } : {}),
     connector,
     background: service.status(),
@@ -3149,9 +3152,10 @@ async function status(a: Args) {
         : undefined,
     // Said as it is on this machine, unless It has just said otherwise, which the first line then says
     refused ? undefined : enrolled ? `This machine is enrolled${name ? ` as “${name}”` : ''}.` : running ? undefined : 'This machine is not enrolled.',
+    here && network.funnel === 'unknown' ? funnelWarning(network.funnel) : undefined,
     !here
       ? undefined
-      : funnelWarning(network.funnel)
+      : network.funnel === 'public'
         ? funnelWarning(network.funnel)
         : network.unable
           ? 'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'

@@ -5,7 +5,7 @@ import path from 'node:path'
 // are, what its name there is, and that the addresses another device is given are those alone.
 import { afterEach, describe, expect, test } from 'vitest'
 import { reachable } from './src/serve/network'
-import { forgetTailnetName, funnelPorts, inspectFunnel, inTailnet, isLoopback, servedAs, tailnetAddresses, tailnetName } from './src/serve/tailnet'
+import { forgetTailnetName, funnelPorts, funnelSaid, inspectFunnel, inTailnet, isLoopback, servedAs, tailnetAddresses, tailnetName } from './src/serve/tailnet'
 
 const HERE = {
   lo: [
@@ -195,4 +195,12 @@ test('Funnel inspection only asks the stand-in Tailscale for status and preserve
     process.env.PATH = original
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('An unknown Funnel check qualifies the whole network sentence', () => {
+  const said = 'The network is off, so It answers this machine only.'
+  expect(funnelSaid('unknown', said)).toContain(said)
+  expect(funnelSaid('unknown', said)).toContain('It could not check Tailscale Funnel.')
+  expect(funnelSaid('off', said)).toBe(said)
+  expect(funnelSaid('public', said)).not.toContain('answers this machine only')
 })
