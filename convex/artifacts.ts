@@ -7,6 +7,7 @@ import { removeLater } from './content'
 import { artifactBySlug, ownArtifact, requireBrowser, requireCaller, requireMachine, requireMachineOrOwner, requireOwner } from './lib/authz'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
+import { addonNotLoaded } from './lib/listening'
 import { log } from './lib/log'
 import { bump } from './lib/tally'
 import { session } from './schema'
@@ -62,6 +63,41 @@ export const list = query({
  * false the versions are not read at all, each of which holds the list of its files, and how
  * the state stands is read from the small record of its revision, never from the state.
  */
+/**
+ * The conversations on the person's machines that are open and have not loaded It's add-on,
+ * of those that have pages here: for the site to ask the person to load it there. Each is said
+ * by its pages alone, and never by the conversation's own id.
+ */
+export const notLoaded = query({
+  args: {},
+  handler: async (ctx) => {
+    const caller = await requireCaller(ctx)
+    // The owner's browsers alone are asked to do this, and a screen is told of none
+    if (caller.kind !== 'browser' || caller.session.role !== 'owner') return []
+    const { user } = caller
+    const machines = await ctx.db
+      .query('machines')
+      .withIndex('by_user', (q) => q.eq('userId', user._id).eq('revoked', false))
+      .take(QUOTA.machines)
+    const found: { harness: string; slugs: string[]; title: string; seenAt: number }[] = []
+    for (const machine of machines)
+      for (const c of machine.notLoaded ?? []) {
+        if (!addonNotLoaded(machine, { harness: c.harness, id: c.sessionId })) continue
+        const pages = (
+          await ctx.db
+            .query('artifacts')
+            .withIndex('by_user_conversation', (q) => q.eq('userId', user._id).eq('session.harness', c.harness).eq('session.id', c.sessionId))
+            .take(QUOTA.artifacts)
+        ).filter((a) => a.machineId === machine._id)
+        if (!pages.length) continue
+        pages.sort((x, y) => y.updatedAt - x.updatedAt)
+        // With when its machine was last heard from, for the site to let it go once the machine is quiet
+        found.push({ harness: c.harness, slugs: pages.map((a) => a.slug), title: pages[0]!.title, seenAt: machine.lastSeenAt })
+      }
+    return found
+  },
+})
+
 export const get = query({
   args: { ...ref, history: v.optional(v.boolean()) },
   handler: async (ctx, { history, ...args }) => {
@@ -134,6 +170,9 @@ export const get = query({
       turn: await turnOf(ctx, machine, a.session),
       // Why it could not be reopened, the last time that was tried and did not work, and when
       wakeFailed: failed(machine, a),
+      // Whether its conversation can hear what is done on it: 'not_loaded' where it is open and
+      // has not loaded It's add-on, and null where It cannot say. The site reads it in one place
+      listening: (addonNotLoaded(machine, a.session) ? 'not_loaded' : null) as 'yes' | 'no' | 'not_loaded' | null,
       // And when a person last stopped it, so that the page can say so of what was done before
       // then. The page keeps that moment itself, and goes on saying it when it has changed
       // conversation or machine since: what was dropped by the stop was stopped, and did not fail.

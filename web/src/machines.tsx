@@ -43,7 +43,7 @@ interface Machine {
   /** The newest version of It this machine has learned is out, where it looks for one. */
   latest?: string | null
   /** An upgrade of this machine that was asked for here, and how far it has got. */
-  upgrade?: { at: number; state: 'asked' | 'working' | 'restarting' | 'failed' | 'installed'; why?: string; version?: string } | null
+  upgrade?: { at: number; state: 'asked' | 'working' | 'restarting' | 'failed' | 'installed' | 'done'; why?: string; version?: string } | null
   harnesses: Harness[]
   wanted: string[]
   wakes: { harness: string; since: number }[]
@@ -107,6 +107,8 @@ export function Machines() {
 
 /** How long a code to join with lasts when the backend does not say. */
 const CODE_MS = 10 * 60_000
+/** How long the site says that an update it was asked for is over, and what is left to do after it. */
+const DONE_SAID_MS = 6 * 60 * 60_000
 
 /**
  * Adding a machine: another computer where the person's agents run joins this It with a code
@@ -201,6 +203,9 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
   const now = useNow(15_000)
   const out = newer(m.latest, m.connectorVersion) ? (m.latest as string) : null
   const state = m.upgrade?.state
+  // Claude Code has It's add-on there: its conversations that were open have not loaded the new one
+  const claude = m.harnesses.some((h) => h.id === 'claude-code' && (h.addon === 'connected' || h.addon === 'needs_approval'))
+  const reload = claude ? ' Type /reload-plugins in any Claude Code chat that was already open there, so that it loads It’s new add-on.' : ''
   if (state === 'installed')
     return (
       <p className="panel-note newer" data-tone="wait">
@@ -208,11 +213,20 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
             from before 0.1.35, whose launcher does not say that it is the service, as well as an older It that sent every Windows machine here */}
         It {m.upgrade?.version ?? ''} is installed on {m.name}. It runs once It is started again there. If you started It in a terminal with{' '}
         <code>it serve</code>, stop it and start it again. Otherwise run <code>it setup</code> in a terminal on that machine, which starts It again and lets the
-        next update start it again by itself. As it starts it brings the add-ons in the agent apps there up to date. An app that is already running goes on with
-        the add-on it loaded, which still takes clicks, until it is restarted, and its line on this page then says so.
+        next update start it again by itself. As it starts it brings the add-ons in the agent apps there up to date.
+        {claude
+          ? ' Then type /reload-plugins in any Claude Code chat that was already open there, so that it loads It’s new add-on.'
+          : ' An app that is already running goes on with the add-on it loaded until it is restarted, and its line on this page then says so.'}
       </p>
     )
   const behind = !m.runsIt && newer(host, m.connectorVersion)
+  // An update the site asked for is over: said for a few hours, with what is left to do there, unless something newer waits already
+  if (state === 'done' && now - (m.upgrade?.at ?? 0) < DONE_SAID_MS && !out && !behind)
+    return (
+      <p className="panel-note newer" data-tone={claude ? 'wait' : undefined}>
+        It {m.upgrade?.version ?? m.connectorVersion} is running on {m.name}.{reload}
+      </p>
+    )
   const mismatch = behind ? `This machine runs It ${m.connectorVersion}. The machine It runs on uses ${host}. ` : ''
   if (!out || (behind && newer(host, out)))
     return behind ? (

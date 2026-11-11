@@ -6,6 +6,7 @@ import { internalMutation, mutation, query } from './_generated/server'
 import { stoppedSince } from './actions'
 import { ownMachine, requireMachine, requireOwner } from './lib/authz'
 import { fail } from './lib/errors'
+import { NOT_LOADED_MOST } from './lib/listening'
 import { log } from './lib/log'
 import { addonRuntime, session } from './schema'
 import { lineOf, pairedOf, revokeMachine } from './sessions'
@@ -27,6 +28,8 @@ const view = (m: Doc<'machines'>) => ({
   // Only where It reopens conversations at all: what was switched on for a machine of another system says nothing
   wakes: wakesOn(m.system, m.reopens) ? (m.wakes ?? []) : [],
   runs: m.runs ?? [],
+  // How many conversations open there have not loaded It's add-on: `it status` says so
+  notLoaded: m.offAt === undefined ? (m.notLoaded ?? []).length : 0,
 })
 
 /**
@@ -276,6 +279,24 @@ export const wakeFailed = mutation({
 })
 
 /**
+ * What a machine's connector says of the Claude Code conversations open there that have not
+ * loaded It's add-on, said whenever that changes, and taken whole: what it said before is
+ * replaced. A connector of its own sets it, and nothing else does.
+ */
+export const notLoaded = mutation({
+  args: { conversations: v.array(v.object({ harness: v.string(), sessionId: v.string(), since: v.number() })) },
+  handler: async (ctx, { conversations }) => {
+    const { machine } = await requireMachine(ctx)
+    const kept = conversations
+      .filter((c) => c.harness === 'claude-code')
+      .slice(0, NOT_LOADED_MOST)
+      .map((c) => ({ harness: c.harness, sessionId: c.sessionId.slice(0, 200), since: c.since }))
+    await ctx.db.patch(machine._id, { notLoaded: kept.length ? kept : undefined })
+    return null
+  },
+})
+
+/**
  * Which harnesses are to be connected, chosen on the machine itself by `it setup`, which also
  * says what system the machine runs, and on Windows that it reopens closed conversations there:
  * setup is run before any connector has reported either. Answers with the apps of them that It
@@ -472,7 +493,16 @@ export const report = mutation({
         paused: held,
         reopens: can,
         ...(first ?? {}),
-        ...(moved ? { upgrade: undefined } : {}),
+        // An upgrade that was asked for on the site is over once the machine runs another version:
+        // it is kept as done, with the version, for the site to say what is left to do there
+        ...(moved
+          ? {
+              upgrade:
+                machine.upgrade && machine.upgrade.state !== 'done'
+                  ? { at: Date.now(), state: 'done' as const, version: connectorVersion.slice(0, 40) }
+                  : undefined,
+            }
+          : {}),
       })
     }
     return null

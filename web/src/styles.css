@@ -2563,6 +2563,22 @@ input[role="switch"]:disabled {
   flex: 1 1 260px;
 }
 
+/* A Claude Code conversation that cannot hear its pages: said plainly, so that the person sees it before using the page */
+.notice.reload {
+  color: var(--fg);
+  font-size: 14px;
+  border-color: color-mix(in srgb, var(--wait) 55%, var(--line));
+  background: color-mix(in srgb, var(--wait) 12%, var(--overlay));
+}
+.notice.reload::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--wait);
+}
+
 /* ══ The site, which scrolls under its bar ══ */
 
 .site {

@@ -28,9 +28,11 @@ describe('once the new program is in place, it upgrade', () => {
     const done = await afterUpgrade('/the/new/it', { service: true, againWith: again, env: {}, running: async () => true, run: p.run })
     expect(p.runs).toEqual([{ args: ['setup'], env: again }])
     expect(done).toEqual({ started: 'again', addons: updated })
-    expect(addonsSaid(done, label)).toEqual([
-      'Restart Claude Code to load its new add-on. Until then, one that is already running goes on with the add-on it loaded, which still takes clicks.',
+    // Claude Code is not told to restart: its conversations that were open load the new add-on with /reload-plugins
+    expect(addonsSaid(done, label, true)).toEqual([
+      'Type /reload-plugins in any Claude Code conversation that was already open, so that it loads It’s new add-on: until then, what is done on its pages may not reach it.',
     ])
+    expect(addonsSaid(done, label)).toEqual([])
   })
 
   test('says an add-on that could not be brought up to date, with why, and that the app keeps the one it had', async () => {
@@ -38,8 +40,8 @@ describe('once the new program is in place, it upgrade', () => {
     const done = await afterUpgrade('/the/new/it', { service: true, againWith: {}, env: {}, running: async () => false, run: p.run })
     expect(addonsSaid(done, label)).toEqual([
       "Codex's add-on could not be brought up to date: Codex would not add the plugin. Codex keeps the add-on it had, which still takes clicks, and It tries again each time it starts and every half hour.",
-      'Restart Claude Code to load its new add-on. Until then, one that is already running goes on with the add-on it loaded, which still takes clicks.',
     ])
+    expect(addonsSaid(done, label, true)).toHaveLength(2)
   })
 
   test('where setup fails, says why as setup said it, and what it said of the add-ons it got to', async () => {
@@ -63,6 +65,11 @@ describe('once the new program is in place, it upgrade', () => {
     expect(p.runs).toEqual([])
     expect(done).toEqual({ started: 'by hand', running: true, addonsLater: true })
     expect(addonsSaid(done, label)).toEqual(['Its add-ons in your agent apps are brought up to date when It starts as the new version.'])
+    // And where Claude Code has It's add-on, what to type in its conversations once It has started again as the new version
+    expect(addonsSaid(done, label, true)).toEqual([
+      'Its add-ons in your agent apps are brought up to date when It starts as the new version.',
+      'Once it has, type /reload-plugins in any Claude Code conversation that was already open, so that it loads It’s new add-on: until then, what is done on its pages may not reach it.',
+    ])
   })
 
   test('where the new program could bring up only some add-ons, and so ends as a failure, says which failed and which apps to restart', async () => {
@@ -70,7 +77,7 @@ describe('once the new program is in place, it upgrade', () => {
     const p = program(() => ({ ok: false, said }))
     const done = await afterUpgrade('/the/new/it', { service: false, againWith: {}, env: {}, running: async () => false, run: p.run })
     expect(done).toEqual({ started: 'by hand', running: false, addons: said.addons })
-    expect(addonsSaid(done, label)).toHaveLength(2)
+    expect(addonsSaid(done, label, true)).toHaveLength(2)
   })
 
   test('where the new program cannot bring up the add-ons, says that It does so when it starts', async () => {
@@ -97,10 +104,11 @@ describe('once the new program is in place, it upgrade', () => {
     ).toEqual([{ id: 'pi', did: 'installed' }])
   })
 
-  test('names several apps to restart in one sentence', () => {
+  test('names several apps to restart in one sentence, and Claude Code apart, with what to type in it', () => {
     const addons: AddonOutcome[] = ['claude-code', 'codex', 'pi'].map((id) => ({ id: id as AddonOutcome['id'], did: 'installed', restart: true }))
-    expect(addonsSaid({ started: 'again', addons }, label)).toEqual([
-      'Restart Claude Code, Codex and Pi to load their new add-ons. Until then, one that is already running goes on with the add-on it loaded, which still takes clicks.',
+    expect(addonsSaid({ started: 'again', addons }, label, true)).toEqual([
+      'Restart Codex and Pi to load their new add-ons. Until then, one that is already running goes on with the add-on it loaded, which still takes clicks.',
+      'Type /reload-plugins in any Claude Code conversation that was already open, so that it loads It’s new add-on: until then, what is done on its pages may not reach it.',
     ])
   })
 })

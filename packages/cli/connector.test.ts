@@ -25,6 +25,11 @@ const stand = vi.hoisted(() => ({
   asking: new Map<string, any>(),
   /** What a look at this machine finds of its agent apps. */
   found: [] as { id: string; version?: string; addon: string }[],
+  /** The folders Claude Code keeps its settings in where It's add-on was put. */
+  claudeFolders: [] as string[],
+  claudeScans: 0,
+  claudeRealProcesses: false,
+  scan: null as null | { started: () => void; completed: () => void; delay: number; timeout?: number; child?: import('node:child_process').ChildProcess },
   /** Every call the connector made to the backend. */
   calls: [] as { name: string; args: any }[],
   /** Every event the connector recorded for usage reporting, with its properties. */
@@ -169,7 +174,30 @@ vi.mock('node:child_process', async (original) => {
   const real = await original<typeof import('node:child_process')>()
   return {
     ...real,
-    execFile: (bin: string, args: string[], options: { env?: NodeJS.ProcessEnv }, done: (err: unknown) => void) => {
+    spawnSync: (...args: Parameters<typeof real.spawnSync>) => {
+      const scan = stand.scan
+      if (!scan || (args[0] !== 'ps' && args[0] !== 'powershell.exe')) return real.spawnSync(...args)
+      scan.started()
+      const result = real.spawnSync(process.execPath, ['-e', `setTimeout(() => console.log('00:00'), ${scan.delay})`], { encoding: 'utf8', timeout: 2500 })
+      scan.completed()
+      return result
+    },
+    execFile: (bin: string, args: string[], options: { env?: NodeJS.ProcessEnv }, done: (err: unknown, out?: string, stderr?: string) => void) => {
+      const scan = stand.scan
+      if (scan && (bin === 'ps' || bin === 'powershell.exe')) {
+        scan.started()
+        scan.child = real.execFile(
+          process.execPath,
+          ['-e', `setTimeout(() => console.log('00:00'), ${scan.delay})`],
+          { ...options, ...(scan.timeout ? { timeout: scan.timeout } : {}) },
+          (err, out, stderr) => {
+            scan.completed()
+            done(err, out, stderr)
+          },
+        )
+        return scan.child
+      }
+      if (bin === 'ps') return real.execFile(bin, args, options, done)
       // Windows PowerShell, through which a reopened run's job is asked after and ended on Windows, is run as it is, and
       // so are the system's own programs that keep a record It writes to the person there
       if (/(^|[\\/])(powershell|icacls|whoami)\.exe$/i.test(bin)) return (real.execFile as (...a: unknown[]) => unknown)(bin, args, options, done)
@@ -188,6 +216,7 @@ vi.mock('./src/service', async (original) => {
   return { ...real, restartWay: () => stand.restartWay ?? real.restartWay() }
 })
 vi.mock('./src/setup', () => ({
+  claudeFolders: () => stand.claudeFolders,
   detectAll: async () => stand.found,
   newerProgramSeen: () => false,
   reconcile: async (chosen: readonly string[] | (() => readonly string[])) => {
@@ -195,6 +224,25 @@ vi.mock('./src/setup', () => ({
     return []
   },
 }))
+// Claude Code's notes of the conversations it has open are read as it writes them. Whether the
+// process a note names is the Claude Code that wrote it is for claude-open.test.ts to try, on each
+// system: here the note names this test's own process, which is no Claude Code
+vi.mock('./src/claude-open', async (original) => {
+  const real = await original<typeof import('./src/claude-open')>()
+  return {
+    ...real,
+    openClaude: (folders: readonly string[], _alive: unknown, _same: unknown, discovery: InstanceType<typeof real.ClaudeDiscovery>) => {
+      stand.claudeScans++
+      if (stand.claudeRealProcesses) return real.openClaude(folders, () => true, undefined, discovery)
+      return real.openClaude(
+        folders,
+        () => true,
+        () => true,
+        discovery,
+      )
+    },
+  }
+})
 vi.mock('./src/usage', () => ({
   agentOf: (harness: unknown) => String(harness ?? 'unknown'),
   begin: () => {},
@@ -364,6 +412,10 @@ afterEach(async () => {
   stand.calls.length = 0
   stand.recorded.length = 0
   stand.reconciled.length = 0
+  stand.claudeFolders.length = 0
+  stand.claudeScans = 0
+  stand.claudeRealProcesses = false
+  stand.scan = null
   said.length = 0
   stand.codex.length = 0
   stand.closed.clear()
@@ -6615,6 +6667,177 @@ describe('how what is done on a conversation’s pages would reach it, as the co
     await until(() => stand.t3.sent.some((m) => m.text.includes('click-2')))
     expect(stand.t3.sent.every((m) => m.thread === 't3-thread-a')).toBe(true)
   })
+
+  test.each(['signal', 'update restart'] as const)('%s shutdown kills an in-flight discovery child before the connector returns', async (how) => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-claude-'))
+    made.push(folder)
+    mkdirSync(path.join(folder, 'sessions'))
+    writeFileSync(
+      path.join(folder, 'sessions', '1.json'),
+      JSON.stringify({ pid: 1, sessionId: claude, startedAt: Date.now() - 60_000, kind: 'interactive', entrypoint: 'cli' }),
+    )
+    stand.claudeFolders.push(folder)
+    stand.claudeRealProcesses = true
+    stand.scan = { started: () => {}, completed: () => {}, delay: 60_000, timeout: 60_000 }
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+    const real = Date.now
+    const ahead = vi.spyOn(Date, 'now').mockImplementation(() => real() + 60_000)
+    try {
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: real() - 60_000 }] })
+      offered({ ...click(1), session: { harness: 'claude-code', id: claude } })
+      await until(() => stand.scan?.child?.pid !== undefined)
+      const child = stand.scan!.child!
+      expect(() => process.kill(child.pid!, 0)).not.toThrow()
+      if (how === 'update restart') {
+        stand.fetched = { from: '0.1.0', to: '9.9.9', program: path.join(os.tmpdir(), 'it-new', 'it.exe') }
+        stand.restartWay = 'launcher'
+        stand.watching.get('machines:me')!({ wanted: ['claude-code'], upgrade: { state: 'asked', version: '9.9.9' } })
+        await until(() => said.includes('stopped'))
+      }
+      await stop!()
+      stop = null
+      expect(() => process.kill(child.pid!, 0)).toThrow()
+      if (how === 'update restart') expect(process.exitCode).toBe(75)
+    } finally {
+      ahead.mockRestore()
+      process.exitCode = undefined
+      const child = stand.scan?.child
+      if (child && child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL')
+        await new Promise<void>((resolve) => child.once('close', () => resolve()))
+      }
+    }
+  })
+
+  test('a slow process scan leaves local requests responsive and shares its in-flight result with the banner', async () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-claude-'))
+    made.push(folder)
+    mkdirSync(path.join(folder, 'sessions'))
+    writeFileSync(
+      path.join(folder, 'sessions', '1.json'),
+      JSON.stringify({ pid: 1, sessionId: claude, startedAt: Date.now() - 60_000, kind: 'interactive', entrypoint: 'cli' }),
+    )
+    stand.claudeFolders.push(folder)
+    stand.claudeRealProcesses = true
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+    const real = Date.now
+    const ahead = vi.spyOn(Date, 'now').mockImplementation(() => real() + 60_000)
+    let completed = false
+    let started = false
+    let began = 0
+    let health: Promise<unknown> | undefined
+    const checking = () => {
+      started = true
+      began = performance.now()
+      health = new Promise((resolve) => setTimeout(() => void local('/health').then(resolve), 50))
+    }
+    stand.scan = {
+      started: checking,
+      completed: () => {
+        completed = true
+      },
+      delay: 1800,
+    }
+    try {
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: real() - 60_000 }] })
+      offered({ ...click(1), session: { harness: 'claude-code', id: claude } })
+      await until(() => started)
+      expect(await health).not.toBeNull()
+      expect(performance.now() - began).toBeLessThan(1500)
+      expect(started).toBe(true)
+      expect(completed).toBe(false)
+      // Another local request triggers banner discovery while routing is still awaiting its scan.
+      await local('/session', { method: 'POST', body: { harness: 'claude-code', session: '22222222-2222-4333-8444-555555555555' } })
+      expect(stand.claudeScans).toBe(1)
+      expect(completed).toBe(false)
+      await until(() => completed, 4000)
+      expect(stand.claudeScans).toBe(1)
+    } finally {
+      if (started) await until(() => completed, 4000)
+      ahead.mockRestore()
+    }
+  })
+
+  test('a hundred clicks share one process scan, and a later routing pass refreshes it', async () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-claude-'))
+    made.push(folder)
+    mkdirSync(path.join(folder, 'sessions'))
+    writeFileSync(
+      path.join(folder, 'sessions', '1.json'),
+      JSON.stringify({ pid: 1, sessionId: claude, startedAt: Date.now() - 60_000, kind: 'interactive', entrypoint: 'cli' }),
+    )
+    stand.claudeFolders.push(folder)
+    await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+    const real = Date.now
+    const ahead = vi.spyOn(Date, 'now').mockImplementation(() => real() + 60_000)
+    try {
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: real() - 60_000 }] })
+      const session = { harness: 'claude-code', id: claude }
+      // An open conversation without the add-on must be held, for every click in the backlog.
+      const clicks = Array.from({ length: 100 }, (_, n) => ({ ...click(n + 1), session }))
+      offered(...clicks)
+      await until(() => stand.calls.filter((c) => c.name === 'delivery:holdBack').flatMap((c) => c.args.ids).length === 100)
+      expect(stand.claudeScans).toBe(1)
+      expect(stand.calls.filter((c) => c.name === 'delivery:holdBack').every((c) => c.args.why === OPEN_WITHOUT_ADDON)).toBe(true)
+      // The next pass after the short cache window must read the processes again.
+      await until(() => stand.claudeScans > 1, 4000)
+    } finally {
+      ahead.mockRestore()
+    }
+  })
+
+  test.each([false, true])(
+    'a Claude Code conversation open at the person’s keyboard that its add-on has not been heard from in is told to It, and is taken back once it is heard from, with past contact %s',
+    async (heard) => {
+      // A Claude Code folder in which Claude Code says it has a conversation open, in this very process, opened a minute ago
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-claude-'))
+      mkdirSync(path.join(folder, 'sessions'))
+      const opened = '33333333-2222-4333-8444-555555555555'
+      const since = Date.now() - 60_000
+      writeFileSync(
+        path.join(folder, 'sessions', `${process.pid}.json`),
+        JSON.stringify({ pid: process.pid, sessionId: opened, startedAt: since, kind: 'interactive', entrypoint: 'cli' }),
+      )
+      stand.claudeFolders.push(folder)
+      const told = () => stand.calls.filter((c) => c.name === 'machines:notLoaded').map((c) => c.args.conversations)
+      try {
+        await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }, (home) => {
+          if (heard) writeFileSync(path.join(home, 'heard.json'), JSON.stringify({ [`claude-code:${opened}`]: 1 }))
+        })
+        // While the connector has only just started, which the add-ons of open conversations are given to reach it, It is
+        // told that there are none, which takes back whatever a connector that ran before said
+        await new Promise((r) => setTimeout(r, 6000))
+        expect(told()).toEqual([[]])
+        // Half a minute on, the conversation has not been heard from, and It is told of it by its id and when it was opened
+        const real = Date.now
+        const ahead = vi.spyOn(Date, 'now').mockImplementation(() => real() + 60_000)
+        try {
+          await until(() => told().length === 2, 10_000)
+          expect(told()[1]).toEqual([{ harness: 'claude-code', sessionId: opened, since }])
+          // An upgraded conversation can have pages without the published-without-addon marker,
+          // and can even have been heard by an older connector. Live detection must protect it.
+          expect(conversationFolder({ harness: 'claude-code', id: opened })).toBeUndefined()
+          stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: real() - 60_000 }] })
+          offered({ ...click(1), session: { harness: 'claude-code', id: opened } })
+          await until(() => stand.calls.some((c) => c.name === 'delivery:holdBack'), 3000)
+          expect(stand.calls.filter((c) => c.name === 'delivery:holdBack').map((c) => c.args)).toEqual([{ ids: ['click-1'], why: OPEN_WITHOUT_ADDON }])
+          expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+          // Said once, and not again while nothing changes
+          await new Promise((r) => setTimeout(r, 5500))
+          expect(told()).toHaveLength(2)
+          // Its add-on is heard from, as after /reload-plugins: It is told at once that none is left
+          await local('/session', { method: 'POST', body: { harness: 'claude-code', session: opened } })
+          await until(() => told().length === 3, 3000)
+          expect(told()[2]).toEqual([])
+        } finally {
+          ahead.mockRestore()
+        }
+      } finally {
+        rmSync(folder, { recursive: true, force: true })
+      }
+    },
+    40_000,
+  )
 
   test('where T3 Code is not running, a conversation is held in no thread and nothing is asked', async () => {
     await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })

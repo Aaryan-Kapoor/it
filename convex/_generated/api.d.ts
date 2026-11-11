@@ -29,6 +29,7 @@ import type * as lib_counted from "../lib/counted.js";
 import type * as lib_errors from "../lib/errors.js";
 import type * as lib_hash from "../lib/hash.js";
 import type * as lib_limits from "../lib/limits.js";
+import type * as lib_listening from "../lib/listening.js";
 import type * as lib_log from "../lib/log.js";
 import type * as lib_signing from "../lib/signing.js";
 import type * as lib_tally from "../lib/tally.js";
@@ -73,6 +74,7 @@ declare const fullApi: ApiFromModules<{
   "lib/errors": typeof lib_errors;
   "lib/hash": typeof lib_hash;
   "lib/limits": typeof lib_limits;
+  "lib/listening": typeof lib_listening;
   "lib/log": typeof lib_log;
   "lib/signing": typeof lib_signing;
   "lib/tally": typeof lib_tally;

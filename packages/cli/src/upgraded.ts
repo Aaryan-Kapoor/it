@@ -106,8 +106,22 @@ export const restartLine = (names: string[]): string | null =>
     ? `Restart ${listed(names)} to load ${names.length === 1 ? 'its new add-on' : 'their new add-ons'}. Until then, one that is already running goes on with the add-on it loaded, which still takes clicks.`
     : null
 
-/** What a person is told of the add-ons once It is upgraded: which could not be brought up to date, and which apps to restart. */
-export function addonsSaid(done: AfterUpgrade, label: (id: Harness) => string): string[] {
+/**
+ * What a person is told to do in every Claude Code conversation that was already open, once
+ * It's add-on there is a new one: Claude Code loads an add-on as a conversation starts, and
+ * one that was open goes on with what it loaded, which may be nothing at all. An It whose
+ * add-on Claude Code did not load, as 0.1.36's in a Claude Code of now, left every such
+ * conversation without one, and nothing done on their pages reaches them until this is done.
+ */
+export const RELOAD_OPEN =
+  'Type /reload-plugins in any Claude Code conversation that was already open, so that it loads It’s new add-on: until then, what is done on its pages may not reach it.'
+
+/**
+ * What a person is told of the add-ons once It is upgraded: which could not be brought up to
+ * date, which apps to restart, and, where Claude Code has It's add-on (`claude`), what to type
+ * in its conversations that were open.
+ */
+export function addonsSaid(done: AfterUpgrade, label: (id: Harness) => string, claude = false): string[] {
   const lines: string[] = []
   for (const o of done.addons ?? [])
     if (o.did === 'failed') {
@@ -116,8 +130,10 @@ export function addonsSaid(done: AfterUpgrade, label: (id: Harness) => string): 
         `${app}'s add-on could not be brought up to date${o.detail ? `: ${o.detail.replace(/\.$/, '')}` : ''}. ${app} keeps the add-on it had, which still takes clicks, and It tries again each time it starts and every half hour.`,
       )
     }
-  const restart = restartLine((done.addons ?? []).filter((o) => o.did === 'installed' && o.restart).map((o) => label(o.id)))
+  // Claude Code is said apart, below: a conversation of its loads the new add-on without a restart
+  const restart = restartLine((done.addons ?? []).filter((o) => o.did === 'installed' && o.restart && o.id !== 'claude-code').map((o) => label(o.id)))
   if (restart) lines.push(restart)
   if (done.addonsLater) lines.push('Its add-ons in your agent apps are brought up to date when It starts as the new version.')
+  if (claude) lines.push(done.addonsLater ? `Once it has, ${RELOAD_OPEN.charAt(0).toLowerCase()}${RELOAD_OPEN.slice(1)}` : RELOAD_OPEN)
   return lines
 }

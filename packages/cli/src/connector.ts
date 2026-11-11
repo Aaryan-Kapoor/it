@@ -33,6 +33,7 @@ import {
 } from '@it/protocol'
 import { ADDON_API, type AddonRuntime, AddonRuntimes } from './addon-runtime'
 import { ADDONS } from './addons.generated'
+import { ClaudeDiscovery, type OpenClaude, openClaude } from './claude-open'
 import {
   DeliveryRecovery,
   eraseDeliveryRecovery,
@@ -70,7 +71,7 @@ import { profileEnvironment, readProfile } from './profiles'
 import { conversationFolder, conversationProfile, noteConversation, publishedWithoutAddon } from './publish'
 import { alone, lockHeld } from './serve/backend'
 import * as service from './service'
-import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
+import { claudeFolders, detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
 import {
   type T3,
   T3_HELD_MOST,
@@ -515,13 +516,14 @@ export async function runConnector(say: (line: string) => void): Promise<void> {
   if (other) throw alreadyThere(other)
   const left = lockHolder()
   let mine = false
+  const discovery = new ClaudeDiscovery()
   try {
     await alone(
       'connector',
       () => {
         mine = true
         if (left !== undefined && left !== process.pid) say(`took over from a connector that is gone and left its lock behind (pid ${left})`)
-        return connecting(say)
+        return connecting(say, discovery)
       },
       0,
     )
@@ -529,6 +531,8 @@ export async function runConnector(say: (line: string) => void): Promise<void> {
     // Another has the lock, and lives
     if (!mine && err instanceof Problem && err.code === 'busy') throw alreadyThere(lockHolder())
     throw err
+  } finally {
+    await discovery.stop()
   }
 }
 
@@ -608,7 +612,7 @@ const NOT_ASKED = new Problem('Whether this machine and the It it joined fit has
 const FITS_EVERY_MS = 60_000
 
 /** Everything the connector does once the folder's lock is its own. */
-async function connecting(say: (line: string) => void): Promise<void> {
+async function connecting(say: (line: string) => void, discovery: ClaudeDiscovery): Promise<void> {
   // Something that goes wrong again and again (the backend cannot be reached, say) is said once
   // every ten minutes for each thing it is about, however many other lines come in between
   const saidAt = new Map<string, number>()
@@ -1566,6 +1570,77 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
   }
   /**
+   * The Claude Code conversations open at a person's keyboard on this machine, as Claude Code
+   * keeps note of them, whose add-on this connector does not hear. It's add-on asks the
+   * connector for clicks every second for as long as its conversation is open, so one that is
+   * open and has not been heard from for a while has not loaded it: it was already open when the
+   * add-on was installed, or when an It whose add-on that Claude Code does not load was replaced.
+   * Typing /reload-plugins in it loads the add-on. A conversation that has just begun, or that
+   * this connector has only just started beside, is given time to be heard first, and one that a
+   * thread of T3 Code holds is not counted: what is done on its pages reaches it through T3 Code.
+   * It goes to It whenever it changes, for the site to say so.
+   */
+  const NOT_HEARD_MS = 30_000
+  const NOT_LOADED_MOST = 40
+  const connectorBegan = Date.now()
+  let notLoadedSaid: string | undefined
+  let notLoadedAsking = false
+  // Process discovery may start PowerShell on Windows. Share it with the banner and nearby
+  // routing passes, but filter current add-on contact and T3 ownership on every use.
+  const OPEN_CACHE_MS = 2000
+  let openChecked = -Infinity
+  let openFound: OpenClaude[] = []
+  let openAsking: Promise<OpenClaude[]> | undefined
+  const openNow = (): Promise<OpenClaude[]> => {
+    if (discovery.stopped) return Promise.resolve([])
+    if (openAsking) return openAsking
+    if (performance.now() - openChecked < OPEN_CACHE_MS) return Promise.resolve(openFound)
+    openAsking = openClaude(claudeFolders(), undefined, undefined, discovery)
+      .catch(() => [])
+      .then((found) => {
+        openFound = found
+        openChecked = performance.now()
+        openAsking = undefined
+        return found
+      })
+    return openAsking
+  }
+  const notLoadedNow = (open: readonly OpenClaude[]): { harness: string; sessionId: string; since: number }[] => {
+    const now = Date.now()
+    if (!connected('claude-code') || now - connectorBegan < NOT_HEARD_MS) return []
+    return open
+      .filter((c) => now - c.startedAt >= NOT_HEARD_MS)
+      .filter((c) => {
+        const key = keyOf('claude-code', c.id)
+        const heard = [key, follow(key)].some((k) => {
+          const s = sessions.get(k)
+          return s !== undefined && now - s.seen < NOT_HEARD_MS
+        })
+        return !heard && notedThread(key) === undefined
+      })
+      .sort((x, y) => y.startedAt - x.startedAt)
+      .slice(0, NOT_LOADED_MOST)
+      .map((c) => ({ harness: 'claude-code', sessionId: c.id, since: c.startedAt }))
+  }
+  const reportNotLoaded = async (): Promise<void> => {
+    if (over || notLoadedAsking) return
+    notLoadedAsking = true
+    try {
+      const open = connected('claude-code') && Date.now() - connectorBegan >= NOT_HEARD_MS ? await openNow() : []
+      if (over || closing) return
+      const list = notLoadedNow(open)
+      const said = JSON.stringify(list)
+      if (said === notLoadedSaid) return
+      await call('mutation', api.machines.notLoaded, { conversations: list })
+      notLoadedSaid = said
+      say(`${list.length} open Claude Code conversation${list.length === 1 ? ' has' : 's have'} not loaded It’s add-on`)
+    } catch {
+      // Said again at the next look
+    } finally {
+      notLoadedAsking = false
+    }
+  }
+  /**
    * Whether a conversation is given the mark alone. Its agent app has to have a hook of It's
    * that runs as a turn begins (Codex and Claude Code have). The conversation's add-on has to
    * have been heard from, so that its hooks are known to run there. No turn of it may be
@@ -2513,25 +2588,31 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * it ended badly, which is often the only word there is of why. That line is the person's
    * own app speaking to them, and goes to the page alone: never into the log.
    */
-  const notReopened = (session: { harness: string; id: string }, why: string) => {
+  const notReopened = async (session: { harness: string; id: string }, why: string) => {
     const words = saidLast.get(follow(keyOf(session.harness, session.id)))
     const said = words ? `${why}, and its last words were: ${words}` : why
     // Why its reopening failed is said all the same, since the conversation may be gone for good,
     // and after it what lets it hear the page where it is still open. A conversation known to be
     // open without the add-on is not reopened at all (`keptShut`), so this is said only of one
     // whose reopening was under way before It knew
-    void call('mutation', api.machines.wakeFailed, { for: session, why: unloaded(session) ? notLoadedToo(said) : said }).catch(() => {})
+    const open = session.harness === 'claude-code' ? await openNow() : []
+    void call('mutation', api.machines.wakeFailed, { for: session, why: unloaded(session, open) ? notLoadedToo(said) : said }).catch(() => {})
   }
   /**
    * Whether a Claude Code conversation is open without It's add-on, as far as this machine
    * knows: it published its page while the add-on did not run in it, as one that was already
    * open when the add-on was installed does, and the add-on has not been heard from in it since.
-   * Only Claude Code's own `it create` notes that (`publishedWithoutAddon`): Codex, Pi, OpenCode
+   * Live detection also covers upgraded conversations without that saved mark, including ones
+   * heard from by an older add-on. Only Claude Code's own notes and processes count: Codex, Pi, OpenCode
    * and Hermes are never taken to be.
    */
-  const unloaded = (session: { harness: string; id: string }): boolean => {
+  const unloaded = (session: { harness: string; id: string }, open: readonly OpenClaude[]): boolean => {
     const key = keyOf(session.harness, session.id)
-    return session.harness === 'claude-code' && publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))
+    return (
+      session.harness === 'claude-code' &&
+      ((publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))) ||
+        notLoadedNow(open).some((c) => follow(keyOf(c.harness, c.sessionId)) === follow(key)))
+    )
   }
   /**
    * What this machine is telling It, or has told It, of why a click is held back from reopening
@@ -2670,8 +2751,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * types /reload-plugins in it, which its page says for as long as it waits, as why it was not
    * woken. One no longer kept from it has that taken away from its page.
    */
-  const keptShut = (click: Offered): boolean => {
-    if (!unloaded(click.session!)) {
+  const keptShut = (click: Offered, open: readonly OpenClaude[]): boolean => {
+    if (!unloaded(click.session!, open)) {
       if (click.heldBack !== undefined) tellHeld(click, null)
       return false
     }
@@ -3096,7 +3177,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const forThread = t3 !== undefined && t3Only(key)
         // Why, as one of a few fixed words made from the refusal: its own words stay on this machine
         record('agent.woken', { result: n >= QUEUE_WAITS.length && !forThread ? 'failed' : 'declined', agent: agentOf(harness), why: wakeWhy(refused ?? '') })
-        if (reopening) notReopened(click.session!, refused)
+        if (reopening) await notReopened(click.session!, refused)
         // T3 Code could not take it, and is not asked again for a while (see `t3For`). A conversation that may go
         // other ways goes as any other meanwhile, which is tried at once; one held in a thread waits for it
         if (t3) {
@@ -3319,7 +3400,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         }
         if (!comingBack.size) givingBack = 'done'
       }
-      const now = Date.now()
+      let now = Date.now()
       // Telling It what was handed over is done beside this, never ahead of it: a slow answer
       // there must not hold up renewing leases or taking new clicks
       void confirmAll()
@@ -3408,6 +3489,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
         return Math.max(now - click.at, here - firstSeen.get(click.id)!)
       }
       const offeredHere = new Map([...inbox, ...recoveredClicks.values()].map((c) => [c.id, c]))
+      // Await one shared snapshot before deciding routes. HTTP requests continue to be served;
+      // all session, ownership and wake checks below use the state after discovery completes.
+      const openThisPass =
+        connected('claude-code') &&
+        Date.now() - connectorBegan >= NOT_HEARD_MS &&
+        [...offeredHere.values()].some((c) => c.session?.harness === 'claude-code' && wakes('claude-code', c.at))
+          ? await openNow()
+          : []
+      if (closing || unfitting || recovery.erased) return
+      now = Date.now()
+
       for (const id of t3Waits.keys()) if (!offeredHere.has(id)) t3Waits.delete(id)
       // Before anything is decided about any of them: a click the person asked to have tried
       // again may be one that a click behind it would otherwise wait for, or go with
@@ -3469,7 +3561,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
                 !runtimes.blocksWake(session.harness) &&
                 !t3Undecided(key) &&
                 // Asked last, since it tells the page: only of a click that would otherwise be reopened for
-                !keptShut(click),
+                !keptShut(click, openThisPass),
             })
         if (forAddOn) {
           // Route 1: the add-on will ask for it, or the running turn's next hook will
@@ -3713,6 +3805,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (typeof body.turn === 'boolean') turnsSaid.set(key, { on: body.turn, at: Date.now() })
       if (typeof body.busy === 'boolean' || typeof body.turn === 'boolean') turnSeen(key)
       if (isNew && (harness === 'codex' || harness === 'claude-code')) noteHeard(key)
+      // A conversation that had not loaded the add-on and is heard from now has: the site is told at once
+      if (isNew && harness === 'claude-code') void reportNotLoaded()
       // The harness as It knows it, and never as whoever asked spelled it
       if (isNew) say(`${a(agentOf(harness))} conversation is listening (${short(id)})`)
       if (changed && typeof body.was === 'string') say(`${a(agentOf(harness))} conversation carries on under a new id (${short(body.was)} is now ${short(id)})`)
@@ -4515,6 +4609,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     void tellTurns()
     watch(true)
   }, 1000)
+  // Which open Claude Code conversations have not loaded It's add-on, looked at every few seconds
+  const looksOpen = setInterval(() => void reportNotLoaded(), 5_000)
   // Said this often and no less: the site takes a machine that has been quiet for a few of these to be off
   const alive = setInterval(() => void report(), ALIVE.everyMs)
   // Whether this machine still fits the It it joined is asked for as long as this runs: that
@@ -4564,6 +4660,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       })
   })
   clearInterval(tick)
+  clearInterval(looksOpen)
   clearInterval(beat)
   clearInterval(alive)
   clearTimeout(firstLook)
@@ -4574,6 +4671,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // started: nothing It runs with nobody watching runs on once It has been stopped. What each
   // was reopened for is given back, and is reopened for again when It next starts.
   closing = true
+  await discovery.stop()
   for (const timer of markTimers) clearTimeout(timer)
   for (const timer of followTimers.values()) clearTimeout(timer)
   followTimers.clear()
