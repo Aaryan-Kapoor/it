@@ -104,8 +104,15 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
 
   if (pages === undefined) return <main className="grid-view" role="status" />
   if (pages.length === 0) return owner ? <DeletionStatus empty /> : <Empty owner={false} />
-  const act = (p: Promise<unknown>) => {
+  // Closing the actions hides them, and so the focus, where it is on one of them, goes back to
+  // the button that opened them rather than to nowhere
+  const close = (from: HTMLElement) => {
+    const open = from.closest('.page-card.is-menu-open')
+    if (open?.contains(document.activeElement)) open.querySelector<HTMLElement>('.card-more')?.focus()
     setMenu(null)
+  }
+  const act = (from: HTMLElement, p: Promise<unknown>) => {
+    close(from)
     return p.catch((err) => say(refusal(err).message, 'error'))
   }
   return (
@@ -187,8 +194,8 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
                     className="card-action"
                     title="Copy link"
                     aria-label="Copy link"
-                    onClick={async () => {
-                      setMenu(null)
+                    onClick={async (e) => {
+                      close(e.currentTarget)
                       say((await copy(`${location.origin}/p/${p.slug}`)) ? 'Link copied' : 'Copy failed')
                     }}
                   >
@@ -200,7 +207,7 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
                     aria-pressed={p.pinned}
                     title={p.pinned ? 'Unpin' : 'Pin to the front'}
                     aria-label={p.pinned ? 'Unpin' : 'Pin'}
-                    onClick={() => act(organize({ artifactId: p.id as Id<'artifacts'>, pinned: !p.pinned }))}
+                    onClick={(e) => act(e.currentTarget, organize({ artifactId: p.id as Id<'artifacts'>, pinned: !p.pinned }))}
                   >
                     <IconPin />
                   </button>
@@ -209,9 +216,11 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
                     className="card-action card-action--danger"
                     title="Delete"
                     aria-label="Delete"
-                    onClick={() =>
-                      confirm(`Delete “${p.title}”? It will leave every display.`) ? act(remove({ artifactId: p.id as Id<'artifacts'> })) : setMenu(null)
-                    }
+                    onClick={(e) => {
+                      const from = e.currentTarget
+                      if (confirm(`Delete “${p.title}”? It will leave every display.`)) act(from, remove({ artifactId: p.id as Id<'artifacts'> }))
+                      else close(from)
+                    }}
                   >
                     <IconX />
                   </button>

@@ -1,6 +1,9 @@
 // A card's actions on the grid, in a stand-in browser with a stand-in backend: the button that
 // opens them where a screen cannot hover, what it tells a screen reader, how the keyboard gets
 // to them and away again, and that each action is what the tray does on a desktop.
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { getFunctionName } from 'convex/server'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -50,6 +53,19 @@ const press = (el: Element) =>
     el.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
   })
 const open = (title: string) => cardOf(title).classList.contains('is-menu-open')
+/** Opens a card's actions as Enter or Space on its button does, which takes the focus to the first of them. */
+const openFromKeyboard = (title: string) =>
+  act(async () => {
+    more(title).focus()
+    more(title).dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }))
+    await new Promise((r) => requestAnimationFrame(r))
+  })
+/** Presses a button as Enter or Space does, where the focus is. */
+const enter = (el: HTMLElement) =>
+  act(async () => {
+    el.focus()
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }))
+  })
 
 beforeEach(() => {
   vi.spyOn(Date, 'now').mockReturnValue(NOW)
@@ -126,6 +142,25 @@ describe('the button that opens a card’s actions', () => {
 })
 
 describe('the actions it opens', () => {
+  test.each(['Copy link', 'Pin', 'Delete'])(
+    'pressed from the keyboard, %s gives the focus back to the button that opened them, which they hide on closing',
+    async (name) => {
+      vi.spyOn(window, 'confirm').mockReturnValue(false)
+      await grid()
+      await openFromKeyboard('Plan')
+      await enter(action('Plan', name))
+      expect(open('Plan')).toBe(false)
+      expect(document.activeElement).toBe(more('Plan'))
+    },
+  )
+
+  test('on a screen that hovers, where no card’s actions are opened by the button, an action keeps the focus where it is', async () => {
+    await grid()
+    await enter(action('Plan', 'Pin'))
+    expect(asked).toEqual([{ name: 'artifacts:organize', args: { artifactId: 'plan', pinned: true } }])
+    expect(document.activeElement).toBe(action('Plan', 'Pin'))
+  })
+
   test('pin a page and unpin one, as the desktop’s tray does, and close once pressed', async () => {
     await grid()
     await press(more('Plan'))
@@ -152,5 +187,26 @@ describe('the actions it opens', () => {
     await press(action('Plan', 'Delete'))
     expect(asked).toEqual([{ name: 'artifacts:remove', args: { artifactId: 'plan' } }])
     expect(open('Plan')).toBe(false)
+  })
+})
+
+describe('the stylesheet', () => {
+  const sheet = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'styles.css'), 'utf8')
+  const touch = sheet.slice(sheet.indexOf('@media (hover: none) {'))
+  const block = touch.slice(0, touch.indexOf('\n}\n'))
+  const rule = (selector: string) => {
+    const at = block.indexOf(`  ${selector} {`)
+    return at === -1 ? '' : block.slice(at, block.indexOf('}', at))
+  }
+
+  test('hides the button where a screen hovers, and shows it where it cannot', () => {
+    expect(sheet).toMatch(/\n\.card-more \{\n {2}display: none;/)
+    expect(rule('.card-more')).toContain('display: flex;')
+  })
+
+  test('keeps a closed tray from a press, the keyboard and a screen reader where a screen cannot hover, and shows an open one', () => {
+    expect(rule('.card-actions')).toContain('visibility: hidden;')
+    const opened = rule('.page-card.is-menu-open .card-actions')
+    for (const said of ['opacity: 1;', 'pointer-events: auto;', 'visibility: visible;']) expect(opened).toContain(said)
   })
 })
