@@ -1937,7 +1937,7 @@ iframe.page-frame.is-loaded {
   align-self: center;
   width: 36px;
   height: 36px;
-  margin: -4px -8px -4px 0;
+  margin: -4px -2px -4px 0;
   padding: 0;
   border: 0;
   border-radius: var(--r-md);
