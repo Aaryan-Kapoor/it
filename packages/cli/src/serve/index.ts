@@ -184,8 +184,13 @@ async function here(
 
 /** How often the service looks at whether the network is to be on, and at which addresses this machine has. */
 const LOOK_MS = 1000
-/** How long a door being opened anew for the network is tried for where one of its ports is still held, and how long the door for this machine alone that it falls back to. */
-const REOPEN_MS = { wanted: 3_000, fallback: 20_000 } as const
+/**
+ * How long a door being opened anew for the network is tried for where one of its ports is
+ * still held, and how long the door for this machine alone that it falls back to. Both together
+ * come to well within the twenty seconds `it network` waits for the service to say how its door
+ * stands, with room for the look that finds the setting and for the telling after it.
+ */
+const REOPEN_MS = { wanted: 3_000, fallback: 10_000 } as const
 
 /**
  * Opens a door anew, trying again a moment later for as long as `ms` where it could not be
