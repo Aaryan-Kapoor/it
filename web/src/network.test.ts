@@ -788,6 +788,15 @@ describe('the network as a switch', () => {
     expect(asked).toEqual([{ to: 'on' }])
   })
 
+  test('A persistent Funnel warning leaves the applied network switch state available', async () => {
+    watched['network:get'] = stands({ on: true, funnel: 'unknown', addresses: [LAN] })
+    await panel()
+    expect(ways()[1]!.checked).toBe(true)
+    expect(host.querySelector('.net-way[data-on] input')).toBe(ways()[1])
+    expect(host.querySelector('.net-said')).toBeNull()
+    expect(host.querySelector('.net-exposure')?.getAttribute('role')).toBe('status')
+  })
+
   test('Funnel warnings remain visible with networking off', async () => {
     watched['network:get'] = stands({ on: false, funnel: 'public' })
     await panel()

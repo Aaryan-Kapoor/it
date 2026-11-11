@@ -247,12 +247,12 @@ export function NetworkSwitch() {
   return (
     <div className="net">
       {net.funnel === 'public' && (
-        <p className="net-said error" role="status">
+        <p className="net-exposure panel-said error" role="status">
           Tailscale Funnel makes It public, even with the network off. Turn off the Funnel in Tailscale to keep It private. These settings do not turn it off.
         </p>
       )}
       {net.funnel === 'unknown' && (
-        <p className="net-said error" role="status">
+        <p className="net-exposure panel-said error" role="status">
           It could not check Tailscale Funnel. A Funnel can make It public, even with the network off. Check Tailscale on the machine It runs on before relying
           on these settings to keep It private.
         </p>
