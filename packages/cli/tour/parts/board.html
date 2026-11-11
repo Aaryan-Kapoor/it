@@ -118,8 +118,13 @@ Shell.part("board", (my) => {
   // What the person's lines are drawn on, which is asked for when the first is
   var ink = null, sought = false;
   function inks() {
-    if (!sought) { sought = true; try { ink = inkEl.getContext("2d"); } catch (err) {} }
+    if (!sought) { sought = true; try { ink = inkEl.getContext("2d"); } catch (err) {} aimed(); }
     return ink;
+  }
+  // It is drawn on in the board's units, from the place for the answer
+  function aimed() {
+    var k = dpr * view.s;
+    if (ink) ink.setTransform(k, 0, 0, k, k * view.ox, k * view.oy);
   }
   function build(mode) {
     var L = LAY[mode], k = L.plot[2] / 100;
@@ -196,10 +201,9 @@ Shell.part("board", (my) => {
   function redraw() {
     inkBox = undefined;
     if (!(sought || mine.length) || !inks()) return;
-    var k = dpr * view.s;
     ink.setTransform(1, 0, 0, 1, 0, 0);
     ink.clearRect(0, 0, inkEl.width, inkEl.height);
-    ink.setTransform(k, 0, 0, k, k * view.ox, k * view.oy);
+    aimed();
     mine.forEach((s) => whole(ink, s, false));
   }
   // Where the ink that is left on the board is, in the board's units: looked for on the board itself, so that what the
@@ -367,7 +371,7 @@ Shell.part("board", (my) => {
     var fonts = document.fonts && document.fonts.load ? document.fonts.load("600 64px Hand").catch(() => {}) : null;
     return Promise.resolve(fonts).then(() => new Promise((resolve) => {
       try {
-        var k = Math.min(3, 1280 / Math.max(R.w, R.h)), c = document.createElement("canvas"), sheet = document.createElement("canvas");
+        var k = Math.min(2.4, 1280 / Math.max(R.w, R.h)), c = document.createElement("canvas"), sheet = document.createElement("canvas");
         c.width = sheet.width = Math.round(R.w * k); c.height = sheet.height = Math.round(R.h * k);
         var g = c.getContext("2d"), lines = sheet.getContext("2d");
         if (!g || !lines) return resolve(null);
