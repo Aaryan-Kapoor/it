@@ -407,6 +407,48 @@ describe('the whiteboard', () => {
     page.close()
   })
 
+  test.each(['clears the sheet', 'writes more'])('an answer that comes late, after the person has the sheet back and %s, is no answer to what is there, and is not drawn', async (does) => {
+    const page = await opened({}, canvas(PICTURE))
+    page.to('board')
+    written(page, [
+      [330, 220],
+      [345, 290],
+    ])
+    const sent = await checked(page)
+    await sent.accept()
+    await page.advance(SLOW)
+    expect(page.$('#wipe').disabled).toBe(false)
+    if (does === 'clears the sheet') page.$('#wipe').click()
+    else
+      written(page, [
+        [400, 220],
+        [430, 290],
+      ])
+    expect(page.state('board')).toContain('is watching the page')
+    await page.set({ board: { request: sent.data.request, read: '1', right: false, answer: '144', hint: 'try again', say: 'Late.' } })
+    await page.advance(1300)
+    expect([on(page, 'ring'), on(page, 'arrow'), on(page, 'right'), on(page, 'hint'), on(page, 'tick')]).toEqual([false, false, false, false, false])
+    expect(page.said('board')).toBe('')
+    expect(page.errors).toEqual([])
+    page.close()
+  })
+
+  test('an answer that comes late to a sheet the person left as it was is still drawn', async () => {
+    const page = await opened({}, canvas(PICTURE))
+    page.to('board')
+    written(page, [
+      [330, 220],
+      [345, 290],
+    ])
+    const sent = await checked(page)
+    await sent.accept()
+    await page.advance(SLOW)
+    await page.set({ board: { request: sent.data.request, read: '144', right: true, hint: 'that is it', say: 'Right.' } })
+    await page.advance(1300)
+    expect([on(page, 'tick'), page.said('board')]).toEqual([true, 'Right.'])
+    page.close()
+  })
+
   test('fits a drawing into an action with the whiteboard page’s own code, which whiteboard.test.ts holds', () => {
     const board = readFileSync(new URL('./pages/whiteboard.html', import.meta.url), 'utf8')
     const fitting = board.slice(board.indexOf('    function snapshot('), board.indexOf('    sendBtn.addEventListener'))
@@ -571,11 +613,62 @@ describe('the chessboard on the first page', () => {
     page.close()
   })
 
-  test('what was set for chess when the page opened is of an earlier game, and the agent’s note is said', async () => {
+  test('the agent’s note beside its move is said', async () => {
     const page = await chess()
     const move = moved(page, 'e2', 'e4')
     await move.accept()
     await reply(page, `${move.data.request}:e7e5`, 'The open game.')
+    expect(page.said('chess')).toBe('The open game.')
+    page.close()
+  })
+})
+
+describe('the chessboard’s notes on the first page', () => {
+  const moved = (page: Page, from: string, to: string) => {
+    page.$(`[data-sq="${from}"]`).click()
+    page.$(`[data-sq="${to}"]`).click()
+    return page.sent.at(-1)!
+  }
+
+  test('a note that was in the state when the page opened is of an earlier game, and is not said', async () => {
+    const page = await opened({}, (w) => {
+      w.It.state = { ...w.It.state, chess: { reply: 'earlier:e7e5', note: 'From the game before.' } }
+    })
+    page.to('chess')
+    expect(page.said('chess')).toBe('')
+    const move = moved(page, 'e2', 'e4')
+    await move.accept()
+    expect(page.said('chess')).toBe('')
+    page.close()
+  })
+
+  test('a note beside a reply to a game that was started again is not said over the new game, and one beside a move that may not be made is not said', async () => {
+    const page = await opened()
+    page.to('chess')
+    const first = moved(page, 'e2', 'e4')
+    await first.accept()
+    page.$('#new-game').click()
+    await page.set({ chess: { reply: `${first.data.request}:e7e5`, note: 'Stale chess note.' } })
+    expect(page.said('chess')).toBe('')
+    const second = moved(page, 'd2', 'd4')
+    await second.accept()
+    await page.set({ chess: { reply: `${second.data.request}:d7d1`, note: 'About a move that is not one.' } })
+    expect(page.said('chess')).not.toContain('About a move')
+    await page.set({ chess: { reply: `${second.data.request}:d7d5`, note: 'Meeting you in the centre.' } })
+    expect(page.said('chess')).toBe('Meeting you in the centre.')
+    // A word more about the same move is said too
+    await page.set({ chess: { note: 'The queen’s pawn game.' } })
+    expect(page.said('chess')).toBe('The queen’s pawn game.')
+    page.close()
+  })
+
+  test('a note that came with an answer heard before the move was known to have gone is said when the answer is played', async () => {
+    const page = await opened()
+    page.to('chess')
+    const move = moved(page, 'e2', 'e4')
+    await page.set({ chess: { reply: `${move.data.request}:e7e5`, note: 'The open game.' } })
+    expect(page.said('chess')).toBe('')
+    await move.accept()
     expect(page.said('chess')).toBe('The open game.')
     page.close()
   })
@@ -639,6 +732,74 @@ describe('the cube', () => {
     await page.advance(0)
     expect(page.$('#cube-turns').textContent).toBe('solved')
     expect(page.$('#cube-said').textContent).toBe("Played 3 turns. 3 were not turns' names, and were left out. Solved.")
+    page.close()
+  })
+})
+
+describe('the cube’s late answers and long histories', () => {
+  const SOLVED = 'UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB'
+  const cube = async () => {
+    const page = await opened({}, (w) => {
+      // Something moves here, so that the agent’s turns take their time
+      w.matchMedia = () => ({ matches: false })
+    })
+    page.to('cube')
+    return page
+  }
+  const press = (page: Page, name: string) => page.$(`[aria-label="Turn ${name}"]`).click()
+
+  test('the cube is the agent’s while its turns are played, where the answer came after the person had it back too', async () => {
+    const page = await cube()
+    press(page, 'R')
+    page.$('#cube-ask').click()
+    const turned = page.sentOf('turned')[0]!
+    await turned.accept()
+    await page.advance(SLOW)
+    expect(page.$('#cube-solve').disabled).toBe(false)
+    await page.set({ cube: { request: turned.data.request, moves: ["R'", 'U'], say: 'Late.' } })
+    expect([page.$('#cube-solve').disabled, page.$('#cube-mix').disabled, page.$('[aria-label="Turn R"]').disabled]).toEqual([true, true, true])
+    // A press that got through all the same changes nothing
+    page.$('#cube-solve').click()
+    await page.advance(2000)
+    expect(page.$('#cube-turns').textContent).toBe('1 turn since it was solved')
+    expect(page.$('#cube-said').textContent).toBe('Played 2 turns.')
+    expect(page.$('#cube-solve').disabled).toBe(false)
+    page.close()
+  })
+
+  test('a late answer to a cube the person has turned since is not played', async () => {
+    const page = await cube()
+    press(page, 'R')
+    page.$('#cube-ask').click()
+    const turned = page.sentOf('turned')[0]!
+    await turned.accept()
+    await page.advance(SLOW)
+    press(page, 'U')
+    await page.set({ cube: { request: turned.data.request, moves: ["R'"], say: 'Late.' } })
+    await page.advance(2000)
+    expect(page.$('#cube-turns').textContent).toBe('2 turns since it was solved')
+    page.close()
+  })
+
+  test('every turn since the cube was solved is told, so that undoing them from the last solves it, and the person’s turns stop while an action still carries them', async () => {
+    const page = await cube()
+    for (let i = 0; i < 61; i++) press(page, i % 2 ? 'U' : 'R')
+    page.$('#cube-ask').click()
+    const turned = page.sentOf('turned')[0]!
+    expect(turned.data.turns).toHaveLength(61)
+    const { turn } = page.w.__cube
+    const undone = [...turned.data.turns].reverse().map((t: string) => (t.endsWith("'") ? t.slice(0, -1) : t.endsWith('2') ? t : `${t}'`))
+    expect(undone.reduce((f: string, m: string) => turn(f, m), turned.data.faces)).toBe(SOLVED)
+    await turned.refuse()
+    for (let i = 61; i < 260; i++) press(page, i % 2 ? 'U' : 'R')
+    expect(page.$('#cube-turns').textContent).toBe('200 turns since it was solved')
+    expect(page.$('#cube-said').textContent).toBe('That is 200 turns. Ask for the next turns, or start solved.')
+    page.$('#cube-mix').click()
+    expect(page.$('#cube-turns').textContent).toBe('200 turns since it was solved')
+    page.$('#cube-ask').click()
+    const all = page.sentOf('turned')[1]!
+    expect(all.data.turns).toHaveLength(200)
+    expect(new TextEncoder().encode(JSON.stringify(all.data)).length).toBeLessThan(LIMITS.actionPayloadBytes / 8)
     page.close()
   })
 })
@@ -831,6 +992,40 @@ describe('the drum machine on the first page', () => {
     page.section('drums').querySelector('[data-go="back"]').click()
     expect(playing(page)).toBe('0')
     page.close()
+  })
+})
+
+describe('a drum answer with no hits in it', () => {
+  test('is an answer: the wait is over, and its note is said', async () => {
+    const page = await opened({}, (w) => {
+      w.requestAnimationFrame = () => 0
+      w.cancelAnimationFrame = () => {}
+    })
+    page.to('drums')
+    page.$('.pad[data-r="3"][data-c="0"]').click()
+    await page.advance(1500)
+    const beat = page.sentOf('beat')[0]!
+    await beat.accept()
+    expect(page.state('drums')).toContain('has not answered yet')
+    await page.set({ drums: { theirs: { request: beat.data.request, pattern: ['........', '........', '........', '........'], note: 'Yours stands on its own.' } } })
+    expect(page.state('drums')).toContain('answered')
+    expect(page.state('drums')).not.toContain('has not answered')
+    expect(page.said('drums')).toBe('Yours stands on its own.')
+    await page.advance(SLOW)
+    expect(page.state('drums')).not.toContain('has not answered')
+    page.close()
+    const plain = await opened({}, (w) => {
+      w.requestAnimationFrame = () => 0
+      w.cancelAnimationFrame = () => {}
+    })
+    plain.to('drums')
+    plain.$('.pad[data-r="3"][data-c="0"]').click()
+    await plain.advance(1500)
+    const sent = plain.sentOf('beat')[0]!
+    await sent.accept()
+    await plain.set({ drums: { theirs: { request: sent.data.request, pattern: [] } } })
+    expect(plain.said('drums')).toBe('added no hits')
+    plain.close()
   })
 })
 

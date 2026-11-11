@@ -672,6 +672,14 @@
     var mine = [], current = null, busy = false;
     var spots = ["ring", "arrow", "tick", "right", "hint"];
     var clean = () => spots.forEach((id) => $(id).classList.remove("on"));
+    // The sheet is the person's again while an answer may still come, once the wait has run out. An
+    // answer is to the sheet as it was sent: where they write more or clear it, it is no answer to
+    // what is there now, and is not drawn
+    function changed() {
+      if (!asker.waiting()) return;
+      asker.forget();
+      box.idle();
+    }
     function ready() { checkBtn.disabled = busy || !mine.length; wipeBtn.disabled = busy || !mine.length; }
     function draw(s) { s.el.setAttribute("points", s.points.map((p) => (p[0] * W).toFixed(1) + "," + (p[1] * H).toFixed(1)).join(" ")); }
     var point = (e) => {
@@ -687,6 +695,7 @@
       current = { points: [point(e)], width: 5, erase: false, color: INK, el: el };
       mine.push(current);
       draw(current);
+      changed();
       clean();
       $("slot-word").style.opacity = 0;
       ready();
@@ -696,6 +705,7 @@
     wipeBtn.addEventListener("click", () => {
       if (busy) return;
       mine.splice(0).forEach((s) => s.el.remove());
+      changed();
       clean();
       $("slot-word").style.opacity = 1;
       ready();
@@ -1008,6 +1018,7 @@
     var picked = -1, goes = {}, last = null;          // the square picked up, where it may go, and the last move
     var waiting = false, sent = false, turn = 0;      // waiting for the agent; whether it has been told; which move this is
     var pendingId = null;
+    var played = null;                                // the reply that was played last in this game
     var early = null;                                 // what the agent set for this move before it was known to have been told
     var cells = [], shown = [], figures = [], home = 12;
 
@@ -1159,10 +1170,11 @@
       });
     }
     // The agent's move
-    function theirs(m) {
+    function theirs(m, reply) {
       var draw = put(m, 250);
       waiting = false;
       pendingId = null;
+      played = reply;
       render();
       draw();
       box.got();
@@ -1188,34 +1200,41 @@
       // Hearing the same answer twice before the move was accepted must keep its request for a correction.
       if (!sent) { early = { reply: reply, fresh: fresh || !!(early && early.reply === reply && early.fresh) }; return; }
       var m = C.find(now.legal, move);
-      if (m) theirs(m);
+      if (m) { theirs(m, reply); noted(); }
       // Not a move it may make: the agent is told so, once for what it set, and the person is shown nothing of it
       else if (fresh) It.action("illegal", { request: pendingId, move: move.slice(0, 40), fen: C.fen(pos), legal: now.legal.map(C.uci) }).catch(() => {});
     }
     var text = (v) => (v == null ? "" : String(v));
     var revision = () => (typeof It.revision === "number" ? It.revision : -1);
     // What was in the state when the page opened is of an earlier game, and is not a move in this one
-    var seenReply = text(part("chess").reply), seenNote = "", seenRev = revision();
+    var seenReply = text(part("chess").reply), seenNote = "", heardNote = "", seenRev = revision();
+    // The agent's words about its move belong to the reply they are set beside. They are shown while
+    // that reply is the one that was played: beside a reply to an earlier move, or to a game that was
+    // started again, they are about a board that is no longer there
+    function noted() {
+      var st = part("chess"), note = text(st.note).slice(0, 160);
+      if (!played || text(st.reply) !== played || note === seenNote) return;
+      seenNote = note;
+      if (note) box.say(note);
+    }
     function heard() {
       var st = part("chess"), reply = text(st.reply), note = text(st.note).slice(0, 160);
-      var rev = revision(), again = seenRev >= 0 && rev > seenRev;
+      var rev = revision(), again = seenRev >= 0 && rev > seenRev, sameNote = note === heardNote;
       seenRev = rev;
+      heardNote = note;
       if (reply !== seenReply) {
         seenReply = reply;
         answer(reply, true);
-      } else if (again && note === seenNote) {
+      } else if (again && sameNote) {
         // A repeated state still belongs only to the request its reply names.
         answer(reply, false);
       }
-      if (note !== seenNote) {
-        seenNote = note;
-        if (note) box.say(note);
-      }
+      noted();
     }
     $("new-game").addEventListener("click", () => {
       var at = ++turn;
       pendingId = null;
-      pos = C.read(C.START); now = C.state(pos); last = null; picked = -1; waiting = false; sent = false; early = null;
+      pos = C.read(C.START); now = C.state(pos); last = null; picked = -1; waiting = false; sent = false; early = null; played = null;
       render();
       box.you("started a new game");
       box.say("");
@@ -1316,10 +1335,17 @@
         if (q) turns.push(name.charAt(0) + ["", "", "2", "'"][q]);
       } else turns.push(name);
       if (faces === SOLVED) turns = [];
-      if (turns.length > 60) turns = turns.slice(-60);
+    }
+    // Every turn since the cube was solved is kept, since undoing them from the last is the agent's
+    // sure way back. So the person's own turns stop at a number that an action still carries with ease
+    var MOST = 200;
+    function full(more) {
+      if (turns.length + more <= MOST) return false;
+      $("cube-said").textContent = "That is " + MOST + " turns. Ask for the next turns, or start solved.";
+      return true;
     }
     function mineTurn(name) {
-      if (busy) return;
+      if (busy || full(1)) return;
       asker.forget();
       apply(name);
       $("cube-said").textContent = "";
@@ -1339,7 +1365,7 @@
       mineTurn(e.shiftKey ? k + "'" : k);
     });
     $("cube-mix").addEventListener("click", () => {
-      if (busy) return;
+      if (busy || full(12)) return;
       asker.forget();
       var lastFace = "";
       for (var i = 0; i < 12; i++) {
@@ -1365,7 +1391,10 @@
       var good = given.filter((m) => typeof m === "string" && NAMED.test(m.trim())).map((m) => m.trim());
       var left = given.length - good.length;
       box.say(got.say);
-      // Each turn the agent gives is played one at a time, and only one that is a turn's name
+      // Each turn the agent gives is played one at a time, and only one that is a turn's name. The
+      // cube is the agent's while they are played, an answer that came late too
+      busy = true;
+      paint();
       var run = ++playing, i = 0;
       (function next() {
         if (run !== playing) return;
@@ -1689,11 +1718,11 @@
       // Pattern and note arrive together with the id of the beat they answer.
       var reply = st.theirs;
       if (request && (!reply || reply.request !== request)) return;
-      var pattern = request ? reply.pattern : reply;
+      var pattern = request ? reply.pattern : reply, none = false;
       if (k !== taken) {
         var got = read(pattern);
         if (got) {
-          taken = k; theirs = got; fresh = count(got) > 0;
+          taken = k; theirs = got; fresh = count(got) > 0; none = !fresh;
           // They land in the order they are played
           for (var c = 0, i = 0; c < STEPS; c++) for (var r = 0; r < ROWS.length; r++) if (got[r][c]) pad[r][c].style.setProperty("--d", i++ * 70 + "ms");
         }
@@ -1716,6 +1745,12 @@
         if (!said) box.say(added ? "added " + added + (added === 1 ? " hit" : " hits") + " between yours" : "played the same hits as you");
         // It is an answer to a beat the person sent, so it is heard at once
         if (asked && !playing && !sections.drums.hidden) { audio(); start(); }
+      }
+      // An answer to the beat that is waiting may have no hits in it, as where every pad is taken: it is an answer all the same
+      if (none && waiting && request) {
+        waiting = false;
+        box.got();
+        if (!said) box.say("added no hits");
       }
       if (said) box.say(note);
     }
