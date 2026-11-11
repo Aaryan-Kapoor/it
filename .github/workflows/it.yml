@@ -420,6 +420,16 @@ jobs:
       - name: Notifications, as a browser with the site closed gets them
         if: ${{ !cancelled() && matrix.cli == 'node bundle' && steps.stack.outcome == 'success' }}
         run: node e2e/push.mjs
+      # It as it answers its tailnet over https with `it https on`: a stand-in for Tailscale's own
+      # server hands each request to the door over plain http, saying that it came over https,
+      # and the site, the pages' port and the live connection are asked through it. It is run
+      # for both commands, and it is the standalone program's run that matters most: inside it
+      # the door listens with Bun's server, which hands it each request in another shape than
+      # Node's does, and no test that calls the door's own function sees that listener. Run
+      # whatever became of the suite, where It was started.
+      - name: Over https, as Tailscale hands a request to the door
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
+        run: node e2e/https.mjs
       # Nothing is read while it can still be written to. The stack is asked to stop and waited
       # for, and it asks the service in its turn: the service stops its connector, closes its
       # door, and asks the backend program to stop. The step waits longer than the stack itself
