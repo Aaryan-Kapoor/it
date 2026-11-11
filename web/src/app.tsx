@@ -39,7 +39,6 @@ import {
   wasErasedHere,
 } from './lib'
 import { Machines } from './machines'
-import { Team } from './team'
 import { forgetGrants } from './media'
 import { Bell, Toasts } from './notifications'
 import {
@@ -64,6 +63,7 @@ import { ReloadNotice } from './reload'
 import { ServiceNotice } from './service'
 import { codeSeen, current, signOut as endSession, heldToken, pair, pairAsScreen, recheck, useSession } from './session'
 import { Displays, Settings } from './settings'
+import { Team } from './team'
 import { TourDialog } from './welcome'
 
 export function App() {
