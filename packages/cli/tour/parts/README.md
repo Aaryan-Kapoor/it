@@ -22,7 +22,7 @@ Shell.part("room", (my) => { … });
 - **The section** is the part itself. It has `class="part"`, names the part in `data-part`, and is `hidden` until the shell shows it. `data-title` is the short title the top line shows, and `data-line` is the one line that says what to do, in which `{agent}` stands for the name of the agent app. A part has no section inside its section.
 - **The script** calls `Shell.part("<name>", setup)` once. `setup` is run as the page loads, whether or not the part is the one shown, and is given `my`, which is described below.
 
-An element is found by its id from anywhere on the page, so an id in a part begins with the part's name and a hyphen. The build refuses two elements with one id.
+An element is found by its id from anywhere on the page, so an id in a part begins with the part's name and a hyphen. The build refuses an id in a part that does not, and two elements with one id.
 
 ## The frame a part fills
 

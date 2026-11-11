@@ -93,7 +93,7 @@ export async function opened(given: Record<string, unknown> = {}, before: (w: an
       // The seconds the page counts are the test's
       w.Date.now = () => now
       w.Element.prototype.getBoundingClientRect = function (this: any) {
-        return this.id === 'pen' ? { left: 0, top: 0, width: 720, height: 420 } : { left: 0, top: 0, width: 720, height: 520 }
+        return this.id === 'board-pen' ? { left: 0, top: 0, width: 720, height: 420 } : { left: 0, top: 0, width: 720, height: 520 }
       }
       w.Element.prototype.setPointerCapture = () => {}
       w.addEventListener('error', (e: any) => errors.push(String(e.message)))

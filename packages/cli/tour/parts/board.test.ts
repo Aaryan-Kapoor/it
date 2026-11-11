@@ -36,7 +36,7 @@ describe('the whiteboard', () => {
   }
   /** One line written on the board through the points given, in pixels of the board as the stand-in lays it out. */
   const written = (page: Page, points: [number, number][]) => {
-    const pen = page.$('#pen')
+    const pen = page.$('#board-pen')
     points.forEach(([x, y], i) => {
       pointer(page, pen, i ? 'pointermove' : 'pointerdown', x, y)
     })
@@ -44,7 +44,7 @@ describe('the whiteboard', () => {
   }
   /** A point of the board, in pixels, as the board's own measure: from the place for the answer, in the units the board is drawn in. */
   const measured = (page: Page, [x, y]: [number, number]): [number, number] => {
-    const [, , w, h] = page.$('#pen').getAttribute('viewBox').split(' ').map(Number)
+    const [, , w, h] = page.$('#board-pen').getAttribute('viewBox').split(' ').map(Number)
     const [ox, oy] = /translate\(([-\d.]+) ([-\d.]+)\)/.exec(page.$('#board-at').getAttribute('transform'))!.slice(1).map(Number)
     return [(x * w) / 720 - ox!, (y * h) / 420 - oy!]
   }

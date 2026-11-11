@@ -11,8 +11,8 @@
   .board-frame > i:nth-of-type(3) { left: 0; bottom: 0; border-radius: 3px 7px 3px 12px; } .board-frame > i:nth-of-type(4) { right: 0; bottom: 0; border-radius: 7px 3px 12px 3px; }
   .board-face { position: relative; width: 100%; height: 100%; border-radius: 3px; background: linear-gradient(112deg, transparent 0 9%, var(--board-band) 12.5% 17%, transparent 21% 23.5%, var(--board-band) 25% 26.5%, transparent 29%), linear-gradient(180deg, var(--board-a), var(--board-b)); }
   .board-face canvas, .board-face > svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
-  [data-part="board"] #pen { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: crosshair; }
-  .board-face.board-holds #pen { cursor: none; } .board-face.board-busy #pen { cursor: progress; }
+  [data-part="board"] #board-pen { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: crosshair; }
+  .board-face.board-holds #board-pen { cursor: none; } .board-face.board-busy #board-pen { cursor: progress; }
   /* Over what is written: a breath of the same light, the dimness of the room at the board's edges, and the shadow the frame throws on the face */
   .board-gloss { position: absolute; inset: 0; pointer-events: none; border-radius: inherit; background: linear-gradient(112deg, transparent 0 9%, var(--board-glint) 12.5% 17%, transparent 21% 23.5%, var(--board-glint) 25% 26.5%, transparent 29%), radial-gradient(130% 120% at 50% 18%, transparent 45%, var(--board-room)); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .09), inset 0 4px 9px -3px rgba(0, 0, 0, .2), inset 3px 0 7px -4px rgba(0, 0, 0, .12); }
   .board-ask { font-family: Hand, "Segoe Print", "Bradley Hand", cursive; font-weight: 600; fill: var(--board-black); stroke: var(--board-black); }
@@ -60,7 +60,7 @@
       <div class="board-frame"><i></i><i></i><i></i><i></i>
         <div class="board-face" id="board-face">
           <canvas id="board-ink" aria-hidden="true"></canvas>
-          <svg id="pen" role="img" aria-label="A whiteboard with one question on it: a square garden has sides of 12 m, what is its area? Write your answer on it with your finger or the mouse.">
+          <svg id="board-pen" role="img" aria-label="A whiteboard with one question on it: a square garden has sides of 12 m, what is its area? Write your answer on it with your finger or the mouse.">
             <g class="board-ask" id="board-ask"></g>
             <g id="board-at">
               <g class="board-slot" id="board-slot"><rect rx="16"/><text text-anchor="middle">write your answer here</text></g>
@@ -91,7 +91,7 @@
 <script>
 Shell.part("board", (my) => {
   var $ = Shell.$, box = my.box;
-  var pen = $("pen"), face = $("board-face"), inkEl = $("board-ink"), ask = $("board-ask"), at = $("board-at"), slot = $("board-slot"), said = $("board-said"), marks = $("board-marks"), ruler = $("board-ruler");
+  var pen = $("board-pen"), face = $("board-face"), inkEl = $("board-ink"), ask = $("board-ask"), at = $("board-at"), slot = $("board-slot"), said = $("board-said"), marks = $("board-marks"), ruler = $("board-ruler");
   var hand = $("board-hand"), held = $("board-held"), theirPen = $("board-theirs"), tools = [].slice.call($("board-tray").querySelectorAll("button"));
   var checkBtn = $("board-check"), wipeBtn = $("board-wipe"), typeRow = $("board-type"), typeIn = $("board-typed");
   var QUESTION = "A square garden has sides of 12 m. What is its area?", SUM = "12 × 12 =", ANSWER = "144", WORKING = "12 × 10 + 12 × 2";

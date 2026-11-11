@@ -106,9 +106,9 @@
     <div class="end-ask">
       <label class="end-field"><svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 15l1-4 8.5-8.5a1.6 1.6 0 0 1 2.3 0l.7.7a1.6 1.6 0 0 1 0 2.3L7 14z"/><path d="M11 4l3 3"/></svg><input id="end-text" type="text" maxlength="300" autocomplete="off" enterkeyhint="send" placeholder="Or say what you want built" aria-label="Say what you want built instead"><button class="btn" type="button" id="end-go" disabled>Make it</button></label>
       <button class="btn ghost" type="button" id="end-more">Other ideas</button>
-      <button class="btn ghost" type="button" id="fin">Go to my pages <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button>
+      <button class="btn ghost" type="button" id="end-finish">Go to my pages <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button>
     </div>
-    <div class="end-foot"><span><span class="end-wide">Whatever it builds opens on any screen you pair, your phone too.</span><span class="end-narrow">Pages open on any screen you pair, your phone too.</span></span><button class="skip" type="button" id="again">See it again</button></div>
+    <div class="end-foot"><span><span class="end-wide">Whatever it builds opens on any screen you pair, your phone too.</span><span class="end-narrow">Pages open on any screen you pair, your phone too.</span></span><button class="skip" type="button" id="end-again">See it again</button></div>
   </div>
 </section>
 <script>
@@ -214,7 +214,7 @@ Shell.part("end", (my) => {
   var drawn = (kind) => '<svg viewBox="0 0 320 200" aria-hidden="true">' + (kind ? ART[kind]() : EMPTY) + "</svg>";
 
   // ── The three cards ──
-  var wrap = $("end-wrap"), deck = $("end-cards"), more = $("end-more"), fin = $("fin"), field = $("end-text"), go = $("end-go");
+  var wrap = $("end-wrap"), deck = $("end-cards"), more = $("end-more"), fin = $("end-finish"), field = $("end-text"), go = $("end-go");
   var cards = [0, 1, 2].map((i) => {
     var el = document.createElement("div"), c = { el: el, idea: null };
     el.style.setProperty("--i", i);
@@ -369,7 +369,7 @@ Shell.part("end", (my) => {
   field.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); typed(); } });
   go.addEventListener("click", typed);
 
-  $("again").addEventListener("click", () => Shell.go(0));
+  $("end-again").addEventListener("click", () => Shell.go(0));
   // The agent takes the tour's pages away, and the screen goes back to the person's own pages. The
   // answer is the page going: where it has not gone a while after, the button is the person's again
   fin.addEventListener("click", () => {

@@ -30,6 +30,9 @@ export function partOf(name, read) {
   if (!/\sclass="part"/.test(open) || !/\shidden(\s|>)/.test(open))
     throw new Error(`${file}: the section of a part has class="part" and is hidden until the shell shows it`)
   for (const key of ['data-title', 'data-line']) if (!attr(key)) throw new Error(`${file}: the section of a part says its ${key}`)
+  // An element is found by its id from anywhere on the page, so each id in a part begins with the part's name
+  const stray = [...section.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]).find((id) => !id.startsWith(`${name}-`))
+  if (stray !== undefined) throw new Error(`${file} gives an element the id "${stray}": an id in a part begins with the part's name and a hyphen, as "${name}-…"`)
   if (!script.includes(`Shell.part("${name}"`)) throw new Error(`${file} does not hand itself to the shell: its script is to call Shell.part("${name}", …)`)
   const rest = text
     .replace(style, '')

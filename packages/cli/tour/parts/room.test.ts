@@ -10,7 +10,7 @@ describe('the room', () => {
   }
   /** Where the armchair's corner is, in centimetres from the room's corner. */
   const corner = (page: Page) => {
-    const at = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(page.$('#chair').style.transform)!.slice(1).map(Number)
+    const at = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(page.$('#room-chair').style.transform)!.slice(1).map(Number)
     const p = plan(page)
     return [at[0]! - p.x, at[1]! - p.y]
   }
@@ -19,7 +19,7 @@ describe('the room', () => {
     const p = plan(page)
     const from = corner(page)
     const point = (cm: number[]) => [((cm[0]! + p.x + 39) / p.vw) * 720, ((cm[1]! + p.y + 39) / p.vh) * 520] as const
-    const chair = page.$('#chair')
+    const chair = page.$('#room-chair')
     pointer(page, chair, 'pointerdown', ...point(from))
     pointer(page, chair, 'pointermove', ...point(to))
     pointer(page, chair, 'pointerup', ...point(to))
@@ -73,8 +73,8 @@ describe('the room', () => {
     for (const words of move.data.free_is) expect(words).toMatch(/^(by the (sofa|coffee table|shelves|plant|window|door)|in the open)(, on the rug)?$/)
     expect(JSON.stringify(move.data).length).toBeLessThan(600)
     // The armchair is the person's again only once the agent has answered
-    expect(page.$('#chair').classList.contains('still')).toBe(true)
-    expect(page.$('#chair').classList.contains('sent')).toBe(true)
+    expect(page.$('#room-chair').classList.contains('still')).toBe(true)
+    expect(page.$('#room-chair').classList.contains('sent')).toBe(true)
     expect(page.state('room')).toBe('Sending what you did to It')
     await move.accept()
     expect(page.state('room')).toBe('It has it. Waiting for Claude Code 1 s')
@@ -86,8 +86,8 @@ describe('the room', () => {
     expect(page.$('#room-dim-text').textContent).toMatch(/^\d+ cm$/)
     expect(page.said('room')).toBe('Moved it off the table, by the rug.')
     expect(page.state('room')).toMatch(/^Claude Code answered in \d+\.\d s$/)
-    expect(page.$('#chair').classList.contains('still')).toBe(false)
-    expect(page.$('#chair').classList.contains('sent')).toBe(false)
+    expect(page.$('#room-chair').classList.contains('still')).toBe(false)
+    expect(page.$('#room-chair').classList.contains('sent')).toBe(false)
     page.close()
   })
 
@@ -134,8 +134,8 @@ describe('the room', () => {
     // Nothing came for a while: the armchair is the person's again, and they move it on
     await page.advance(SLOW)
     expect(page.state('room')).toContain('No answer after 40 s')
-    expect(page.$('#chair').classList.contains('still')).toBe(false)
-    expect(page.$('#chair').classList.contains('sent')).toBe(false)
+    expect(page.$('#room-chair').classList.contains('still')).toBe(false)
+    expect(page.$('#room-chair').classList.contains('sent')).toBe(false)
     const second = dragged(page, [260, 80])
     await page.set({ room: { request: first.data.request, armchair: first.data.free[0], lamp: true, say: 'Late.' } })
     expect([corner(page), page.said('room'), lit(page, 'lamp')]).toEqual([[260, 80], '', false])
@@ -155,7 +155,7 @@ describe('the room', () => {
     const move = dragged(page, [160, 160])
     await move.refuse()
     expect(page.state('room')).toBe('It did not take that. Do it again.')
-    expect(page.$('#chair').classList.contains('still')).toBe(false)
+    expect(page.$('#room-chair').classList.contains('still')).toBe(false)
     await page.set({ room: { request: move.data.request, armchair: [10, 10], say: 'No.' } })
     expect(page.said('room')).toBe('')
     expect(dragged(page, [170, 160]).data.request).not.toBe(move.data.request)

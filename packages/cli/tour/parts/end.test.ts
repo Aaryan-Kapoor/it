@@ -166,12 +166,12 @@ describe('the ending', () => {
     const asked = page.sentOf('ideas')[0]!
     await asked.accept()
     // The box and the way out are the person's all the while
-    expect([page.$('#end-text').disabled, page.$('#fin').disabled]).toEqual([false, false])
+    expect([page.$('#end-text').disabled, page.$('#end-finish').disabled]).toEqual([false, false])
     await page.advance(SLOW)
     expect(page.read('end').stage).toBe('slow')
     expect(page.read('end').hint).toBe('No ideas came. Say what you want built in the box, or ask again.')
     expect(line(page)).toBe('Say what you want on your screen, and Claude Code builds it.')
-    expect([page.$('#end-more').textContent, page.$('#end-more').disabled, page.$('#fin').disabled]).toEqual(['Ask again', false, false])
+    expect([page.$('#end-more').textContent, page.$('#end-more').disabled, page.$('#end-finish').disabled]).toEqual(['Ask again', false, false])
     expect(page.w.document.querySelectorAll('.end-card.wait.still')).toHaveLength(3)
     await page.set({ end: { request: asked.data.request, ideas: IDEAS } })
     expect([names(page), page.read('end').stage, page.$('#end-more').textContent]).toEqual([IDEAS.map((idea) => idea.name), 'answered', 'Other ideas'])
@@ -327,19 +327,19 @@ describe('the ending', () => {
   test('“Go to my pages” asks the agent to finish, and is the person’s to press again where nothing comes of it', async () => {
     const page = await prepared()
     page.$('#skip').click()
-    page.$('#fin').click()
+    page.$('#end-finish').click()
     const finish = page.sentOf('finish')[0]!
     expect(finish.data).toEqual({ part: 'end', from: 'start' })
-    expect(page.$('#fin').disabled).toBe(true)
+    expect(page.$('#end-finish').disabled).toBe(true)
     await finish.accept()
     // The dock says where the asking has got to. The answer is the page going, so nothing more is drawn here
     expect([page.read('end').stage, page.read('end').did]).toEqual(['took', 'left the tour'])
     expect(page.read('end').hint).toBe('Claude Code takes the tour away, and then you are at your pages.')
     await page.advance(SLOW)
-    expect([page.$('#fin').disabled, page.read('end').stage]).toEqual([false, 'slow'])
-    page.$('#fin').click()
+    expect([page.$('#end-finish').disabled, page.read('end').stage]).toEqual([false, 'slow'])
+    page.$('#end-finish').click()
     await page.sentOf('finish')[1]!.refuse()
-    expect([page.$('#fin').disabled, page.read('end').stage]).toEqual([false, 'refused'])
+    expect([page.$('#end-finish').disabled, page.read('end').stage]).toEqual([false, 'refused'])
     page.close()
   })
 
@@ -348,7 +348,7 @@ describe('the ending', () => {
     page.to('end')
     const asked = page.sentOf('ideas')[0]!
     await asked.accept()
-    page.$('#fin').click()
+    page.$('#end-finish').click()
     await page.sentOf('finish')[0]!.accept()
     await page.set({ end: { request: asked.data.request, ideas: IDEAS } })
     // The ideas are drawn, since they are the agent's and are there, and the dock goes on with the leaving
@@ -359,7 +359,7 @@ describe('the ending', () => {
     pressed(making, 0)
     const make = making.sentOf('make')[0]!
     await make.accept()
-    making.$('#fin').click()
+    making.$('#end-finish').click()
     await making.sentOf('finish')[0]!.accept()
     await making.set({ end: { request: make.data.request, say: 'I could not.' } })
     expect([mode(making), making.read('end').stage, making.said('end')]).toEqual(['ideas', 'took', ''])
@@ -375,7 +375,7 @@ describe('the ending', () => {
     expect(page.$('.end-foot .end-wide').textContent).toBe('Whatever it builds opens on any screen you pair, your phone too.')
     expect(page.$('.end-foot .end-narrow').textContent).toBe('Pages open on any screen you pair, your phone too.')
     expect(page.section('end').querySelectorAll('h1, h2, h3')).toHaveLength(0)
-    page.$('#again').click()
+    page.$('#end-again').click()
     expect(page.shown()).toBe('room')
     page.close()
   })

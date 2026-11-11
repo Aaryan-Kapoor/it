@@ -4,12 +4,12 @@
   [data-part="room"] .room-frame { position: relative; width: min(100cqw, calc(100cqh * var(--vw, 672) / var(--vh, 514))); aspect-ratio: var(--vw, 672) / var(--vh, 514); }
   [data-part="room"] svg { display: block; width: 100%; height: 100%; overflow: visible; touch-action: none; user-select: none; -webkit-user-select: none; }
   [data-part="room"] svg text { font-family: var(--mono); font-size: 11px; letter-spacing: 1.5px; fill: var(--faint); }
-  [data-part="room"] #chair { outline: none; cursor: grab; transition: transform .8s cubic-bezier(.22, 1, .36, 1); }
-  [data-part="room"] #chair:focus-visible .lift > rect:first-child { stroke: var(--green); stroke-width: 3; }
-  [data-part="room"] #chair.held { cursor: grabbing; transition: none; } [data-part="room"] #chair.still { cursor: default; }
-  [data-part="room"] #chair .lift { transition: transform .2s; transform-origin: 39px 39px; } [data-part="room"] #chair.up .lift { transform: scale(1.07); }
+  [data-part="room"] #room-chair { outline: none; cursor: grab; transition: transform .8s cubic-bezier(.22, 1, .36, 1); }
+  [data-part="room"] #room-chair:focus-visible .lift > rect:first-child { stroke: var(--green); stroke-width: 3; }
+  [data-part="room"] #room-chair.held { cursor: grabbing; transition: none; } [data-part="room"] #room-chair.still { cursor: default; }
+  [data-part="room"] #room-chair .lift { transition: transform .2s; transform-origin: 39px 39px; } [data-part="room"] #room-chair.up .lift { transform: scale(1.07); }
   /* For as long as the move is with the agent, a ring goes out from the armchair where the person left it */
-  [data-part="room"] #chair .ring { opacity: 0; transform-origin: 39px 39px; } [data-part="room"] #chair.sent .ring { animation: room-sent 1.7s ease-out infinite; }
+  [data-part="room"] #room-chair .ring { opacity: 0; transform-origin: 39px 39px; } [data-part="room"] #room-chair.sent .ring { animation: room-sent 1.7s ease-out infinite; }
   @keyframes room-sent { from { opacity: .85; transform: scale(.96); } to { opacity: 0; transform: scale(1.3); } }
   #room-nudge { transition: opacity .3s; animation: room-bob 1.8s ease-in-out infinite; } #room-nudge.off { opacity: 0; animation: none; }
   @keyframes room-bob { 50% { transform: translateY(-5px); } }
@@ -57,7 +57,7 @@
         <path id="room-trail" fill="none" stroke="var(--green)" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="1 8"/>
         <g id="room-dim"><line id="room-dim-line" stroke="var(--green)" stroke-width="1.6"/><g id="room-dim-label"><rect x="-34" y="-12" width="68" height="24" rx="12" fill="var(--green)"/><text id="room-dim-text" text-anchor="middle" y="4.5"></text></g></g>
         <g id="room-lamp"><circle class="glow" r="52" fill="url(#room-glow)"/><g class="pop"><circle r="13" fill="#fffdf8" stroke="#d8b24a" stroke-width="3" filter="url(#room-drop)"/><circle r="4" fill="#d8b24a"/></g></g>
-        <g id="chair" tabindex="0" role="button" aria-label="The armchair. Drag it, or move it with the arrow keys and press Enter.">
+        <g id="room-chair" tabindex="0" role="button" aria-label="The armchair. Drag it, or move it with the arrow keys and press Enter.">
           <rect class="ring" x="-5" y="-5" width="88" height="88" rx="23" fill="none" stroke="var(--green)" stroke-width="2.5"/>
           <g class="lift" filter="url(#room-drop)"><rect width="78" height="78" rx="18" fill="var(--clay-dark)"/><rect x="0" y="0" width="78" height="22" rx="11" fill="var(--clay-dark)"/><rect x="12" y="20" width="54" height="50" rx="12" fill="var(--clay)"/><rect x="0" y="16" width="14" height="56" rx="7" fill="var(--clay-dark)"/><rect x="64" y="16" width="14" height="56" rx="7" fill="var(--clay-dark)"/><path d="M22 44h34" stroke="var(--clay-dark)" stroke-width="2" stroke-linecap="round" opacity=".6"/></g>
           <g id="room-nudge"><rect x="-1" y="-34" width="80" height="24" rx="12" fill="var(--ink)"/><text x="39" y="-18" text-anchor="middle" style="font: 600 12px/1 Text, sans-serif; letter-spacing: 0; fill: var(--paper)">drag me</text><path d="M33 -10l6 6 6-6" fill="var(--ink)"/></g>
@@ -71,7 +71,7 @@
 <script>
 Shell.part("room", (my) => {
   var $ = Shell.$, NS = Shell.SVG, calm = Shell.calm;
-  var box = my.box, svg = $("room-plan"), frame = $("room-frame"), fill = $("room-fill"), chair = $("chair"), hand = $("room-hand"), again = $("room-reset");
+  var box = my.box, svg = $("room-plan"), frame = $("room-frame"), fill = $("room-fill"), chair = $("room-chair"), hand = $("room-hand"), again = $("room-reset");
   var lift = chair.querySelector(".lift");
   // The drawing is in centimetres. The room's inside begins MX in and MT down: outside it are the walls, and what is written beside them
   var MX = 16, MT = 30, MB = 44, SIZE = 78, SWING = 100;

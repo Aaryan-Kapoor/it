@@ -15,7 +15,7 @@ const { assembled, partOf } = (await import('../tour-parts.mjs' as string)) as {
 
 /** The armchair of the room put down on the coffee table, which is the page's first way to ask the agent something. */
 const moved = (page: Page) => {
-  const chair = page.$('#chair')
+  const chair = page.$('#room-chair')
   const at = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(chair.style.transform)!.slice(1).map(Number)
   pointer(page, chair, 'pointerdown', at[0]! + 39, at[1]! + 39)
   pointer(page, chair, 'pointermove', 430 + 39, 230 + 39)
@@ -45,7 +45,7 @@ describe('the frame of the tour’s first page', () => {
     page.$('#back').click()
     expect(page.shown()).toBe('drums')
     page.to('end')
-    page.$('#again').click()
+    page.$('#end-again').click()
     expect(page.shown()).toBe('room')
     // A person may stop at any point and still reach the ending
     page.to('cube')
@@ -215,7 +215,7 @@ describe('the agent’s dock', () => {
     expect(page.state('room')).toBe('No answer after 40 s. This is yours again, and a late answer is still shown.')
     // What was reached stays reached, and the stage that never came is where it stopped
     expect(stages(page)).toEqual({ you: 'done', it: 'done', chat: 'done', work: 'off', page: '' })
-    expect(page.$('#chair').classList.contains('still')).toBe(false)
+    expect(page.$('#room-chair').classList.contains('still')).toBe(false)
     await page.advance(7000)
     await page.set({ room: { request: move.data.request, armchair: move.data.free[0], say: 'Late, and here.' } })
     expect(page.state('room')).toBe('Claude Code answered in 47.0 s')
@@ -362,10 +362,13 @@ describe('how the first page is put together', () => {
     expect(() => assembled(shell, [], reads(good))).toThrow('gives the first page no parts')
   })
 
-  test('two parts may not give an element the same id, since an element is found by its id from anywhere on the page', () => {
-    const same = (name: string) =>
-      part(name, { section: `<section class="part" data-part="${name}" data-title="A" data-line="B" hidden><p id="same">x</p></section>` })
-    expect(() => assembled(shell, ['one', 'two'], reads({ one: same('one'), two: same('two') }))).toThrow('two elements with the id "same"')
+  test('each id in a part begins with the part’s name, and no two elements have one id, since an element is found by its id from anywhere on the page', () => {
+    const ids = (name: string, ...given: string[]) =>
+      part(name, { section: `<section class="part" data-part="${name}" data-title="A" data-line="B" hidden>${given.map((id) => `<p id="${id}">x</p>`).join('')}</section>` })
+    expect(() => assembled(shell, ['one'], reads({ one: ids('one', 'same') }))).toThrow('tour/parts/one.html gives an element the id "same"')
+    expect(() => assembled(shell, ['one'], reads({ one: ids('one', 'two-x') }))).toThrow('gives an element the id "two-x"')
+    expect(() => assembled(shell, ['one', 'two'], reads({ one: ids('one', 'one-x', 'one-x'), two: ids('two', 'two-x') }))).toThrow('two elements with the id "one-x"')
+    expect(() => assembled(shell, ['one', 'two'], reads({ one: ids('one', 'one-x'), two: ids('two', 'two-x') }))).not.toThrow()
   })
 
   test('a part is its styles, its one section and its one script', () => {
