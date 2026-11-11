@@ -227,6 +227,64 @@ sha() {
   fi
 }
 
+# A folder where one of the three files is to go is never installed over, nor into, and that is
+# found out before anything is downloaded.
+no_folder() {
+  if [ -d "$1" ] && [ ! -L "$1" ]; then
+    say "$1 is a folder, and It is not installed over one. Nothing was installed." >&2
+    exit 1
+  fi
+}
+no_folder "${DIR}/it"
+no_folder "${HOME_DIR}/LICENSE.md"
+no_folder "${HOME_DIR}/THIRD_PARTY_NOTICES.md"
+
+# It is installed only in a folder that is new, empty or It's already, and that is found out
+# before anything is made in it or downloaded. Taking It off again removes It's own folders
+# there whole, bin, logs and content among them, so a folder that already held someone's files
+# under those names would lose them. A folder is It's when it holds the installation record It
+# writes, which must then be exactly that record. One made by a release from before there was a
+# record is It's when it holds the program, the license as one of those releases published it,
+# and the notices beside them. What an install that stopped half way leaves behind (its lock,
+# the folders its downloads went to, and an empty bin) is not counted as anything in the folder,
+# and neither are the notes the program itself keeps before It is set up: whether usage is
+# reported and updates looked for, and where the program was downloaded from.
+installation='{"product":"It","format":1,"about":"This folder holds an installation of It."}'
+LICENSES="06f412e8c0ab7d324b09d1ff1261ff667a4986546a5f38170966eb6542c6b20d 5c2b54bcb8f96e22f8994364182b4e0f3fa06dfb448378e81ede85bcc9003e09"
+plain_file() { [ -f "$1" ] && [ ! -L "$1" ]; }
+plain_folder() { [ -d "$1" ] && [ ! -L "$1" ]; }
+claimable() {
+  # Where there is no folder, or something that is not one, making it below decides
+  if [ ! -d "${HOME_DIR}" ]; then return 0; fi
+  if [ -e "${HOME_DIR}/installation.json" ] || [ -L "${HOME_DIR}/installation.json" ]; then
+    # A damaged or linked record is never silently replaced
+    if ! plain_file "${HOME_DIR}/installation.json" || [ "$(cat "${HOME_DIR}/installation.json")" != "${installation}" ]; then
+      say "The installation record in ${HOME_DIR} is not the one It wrote. Inspect it before installing again. Nothing was installed." >&2
+      exit 1
+    fi
+    return 0
+  fi
+  if plain_folder "${DIR}" && plain_file "${DIR}/it" && plain_file "${HOME_DIR}/THIRD_PARTY_NOTICES.md" && plain_file "${HOME_DIR}/LICENSE.md"; then
+    case " ${LICENSES} " in *" $(sha "${HOME_DIR}/LICENSE.md") "*) return 0 ;; esac
+  fi
+  for entry in "${HOME_DIR}"/* "${HOME_DIR}"/.[!.]* "${HOME_DIR}"/..?*; do
+    if [ ! -e "${entry}" ] && [ ! -L "${entry}" ]; then continue; fi
+    case "${entry##*/}" in
+      .installing|.installing.taking|.install.*) if plain_folder "${entry}"; then continue; fi ;;
+      bin) if plain_folder "${entry}" && [ -z "$(ls -A "${entry}")" ]; then continue; fi ;;
+      telemetry.json|telemetry-off|telemetry-sending|usage.jsonl|usage.jsonl.taken|updates-off|releases.json) if plain_file "${entry}"; then continue; fi ;;
+    esac
+    return 1
+  done
+  return 0
+}
+# A folder that holds It's install lock is one an install of It is putting its files in, or
+# was until it stopped: the lock, below, says which, and waits for it or takes over from it
+if ! claimable && ! plain_folder "${HOME_DIR}/.installing"; then
+  say "${HOME_DIR} already holds files, and nothing in it shows that it is It's. It is installed only in a folder that is new, empty or It's already, since taking It off again removes It's own folders there whole, such as bin, logs and content. Nothing was installed. Set IT_HOME to a new or empty folder, or move what is in ${HOME_DIR} somewhere else first." >&2
+  exit 1
+fi
+
 mkdir -p -- "${DIR}"
 # Only this user may look inside It's folder: the machine's key is kept there. Whether that is
 # so is read back from the folder itself, since setting it can be refused, and on some disks
@@ -246,18 +304,6 @@ if [ "${os}" = darwin ] && ls -lde "${HOME_DIR}/." 2>/dev/null | sed 1d | grep -
   say "${HOME_DIR} has an access list that lets others look inside it, and It keeps this machine's key there. Nothing was installed. Take the list away with  chmod -N $(quoted "${HOME_DIR}")  or set IT_HOME to a folder of your own." >&2
   exit 1
 fi
-
-# A folder where one of the three files is to go is never installed over, nor into, and that is
-# found out before anything is downloaded.
-no_folder() {
-  if [ -d "$1" ] && [ ! -L "$1" ]; then
-    say "$1 is a folder, and It is not installed over one. Nothing was installed." >&2
-    exit 1
-  fi
-}
-no_folder "${DIR}/it"
-no_folder "${HOME_DIR}/LICENSE.md"
-no_folder "${HOME_DIR}/THIRD_PARTY_NOTICES.md"
 
 # The folder the downloads are kept in, once it has been made
 stage=""
@@ -480,14 +526,6 @@ if [ "${led}" = 1 ]; then did "Downloaded for ${os} ${arch}, and checked"; fi
 # A command moving a file still receives the signal, and cleanup puts back what was there
 # if that command stops. The shell itself stays to finish the replacement or its cleanup.
 trap ':' HUP INT QUIT PIPE TERM
-# A damaged or linked ownership record is never silently replaced.
-installation='{"product":"It","format":1,"about":"This folder holds an installation of It."}'
-if [ -e "${HOME_DIR}/installation.json" ] || [ -L "${HOME_DIR}/installation.json" ]; then
-  if [ -L "${HOME_DIR}/installation.json" ] || [ ! -f "${HOME_DIR}/installation.json" ] || [ "$(cat "${HOME_DIR}/installation.json")" != "${installation}" ]; then
-    say "The installation record in ${HOME_DIR} is not the one It wrote. Inspect it before installing again. Nothing was installed." >&2
-    exit 1
-  fi
-fi
 (umask 077; printf '%s\n' "${installation}" > "${stage}/installation")
 # A link where a file is to go is moved aside like anything else and the file put in its place:
 # nothing is written through a link to wherever it leads, and a link to a folder is not a way
