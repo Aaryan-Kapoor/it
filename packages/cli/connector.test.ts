@@ -314,7 +314,7 @@ import { DeliveryRecovery, eraseDeliveryRecovery } from './src/delivery-recovery
 import * as files from './src/lib'
 import { readJson } from './src/lib'
 import { alone, startOf } from './src/serve/backend'
-import { identity, SINCE_TOLD, WAS_STOPPED } from './src/wake'
+import { identity, SINCE_TOLD, WAS_CUT_OFF, WAS_STOPPED } from './src/wake'
 
 // The real clock, kept from before any test puts a stand-in in its place
 const really = setTimeout
@@ -2034,6 +2034,68 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
         ended.mockRestore()
       }
     },
+  )
+
+  test('a held run whose agent is gone is said to It to be over, so the page says why each click waits and not that the agent works, and is let go of once a later look finds nothing of it', async () => {
+    let outcome: 'unknown' | 'gone' = 'unknown'
+    const ended = vi.spyOn(wake, 'endTree').mockImplementation(async () => outcome)
+    const now = Date.now
+    try {
+      // The agent's own process is gone (no process can have this number), and something that may be its is not known to be
+      await start('socket', {}, (home) => {
+        writeFileSync(
+          path.join(home, 'runs.json'),
+          JSON.stringify({
+            'codex:thread-1': { pid: 2 ** 22 + 7, since: 'tick 1', told: SINCE_TOLD, run: 'the-held-run', unsure: true, cgroup: '/it.service' },
+          }),
+        )
+      })
+      expect(ended).toHaveBeenCalledWith(2 ** 22 + 7, 'tick 1', expect.objectContaining({ run: 'the-held-run', cgroup: '/it.service' }))
+      expect((await local<{ held: unknown[] }>('/runs'))!.held).toHaveLength(1)
+      expect((await local<{ heldRuns?: number }>('/health'))!.heldRuns).toBe(1)
+      // It still has it down as running, as it does after a service that died is started again
+      stand.watching.get('machines:me')!({ wanted: ['codex'], runs: [{ harness: 'codex', sessionId: 'thread-1', run: 'the-held-run' }] })
+      await until(() => stand.calls.some((c) => c.name === 'machines:runEnded' && c.args.run === 'the-held-run'))
+      expect((await local<{ held: unknown[] }>('/runs'))!.held).toHaveLength(1)
+      // A minute on, it is looked at again, and nothing of it is left by now
+      outcome = 'gone'
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now() + 61_000)
+      try {
+        await until(async () => (await local<{ held: unknown[] }>('/runs'))!.held.length === 0)
+      } finally {
+        clock.mockRestore()
+      }
+      expect(existsSync(path.join(home, 'runs.json'))).toBe(false)
+      expect(readJson(path.join(home, 'cut-off.json'))).toEqual(['codex:thread-1'])
+    } finally {
+      ended.mockRestore()
+    }
+  })
+
+  test.skipIf(process.platform === 'win32')(
+    'a reopened agent that is killed in the middle of its turn has the turn that tries its click again told that the one before was cut off',
+    async () => {
+      const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(bin, folder)
+      // The first turn is killed as it works, as the system does to a program when memory runs out
+      writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\nn=$(ls ${bin} | grep -c given)\ncat > ${bin}/given-$n\n[ "$n" = 0 ] && kill -KILL $$\nexit 0\n`, {
+        mode: 0o755,
+      })
+      process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+      await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+      stand.closed.add('thread-1')
+      stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+      offered(click(1))
+      await until(() => said.some((line) => line.includes('Codex exited with SIGKILL')))
+      expect(readJson(path.join(home, 'cut-off.json'))).toEqual(['codex:thread-1'])
+      expect(readFileSync(path.join(bin, 'given-0'), 'utf8')).not.toContain(WAS_CUT_OFF)
+      // Tried again a few seconds on, the turn is told
+      await until(() => existsSync(path.join(bin, 'given-1')) && readFileSync(path.join(bin, 'given-1'), 'utf8').length > 0, 30_000)
+      expect(readFileSync(path.join(bin, 'given-1'), 'utf8')).toContain(WAS_CUT_OFF)
+      await until(() => !existsSync(path.join(home, 'cut-off.json')))
+    },
+    45_000,
   )
 
   test('an uncertain legacy run without a run mark stays held when its leader is gone', async () => {

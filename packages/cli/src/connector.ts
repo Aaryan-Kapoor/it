@@ -103,6 +103,7 @@ import {
   mayWake,
   NO_PS,
   PROGRAM,
+  processes,
   SINCE_TOLD,
   STOPPED,
   WAS_CUT_OFF,
@@ -608,6 +609,8 @@ export const notLoadedToo = (why: string): string => {
 const joined = (): boolean => typeof readJson<{ at?: unknown }>(inHome('machine.json'))?.at === 'string'
 /** What stands in the way of handing anything over before a machine that joined has first asked whether the two fit: nothing is known yet. */
 const NOT_ASKED = new Problem('Whether this machine and the It it joined fit has not been asked yet.', 'invalid')
+/** How often a run that is held, since what was left of it could not be checked on or ended, is looked at again. */
+const HELD_LOOKED_AT_MS = 60_000
 /** How often a machine that does not fit the It it joined asks again whether it does, and one that fits whether it still does. */
 const FITS_EVERY_MS = 60_000
 
@@ -2140,7 +2143,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   // the process it was is known by its number and by when it began, so that no other process
   // that has since been given the number is touched. Its conversation is told, the next time
   // it is reopened, that its turn was cut off.
-  type Run = { pid: number; since: string; boot?: string; told?: number; unsure?: true; stopped?: true; run?: string }
+  type Run = { pid: number; since: string; boot?: string; told?: number; unsure?: true; stopped?: true; run?: string; cgroup?: string }
   /** The note of runs from before could not be read, as this connector found when it started: it reopens nothing, whatever became of the file since. */
   let unread = false
   /** And it could not be moved aside either, so it is still where the note of runs is written. */
@@ -2210,6 +2213,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       boot: was.boot,
       told: was.told,
       run: was.run,
+      ...(was.cgroup ? { cgroup: was.cgroup } : {}),
     }).catch(() => 'unknown' as const)
     if (became === 'unknown') return false
     // An older uncertain record may have no run mark. With its leader gone, there is then
@@ -2266,6 +2270,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
             ...((was as { unsure?: unknown }).unsure === true ? { unsure: true as const } : {}),
             ...((was as { stopped?: unknown }).stopped === true ? { stopped: true as const } : {}),
             ...(typeof (was as { run?: unknown }).run === 'string' ? { run: (was as { run: string }).run } : {}),
+            ...(typeof (was as { cgroup?: unknown }).cgroup === 'string' ? { cgroup: (was as { cgroup: string }).cgroup } : {}),
           }
         }
       } catch {
@@ -2315,7 +2320,17 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         // A completed process tree held only for an unsaved notice can be released once the
         // disk works again. Process uncertainty is checked before the next reopening.
         if (held && !held.unsure && (await settleOld(key, held))) keepRuns()
-        if (over || unsettled.has(key)) continue
+        if (over) continue
+        // Still held, it is still said to be running for as long as its agent may be. Once the
+        // agent's own process is known to be gone, it is not: left so, the page said "Working"
+        // or "Stopping" for as long as the hold lasted, with no word of why, and hid why each
+        // later click waited. Said to be over, the page says that instead.
+        const still = unsettled.get(key)
+        if (still) {
+          const now = pendingStops.has(key) ? null : processes([still.pid])
+          // (Another process that has its number by now is not the agent. On Windows nothing is asked by number, and it stays as it was)
+          if (now === null || now.get(still.pid) === still.since) continue
+        }
         await call('mutation', api.machines.runEnded, ended).then(
           () => {
             if (pendingEnds.get(key) === ended) pendingEnds.delete(key)
@@ -2325,6 +2340,27 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       }
     } finally {
       finishing = false
+    }
+  }
+  /**
+   * Looks again, once a minute, at each run that is held because what was left of it could not be
+   * checked on or ended, and lets go of it once nothing of it is left: what kept it held, such as
+   * a program of the run's that could not be read, may have ended since. Without this a run was
+   * looked at again only when its conversation was next to be reopened.
+   */
+  let heldLookedAt = Date.now()
+  let lookingAtHeld = false
+  const lookAtHeld = async () => {
+    if (lookingAtHeld || over || closing || Date.now() - heldLookedAt < HELD_LOOKED_AT_MS) return
+    heldLookedAt = Date.now()
+    lookingAtHeld = true
+    try {
+      for (const [key, run] of [...unsettled]) {
+        if (over || closing || reopenedNow.has(key) || !run.unsure || unsettled.get(key) !== run) continue
+        if (await settleOld(key, run).catch(() => false)) keepRuns()
+      }
+    } finally {
+      lookingAtHeld = false
     }
   }
   /**
@@ -2431,7 +2467,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     // (Seen to once, before this turn's message was written: not again here, where settling
     // it would make a note that the message could no longer carry)
     if (unsettled.has(key) || pendingStops.has(key))
-      return `a turn of it from before may still be running on its machine, and could not be checked on or ended. It is reopened again once that machine has been started again, or once you have looked that nothing of it is running there and run \`it runs clear\`${listsProcesses() ? '' : `. ${NO_PS}`}`
+      return `a turn of it from before may still be running on its machine, and could not be checked on or ended. It is reopened again once It sees that nothing of that turn is left, which it looks for every minute, or once that machine has been started again. To let it be reopened sooner, run \`it runs\` there, look that nothing of it is running, and run \`it runs clear\`${listsProcesses() ? '' : `. ${NO_PS}`}`
     if (closing || unfitting) return NOT_STARTED
     const stop = new AbortController()
     reopenedNow.set(key, stop)
@@ -2495,16 +2531,23 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
             cutOff.add(key)
             keepCutOff()
           },
+          // Killed, or failing, in the middle of its turn: what it was reopened for is tried
+          // again, and the turn that tries it is told, as after a restart, that the one before
+          // was cut off and may have done part of the work
+          brokeOff: () => {
+            cutOff.add(key)
+            keepCutOff()
+          },
           keepIn: inHome('logs'),
           said: (words) => saidLast.set(key, words),
           // Written down before it is given anything to do, or it is not to run: see `carryOn`
-          began: (pid, since) => {
+          began: (pid, since, cgroup) => {
             if (since === undefined) throw new Error('which process it is could not be told')
             const boot = bootId()
             // This conservative copy predates every signal and every possible disk failure.
             // Only a verified ending removes it. A crash cannot turn missing evidence into
             // permission to reopen beside a detached command.
-            running.set(key, { pid, since, told: SINCE_TOLD, run: runId, unsure: true, ...(boot ? { boot } : {}) })
+            running.set(key, { pid, since, told: SINCE_TOLD, run: runId, unsure: true, ...(boot ? { boot } : {}), ...(cgroup ? { cgroup } : {}) })
             try {
               keepRuns(true)
             } catch (err) {
@@ -4603,6 +4646,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   await report()
   const tick = setInterval(() => {
     void finishRuns()
+    void lookAtHeld()
     void route()
     turnsSettle = true
     void tellTurns()
