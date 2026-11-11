@@ -457,8 +457,8 @@ describe('the agent skill', () => {
     const state = rule('stateKilobytesPage')
     expect(skill).toContain(`one page may write ${state.burst / 1024} MB of it at once, and then ${state.perMinute / 1024} MB a minute`)
     const frame = source('../../web/src/mount.tsx')
-    expect(/const PER_SECOND = (\d+)/.exec(frame)![1]).toBe('15')
-    expect(skill).toContain(`The site takes ${/const BURST = (\d+)/.exec(frame)![1]} actions from a page at once, and then fifteen a second`)
+    expect(/const ACTION_PER_SECOND = (\d+)/.exec(frame)![1]).toBe('15')
+    expect(skill).toContain(`The site takes ${/const ACTION_BURST = (\d+)/.exec(frame)![1]} actions from a page at once, and then fifteen a second`)
     // What comes too fast for It waits in the browser, up to so many from one page
     expect(/const MAX_PER_PAGE = (\d+)/.exec(source('../../web/src/outbox.ts'))![1]).toBe('100')
     expect(skill).toContain('so its promise resolves late, until 100 actions from the page are waiting')

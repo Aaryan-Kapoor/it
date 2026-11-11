@@ -62,12 +62,15 @@ import { reportPage } from './presence'
 
 type Phase = { is: 'loading' } | { is: 'shown' } | { is: 'failed'; why: string }
 const REMOUNT_EVERY_MS = 10_000
+/** A page that asks for more than this is told to slow down, without the backend hearing of it. */
+const BURST = 20
+const PER_SECOND = 5
 /**
- * A page that asks for more than this is told to slow down, without the backend hearing of it:
- * more than a person clicks at their fastest, so that only a page sending by itself meets it.
+ * What it sends as actions is counted apart, and allowed more than a person clicks at their
+ * fastest, so that only a page sending by itself meets it.
  */
-const BURST = 60
-const PER_SECOND = 15
+const ACTION_BURST = 60
+const ACTION_PER_SECOND = 15
 /**
  * What a page keeps for itself is counted apart, and allowed more: twice what the script in a
  * page sends at its fastest, which is one write each STORE_EVERY_MS, each with whatever was set
@@ -219,6 +222,8 @@ export function Mount({
     let answered = ''
     let tokens = BURST
     let filled = Date.now()
+    let actionTokens = ACTION_BURST
+    let actionFilled = Date.now()
     let storeTokens = STORE_BURST
     let storeFilled = Date.now()
     const timer = setTimeout(() => live && setPhase({ is: 'failed', why: 'The page did not load. Check the connection.' }), READY_MS)
@@ -593,6 +598,14 @@ export function Mount({
       tokens -= 1
       return true
     }
+    const actionAllowed = () => {
+      const now = Date.now()
+      actionTokens = Math.min(ACTION_BURST, actionTokens + (Math.max(0, now - actionFilled) / 1000) * ACTION_PER_SECOND)
+      actionFilled = now
+      if (actionTokens < 1) return false
+      actionTokens -= 1
+      return true
+    }
     /** Whether the page may keep something now, or else how long until it may. */
     const storeAllowed = (): number => {
       const now = Date.now()
@@ -758,7 +771,7 @@ export function Mount({
         const known =
           message.type === 'it:action' ? ledger.get(typeof message.envelope?.clientActionId === 'string' ? message.envelope.clientActionId : '') : undefined
         const again = message.type === 'it:action' && message.again === true
-        if (message.type === 'it:action' && !known && !(again && forgot) && !allowed()) {
+        if (message.type === 'it:action' && !known && !(again && forgot) && !actionAllowed()) {
           noteRefused(user, artifactId, 'fast')
           throw new Error('This page is sending too much at once. Try again in a moment.')
         }
