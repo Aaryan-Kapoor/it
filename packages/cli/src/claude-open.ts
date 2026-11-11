@@ -64,7 +64,7 @@ export class ClaudeDiscovery {
   private ended = false
   private children = new Map<ChildProcess, { cancel: () => void; exited: Promise<void> }>()
   /** What the last look at Windows' Claude processes found, when, and for which notes. */
-  private windowsSeen?: { at: number; starts: ReadonlyMap<number, number>; for: Set<string>; read: boolean }
+  private windowsSeen?: { at: number; starts: ReadonlyMap<number, number>; for: Set<string> }
 
   get stopped(): boolean {
     return this.ended
@@ -92,19 +92,19 @@ export class ClaudeDiscovery {
 
   /**
    * Windows' Claude processes and their starts, for the notes given, each named `pid:startedAt`.
-   * PowerShell is started only where the last look did not cover one of these notes, failed a
-   * while ago, or is older than WINDOWS_FRESH_MS: a process's start never changes, and a note
-   * whose Claude Code has ended is told by `running` on every scan, which then takes the note
-   * out of what the look covers (`windowsGone`), so that the number's next program is looked at.
-   * What a look that is kept cannot see is a number given to another program between two scans,
-   * after a Claude Code ended without taking its note away, and that is seen at the next look.
+   * PowerShell is started only where the last look did not cover one of these notes, or is older
+   * than `keptMs`: a process's start never changes, and a note whose Claude Code has ended is
+   * told by `running` on every scan, which then takes the note out of what the look covers
+   * (`windowsGone`), so that the number's next program is looked at. What a look that is kept
+   * cannot see is a number given to another program between two scans, after a Claude Code
+   * ended without taking its note away, and that is seen at the next look. A look that could not
+   * be read is not kept: the next scan looks again, as it would have without any look kept.
    */
-  async windowsStarts(notes: readonly string[]): Promise<ReadonlyMap<number, number>> {
+  async windowsStarts(notes: readonly string[], keptMs: number): Promise<ReadonlyMap<number, number>> {
     const seen = this.windowsSeen
-    const now = performance.now()
-    if (seen && now - seen.at < (seen.read ? WINDOWS_FRESH_MS : WINDOWS_RETRY_MS) && notes.every((note) => seen.for.has(note))) return seen.starts
+    if (seen && performance.now() - seen.at < keptMs && notes.every((note) => seen.for.has(note))) return seen.starts
     const starts = await readWindowsStarts(this)
-    if (!this.ended) this.windowsSeen = { at: performance.now(), starts: starts ?? new Map(), for: new Set(notes), read: starts !== undefined }
+    this.windowsSeen = starts && !this.ended ? { at: performance.now(), starts, for: new Set(notes) } : undefined
     return starts ?? new Map()
   }
 
@@ -151,10 +151,18 @@ async function beganAt(pid: number, discovery: ClaudeDiscovery): Promise<number 
 /** How much later than its process a Claude Code may say its session began, as the two clocks are read: a few seconds. */
 const SLACK_MS = 5_000
 
-/** How long one look at Windows' Claude processes is gone by while the notes it was taken for are all that is open. */
-export const WINDOWS_FRESH_MS = 5 * 60_000
-/** And how long a look that could not be read is, before PowerShell is tried again. */
-export const WINDOWS_RETRY_MS = 30_000
+/**
+ * How long one look at Windows' Claude processes is gone by, while the notes it was taken for
+ * are all that is open, for what decides where a click goes: a click is never held back for long
+ * by a process number that has been given to another program since. One look is half a second of
+ * a core, so a click that waits for /reload-plugins costs one every this often.
+ */
+export const KEPT_FOR_CLICKS_MS = 30_000
+/**
+ * And for the site's notice of conversations that have not loaded the add-on, which is looked at
+ * every few seconds for as long as Claude Code is connected, and decides nothing about a click.
+ */
+export const KEPT_FOR_NOTICE_MS = 5 * 60_000
 
 /** Claude processes and their starts, read together as the backend reads Windows process identity: undefined where they could not be read. */
 async function readWindowsStarts(discovery: ClaudeDiscovery): Promise<Map<number, number> | undefined> {
@@ -208,12 +216,15 @@ export async function sameProcess(
  * folders given. Only where a person can type to it: a session run for a script, or by It
  * itself to reopen a conversation, has no prompt for a person to type `/reload-plugins` at, and
  * neither has a Claude Code that T3 Code runs, whose clicks reach it through T3 Code's own thread.
+ * On Windows a look at the processes that `discovery` keeps is taken for one that is up to
+ * `keptMs` old (`ClaudeDiscovery.windowsStarts`).
  */
 export async function openClaude(
   folders: readonly string[],
   alive: (pid: number) => boolean = running,
   same: (pid: number, note: { procStart?: unknown; startedAt: number }) => boolean | Promise<boolean> = sameProcess,
   discovery = new ClaudeDiscovery(),
+  keptMs = KEPT_FOR_CLICKS_MS,
 ): Promise<OpenClaude[]> {
   const open = new Map<string, OpenClaude>()
   // Every note is read first, so that on Windows one look at the processes is taken for all of them, and only where one is live
@@ -247,7 +258,13 @@ export async function openClaude(
   }
   const windows = same === sameProcess && process.platform === 'win32'
   if (windows) discovery.windowsGone(gone)
-  const starts = windows && live.length ? await discovery.windowsStarts(live.map((note) => `${note.pid}:${note.startedAt}`)) : undefined
+  const starts =
+    windows && live.length
+      ? await discovery.windowsStarts(
+          live.map((note) => `${note.pid}:${note.startedAt}`),
+          keptMs,
+        )
+      : undefined
   for (const note of live) {
     if (discovery.stopped) return []
     try {

@@ -33,7 +33,7 @@ import {
 } from '@it/protocol'
 import { ADDON_API, type AddonRuntime, AddonRuntimes } from './addon-runtime'
 import { ADDONS } from './addons.generated'
-import { ClaudeDiscovery, type OpenClaude, openClaude } from './claude-open'
+import { ClaudeDiscovery, KEPT_FOR_NOTICE_MS, type OpenClaude, openClaude } from './claude-open'
 import {
   DeliveryRecovery,
   eraseDeliveryRecovery,
@@ -1602,6 +1602,13 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       })
     return openAsking
   }
+  // The notice alone may go by a look at Windows' processes that is a few minutes old, since it
+  // decides nothing about a click. A routing pass's scan, under way or a moment old, is used as it is.
+  const openForNotice = (): Promise<OpenClaude[]> => {
+    if (discovery.stopped) return Promise.resolve([])
+    if (openAsking || performance.now() - openChecked < OPEN_CACHE_MS) return openNow()
+    return openClaude(claudeFolders(), undefined, undefined, discovery, KEPT_FOR_NOTICE_MS).catch(() => [])
+  }
   const notLoadedNow = (open: readonly OpenClaude[]): { harness: string; sessionId: string; since: number }[] => {
     const now = Date.now()
     if (!connected('claude-code') || now - connectorBegan < NOT_HEARD_MS) return []
@@ -1623,7 +1630,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     if (over || notLoadedAsking || notLoadedTaken !== true) return
     notLoadedAsking = true
     try {
-      const open = connected('claude-code') && Date.now() - connectorBegan >= NOT_HEARD_MS ? await openNow() : []
+      const open = connected('claude-code') && Date.now() - connectorBegan >= NOT_HEARD_MS ? await openForNotice() : []
       if (over || closing) return
       const list = notLoadedNow(open)
       const said = JSON.stringify(list)

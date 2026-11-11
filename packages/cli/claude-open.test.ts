@@ -6,7 +6,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { ClaudeDiscovery, openClaude, ranFor, sameProcess, WINDOWS_FRESH_MS, WINDOWS_RETRY_MS } from './src/claude-open'
+import { ClaudeDiscovery, KEPT_FOR_CLICKS_MS, KEPT_FOR_NOTICE_MS, openClaude, ranFor, sameProcess } from './src/claude-open'
 
 const folders: string[] = []
 afterEach(async () => {
@@ -135,16 +135,30 @@ describe('the Claude Code conversations open at a person’s keyboard', async ()
       syncBuiltinESMExports()
     })
 
-    test('a scan whose notes were all covered by a recent look starts none', async () => {
+    test('a scan for the notice whose notes were all covered by a recent look starts none', async () => {
       const discovery = new ClaudeDiscovery()
       const folder = folderWith([session(1)])
       for (let i = 0; i < 10; i++) {
-        expect(await openClaude([folder], alive, undefined, discovery)).toEqual([{ id: id(1), startedAt: 1_001 }])
+        expect(await openClaude([folder], alive, undefined, discovery, KEPT_FOR_NOTICE_MS)).toEqual([{ id: id(1), startedAt: 1_001 }])
         clock += 5_000
       }
       expect(looks).toHaveLength(1)
       // PowerShell is told not to write its progress for nobody to read
       expect(looks[0]).toMatch(/^\$ProgressPreference = 'SilentlyContinue'; Get-Process -Name claude /)
+    })
+
+    test('a scan that decides a click goes by a look no older than half a minute', async () => {
+      const discovery = new ClaudeDiscovery()
+      const folder = folderWith([session(1)])
+      await openClaude([folder], alive, undefined, discovery, KEPT_FOR_NOTICE_MS)
+      clock += KEPT_FOR_CLICKS_MS - 1
+      expect(await openClaude([folder], alive, undefined, discovery)).toHaveLength(1)
+      expect(looks).toHaveLength(1)
+      // Process 1 ended without taking its note away, and its number went to another program before any scan saw it gone
+      answer = '2 116444736010000000\n'
+      clock += 1
+      expect(await openClaude([folder], alive, undefined, discovery)).toEqual([])
+      expect(looks).toHaveLength(2)
     })
 
     test('a conversation opened since the last look is looked for at once, and one that closed needs no look', async () => {
@@ -193,32 +207,31 @@ describe('the Claude Code conversations open at a person’s keyboard', async ()
       expect(looks).toHaveLength(2)
     })
 
-    test('the processes are looked at again once the last look is a few minutes old, and what is gone by then is seen', async () => {
+    test('the notice looks at the processes again once the last look is a few minutes old, and what is gone by then is seen', async () => {
       const discovery = new ClaudeDiscovery()
       const folder = folderWith([session(1)])
-      await openClaude([folder], alive, undefined, discovery)
-      clock += WINDOWS_FRESH_MS - 1
-      await openClaude([folder], alive, undefined, discovery)
+      await openClaude([folder], alive, undefined, discovery, KEPT_FOR_NOTICE_MS)
+      clock += KEPT_FOR_NOTICE_MS - 1
+      await openClaude([folder], alive, undefined, discovery, KEPT_FOR_NOTICE_MS)
       expect(looks).toHaveLength(1)
       // Process 1 has ended without taking its note away, and its number is another program's
       answer = '2 116444736010000000\n'
       clock += 1
-      expect(await openClaude([folder], alive, undefined, discovery)).toEqual([])
+      expect(await openClaude([folder], alive, undefined, discovery, KEPT_FOR_NOTICE_MS)).toEqual([])
       expect(looks).toHaveLength(2)
     })
 
-    test('a look that could not be read is tried again after a short while, and not at every scan', async () => {
+    test('a look that could not be read is not kept, and the next scan looks again', async () => {
       const discovery = new ClaudeDiscovery()
       const folder = folderWith([session(1)])
+      expect(await openClaude([folder], alive, undefined, discovery, KEPT_FOR_NOTICE_MS)).toHaveLength(1)
+      // A look that is due fails: what was kept before it is let go as well
+      writeFileSync(path.join(folder, 'sessions', '2.json'), JSON.stringify(session(2)))
       answer = undefined
-      expect(await openClaude([folder], alive, undefined, discovery)).toEqual([])
-      clock += WINDOWS_RETRY_MS - 1
-      expect(await openClaude([folder], alive, undefined, discovery)).toEqual([])
-      expect(looks).toHaveLength(1)
-      answer = '1 116444736010000000\n'
-      clock += 1
-      expect(await openClaude([folder], alive, undefined, discovery)).toEqual([{ id: id(1), startedAt: 1_001 }])
-      expect(looks).toHaveLength(2)
+      expect(await openClaude([folder], alive, undefined, discovery, KEPT_FOR_NOTICE_MS)).toEqual([])
+      answer = '1 116444736010000000\n2 116444736010000000\n'
+      expect((await openClaude([folder], alive, undefined, discovery, KEPT_FOR_NOTICE_MS)).map((c) => c.id)).toEqual([id(1), id(2)])
+      expect(looks).toHaveLength(3)
     })
 
     test('no look is taken where no note names a running process, and none is kept by a discovery that has stopped', async () => {
