@@ -2,14 +2,18 @@
 // the person does on its pages arrives in its conversation by itself, and what to do about it.
 import { describe, expect, test } from 'vitest'
 import {
+  afterSetupForAgent,
   arrives,
-  claudeAfterSetup,
+  CODEX_RESTART,
   claudeReloadLine,
   claudeRunning,
   loadAddon,
   notLoadedHere,
   RELOAD_PLUGINS_SINCE,
   reloadLine,
+  setupLine,
+  T3_CODEX,
+  t3ClaudeLine,
   tooOldToReload,
 } from './src/arrives'
 import type { Route } from './src/connector'
@@ -137,36 +141,96 @@ describe('the Claude Code a command runs inside', () => {
   })
 })
 
-describe('what setup says last where it has just connected Claude Code', () => {
+describe('what setup says of the conversation it ran in, where it has just connected that conversation’s app', () => {
   const inClaude = { CLAUDE_CODE_SESSION_ID: '11111111-2222-4333-8444-555555555555' }
-  test('from inside a conversation that has not loaded the add-on: to the agent, to tell the person word for word to type /reload-plugins', () => {
-    const said = claudeAfterSetup({ ...inClaude, CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.321' })!
-    expect(said).toMatch(/^For the agent that ran this: /)
-    expect(said).toContain('Tell the person this in your next message, word for word:')
-    // The words for the person come last, on their own, as they are to be said
-    expect(said.endsWith(`\n\n  ${reloadLine('2.1.321')}`)).toBe(true)
+  const codex = { harness: 'codex', id: 'thread-1' }
+  const facts = { session: claude, addonHere: false, claude: '2.1.321', route: null, connected: true, codexPending: false }
+
+  test('in a Claude Code conversation that has not loaded the add-on: to type /reload-plugins, or in one too old for that, to start a new conversation', () => {
+    expect(setupLine(facts)).toBe(reloadLine('2.1.321'))
     expect(reloadLine('2.1.321')).toContain('Type /reload-plugins in this chat')
+    expect(setupLine({ ...facts, claude: '2.1.286' })).toContain('Start a new Claude Code chat to use It')
     expect(claudeReloadLine(inClaude)).toBe(reloadLine(undefined))
   })
 
+  test('in a Claude Code conversation held in a thread of T3 Code: that what the person does reaches the thread already, with /reload-plugins for a turn that is running', () => {
+    const said = setupLine({ ...facts, route: route({ thread: 'held' }) })!
+    expect(said).toBe(t3ClaudeLine('2.1.321'))
+    expect(said).toContain('already reaches this thread through T3 Code')
+    expect(said).toContain('Type /reload-plugins here too')
+    expect(said).not.toMatch(/won’t|doesn’t reach|not reach/)
+    // One too old to load it that way is told nothing of reloading
+    expect(setupLine({ ...facts, claude: '2.1.286', route: route({ thread: 'held' }) })).toBe(
+      'What you do on It’s pages already reaches this thread through T3 Code.',
+    )
+  })
+
+  test('in a Codex conversation, while Codex has yet to run It’s hooks: to start Codex again now, and why', () => {
+    const said = setupLine({ ...facts, session: codex, addonHere: undefined, codexPending: true })
+    expect(said).toBe(CODEX_RESTART)
+    expect(CODEX_RESTART).toMatch(/^Quit Codex and start it again now/)
+    expect(CODEX_RESTART).toContain('may ask you to approve every `it` command')
+    expect(CODEX_RESTART).toContain('“Trust all and continue”')
+  })
+
+  test('in a Codex conversation held in a thread of T3 Code: that clicks reach the thread, and nothing is asked for that T3 Code never shows', () => {
+    const said = setupLine({ ...facts, session: codex, addonHere: undefined, codexPending: true, route: route({ thread: 'held' }) })
+    expect(said).toBe(T3_CODEX)
+    expect(T3_CODEX).not.toContain('Trust all')
+    expect(T3_CODEX).toContain('nothing to approve')
+  })
+
+  test('nothing where the conversation’s app is not connected, where nothing is left to do in it, or where no conversation is known', () => {
+    expect(setupLine({ ...facts, connected: false })).toBeUndefined()
+    expect(setupLine({ ...facts, addonHere: true })).toBeUndefined()
+    expect(setupLine({ ...facts, session: codex, addonHere: undefined, codexPending: false })).toBeUndefined()
+    expect(setupLine({ ...facts, session: undefined })).toBeUndefined()
+    expect(setupLine({ ...facts, session: { harness: 'pi', id: 'p' }, addonHere: undefined, codexPending: true })).toBeUndefined()
+    expect(claudeReloadLine({})).toBeUndefined()
+    expect(claudeReloadLine({ CODEX_THREAD_ID: 'thread-1' })).toBeUndefined()
+    expect(claudeReloadLine({ ...inClaude, IT_HARNESS: 'claude-code', IT_SESSION: inClaude.CLAUDE_CODE_SESSION_ID })).toBeUndefined()
+  })
+
+  test('is said to the agent, with every note for the person on its own, as it is to be said', () => {
+    const hermes = 'Hermes: restart Hermes.\nFor the Hermes TUI, also run this once:\n    hermes config set x true'
+    const said = afterSetupForAgent([reloadLine('2.1.321'), hermes])
+    expect(said).toMatch(/^For the agent that ran this: /)
+    expect(said).toContain('Tell them this in your next message, word for word:')
+    expect(
+      said.endsWith(`\n\n  ${reloadLine('2.1.321')}\n\n  Hermes: restart Hermes.\n  For the Hermes TUI, also run this once:\n      hermes config set x true`),
+    ).toBe(true)
+  })
+
   test('the words for the person are short and in the agent’s voice, as an agent passes them on as they stand', () => {
-    for (const line of [reloadLine('2.1.321'), reloadLine('2.1.286')]) {
-      expect(line.length).toBeLessThan(140)
+    for (const line of [reloadLine('2.1.321'), reloadLine('2.1.286'), t3ClaudeLine('2.1.321'), T3_CODEX]) {
+      expect(line.length).toBeLessThan(160)
       expect(line).not.toMatch(/\bagent\b|\bIt’s add-on is not running\b/)
     }
+    expect(CODEX_RESTART.length).toBeLessThan(260)
     expect(reloadLine('2.1.321')).toContain('reaches me')
   })
+})
 
-  test('from inside one of a Claude Code too old for that: to start a new conversation', () => {
-    const said = claudeAfterSetup({ ...inClaude, CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.286' })!
-    expect(said).toContain('Start a new Claude Code chat to use It')
-    expect(said).not.toContain('/reload-plugins')
+describe('what a Codex conversation is told with each page while Codex has yet to run It’s hooks', () => {
+  const codex = { harness: 'codex', id: 'thread-1' }
+  test('outside T3 Code, the agent is told to have the person start Codex again, word for word, once', () => {
+    for (const r of [route(), route({ listening: true })]) {
+      const said = arrives({ session: codex, addonHere: undefined, route: r, slug: 'plan', codexPending: true })
+      expect(said.next).toContain(
+        `Unless you have told the person already in this conversation, tell them this in your next message, word for word: “${CODEX_RESTART}”`,
+      )
+    }
+    const tour = arrives({ session: codex, addonHere: undefined, route: route(), slug: 'it-tour-menu', tour: true, codexPending: true })
+    expect(tour.next).toContain(`after the tour’s ending: “${CODEX_RESTART}”`)
   })
 
-  test('nothing from outside Claude Code, or from a conversation where the add-on runs already', () => {
-    expect(claudeAfterSetup({})).toBeUndefined()
-    expect(claudeAfterSetup({ CODEX_THREAD_ID: 'thread-1' })).toBeUndefined()
-    expect(claudeAfterSetup({ ...inClaude, IT_HARNESS: 'claude-code', IT_SESSION: inClaude.CLAUDE_CODE_SESSION_ID })).toBeUndefined()
-    expect(claudeReloadLine({})).toBeUndefined()
+  test('in a thread of T3 Code, once its hooks have run, or where Codex is not connected here, nothing of it is said', () => {
+    const held = arrives({ session: codex, addonHere: undefined, route: route({ thread: 'held' }), slug: 'plan', codexPending: true })
+    expect(held).toMatchObject({ byItself: true, via: 't3' })
+    expect(held.next).not.toContain('Codex again')
+    expect(arrives({ session: codex, addonHere: undefined, route: route(), slug: 'plan', codexPending: false }).next).not.toContain('Codex again')
+    expect(arrives({ session: codex, addonHere: undefined, route: route({ connected: false }), codexPending: true }).next).not.toContain('Codex again')
+    // And never in another app's conversation
+    expect(arrives({ session: claude, addonHere: false, claude: '2.1.321', route: route(), codexPending: true }).next).not.toContain('Codex again')
   })
 })

@@ -58,6 +58,33 @@ export const reloadLine = (running: string | undefined): string =>
     ? 'Start a new Claude Code chat to use It. This Claude Code is too old to load It’s add-on into this one.'
     : 'Type /reload-plugins in this chat, so that what you do on It’s pages reaches me. If I’m still replying, it takes effect when I’m done.'
 
+/**
+ * What a person in a Codex conversation is told, in so many words, once It's add-on is in Codex
+ * and Codex has not yet run It's hooks: Codex reads its rules and asks to review hooks only as it
+ * starts, so the Codex that ran setup asks before `it` commands, and runs none of It's hooks,
+ * until it is started again. Not said in a thread of T3 Code, where Codex never asks (`T3_CODEX`).
+ */
+export const CODEX_RESTART =
+  'Quit Codex and start it again now, then choose “Trust all and continue” when it asks to review hooks. Until then, Codex may ask you to approve every `it` command I run, and It’s hooks don’t run. In a terminal, `codex resume --last` brings this chat back.'
+
+/**
+ * What a person in a Codex conversation held in a thread of T3 Code is told: what they do on a
+ * page reaches the thread through T3 Code, idle or in the middle of a turn, and T3 Code never
+ * shows Codex's review of It's hooks, so nothing there is to be approved.
+ */
+export const T3_CODEX =
+  'What you do on It’s pages reaches this thread through T3 Code, even while I’m replying. Codex never asks about It’s hooks here, so there’s nothing to approve.'
+
+/**
+ * What a person in a Claude Code conversation held in a thread of T3 Code that has not loaded
+ * It's add-on is told: what they do on a page reaches the thread already, through T3 Code, and
+ * `/reload-plugins` is what lets it reach a turn that is running, through the add-on.
+ */
+export const t3ClaudeLine = (running: string | undefined): string =>
+  tooOldToReload(running)
+    ? 'What you do on It’s pages already reaches this thread through T3 Code.'
+    : 'What you do on It’s pages already reaches this thread through T3 Code. Type /reload-plugins here too, so it also reaches me in the middle of a reply.'
+
 /** How an agent is told to pass on what the person is to be told: in its next message, and word for word. */
 export const tellWordForWord = (line: string): string => `Tell the person this in your next message, word for word: “${line}”`
 
@@ -78,6 +105,8 @@ export interface Facts {
   slug?: string
   /** Whether that page is one of the tour's, which the agent gives by the tour's own rules. */
   tour?: boolean
+  /** Whether Codex has yet to run It's hooks on this machine (`codexHooksPending`). */
+  codexPending?: boolean
 }
 
 /**
@@ -96,8 +125,22 @@ export const notLoadedHere = (f: Facts): boolean =>
   f.route.thread === 'none' &&
   f.route.runtime !== 'incompatible'
 
-/** Whether what the person does arrives by itself, by which way, and what to do, from what It knows of the conversation. */
+/**
+ * Whether what the person does arrives by itself, by which way, and what to do, from what It
+ * knows of the conversation. In a Codex conversation that is not held in a thread of T3 Code,
+ * while Codex has yet to run It's hooks, the agent is told as well to have the person start
+ * Codex again, in so many words: until then Codex may ask before each `it` command the agent runs.
+ */
 export function arrives(f: Facts): Arrives {
+  const said = arrivesAsIs(f)
+  if (f.session?.harness !== 'codex' || !f.codexPending || f.route?.thread === 'held' || f.route?.connected === false) return said
+  const tell = f.tour
+    ? `Unless you told the person this with the pairing link, tell them this once, word for word, after the tour’s ending: “${CODEX_RESTART}”`
+    : `Unless you have told the person already in this conversation, tell them this in your next message, word for word: “${CODEX_RESTART}”`
+  return { ...said, next: `${said.next} Codex has not run It’s hooks in this conversation, which it does only once it is started again. ${tell}` }
+}
+
+function arrivesAsIs(f: Facts): Arrives {
   const on = f.slug ? 'this page' : 'your pages'
   const end = (via: 'addon' | 't3'): Arrives => ({
     byItself: true,
@@ -120,7 +163,7 @@ export function arrives(f: Facts): Arrives {
     // Hermes lets its add-on speak only in some of the places it runs, and the add-on cannot say which this is
     if (harness === 'hermes')
       return unknown(
-        'It’s add-on for Hermes is listening, and Hermes lets it speak only in some places: in its plain terminal what the person does arrives by itself, in its TUI and desktop app only where the person has allowed it, and in its messaging gateway never.',
+        'It’s add-on for Hermes is listening, and Hermes lets it speak only in some places: up to Hermes 0.21.5 in its plain terminal alone; in a later Hermes, in its plain terminal, TUI and desktop app, only where the person has allowed it with `hermes config set plugins.entries.it-bridge.allow_gateway_injection true`; and in its messaging gateway never.',
       )
     // Heard from under this conversation's id, and not running in this process: another copy of it has the add-on
     if (f.addonHere === false) return unknown('It’s add-on is listening for this conversation in another copy of it, and not in this one.')
@@ -168,12 +211,37 @@ export function claudeReloadLine(e: NodeJS.ProcessEnv = process.env): string | u
 }
 
 /**
- * What setup says last of all, in words, in that conversation. It is addressed to the agent that
- * ran setup, which is the one that reads it: the person sees what the agent says, and not what a
- * command printed for it. So it tells the agent what to say, and gives the words to say.
+ * What the person is told, word for word, of the conversation setup ran in, once setup has put
+ * in the add-on of the app it runs in: in Claude Code, that a conversation which has not loaded
+ * the add-on loads it with `/reload-plugins`; in Codex, that Codex is to be started again so
+ * that it runs It's hooks. In a thread of T3 Code, what is so there instead: what the person does
+ * reaches the thread through T3 Code, and nothing is asked for that T3 Code would never show.
+ * Nothing where nothing is left to do in this conversation.
  */
-export function claudeAfterSetup(e: NodeJS.ProcessEnv = process.env): string | undefined {
-  const line = claudeReloadLine(e)
-  if (!line) return undefined
-  return `For the agent that ran this: this Claude Code conversation was already open when It’s add-on was installed, so it has not loaded it, and nothing the person does on a page reaches it yet. Tell the person this in your next message, word for word:\n\n  ${line}`
+export function setupLine(f: {
+  session: { harness: string; id: string } | undefined
+  /** Whether It's add-on runs in that conversation, where that can be told (`claudeAddonHere`). */
+  addonHere: boolean | undefined
+  claude?: string
+  /** What the connector answered at `/route` for the conversation, or null. */
+  route: Route | null
+  /** Whether the app of the conversation is connected now, its hooks waiting on the person or not. */
+  connected: boolean
+  /** Whether Codex has yet to run It's hooks (`codexHooksPending`). */
+  codexPending: boolean
+}): string | undefined {
+  if (!f.connected || !f.session) return undefined
+  const held = f.route?.thread === 'held'
+  if (f.session.harness === 'claude-code' && f.addonHere === false) return held ? t3ClaudeLine(f.claude) : reloadLine(f.claude)
+  if (f.session.harness === 'codex' && f.codexPending) return held ? T3_CODEX : CODEX_RESTART
+  return undefined
 }
+
+/**
+ * What setup says last of all, in words, to whoever ran it from inside an agent's conversation.
+ * It is addressed to the agent, which is the one that reads it: the person sees what the agent
+ * says, and not what a command printed for it. So it tells the agent what to say, and gives the
+ * words to say, which are what is left for the person to do.
+ */
+export const afterSetupForAgent = (lines: readonly string[]): string =>
+  `For the agent that ran this: the person sees only what you say, and not what setup printed. Tell them this in your next message, word for word:\n\n${lines.map((line) => line.replace(/^/gm, '  ')).join('\n\n')}`

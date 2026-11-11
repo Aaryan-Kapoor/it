@@ -42,7 +42,7 @@ import {
 } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
 import { type Args, fileText, json, loose, need, nested, OPTIONS, optionsFor, outputArgs, parse, setValue, text } from './args'
-import { type Arrives, arrives, claudeAfterSetup, claudeReloadLine, claudeRunning, reloadLine, tellWordForWord } from './arrives'
+import { type Arrives, afterSetupForAgent, arrives, CODEX_RESTART, claudeReloadLine, claudeRunning, reloadLine, setupLine, tellWordForWord } from './arrives'
 import { CODEX_SAVE_ESCALATE } from './codex-settings'
 import { choices, conversationIds, local, type Route, refusedFor } from './connector'
 import { deletePage, deletionStatus } from './delete'
@@ -128,6 +128,7 @@ import {
   CODEX_SHUT,
   claudeDesktopHere,
   claudeFolders,
+  codexHooksPending,
   codexLetsItOut,
   codexRuleLetsItOut,
   codexRulesWarning,
@@ -826,16 +827,47 @@ function anothers(slug: string, theirs: Made | null): Problem {
 async function arrivalHere(slug?: string, tour = false): Promise<Arrives | undefined> {
   const session = sessionAsked()?.session
   if (!session) return undefined
+  const route = await routeOf(session)
+  return arrives({
+    session,
+    addonHere: session.harness === 'claude-code' ? claudeAddonHere() : undefined,
+    claude: claudeRunning(),
+    route,
+    slug,
+    tour,
+    codexPending: session.harness === 'codex' && codexHooksPending(),
+  })
+}
+
+/** What the connector says of the way to a conversation (`/route`), or null where it could not be asked or gave no answer that is one. */
+async function routeOf(session: { harness: string; id: string }): Promise<Route | null> {
   // The connector gives T3 Code up to eight seconds, the first time a couple of them to issue It a session
   const asked = await local<Partial<Route>>(`/route?harness=${encodeURIComponent(session.harness)}&session=${encodeURIComponent(session.id)}`, {
     timeoutMs: 10_000,
   })
   // An answer that is not one is no answer: a connector from before it answered this says nothing of it
-  const route =
-    asked && typeof asked.connected === 'boolean' && typeof asked.listening === 'boolean' && ['held', 'none', 'unknown'].includes(asked.thread as string)
-      ? (asked as Route)
-      : null
-  return arrives({ session, addonHere: session?.harness === 'claude-code' ? claudeAddonHere() : undefined, claude: claudeRunning(), route, slug, tour })
+  return asked && typeof asked.connected === 'boolean' && typeof asked.listening === 'boolean' && ['held', 'none', 'unknown'].includes(asked.thread as string)
+    ? (asked as Route)
+    : null
+}
+
+/**
+ * What the person is told, word for word, of the conversation a command of setup's runs in,
+ * where its app is connected (`setupLine`): the connector is asked of the way to it only where
+ * there is something to tell, since only then can a thread of T3 Code change what it is.
+ */
+async function lineHere(connected: (harness: string) => boolean): Promise<string | undefined> {
+  const session = sessionAsked()?.session
+  if (!session || !connected(session.harness)) return undefined
+  const facts = {
+    session,
+    addonHere: session.harness === 'claude-code' ? claudeAddonHere() : undefined,
+    claude: claudeRunning(),
+    connected: true,
+    codexPending: session.harness === 'codex' && codexHooksPending(),
+  }
+  if (!setupLine({ ...facts, route: null })) return undefined
+  return setupLine({ ...facts, route: await routeOf(session) })
 }
 
 async function published(
@@ -937,12 +969,24 @@ export const AFTER_SETUP =
   'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
 
 /**
- * The same, where the conversation that ran setup has not loaded the add-on it has just
- * installed, and the person has to be told what to type: the words are in the step itself, and
- * not in a condition that an agent may read past.
+ * The same, where something is left for the person to do and they have to be told it: in the
+ * conversation that ran setup, such as typing /reload-plugins in it, and in each app setup has
+ * connected, such as restarting it. The words are in the step itself, and not in a condition that
+ * an agent may read past, and each is given whole, since a person who is told only some of them
+ * goes without what the rest would have done. Where Codex is to be started again, which ends the
+ * agent's turn, the tour is left until it has been, and the person is told to ask for it then.
  */
-export const afterSetupTelling = (line: string): string =>
-  `If you are an agent installing It for someone, two steps of the install guide come after this one. First, write the person one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${line}” Then, only once that message is written and in the same turn, run \`it tour --wait\` and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
+export const afterSetupTelling = (lines: readonly string[], restart = false): string =>
+  `If you are an agent installing It for someone, two steps of the install guide come after this one. First, write the person one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them ${
+    lines.length === 1 ? `this, word for word: “${lines[0]}”` : `each of these, word for word:\n\n${lines.map((line) => `“${line}”`).join('\n\n')}\n\n`
+  }${
+    restart
+      ? ' Then end your turn, and do not run `it tour --wait` yet: Codex has to be started again first, which ends this turn anyway. Once it is back and the person asks for the tour, run `it tour --wait` and do what it prints.'
+      : ' Then, only once that message is written and in the same turn, run `it tour --wait` and do what it prints.'
+  } If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
+
+/** What a person in a Codex conversation is told after setup: to start Codex again, and to ask for the tour once it is back. */
+const CODEX_RESTART_SETUP = `${CODEX_RESTART} Once Codex is back, say “Give me the It tour.”`
 
 /**
  * What an agent that asked for a pairing link is told to do with it: give it to the person at
@@ -956,11 +1000,9 @@ async function linkToTell(): Promise<{ tell?: string }> {
   if (!sessionAsked()) return {}
   const give =
     'Give the person this url now, in a message, before you run anything else: they open it in a browser on this computer, and it pairs that browser, once, within ten minutes.'
-  const line = claudeReloadLine()
-  if (!line) return { tell: give }
   const me = await call<{ harnesses?: { id: string; addon: string }[] } | null>('query', api.machines.me).catch(() => null)
-  const connected = me?.harnesses?.some((h) => h.id === 'claude-code' && h.addon === 'connected') === true
-  return { tell: connected ? `${give} In that same message, tell them this, word for word: “${line}”` : give }
+  const line = await lineHere((harness) => me?.harnesses?.some((h) => h.id === harness && (h.addon === 'connected' || h.addon === 'needs_approval')) === true)
+  return { tell: line ? `${give} In that same message, tell them this, word for word: “${line}”` : give }
 }
 
 /**
@@ -2040,6 +2082,9 @@ async function settingUpLed(a: Args, begunAlready = false) {
       const why = h.detail ?? said
       left.push(`${KNOWN[h.id].label} could not be connected${why ? `: ${why.replace(/\.$/, '')}.` : '.'}`)
     }
+    // An app that `--only` took out, said as what it means for the person
+    const gone = only !== undefined ? disconnectedSaid(found, after, wanted) : null
+    if (gone) left.push(gone)
     // What decides whether Codex's first page appears at all is said by itself, and first
     const shut = codexShut(after)
     if (shut) left.push(shut)
@@ -2250,6 +2295,36 @@ async function joinedInstead(a: Args): Promise<boolean> {
   }
 }
 
+/** Names as a sentence lists them: "A", "A and B", "A, B and C". */
+const listed = (names: readonly string[]): string => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : (names[0] ?? ''))
+
+/**
+ * The apps that an agent's `--only` leaves connected beside the ones it names: each that is
+ * connected here, its hooks waiting on the person or not, and each that the person chose and
+ * It has on record, as a setup with nobody to ask keeps them. Where It cannot be asked what was
+ * chosen, what is connected here is kept.
+ */
+async function keptConnected(found: readonly HarnessStatus[], named: readonly Harness[]): Promise<Harness[]> {
+  const chosen = (await call<{ wanted?: string[] } | null>('query', api.machines.me).catch(() => null))?.wanted ?? []
+  const connected = found.filter((h) => h.addon === 'connected' || h.addon === 'needs_approval').map((h) => h.id)
+  return [...new Set([...connected, ...chosen])].filter(
+    (id): id is Harness => (HARNESSES as readonly string[]).includes(id) && !named.includes(id as Harness) && found.some((h) => h.id === id),
+  )
+}
+
+/**
+ * What a person is told of the apps that were connected before a setup with `--only` and are not
+ * now, since it did not name them: that what they do on a page one of those apps' conversations
+ * made no longer reaches it, and the command that connects them all again. Null where none was.
+ */
+function disconnectedSaid(found: readonly HarnessStatus[], after: readonly HarnessStatus[], wanted: readonly Harness[]): string | null {
+  const on = (h: HarnessStatus) => h.addon === 'connected' || h.addon === 'needs_approval'
+  const gone = found.filter((h) => on(h) && !wanted.includes(h.id) && !after.some((now) => now.id === h.id && on(now))).map((h) => h.id)
+  if (!gone.length) return null
+  const one = gone.length === 1
+  return `${listed(gone.map((id) => KNOWN[id].label))} ${one ? 'is' : 'are'} no longer connected, since \`--only\` did not name ${one ? 'it' : 'them'}: what you do on a page that one of ${one ? 'its' : 'their'} conversations made no longer reaches that conversation. \`it setup --only ${[...wanted, ...gone].join(',')}\` connects ${one ? 'it' : 'them'} again.`
+}
+
 /**
  * The agent apps that `--only` names. A name It does not know is refused, and so is an app
  * whose add-on is held back and that nobody has asked for: in words, with nothing changed.
@@ -2313,8 +2388,23 @@ async function settingUp(a: Args, joined: boolean) {
     /** What is said of the apps that were found and left unconnected because nobody was there to be asked. */
     let unasked: string | undefined
     if (a.flags.none) wanted = []
-    else if (only !== undefined) wanted = appsNamed(only)
-    else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
+    else if (only !== undefined) {
+      wanted = appsNamed(only)
+      // Run by an agent, `--only` names the app the agent runs in, as the install guide has it,
+      // and leaves the apps that are connected already as they are: an agent installing It into
+      // a second app would otherwise take It out of the first, and the person would learn of it
+      // only from a page that no longer answers. Changing which apps are connected otherwise is
+      // the person's to do, in a terminal.
+      if (sessionAsked()) {
+        const kept = await keptConnected(found, wanted)
+        if (kept.length) {
+          wanted = [...wanted, ...kept]
+          say(
+            `${listed(kept.map((id) => KNOWN[id].label))} ${kept.length === 1 ? 'stays' : 'stay'} connected as well: run from an agent’s conversation, \`--only\` connects what it names and leaves connected what is connected already. \`it setup\`, run in a terminal, changes which apps are connected.`,
+          )
+        }
+      }
+    } else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
     else if (!process.stdin.isTTY) {
       // Nobody is here to be asked. What the person chose before stays chosen, and what is
       // connected stays connected: It is asked first, so that nothing is changed where it cannot be
@@ -2391,19 +2481,28 @@ async function settingUp(a: Args, joined: boolean) {
     if (forPerson(a)) tell(appsSaid(after, false, false))
     // What the person still has to do themselves, for each harness that was just connected.
     // What decides whether Codex's first page appears at all is said by itself, and first.
+    // Each is kept as well, with the app it is of, for the agent to pass on whole
+    const notes: { id?: Harness; line: string }[] = []
+    const note = (line: string, id?: Harness) => {
+      say(`\n${line}`)
+      notes.push({ id, line })
+    }
     const shut = codexShut(after)
-    if (shut) say(`\n${shut}`)
+    if (shut) note(shut)
     const restart = restartSaid(outcomes, before)
-    if (restart) say(`\n${restart}`)
+    if (restart) note(restart)
     // That reopening came on with this setup, said once: not again each time setup is run
     const waking = wakesSaid(
       cameOn(woken, wokenBefore, before).filter((id) => after.some((h) => h.id === id && (h.addon === 'connected' || h.addon === 'needs_approval'))),
     )
     if (waking) say(`\n${waking}`)
     for (const h of after) {
-      if (h.addon === 'needs_approval') say(`\n${KNOWN[h.id].label}: ${h.detail}`)
-      else if (h.addon === 'connected' && wanted.includes(h.id) && AFTER[h.id] && !before.has(h.id)) say(`\n${KNOWN[h.id].label}: ${AFTER[h.id]}`)
+      if (h.addon === 'needs_approval') note(`${KNOWN[h.id].label}: ${h.detail}`, h.id)
+      else if (h.addon === 'connected' && wanted.includes(h.id) && AFTER[h.id] && !before.has(h.id)) note(`${KNOWN[h.id].label}: ${AFTER[h.id]}`, h.id)
     }
+    // An app that `--only` took out, said as what it means for the person, and not only as the progress line that took it out
+    const gone = only !== undefined ? disconnectedSaid(found, after, wanted) : null
+    if (gone) note(gone)
     // The things left for the person to do, unless everything was just taken out again from
     // an It that was already here
     if (!a.flags.none || begun?.enrolled || joined) {
@@ -2425,11 +2524,19 @@ async function settingUp(a: Args, joined: boolean) {
           : `\nNo browser is let in to It’s site until it is paired: \`it site\` opens the site in a browser on this machine and pairs that browser, and \`it site --no-open\` prints the link that does.`,
       )
     }
-    // Claude Code, connected just now from inside one of its conversations that has not loaded the add-on: said last of all,
-    // since it is what decides whether what the person does on a page reaches the conversation they are in, and
-    // said to the agent, with the words it is to tell the person, since the agent is the one that reads it
-    const toTell = wanted.includes('claude-code') && after.some((h) => h.id === 'claude-code' && h.addon === 'connected') ? claudeReloadLine() : undefined
-    if (toTell) say(`\n${claudeAfterSetup()}`)
+    // What is left to do in the conversation this ran in, where setup connected its app: in
+    // Claude Code that has not loaded the add-on, /reload-plugins; in Codex, starting it again;
+    // in a thread of T3 Code, what is so there. It takes the place of the app's own note, and
+    // with the other apps' notes is said last of all, to the agent, with the words it is to tell
+    // the person, since the agent is the one that reads it and the person sees only what it says
+    const here = await lineHere(
+      (harness) => wanted.includes(harness as Harness) && after.some((h) => h.id === harness && (h.addon === 'connected' || h.addon === 'needs_approval')),
+    )
+    const herApp = here ? sessionAsked()?.session.harness : undefined
+    const codexRestart = here === CODEX_RESTART
+    const toTell = [...(here ? [codexRestart ? CODEX_RESTART_SETUP : here] : []), ...notes.filter((n) => !here || n.id !== herApp).map((n) => n.line)]
+    // Said to an agent alone: a person at a terminal has read each of them already
+    if (toTell.length && sessionAsked()) say(`\n${afterSetupForAgent(toTell)}`)
     if (!forPerson(a))
       out({
         harnesses: after,
@@ -2440,9 +2547,11 @@ async function settingUp(a: Args, joined: boolean) {
         ...(unasked ? { hint: unasked } : {}),
         // An agent that is installing It reads this whole, whatever it was given of the guide.
         // Said once an agent app is connected: until then the hint above is what comes next
-        ...(after.some((h) => h.addon === 'connected' || h.addon === 'needs_approval') ? { next: toTell ? afterSetupTelling(toTell) : AFTER_SETUP } : {}),
+        ...(after.some((h) => h.addon === 'connected' || h.addon === 'needs_approval')
+          ? { next: toTell.length ? afterSetupTelling(toTell, codexRestart) : AFTER_SETUP }
+          : {}),
         // And the words themselves, last of all in what it prints
-        ...(toTell ? { tell: tellWordForWord(toTell) } : {}),
+        ...(toTell.length ? { tell: tellWordForWord(toTell.join('\n\n')) } : {}),
       })
     // Setup that leaves It not running where it was wanted has not done what it was asked, and ends by saying so
     if (trouble) process.exitCode = 1

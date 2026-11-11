@@ -31,11 +31,17 @@ import { behindMark, MARK, PORTS, TAKES, UPLOAD, WHEN } from '@it/protocol'
 const AFTER_SETUP =
   'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
 
+/** What setup says Pi's user is to do once Pi is connected, as the program has it. */
+const PI_NOTE = 'Pi: If Pi is open, restart it or run /reload in it: it reads its extensions when it starts.'
+/** What setup says last to an agent where something is left for the person to do: the words, whole, in the step that gives the pairing link. */
+const AFTER_SETUP_TELLING = (words: string) =>
+  `If you are an agent installing It for someone, two steps of the install guide come after this one. First, write the person one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them ${words} Then, only once that message is written and in the same turn, run \`it tour --wait\` and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
+
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { BOOLEAN } from './src/args'
-import { reloadLine } from './src/arrives'
+import { reloadLine, t3ClaudeLine } from './src/arrives'
 import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
 import { VERSION } from './src/lib'
 import { aloneAt } from './src/serve/backend'
@@ -6800,8 +6806,9 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
     // And with an app connected and no service, the same is said of running It here
     const one = await joining(['--only', 'pi', '--no-service'])
     expect([one.ran.code, one.registered]).toEqual([0, false])
-    // An agent that set an app up is told what follows setup, and how to read the guide whole: it may have been given only a summary of it
-    expect(printed(one.ran).next).toBe(AFTER_SETUP)
+    // An agent that set an app up is told what follows setup, and how to read the guide whole: it may have been given only a summary of it.
+    // What is left for the person to do in the app it connected is in that step, word for word
+    expect(printed(one.ran).next).toBe(AFTER_SETUP_TELLING(`this, word for word: “${PI_NOTE}”`))
     expect(AFTER_SETUP).toContain('`it site --no-open`')
     expect(AFTER_SETUP).toContain('`it tour --wait`')
     expect(AFTER_SETUP).toContain('`curl -fsSL https://itcan.do/install.md`')
@@ -7328,7 +7335,9 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
           // A Pi that was already running loads the add-on once it is started again
           addons: [{ id: 'pi', did: 'installed', restart: true }],
           service: { registered: false, state: 'not installed' },
-          next: AFTER_SETUP,
+          // What Pi's user is to do is said to the agent to pass on, whole
+          next: AFTER_SETUP_TELLING(`this, word for word: “${PI_NOTE}”`),
+          tell: `Tell the person this in your next message, word for word: “${PI_NOTE}”`,
         })
         expect(setup.err).not.toContain('There is no terminal here')
         expect([flags, ran().filter((words) => words.startsWith('install')).length, chose(b)]).toEqual([flags, 1, [['pi']]])
@@ -7424,6 +7433,60 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
       b.asked.length = 0
       const again = await run(m, ['setup', '--no-service'], b.env)
       expect([again.code, printed(again).harnesses, chose(b)]).toEqual([0, [{ id: 'pi', version: '0.82.0', addon: 'connected' }], [['pi']]])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('run from an agent’s conversation, `--only` connects the app it names and leaves the apps already connected as they are', async () => {
+    const m = machine()
+    const ran = pi(m)
+    writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.18.32\n', { mode: 0o755 })
+    let wanted: string[] = []
+    const b = await backend(m, (asked) => {
+      if (asked.path === 'machines:choose') wanted = asked.args.harnesses as string[]
+      return asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted } : null
+    })
+    try {
+      // Pi is connected first, as by an agent in Pi following the install guide
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi'], { ...b.env, PI_SESSION_ID: 'pi-1' })).code).toBe(0)
+      // Then an agent in OpenCode follows the same guide, and names its own app alone
+      const second = await run(m, ['setup', '--no-service', '--only', 'opencode'], { ...b.env, OPENCODE_SESSION_ID: 'ses_1' })
+      expect(second.code).toBe(0)
+      expect(printed(second).harnesses).toEqual([
+        { id: 'opencode', version: '1.18.32', addon: 'connected' },
+        { id: 'pi', version: '0.82.0', addon: 'connected' },
+      ])
+      // It is told of both, so that the service does not take Pi out again by itself, and Pi was not touched
+      expect(wanted.sort()).toEqual(['opencode', 'pi'])
+      expect(ran().some((words) => words.startsWith('remove'))).toBe(false)
+      expect(second.err).not.toContain('disconnecting Pi')
+      expect(second.err).toContain(
+        'Pi stays connected as well: run from an agent’s conversation, `--only` connects what it names and leaves connected what is connected already.',
+      )
+      expect(second.err).not.toContain('no longer connected')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('run anywhere else, `--only` takes out an app it does not name, and says what that means for the person and how to have it back', async () => {
+    const m = machine()
+    const ran = pi(m)
+    writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.18.32\n', { mode: 0o755 })
+    const b = await backend(m, (asked) => (asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted: [] } : null))
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)).code).toBe(0)
+      const narrower = await run(m, ['setup', '--no-service', '--only', 'opencode'], b.env)
+      expect(narrower.code).toBe(0)
+      expect(printed(narrower).harnesses).toContainEqual({ id: 'pi', version: '0.82.0', addon: 'not_connected' })
+      expect(ran().some((words) => words.startsWith('remove'))).toBe(true)
+      const GONE =
+        'Pi is no longer connected, since `--only` did not name it: what you do on a page that one of its conversations made no longer reaches that conversation. `it setup --only opencode,pi` connects it again.'
+      expect(narrower.err).toContain(GONE)
+      // And whoever ran it is told to pass it on, whole, with the rest of what is left for the person
+      expect(printed(narrower).tell).toContain(GONE)
+      expect(printed(narrower).next).toContain(GONE)
     } finally {
       await b.close()
     }
@@ -7781,10 +7844,10 @@ else if (said === 'plugin install it-bridge@it --scope user') {
 
   test('it ends with words for the person, which the agent is told to say word for word in the message with the pairing link', async () => {
     // A machine joining an It on another computer, which is set up as a first setup is and needs no backend program of its own
-    const joining = async (env: Record<string, string>) => {
+    const joining = async (env: Record<string, string>, answer = (_url: string) => '{"ok":true}') => {
       const m = machine(false)
       claudeStandIn(m)
-      const answers = http.createServer((_req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}'))
+      const answers = http.createServer((req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end(answer(req.url ?? '')))
       const socket = path.join(m.it, 'connector.sock')
       await new Promise<void>((r) => answers.listen(socket, r))
       writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'ef'.repeat(24), pid: process.pid, version: 'x', startedAt: 0 }))
@@ -7816,7 +7879,7 @@ else if (said === 'plugin install it-bridge@it --scope user') {
     expect(Object.keys(said).pop()).toBe('tell')
     expect(said.tell).toBe(`Tell the person this in your next message, word for word: “${line}”`)
     // What it says in words ends the same way: to the agent, with the words on their own
-    expect(ran.err.trimEnd().endsWith(`Tell the person this in your next message, word for word:\n\n  ${line}`)).toBe(true)
+    expect(ran.err.trimEnd().endsWith(`Tell them this in your next message, word for word:\n\n  ${line}`)).toBe(true)
     expect(ran.err).toContain('For the agent that ran this:')
 
     // Outside a conversation nothing of it is said, and neither where the add-on runs in it already
@@ -7830,5 +7893,19 @@ else if (said === 'plugin install it-bridge@it --scope user') {
       expect(printed(plain).tell).toBeUndefined()
       expect(plain.err).not.toContain('/reload-plugins')
     }
+
+    // In a thread of T3 Code, which the connector says holds the conversation, what the person does reaches it already:
+    // they are told so, with /reload-plugins as what lets it reach a turn that is running, and never that nothing reaches it
+    const inThread = await joining(
+      { CLAUDE_CODE_SESSION_ID: '11111111-2222-4333-8444-555555555555', CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.321' },
+      (url) =>
+        url.startsWith('/route?harness=claude-code&session=11111111-2222-4333-8444-555555555555')
+          ? JSON.stringify({ connected: true, listening: false, runtime: 'inactive', thread: 'held' })
+          : '{"ok":true}',
+    )
+    const held = printed(inThread)
+    expect(held.tell).toBe(`Tell the person this in your next message, word for word: “${t3ClaudeLine('2.1.321')}”`)
+    expect(held.next).toContain(`tells them this, word for word: “${t3ClaudeLine('2.1.321')}”`)
+    expect(inThread.err).not.toContain(reloadLine('2.1.321'))
   })
 })
