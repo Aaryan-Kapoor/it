@@ -326,7 +326,7 @@ describe('the agent skill', () => {
     expect(short).toContain(`A photo is shrunk to ${SHRINK.side} px unless a third argument says \`{ original: true }\`.`)
     expect(source('../../packages/runtime/src/it.ts')).toMatch(/original\?: boolean/)
     // And what the agent then reads it with
-    expect(more.actions).toContain('`it action <id> --save receipt.jpg` writes it to that file')
+    expect(more.actions).toContain('`it save <id> receipt.jpg` writes it to that file')
     expect(more.actions).toContain('`--number 2` says which to write')
   })
 

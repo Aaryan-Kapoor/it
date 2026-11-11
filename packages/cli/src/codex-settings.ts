@@ -18,7 +18,7 @@
  *
  * There is a third way, which leaves the sandbox alone: a rule in Codex's `rules` folder that
  * lets one command run outside it. Seen with Codex as it comes, in a plain folder and in a git
- * one: with the one rule for `it`, every `it` command runs unasked, and any other command is
+ * one: with only the broad rule for `it`, every `it` command runs unasked, and any other command is
  * still kept from the network and from writing outside its folder. So `it setup` writes that rule
  * into a file of It's own there when it connects Codex (see `CODEX_RULES`). Without it, a git folder
  * asks for approval of each `it` command, and a plain folder refuses the asking itself
@@ -35,6 +35,9 @@ import path from 'node:path'
 
 /** The rule that lets `it`, and nothing else, run outside Codex's sandbox: one line of a file in Codex's `rules` folder. */
 export const CODEX_RULE = 'prefix_rule(pattern=["it"], decision="allow")'
+/** Saving page-supplied bytes always needs approval outside the sandbox. */
+export const CODEX_SAVE_RULE =
+  'prefix_rule(pattern=["it", "save"], decision="prompt", justification="This command writes a file a page sent to a path on this machine.")'
 /**
  * The commands of `it` that change It on this machine, rather than use it: its installation, its
  * service, whom it answers, what it reports, and the hold it keeps on conversations it cannot tell
@@ -56,11 +59,13 @@ export const CODEX_RULES_REL = 'rules/it.rules'
  */
 export const CODEX_RULES = `# Written by It when \`it setup\` connected Codex. It lets the \`it\` command run outside Codex's
 # sandbox, so that it can reach It on this machine. Every other command stays in the sandbox,
-# and the \`it\` commands that change It itself, rather than use it, still ask you first.
+# and the \`it\` commands that change It itself still ask you first. \`it save\` also asks first,
+# because it writes a file a page sent to a path on this machine. \`it action\` only reads.
 # It brings this file up to date with its add-on, and removes it when Codex is disconnected or
 # It is uninstalled. Once you change it, it is yours, and It leaves it alone.
 ${CODEX_RULE}
 prefix_rule(pattern=["it", [${CODEX_ASKED.map((word) => `"${word}"`).join(', ')}]], decision="prompt", justification="This command can change It on this machine rather than use it.")
+${CODEX_SAVE_RULE}
 `
 const codexHome = () => process.env.CODEX_HOME || path.join(os.homedir(), '.codex')
 
@@ -231,13 +236,32 @@ const WHY = 'Codex runs the commands its agent gives it in a sandbox that cannot
  * of that name, or changed It's since.
  */
 export const CODEX_SHUT = `${WHY}.
-To let \`it\` through, and leave the sandbox as it is for everything else, \`it setup\` writes the file \`${CODEX_RULE_FILE}\` when it connects Codex, but leaves a file of that name as it is where It did not write it, or where it was changed after It wrote it. Run \`it setup\` again, or put this one line in that file yourself, and start Codex again:
-    ${CODEX_RULE}
-Without it, Codex asks you to approve each \`it\` command. In a folder that is not a git repository it does not ask at all, until you choose "Ask for approval" under \`/permissions\` there. None of this is needed if you run Codex with full access.`
+Run \`it setup\` again to install the complete protected rules in \`${CODEX_RULE_FILE}\`, then restart Codex. If you edited that file, keep your changes and add all these rules yourself:
+${CODEX_RULES.split('\n')
+  .filter((line) => line.startsWith('prefix_rule'))
+  .map((line) => `    ${line}`)
+  .join('\n')}
+These rules allow reads with \`it action\`, but \`it save\` and administrative commands ask first. Without the rules, Codex asks you to approve each \`it\` command.`
 
 /**
  * The same for an agent that was stopped there to pass on, in a sentence or two of its own
  * reply. Codex reads its rules as it starts, so a Codex that was running when setup wrote the
  * file is one that does not have the rule yet.
  */
-export const CODEX_SHUT_SAID = `${WHY}. \`it setup\` writes the file \`${CODEX_RULE_FILE}\` when it connects Codex, with the rule \`${CODEX_RULE}\`, which lets \`it\` through and leaves the sandbox as it is for everything else. Codex reads it when it next starts, so start Codex again. If \`it\` is still stopped after that, put that one line in the file yourself.`
+export const CODEX_SHUT_SAID = `${WHY}. Run \`it setup\` to install the complete protected rules in \`${CODEX_RULE_FILE}\`, then restart Codex. If you edited that file, keep your changes and add all of these rules: ${CODEX_RULES.split(
+  '\n',
+)
+  .filter((line) => line.startsWith('prefix_rule'))
+  .map((line) => `\`${line}\``)
+  .join('; ')}. Reads with \`it action\` remain allowed; \`it save\` asks first.`
+
+/** A personal rules file is preserved, but must not be described as protected without the save rule. */
+export function codexRulesWarning(home = codexHome()): string | null {
+  try {
+    const text = readFileSync(path.join(home, ...CODEX_RULES_REL.split('/')), 'utf8')
+    if (text.split('\n').some((line) => line.trim() === CODEX_SAVE_RULE)) return null
+    return `Codex: your rules file was left unchanged. It needs the \`it save\` prompt rule before saving is protected: ${CODEX_SAVE_RULE}`
+  } catch {
+    return null
+  }
+}

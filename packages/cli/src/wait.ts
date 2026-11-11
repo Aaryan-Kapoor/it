@@ -59,7 +59,7 @@ export const printed = (c: Listed) => ({
   ...(c.files?.length
     ? {
         files: c.files.map((f, i) => ({ number: i + 1, ...f })),
-        saveWith: `it action ${c.id} --save <file>${c.files.length > 1 ? ' --number <n>' : ''}`,
+        saveWith: `it save ${c.id} <file>${c.files.length > 1 ? ' --number <n>' : ''}`,
       }
     : {}),
   // Which display it was done on, by the id the backend knows it by, where it says

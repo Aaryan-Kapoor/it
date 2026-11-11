@@ -4227,6 +4227,25 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(JSON.stringify(stand.codex[0]!.args)).not.toContain('bigger')
   })
 
+  test.each(['queue', 't3'])('a long action with attachment details stays readable through the %s fallback', async (via) => {
+    if (via === 't3') {
+      withT3Code()
+      stand.t3.threads.set('thread-8', 't3-thread-h')
+    }
+    await start()
+    offered({
+      ...click(8),
+      name: 'it:message',
+      payload: JSON.stringify({ text: 'x'.repeat(5000) }),
+      files: [{ number: 1, name: 'photo.png', type: 'image/png', bytes: 100 }],
+    })
+    await until(() => (via === 't3' ? stand.t3.sent.length === 1 : stand.codex.length === 1))
+    const text = via === 't3' ? stand.t3.sent[0]!.text : stand.codex[0]!.args.join(' ')
+    expect(text).toContain('it action click-8')
+    expect(text).toContain('[action click-8]')
+    expect(text).not.toContain('--save')
+  })
+
   /** The conversation's hooks are heard from, as they are once a turn of it has run with It's add-on there. */
   const heard = (n: number) => turn(n, false)
   /** What a hook of the conversation is handed when it asks what the marks put into it stand for: the words, and the names it says afterwards that it has them by. */

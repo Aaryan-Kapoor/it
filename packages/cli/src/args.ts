@@ -71,7 +71,8 @@ export const OPTIONS: Record<string, readonly string[]> = {
   displays: [],
   wait: ['id', 'follow', 'timeout'],
   actions: ['id', 'all', 'follow', 'after'],
-  action: ['save', 'number'],
+  action: [],
+  save: ['number'],
   ack: ['failed'],
   setup: ['all', 'only', 'none', 'name', 'no-service', 'yes', 'refresh'],
   login: ['url', 'code', 'name', 'no-setup', 'all', 'only', 'none', 'no-service', 'yes'],
@@ -107,6 +108,14 @@ export function optionsFor(cmd: string | undefined, a: Args): void {
   const allowed = new Set(['json', 'help', ...(Object.hasOwn(OPTIONS, name) ? OPTIONS[name]! : [])])
   for (const flag of Object.keys(a.flags))
     if (!allowed.has(flag)) throw new Problem(`\`it ${name}\` does not take --${flag}.`, 'invalid', '`it help` lists what each command takes.')
+  if (cmd === 'save' && !a.flags.help) {
+    if (a._.length !== 2 || a._.some((word) => !word || word.startsWith('-')))
+      throw new Problem('Say which action and file to save.', 'invalid', 'Usage: it save <action-id> <file> [--number <n>]')
+    for (const [flag, values] of Object.entries(a.many)) if (values.length > 1) throw new Problem(`--${flag} may be given only once.`, 'invalid')
+    const number = text(a, 'number')
+    if (number !== undefined && (!/^[1-9][0-9]*$/.test(number) || !Number.isSafeInteger(Number(number))))
+      throw new Problem('--number is the number of one of the files the action carried, from 1.', 'invalid')
+  }
   if (cmd === 'tour' && a._.length === 0 && a.flags.timeout !== undefined && a.flags.wait !== true)
     throw new Problem('--timeout needs --wait with `it tour`.', 'invalid', 'Usage: it tour --wait [--timeout <seconds>]')
   if (cmd === 'login' && a.flags['no-setup'] === true) {
