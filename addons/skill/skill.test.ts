@@ -263,6 +263,7 @@ describe('the agent skill', () => {
     expect(more.page).toContain('"The It command may only be used inside a Describe block"')
     expect(more.page).toContain('`C:/Users/ana/.it/bin/it.exe state board`')
     expect(more.page).toContain('`& "C:/Users/Ana Lee/.it/bin/it.exe" state board`')
+    expect(more.page).toContain('in cmd write it in quotes with backslashes')
   })
 
   test('tells an agent on Windows to give JSON in a file, which Windows PowerShell 5.1 cannot change, and not to pipe it there', () => {
