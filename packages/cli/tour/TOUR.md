@@ -53,6 +53,8 @@ The person dragged the armchair of a floor plan. `in_the_way` is what they put i
 it tour answer <the action's id> '{"armchair":[419,309],"lamp":true,"say":"<one sentence about where it stands now>"}'
 ```
 
+The page shows your hand carrying the armchair there. The room is as large as the person's screen, so `room` and the places differ from one person to the next: use the numbers the action gives, and none from here.
+
 ### The whiteboard: `checked`
 
 The person wrote their answer to `sum` by hand, and `answer` is the right one. `saved` names a picture of the sheet, which It has already written for you in the folder you are in. Read that one file with whatever you read images with, and answer with what you read, whether it is right, the right answer, a hint of a few words, and a sentence:
@@ -73,15 +75,15 @@ it tour answer <the action's id> '{"blind":true,"say":"<one sentence saying that
 
 This part sends nothing yet.
 
-### The chessboard: `move`, `illegal`, `reset`
+### The chessboard: `move`, `illegal`
 
-The person plays White and you play Black. `good` holds a few sound moves for you, best first, and `legal` every move you may make, each written as `e7e5`. Answer with one of them and a few words. Take the first of `good` unless you see a better one at a glance:
+The person plays White and you play Black. `good` holds a few sound moves for you, best first, and `legal` every move you may make, each written as `e7e5`. Answer with one of them and a few words about it, which are the only words the page has of your move. Take the first of `good` unless you see a better one at a glance:
 
 ```sh
 it tour answer <the action's id> '{"move":"e7e5","note":"<a few words>"}'
 ```
 
-`illegal` means the move you gave was not one of the legal ones: answer it in the same way, with another. Where `over` is not `null` their move ended the game, and there is nothing to answer. `reset` means they started a new game, and needs no answer.
+`illegal` means the move you gave was not one of the legal ones: answer it in the same way, with another. Where `new_game` is `true` the move is the first of a game: whatever game there was before is over, and `last_game` says how it ended, where there was one. Nothing arrives when a game ends or a new one is set up, since neither needs an answer.
 
 ### The cube: `turned`
 

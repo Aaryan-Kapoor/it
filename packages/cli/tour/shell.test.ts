@@ -343,7 +343,7 @@ describe('the guide for the first page', () => {
 
   test('names every action a part sends, in that part’s own section, and the page sends each it names', () => {
     const sends = [...page.matchAll(/(?:asker|my)\.send\("([a-z]+)"/g)].map((m) => m[1]!)
-    expect([...new Set(sends)].sort()).toEqual(['beat', 'checked', 'finish', 'illegal', 'move', 'moved', 'reset', 'turned'])
+    expect([...new Set(sends)].sort()).toEqual(['beat', 'checked', 'finish', 'illegal', 'move', 'moved', 'turned'])
     for (const action of new Set(sends)) expect(sectionFor(action), action).toBeDefined()
     for (const heading of part.matchAll(/^### [^\n]*$/gm)) for (const named of heading[0].matchAll(/`([a-z]+)`/g)) expect(sends, named[1]).toContain(named[1])
   })
