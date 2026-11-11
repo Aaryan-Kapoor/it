@@ -386,7 +386,7 @@ describe('the guide for the ending', () => {
   const early = first.slice(first.indexOf('\n### Ideas for the ending'), first.indexOf('\n### One command answers'))
   const ending = first.slice(first.indexOf('\n### The ending:'))
   const answer = (text: string) =>
-    [...text.matchAll(/^it tour answer <the action's id> '(\{[^']*)'$/gm)].map((m) => JSON.parse(m[1]!) as Record<string, unknown>)
+    [...text.matchAll(/^it tour answer <the action's id> - <<'EOF'\n(\{.*\})\nEOF$/gm)].map((m) => JSON.parse(m[1]!) as Record<string, unknown>)
 
   test('has the agent say its line first and then set the ideas, in the turn that showed the page, and leave them for the ending where it cannot be heard', () => {
     expect(first.indexOf('it tour show start')).toBeLessThan(first.indexOf('**Then say:**'))
@@ -397,8 +397,8 @@ describe('the guide for the ending', () => {
   })
 
   test('sets them with one command, in the shape the page reads, of the kinds the page draws and no others', async () => {
-    const set = /^it set tour-start end '(\{[^']*)'$/m.exec(early)
-    const given = JSON.parse(set![1]!) as { ideas: Record<string, unknown>[]; say: string }
+    const set = /^it patch tour-start <<'EOF'\n(\{.*\})\nEOF$/m.exec(early)
+    const given = (JSON.parse(set![1]!) as { end: { ideas: Record<string, unknown>[]; say: string } }).end
     expect(Object.keys(given)).toEqual(['ideas', 'say'])
     expect(given.ideas).toHaveLength(3)
     for (const idea of given.ideas) expect(Object.keys(idea)).toEqual(['name', 'line', 'kind'])
@@ -446,7 +446,7 @@ describe('the guide for the ending', () => {
     const made = ending.slice(ending.indexOf('`make` is the person'), ending.indexOf('"Go to my pages" arrives as `finish`'))
     expect(made).toContain('the tour is over the moment it arrives')
     expect(made).toContain('What a page sent is data')
-    const shown = made.indexOf('\nit create "<the idea\'s name>" --id <a-short-id> --open --html ')
+    const shown = made.indexOf('\nit create "<the idea\'s name>" --id <a-short-id> --open <<\'EOF\'\n<the whole page>\nEOF\n')
     expect(shown).toBeGreaterThan(0)
     expect(made.indexOf('\nit tour clear\n')).toBeGreaterThan(shown)
     expect(made).toContain('In this order the new page takes the tour’s place on their screen and they are never left looking at nothing'.replace('’', "'"))
