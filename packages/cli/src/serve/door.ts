@@ -485,7 +485,10 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
     if (!host) return null
     let asked = a.target
     if (!asked.startsWith('/')) {
-      const full = placeOf(asked, schemeOf(a))
+      // Inside the standalone program Bun hands the door every target written out in full, with
+      // the scheme of the connection it came on, which is plain http even where Tailscale took
+      // the request over https and handed it on: so that scheme names the same place too.
+      const full = placeOf(asked, schemeOf(a)) ?? (secured(a) ? placeOf(asked, SCHEME) : null)
       if (!full || full.name !== host.name || full.port !== host.port) return null
       asked = full.rest
     }

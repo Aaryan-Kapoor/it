@@ -3749,6 +3749,26 @@ describe('Over https, through Tailscale on this machine', () => {
     expect(plain['frame-src']).toEqual([`http://localhost:${contentPort(door.base)}`, ...EMBED_HOSTS.map((name) => `https://${name}`)])
   })
 
+  test('A request Tailscale hands on over https is answered by the door as it listens, the site and a page alike', async () => {
+    const listening = await open(false, {}, backend, { https: NAME })
+    try {
+      const handed = (port: number, path: string) =>
+        ask(port, {
+          path,
+          host: `${NAME}:${port + 2}`,
+          headers: [
+            ['X-Forwarded-Proto', 'https'],
+            ['X-Forwarded-For', '100.101.42.17'],
+            ['X-Forwarded-Host', `${NAME}:${port + 2}`],
+          ],
+        })
+      expect((await handed(listening.base, '/')).status).toBe(200)
+      expect((await handed(contentPort(listening.base), '/s/x/index.html')).status).not.toBe(400)
+    } finally {
+      await listening.stop()
+    }
+  })
+
   test('A page shown over https may be framed only by the site at its https address', async () => {
     const page = await answer(secure(), viaTailscale(contentPort(door.base)), { port: contentPort(door.base), target: '/s/x/index.html' })
     expect(page.headers.get('content-security-policy')).toContain(`frame-ancestors https://${NAME}:${door.base + 2}`)
