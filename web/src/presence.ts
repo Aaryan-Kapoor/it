@@ -174,8 +174,8 @@ export function startReports(
   let spent = true
   /** How long ago the last use was, by whichever of the two clocks says it was longer. */
   const age = () => Math.max(now() - usedAt, wall() - usedWallAt, 0)
-  const fresh = () => {
-    if (!spent && age() >= USED_EVERY_MS) spent = true
+  const fresh = (old = age()) => {
+    if (!spent && old >= USED_EVERY_MS) spent = true
     return !spent
   }
   let saidUseOf = Number.NEGATIVE_INFINITY
@@ -191,10 +191,12 @@ export function startReports(
     const observedAt = clock?.at()
     untimed = clock !== undefined && observedAt === undefined
     if (untimed) clock!.ask()
-    const used = !untimed && shown && usedAt > saidUseOf && fresh()
+    // The use's age read once, so that what is judged fresh is what is said
+    const old = age()
+    const used = !untimed && shown && usedAt > saidUseOf && fresh(old)
     const what = closing ? { phase: 'none' as const } : page
     // When the use was, as long ago as the clock that says longer has it, so never later than it was
-    const when = used && observedAt !== undefined && at.takesUsedAt?.() ? { usedAt: Math.floor(observedAt - age() - usedLead) } : {}
+    const when = used && observedAt !== undefined && at.takesUsedAt?.() ? { usedAt: Math.floor(observedAt - old - usedLead) } : {}
     return {
       tab,
       sequence: ++sequence,
