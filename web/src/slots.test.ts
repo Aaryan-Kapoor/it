@@ -265,8 +265,32 @@ describe('the screen’s setting', () => {
     expect(previewChoice()).toBe('sixteen')
     choosePreviews('nine')
     expect([previewChoice(), localStorage.getItem('it.previews')]).toEqual(['nine', 'nine'])
+  })
+
+  test('ignores an invalid persisted choice', async () => {
+    vi.resetModules()
     localStorage.setItem('it.previews', 'forty-eight')
-    expect(previewChoice()).toBe('sixteen')
+    expect((await import('./slots')).previewChoice()).toBe('sixteen')
+  })
+
+  test('keeps the choice when storage refuses writes and reads', () => {
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('full')
+    })
+    try {
+      choosePreviews('none')
+      expect(previewChoice()).toBe('none')
+      const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+        throw new Error('denied')
+      })
+      try {
+        expect(previewChoice()).toBe('none')
+      } finally {
+        get.mockRestore()
+      }
+    } finally {
+      set.mockRestore()
+    }
   })
 
   test('each of the four choices comes to what it says', () => {
@@ -320,6 +344,20 @@ describe('the grid’s own slots', () => {
     expect(g.live()).toBe(16)
     g.lib.learnTakes([])
     expect(g.live()).toBe(9)
+  })
+
+  test('follows choices and storage clearing from another tab', async () => {
+    const g = await theGrid(30)
+    g.lib.learnTakes([TAKES.pictures])
+    g.scroll(30)
+    g.choosePreviews('all')
+    localStorage.setItem('it.previews', 'none')
+    window.dispatchEvent(new StorageEvent('storage', { key: 'it.previews' }))
+    expect(g.live()).toBe(0)
+    localStorage.clear()
+    window.dispatchEvent(new StorageEvent('storage', { key: null }))
+    g.settle()
+    expect(g.live()).toBe(16)
   })
 
   test('follow the setting as soon as it changes', async () => {

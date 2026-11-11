@@ -377,6 +377,17 @@ describe('help respects persistent telemetry opt-outs', () => {
         expect(existsSync(path.join(m.it, 'usage.jsonl'))).toBe(false)
       }
     })
+  test('a word that names no command is refused before any file is written', async () => {
+    for (const args of [['--save=x', 'action', 'a1'], ['--save', 'x', 'action', 'a1'], ['nonsense'], ['tour show'], ['tour clear'], ['runs clear']]) {
+      const m = machine(false)
+      const ran = await run(m, args)
+      expect(ran.code).toBe(2)
+      expect(error(ran).message).toBe(`No such command: ${args[0]}`)
+      expect(existsSync(path.join(m.it, 'telemetry.json'))).toBe(false)
+      expect(existsSync(path.join(m.it, 'usage.jsonl'))).toBe(false)
+      expect(existsSync(path.join(m.it, 'telemetry-off'))).toBe(false)
+    }
+  })
   test('invalid options still make no reporting changes', async () => {
     const m = machine(false)
     const ran = await run(m, ['status', '--repalce'], { DO_NOT_TRACK: '1' })
@@ -1462,6 +1473,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
             notShown: [
               { display: 'TV', displayId: 'k57tv', reason: 'agents_off' },
               { display: 'Phone', displayId: 'p1', reason: 'not_chosen' },
+              { display: 'Gym', displayId: 'g1', reason: 'locked' },
             ],
             took: false,
             chosen: 'open',
@@ -1474,6 +1486,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       const said = printed(opened)
       expect(said).toMatchObject({ shownOn: ['Desk'], shownDisplayIds: ['jh7desk'] })
       expect(said.hint).toContain('No display was named, so it is shown on "Desk" alone')
+      expect(said.hint).toContain('most recently used unlocked display')
       expect(said.hint).toContain('--everywhere')
     } finally {
       await b.close()
@@ -1488,6 +1501,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       // Sent to the display used last, whose site is closed: the person needs the link
       answer = { displays: ['Desk'], displayIds: ['jh7desk'], notShown: [], took: false, chosen: 'last_used', url: 'http://127.0.0.1:39000/p/board' }
       let said = printed(await run(m, ['open', 'board'], b.env))
+      expect(said.hint).toContain('most recently used unlocked display')
       expect(said.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/p\/board$/)
       expect(said.hint).toContain('give them `url` in the chat')
       // At the place the owner chose for links, where It is reached there
@@ -3198,8 +3212,69 @@ syncBuiltinESMExports()
   })
 })
 
+test.each([false, true])('saving rejects obsolete and ambiguous forms before contacting It, attached %s', async (attached) => {
+  const m = machine()
+  const bytes = Buffer.from('prefix_rule(pattern=["sh"], decision="allow")\n')
+  const meta = { name: 'extra.rules', type: 'text/plain', bytes: bytes.length }
+  const b = await backend(m, (asked) => {
+    if (asked.path === 'delivery:get')
+      return {
+        id: 'a1',
+        artifact: 'board',
+        title: 'Board',
+        name: 'upload',
+        at: 1,
+        attended: true,
+        delivery: 'handed_off',
+        route: 'addon',
+        outcome: null,
+        files: attached ? [meta] : [],
+        payload: JSON.stringify(attached ? { file: 1 } : { file: `data:text/plain;base64,${bytes.toString('base64')}` }),
+      }
+    if (asked.path === 'files:read')
+      return { ...meta, url: 'http://127.0.0.1:9/download/1', grant: 'read', number: 1, sha256: createHash('sha256').update(bytes).digest('hex') }
+    return null
+  })
+  b.download.answer = () => [200, bytes]
+  const target = path.join(m.home, 'extra.rules')
+  const forms = [
+    ['action', 'a1', '--save', target],
+    ['action', 'a1', `--save=${target}`],
+    ['action', '--save', target, 'a1'],
+    ['action', 'a1', '--number', '1'],
+    ['action', 'a1', '--save', target, '--save', target],
+    ['action', 'a1', '--', '--save', target],
+    ['action', 'a1', '--sav', target],
+    ['action', 'a1', '—save', target],
+    ['action', 'a1', '--sаve', target],
+    ['action', 'a1', target],
+    ['save', 'a1', target, 'extra'],
+    ['save', 'a1', target, '--number', '1', '--number=2'],
+    ['save', 'a1', target, '--number=0'],
+    ['save', 'a1', target, '--number=-1'],
+    ['save', 'a1', target, '--number=1.5'],
+    ['save', 'a1', target, '--num=1'],
+    ['save', '--', 'a1', target],
+    ['save', 'a1', '--', target],
+    ['--save', 'a1', target],
+    ['--', 'save', 'a1', target],
+    ['action', 'save', 'a1', target],
+  ]
+  try {
+    for (const form of forms) {
+      const result = await run(m, form, b.env)
+      expect(result.code, form.join(' ')).not.toBe(0)
+      expect(existsSync(target)).toBe(false)
+      expect(readdirSync(m.home).some((name) => name.endsWith('.part'))).toBe(false)
+    }
+    expect(b.asked).toEqual([])
+  } finally {
+    await b.close()
+  }
+})
+
 describe.skipIf(process.platform === 'win32')('a picture an action carried', () => {
-  test('`it action --save` writes it to the file as the picture it is, and prints the action without its text', async () => {
+  test('`it save` writes it to the file as the picture it is, and prints the action without its text', async () => {
     const m = machine()
     // The smallest PNG there is: one transparent dot
     const dot = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
@@ -3219,7 +3294,7 @@ describe.skipIf(process.platform === 'win32')('a picture an action carried', () 
     const b = await backend(m, (asked) => (asked.path === 'delivery:get' ? listed(carried) : null))
     try {
       const to = path.join(m.home, 'drawing.png')
-      const saved = await run(m, ['action', 'k57', '--save', to], b.env)
+      const saved = await run(m, ['save', 'k57', to], b.env)
       expect(saved.code).toBe(0)
       expect(readFileSync(to).toString('base64')).toBe(dot)
       expect(printed(saved)).toMatchObject({
@@ -3232,7 +3307,7 @@ describe.skipIf(process.platform === 'win32')('a picture an action carried', () 
       expect(printed(await run(m, ['action', 'k57'], b.env)).data).toEqual(carried)
       // A file of that name that is there already is the person's: it is not written over, and is as it was
       writeFileSync(to, 'the person’s own drawing')
-      const over = await run(m, ['action', 'k57', '--save', to], b.env)
+      const over = await run(m, ['save', 'k57', to], b.env)
       expect([over.code, error(over)]).toEqual([
         2,
         {
@@ -3244,7 +3319,7 @@ describe.skipIf(process.platform === 'win32')('a picture an action carried', () 
       expect(readFileSync(to, 'utf8')).toBe('the person’s own drawing')
       // An action that carried no picture says so, and writes nothing
       carried = { cell: 4 }
-      const none = await run(m, ['action', 'k57', '--save', path.join(m.home, 'nothing.png')], b.env)
+      const none = await run(m, ['save', 'k57', path.join(m.home, 'nothing.png')], b.env)
       expect([none.code, existsSync(path.join(m.home, 'nothing.png'))]).toEqual([2, false])
       expect(none.err).toContain('This action carried no picture or other file to save.')
     } finally {
@@ -3276,7 +3351,7 @@ describe.skipIf(process.platform === 'win32')('files an action carried beside it
   const kept = [PHOTO, SHEET]
   const meta = [listed.files[0]!, listed.files[1]!]
 
-  test('are listed with the action by number, and `--save` writes the one asked for, read through the door this machine was told of and checked against what It took', async () => {
+  test('are listed with the action by number, and `it save` writes the one asked for, read through the door this machine was told of and checked against what It took', async () => {
     const m = machine()
     const b = await backend(m, (asked) => {
       if (asked.path === 'delivery:get') return listed
@@ -3298,27 +3373,27 @@ describe.skipIf(process.platform === 'win32')('files an action carried beside it
           { number: 1, name: 'IMG_2041.jpg', type: 'image/jpeg', bytes: PHOTO.length },
           { number: 2, name: 'totals.csv', type: 'text/csv', bytes: SHEET.length },
         ],
-        saveWith: 'it action k58 --save <file> --number <n>',
+        saveWith: 'it save k58 <file> --number <n>',
       })
       expect(shown.text).toContain('It carries 2 files beside that: 1. "IMG_2041.jpg" (image/jpeg, 68 KB); 2. "totals.csv" (text/csv, 22 bytes).')
       const photo = path.join(m.home, 'receipt.jpg')
-      const saved = await run(m, ['action', 'k58', '--save', photo], b.env)
+      const saved = await run(m, ['save', 'k58', photo], b.env)
       expect(saved.code).toBe(0)
       expect(printed(saved).saved).toEqual({ file: photo, number: 1, name: 'IMG_2041.jpg', type: 'image/jpeg', bytes: PHOTO.length })
       expect(sha(readFileSync(photo))).toBe(sha(PHOTO))
       // What a page sent may be private: the file is for this user alone
       expect(statSync(photo).mode & 0o777).toBe(0o600)
       const sheet = path.join(m.home, 'totals.csv')
-      expect((await run(m, ['action', 'k58', '--save', sheet, '--number', '2'], b.env)).code).toBe(0)
+      expect((await run(m, ['save', 'k58', sheet, '--number', '2'], b.env)).code).toBe(0)
       expect(readFileSync(sheet, 'utf8')).toBe(SHEET.toString())
       expect(b.download.asked.map((x) => x.path)).toEqual(['/download/1', '/download/2'])
       // A number it did not carry, one that is no number, and a number with nothing to write it to
-      const third = await run(m, ['action', 'k58', '--save', path.join(m.home, 'third'), '--number', '3'], b.env)
+      const third = await run(m, ['save', 'k58', path.join(m.home, 'third'), '--number', '3'], b.env)
       expect([third.code, error(third).code, existsSync(path.join(m.home, 'third'))]).toEqual([1, 'not_found', false])
-      expect(error(await run(m, ['action', 'k58', '--save', path.join(m.home, 'x'), '--number', 'two'], b.env)).code).toBe('invalid')
-      expect(error(await run(m, ['action', 'k58', '--number', '2'], b.env)).message).toBe('--number says which file --save writes.')
+      expect(error(await run(m, ['save', 'k58', path.join(m.home, 'x'), '--number', 'two'], b.env)).code).toBe('invalid')
+      expect(error(await run(m, ['action', 'k58', '--number', '2'], b.env)).message).toContain('it save')
       // A file of that name that is there already is the person's
-      const over = await run(m, ['action', 'k58', '--save', photo], b.env)
+      const over = await run(m, ['save', 'k58', photo], b.env)
       expect([over.code, error(over).message]).toEqual([2, `${photo} is there already, and It does not write over a file.`])
     } finally {
       await b.close()
@@ -3339,20 +3414,20 @@ describe.skipIf(process.platform === 'win32')('files an action carried beside it
       // The connection drops part of the way through the file, once: it is asked for again, and written whole
       let cut = 1
       b.download.answer = () => (cut-- > 0 ? [200, PHOTO, 20_000] : [200, PHOTO])
-      const resumed = await run(m, ['action', 'k58', '--save', photo], b.env)
+      const resumed = await run(m, ['save', 'k58', photo], b.env)
       expect([resumed.code, b.download.asked.length, sha(readFileSync(photo))]).toEqual([0, 2, sha(PHOTO)])
       rmSync(photo)
       b.download.asked.length = 0
       // Bytes of the right length that are not the file, as from a disk that went wrong
       b.download.answer = () => [200, Buffer.alloc(PHOTO.length, 1)]
-      const damaged = await run(m, ['action', 'k58', '--save', photo], b.env)
+      const damaged = await run(m, ['save', 'k58', photo], b.env)
       expect([damaged.code, error(damaged).code, existsSync(photo)]).toEqual([1, 'unavailable', false])
       expect(error(damaged).message).toBe('That file could not be read, because it did not arrive whole.')
       expect(b.download.asked).toHaveLength(3)
       // Gone with its action or its page: said at once, and nothing is asked again
       b.download.asked.length = 0
       b.download.answer = () => [404, Buffer.alloc(0)]
-      const gone = await run(m, ['action', 'k58', '--save', photo], b.env)
+      const gone = await run(m, ['save', 'k58', photo], b.env)
       expect([error(gone).code, error(gone).message, b.download.asked.length]).toEqual([
         'not_found',
         'That file is not kept any more: it went with its action, or with its page.',
@@ -3408,7 +3483,7 @@ describe.skipIf(process.platform === 'win32')('a file an action carried that is 
     }
     try {
       const at = path.join(m.home, 'take-3.wav')
-      const saved = await run(m, ['action', 'k60', '--save', at], b.env)
+      const saved = await run(m, ['save', 'k60', at], b.env)
       expect([saved.code, saved.err]).toEqual([0, ''])
       expect(printed(saved).saved).toEqual({ file: at, number: 1, name: 'take-3.wav', type: 'audio/wav', bytes: take.length })
       expect(createHash('sha256').update(readFileSync(at)).digest('hex')).toBe(sha)
@@ -3471,7 +3546,7 @@ describe.skipIf(process.platform === 'win32')('a file an action carried that is 
     }
     try {
       const at = path.join(m.home, 'take-4.wav')
-      const saved = await run(m, ['action', 'k61', '--save', at], b.env)
+      const saved = await run(m, ['save', 'k61', at], b.env)
       expect([saved.code, saved.err]).toEqual([0, ''])
       expect(createHash('sha256').update(readFileSync(at)).digest('hex')).toBe(sha)
       expect(grants).toBe(5)
@@ -3479,7 +3554,7 @@ describe.skipIf(process.platform === 'win32')('a file an action carried that is 
       refusing = true
       b.download.asked.length = 0
       const stuck = path.join(m.home, 'take-4-again.wav')
-      const refused = await run(m, ['action', 'k61', '--save', stuck], b.env)
+      const refused = await run(m, ['save', 'k61', stuck], b.env)
       expect([refused.code, existsSync(stuck)]).toEqual([1, false])
       expect(b.download.asked.filter((x) => x.range !== `bytes=0-${UPLOAD.partBytes - 1}`)).toHaveLength(4)
     } finally {
@@ -4643,9 +4718,33 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
       const created = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], b.env)
       expect([created.code, printed(created)]).toEqual([0, { id: 'plan', version: 1, url: 'https://site.example/p/plan', tell: TELL, hint: UNSHOWN('plan') }])
       const updated = await run(m, ['update', 'plan', '--html', '<p>hi</p>'], b.env)
-      expect([updated.code, printed(updated)]).toEqual([0, { id: 'plan', version: 1, url: 'https://site.example/p/plan', hint: UNSHOWN('plan') }])
+      expect([updated.code, printed(updated)]).toEqual([
+        0,
+        {
+          id: 'plan',
+          version: 1,
+          url: 'https://site.example/p/plan',
+          hint: 'No display was asked to bring this page up, because --open was not given. Displays already showing it update by themselves. Run `it open plan` to bring it up on a display.',
+        },
+      ])
       // No display was asked
       expect(b.asked.some((x) => x.path === 'displays:show')).toBe(false)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('an empty showing without a reason says Run rather than Then run', async () => {
+    const m = machine(true, true)
+    const b = await backend(m, (asked) => {
+      if (asked.path === 'artifacts:get') return { title: 'Plan' }
+      if (asked.path === 'displays:show') return { displays: [], notShown: [{ display: 'Kitchen', reason: 'not_chosen' }] }
+      const said = answers(['Kitchen'])(asked)
+      return asked.path === 'publish:begin' ? { ...(said as object), upload: { url: `${b.url}/upload/`, grant: 'a-grant' } } : said
+    })
+    try {
+      const result = printed(await run(m, ['update', 'plan', '--html', '<p>hi</p>', '--open'], b.env))
+      expect(result.hint).toBe('The page is published and not shown on any display. Run `it open plan` to show it.')
     } finally {
       await b.close()
     }

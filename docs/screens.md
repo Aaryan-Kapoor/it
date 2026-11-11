@@ -127,3 +127,7 @@ A browser keeps its pairing for the name or the address it opened It by, so a li
 A browser counts a plain `http` address as secure only where it is `localhost` or a loopback address such as `127.0.0.1`, so an address at the machine's name on the tailnet is not, even in a browser on that machine. A page opened by a link there works as on any screen that reaches It over the network: notifications, for one, are shown only while the site is open.
 
 The link is part of what the agent says, so the address in it is in the conversation, and in what the agent app sends to the model it uses.
+
+## Live previews
+
+Under Settings, Live previews chooses how many cards on this screen show their page live: All on screen, Nine, 16, or Pictures only. The default is 16. This browser keeps the choice for this screen; it is not sent to It. Pictures only shows covers without starting live pages. With an older backend, live previews stay limited to nine at once.

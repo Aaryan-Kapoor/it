@@ -13,6 +13,7 @@ import { MARK, PROTOCOL_VERSION, TAKES, WAKE_BACK_MS } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS } from './src/addons.generated'
+import { arrives } from './src/arrives'
 import { conversationFolder, conversationProfile, noteConversation } from './src/publish'
 import * as wake from './src/wake'
 
@@ -215,15 +216,20 @@ vi.mock('./src/service', async (original) => {
   const real = await original<typeof import('./src/service')>()
   return { ...real, restartWay: () => stand.restartWay ?? real.restartWay() }
 })
-vi.mock('./src/setup', () => ({
-  claudeFolders: () => stand.claudeFolders,
-  detectAll: async () => stand.found,
-  newerProgramSeen: () => false,
-  reconcile: async (chosen: readonly string[] | (() => readonly string[])) => {
-    stand.reconciled.push([...(typeof chosen === 'function' ? chosen() : chosen)])
-    return []
-  },
-}))
+vi.mock('./src/setup', async (original) => {
+  const { KNOWN, older } = await original<typeof import('./src/setup')>()
+  return {
+    KNOWN,
+    older,
+    claudeFolders: () => stand.claudeFolders,
+    detectAll: async () => stand.found,
+    newerProgramSeen: () => false,
+    reconcile: async (chosen: readonly string[] | (() => readonly string[])) => {
+      stand.reconciled.push([...(typeof chosen === 'function' ? chosen() : chosen)])
+      return []
+    },
+  }
+})
 // Claude Code's notes of the conversations it has open are read as it writes them. Whether the
 // process a note names is the Claude Code that wrote it is for claude-open.test.ts to try, on each
 // system: here the note names this test's own process, which is no Claude Code
@@ -4227,6 +4233,26 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(JSON.stringify(stand.codex[0]!.args)).not.toContain('bigger')
   })
 
+  test.each(['queue', 't3'])('a long action with attachment details stays readable through the %s fallback', async (via) => {
+    if (via === 't3') {
+      withT3Code()
+      stand.t3.threads.set('thread-8', 't3-thread-h')
+    }
+    await start()
+    const long = {
+      ...click(8),
+      name: 'it:message',
+      payload: JSON.stringify({ text: 'x'.repeat(5000) }),
+      files: [{ name: 'photo.png', type: 'image/png', bytes: 100 }],
+    }
+    offered(long)
+    await until(() => (via === 't3' ? stand.t3.sent.length === 1 : stand.codex.length === 1))
+    const text = via === 't3' ? stand.t3.sent[0]!.text : stand.codex[0]!.args.join(' ')
+    expect(text).toContain('it action click-8')
+    expect(text).toContain('[action click-8]')
+    expect(text).not.toContain('--save')
+  })
+
   /** The conversation's hooks are heard from, as they are once a turn of it has run with It's add-on there. */
   const heard = (n: number) => turn(n, false)
   /** What a hook of the conversation is handed when it asks what the marks put into it stand for: the words, and the names it says afterwards that it has them by. */
@@ -6349,15 +6375,17 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     expect(told()).toEqual(reported)
   })
 
-  test('an It from before it took any of this is told nothing more once it has said so', async () => {
+  test.each([false, undefined])('an older or unknown backend gets no new reports, capability %s', async (takes) => {
     standIn()
-    stand.answer = (name) => (name === 'turns:say' ? Promise.reject(new Error('Could not find public function for turns:say')) : undefined)
+    stand.takes = takes
+    stand.answer = (name) => (['turns:say', 'machines:notLoaded'].includes(name) ? Promise.reject(new Error('Server Error')) : undefined)
     await start('socket', APPS)
     await asks(false)
     await handed(1, { woke: true, turn: true }, false)
     await asks(true)
     await pass(3)
-    expect(told()).toEqual([{}])
+    expect(told()).toEqual([])
+    expect(stand.calls.filter((c) => c.name === 'machines:notLoaded')).toEqual([])
     expect(said.filter((line) => line.includes('turn'))).toEqual([])
   })
 })
@@ -6592,11 +6620,42 @@ describe('how what is done on a conversation’s pages would reach it, as the co
 
   test('a conversation whose add-on is listening is said to be listening, and one that is not is said not to be', async () => {
     await start()
-    expect(await way('codex', 'thread-1')).toEqual({ connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    expect(await way('codex', 'thread-1')).toEqual({ connected: true, listening: true, runtime: 'inactive', thread: 'none' })
     await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1' } })
     expect(await way('codex', 'thread-1')).toMatchObject({ connected: true, listening: true, thread: 'none' })
     // An app the person has not connected here is said to be not connected
     expect(await way('opencode', 'ses_abc')).toMatchObject({ connected: false, listening: false, thread: 'none' })
+  })
+
+  test('an open idle Codex queue makes arrivals automatic after a minute without a hook', async () => {
+    await start()
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: false } })
+    const real = Date.now
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => real() + 60_000)
+    try {
+      const route = await way('codex', 'thread-1')
+      expect(route).toMatchObject({ listening: true })
+      expect(arrives({ session: { harness: 'codex', id: 'thread-1' }, addonHere: undefined, route: route! })).toMatchObject({ byItself: true, via: 'addon' })
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  test('Codex remains reachable after five seconds without a hook', async () => {
+    await start()
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: true } })
+    const real = Date.now
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => real() + 10_000)
+    try {
+      expect(await way('codex', 'thread-1')).toMatchObject({ listening: true })
+      stand.unknown.add('thread-1')
+      expect(await way('codex', 'thread-1')).toMatchObject({ listening: true })
+      stand.closed.add('thread-1')
+      stand.unknown.delete('thread-1')
+      expect(await way('codex', 'thread-1')).toMatchObject({ listening: false })
+    } finally {
+      clock.mockRestore()
+    }
   })
 
   test('a Claude Code conversation that a thread of T3 Code holds is said to be held there, and the thread is noted as a click’s look notes it', async () => {

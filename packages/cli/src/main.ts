@@ -38,7 +38,7 @@ import {
   withoutFiles,
 } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
-import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
+import { type Args, json, loose, need, nested, OPTIONS, optionsFor, outputArgs, parse, text } from './args'
 import { type Arrives, arrives, claudeAfterSetup, claudeReloadLine, claudeRunning, reloadLine, tellWordForWord } from './arrives'
 import { choices, conversationIds, local, type Route, refusedFor } from './connector'
 import { deletePage, deletionStatus } from './delete'
@@ -123,6 +123,7 @@ import {
   claudeFolders,
   codexLetsItOut,
   codexRuleLetsItOut,
+  codexRulesWarning,
   detectAll,
   disconnect,
   type HarnessStatus,
@@ -159,7 +160,7 @@ const inApp = (h: LoadedStatus) => h.addon === 'connected' || h.addon === 'outda
 /** What a person is told where Codex is connected and, as it is set, would keep `it` from reaching It. Null where it would not. */
 function codexShut(found: LoadedStatus[]): string | null {
   if (!found.some((h) => h.id === 'codex' && (inApp(h) || h.addon === 'needs_approval'))) return null
-  return codexLetsItOut() === false ? `Codex: ${CODEX_SHUT}` : null
+  return codexLetsItOut() === false ? `Codex: ${CODEX_SHUT}` : codexRulesWarning()
 }
 /**
  * What a person is told where Claude's desktop app has a Claude Code of its own here and no
@@ -583,8 +584,8 @@ function shownAs(shown: Shown): {
   if (shown.chosen && where !== undefined)
     said.push(
       shown.chosen === 'open'
-        ? `No display was named, so it is shown on ${named(where)} alone: of the displays with It’s site open, that is the one used most recently.`
-        : `No display was named and none has It’s site open now, so it was sent to ${named(where)} alone, the display used most recently. A display whose site is closed does not bring a page up by itself, so the user needs the link${shown.url ? ': give them `url` in the chat' : ''}.`,
+        ? `No display was named, so it is shown on ${named(where)} alone: the most recently used unlocked display with It’s site open.`
+        : `No display was named and no unlocked display has It’s site open now, so it was sent to ${named(where)} alone, the most recently used unlocked display. A display whose site is closed does not bring a page up by itself, so the user needs the link${shown.url ? ': give them `url` in the chat' : ''}.`,
       ELSEWHERE,
     )
   else {
@@ -676,7 +677,8 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   displays: [0, 'displays'],
   wait: [0, 'wait [--id <id>] [--follow] [--timeout <seconds>]'],
   actions: [0, 'actions [--id <id> [--after <cursor>] [--follow]]'],
-  action: [1, 'action <action-id> [--save <file> [--number <n>]]'],
+  action: [1, 'action <action-id>'],
+  save: [2, 'save <action-id> <file> [--number <n>]'],
   ack: [1, 'ack <action-id> [--failed]'],
 }
 /**
@@ -812,6 +814,7 @@ async function published(
   a: Args,
   fresh = false,
   tour = false,
+  updated = false,
 ): Promise<void> {
   const arrival = await arrivalHere(done.slug, tour)
   const result = {
@@ -829,7 +832,13 @@ async function published(
     ...(arrival ? { arrives: arrival } : {}),
   }
   let said: Record<string, unknown> & { hint?: string }
-  if (!a.flags.open) said = { ...result, hint: shownNowhere(done.slug, false) }
+  if (!a.flags.open)
+    said = {
+      ...result,
+      hint: !updated
+        ? shownNowhere(done.slug, false)
+        : `No display was asked to bring this page up, because --open was not given. Displays already showing it update by themselves. Run \`it open ${done.slug}\` to bring it up on a display.`,
+    }
   else
     try {
       const where = shownAs(await show(done.slug, a))
@@ -857,7 +866,7 @@ async function published(
  */
 const shownNowhere = (slug: string, opened: boolean, why?: string): string =>
   opened
-    ? `The ${NOUN.one} is published and not shown on any display.${why ? ` ${why}` : ''} Then run \`it open ${slug}\` to show it.`
+    ? `The ${NOUN.one} is published and not shown on any display.${why ? ` ${why} Then run` : ' Run'} \`it open ${slug}\` to show it.`
     : `The ${NOUN.one} is published and not shown on any display, because --open was not given. Run \`it open ${slug}\` to show it, or add --open when you publish.`
 
 /** How often an agent that waits to give the tour says so, and asks whether it was asked for. */
@@ -1064,7 +1073,7 @@ async function update(a: Args) {
     take: a.flags.take === true,
     shown: a.flags.open === true,
   })
-  await published(done, a)
+  await published(done, a, false, false, true)
 }
 
 /** A page as an agent sees it: the id is the one it chose, not the backend's own. */
@@ -3026,10 +3035,10 @@ What the person did
                                  with that cursor, oldest first (0 for the first ones).
                                  --follow keeps printing each one that comes, a line each, and
                                  never claims or answers one: it is for a program that watches.
-  it action <action-id> [--save <file> [--number <n>]]
-                                 Print one action in full, by the id in its message. --save
-                                 writes a file it carried (a photo, a drawing, a document) to a
-                                 file you can open; --number says which, where it carried more.
+  it action <action-id>           Print one action and its file details, without saving.
+  it save <action-id> <file> [--number <n>]
+                                 Write a file the action carried, without overwriting.
+                                 Codex asks first; unattended saving may be refused.
   it ack <action-id> [--failed]
 
 This machine
@@ -3114,6 +3123,10 @@ async function main(argv: string[]): Promise<void> {
     process.stdout.write(`${dir}\n`)
     return
   }
+  if (cmd === 'action' && rest.some((word) => /^--(?:save|number)(?:=|$)/.test(word)))
+    throw new Problem('`it action` only reads actions. Use `it save <action-id> <file> [--number <n>]` to save a file.', 'invalid')
+  if ((cmd === 'action' || cmd === 'save') && rest.includes('--'))
+    throw new Problem('`it action` and `it save` do not take --. Use `it save <action-id> <file> [--number <n>]` to save a file.', 'invalid')
   const a = parse(rest)
   optionsFor(cmd, a)
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h' || a.flags.help) {
@@ -3125,6 +3138,9 @@ async function main(argv: string[]): Promise<void> {
     written(process.stdout, more ?? HELP)
     return
   }
+  // A word that names no command is refused before anything is written, the files that count usage among them
+  // The table also names a command with its subcommand, as `tour show`, which is no word a command line can name
+  if (!Object.hasOwn(OPTIONS, cmd) || cmd.includes(' ')) throw new Problem(`No such command: ${cmd}`, 'invalid', 'Run `it help`.')
   noMore(cmd, a)
   if (cmd === 'setup' || cmd === 'login') checkInstallationFolder(home())
   // A rejected command changes no reporting setting either.
@@ -3692,7 +3708,8 @@ async function main(argv: string[]): Promise<void> {
       const theirs = (c: Listed) => mine !== null && !mine.some((m) => m.id === c.id)
       return out(clicks.map((c) => ({ ...printed(c), ...(theirs(c) ? { forAnotherConversation: true } : {}) })))
     }
-    case 'action': {
+    case 'action':
+    case 'save': {
       // One action in full, by the id an agent was given: for data too long to have been shown, or to check a repeat
       const id = need(a._[0], 'which action', 'action <action-id>')
       const c = await call<Listed & { delivery: string; route: string | null; outcome: string | null }>('query', api.delivery.get, { id })
@@ -3711,21 +3728,14 @@ async function main(argv: string[]): Promise<void> {
         ...(c.files?.length ? { files: c.files } : {}),
       }
       const all = { ...printed(c), delivery: c.delivery, route: c.route, outcome: c.outcome, text: describeClick(click, Number.MAX_SAFE_INTEGER) }
-      // A file the action carried, written out as the file it is: an agent opens a file with what
-      // it reads pictures, documents and the rest with, and need not write a program to fetch or
-      // decode one
-      const to = text(a, 'save')
-      const asked = text(a, 'number')
-      if (asked !== undefined && to === undefined)
-        throw new Problem('--number says which file --save writes.', 'invalid', `Usage: it action ${id} --save <file> --number <n>`)
-      const number = asked === undefined ? 1 : /^[1-9][0-9]?$/.test(asked) ? Number(asked) : 0
-      if (!number) throw new Problem('--number is the number of one of the files the action carried, from 1.', 'invalid')
-      if (to === undefined) return out(all)
+      if (cmd === 'action') return out(all)
+      const to = a._[1]!
+      const number = text(a, 'number') === undefined ? 1 : Number(text(a, 'number'))
       if (c.files?.length) return out({ ...all, saved: await saveAttached(id, number, to) })
       // An action from a page that wrote a picture into what it carried, as text
       if (number !== 1) throw new Problem('That action carried no files but a picture written into what it carried, which is number 1.', 'invalid')
       const file = firstFile(click.payload)
-      if (!file) throw new Problem('This action carried no picture or other file to save.', 'invalid', 'Run it without --save to read what it carried.')
+      if (!file) throw new Problem('This action carried no picture or other file to save.', 'invalid', `Run \`it action ${id}\` to read what it carried.`)
       const bytes = Buffer.from(file.base64, 'base64')
       const at = path.resolve(to)
       try {

@@ -87,7 +87,8 @@ describe('whether what the person does arrives by itself', () => {
       arrives({ session: { harness: 'hermes', id: '20261108_120000_abcd' }, addonHere: undefined, route: route({ listening: true }) }),
       // The add-on runs in this conversation and has not been heard from
       arrives({ session: claude, addonHere: true, route: route() }),
-      // Another app whose add-on has not been heard from
+      // Codex with neither a running hooked turn nor an open queue remains unknown.
+      // A quiet hook alone is no longer enough to make /route say this.
       arrives({ session: { harness: 'codex', id: 'thread-1' }, addonHere: undefined, route: route() }),
     ]) {
       expect(said.byItself).toBe('unknown')

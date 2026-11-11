@@ -335,7 +335,7 @@ describe('reading a file an action carried', () => {
     ])
     const text = describeClick({ ...got, payload: JSON.parse(got.payload), attended: true })
     expect(text).toContain(
-      `It carries 2 files beside that: 1. "IMG_2041.jpg" (image/jpeg, 393 KB); 2. "totals.csv" (text/csv, 120 bytes). \`it action ${actionId} --save <file> --number <n>\` writes one of them to a file you can open.`,
+      `It carries 2 files beside that: 1. "IMG_2041.jpg" (image/jpeg, 393 KB); 2. "totals.csv" (text/csv, 120 bytes). \`it save ${actionId} <file> --number <n>\` writes one of them to a file you can open.`,
     )
   })
 })

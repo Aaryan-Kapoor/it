@@ -270,7 +270,7 @@ describe('the agent skill', () => {
         const flag = /^[[(]?(--[a-z-]+)/.exec(word)?.[1]
         if (flag) flags.set(words[1]!, (flags.get(words[1]!) ?? new Set()).add(flag))
       }
-    expect([...flags.keys()].sort()).toEqual(['ack', 'action', 'actions', 'create', 'delete', 'notify', 'open', 'patch', 'update', 'wait'])
+    expect([...flags.keys()].sort()).toEqual(['ack', 'actions', 'create', 'delete', 'notify', 'open', 'patch', 'save', 'update', 'wait'])
     for (const [command, taken] of flags) {
       // What the program's own help says of that command
       const said = help
@@ -326,7 +326,7 @@ describe('the agent skill', () => {
     expect(short).toContain(`A photo is shrunk to ${SHRINK.side} px unless a third argument says \`{ original: true }\`.`)
     expect(source('../../packages/runtime/src/it.ts')).toMatch(/original\?: boolean/)
     // And what the agent then reads it with
-    expect(more.actions).toContain('`it action <id> --save receipt.jpg` writes it to that file')
+    expect(more.actions).toContain('`it save <id> receipt.jpg` writes it to that file')
     expect(more.actions).toContain('`--number 2` says which to write')
   })
 

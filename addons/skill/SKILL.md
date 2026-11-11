@@ -9,7 +9,7 @@ It is the user's two-way workspace. You write a page, It shows it on the screens
 
 ## When to use It
 
-Decide before you answer. Whenever the user is to see, use, play, choose, fill in or decide on something, or you need an answer from them, build the interface the task calls for as a page with It: made for this user and this moment, and two-way, so that what they do on it comes back to you and you answer on the page. Do that before a reply in chat and before whatever your own app has for showing things (artifacts, a canvas, widgets, a site it generates), unless the user asks for one of those by name. What you make with It reaches every screen they own, stays there after this conversation, and what they do on it reaches you hours later and from their phone. Only a plain answer to a plain question stays in chat.
+Decide before answering. When the user needs to see, use, play, choose, fill in or decide, or you need their answer, build an It page for them. Their actions come back to you; answer on the page. Do this before chat or your app's artifacts, canvas, widgets or generated sites, unless they ask for one by name. Pages stay on their screens; actions reach you later and from phones. Only a plain answer to a plain question stays in chat.
 
 ## The loop
 
@@ -79,9 +79,12 @@ Everything a page shows that can change, and every control on it, lives in its s
 | `it open <id> [--on "<display>"]` | Bring a page up on the display in use, or one the user named |
 | `it notify "<text>" [--id <id>] [--on "<display>"]` | A short message outside any page, which a display that is not open may get as a notification |
 | `it wait [--id <id>] [--follow] [--timeout <seconds>]` | Block until the user acts, then print the action |
-| `it actions [--id <id>]` · `it action <action-id>` · `it ack <action-id> [--failed]` | List what waits on your pages, print one in full, and mark one as handled |
+| `it save <action-id> <file> [--number <n>]` | Save a file the action carried; Codex asks first |
+| `it actions [--id <id>]` · `it action <action-id>` · `it ack <action-id> [--failed]` | List what waits on your pages, print one and its file details without saving, and mark one as handled |
 | `it list` · `it read <id>` · `it delete <id>` · `it displays` · `it status` | The pages, one page, removing one, the displays, and whether It is running and connected |
 | `it help <topic>` | More, when you need it: `showing`, `page`, `waiting`, `actions` |
+
+If saving is refused in an unattended conversation, carry on with the action text and say the file could not be saved. Do not change permissions or try another command to bypass the refusal.
 
 ## When you are reopened
 

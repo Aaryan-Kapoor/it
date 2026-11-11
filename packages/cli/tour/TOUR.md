@@ -94,7 +94,7 @@ it tour show whiteboard
 The `snapshot` action carries `strokes`, the drawing as lines, and beside them `png`, a picture of the drawing as a file, which its data names as `{"file": 1}`. The message that arrives says the file is there and cuts long data short, so have the picture written to a file, in the folder you are in:
 
 ```sh
-it action <the action's id> --save drawing.png
+it save <the action's id> drawing.png
 ```
 
 If it says that `drawing.png` is there already, that file is the person's: save under another name, and use that name from here on.

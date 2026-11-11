@@ -20,6 +20,7 @@ import fs, {
 import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
+import { describeClick } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import shims from './fixtures/windows-shims.json'
 import { claudeAddonHere } from './src/lib'
@@ -208,6 +209,24 @@ describe('whether a closed conversation may be reopened for a click', () => {
 describe('the command each agent app is carried on with', () => {
   const has = { codex: ['codex'], itHome: '/home/someone/.it', platform: 'linux' as const }
   const UUID = '3f6c2f0e-1a2b-4c3d-9e8f-000000000001'
+
+  test('Auto-wake keeps a long action readable and gives attachment details on stdin', () => {
+    const text = describeClick({
+      id: 'long-action',
+      artifact: 'board',
+      title: 'Board',
+      name: 'approve',
+      payload: { text: 'x'.repeat(5000) },
+      at: 1,
+      files: [{ name: 'photo.png', type: 'image/png', bytes: 100 }],
+    })
+    const how = carrying('codex', 'thread-1', text, has)
+    if (typeof how === 'string') throw new Error(how)
+    expect(how.input).toContain('it action long-action')
+    expect(how.input).toContain('photo.png')
+    expect(how.input).toContain('it save long-action')
+    expect(how.argv.join(' ')).not.toContain('photo.png')
+  })
 
   test('each is the app’s own command for a conversation named by its id, with the message on its input and never among its words', () => {
     const said = 'the page sent: approve {"secret":"s3cret"}'

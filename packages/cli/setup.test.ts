@@ -29,7 +29,7 @@ import type { Harness } from '@it/protocol'
 import { build } from 'esbuild'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS, SKILL } from './src/addons.generated'
-import { CODEX_RULE_FILE, CODEX_RULES, CODEX_RULES_REL, CODEX_SHUT_SAID } from './src/codex-settings'
+import { CODEX_RULE_FILE, CODEX_RULES, CODEX_RULES_REL, CODEX_SAVE_RULE, CODEX_SHUT_SAID } from './src/codex-settings'
 import { shutIn, VERSION } from './src/lib'
 import { keepOriginal, ORIGINAL_LIMIT, restoreAbsent } from './src/preserve'
 import { startOf } from './src/serve/backend'
@@ -1382,6 +1382,7 @@ describe('the file of rules that lets `it` out of Codex’s sandbox', () => {
   }
   test.each([
     ['rules as an earlier It wrote them', `${CODEX_RULE}\n`],
+    ['the earlier 0.1.38 rules', readFileSync(new URL('./fixtures/codex-0138.rules', import.meta.url), 'utf8')],
     ['rules Codex will not load', 'prefix_rule(pattern=["it"], decision="alow")\n'],
   ])('with the add-on’s version unchanged, a file of It’s that holds %s is brought up to date, and Codex is to be started again', async (_, earlier) => {
     const rules = rulesIn(folderOf('codex'))
@@ -1398,6 +1399,20 @@ describe('the file of rules that lets `it` out of Codex’s sandbox', () => {
     await connect('codex', say)
     expect(said).toEqual([])
   })
+  test('an edited earlier rules file is preserved and explicitly needs the save prompt', async () => {
+    const rules = rulesIn(folderOf('codex'))
+    await connect('codex', () => {})
+    const earlier = CODEX_RULES.replace(`${CODEX_SAVE_RULE}\n`, '')
+    asIfWritten(earlier)
+    const edited = `${earlier}# my changes\n`
+    writeFileSync(rules, edited)
+    const { said, say } = lines()
+    await refresh(say)
+    await connect('codex', say)
+    expect(read(rules)).toBe(edited)
+    expect(said.join('\n')).toContain('needs the `it save` prompt rule before saving is protected')
+  })
+
   test('with the add-on’s version unchanged, an installation that an It from before noted only the skill for is given the rules, and Codex is to be started again', async () => {
     const rules = rulesIn(folderOf('codex'))
     await connect('codex', () => {})
@@ -3647,7 +3662,8 @@ describe('whether Codex, as it is set, lets `it` reach It', () => {
     for (const said of [CODEX_SHUT, CODEX_SHUT_SAID]) {
       expect(said).toContain(CODEX_RULE)
       expect(said).toContain(`\`${CODEX_RULE_FILE}\``)
-      expect(said).toContain('leave')
+      expect(said).toContain(CODEX_SAVE_RULE)
+      expect(said).not.toContain('put that one line')
     }
     expect(CODEX_SHUT).toContain(`\n    ${CODEX_RULE}\n`)
     expect(CODEX_SHUT).toContain('approve each `it` command')

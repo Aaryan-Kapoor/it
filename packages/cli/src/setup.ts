@@ -32,7 +32,7 @@ import { CODEX_MIN_VERSION, HARNESSES, type Harness, newer as newerVersion } fro
 import type { AddonRuntime } from './addon-runtime'
 import { ADDONS, LICENSE } from './addons.generated'
 import { claudeDefaultFolder } from './claude-open'
-import { CODEX_RULES, CODEX_RULES_REL, codexConfig } from './codex-settings'
+import { CODEX_RULES, CODEX_RULES_REL, codexConfig, codexRulesWarning } from './codex-settings'
 import { harnessEnv, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
 import { checkHardLinks, keepOriginal, putAbsent, removeOriginal, removeOwnOriginals, restoreAbsent, withoutFileWait } from './preserve'
 import { alone as oneAtATime } from './serve/backend'
@@ -1426,7 +1426,16 @@ export function afterHermes(version: string | undefined): string {
   return `${first}\n${resumed}\nFor the Hermes TUI or desktop app, also run this once, which lets It put what you do into a conversation there from the moment it is open:\n    hermes config set plugins.entries.it-bridge.allow_gateway_injection true\nIf this Hermes (${version}) does not take that setting, what you do waits on the page until the agent runs \`it wait\`, as it does in the messaging gateway.`
 }
 
-export { CODEX_RULE, CODEX_RULE_FILE, CODEX_SHUT, codexGivesNetwork, codexLetsItOut, codexRuleLetsItOut, codexRunsApart } from './codex-settings'
+export {
+  CODEX_RULE,
+  CODEX_RULE_FILE,
+  CODEX_SHUT,
+  codexGivesNetwork,
+  codexLetsItOut,
+  codexRuleLetsItOut,
+  codexRulesWarning,
+  codexRunsApart,
+} from './codex-settings'
 
 /** What the person still has to do themselves once an add-on is in, if anything. Shown once, by `it setup`. */
 export const AFTER: Partial<Record<Harness, string>> = {
@@ -1850,7 +1859,13 @@ export async function connect(
   // The same where a file this program may write is not as this version would have it, though
   // the add-on's own version is this one: Codex's rules, which are no part of it
   if (doing === 'nothing' && adapter.stale?.(at, was)) doing = 'install'
-  if (doing === 'nothing') return before
+  if (doing === 'nothing') {
+    if (id === 'codex') {
+      const warning = codexRulesWarning(settingsAt(at, 'CODEX_HOME', '.codex'))
+      if (warning) say(warning)
+    }
+    return before
+  }
   if (doing === 'leave to the newer program') {
     newer = true
     return before
@@ -1910,6 +1925,10 @@ export async function connect(
     return { id, version: before.version, addon: 'error', detail }
   }
   keep(id, noted(ADDONS[id]!.version, r.files, ADDONS[id]!.build))
+  if (id === 'codex') {
+    const warning = codexRulesWarning(settingsAt(at, 'CODEX_HOME', '.codex'))
+    if (warning) say(warning)
+  }
   // An app that had this very build of the add-on's code has nothing to load anew, unless the
   // install says it has, as Codex has when its rules changed. One whose build is not known, as
   // after an install that did not finish, is taken to have another

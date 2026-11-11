@@ -65,6 +65,12 @@ export const TAKES = {
   heldBack: 'delivery.holdBack',
   /** Locking a display to a page, from a paired browser: the site offers it only where it is named. */
   displayLock: 'displays.lock',
+  /** Conversations needing the reload notice: the site subscribes only where this query is named. */
+  reloadReport: 'artifacts.notLoaded',
+  /** Machine reports of conversation turns, sent only when advertised by the backend. */
+  turnReports: 'turns.say',
+  /** Machine reports of open conversations missing the add-on. */
+  notLoadedReports: 'machines.notLoaded',
 } as const
 
 /**
@@ -474,7 +480,7 @@ export interface AttachedFile {
  * What stands in an action's data where the page put a file: which of the action's files it is,
  * counted from 1. The site writes it, in place of the bytes, which travel beside the action, and
  * the action's list of its files says what each is. Its numbers are those that
- * `it action <id> --save <file> --number <n>` takes.
+ * `it save <id> <file> --number <n>` takes.
  */
 export interface FileMarker {
   file: number
@@ -682,7 +688,7 @@ export function describeClick(c: Click, max = CLICK_TEXT_BYTES): string {
   const { payload, left } = withoutFiles(c.payload)
   const full = payload === undefined || payload === null ? '' : JSON.stringify(payload)
   const empty = full === '' || full === '{}'
-  const files = left === 0 ? '' : ` (\`it action ${c.id} --save <file>\` writes ${left === 1 ? 'it' : 'the first of them'} to a file you can open)`
+  const files = left === 0 ? '' : ` (\`it save ${c.id} <file>\` writes ${left === 1 ? 'it' : 'the first of them'} to a file you can open)`
   const data = empty
     ? ''
     : max <= 0
@@ -720,8 +726,8 @@ function attached(c: Click, max: number): string {
   const each = (f: AttachedFile) => `${JSON.stringify(f.name)} (${f.type}, ${sized(f.bytes)})`
   const listed = many ? files.map((f, i) => `${i + 1}. ${each(f)}`).join('; ') : each(files[0]!)
   const save = many
-    ? `\`it action ${c.id} --save <file> --number <n>\` writes one of them to a file you can open`
-    : `\`it action ${c.id} --save <file>\` writes it to a file you can open`
+    ? `\`it save ${c.id} <file> --number <n>\` writes one of them to a file you can open`
+    : `\`it save ${c.id} <file>\` writes it to a file you can open`
   return ` It carries ${counted} beside that: ${listed}. ${save}.`
 }
 /**

@@ -850,7 +850,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   /** Whether It has been told, since this connector started, that none of this machine's turns is known any more. */
   let turnsForgotten = false
   /** Whether the It this machine joined is one from before it took any of this: nothing is told to it then. */
-  let turnsUntaken = false
+  let turnsTaken: boolean | undefined
   /** Looks at how a watched conversation's turn stands now, and so what It is to be told of it. */
   const lookAtTurn = (key: string, w: Watched): void => {
     const running = turnKnown(key, Date.now())
@@ -888,7 +888,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    * add-on hears that its prompt was taken.
    */
   const handedOver = (click: Offered, key: string, starts: boolean, finished = false): void => {
-    if (!click.session || turnsUntaken) return
+    if (!click.session || turnsTaken === false) return
     handedTo.set(click.id, key)
     const w = watchedTurns.get(key) ?? {
       names: new Set<string>(),
@@ -965,7 +965,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    * had nothing to do with it. Tried again with the next pass where It could not be told.
    */
   async function tellTurns(): Promise<void> {
-    if (over || turnsUntaken) return
+    if (over || turnsTaken !== true) return
     if (tellingTurns) {
       tellTurnsAgain = true
       return
@@ -1025,11 +1025,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     } catch (err) {
       // Tried again with the next pass, and not at once
       tellTurnsAgain = false
-      if (/could not find/i.test(String((err as Error)?.message ?? err))) {
-        turnsUntaken = true
-        watchedTurns.clear()
-        handedTo.clear()
-      } else seldom('turns', `could not tell It how a conversation’s turn stands (${why(err)}); trying again`)
+      seldom('turns', `could not tell It how a conversation’s turn stands (${why(err)}); trying again`)
     } finally {
       tellingTurns = false
     }
@@ -1370,7 +1366,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     const now = Date.now()
     const listening = [keyOf(harness, id), key].some((k) => {
       const s = sessions.get(k)
-      return s !== undefined && now - s.seen < LIVE_MS
+      return (s !== undefined && now - s.seen < LIVE_MS) || (harness === 'codex' && (turnRunning(k, now) || codexOpen(k) === true))
     })
     const answer = { connected: connected(harness), listening, runtime: runtimes.status(harness).state }
     if (harness !== 'claude-code' && harness !== 'codex') return { ...answer, thread: 'none' }
@@ -1585,6 +1581,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   const connectorBegan = Date.now()
   let notLoadedSaid: string | undefined
   let notLoadedAsking = false
+  let notLoadedTaken: boolean | undefined
   // Process discovery may start PowerShell on Windows. Share it with the banner and nearby
   // routing passes, but filter current add-on contact and T3 ownership on every use.
   const OPEN_CACHE_MS = 2000
@@ -1623,7 +1620,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       .map((c) => ({ harness: 'claude-code', sessionId: c.id, since: c.startedAt }))
   }
   const reportNotLoaded = async (): Promise<void> => {
-    if (over || notLoadedAsking) return
+    if (over || notLoadedAsking || notLoadedTaken !== true) return
     notLoadedAsking = true
     try {
       const open = connected('claude-code') && Date.now() - connectorBegan >= NOT_HEARD_MS ? await openNow() : []
@@ -4191,6 +4188,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     if (closing || over) return
     // Asked again with the next minute. Said, now and then, since clicks held back meanwhile are
     // told the older way after a while, and only the door's answer would say that It keeps more
+    turnsTaken = door?.takes.includes(TAKES.turnReports)
+    notLoadedTaken = door?.takes.includes(TAKES.notLoadedReports)
     if (door === undefined) return seldom('door', 'could not ask It at its door which later forms of a call it takes; asked again in a minute')
     // Taken as the answer came, after It said its time, so that what is worked out from it is never later than It's own
     if (door.now !== undefined) itAhead = door.now - Date.now()

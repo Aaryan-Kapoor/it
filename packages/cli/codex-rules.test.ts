@@ -2,21 +2,37 @@
 // Codex's sandbox: what they say, and what Codex itself makes of them where a `codex` command is
 // on this machine. Codex is asked in a folder of its own, so no settings of a person's are read.
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
-import { CODEX_ASKED, CODEX_RULE, CODEX_RULES } from './src/codex-settings'
+import { CODEX_ASKED, CODEX_RULE, CODEX_RULES, CODEX_SAVE_RULE } from './src/codex-settings'
 
 const rules = () => CODEX_RULES.split('\n').filter((line) => line && !line.startsWith('#'))
 
 test('the file holds the one rule that lets `it` out, and one that asks first of every command that can change It itself', () => {
   expect(rules()).toEqual([
     'prefix_rule(pattern=["it"], decision="allow")',
-    'prefix_rule(pattern=["it", ["setup", "uninstall", "upgrade", "login", "logout", "serve", "service", "network", "runs", "telemetry", "updates"]], decision="prompt", justification="This command can change It on this machine rather than use it.")',
+    'prefix_rule(pattern=["it", ["setup", "uninstall", "upgrade", "login", "logout", "serve", "service", "network", "runs", "telemetry", "updates", "shell-profile"]], decision="prompt", justification="This command can change It on this machine rather than use it.")',
+    CODEX_SAVE_RULE,
   ])
   expect(rules()[0]).toBe(CODEX_RULE)
-  expect([...CODEX_ASKED]).toEqual(['setup', 'uninstall', 'upgrade', 'login', 'logout', 'serve', 'service', 'network', 'runs', 'telemetry', 'updates'])
+  expect([...CODEX_ASKED]).toEqual([
+    'setup',
+    'uninstall',
+    'upgrade',
+    'login',
+    'logout',
+    'serve',
+    'service',
+    'network',
+    'runs',
+    'telemetry',
+    'updates',
+    'shell-profile',
+  ])
+  expect(CODEX_ASKED).not.toContain('action')
+  expect(CODEX_RULES).toContain(CODEX_SAVE_RULE)
   expect(CODEX_RULES.endsWith('\n')).toBe(true)
 })
 
@@ -27,7 +43,12 @@ const DECIDED: [string, 'allow' | 'prompt' | undefined][] = [
   ['it create board --file board.html', 'allow'],
   ['it update board --file board.html --open', 'allow'],
   ['it wait --timeout 30', 'allow'],
-  ['it action a1 --save photo.jpg', 'allow'],
+  ['it action a1', 'allow'],
+  ['it save a1 photo.jpg', 'prompt'],
+  ['it save a1 photo.jpg --number 2', 'prompt'],
+  ['it save a1 photo.jpg --number=2', 'prompt'],
+  ['it save --number=2 a1 photo.jpg', 'prompt'],
+  ['it save a1 ~/.codex/rules/extra.rules', 'prompt'],
   ['it status', 'allow'],
   ['it displays', 'allow'],
   ['it delete board', 'allow'],
@@ -78,4 +99,20 @@ describe.skipIf(!codex)('what Codex makes of the file', () => {
   test.each(DECIDED)('%s', (command, decision) => {
     expect(decide(command)).toBe(decision)
   })
+})
+
+test('help, delivery instructions and docs use the separate save command', () => {
+  for (const relative of [
+    'src/main.ts',
+    'src/wait.ts',
+    'tour/TOUR.md',
+    '../protocol/src/index.ts',
+    '../../addons/skill/SKILL.md',
+    '../../addons/skill/more/actions.md',
+    '../../docs/add-ons.md',
+    '../../docs/what-it-protects.md',
+  ]) {
+    const text = readFileSync(new URL(relative, import.meta.url), 'utf8')
+    expect(text, relative).not.toMatch(/it action [^\n]*--save/)
+  }
 })
