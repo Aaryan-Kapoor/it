@@ -121,3 +121,25 @@ test('An add-on that says when it began ends a refusal only where it began after
   expect(other.status('opencode', 0).state).toBe('active')
   expect(other.refusedSince('opencode')).toBe(refusedAt)
 })
+
+test('a Hermes that refuses what the add-on hands it, because the person has not allowed it, is not called active, and is once they allow it', () => {
+  const seen = new AddonRuntimes()
+  const report = { api: ADDON_API, version: ADDONS.hermes!.build, delivery: true, idle: false, missing: [] as string[] }
+  const refused = seen.hear('hermes', 'gateway', { ...report, delivery: false, missing: ['consent'] }, 0)
+  expect(refused).toMatchObject({ state: 'incompatible' })
+  expect(refused?.detail).toMatch(/refuses what it hands over, because that has not been allowed/)
+  expect(refused?.detail).toContain('`hermes config set plugins.entries.it-bridge.allow_gateway_injection true`')
+  expect(refused?.detail).not.toMatch(/missing a delivery API|Update the app/)
+  expect(seen.status('hermes', 0).state).toBe('incompatible')
+  expect(seen.blocksWake('hermes', 0)).toBe(true)
+  // The same process, once the person has run the command: its next report says it can deliver
+  expect(seen.hear('hermes', 'gateway', report, 1000)).toMatchObject({ state: 'active' })
+  expect(seen.status('hermes', 1000).state).toBe('active')
+})
+
+test('an app with no such setting that says it lacks consent is told what any app that cannot deliver is told', () => {
+  const seen = new AddonRuntimes()
+  const said = seen.hear('pi', 'one', { api: ADDON_API, version: ADDONS.pi!.build, delivery: false, idle: true, missing: ['consent'] }, 0)
+  expect(said).toMatchObject({ state: 'incompatible' })
+  expect(said?.detail).toMatch(/missing a delivery API the add-on needs/)
+})
