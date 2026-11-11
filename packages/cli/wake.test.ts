@@ -36,6 +36,7 @@ import {
   claudeResume,
   claudeWroteAt,
   codexHolder,
+  codexInterruptedAt,
   codexWroteAt,
   endJob,
   endTree,
@@ -977,6 +978,61 @@ describe('when Codex last wrote of a conversation', () => {
     expect(codexWroteAt('01a10f7c-0000-7010-8d57-000000000000', codexHome)).toBeNull()
     expect(codexWroteAt('../../etc', codexHome)).toBeNull()
     expect(codexWroteAt(thread, path.join(scratch, 'no-such-codex'))).toBeNull()
+  })
+})
+
+describe('whether a Codex conversation’s last turn was interrupted', () => {
+  const thread = '01a10f7c-062c-7010-8d57-8e1007169552'
+  const line = (type: string, more: Record<string, unknown> = {}, at = '2026-11-10T15:42:00.000Z') =>
+    `${JSON.stringify({ timestamp: at, type: 'event_msg', payload: { type, ...more } })}\n`
+  let file = ''
+  let wrote = 1_791_000_000
+  /** Writes the conversation's file as Codex would have it now, at a time of its own, as each writing has. */
+  const kept = (text: string) => {
+    writeFileSync(file, text)
+    wrote += 10
+    utimesSync(file, wrote, wrote)
+  }
+  const codexHome = () => path.join(scratch, 'codex-interrupted')
+  beforeEach(() => {
+    const day = path.join(codexHome(), 'sessions', '2026', '11', '10')
+    mkdirSync(day, { recursive: true })
+    file = path.join(day, `rollout-2026-11-10T10-00-00-${thread}.jsonl`)
+  })
+
+  test('is read from the last word of a turn in the file Codex keeps of it, with when that was', () => {
+    kept(line('task_started') + line('turn_aborted', { reason: 'interrupted' }, '2026-11-10T15:42:07.500Z'))
+    expect(codexInterruptedAt(thread, codexHome())).toBe(Date.parse('2026-11-10T15:42:07.500Z'))
+    // What Codex wrote after it that is no word of a turn changes nothing
+    kept(line('task_started') + line('turn_aborted', { reason: 'interrupted' }, '2026-11-10T15:42:07.500Z') + line('token_count'))
+    expect(codexInterruptedAt(thread, codexHome())).toBe(Date.parse('2026-11-10T15:42:07.500Z'))
+  })
+
+  test.each(['task_started', 'turn_started', 'user_message', 'task_complete', 'turn_complete'])(
+    'is not so once a turn has begun or ended by itself after the interruption (%s)',
+    (mark) => {
+      kept(line('turn_aborted', { reason: 'interrupted' }) + line(mark))
+      expect(codexInterruptedAt(thread, codexHome())).toBeNull()
+    },
+  )
+
+  test('is not so of a turn that ended by itself, of one Codex ended to begin another, or where nothing of a turn is written', () => {
+    kept(line('task_started') + line('task_complete'))
+    expect(codexInterruptedAt(thread, codexHome())).toBeNull()
+    kept(line('task_started') + line('task_complete') + line('turn_aborted', { reason: 'replaced' }))
+    expect(codexInterruptedAt(thread, codexHome())).toBeNull()
+    kept('{}\n')
+    expect(codexInterruptedAt(thread, codexHome())).toBeNull()
+    expect(codexInterruptedAt('01a10f7c-0000-7010-8d57-000000000000', codexHome())).toBeNull()
+  })
+
+  test('takes when the file was written where the line carries no time, and no line of a command’s output for Codex’s own', () => {
+    // What a command printed is kept inside another line, and says nothing of the turn
+    const printed = `${JSON.stringify({ type: 'response_item', payload: { type: 'function_call_output', output: '{"type":"event_msg","payload":{"type":"turn_aborted"}}' } })}\n`
+    kept(line('task_started') + line('task_complete') + printed)
+    expect(codexInterruptedAt(thread, codexHome())).toBeNull()
+    kept(`${JSON.stringify({ type: 'event_msg', payload: { type: 'turn_aborted', reason: 'interrupted' } })}\nnot a line of Codex’s\n`)
+    expect(codexInterruptedAt(thread, codexHome())).toBe(wrote * 1000)
   })
 })
 

@@ -1589,6 +1589,56 @@ export function codexWroteAt(thread: string, codexHome = process.env.CODEX_HOME 
 }
 const found = new Map<string, string>()
 
+/** What Codex writes in a conversation's file as a turn begins, and as one ends by itself. */
+const CODEX_TURN_MARKS = ['task_started', 'turn_started', 'user_message', 'task_complete', 'turn_complete']
+/**
+ * When a Codex conversation's last turn was interrupted, as the file Codex keeps of it says, or
+ * null where its last turn was not, or nothing of a turn is found there. Codex writes a line as
+ * a turn begins, one as it ends by itself, and `turn_aborted` when the person interrupts it, and
+ * the last of these says how the conversation stands. A Codex whose turn was interrupted keeps
+ * what is in its queue until the person's next message there, though it has the conversation
+ * open and is not working. The moment is the one the line carries, or else when the file was
+ * last written. Only the end of the file is read, and again only once the file has changed.
+ */
+export function codexInterruptedAt(thread: string, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')): number | null {
+  const wrote = codexWroteAt(thread, codexHome)
+  const file = found.get(`${codexHome}\n${thread}`)
+  if (wrote === null || !file) return null
+  try {
+    const { size } = statSync(file)
+    const known = interrupted.get(file)
+    if (known && known.wrote === wrote && known.size === size) return known.at
+    let at: number | null = null
+    const lines = tail(file, 256 * 1024).split('\n')
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i]!
+      if (!line.includes('"turn_aborted"') && !CODEX_TURN_MARKS.some((mark) => line.includes(`"${mark}"`))) continue
+      let said: { type?: unknown; timestamp?: unknown; payload?: { type?: unknown; reason?: unknown } } | null = null
+      try {
+        said = JSON.parse(line)
+      } catch {
+        // The first line of what was read may be cut, and what a command printed is no line of Codex's
+      }
+      if (!said || typeof said !== 'object' || said.type !== 'event_msg' || typeof said.payload !== 'object' || said.payload === null) continue
+      const what = said.payload.type
+      if (what === 'turn_aborted') {
+        // A turn that Codex ended to begin another is followed by that one, and is no interruption
+        if (said.payload.reason !== undefined && said.payload.reason !== 'interrupted') continue
+        const when = typeof said.timestamp === 'string' ? Date.parse(said.timestamp) : Number.NaN
+        at = Number.isFinite(when) ? when : wrote
+        break
+      }
+      if (typeof what === 'string' && CODEX_TURN_MARKS.includes(what)) break
+    }
+    if (interrupted.size > 500) interrupted.clear()
+    interrupted.set(file, { wrote, size, at })
+    return at
+  } catch {
+    return null
+  }
+}
+const interrupted = new Map<string, { wrote: number; size: number; at: number | null }>()
+
 /** The permission modes of Claude Code that do not ask a person: a conversation last held in one of these is reopened in it. Any other is reopened in the mode that asks, where what would be asked is refused. */
 export const CLAUDE_MODES = ['acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'] as const
 
