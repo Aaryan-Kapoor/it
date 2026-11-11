@@ -24,7 +24,7 @@ A player lies over the page rather than in it, which has these costs. Lay the pa
 - **The wheel or a swipe over a player does not scroll the page.** Leave room around a large player for scrolling.
 - **A player follows its element.** It hides while the element is hidden or scrolled out of sight, is cut where the window or a box of the page that scrolls cuts the element, takes the element's rounded corners, and goes with it as the page scrolls, a frame behind in some browsers.
 - **A click within 0.6 seconds of a player appearing, moving, changing size or being uncovered does nothing**, so that a page cannot slide a player under a click meant for the page. A player that keeps moving cannot be clicked until it stops.
-- **A page that puts one of its own elements in fullscreen leaves its players behind.** The browser's own fullscreen keeps them.
+- **A page that puts another of its own elements in fullscreen leaves its players behind.** A player's own fullscreen button makes It fullscreen, with that player over the whole of the page's area below the bar, until the user leaves fullscreen; then it goes back to its place. `requestFullscreen()` on a player's frame or element does the same from the page.
 - **A card's small picture of the page shows no player or map:** their places are left empty there.
 
 ## Sending a photo or any other file
@@ -50,7 +50,7 @@ const photo = await It.photo()
 ```
 
 - **Show why it failed.** `It.record` and `It.photo` reject with a sentence that says why: the user said no, the page was not in front, the screen reaches It over plain http, or the browser refused. A browser gives the microphone only to an https address or to the machine It runs on, so on another screen It must be opened at its https address, which `it https on` on that machine sets up.
-- **The user can stop it.** `take.state` is `recording`, `paused` (while the screen does not show It) or `ended`, and `take.onchange = (state, why) => …` is called when it changes without the page asking. The user can stop a recording from It's bar, which throws it away, and it is thrown away too when another conversation takes the page over. `take.cancel()` throws one away from the page.
+- **The user can stop it.** `take.state` is `recording`, `paused` (while the screen does not show It) or `ended`, and `take.onchange = (state, why) => …` is called when it changes without the page asking. The user can discard a recording with Discard in It's bar, which throws it away, and it is thrown away too when another conversation takes the page over. `take.cancel()` throws one away from the page.
 - **Settings are the page's to say.** `audio` and `video` may be objects such as `{ echoCancellation: false }` or `{ facingMode: 'environment', width: 1280 }`, and `audioBitsPerSecond`, `videoBitsPerSecond` and `mimeType` are as for a MediaRecorder. A page records one thing at a time, for an hour at most and up to 1 GB, the most one file sent with an action can be: It stops it there and gives the page what was recorded.
 - **A recording is a file like any other.** The action that carries it is held to the same limits as any file, so keep video takes short or their bit rate low, and save what arrives with `it save <id> take.webm`.
 
