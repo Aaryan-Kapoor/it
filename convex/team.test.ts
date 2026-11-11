@@ -5,7 +5,7 @@
 // paired for them.
 import { getFunctionName } from 'convex/server'
 import { convexTest } from 'convex-test'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import { sha256 } from './lib/hash'
@@ -118,6 +118,22 @@ describe('a teammate’s browser', () => {
     // The person sees that it came back, and from whom
     expect(await person.query(api.team.inbox, {})).toMatchObject([{ slug: 'plan', to: 'Ada' }])
     expect((await person.query(api.team.inbox, {}))[0]!.back).toBeTypeOf('number')
+  })
+
+  test('is shown in its tray what was sent about a page it is shown, and nothing sent about a private page or about no page', async () => {
+    vi.useFakeTimers()
+    const { t, agent, join } = await withTeam()
+    const { browser } = await join('Ada')
+    const ua = 'Mozilla/5.0 (X11; Linux x86_64) Chrome/144.0.0.0 Safari/537.36'
+    await browser.mutation(api.displays.register, { key: KEY, userAgent: ua })
+    await agent.mutation(api.team.send, { slug: 'plan', to: 'Ada' })
+    await agent.mutation(api.notifications.send, { text: 'the plan is ready', slug: 'plan', everywhere: true })
+    await agent.mutation(api.notifications.send, { text: 'dear diary', slug: 'diary', everywhere: true })
+    await agent.mutation(api.notifications.send, { text: 'the build is red', everywhere: true })
+    expect((await browser.query(api.notifications.list, { key: KEY })).map((n: { text: string }) => n.text)).toEqual(['the plan is ready'])
+    // What sending a notification leaves to be done afterwards is let finish before the backend is put away
+    await t.finishAllScheduledFunctions(vi.runAllTimers).catch(() => {})
+    vi.useRealTimers()
   })
 
   test('may not invite, remove, share or send, and is told nothing of the other teammates', async () => {

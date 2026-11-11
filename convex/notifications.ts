@@ -8,7 +8,7 @@ import type { Doc, Id } from './_generated/dataModel'
 import { type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import { madeAt, record } from './actions'
 import { aim, nameOf, targetOf } from './lib/aim'
-import { artifactBySlug, type Browser, displayByKey, findDisplay, requireBrowser, requireMachine } from './lib/authz'
+import { artifactBySlug, type Browser, displayByKey, findDisplay, requireBrowser, requireMachine, shownTo, teammateOf } from './lib/authz'
 import { counted } from './lib/counted'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
@@ -155,6 +155,7 @@ export const list = query({
     const c = await requireBrowser(ctx)
     const { user } = c
     const display = await findDisplay(ctx, c, key)
+    const teammate = teammateOf(c)
     // Read by who it is for, so that what is addressed to another display, or was dismissed,
     // never stands in front of what belongs here: the newest for this display, the newest of
     // what went to every display that this one was among, and then the newest of the two together.
@@ -172,6 +173,12 @@ export const list = query({
       if (out.length >= TRAY) break
       if (display && !isFor(n, display)) continue
       if (!display && n.displayId === undefined) continue
+      // A teammate's browser is shown what was sent about a page it is shown, and nothing else:
+      // not what was sent about a private page, and not what was sent about no page at all
+      if (teammate !== null) {
+        const page = n.artifactId ? await ctx.db.get(n.artifactId) : null
+        if (!page || !shownTo(teammate, page)) continue
+      }
       if (n.artifactId && !slugs.has(n.artifactId)) slugs.set(n.artifactId, (await ctx.db.get(n.artifactId))?.slug ?? null)
       // What was sent about a page that has since been deleted is shown no more. Deleting the
       // page puts away its notices in bounded steps. Until those finish, none offers a
