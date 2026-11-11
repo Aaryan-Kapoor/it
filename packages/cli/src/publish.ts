@@ -264,8 +264,11 @@ export async function noteConversation(
     const key = `${session.harness}:${session.id}`
     type Note = { cwd: string; at: number; profile?: Profile; addon?: false }
     const read = () => readJson<Record<string, Note>>(conversationsFile()) ?? {}
-    // A note an hour or more from the clock, either way, is written again with the time now
+    // A note an hour or more from the clock, either way, is written again with the time now. One
+    // that says the add-on did not run is written with the time now each time it is said, since
+    // the connector goes by whether it was said after the add-on was last heard from
     const unchanged = (noted: Note | undefined) =>
+      addon !== false &&
       noted?.cwd === cwd &&
       JSON.stringify(noted.profile) === JSON.stringify(profile ?? noted.profile) &&
       (addon === undefined || (noted.addon === false) === !addon) &&
@@ -326,13 +329,37 @@ export function addonMarks(harness: string): Map<string, number> {
 
 /**
  * Takes away the note that a conversation published without It's add-on, now that the add-on
- * has been heard from in it, and leaves the rest of the note as it was. Nothing where the note
- * says no such thing.
+ * has been heard from in it, where the note was written no later than `heard`, and leaves the
+ * rest of the note as it was. A note written after that, by a page published without the
+ * add-on since, is kept. It is read again once the lock is held, so a note written meanwhile is
+ * never taken for the one that was looked at. Nothing where the note says no such thing.
  */
-export async function forgetAddonMark(session: { harness: string; id: string }): Promise<void> {
-  const note = readJson<Record<string, { cwd?: unknown; profile?: Profile; addon?: unknown }>>(conversationsFile())?.[`${session.harness}:${session.id}`]
-  if (note?.addon !== false || typeof note.cwd !== 'string') return
-  await noteConversation(session, note.cwd, note.profile ?? null, true)
+export async function forgetAddonMark(session: { harness: string; id: string }, heard: number): Promise<void> {
+  try {
+    const key = `${session.harness}:${session.id}`
+    type Note = { cwd?: unknown; at?: unknown; addon?: unknown }
+    const stale = (noted: Note | undefined) => noted?.addon === false && typeof noted.at === 'number' && noted.at <= heard
+    if (!stale(readJson<Record<string, Note>>(conversationsFile())?.[key])) return
+    const until = performance.now() + 3000
+    while (performance.now() < until) {
+      const release = claimLock(`${conversationsFile()}.lock`, 10_000, randomBytes(8).toString('hex'))
+      if (release) {
+        try {
+          const kept = readJson<Record<string, Note>>(conversationsFile()) ?? {}
+          if (!stale(kept[key])) return
+          const { addon: _, ...rest } = kept[key]!
+          kept[key] = rest
+          writePrivate(conversationsFile(), kept)
+          return
+        } finally {
+          release()
+        }
+      }
+      await sleep(5 + Math.random() * 20)
+    }
+  } catch {
+    // Taken away the next time the add-on is heard from
+  }
 }
 
 /** The recorded profile stays local, alongside the working folder. */

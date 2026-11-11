@@ -2631,24 +2631,24 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     const marked = publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))
     return session.harness === 'claude-code' && (marked || notLoadedNow(open).some((c) => follow(keyOf(c.harness, c.sessionId)) === follow(key)))
   }
-  /**
-   * When each Pi conversation's add-on was last looked at for marks to take away, by
-   * conversation: once as it is first heard from, and then at most every half minute, which is
-   * how soon a page published while it listens (by an add-on of an earlier build, which does not
-   * name its conversation for its commands) stops counting against it.
-   */
-  const piMarksLooked = new Map<string, number>()
+  /** The Pi conversations whose note is being taken away at this moment (`forgetPiMarks`). */
+  const piForgetting = new Set<string>()
   /**
    * Takes away, on the disk, the note that a Pi conversation published without It's add-on, of
-   * the conversation heard from now and of every id it carried on from, now that its add-on is
-   * heard from in it: what is done on their pages reaches it from now on.
+   * the conversation heard from now and of every id it carried on from, where it was written no
+   * later than now: what is done on their pages reaches it from now on. Looked at each time the
+   * add-on asks, which is a read of one small file, so that no word from the add-on is passed
+   * over: a page published while it listens (by an add-on of an earlier build, which does not
+   * name its conversation for its commands) stops counting against it at the next.
    */
   const forgetPiMarks = (key: string) => {
     const now = Date.now()
-    if (now - (piMarksLooked.get(key) ?? 0) < 30_000) return
-    piMarksLooked.set(key, now)
-    while (piMarksLooked.size > HEARD_MOST) piMarksLooked.delete(piMarksLooked.keys().next().value!)
-    for (const [id, at] of addonMarks('pi')) if (at <= now && follow(keyOf('pi', id)) === follow(key)) void forgetAddonMark({ harness: 'pi', id })
+    for (const [id, at] of addonMarks('pi')) {
+      const mark = keyOf('pi', id)
+      if (at > now || piForgetting.has(mark) || follow(mark) !== follow(key)) continue
+      piForgetting.add(mark)
+      void forgetAddonMark({ harness: 'pi', id }, now).finally(() => piForgetting.delete(mark))
+    }
   }
   /**
    * What this machine is telling It, or has told It, of why a click is held back from reopening

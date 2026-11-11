@@ -1562,6 +1562,19 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
   })
 
+  test('a Pi conversation that published without It’s add-on between two words from its add-on a moment apart has the note taken away at the second', async () => {
+    await reopensFor('pi', 'conversation-1', null)
+    expect(await piHeard('conversation-1')).toEqual({ ok: true })
+    await new Promise((r) => setTimeout(r, 50))
+    writeFileSync(
+      path.join(home, 'conversations.json'),
+      JSON.stringify({ 'pi:conversation-1': { cwd: path.join(home, 'gone'), at: Date.now(), addon: false } }),
+    )
+    await new Promise((r) => setTimeout(r, 50))
+    expect(await piHeard('conversation-1')).toEqual({ ok: true })
+    await until(() => piNote()['pi:conversation-1'].addon === undefined)
+  })
+
   test('the note that a Pi conversation published without It’s add-on is taken away for the id it carried on from too, once its add-on is heard from under the new one', async () => {
     await reopensFor('pi', 'conversation-old', { addon: false, at: Date.now() - 60_000 })
     expect(await piHeard('conversation-new', 'conversation-old')).toEqual({ ok: true })
