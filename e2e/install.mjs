@@ -259,6 +259,8 @@ async function install(
     script = path.join(root, windows ? 'install/install.ps1' : 'install/install.sh'),
     // What is given after the script, as `sh -s -- login ...` gives it to one read from a pipe
     args = [],
+    // A line of PowerShell run after a piped script in the same session, as what a person types next is
+    after = '',
   } = {},
 ) {
   mkdirSync(home, { recursive: true })
@@ -282,6 +284,7 @@ async function install(
       ? `& ([scriptblock]::Create([IO.File]::ReadAllText('${ps1.replaceAll("'", "''")}'))) ${args.map((word) => `'${word.replaceAll("'", "''")}'`).join(' ')}`
       : `Get-Content -Raw -LiteralPath '${ps1.replaceAll("'", "''")}' | Invoke-Expression`,
     "if ((Test-Path variable:root) -or (Test-Path function:Get-File) -or $ErrorActionPreference -ne 'Continue' -or [Net.ServicePointManager]::SecurityProtocol -ne $itTestTls) { Write-Output 'something was left behind in the session'; exit 9 }",
+    after,
   ].join('\n')
   const r = windows
     ? await run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...(piped ? encoded(pipedIn) : ['-File', ps1, ...args])], env, home, started)
@@ -1407,6 +1410,62 @@ try {
       check('Windows refuses a command other than login before installing anything', invalid.code !== 0 && !existsSync(invalid.folder), invalid.said)
     } finally {
       await new Promise((resolve) => host.close(resolve))
+    }
+
+    // ---------- a bare `it`, which Windows PowerShell has another command for ----------
+    // Windows comes with Pester, a test framework whose own command is called `It`, and PowerShell
+    // reads names without regard to capitals: wherever It's folder is not on the PATH, a bare `it`
+    // is Pester's, and what it says is about a Describe block. The folder goes on the PATH that
+    // Windows keeps for the account, in the registry, which a test leaves alone on a person's
+    // machine. So this is run only where CI is set, on a machine that is thrown away afterwards,
+    // and the folder is taken off that PATH again when it ends.
+    if (process.env.CI) {
+      const pester = await inPowerShell('Get-Command it | ForEach-Object { "$($_.CommandType) $($_.Source)" }', {
+        folder: path.join(tmp, 'windows-pester', '.it'),
+        home: tmp,
+      })
+      check(
+        'Windows PowerShell takes a bare `it` for Pester’s command where It’s folder is not on the PATH',
+        /^Function Pester\s*$/.test(pester.said),
+        pester.said,
+      )
+      const typed = await install(
+        'windows-pester',
+        { IT_INSTALL_NO_PATH: undefined },
+        { piped: true, after: "Write-Output ('typed next: ' + (Get-Command it).CommandType + ' ' + ((it --version) -join ''))" },
+      )
+      try {
+        check(
+          'in the PowerShell that installed it, a bare `it` typed next runs It and not Pester’s command',
+          typed.code === 0 && /typed next: Application .*"version"/.test(typed.flat) && !/Describe/.test(typed.said),
+          typed.said,
+        )
+        // A terminal opened afterwards has the PATH Windows keeps: the machine's, then the account's
+        const fresh = await inPowerShell(
+          "$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User'); powershell -NoProfile -Command \"Write-Output ('fresh: ' + (Get-Command it).CommandType + ' ' + ((it --version) -join ''))\"",
+          typed,
+        )
+        check(
+          'in a PowerShell opened after the install, with Pester there, a bare `it` runs It',
+          fresh.status === 0 && /fresh: Application .*"version"/.test(fresh.said.replace(/\s+/g, ' ')) && !/Describe/.test(fresh.said),
+          fresh.said,
+        )
+        // An app that was open before the install runs its commands with the PATH it started with,
+        // and there the program's whole path, as setup gives it to an agent, is what runs It
+        const byPath = await inPowerShell(`${typed.it.replaceAll('\\', '/')} --version`, typed)
+        check(
+          'where the folder is not on the PATH, the program’s whole path with forward slashes runs It',
+          byPath.status === 0 && /"version"/.test(byPath.said) && !/Describe/.test(byPath.said),
+          byPath.said,
+        )
+      } finally {
+        const dir = path.join(typed.folder, 'bin').replaceAll("'", "''")
+        const undone = await inPowerShell(
+          `$key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment'); $kept = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); $kind = $key.GetValueKind('Path'); $key.SetValue('Path', (@($kept -split ';' | Where-Object { $_ -and $_ -ne '${dir}' }) -join ';'), $kind); $key.Close(); Write-Output ([Environment]::GetEnvironmentVariable('Path', 'User'))`,
+          typed,
+        )
+        check('the folder is taken off the account’s PATH again', undone.status === 0 && !undone.said.includes(path.join(typed.folder, 'bin')), undone.said)
+      }
     }
 
     // ---------- a processor without SSE4.2 ----------
