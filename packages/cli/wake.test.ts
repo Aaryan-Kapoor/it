@@ -1921,17 +1921,23 @@ setInterval(() => {}, 1000)
     expect(await endJob(run)).toBe('gone')
   }, 180_000)
 
-  test('that ends badly by itself says so, with its code and the last line it printed', async () => {
+  test('that ends badly by itself says so, with its code and the last line it printed, and what it left running is ended with its job', async () => {
     const said: string[] = []
+    const run = randomUUID()
+    let brokeOff = 0
     const ended = await carryOn(
       standIn(scratch, 'fail'),
       scratch,
-      { harness: 'pi', session: 's-1', run: randomUUID() },
-      { env: process.env, keepIn: path.join(scratch, 'logs'), said: (words) => said.push(words) },
+      { harness: 'pi', session: 's-1', run },
+      { env: process.env, keepIn: path.join(scratch, 'logs'), said: (words) => said.push(words), brokeOff: () => brokeOff++ },
     )
-    left.push(ranIn(scratch).left)
+    const ran = ranIn(scratch)
+    left.push(ran.left)
     expect(ended).toBe('Stand-in exited with 3')
     expect(said).toEqual(['a last line'])
+    expect(brokeOff).toBe(1)
+    await until(() => !alive(ran.left))
+    expect(await endJob(run)).toBe('gone')
   }, 180_000)
 
   test('that is stopped is ended with everything it started, and its job is gone after', async () => {
