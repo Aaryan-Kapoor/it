@@ -101,7 +101,7 @@ The person and you make music on one loop. `ask` says in words what they want of
 it tour answer <the action's id> '{"pattern":["...x.x.x","..x...x.","........","...x....","........"],"note":"<a few words>"}'
 ```
 
-`pattern` in your answer is the whole of your own part: one string for each of `rows`, as long as `steps`. In the four drums `x` is a hit. In the last row, the bass, a digit from 1 to 5 is a note of the scale, low to high, and any five of them sound right together. `pattern` in the action is the person's own hits in the same form, and they stay whatever you answer, so play on the steps they left empty. `yours` is your part as it plays now.
+`pattern` in your answer is the whole of your own part: one string for each of `rows`, as long as `steps`. In the four drums `x` is a hit. In the last row, the bass, a digit from 1 to 5 is a note of the scale, low to high, and the five sound right in any order. `pattern` in the action is the person's own hits in the same form, and they stay whatever you answer, so play on the steps they left empty. `yours` is your part as it plays now.
 
 You may also set the tempo with `bpm`, from 50 to 180, and the swing with `swing`, from 0 for straight to 60, where 33 is a shuffle. Give either only when you change it, as `fits` does where the ask is for one:
 
