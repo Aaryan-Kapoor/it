@@ -565,16 +565,35 @@ interface Lane {
   held: number
   /** Settled when the last click to join has had its turn. */
   tail: Promise<void>
+  /** Settled once the lane is let go of, when the pairing it was made under has ended: every click in it then stops waiting. */
+  over: Promise<void>
+  end: () => void
 }
 const lanes = new Map<string, Lane>()
 const laneOf = (user: string, artifactId: string) => `${user}.${artifactId}`
 function laneFor(id: string): Lane {
   let lane = lanes.get(id)
   if (!lane) {
-    lane = { until: 0, held: 0, tail: Promise.resolve() }
+    let end = () => {}
+    const over = new Promise<void>((r) => {
+      end = r
+    })
+    lane = { until: 0, held: 0, tail: Promise.resolve(), over, end }
     lanes.set(id, lane)
   }
   return lane
+}
+/**
+ * Lets go of every lane, or every one of a person's: the pairing they were made under has ended,
+ * or what was kept for that person was. The clicks waiting in them stop waiting at once, and each
+ * finds then that it is not to be sent.
+ */
+function endLanes(user?: string): void {
+  for (const [id, lane] of lanes) {
+    if (user !== undefined && !id.startsWith(`${user}.`)) continue
+    lane.end()
+    lanes.delete(id)
+  }
 }
 /** It said to wait so long before this page is sent to again: all of it, however long, waited a minute at a time. */
 function slowDown(id: string, ms: number): void {
@@ -593,7 +612,7 @@ async function joinLane(id: string): Promise<() => void> {
     done = r
   })
   lane.held++
-  await before
+  await Promise.race([before, lane.over])
   let ended = false
   return () => {
     if (ended) return
@@ -605,9 +624,10 @@ async function joinLane(id: string): Promise<() => void> {
 /** Waits until the page's lane may be sent to. */
 async function laneOpen(id: string): Promise<void> {
   for (;;) {
-    const wait = (lanes.get(id)?.until ?? 0) - Date.now()
-    if (wait <= 0) return
-    await sleep(Math.min(wait, LONGEST_WAIT_MS))
+    const lane = lanes.get(id)
+    const wait = (lane?.until ?? 0) - Date.now()
+    if (!lane || wait <= 0) return
+    await Promise.race([sleep(Math.min(wait, LONGEST_WAIT_MS)), lane.over])
   }
 }
 
@@ -639,6 +659,27 @@ export function noteRefused(user: string, artifactId: string, why: 'fast' | stri
     at: now,
   })
   changed()
+}
+/** Refusals already counted for a page's bar, or found not to be a click lost, so that whatever passes one on counts it once at most. */
+const counted = new WeakSet<object>()
+/** What a page is told when it sends actions faster than the site's frame takes them. */
+export const SENDING_TOO_MUCH = 'This page is sending too much at once. Try again in a moment.'
+/**
+ * Counts a click on a page that was refused and is gone, by what it was refused with, once
+ * however many hands the refusal passes through: as one that came too fast, or by its reason.
+ */
+export function noteLost(user: string, artifactId: string, err: unknown): void {
+  if (typeof err === 'object' && err !== null) {
+    if (counted.has(err)) return
+    counted.add(err)
+  }
+  const message = err instanceof Error && !('data' in err) ? err.message : refusal(err).message
+  const fast = refusal(err).code === 'rate_limited' || message === TOO_MANY_WAITING || message === SENDING_TOO_MUCH
+  noteRefused(user, artifactId, fast ? 'fast' : message)
+}
+/** A refusal that is no click lost: the click is still kept, or on its way, or went with a pairing that ended. */
+function accounted(err: unknown): void {
+  if (typeof err === 'object' && err !== null) counted.add(err)
 }
 /** What was refused on a page lately, for its bar. */
 export function refusedLately(user: string, artifactId: string, now = Date.now()): Refused | null {
@@ -720,6 +761,9 @@ export function outboxBelongsTo(user: string | null, under: string | null = null
   void tidyBytes()
   if (!replaced) return
   pairedFor = user
+  // Nothing waits its turn, nor is said to have been refused, under a pairing that has ended
+  endLanes()
+  refusals.clear()
   // Whatever was going to be tried again later was for whoever was here before
   for (const r of retry.values()) clearTimeout(r.timer)
   retry.clear()
@@ -746,6 +790,12 @@ const unkept = new Map<string, number[]>()
 let unkeptBytes = 0
 const MAX_UNKEPT_FILE_BYTES = 256 * 1024 * 1024
 const unkeptKey = (user: string, artifactId: string) => `${user}.${artifactId}`
+/** How many of this person's clicks wait in this tab alone, on every page. */
+const unsavedAll = (user: string) => [...unkept].reduce((n, [k, v]) => (k.startsWith(`${user}.`) ? n + v.length : n), 0)
+/** Clicks let in to be kept, whose files are still being kept: by person and page, as `unkept` is. */
+const admitting = new Map<string, number>()
+const admittingFor = (user: string, artifactId?: string) =>
+  artifactId !== undefined ? (admitting.get(unkeptKey(user, artifactId)) ?? 0) : [...admitting].reduce((n, [k, v]) => (k.startsWith(`${user}.`) ? n + v : n), 0)
 /** How many of this person's clicks on one page are on their way with no copy kept in this browser. */
 export const unsaved = (user: string, artifactId: string) => unkept.get(unkeptKey(user, artifactId))?.length ?? 0
 /** Whether automatic recovery would interrupt a request still waiting for confirmation. */
@@ -772,6 +822,8 @@ export function dismissMessage(user: string, artifactId: string, id: string): vo
 }
 export function abandonOutbox(user: string): void {
   if (pairedFor === user) outboxBelongsTo(null)
+  endLanes(user)
+  for (const id of refusals.keys()) if (id.startsWith(`${user}.`)) refusals.delete(id)
   for (const [key] of entries(user)) forget(key)
   forgetGivenUp(user)
   discardPending(user)
@@ -832,6 +884,10 @@ whenLetGo((person, whole) => {
   for (const key of [...unkept.keys()]) if (whole || (person !== null && key.startsWith(`${person}.`))) unkept.delete(key)
   // And what became of clicks sent under that pairing: nothing said of a click is said under another
   for (const key of [...finals.keys()]) if (whole || (person !== null && key.startsWith(`${PREFIX}${person}.`))) finals.delete(key)
+  // Nothing of theirs waits its turn, nor is said to have been refused
+  if (whole) endLanes()
+  else if (person !== null) endLanes(person)
+  for (const id of [...refusals.keys()]) if (whole || (person !== null && id.startsWith(`${person}.`))) refusals.delete(id)
   discardPending(whole ? undefined : (person ?? undefined))
   changed()
 })
@@ -935,18 +991,13 @@ export async function submit(
   // When the person did it, taken before anything that takes time: reading its files, or
   // waiting for another tab, may take long enough for a Stop to be pressed meanwhile
   const made = backendNow()
-  if (new TextEncoder().encode(envelope.payload).length > LIMITS.actionPayloadBytes)
-    throw new Error(`An action carries at most ${LIMITS.actionPayloadBytes / 1024} KB.`)
-  // The same rules the site's frame keeps, kept here too: this is what decides what is stored
-  if (files.length > LIMITS.actionFiles) throw new Error(`An action carries at most ${LIMITS.actionFiles} files.`)
-  if (files.some((f) => f.size > LIMITS.actionFileBytes)) throw new Error(`A file sent with an action is at most ${sizeSaid(LIMITS.actionFileBytes)}.`)
-  if (files.reduce((n, f) => n + f.size, 0) > LIMITS.actionFilesBytes)
-    throw new Error(`The files sent with one action come to at most ${sizeSaid(LIMITS.actionFilesBytes)}.`)
-  // The same rules the backend applies, applied before anything is stored here
-  if (!/^[A-Za-z0-9_.:-]{8,128}$/.test(envelope.clientActionId) || !/^[A-Za-z0-9_.:-]{1,64}$/.test(envelope.name))
-    throw new Error('That is not an action this page can send.')
-  if (!Number.isInteger(envelope.contentVersion) || (envelope.baseStateRevision !== undefined && !Number.isInteger(envelope.baseStateRevision)))
-    throw new Error('That is not an action this page can send.')
+  try {
+    checked(envelope, files)
+  } catch (err) {
+    // Refused before anything was kept: the page's bar says so, as well as the page
+    noteLost(user, artifactId, err)
+    throw err
+  }
   const key = keyOf(user, artifactId, envelope.clientActionId)
   // What became of an earlier sending under this key was of that sending, and not of this one, nor is what becomes of one still going
   finals.delete(key)
@@ -963,15 +1014,30 @@ export async function submit(
     return (await (shared ? shared.request(key, {}, work) : work())) as { actionId: string }
   } catch (err) {
     // Refused, and kept nowhere to be sent later: the page's bar says so, as well as the page.
-    // Not a click this same id is still on its way as, nor one kept for later, nor one whose pairing ended
-    if (stillPairedFor(user, pairing) && !sending.has(key) && localStorage.getItem(key) === null) {
-      const fast = refusal(err).code === 'rate_limited' || (err instanceof Error && err.message === TOO_MANY_WAITING)
-      noteRefused(user, artifactId, fast ? 'fast' : err instanceof Error && !('data' in err) ? err.message : refusal(err).message)
-    }
+    // Not a click this same id is still on its way as, nor one kept for later, nor one whose
+    // pairing ended, which whatever passes the refusal on does not count either
+    if (stillPairedFor(user, pairing) && !sending.has(key) && localStorage.getItem(key) === null) noteLost(user, artifactId, err)
+    else accounted(err)
     throw err
   } finally {
     release()
   }
+}
+
+/** The same rules the site's frame and the backend keep, applied before anything is stored here. */
+function checked(envelope: Sent, files: Blob[]): void {
+  if (new TextEncoder().encode(envelope.payload).length > LIMITS.actionPayloadBytes)
+    throw new Error(`An action carries at most ${LIMITS.actionPayloadBytes / 1024} KB.`)
+  // The same rules the site's frame keeps, kept here too: this is what decides what is stored
+  if (files.length > LIMITS.actionFiles) throw new Error(`An action carries at most ${LIMITS.actionFiles} files.`)
+  if (files.some((f) => f.size > LIMITS.actionFileBytes)) throw new Error(`A file sent with an action is at most ${sizeSaid(LIMITS.actionFileBytes)}.`)
+  if (files.reduce((n, f) => n + f.size, 0) > LIMITS.actionFilesBytes)
+    throw new Error(`The files sent with one action come to at most ${sizeSaid(LIMITS.actionFilesBytes)}.`)
+  // The same rules the backend applies, applied before anything is stored here
+  if (!/^[A-Za-z0-9_.:-]{8,128}$/.test(envelope.clientActionId) || !/^[A-Za-z0-9_.:-]{1,64}$/.test(envelope.name))
+    throw new Error('That is not an action this page can send.')
+  if (!Number.isInteger(envelope.contentVersion) || (envelope.baseStateRevision !== undefined && !Number.isInteger(envelope.baseStateRevision)))
+    throw new Error('That is not an action this page can send.')
 }
 
 async function sendNow(
@@ -1019,10 +1085,12 @@ async function sendNow(
   if (which !== undefined) entry.sending = which
   // Too many already unsent means something is wrong, and one more would only push an older one
   // out. One page may hold only part of what the browser keeps, so it cannot crowd out the rest.
-  // Those this browser could not keep, which wait in this tab alone, are counted with them.
+  // Those this browser could not keep, which wait in this tab alone, are counted with them, and
+  // so are those let in a moment ago whose files are still being kept, and that are not yet either.
   const waiting = entries(user).filter(([saved]) => saved !== key)
-  const waitingHere = waiting.filter(([, e]) => e.artifactId === artifactId).length + unsaved(user, artifactId)
-  if (waiting.length >= MAX || waitingHere >= MAX_PER_PAGE)
+  const waitingAll = waiting.length + unsavedAll(user) + admittingFor(user)
+  const waitingHere = waiting.filter(([, e]) => e.artifactId === artifactId).length + unsaved(user, artifactId) + admittingFor(user, artifactId)
+  if (waitingAll >= MAX || waitingHere >= MAX_PER_PAGE)
     throw new Error(
       // With It there, the page has sent faster than It answers, and the connection is not to blame
       convex.connectionState().isWebSocketConnected
@@ -1030,58 +1098,67 @@ async function sendNow(
         : 'Too many actions are still waiting to be sent from this browser. Check the connection.',
     )
   let kept = false
-  // Noted as being sent before it is kept, so that whatever is told of the change finds it so
-  sending.add(key)
-  if (what) inHand.set(key, files)
-  // The bytes first, where this browser will keep them. Where it will not, the click is not kept
-  // either, and is sent from this tab while it is open, as a click is that cannot be kept. Files
-  // take room of their own: past so many bytes of the person's unsent, counted with what every
-  // other tab keeps in the same step as these are kept, the person is told now
-  let bytesKept = !what
   /** What its files come to, which wait in this tab's memory if this browser will not keep them. */
   const inMemory = what ? files.reduce((n, f) => n + f.size, 0) : 0
-  let room: 'kept' | 'full' = 'kept'
-  if (what)
-    try {
-      room = await kept_().put(key, files, { under: `${PREFIX}${user}.`, most: MAX_FILE_BYTES })
-      bytesKept = room === 'kept'
-    } catch {}
-  if (room === 'full') {
-    sending.delete(key)
-    inHand.delete(key)
-    throw new Error('Too many files are still waiting to be sent from this browser. Check the connection, and send this again once they have gone.')
-  }
-  // Keeping the bytes takes a moment, in which the pairing may have ended or what is kept here
-  // been let go of, and what was kept for the person cleared away with this click not yet among
-  // it. Then nothing of it is kept now: its bytes go again, and no record of it is written back
-  if (what && (!mine() || letGo())) {
-    sending.delete(key)
-    letGoOfBytes(key)
-    throw new Error('This browser’s pairing has ended.')
-  }
+  // Its place is taken now, before anything is waited for, and given up once it is counted as kept or as in this tab, or is refused
+  const admitted = unkeptKey(user, artifactId)
+  admitting.set(admitted, (admitting.get(admitted) ?? 0) + 1)
   try {
-    if (!bytesKept) throw new Error('its files could not be kept')
-    put(key, JSON.stringify(entry))
-    kept = true
-  } catch {
-    // This browser will not store it (its storage is full, or switched off). Without a
-    // connection it could only sit in memory and be lost with the tab, so the person is told
-    // now, while they can still do something about it. With one it is sent, and until it is
-    // answered the page's bar says that it is not saved here and the tab must stay open.
-    if (!convex.connectionState().isWebSocketConnected) {
+    // Noted as being sent before it is kept, so that whatever is told of the change finds it so
+    sending.add(key)
+    if (what) inHand.set(key, files)
+    // The bytes first, where this browser will keep them. Where it will not, the click is not kept
+    // either, and is sent from this tab while it is open, as a click is that cannot be kept. Files
+    // take room of their own: past so many bytes of the person's unsent, counted with what every
+    // other tab keeps in the same step as these are kept, the person is told now
+    let bytesKept = !what
+    let room: 'kept' | 'full' = 'kept'
+    if (what)
+      try {
+        room = await kept_().put(key, files, { under: `${PREFIX}${user}.`, most: MAX_FILE_BYTES })
+        bytesKept = room === 'kept'
+      } catch {}
+    if (room === 'full') {
+      sending.delete(key)
+      inHand.delete(key)
+      throw new Error('Too many files are still waiting to be sent from this browser. Check the connection, and send this again once they have gone.')
+    }
+    // Keeping the bytes takes a moment, in which the pairing may have ended or what is kept here
+    // been let go of, and what was kept for the person cleared away with this click not yet among
+    // it. Then nothing of it is kept now: its bytes go again, and no record of it is written back
+    if (what && (!mine() || letGo())) {
       sending.delete(key)
       letGoOfBytes(key)
-      throw new Error('This could not be saved or sent. Check the connection and try again.')
+      throw new Error('This browser’s pairing has ended.')
     }
-    // Files that wait in this tab's memory alone take room there: past so many bytes, the person is told now
-    if (unkeptBytes + inMemory > MAX_UNKEPT_FILE_BYTES) {
-      sending.delete(key)
-      letGoOfBytes(key)
-      throw new Error('Too many files are still waiting to be sent from this tab. Send this again once they have gone.')
+    try {
+      if (!bytesKept) throw new Error('its files could not be kept')
+      put(key, JSON.stringify(entry))
+      kept = true
+    } catch {
+      // This browser will not store it (its storage is full, or switched off). Without a
+      // connection it could only sit in memory and be lost with the tab, so the person is told
+      // now, while they can still do something about it. With one it is sent, and until it is
+      // answered the page's bar says that it is not saved here and the tab must stay open.
+      if (!convex.connectionState().isWebSocketConnected) {
+        sending.delete(key)
+        letGoOfBytes(key)
+        throw new Error('This could not be saved or sent. Check the connection and try again.')
+      }
+      // Files that wait in this tab's memory alone take room there: past so many bytes, the person is told now
+      if (unkeptBytes + inMemory > MAX_UNKEPT_FILE_BYTES) {
+        sending.delete(key)
+        letGoOfBytes(key)
+        throw new Error('Too many files are still waiting to be sent from this tab. Send this again once they have gone.')
+      }
+      unkeptBytes += inMemory
+      unkept.set(unkeptKey(user, artifactId), [...(unkept.get(unkeptKey(user, artifactId)) ?? []), entry.at])
+      changed()
     }
-    unkeptBytes += inMemory
-    unkept.set(unkeptKey(user, artifactId), [...(unkept.get(unkeptKey(user, artifactId)) ?? []), entry.at])
-    changed()
+  } finally {
+    const left = (admitting.get(admitted) ?? 1) - 1
+    if (left > 0) admitting.set(admitted, left)
+    else admitting.delete(admitted)
   }
   const release = holdPending(user)
   let keep = false

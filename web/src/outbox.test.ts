@@ -302,6 +302,28 @@ describe('the outbox', () => {
     expect(stored()).toEqual([])
   })
 
+  test('a click refused by the site’s own rules, before anything is kept, is said in its page’s bar too', async () => {
+    await expect(submit(backend([]).client, 'alice', 'page-rules', envelope('short'))).rejects.toThrow()
+    expect(refusedLately('alice', 'page-rules')).toMatchObject({ fast: 0, other: 1, why: 'That is not an action this page can send.' })
+  })
+
+  test('clicks waiting their turn stop waiting the moment the pairing ends, and are neither sent nor said to have been refused', async () => {
+    // The first is told to wait a long time, and the second joins behind it
+    const b = backend([refuse('rate_limited', { retryAfterMs: 50_000 })])
+    const first = submit(b.client, 'alice', 'page-lane', envelope('click-0070')).catch((e: Error) => e.message)
+    await new Promise((r) => setTimeout(r, 20))
+    const second = submit(b.client, 'alice', 'page-lane', envelope('click-0071')).catch((e: Error) => e.message)
+    await new Promise((r) => setTimeout(r, 20))
+    outboxBelongsTo('bob')
+    const ended = await Promise.race([Promise.all([first, second]), new Promise((r) => setTimeout(() => r('still waiting'), 1000))])
+    expect(ended).toEqual(['This browser’s pairing has ended.', 'This browser’s pairing has ended.'])
+    expect(b.calls.length).toBe(1)
+    outboxBelongsTo('alice')
+    expect(refusedLately('alice', 'page-lane')).toBeNull()
+    // And Alice's clicks on that page, under her pairing anew, wait behind nothing
+    expect(await submit(backend([{ actionId: 'fresh' }]).client, 'alice', 'page-lane', envelope('click-0072'))).toEqual({ actionId: 'fresh' })
+  })
+
   test('a click that is refused and not kept is said in its page’s bar, and one kept for later is not', async () => {
     const bad = backend([refuse('invalid')])
     await expect(submit(bad.client, 'alice', 'page-said', envelope('click-0060'))).rejects.toBeInstanceOf(ConvexError)
