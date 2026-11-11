@@ -191,6 +191,8 @@ test('Funnel inspection only asks the stand-in Tailscale for status and preserve
     expect(readFileSync(log, 'utf8')).toBe('serve status --json\n')
     writeFileSync(command, '#!/bin/sh\necho invalid-json\n', { mode: 0o700 })
     expect(await inspectFunnel([5130])).toBeUndefined()
+    writeFileSync(command, '#!/bin/sh\nexit 1\n', { mode: 0o700 })
+    expect(await inspectFunnel([5130])).toBeUndefined()
   } finally {
     process.env.PATH = original
     rmSync(dir, { recursive: true, force: true })
@@ -203,4 +205,16 @@ test('An unknown Funnel check qualifies the whole network sentence', () => {
   expect(funnelSaid('unknown', said)).toContain('It could not check Tailscale Funnel.')
   expect(funnelSaid('off', said)).toBe(said)
   expect(funnelSaid('public', said)).not.toContain('answers this machine only')
+})
+
+test('A missing Tailscale command means no Funnel is configured through it', async () => {
+  const original = process.env.PATH
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'it-no-tailscale-'))
+  try {
+    process.env.PATH = dir
+    expect(await inspectFunnel([5130, 5131])).toEqual([])
+  } finally {
+    process.env.PATH = original
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

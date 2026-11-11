@@ -46,4 +46,4 @@ With `it network on`, the site's port and the pages' port are listened on at the
 
 On Linux and macOS the connector takes its add-ons' requests on a socket in `~/.it` that only your user can open. Windows has no such socket, so there it listens on a port of the machine itself, which the system picks. Either way a request must show that it knows a token kept in `connector.json`.
 
-Tailscale Funnel can publish a proxy to It independently of It's network setting. `it https on` refuses a Funnel pointing to It, and the network page and commands warn about the Funnel independently of the network setting. If It cannot check Tailscale, they say so. It does not change your Funnel settings.
+Tailscale Funnel can publish a proxy to It independently of It's network setting. `it https on` refuses a Funnel pointing to It, and the network page and commands warn about the Funnel independently of the network setting. Where the Tailscale command is absent, no Funnel warning is shown. Where it is installed but cannot answer, they say exposure could not be checked. It does not change your Funnel settings.

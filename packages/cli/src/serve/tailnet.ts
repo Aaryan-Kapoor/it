@@ -108,7 +108,7 @@ export function funnelPorts(status: unknown, ports: number[]): number[] {
 export async function inspectFunnel(ports: number[]): Promise<number[] | undefined> {
   return new Promise<number[] | undefined>((resolve) => {
     execFile('tailscale', ['serve', 'status', '--json'], { encoding: 'utf8', timeout: 2000, windowsHide: true }, (error, stdout) => {
-      if (error) return resolve(undefined)
+      if (error) return resolve(error.code === 'ENOENT' ? [] : undefined)
       try {
         const status: unknown = JSON.parse(stdout)
         if (!status || typeof status !== 'object' || Array.isArray(status)) return resolve(undefined)

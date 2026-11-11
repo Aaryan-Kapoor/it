@@ -5752,7 +5752,6 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
             NOT_RUNNING,
             `Its site is at ${SITE} while it runs.`,
             'This machine is enrolled as “the desk”.',
-            'It could not check Tailscale Funnel. Check Tailscale before relying on the network setting to keep It private.',
             'The network is off, so It answers this machine only. `it network tailscale` lets your own devices reach it over your tailnet, and `it network on` lets anyone on this network reach it.',
             'No agent app was found on this machine.',
             NOT_REGISTERED,
@@ -5760,6 +5759,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
             '',
           ],
         ])
+        expect(stopped.shown).not.toContain('Tailscale Funnel')
         expect(stopped.shown).not.toMatch(/harness|[{}"]/)
         // Asked for JSON, it prints what it prints to a program
         const asked = await atTerminal(m, ['status', '--json'], {}, runtime)
@@ -5946,13 +5946,10 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
 
   test('`it network` says which it is in a sentence, with the machine’s other addresses under it, and `it service status` whether It runs and starts by itself', async () => {
     const m = await setUp()
-    const UNKNOWN = 'It could not check Tailscale Funnel. Check Tailscale before relying on the network setting to keep It private.'
     const STOPPED = 'It is not running on this machine at the moment, so this takes effect when it starts.'
     // Nothing is running here, and each of these says so: the setting is all there is until It starts
-    expect((await atTerminal(m, ['network'])).shown).toBe(`${UNKNOWN}\nThe network is off. It answers this machine only.\n${STOPPED}\n`)
-    const report = (await atTerminal(m, ['network', 'on'])).shown.split('\n')
-    expect(report[0]).toBe(UNKNOWN)
-    const said = report.slice(1)
+    expect((await atTerminal(m, ['network'])).shown).toBe(`The network is off. It answers this machine only.\n${STOPPED}\n`)
+    const said = (await atTerminal(m, ['network', 'on'])).shown.split('\n')
     // Where there is an address to open, the tailnet is said to be the way for a phone, in a line of its own before the last; the internet is never said to reach It
     const PHONE =
       /^On shared Wi-Fi, such as a venue’s or a café’s, this is plain http that others on the network can read, .* Pair phones and screens there over Tailscale with `it network tailscale`, .* or over your phone’s own hotspot\.$/
@@ -5965,7 +5962,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     for (const line of on.slice(1, -2)) expect(line).toMatch(/^ {2}http:\/\/\S+:21000$/)
     expect(on.join('\n')).not.toMatch(/[{}"]/)
     // Asked afterwards how it stands, it says the same, and no more promises a site that can be reached than turning it on did
-    expect((await atTerminal(m, ['network'])).shown.split('\n')).toEqual([UNKNOWN, ...said])
+    expect((await atTerminal(m, ['network'])).shown.split('\n')).toEqual(said)
     const piped = await run(m, ['network'])
     expect(piped.err.trim().split('\n').at(-1)).toBe(STOPPED)
     const asked = JSON.parse((await atTerminal(m, ['network', '--json'])).shown.replace(/^[^{]*/, '')) as { network: boolean; addresses: string[] }

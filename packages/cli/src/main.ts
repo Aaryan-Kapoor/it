@@ -2624,7 +2624,7 @@ async function networkAsItStands(running: boolean, inspect = true): Promise<Retu
     const local = inspect && !elsewhere() ? readConfig() : null
     if (local) {
       const found = await inspectFunnel([local.port, contentPort(local.port)])
-      asked.funnel = found === undefined ? 'unknown' : found.length ? 'public' : 'off'
+      asked.funnel = found === undefined ? 'unknown' : found.length ? 'public' : undefined
     }
   } catch {
     asked.funnel = 'unknown'
@@ -2827,7 +2827,7 @@ async function network(a: Args) {
           'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'
         if (forPerson(a)) return tell([funnelSaid(funnel, could)])
         say(funnelSaid(funnel, could))
-        return out({ network: false, funnel, addresses: [] })
+        return out({ network: false, ...(funnel === 'off' ? {} : { funnel }), addresses: [] })
       }
     }
     // Off, the door answers this machine alone. Kept to the tailnet, an earlier It did as this one does, and says so. On for the
@@ -2879,7 +2879,7 @@ async function network(a: Args) {
   if (later) say(later)
   return out({
     network: on,
-    funnel,
+    ...(funnel === 'off' ? {} : { funnel }),
     ...(tailnet ? { tailnet: true } : {}),
     ...(internet ? { internet: true } : {}),
     addresses,

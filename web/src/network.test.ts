@@ -788,6 +788,14 @@ describe('the network as a switch', () => {
     expect(asked).toEqual([{ to: 'on' }])
   })
 
+  test('No Funnel warning is shown when Tailscale is absent', async () => {
+    watched['network:get'] = stands({ on: false, funnel: 'off' })
+    await panel()
+    expect(host.querySelector('.net-exposure')).toBeNull()
+    expect(host.textContent).not.toContain('could not check Tailscale')
+    expect(ways()[0]!.checked).toBe(true)
+  })
+
   test('A persistent Funnel warning leaves the applied network switch state available', async () => {
     watched['network:get'] = stands({ on: true, funnel: 'unknown', addresses: [LAN] })
     await panel()
