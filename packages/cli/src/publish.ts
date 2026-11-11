@@ -312,6 +312,29 @@ export function publishedWithoutAddon(session: { harness: string; id: string }):
   return readJson<Record<string, { addon?: unknown }>>(conversationsFile())?.[`${session.harness}:${session.id}`]?.addon === false
 }
 
+/**
+ * The conversations of an app whose note says they last published a page here while It's add-on
+ * did not run in them (`publishedWithoutAddon`), by id, each with when that note was written.
+ */
+export function addonMarks(harness: string): Map<string, number> {
+  const notes = readJson<Record<string, { addon?: unknown; at?: unknown }>>(conversationsFile()) ?? {}
+  const marks = new Map<string, number>()
+  for (const [key, note] of Object.entries(notes))
+    if (key.startsWith(`${harness}:`) && note?.addon === false && typeof note.at === 'number') marks.set(key.slice(harness.length + 1), note.at)
+  return marks
+}
+
+/**
+ * Takes away the note that a conversation published without It's add-on, now that the add-on
+ * has been heard from in it, and leaves the rest of the note as it was. Nothing where the note
+ * says no such thing.
+ */
+export async function forgetAddonMark(session: { harness: string; id: string }): Promise<void> {
+  const note = readJson<Record<string, { cwd?: unknown; profile?: Profile; addon?: unknown }>>(conversationsFile())?.[`${session.harness}:${session.id}`]
+  if (note?.addon !== false || typeof note.cwd !== 'string') return
+  await noteConversation(session, note.cwd, note.profile ?? null, true)
+}
+
 /** The recorded profile stays local, alongside the working folder. */
 export function conversationProfile(session: { harness: string; id: string }): unknown {
   return readJson<Record<string, { profile?: unknown }>>(conversationsFile())?.[`${session.harness}:${session.id}`]?.profile

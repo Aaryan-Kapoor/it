@@ -68,7 +68,7 @@ import {
 } from './lib'
 import { incompatible } from './login'
 import { profileEnvironment, readProfile } from './profiles'
-import { conversationFolder, conversationProfile, noteConversation, publishedWithoutAddon } from './publish'
+import { addonMarks, conversationFolder, conversationProfile, forgetAddonMark, noteConversation, publishedWithoutAddon } from './publish'
 import { alone, lockHeld } from './serve/backend'
 import * as service from './service'
 import { claudeFolders, detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
@@ -2614,15 +2614,41 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    * For Claude Code, live detection also covers upgraded conversations without that saved mark,
    * including ones heard from by an older add-on: only Claude Code's own notes and processes
    * count there. Pi keeps no note of which conversations are open, so a Pi conversation is known
-   * by the mark alone. Codex, OpenCode and Hermes are never taken to be: Codex says by its own
-   * locks who has a conversation open, and Auto-wake waits for OpenCode and Hermes while any of
-   * them with the add-on is heard from (`blocksWake`).
+   * by the mark alone, and only while the mark is newer than the last word from its add-on: one
+   * that published without the add-on after its add-on was heard from, as where the add-on was
+   * switched off and Pi reloaded, is open without it all the same. Its add-on heard from after
+   * the mark takes the mark away on the disk (`forgetPiMarks`), so a restart of the connector
+   * does not bring it back. Codex, OpenCode and Hermes are never taken to be: Codex says by its
+   * own locks who has a conversation open, and Auto-wake waits for OpenCode and Hermes while any
+   * of them with the add-on is heard from (`blocksWake`).
    */
   const unloaded = (session: { harness: string; id: string }, open: readonly OpenClaude[]): boolean => {
     const key = keyOf(session.harness, session.id)
-    const marked = () => publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))
-    if (session.harness === 'pi') return marked()
-    return session.harness === 'claude-code' && (marked() || notLoadedNow(open).some((c) => follow(keyOf(c.harness, c.sessionId)) === follow(key)))
+    if (session.harness === 'pi') {
+      const since = addonMarks('pi').get(session.id)
+      return since !== undefined && ![key, follow(key)].some((k) => (sessions.get(k)?.seen ?? 0) > since)
+    }
+    const marked = publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))
+    return session.harness === 'claude-code' && (marked || notLoadedNow(open).some((c) => follow(keyOf(c.harness, c.sessionId)) === follow(key)))
+  }
+  /**
+   * When each Pi conversation's add-on was last looked at for marks to take away, by
+   * conversation: once as it is first heard from, and then at most every half minute, which is
+   * how soon a page published while it listens (by an add-on of an earlier build, which does not
+   * name its conversation for its commands) stops counting against it.
+   */
+  const piMarksLooked = new Map<string, number>()
+  /**
+   * Takes away, on the disk, the note that a Pi conversation published without It's add-on, of
+   * the conversation heard from now and of every id it carried on from, now that its add-on is
+   * heard from in it: what is done on their pages reaches it from now on.
+   */
+  const forgetPiMarks = (key: string) => {
+    const now = Date.now()
+    if (now - (piMarksLooked.get(key) ?? 0) < 30_000) return
+    piMarksLooked.set(key, now)
+    while (piMarksLooked.size > HEARD_MOST) piMarksLooked.delete(piMarksLooked.keys().next().value!)
+    for (const [id, at] of addonMarks('pi')) if (at <= now && follow(keyOf('pi', id)) === follow(key)) void forgetAddonMark({ harness: 'pi', id })
   }
   /**
    * What this machine is telling It, or has told It, of why a click is held back from reopening
@@ -3816,6 +3842,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       if (typeof body.turn === 'boolean') turnsSaid.set(key, { on: body.turn, at: Date.now() })
       if (typeof body.busy === 'boolean' || typeof body.turn === 'boolean') turnSeen(key)
       if (isNew && (harness === 'codex' || harness === 'claude-code')) noteHeard(key)
+      if (harness === 'pi') forgetPiMarks(key)
       // A conversation that had not loaded the add-on and is heard from now has: the site is told at once
       if (isNew && harness === 'claude-code') void reportNotLoaded()
       // The harness as It knows it, and never as whoever asked spelled it
