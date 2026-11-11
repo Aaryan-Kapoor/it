@@ -170,7 +170,7 @@ If It says "Reload It before sending new requests", reload the site to use the s
 `it status` names each agent app's add-on as the app has loaded it, and the Machines page does the same beside the app.
 
 - **"outdated", or "Restart to update the add-on".** The app is running an earlier build of It's add-on than the one installed, as an app that was already running when It was updated is. Clicks still arrive. Restart the app, or T3 Code where the app runs inside it, to load the new build.
-- **"incompatible", or "Add-on needs attention".** What the app has loaded cannot take clicks from this It: it speaks another delivery API than the connector, or the app lacks something the add-on needs. Clicks wait in the inbox, and the line beside the app says what to do. Where it says to update It and restart the app, run `it setup` and then restart the app. Where it says the app is missing a delivery API, update the app.
+- **"incompatible", or "Add-on needs attention".** What the app has loaded cannot take clicks from this It: it speaks another delivery API than the connector, or the app lacks something the add-on needs. For OpenCode it can also mean that OpenCode refused to load the add-on, as OpenCode's own log says, so that nothing of It runs there at all. Clicks wait in the inbox, and the line beside the app says what to do. Where it says to update It and restart the app, run `it setup` and then restart the app. Where it says the app is missing a delivery API, update the app.
 
 Where `it upgrade` said that an add-on could not be brought up to date, the app keeps the add-on it had, and It tries again each time it starts and every half hour. `it setup` tries again at once, and says why where it cannot.
 
