@@ -261,9 +261,14 @@ export const runEnded = mutation({
     const fails = machine.fails ?? []
     const stillFailed = s && ok ? fails.filter((f) => f.harness !== s.harness || f.sessionId !== s.id) : fails
     if (left.length !== now.length || stillFailed.length !== fails.length) await ctx.db.patch(machine._id, { runs: left, fails: stillFailed })
-    // Whether a person had asked for what is taken away to be stopped: the connector may not have
-    // heard of that yet, and the run that carried the word is gone with this
-    return { stopped: now.some((r) => r.stop === true && !left.includes(r)) }
+    // Whether a person had asked for that run to be stopped: the connector may not have heard of
+    // it yet, and the run that carried the word is gone with this. Asked of the stops kept as
+    // well, by the run's name, so that a connector that says so again, having missed the answer,
+    // is told the same
+    const stopped =
+      now.some((r) => r.stop === true && !left.includes(r)) ||
+      (s !== undefined && run !== undefined && (machine.stops ?? []).some((x) => x.harness === s.harness && x.sessionId === s.id && x.run === run))
+    return { stopped }
   },
 })
 

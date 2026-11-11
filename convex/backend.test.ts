@@ -3319,6 +3319,18 @@ describe('clicks and their delivery', () => {
     expect(await onPage()).toMatchObject({ stopping: false })
   })
 
+  test('a machine that says a stopped run is over is told it was stopped, however often it says so, and of that run alone', async () => {
+    const { alice, m, p } = await setup()
+    await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'stopped-run' })
+    expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
+    expect(await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'stopped-run' })).toEqual({ stopped: true })
+    // Said again, as by a machine that did not hear the answer: the run is gone, and the stop is still told
+    expect(await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'stopped-run' })).toEqual({ stopped: true })
+    // Another run of the same conversation was not stopped
+    await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'next-run' })
+    expect(await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'next-run' })).toEqual({ stopped: false })
+  })
+
   test('the ending of an earlier run of a conversation, told late, does not take away the run that has begun since, and an ending that names none is never that of a named run', async () => {
     const { m } = await setup()
     const runs = async () => (await m.as.query(api.machines.me, {})).runs.map((r) => (r as { run?: string }).run ?? null)
