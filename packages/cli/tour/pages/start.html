@@ -437,8 +437,27 @@ var Shell = (() => {
       shown: () => shown() === p,
     });
   }
+  // ── The frame in other colours ──
+  // A part may dress the frame in an accent and a tint of its own, and put the frame's own back.
+  // Only these six can be given, each as #rrggbb. All are refused together where what is written
+  // on the accent or on the paper could not be read, or the accent could not be seen on the paper.
+  var WORN = ["--green", "--on-green", "--green-soft", "--paper", "--card", "--line"];
+  function wear(colours) {
+    var root = document.documentElement, given = colours && typeof colours === "object" ? colours : null;
+    WORN.forEach((k) => root.style.removeProperty(k));
+    if (!given) return false;
+    var own = window.getComputedStyle(root), has = (k) => (Object.prototype.hasOwnProperty.call(given, k) ? given[k] : own.getPropertyValue(k).trim());
+    var light = (c) => [1, 3, 5].reduce((sum, i, n) => { var v = parseInt(c.slice(i, i + 2), 16) / 255; return sum + [.2126, .7152, .0722][n] * (v <= .03928 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4)); }, 0);
+    var apart = (a, b) => { var x = light(has(a)), y = light(has(b)); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); };
+    var keys = Object.keys(given), all = WORN.concat("--ink").every((k) => /^#[0-9a-f]{6}$/i.test(has(k)));
+    if (!keys.length || !all || keys.some((k) => WORN.indexOf(k) < 0)) return false;
+    if (apart("--on-green", "--green") < 4.5 || apart("--green", "--paper") < 3 || apart("--green", "--card") < 3 || apart("--ink", "--paper") < 7 || apart("--ink", "--card") < 7) return false;
+    keys.forEach((k) => root.style.setProperty(k, given[k]));
+    return true;
+  }
   return {
     part: part,
+    wear: wear,
     /** Shows the first part. Called once every part has been handed over. */
     start: () => { NAMES.forEach(kept); go(0); },
     go: go,
