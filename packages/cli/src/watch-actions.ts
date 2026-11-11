@@ -2,7 +2,7 @@
 // watches them. Both only read: nothing here claims, holds, hands off, sets aside or answers an
 // action, so whatever else delivers the person's actions goes on as it would without them.
 import { actionCursor, comparePlaces, NOUN, TAKES } from '@it/protocol'
-import { api, backendTakes, call, handed, live, machine, notKnown, Problem, shutIn, shutInByAsking, translate } from './lib'
+import { api, backendTakes, call, doorKeptFrom, handed, live, machine, notKnown, Problem, shutIn, translate } from './lib'
 import { type Listed, printed } from './wait'
 
 /** What `delivery.waitingPage` answers: a bounded page of a page's waiting actions, each with its place. */
@@ -62,7 +62,7 @@ async function pagedRead(): Promise<boolean> {
   const takes = await backendTakes(TAKES.waitingPage)
   if (takes === undefined)
     // Kept from the network, as a sandbox keeps a command, says nothing of whether It is running
-    throw (await shutInByAsking())
+    throw (await doorKeptFrom())
       ? shutIn()
       : new Problem('It could not be asked which ways of reading a page’s actions it takes, so none was asked for.', 'offline', 'Run `it status`.')
   return takes

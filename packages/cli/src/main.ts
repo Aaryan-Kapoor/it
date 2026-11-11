@@ -59,6 +59,7 @@ import {
   call,
   changeWhole,
   claudeAddonHere,
+  closedToNetwork,
   direct,
   doorRefusal,
   elsewhere,
@@ -91,7 +92,6 @@ import {
   sessionNote,
   settingsFile,
   shutIn,
-  shutInByAsking,
   siteAddress,
   textOf,
   throughDoor,
@@ -3254,7 +3254,8 @@ async function main(argv: string[]): Promise<void> {
       const sub = a._[0]
       if (sub !== undefined && sub !== 'clear') throw new Problem('It is `it runs` or `it runs clear`.', 'invalid')
       const now = await local<Held>('/runs')
-      if (!now && (await shutInByAsking())) throw shutIn()
+      // Only the system's refusing this command the network altogether says that it is shut in: the connector's not answering does not
+      if (!now && (await closedToNetwork())) throw shutIn()
       if (!now)
         throw new Problem(
           'It is not running on this machine, so there is nothing to ask about what it reopened.',
