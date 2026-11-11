@@ -985,6 +985,24 @@ export type PageToSite =
   | { type: 'it:record-stop'; requestId: string; recording: string; keep: boolean }
   /** A photo, which the person takes in It's own view of the camera. Answered with the photo as a file. */
   | { type: 'it:photo'; requestId: string; facing?: unknown }
+  /**
+   * Open the camera live. This call is the page's asking, as `it:record` is. The site opens it
+   * and sends the page each picture it gives, as `it:camera-frame`, under the id the page names
+   * it by here. The site takes no more of `video` than plain sizes and which way the camera
+   * faces. Answered once the camera is open.
+   */
+  | { type: 'it:camera'; requestId: string; camera: string; video: unknown }
+  /** Close the live camera. */
+  | { type: 'it:camera-stop'; requestId: string; camera: string }
+  /** The page has drawn this picture of the live camera, and the site may send another in its place. */
+  | { type: 'it:camera-drawn'; camera: string; frame: number }
+
+/** A picture of the live camera, as a page is given it: an `ImageBitmap`, which is the page's to draw and close. */
+export interface CameraPicture {
+  readonly width: number
+  readonly height: number
+  close(): void
+}
 
 export type SiteToPage =
   /** The page's whole state. */
@@ -1019,6 +1037,19 @@ export type SiteToPage =
       why?: 'person' | 'taken_back' | 'not_shown' | 'device' | 'too_long' | 'taken_over' | 'too_large'
       file?: Blob
     }
+  /**
+   * One picture of the live camera, numbered in the order the camera gave it. The site sends a
+   * few at a time and no more: the next goes once the page says it has drawn one
+   * (`it:camera-drawn`), and the camera's pictures in between are passed over.
+   */
+  | { type: 'it:camera-frame'; camera: string; frame: number; picture: CameraPicture }
+  /**
+   * The live camera paused, went on, or ended without the page asking: paused while the screen
+   * does not show It, and ended when the person stopped it in It's bar or took back what they had
+   * allowed, when another conversation took the page over, when the page is no longer shown, and
+   * when the camera went away.
+   */
+  | { type: 'it:camera-state'; camera: string; state: 'live' | 'paused' | 'ended'; why?: 'person' | 'taken_back' | 'not_shown' | 'device' | 'taken_over' }
 
 /** The key in a page's state that belongs to the page itself (It.store). */
 export const STORE_KEY = '_page'

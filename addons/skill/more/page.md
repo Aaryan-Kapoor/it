@@ -39,6 +39,22 @@ const photo = await It.photo()
 - **Settings are the page's to say.** `audio` and `video` may be objects such as `{ echoCancellation: false }` or `{ facingMode: 'environment', width: 1280 }`, and `audioBitsPerSecond`, `videoBitsPerSecond` and `mimeType` are as for a MediaRecorder. A page records one thing at a time, for an hour at most and up to 1 GB, the most one file sent with an action can be: It stops it there and gives the page what was recorded.
 - **A recording is a file like any other.** The action that carries it is held to the same limits as any file, so keep video takes short or their bit rate low, and save what arrives with `it save <id> take.webm`.
 
+## Seeing the camera live
+
+For a call to another screen, reading a QR code, a filter or a live preview, the page can see the camera's picture as it happens. Call `It.camera()`, with nothing declared when you publish. It asks once in its bar for that page on that screen, and the browser asks the first time; a page allowed the camera, for a photo or a recording too, opens it live without being asked again. It's bar says "Camera live" with a Stop button for as long as it is open.
+
+```js
+const cam = await It.camera({ facing: 'environment', width: 1280 }) // asks the user first, the first time on each screen
+video.srcObject = cam.stream // a MediaStream: show it, or send its track with RTCPeerConnection
+cam.onframe = (picture) => ctx.drawImage(picture, 0, 0) // each picture, an ImageBitmap, closed when this returns
+cam.onchange = (state, why) => {} // 'live', 'paused' or 'ended', with why it ended
+await cam.stop()
+```
+
+- **The page never gets the camera itself.** It sends the page each picture, and `cam.stream` is made in the page from them. The next picture comes only once the page has drawn the last, so a slow `onframe` gets fewer pictures and never a backlog. Read or draw the picture inside `onframe`. `cam.width` and `cam.height` are the last picture's size, at most 1920 pixels on its longer side, and at most 30 pictures come in a second, whatever you ask for.
+- **It can end without the page asking.** It pauses while the browser says the page is not shown, and ends when the user stops it or takes back what they allowed, when another conversation takes the page over, or when the page closes. `cam.onchange` says which, and `cam.stream` ends.
+- **Sound can be recorded beside it.** While the camera is live, `It.record({ audio: true })` works, with its own Stop in It's bar. `It.photo` and a recording with video are refused then: take your own picture from `cam.onframe` (draw it on a canvas and use `canvas.toBlob`), or record `cam.stream` yourself. `It.camera` is refused while a recording with video or a photo is under way. Only the picture is live: a call made from `cam.stream` has no sound from the user.
+
 ## Keeping something with the page
 
 `It.store.set(key, value)` and `It.store.get(key)` keep what the page itself changes. What is kept there is kept with the page, so it is there the next time the page is opened, on any display. It arrives with the page's state, which is empty until it arrives, a moment after the page opens. It is not there yet when the page's scripts first run: `It.store.get` waits for nothing and answers from what has arrived, so as the page starts it returns `undefined` even for something that was saved. Read what was saved in `It.onState`, as below.

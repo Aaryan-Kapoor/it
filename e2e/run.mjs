@@ -2669,6 +2669,116 @@ try {
     viewOpenedAgain && /^refused: Another conversation took this page over/.test(photoTakenOver) && (await cameraView.count()) === 0,
     JSON.stringify({ viewOpenedAgain, photoTakenOver, viewStillOpen: await cameraView.count() }),
   )
+  // The camera live to the page, for the conversation that has it now: the page is sent the
+  // camera's pictures, and its own video element shows the stream it makes of them
+  // The camera's chip in It's bar, beside a recording's where sound is recorded alongside
+  const liveRow = page.locator('.page-nav .media-cam')
+  const liveView = page.frameLocator('.mount iframe').locator('#view')
+  /** How big the page's own video element says its picture is, and how many pictures the page was given. */
+  const liveShown = () =>
+    liveView.evaluate((v) => ({ width: v.videoWidth, height: v.videoHeight, pictures: Number(document.getElementById('frames').textContent) }))
+  /** Waits until the page has been given more pictures than it had, and its video element shows them. */
+  const livePictures = async (after = 0) => until(async () => ((s) => (s.width > 0 && s.pictures > after + 10 ? s : undefined))(await liveShown()), 20_000, 250)
+  await page.frameLocator('.mount iframe').locator('#live').click()
+  const liveAsked = await mediaQuestion.waitFor({ timeout: 15_000 }).then(
+    () => mediaQuestion.textContent(),
+    () => '',
+  )
+  if (liveAsked) await mediaQuestion.getByRole('button', { name: 'Allow', exact: true }).click()
+  const liveSaid = await recOut(page)
+    .filter({ hasText: /^(live|refused)/ })
+    .waitFor({ timeout: 15_000 })
+    .then(() => recOut(page).textContent())
+  const liveFirst = await livePictures()
+  const liveBar = (await liveRow.textContent().catch(() => '')) ?? ''
+  check(
+    'a page allowed the camera sees it live once the person allows it, in a question that says so, its own video element shows the picture, and It’s bar says the camera is live',
+    /see the camera’s picture live/.test(liveAsked) && liveSaid === 'live' && liveFirst?.width > 0 && liveFirst?.height > 0 && liveBar === 'Camera liveStop',
+    JSON.stringify({ askedOfTheLivePicture: /see the camera’s picture live/.test(liveAsked), liveSaid, liveFirst, liveBar }),
+  )
+  const photoWhileLive = await recPressed(page, '#photo', /^refused/)
+  check(
+    'a photo is refused while the camera is live to the page, saying that the page can take its own picture',
+    /^refused: The camera is live to this page just now.*cam\.onframe or cam\.stream/.test(photoWhileLive) && (await cameraView.count()) === 0,
+    photoWhileLive,
+  )
+  // Sound is recorded beside the live camera, and the camera goes on giving the page pictures all the while
+  const picturesBeforeSound = (await liveShown()).pictures
+  await page.frameLocator('.mount iframe').locator('#record').click()
+  // Allowed the camera alone, the page is asked about the microphone in the bar first
+  const askedForTheMic = await mediaQuestion.waitFor({ timeout: 15_000 }).then(
+    () => mediaQuestion.textContent(),
+    () => '',
+  )
+  if (askedForTheMic) await mediaQuestion.getByRole('button', { name: 'Allow', exact: true }).click()
+  const soundSaid = await recOut(page)
+    .filter({ hasText: /^(recording|refused)/ })
+    .waitFor({ timeout: 15_000 })
+    .then(() => recOut(page).textContent())
+  // Both said in It's bar at once, each with its own Stop
+  const bothChips = { camera: await liveRow.count(), recording: await page.locator('.page-nav .media-rec').count() }
+  const soundSent = /^recording audio\//.test(soundSaid) ? await recPressed(page, '#stop', /^(accepted|refused)/) : soundSaid
+  const soundTake = await until(async () => (await it(A, ['actions', '--id', camSlug])).find((x) => x.action === 'take'), 30_000, 500)
+  const picturesAfterSound = await livePictures(picturesBeforeSound)
+  check(
+    'sound is recorded beside the live camera, each with its own chip in It’s bar, and reaches the agent while the camera goes on',
+    /wants the mic/.test(askedForTheMic) &&
+      /^recording audio\//.test(soundSaid) &&
+      /^accepted /.test(soundSent) &&
+      /^audio\//.test(soundTake?.files?.[0]?.type ?? '') &&
+      !!picturesAfterSound &&
+      bothChips.camera === 1 &&
+      bothChips.recording === 1 &&
+      (await liveRow.count()) === 1,
+    JSON.stringify({
+      askedForTheMic: /wants the mic/.test(askedForTheMic),
+      soundSaid,
+      bothChips,
+      soundSent,
+      files: soundTake?.files,
+      picturesBeforeSound,
+      picturesAfterSound,
+      rows: await liveRow.count(),
+    }),
+  )
+  if (soundTake) await it(A, ['ack', soundTake.id])
+  // Stopped from It's bar, the camera closes, and the page's stream ends with it
+  await liveRow.getByRole('button', { name: 'Stop the camera' }).click()
+  const liveStopped = await recOut(page)
+    .filter({ hasText: /^camera ended/ })
+    .waitFor({ timeout: 15_000 })
+    .then(
+      () => recOut(page).textContent(),
+      () => recOut(page).textContent(),
+    )
+  const streamEnded = await liveView.evaluate((v) => v.srcObject?.getVideoTracks()[0]?.readyState)
+  check(
+    'Stop in It’s bar closes the camera live to the page, the page is told the person stopped it, and its stream ends',
+    liveStopped === 'camera ended: The person stopped the camera in It’s bar.' && streamEnded === 'ended' && (await liveRow.count()) === 0,
+    JSON.stringify({ liveStopped, streamEnded, row: await liveRow.count() }),
+  )
+  // Opened again it is not asked about, and another conversation taking the page over closes it
+  const picturesBefore = (await liveShown()).pictures
+  await recPressed(page, '#live', /^(live|refused)/)
+  const liveAgain = { askedAgain: await mediaQuestion.count(), said: await recOut(page).textContent(), shown: await livePictures(picturesBefore) }
+  await it(A, ['open', camSlug], { extraEnv: { IT_HARNESS: 'claude-code', IT_SESSION: `${slug}-a-third-conversation` } })
+  const liveTakenOver = await recOut(page)
+    .filter({ hasText: /^camera ended/ })
+    .waitFor({ timeout: 30_000 })
+    .then(
+      () => recOut(page).textContent(),
+      () => recOut(page).textContent(),
+    )
+  check(
+    'the camera opens live again without a second question, and closes when another conversation takes the page over',
+    liveAgain.askedAgain === 0 &&
+      liveAgain.said === 'live' &&
+      !!liveAgain.shown &&
+      liveTakenOver === 'camera ended: Another conversation took this page over.' &&
+      (await liveRow.count()) === 0 &&
+      (await mediaQuestion.count()) === 0,
+    JSON.stringify({ ...liveAgain, liveTakenOver, row: await liveRow.count() }),
+  )
   await page.goto(`${APP}/p/${slug}`)
   await pageIn(page, { id: slug })
   for (const gone of [recSlug, camSlug]) await it(A, ['delete', gone])
