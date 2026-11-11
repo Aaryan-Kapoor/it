@@ -266,6 +266,53 @@ describe('the script inside a page', () => {
     })
   })
 
+  test('where the things done on the page have got to is heard as the site says it, by the id each action was answered with, and never on a page the site says nothing to', async () => {
+    const p = load()
+    p.answer()
+    const settle = () => new Promise((r) => setTimeout(r, 5))
+    const heard: unknown[] = []
+    const off = p.It.onProgress((said: unknown) => heard.push(said))
+    // The site has said nothing: nothing is heard, as on every page that is not the tour's
+    p.fromSite({ type: 'it:state', state: {}, revision: 1 })
+    await settle()
+    expect(heard).toEqual([])
+    p.fromSite({
+      type: 'it:progress',
+      actions: [
+        { id: 'a1', handed: true, turn: 'running' },
+        { id: 'a0', handed: false, turn: null },
+      ],
+    })
+    expect(heard).toEqual([
+      {
+        actions: [
+          { id: 'a1', handed: true, turn: 'running' },
+          { id: 'a0', handed: false, turn: null },
+        ],
+      },
+    ])
+    // Whatever is not shaped as it is to be is left out or said as not known, so that a page need check nothing
+    p.fromSite({ type: 'it:progress', actions: [{ id: 'a2', handed: 'yes', turn: 'thinking', more: 1 }, { handed: true }, null, 'a3'] })
+    await settle()
+    expect(heard[1]).toEqual({ actions: [{ id: 'a2', handed: false, turn: null }] })
+    p.fromSite({ type: 'it:progress', actions: 'all of them' })
+    await settle()
+    expect(heard).toHaveLength(2)
+    // One that begins to listen later is told what was said last, and one that throws keeps nobody else from hearing
+    const late: unknown[] = []
+    p.It.onProgress(() => {
+      throw new Error('a page’s own fault')
+    })
+    p.It.onProgress((said: unknown) => late.push(said))
+    await settle()
+    expect(late).toEqual([heard[1]])
+    off()
+    p.fromSite({ type: 'it:progress', actions: [{ id: 'a4', handed: true, turn: 'ended' }] })
+    await settle()
+    expect(heard).toHaveLength(2)
+    expect(late[1]).toEqual({ actions: [{ id: 'a4', handed: true, turn: 'ended' }] })
+  })
+
   test('a commit sends what was staged, and clears only that: choices made while it was on its way stay', async () => {
     const p = load()
     const port = p.answer()

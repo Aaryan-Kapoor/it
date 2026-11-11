@@ -2,6 +2,15 @@
 
 Start with `it status`. It says how things stand on this machine in a few sentences, and where something is wrong it says that first, with what to do about it. This page is for what it sends you to, and for the things it cannot see from where it runs.
 
+## What you did on a page did not reach your agent
+
+This is the one to check first, and it takes a minute. What you did is kept meanwhile: It holds it until the agent has it, for up to a month, so nothing below loses it.
+
+1. **Read the bar above the page.** It says where the last thing you did has got to, and what to do where it is stuck. [The table further down](#a-page-that-does-not-arrive-or-a-click-that-does-not) has every line it can say.
+2. **Look at the agent's conversation.** It has to be open in its agent app. A Claude Code conversation that was already open when It was installed, such as the one that installed It, hears nothing until you type `/reload-plugins` in it.
+3. **Run `it status` on the computer the agent runs on.** It says whether It is running there and whether that agent app is connected, and what to do where either is not so.
+4. **Ask the agent to take it.** Say "check It for what I did" in its conversation. The agent reads what is waiting for it with `it actions`, and that works in every agent app, connected or not.
+
 ## Where the log is
 
 The background service writes down what happens in `~/.it/logs/it.log`, which only your user can read, and `it service logs` prints the end of it. The file is kept to its newest few megabytes. A line there names what happened and carries ids, counts and fixed codes. It never carries what was on a page, a name you typed, or a file's path.

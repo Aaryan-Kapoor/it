@@ -1,0 +1,771 @@
+<!-- The drum machine: the person taps a beat, and the agent plays between their hits. Then they ask it for more with one tap: a bassline, a busier or a sparser part, swing, half time, a second bar that answers theirs. It is the one part that makes a sound. -->
+<style>
+  [data-part="drums"] { --hat: #cf6f4d; --clap: #d8a24a; --snare: #b9617f; --kick: #4c6fa3; --bass: #8a6fa8; --dip: color-mix(in srgb, var(--ink) 9%, transparent); --lift: color-mix(in srgb, var(--card) 70%, transparent); }
+  /* The instrument: one body over the whole stage, with its controls along the top, the lanes in the middle and the asks along the bottom */
+  [data-part="drums"] .drums-box { width: min(100cqw, 1480px); height: min(100cqh, 900px); display: flex; flex-direction: column; gap: 10px; padding: 14px 18px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 28px; box-shadow: inset 0 1px 0 var(--lift), 0 40px 70px -50px rgba(28, 26, 22, .7); }
+  [data-part="drums"] .drums-top { flex: none; display: flex; align-items: center; gap: 12px 22px; }
+  [data-part="drums"] .drums-play { flex: none; display: inline-flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 22px 0 18px; border-radius: 999px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font: 600 15px/1 Text; box-shadow: 0 10px 22px -14px rgba(28, 26, 22, .7); transition: transform .12s; }
+  [data-part="drums"] .drums-play:hover { transform: translateY(-1px); } [data-part="drums"] .drums-play:active { transform: translateY(1px); }
+  [data-part="drums"] .drums-play:focus-visible, [data-part="drums"] .drums-ask:focus-visible, [data-part="drums"] .drums-tab:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+  [data-part="drums"] .drums-play i { width: 14px; height: 14px; background: currentColor; clip-path: polygon(12% 0, 100% 50%, 12% 100%); transition: clip-path .18s; }
+  [data-part="drums"] .drums-play[data-on="1"] i { clip-path: polygon(6% 6%, 94% 6%, 94% 94%, 6% 94%); }
+  /* A fader: its name, what it stands at, and the slide itself. One the agent set is green until the person moves it */
+  [data-part="drums"] .drums-fader { --at: .5; --tone: var(--ink); --fill: linear-gradient(90deg, var(--tone) calc(6px + (100% - 12px) * var(--at)), var(--pad) 0); min-width: 0; display: grid; grid-template-columns: auto auto; grid-template-areas: "name value" "slide slide"; align-items: baseline; justify-content: space-between; gap: 3px 10px; width: 190px; }
+  [data-part="drums"] .drums-fader.theirs { --tone: var(--green); }
+  [data-part="drums"] .drums-fader > span { grid-area: name; display: inline-flex; align-items: center; gap: 6px; font: 600 10.5px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+  [data-part="drums"] .drums-fader > span i { display: none; width: 9px; height: 9px; border-radius: 3px; background: var(--green); }
+  [data-part="drums"] .drums-fader.theirs > span i { display: block; }
+  [data-part="drums"] .drums-fader output { grid-area: value; font: 600 17px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--tone); transition: color .3s; } [data-part="drums"] .drums-fader output b { font-weight: 600; }
+  [data-part="drums"] .drums-fader output small { margin-left: 3px; font: 400 10.5px/1 var(--mono); color: var(--faint); }
+  [data-part="drums"] .drums-fader input { grid-area: slide; -webkit-appearance: none; appearance: none; width: 100%; height: 18px; margin: 0; background: transparent; cursor: pointer; touch-action: none; }
+  [data-part="drums"] .drums-fader input::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: var(--fill); box-shadow: inset 0 1px 1px var(--dip); }
+  [data-part="drums"] .drums-fader input::-moz-range-track { height: 6px; border-radius: 3px; background: var(--fill); }
+  [data-part="drums"] .drums-fader input::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 18px; margin-top: -6px; border-radius: 4px; border: 0; background: var(--tone); box-shadow: 0 3px 6px -2px rgba(28, 26, 22, .6), inset 0 0 0 1px var(--lift); }
+  [data-part="drums"] .drums-fader input::-moz-range-thumb { width: 12px; height: 18px; border-radius: 4px; border: 0; background: var(--tone); }
+  [data-part="drums"] .drums-fader input:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; border-radius: 4px; }
+  [data-part="drums"] .drums-whose { margin-left: auto; display: inline-flex; align-items: center; gap: 14px; font: 400 12.5px/1 Text; color: var(--soft); white-space: nowrap; }
+  [data-part="drums"] .drums-whose span { display: inline-flex; align-items: center; gap: 6px; } [data-part="drums"] .drums-whose i { width: 11px; height: 11px; border-radius: 4px; background: var(--hat); }
+  [data-part="drums"] .drums-whose span + span i { background: radial-gradient(circle, var(--green) 0 1.6px, var(--on-green) 2.1px 3.1px, var(--green) 3.6px); }
+  /* The second bar's tabs, where a screen shows one bar at a time */
+  [data-part="drums"] .drums-tabs { display: none; flex: none; gap: 6px; }
+  [data-part="drums"] .drums-tab { flex: 1; position: relative; min-height: 28px; border-radius: 9px; border: 1px solid var(--line); background: transparent; font: 600 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--faint); overflow: hidden; }
+  [data-part="drums"] .drums-tab.view { color: var(--ink); border-color: var(--ink); } [data-part="drums"] .drums-tab.held { background: var(--pad); }
+  [data-part="drums"] .drums-tab.sounding::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: 3px; height: 2px; border-radius: 1px; background: var(--green); }
+
+  /* The lanes: the names down the side, and one bar or two of steps beside them */
+  [data-part="drums"] .drums-deck { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 0 10px; }
+  [data-part="drums"] .drums-names, [data-part="drums"] .drums-bar { display: grid; grid-template-rows: 14px repeat(4, minmax(0, 1fr)) 3px repeat(5, minmax(0, .46fr)); gap: 6px; min-height: 0; }
+  [data-part="drums"] .drums-names { position: relative; font: 600 10.5px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+  [data-part="drums"] .drums-names span { display: flex; align-items: center; } [data-part="drums"] .drums-names .n { justify-content: flex-end; padding-right: 2px; letter-spacing: 0; font-weight: 400; }
+  [data-part="drums"] .drums-names em { position: absolute; left: 0; bottom: 0; font-style: normal; writing-mode: vertical-rl; transform: rotate(180deg); height: calc((100% - 14px - 3px - 60px) * 2.3 / 6.3 + 24px); text-align: center; }
+  [data-part="drums"] .drums-bars { position: relative; min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0fr); gap: 0; transition: grid-template-columns .7s cubic-bezier(.3, 1, .3, 1), gap .7s cubic-bezier(.3, 1, .3, 1); }
+  [data-part="drums"] .drums-box[data-bars="2"] .drums-bars { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 22px; }
+  [data-part="drums"] .drums-bar { min-width: 0; grid-template-columns: repeat(4, minmax(0, 1fr)) 4px repeat(4, minmax(0, 1fr)); }
+  [data-part="drums"] .drums-box[data-bars="1"] .drums-bar[data-bar="1"] { visibility: hidden; overflow: hidden; }
+  [data-part="drums"] .drums-tick { align-self: end; text-align: center; font: 400 10.5px/1 var(--mono); color: var(--faint); transition: color .1s; } [data-part="drums"] .drums-tick.now { color: var(--ink); font-weight: 700; }
+  /* A pad: a key that is good to hit, lit in its drum's colour where the person plays and in green where the agent does */
+  [data-part="drums"] .pad, [data-part="drums"] .drums-key { --off: var(--pad); --sunk: inset 0 -4px 0 var(--dip), inset 0 1px 0 var(--lift); position: relative; min-width: 0; min-height: 0; padding: 0; border: 0; cursor: pointer; background: var(--off); touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  [data-part="drums"] .pad { border-radius: 13px; box-shadow: var(--sunk); transition: background .15s, transform .1s, box-shadow .15s; }
+  [data-part="drums"] .pad.beat { --off: color-mix(in srgb, var(--pad) 91%, var(--ink)); }
+  [data-part="drums"] .pad[data-r="0"] { --on: var(--hat); } [data-part="drums"] .pad[data-r="1"] { --on: var(--clap); } [data-part="drums"] .pad[data-r="2"] { --on: var(--snare); } [data-part="drums"] .pad[data-r="3"] { --on: var(--kick); }
+  [data-part="drums"] .pad.mine, [data-part="drums"] .drums-key.mine { background: var(--on); box-shadow: inset 0 -4px 0 rgba(0, 0, 0, .16), inset 0 1px 0 rgba(255, 255, 255, .28), 0 10px 18px -12px var(--on); }
+  [data-part="drums"] .pad.theirs, [data-part="drums"] .drums-key.theirs { background: var(--green); box-shadow: inset 0 -4px 0 rgba(0, 0, 0, .16), inset 0 1px 0 rgba(255, 255, 255, .28), 0 10px 18px -12px var(--green); }
+  /* The agent's mark, as on its plate in the dock */
+  [data-part="drums"] .pad.theirs::after { content: ""; position: absolute; right: 8px; top: 8px; width: 11px; height: 11px; border-radius: 4px; background: radial-gradient(circle, var(--green) 0 1.6px, var(--on-green) 2.1px); opacity: .92; }
+  [data-part="drums"] .pad:active, [data-part="drums"] .drums-key:active { transform: scale(.94); }
+  [data-part="drums"] .pad:focus-visible, [data-part="drums"] .drums-key:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; z-index: 1; }
+  [data-part="drums"] .pad.now:not(.on) { background: color-mix(in srgb, var(--pad) 74%, var(--ink)); }
+  /* The bass lane: five notes of one scale, thin keys, low at the bottom */
+  [data-part="drums"] .drums-key { --on: var(--bass); --off: color-mix(in srgb, var(--pad) 55%, transparent); --sunk: none; border-radius: 7px; transition: background .15s, transform .1s; }
+  [data-part="drums"] .drums-key.beat { --off: color-mix(in srgb, var(--pad) 90%, transparent); } [data-part="drums"] .drums-key.now:not(.on) { background: color-mix(in srgb, var(--pad) 80%, var(--ink)); }
+  /* The agent's hits come in as each is first played: until then a pad is as it was */
+  [data-part="drums"] .theirs.land { animation: drums-land .55s cubic-bezier(.2, 1.5, .4, 1) backwards; animation-delay: var(--d, 0ms); } [data-part="drums"] .pad.theirs.land::after { animation: drums-mark .3s ease-out backwards; animation-delay: var(--d, 0ms); }
+  @keyframes drums-land { 0% { background: var(--off); box-shadow: var(--sunk); transform: none; } 1% { background: var(--green); transform: scale(.55); } 55% { transform: scale(1.1); } }
+  @keyframes drums-mark { from { opacity: 0; } }
+  /* The place in the bar: a line that goes across the lanes with what is heard */
+  [data-part="drums"] .drums-head { position: absolute; left: -3px; top: 20px; bottom: 0; width: 3px; border-radius: 2px; background: var(--ink); opacity: 0; pointer-events: none; will-change: transform; box-shadow: -16px 0 22px -4px color-mix(in srgb, var(--ink) 30%, transparent); transition: opacity .2s; }
+  [data-part="drums"] .drums-head.on { opacity: .85; }
+  [data-part="drums"] .drums-start { position: absolute; left: 0; right: 0; top: 27%; text-align: center; pointer-events: none; font: 600 34px/1 Hand; color: var(--ink); opacity: .8; text-shadow: 0 0 14px var(--pad), 0 0 14px var(--pad), 0 0 6px var(--pad); transform: rotate(-2deg); transition: opacity .3s; }
+  [data-part="drums"] .drums-box[data-touched="1"] .drums-start { opacity: 0; }
+
+  /* The asks: one tap each, and the agent changes its own part, the tempo or the swing */
+  [data-part="drums"] .drums-asks { flex: none; display: flex; align-items: center; gap: 8px; }
+  [data-part="drums"] .drums-to { flex: none; display: inline-flex; align-items: center; gap: 6px; margin-right: 4px; font: 600 21px/1 Hand; color: var(--soft); white-space: nowrap; } [data-part="drums"] .drums-to svg { width: 26px; height: 14px; }
+  [data-part="drums"] .drums-ask { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; min-height: 40px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line); background: var(--paper); font: 600 14px/1 Text; white-space: nowrap; box-shadow: inset 0 -2px 0 var(--dip); transition: transform .12s, border-color .2s, color .2s; }
+  [data-part="drums"] .drums-ask:hover:not(:disabled) { border-color: var(--ink); transform: translateY(-1px); } [data-part="drums"] .drums-ask:active:not(:disabled) { transform: translateY(1px); box-shadow: none; }
+  [data-part="drums"] .drums-ask:disabled { opacity: .45; cursor: default; }
+  /* The one that was asked and is not answered yet */
+  [data-part="drums"] .drums-ask.asked, [data-part="drums"] .drums-ask.asked:hover { border-color: var(--green); color: var(--green); } [data-part="drums"] .drums-ask.asked::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: drums-asked 1.1s ease-in-out infinite alternate; }
+  @keyframes drums-asked { to { opacity: .25; } }
+  [data-part="drums"] .drums-clear { margin-left: auto; }
+
+  @media (max-width: 1100px) { [data-part="drums"] .drums-whose { display: none; } [data-part="drums"] .drums-clear { margin-left: 0; } [data-part="drums"] .drums-fader { margin-left: auto; } [data-part="drums"] .drums-fader + .drums-fader { margin-left: 0; } [data-part="drums"] .drums-ask { padding: 0 12px; font-size: 13.5px; } }
+  @media (max-width: 760px) {
+    [data-part="drums"] .drums-box { gap: 8px; padding: 10px 10px 10px; border-radius: 22px; }
+    [data-part="drums"] .drums-top { gap: 10px; }
+    [data-part="drums"] .drums-play { min-height: 42px; padding: 0 14px 0 12px; gap: 8px; font-size: 14px; }
+    [data-part="drums"] .drums-fader { flex: 1 1 0; width: auto; margin: 0; gap: 2px 6px; } [data-part="drums"] .drums-fader output { font-size: 14px; } [data-part="drums"] .drums-fader > span { font-size: 9.5px; }
+    [data-part="drums"] .drums-box[data-bars="2"] .drums-tabs { display: flex; }
+    [data-part="drums"] .drums-deck { grid-template-columns: 30px minmax(0, 1fr); gap: 0 6px; }
+    [data-part="drums"] .drums-names, [data-part="drums"] .drums-bar { gap: 4px; grid-template-rows: 12px repeat(4, minmax(0, 1fr)) 2px repeat(5, minmax(0, .5fr)); } [data-part="drums"] .drums-bar { grid-template-columns: repeat(4, minmax(0, 1fr)) 2px repeat(4, minmax(0, 1fr)); }
+    [data-part="drums"] .drums-names { font-size: 8.5px; letter-spacing: .04em; } [data-part="drums"] .drums-names em { display: none; }
+    [data-part="drums"] .drums-bars, [data-part="drums"] .drums-box[data-bars="2"] .drums-bars { grid-template-columns: minmax(0, 1fr); gap: 0; transition: none; }
+    /* One bar is shown at a time, and the other is under it, out of sight: it is still there, so that what is coming onto its pads goes on coming */
+    [data-part="drums"] .drums-bar { grid-area: 1 / 1; } [data-part="drums"] .drums-bar:not(.view), [data-part="drums"] .drums-box[data-bars="1"] .drums-bar[data-bar="1"] { visibility: hidden; pointer-events: none; }
+    [data-part="drums"] .pad { --sunk: inset 0 -3px 0 var(--dip), inset 0 1px 0 var(--lift); border-radius: 10px; } [data-part="drums"] .pad.theirs::after { right: 5px; top: 5px; width: 9px; height: 9px; border-radius: 3px; } [data-part="drums"] .drums-key { border-radius: 5px; }
+    [data-part="drums"] .drums-head { top: 16px; } [data-part="drums"] .drums-start { font-size: 25px; }
+    [data-part="drums"] .drums-asks { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; } [data-part="drums"] .drums-to { display: none; }
+    [data-part="drums"] .drums-ask { min-height: 34px; padding: 0 4px; font-size: 12px; gap: 4px; } [data-part="drums"] .drums-ask.asked::before { width: 5px; height: 5px; }
+    [data-part="drums"] .drums-clear { margin: 0; min-height: 34px; padding: 0 4px; font-size: 12px; }
+  }
+</style>
+<section class="part" data-part="drums" data-title="A drum machine" data-line="Tap a few pads, and {agent} plays between your hits. Then ask it for more." hidden>
+  <div class="fill"><div class="drums-box" id="drums-box" data-bars="1" data-touched="0">
+    <div class="drums-top">
+      <button class="drums-play" type="button" id="drums-play" data-on="0"><i aria-hidden="true"></i><span>Play</span></button>
+      <label class="drums-fader" id="drums-tempo-box"><span><i aria-hidden="true"></i>Tempo</span><output><b id="drums-bpm"></b><small>bpm</small></output><input type="range" id="drums-tempo" min="50" max="180" step="1" value="118" aria-label="Tempo, in beats a minute"></label>
+      <label class="drums-fader" id="drums-swing-box"><span><i aria-hidden="true"></i>Swing</span><output><b id="drums-lilt"></b><small>%</small></output><input type="range" id="drums-swing" min="0" max="60" step="1" value="0" aria-label="Swing, in hundredths of a step"></label>
+      <p class="drums-whose" aria-hidden="true"><span><i></i>yours</span><span><i></i><b id="drums-theirs"></b></span></p>
+    </div>
+    <div class="drums-tabs" id="drums-tabs" role="group" aria-label="Which bar is shown"><button class="drums-tab" type="button" data-bar="0">Bar 1</button><button class="drums-tab" type="button" data-bar="1">Bar 2</button></div>
+    <div class="drums-deck">
+      <div class="drums-names" aria-hidden="true"><span></span><span>Hat</span><span>Clap</span><span>Snare</span><span>Kick</span><span></span><span class="n">G</span><span class="n">E</span><span class="n">D</span><span class="n">C</span><span class="n">A</span><em>Bass</em></div>
+      <div class="drums-bars" id="drums-bars"><div class="drums-bar view" data-bar="0" role="group" aria-label="The first bar: four drums and a bass, eight steps"></div><div class="drums-bar" data-bar="1" role="group" aria-label="The second bar"></div><i class="drums-head" id="drums-head" aria-hidden="true"></i><p class="drums-start" aria-hidden="true">tap a few pads</p></div>
+    </div>
+    <div class="drums-asks" id="drums-asks" role="group"><span class="drums-to" id="drums-to" aria-hidden="true"><span></span><svg viewBox="0 0 26 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8c6-4 13-4 22-1M18 2l5 5-6 4"/></svg></span><button class="btn ghost small drums-clear" type="button" id="drums-clear">Clear</button></div>
+  </div></div>
+</section>
+<script>
+// The person taps hits onto the pads. A moment after they stop, the page tells the agent the
+// beat, and the agent answers with a part of its own, which is shown in green on the same pads
+// and played in the same loop. From there one tap asks the agent for more: a bassline, a busier
+// or a sparser part, swing, half time, a second bar that answers the first, a surprise. Every
+// ask goes as the same action, with the beat as it stands and an answer that fits already made,
+// and is answered in the same small shape: the agent's part, and a tempo or a swing where it
+// sets one. The person's own hits are never the agent's to take off.
+Shell.part("drums", (my) => {
+  var $ = Shell.$, calm = Shell.calm;
+  var box = my.box, AGENT = my.agent, newId = Shell.newId;
+  var ROWS = ["hat", "clap", "snare", "kick"], NAMES = ["Hat", "Clap", "Snare", "Kick"];
+  // The bass has five notes, of a scale in which no two sound wrong together: A, C, D, E and G, from the bottom
+  var SCALE = ["A", "C", "D", "E", "G"], PITCH = [110, 130.81, 146.83, 164.81, 196];
+  // A bar is eight steps, two to the beat, and the loop is one bar or two
+  var BAR = 8, MOST = 16, BPM = 118, SLOWEST = 50, FASTEST = 180, LILT = 60;
+  var el = $("drums-box"), barsEl = $("drums-bars"), head = $("drums-head"), playBtn = $("drums-play"), clearBtn = $("drums-clear"), asksEl = $("drums-asks"), tabsEl = $("drums-tabs");
+  var tempoIn = $("drums-tempo"), swingIn = $("drums-swing");
+  // A part is what one of the two plays: for each drum the steps it is hit on, and for the bass the note on each step, from 1, or none
+  var blank = () => ({ d: ROWS.map(() => new Array(MOST).fill(false)), b: new Array(MOST).fill(0) });
+  var copy = (p) => ({ d: p.d.map((row) => row.slice()), b: p.b.slice() });
+  var count = (p) => p.d.reduce((n, row) => n + row.filter(Boolean).length, 0) + p.b.filter(Boolean).length;
+  // A part as it is written to the agent and by it: a row of steps for each drum, `x` for a hit, and a row for the bass, with the number of the note
+  var written = (p, n) => p.d.map((row) => row.slice(0, n).map((on) => (on ? "x" : ".")).join("")).concat([p.b.slice(0, n).map((v) => (v ? String(v) : ".")).join("")]);
+  var mine = blank(), theirs = blank(), steps = BAR, bpm = BPM, swing = 0;
+  // What is asked of the agent and not yet superseded: its id, how long a loop it is about, and what it was offered
+  var req = null, asked = false, sendTimer = 0, trades = 0;
+  var HINT = "Tap a few pads. A moment after you stop, " + AGENT + " plays between your hits, and says here what it added.";
+  // How much has been played so far, kept where it can be counted
+  var meter = (window.__drums = { audio: "none", steps: 0, notes: 0 });
+
+  // ── The sound: every drum and the bass are made here, from a tone or from noise ──
+  var AC = window.AudioContext || window.webkitAudioContext, ctx = null, out = null, hiss = null;
+  // The browser lets sound start only from a tap, so this is called from every one
+  function audio() {
+    if (!AC) return null;
+    if (!ctx) {
+      try {
+        ctx = new AC();
+        // Everything at once is held under the top, so that nothing is ever cut off
+        var squeeze = ctx.createDynamicsCompressor(), trim = ctx.createGain();
+        out = ctx.createGain();
+        out.gain.value = .8;
+        trim.gain.value = .8;
+        out.connect(squeeze);
+        squeeze.connect(trim);
+        trim.connect(ctx.destination);
+        hiss = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+        var d = hiss.getChannelData(0);
+        for (var i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+        meter.audio = ctx.state;
+        ctx.onstatechange = () => { meter.audio = ctx.state; };
+      } catch (e) {
+        ctx = null; AC = null;
+        return null;
+      }
+    }
+    if (ctx.state !== "running" && ctx.resume) {
+      try { var p = ctx.resume(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+    }
+    return ctx;
+  }
+  // A tone that may fall from one pitch to another, and dies away
+  function tone(t, to, shape, from, down, fall, peak, len) {
+    var o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = shape;
+    o.frequency.setValueAtTime(from, t);
+    if (down !== from) o.frequency.exponentialRampToValueAtTime(down, t + fall);
+    g.gain.setValueAtTime(.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + .004);
+    g.gain.exponentialRampToValueAtTime(.0001, t + len);
+    o.connect(g); g.connect(to);
+    o.start(t); o.stop(t + len + .02);
+  }
+  // A burst of noise through a filter, dying away
+  function burst(t, to, kind, freq, q, peak, len) {
+    var s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+    s.buffer = hiss;
+    f.type = kind; f.frequency.value = freq; f.Q.value = q;
+    g.gain.setValueAtTime(peak, t);
+    g.gain.exponentialRampToValueAtTime(.0001, t + len);
+    s.connect(f); f.connect(g); g.connect(to);
+    s.start(t, Math.random() * .6, len + .03);
+  }
+  var VOICE = [
+    // Hat: a tick of the highest noise
+    (t, to) => burst(t, to, "highpass", 7500, .7, .34, .05),
+    // Clap: three bursts a few thousandths of a second apart, the last one ringing
+    (t, to) => {
+      burst(t, to, "bandpass", 1200, 1.1, 1.5, .02);
+      burst(t + .011, to, "bandpass", 1200, 1.1, 1.5, .02);
+      burst(t + .022, to, "bandpass", 1200, 1.1, 1.7, .17);
+    },
+    // Snare: noise, and a short tone under it
+    (t, to) => { burst(t, to, "highpass", 1400, .6, .55, .17); tone(t, to, "triangle", 180, 180, 0, .5, .11); },
+    // Kick: a sine that falls fast, with a tick at its start for speakers too small for the rest
+    (t, to) => { tone(t, to, "sine", 150, 45, .11, 1, .34); burst(t, to, "lowpass", 1800, .7, .22, .012); },
+  ];
+  // The bass: a plucked string, bright as it is struck and closing as it rings, so that a small speaker carries it too
+  function pluck(t, to, hz, len) {
+    var o = ctx.createOscillator(), under = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain(), low = ctx.createGain();
+    o.type = "sawtooth"; o.frequency.value = hz;
+    under.type = "sine"; under.frequency.value = hz;
+    f.type = "lowpass"; f.Q.value = 5;
+    f.frequency.setValueAtTime(hz * 9, t);
+    f.frequency.exponentialRampToValueAtTime(hz * 2.2, t + .16);
+    g.gain.setValueAtTime(.0001, t);
+    g.gain.exponentialRampToValueAtTime(.3, t + .006);
+    g.gain.exponentialRampToValueAtTime(.14, t + .12);
+    g.gain.exponentialRampToValueAtTime(.0001, t + len);
+    low.gain.value = .7;
+    o.connect(f); f.connect(g); under.connect(low); low.connect(g); g.connect(to);
+    o.start(t); under.start(t); o.stop(t + len + .02); under.stop(t + len + .02);
+  }
+
+  // ── The loop: steps are given their times a little ahead, on the sound's own clock ──
+  // `pos` is the step that is given its time next, and `grid` when it falls where nothing swings.
+  // A step between two beats falls later by the swing, in hundredths of a step
+  var playing = false, live = false, timer = 0, frame = 0, pos = 0, grid = 0, due = [], bus = null, lit = -1, last = null;
+  var stepLen = () => 60 / bpm / 2;
+  var late = (c) => (c % 2 ? (swing / 100) * stepLen() : 0);
+  // The sound's clock where there is sound, and the page's where there is none
+  var clock = () => (live ? ctx.currentTime : performance.now() / 1000);
+  function line() {
+    if (!bus) { bus = ctx.createGain(); bus.connect(out); }
+    return bus;
+  }
+  function sound(c, t) {
+    for (var r = 0; r < ROWS.length; r++) if (mine.d[r][c] || theirs.d[r][c]) { VOICE[r](t, line()); meter.notes++; }
+    [mine.b[c], theirs.b[c] === mine.b[c] ? 0 : theirs.b[c]].forEach((n) => { if (n) { pluck(t, line(), PITCH[n - 1], stepLen() * .95); meter.notes++; } });
+  }
+  function ahead() {
+    var on = !!(ctx && ctx.state === "running");
+    // Sound has come or gone: the loop goes on by the other clock, from the first step not yet played
+    if (on !== live) {
+      if (!on && bus) { try { bus.disconnect(); } catch (e) {} bus = null; }
+      pos = (pos - (due.length % steps) + steps) % steps;
+      live = on; grid = clock() + .05; due = [];
+    }
+    var now = clock();
+    // Fallen behind, as in a tab nobody is looking at: what was missed is left out, and the place is kept
+    if (grid < now - .03) {
+      var missed = Math.ceil((now - grid) / stepLen());
+      pos = (pos + missed) % steps;
+      grid += missed * stepLen();
+    }
+    var far = document.hidden ? 1.25 : .12;
+    while (grid < now + far) {
+      var t = grid + late(pos);
+      if (live) sound(pos, t);
+      due.push({ step: pos, at: t });
+      meter.steps++;
+      pos = (pos + 1) % steps;
+      grid += stepLen();
+    }
+    if (due.length > 32) due.splice(0, due.length - 32);
+  }
+  // When a hit that has just been put on a step is first heard, by the loop's clock. A step that has its time already was given its sound as well, so it is the time after that
+  function next(c) {
+    return grid + (((c - pos + steps) % steps) + (due.some((d) => d.step === c) ? steps : 0)) * stepLen() + late(c);
+  }
+  // The light follows what is heard
+  function show() {
+    var now = clock() - (live ? Math.min(ctx.outputLatency || 0, .25) : 0), cur = null;
+    while (due.length && due[0].at <= now) cur = due.shift();
+    if (cur) { last = cur; light(cur.step); }
+    glide(now);
+    frame = requestAnimationFrame(show);
+  }
+  function light(c) {
+    if (c === lit) return;
+    if (lit >= 0) column[lit].forEach((b) => b.classList.remove("now"));
+    lit = c;
+    el.setAttribute("data-step", c);
+    tabs.forEach((t, i) => t.classList.toggle("sounding", c >= 0 && i === Math.floor(c / BAR)));
+    if (c < 0) return;
+    column[c].forEach((b) => {
+      b.classList.add("now");
+      // A pad that is hit jumps as it sounds
+      if (!calm && b.animate && b.classList.contains("on")) b.animate([{ transform: "scale(1.09)", filter: "brightness(1.22)" }, { transform: "scale(1)", filter: "brightness(1)" }], { duration: 240, easing: "cubic-bezier(.2, .9, .3, 1)" });
+    });
+    // Where one bar is shown at a time, the one that is sounding is the one shown, unless the person is holding another
+    if (held < 0) see(Math.floor(c / BAR));
+  }
+  // The line goes from each step to the next in the time between the two
+  function glide(now) {
+    var a = last && tick[last.step];
+    // Where one bar is shown at a time and it is the other that sounds, there is no line to show
+    if (!a || !a.offsetParent || (narrow && narrow.matches && Math.floor(last.step / BAR) !== view)) { head.classList.remove("on"); return; }
+    var to = (last.step + 1) % steps, len = stepLen() + late(to) - late(last.step), part = Math.max(0, Math.min(1, (now - last.at) / len));
+    var whole = barsEl.getBoundingClientRect(), from = a.getBoundingClientRect(), b = last.step % BAR < BAR - 1 ? tick[last.step + 1].getBoundingClientRect() : null;
+    var x = from.left + part * ((b ? b.left : from.right + 6) - from.left) - whole.left;
+    head.style.transform = "translateX(" + x.toFixed(1) + "px)";
+    head.classList.add("on");
+  }
+  function start() {
+    if (playing) return;
+    playing = true;
+    live = !!(ctx && ctx.state === "running");
+    pos = 0; grid = clock() + .06; due = []; last = null;
+    timer = setInterval(ahead, 25);
+    ahead();
+    frame = requestAnimationFrame(show);
+    paint();
+  }
+  function stop() {
+    if (!playing) return;
+    playing = false;
+    clearInterval(timer);
+    cancelAnimationFrame(frame);
+    // What was already given a time is not heard
+    if (bus) {
+      var b = bus;
+      bus = null;
+      try { b.gain.setTargetAtTime(0, ctx.currentTime, .008); } catch (e) {}
+      setTimeout(() => { try { b.disconnect(); } catch (e) {} }, 400);
+    }
+    due = []; last = null;
+    light(-1);
+    head.classList.remove("on");
+    paint();
+  }
+  // A page that is looked at again takes its sound up again, and one that is left is given its steps further ahead
+  document.addEventListener("visibilitychange", () => {
+    if (!playing) return;
+    if (!document.hidden) audio();
+    ahead();
+  });
+  // Nothing plays in another part of the page
+  my.onLeave(stop);
+
+  // ── The pads and the keys ──
+  var pad = ROWS.map(() => []), key = SCALE.map(() => []), tick = [], column = [];
+  var tabs = [].slice.call(tabsEl.querySelectorAll(".drums-tab"));
+  [0, 1].forEach((bar) => {
+    var into = barsEl.querySelector('.drums-bar[data-bar="' + bar + '"]');
+    var made = (tag, cls, c, row) => {
+      var b = document.createElement(tag), at = c - bar * BAR;
+      b.className = cls + (at % 2 ? "" : " beat");
+      b.setAttribute("data-c", c);
+      b.style.gridRow = String(row);
+      b.style.gridColumn = String(at < 4 ? at + 1 : at + 2);
+      into.appendChild(b);
+      (column[c] = column[c] || []).push(b);
+      return b;
+    };
+    for (var c = bar * BAR; c < (bar + 1) * BAR; c++) {
+      // The four beats of a bar are numbered, and the steps between them are not
+      var t = made("span", "drums-tick", c, 1);
+      t.textContent = (c - bar * BAR) % 2 ? "·" : String((c - bar * BAR) / 2 + 1);
+      t.setAttribute("aria-hidden", "true");
+      tick.push(t);
+      for (var r = 0; r < ROWS.length; r++) {
+        var b = made("button", "pad", c, r + 2);
+        b.type = "button";
+        b.setAttribute("data-r", r);
+        pad[r].push(b);
+      }
+      // The highest note is the top key
+      for (var n = SCALE.length; n >= 1; n--) {
+        var k = made("button", "drums-key", c, 7 + SCALE.length - n);
+        k.type = "button";
+        k.setAttribute("data-n", n);
+        key[n - 1].push(k);
+      }
+    }
+  });
+  $("drums-theirs").textContent = AGENT;
+  $("drums-to").firstChild.textContent = "ask " + AGENT;
+  asksEl.setAttribute("aria-label", "Ask " + AGENT);
+
+  // ── The asks ──
+  // Each has what its button says, what the agent is told, and what the dock says the person did
+  var ASKS = [
+    { k: "bass", label: () => "Bassline", ask: () => "add a bassline", did: () => "asked for bass" },
+    { k: "more", label: () => "Busier", ask: () => "busier", did: () => "asked for busier" },
+    { k: "less", label: () => "Sparser", ask: () => "strip it back", did: () => "asked for less" },
+    { k: "swing", label: () => (swing ? "Straighten" : "Swing it"), ask: () => (swing ? "play it straight" : "make it swing"), did: () => (swing ? "asked for straight" : "asked for swing") },
+    { k: "time", label: () => (bpm < 90 ? "Double time" : "Half time"), ask: () => (bpm < 90 ? "double time" : "half time"), did: () => (bpm < 90 ? "asked for double" : "asked for halftime") },
+    { k: "trade", label: () => "Trade bars", ask: () => "answer my bar with the next bar", did: () => "asked for a bar" },
+    { k: "wild", label: () => "Surprise me", ask: () => "surprise me", did: () => "asked for anything" },
+  ];
+  var BETWEEN = { k: "", ask: () => "play between my hits", did: () => { var n = count(mine); return "put down " + n + (n === 1 ? " hit" : " hits"); } };
+  ASKS.forEach((a) => {
+    a.el = document.createElement("button");
+    a.el.type = "button";
+    a.el.className = "drums-ask";
+    a.el.setAttribute("data-ask", a.k);
+    a.el.appendChild(document.createElement("span"));
+    asksEl.insertBefore(a.el, clearBtn);
+    a.el.addEventListener("click", () => { audio(); send(a); });
+  });
+
+  // ── The two faders ──
+  var shownBpm = bpm, shownSwing = swing, rolling = { bpm: 0, swing: 0 };
+  function fader(input, value, low, high, whose) {
+    var boxEl = input.parentNode;
+    if (String(input.value) !== String(Math.round(value))) input.value = String(Math.round(value));
+    boxEl.style.setProperty("--at", String((value - low) / (high - low)));
+    if (whose !== undefined) boxEl.classList.toggle("theirs", whose);
+  }
+  function dials() {
+    fader(tempoIn, shownBpm, SLOWEST, FASTEST);
+    fader(swingIn, shownSwing, 0, LILT);
+    $("drums-bpm").textContent = String(Math.round(shownBpm));
+    $("drums-lilt").textContent = String(Math.round(shownSwing));
+  }
+  // A fader the agent set is seen to move to where it set it
+  function roll(name, from, to, set) {
+    var id = ++rolling[name], t0 = performance.now();
+    if (calm || !my.shown()) { set(to); dials(); return; }
+    (function go() {
+      if (id !== rolling[name]) return;
+      var p = Math.min(1, (performance.now() - t0) / 700), e = 1 - Math.pow(1 - p, 3);
+      set(from + (to - from) * e);
+      dials();
+      if (p < 1) requestAnimationFrame(go);
+    })();
+  }
+  function setTempo(v, byAgent) {
+    bpm = v;
+    fader(tempoIn, shownBpm, SLOWEST, FASTEST, byAgent);
+    if (byAgent) roll("bpm", shownBpm, v, (x) => { shownBpm = x; }); else { rolling.bpm++; shownBpm = v; dials(); }
+    paint();
+  }
+  function setSwing(v, byAgent) {
+    swing = v;
+    fader(swingIn, shownSwing, 0, LILT, byAgent);
+    if (byAgent) roll("swing", shownSwing, v, (x) => { shownSwing = x; }); else { rolling.swing++; shownSwing = v; dials(); }
+    paint();
+  }
+  // The person's own hand on a fader changes what is heard at once. The agent hears of it with the next thing asked of it
+  var within = (v, low, high) => typeof v === "number" && isFinite(v) && Math.round(v) >= low && Math.round(v) <= high ? Math.round(v) : null;
+  tempoIn.addEventListener("input", () => { audio(); var v = within(+tempoIn.value, SLOWEST, FASTEST); if (v !== null) setTempo(v, false); });
+  swingIn.addEventListener("input", () => { audio(); var v = within(+swingIn.value, 0, LILT); if (v !== null) setSwing(v, false); });
+
+  // ── Which bar is shown, where a screen shows one at a time ──
+  // `held` is the bar the person is keeping in view, by its tab or by tapping in it, and -1 where the bar shown is the one sounding
+  var view = 0, held = -1, heldByTab = false, narrow = window.matchMedia ? window.matchMedia("(max-width: 760px)") : null;
+  function see(bar) {
+    if (bar === view || bar * BAR >= steps) return;
+    view = bar;
+    [].forEach.call(barsEl.querySelectorAll(".drums-bar"), (b, i) => b.classList.toggle("view", i === view));
+    tabsPaint();
+  }
+  function tabsPaint() { tabs.forEach((t, i) => { t.classList.toggle("view", i === view); t.classList.toggle("held", i === held); t.setAttribute("aria-pressed", i === view ? "true" : "false"); }); }
+  tabs.forEach((t, i) => t.addEventListener("click", () => {
+    if (held === i && heldByTab) held = -1; else { held = i; heldByTab = true; see(i); }
+    tabsPaint();
+  }));
+  function bars(n) {
+    steps = n;
+    el.setAttribute("data-bars", String(n / BAR));
+    if (n === BAR) { held = -1; see(0); }
+    tabsPaint();
+  }
+
+  function paint() {
+    var any = count(mine) > 0;
+    var one = (b, m, t, name) => {
+      b.classList.toggle("on", m || t);
+      b.classList.toggle("mine", m);
+      b.classList.toggle("theirs", t && !m);
+      if (!t || m) b.classList.remove("land");
+      b.setAttribute("aria-pressed", m ? "true" : "false");
+      var c = +b.getAttribute("data-c");
+      b.setAttribute("aria-label", name + ", step " + ((c % BAR) + 1) + (steps > BAR ? " of bar " + (Math.floor(c / BAR) + 1) : "") + (t ? ", " + AGENT + " plays here" : ""));
+    };
+    pad.forEach((row, r) => row.forEach((b, c) => one(b, mine.d[r][c], theirs.d[r][c], NAMES[r])));
+    key.forEach((row, i) => row.forEach((b, c) => one(b, mine.b[c] === i + 1, theirs.b[c] === i + 1, "Bass, " + SCALE[i])));
+    clearBtn.disabled = !any && !count(theirs) && !playing && steps === BAR && bpm === BPM && !swing;
+    playBtn.setAttribute("data-on", playing ? "1" : "0");
+    playBtn.querySelector("span").textContent = playing ? "Stop" : "Play";
+    ASKS.forEach((a) => {
+      a.el.firstChild.textContent = a.label();
+      // There is nothing to ask about until the person has put something down
+      a.el.disabled = !any;
+      a.el.classList.toggle("asked", !!req && !req.answered && !req.back && req.ask === a.k);
+    });
+  }
+  // The person's own change: answers to the beat as it was stop applying, and the beat goes to the agent once they have left it alone for a moment, however few hits are in it
+  function touched(bar) {
+    el.setAttribute("data-touched", "1");
+    req = null;
+    if (!heldByTab || held < 0) { held = bar; heldByTab = false; }
+    paint();
+    tabsPaint();
+    clearTimeout(sendTimer);
+    sendTimer = setTimeout(() => send(BETWEEN), 1500);
+  }
+  function tap(r, c) {
+    var a = audio();
+    mine.d[r][c] = !mine.d[r][c];
+    if (mine.d[r][c] && a) VOICE[r](a.currentTime, out);
+    touched(Math.floor(c / BAR));
+  }
+  // The bass plays one note of the person's on a step: a tap on another key moves it there
+  function note(n, c) {
+    var a = audio();
+    mine.b[c] = mine.b[c] === n ? 0 : n;
+    if (mine.b[c] && a) pluck(a.currentTime, out, PITCH[n - 1], .3);
+    touched(Math.floor(c / BAR));
+  }
+  barsEl.addEventListener("click", (e) => {
+    var b = e.target.closest(".pad"), k = b ? null : e.target.closest(".drums-key");
+    if (b) tap(+b.getAttribute("data-r"), +b.getAttribute("data-c"));
+    if (k) note(+k.getAttribute("data-n"), +k.getAttribute("data-c"));
+  });
+  // The arrow keys go from pad to pad, and down from the drums into the bass
+  barsEl.addEventListener("keydown", (e) => {
+    var b = e.target.closest(".pad, .drums-key"), d = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] }[e.key];
+    if (!b || !d) return;
+    var lanes = pad.concat(key.slice().reverse());
+    var r = (b.classList.contains("pad") ? +b.getAttribute("data-r") : ROWS.length + SCALE.length - +b.getAttribute("data-n")) + d[0], c = +b.getAttribute("data-c") + d[1];
+    if (r < 0 || r >= lanes.length || c < 0 || c >= steps) return;
+    e.preventDefault();
+    see(Math.floor(c / BAR));
+    lanes[r][c].focus();
+  });
+  playBtn.addEventListener("click", () => {
+    audio();
+    if (playing) stop(); else start();
+  });
+  // Everything goes from the pads, the agent's part with the person's own, and stays gone until the agent plays another.
+  // The agent is told nothing of it: the next beat says all there is to know
+  function empty() {
+    clearTimeout(sendTimer);
+    theirs = blank(); req = null; asked = false; trades = 0;
+    stop();
+    bars(BAR);
+    paint();
+    box.did("");
+    box.hint(HINT);
+    box.idle();
+  }
+  clearBtn.addEventListener("click", () => {
+    mine = blank();
+    el.setAttribute("data-touched", "0");
+    setTempo(BPM, false);
+    setSwing(0, false);
+    empty();
+  });
+
+  // ── An answer that fits, made here for the agent to take or to change ──
+  // Each works on a part of the agent's and leaves the person's hits alone
+  var RIFF = [1, 1, 3, 1, 4, 1, 5, 3];
+  var eachBar = (n, fn) => { for (var o = 0; o < n; o += BAR) fn(o); };
+  // A hit of the agent's where the person has since put their own is theirs now
+  function apart(g) {
+    g.d.forEach((row, r) => row.forEach((on, c) => { if (on && mine.d[r][c]) row[c] = false; }));
+    g.b.forEach((v, c) => { if (v && v === mine.b[c]) g.b[c] = 0; });
+    return g;
+  }
+  // Between the person's hits: a hat on every step between the beats that they left empty, a clap
+  // on the second beat of a pair where they put none on either, and a kick that pushes into the
+  // next beat where theirs leaves room
+  function between(g, n) {
+    eachBar(n, (o) => {
+      [1, 3, 5, 7].forEach((c) => { if (!mine.d[0][o + c]) g.d[0][o + c] = true; });
+      if (!mine.d[1].slice(o, o + BAR).some(Boolean) && !mine.d[2][o + 2] && !mine.d[2][o + 6]) { g.d[1][o + 2] = true; g.d[1][o + 6] = true; }
+      [3, 7].forEach((c) => { if (!mine.d[3][o + c] && !mine.d[3][(o + c + 1) % n]) g.d[3][o + c] = true; });
+    });
+    return g;
+  }
+  // A bassline under the kicks, the person's and the agent's, and on a few steps more where the kicks are few
+  function bassline(g, n) {
+    eachBar(n, (o) => {
+      var at = [];
+      for (var c = 0; c < BAR; c++) { g.b[o + c] = 0; if (mine.d[3][o + c] || g.d[3][o + c]) at.push(c); }
+      if (at.length < 3) [0, 3, 6].forEach((c) => { if (at.indexOf(c) < 0) at.push(c); });
+      at.forEach((c) => { if (!mine.b[o + c]) g.b[o + c] = RIFF[c]; });
+    });
+    return g;
+  }
+  // Busier: the next two things of these that the agent does not play yet, and more notes where it has a bassline
+  var MORE = [[0, [0, 2, 4, 6]], [3, [3, 7]], [2, [7]], [3, [5]], [1, [2, 6]], [2, [3]], [0, [1, 3, 5, 7]], [3, [1]], [2, [5]]];
+  function busier(g, n) {
+    var added = 0;
+    MORE.forEach((more) => {
+      var some = false;
+      if (added >= 2) return;
+      eachBar(n, (o) => more[1].forEach((c) => { if (!mine.d[more[0]][o + c] && !g.d[more[0]][o + c]) { g.d[more[0]][o + c] = true; some = true; } }));
+      if (some) added++;
+    });
+    if (g.b.some(Boolean)) eachBar(n, (o) => [2, 5, 7].forEach((c) => { if (!g.b[o + c] && !mine.b[o + c]) g.b[o + c] = RIFF[c]; }));
+    return g;
+  }
+  // Sparser: every other hit of each drum and every other note, and where that takes nothing off, the fullest lane
+  function sparser(g, n) {
+    var was = count(g), thin = (row) => { var k = 0; for (var c = 0; c < n; c++) if (row[c] && k++ % 2) row[c] = row === g.b ? 0 : false; };
+    g.d.forEach(thin);
+    thin(g.b);
+    if (count(g) === was) {
+      var lanes = g.d.concat([g.b]), full = lanes.reduce((best, row) => (row.filter(Boolean).length > best.filter(Boolean).length ? row : best), lanes[0]);
+      for (var c = 0; c < n; c++) full[c] = full === g.b ? 0 : false;
+    }
+    return g;
+  }
+  // A bar that answers the first: what the two play there together, turned round at its end
+  function answering(g) {
+    var second = trades % 2 === 1;
+    for (var c = 0; c < BAR; c++) {
+      for (var r = 0; r < ROWS.length; r++) g.d[r][BAR + c] = mine.d[r][c] || theirs.d[r][c];
+      g.b[BAR + c] = mine.b[c] || theirs.b[c];
+    }
+    var set = (r, cs, on) => cs.forEach((c) => { g.d[r][BAR + c] = on; });
+    if (second) { set(0, [0, 1, 2, 3], false); set(3, [0, 3], true); set(2, [4, 6, 7], true); set(1, [6], false); }
+    else { set(0, [6, 7], false); set(1, [6], false); set(2, [6, 7], true); set(3, [5], true); }
+    // Its second half goes a note up the scale, to come back down to the first bar
+    for (var h = 4; h < BAR; h++) if (g.b[BAR + h]) g.b[BAR + h] = Math.min(SCALE.length, g.b[BAR + h] + (second ? 2 : 1));
+    return g;
+  }
+  // A surprise: a hat, a kick, a clap and a bassline drawn from a few of each, at a tempo and a swing of its own
+  var pick = (list) => list[Math.floor(Math.random() * list.length)];
+  var WILD = [["x.x.x.x.", ".x.x.x.x", "xxxxxxxx", "..x...x.", "x..x.x.x", "xx.xxx.x"], ["..x...x.", "......x.", "..x....x", "....x...", "........"], ["........", ".......x", "...x....", "......x.", "....x.xx"], ["x..x..x.", "x...x...", "x..x.x..", "x.x...x.", "x....x..", "x.x..x.."], ["1..1..3.", "1.1.3.4.", "1..3.4.5", "1.5.4.3.", "11.3.1.5", "1...4.3.", "3.1..5.4"]];
+  function wild(g, n) {
+    eachBar(n, (o) => WILD.forEach((kinds, r) => {
+      var row = pick(kinds);
+      for (var c = 0; c < BAR; c++) {
+        if (r < ROWS.length) g.d[r][o + c] = row.charAt(c) === "x";
+        else g.b[o + c] = +row.charAt(c) || 0;
+      }
+    }));
+    return g;
+  }
+  /** What the agent is offered for an ask: its part after it, in the shape of an answer, with a tempo or a swing where the ask is for one. */
+  function fitting(a, n) {
+    var g = apart(copy(theirs)), k = a.k, fits = {};
+    if (k === "" && !count(g)) between(g, n);
+    if (k === "bass") bassline(g, n);
+    if (k === "more") busier(g, n);
+    if (k === "less") sparser(g, n);
+    if (k === "trade") answering(g);
+    if (k === "wild") {
+      apart(wild(g, n));
+      fits.bpm = pick([96, 104, 112, 118, 124, 132].filter((v) => v !== bpm));
+      fits.swing = pick([0, 25, 33].filter((v) => v !== swing));
+    }
+    if (k === "swing") fits.swing = swing ? 0 : 33;
+    if (k === "time") fits.bpm = bpm < 90 ? Math.min(FASTEST, bpm * 2) : Math.max(SLOWEST, Math.round(bpm / 2));
+    return Object.assign({ pattern: written(apart(g), n) }, fits);
+  }
+
+  // ── What goes to the agent, and what comes back ──
+  var seen = (from, k) => { try { return JSON.stringify(from && from[k]); } catch (e) { return undefined; } };
+  var holders = () => { var st = my.answers(); return [st, st.theirs && typeof st.theirs === "object" && !Array.isArray(st.theirs) ? st.theirs : null]; };
+  function send(a) {
+    clearTimeout(sendTimer);
+    var n = count(mine);
+    // With the last hit taken off there is no beat to play between: the agent's part goes with it.
+    // Nothing is sent for that, since nothing is asked
+    if (!n) {
+      if (asked || count(theirs)) empty();
+      return;
+    }
+    // The bar the person was kept in while they tapped is let go, and the one sounding is shown again
+    if (!heldByTab) { held = -1; if (lit >= 0) see(Math.floor(lit / BAR)); }
+    // A second bar is asked for as a loop of two, and the pads go to two only when the answer comes
+    var loop = a.k === "trade" ? MOST : steps, id = newId(), fits = fitting(a, loop);
+    req = { id: id, ask: a.k, steps: loop, answered: false, back: false, taken: null };
+    asked = true;
+    box.did(a.did());
+    box.sending();
+    paint();
+    tabsPaint();
+    my.send("beat", { request: id, ask: a.ask(), fits: fits, pattern: written(mine, loop), yours: written(theirs, loop), rows: ROWS.concat(["bass"]), steps: loop, bpm: bpm, swing: swing, scale: "bass notes 1 to 5 are " + SCALE.join(" ") + ", low to high" }).then((result) => {
+      // After forty seconds the ask is no longer shown as waiting, and its answer is drawn all the same when it comes
+      if (req && req.id === id && !req.answered) box.asked(() => { if (req && req.id === id) { req.back = true; paint(); } }, result);
+    }, () => {
+      if (!req || req.id !== id) return;
+      req = null;
+      box.refused();
+      paint();
+    });
+  }
+  // The agent's part as it wrote it: a row for each drum, as long as the loop it was asked about, with `x` for a hit, and after them a row for the bass, with the number of a note of the scale. No rows at all is no hits, and anything else is not taken
+  function read(v, n) {
+    if (typeof v === "string" && v.charAt(0) === "[") { try { v = JSON.parse(v); } catch (e) { return null; } }
+    if (v == null || v === "" || (Array.isArray(v) && !v.length)) return blank();
+    if (!Array.isArray(v) || (v.length !== ROWS.length && v.length !== ROWS.length + 1)) return null;
+    var g = blank();
+    for (var r = 0; r < v.length; r++) {
+      if (typeof v[r] !== "string" || v[r].length !== n) return null;
+      for (var c = 0; c < n; c++) {
+        var ch = v[r].charAt(c);
+        if (r < ROWS.length) g.d[r][c] = ch === "x" || ch === "X";
+        else g.b[c] = ch >= "1" && ch <= String(SCALE.length) ? +ch : 0;
+      }
+    }
+    return g;
+  }
+  function hear() {
+    if (!req) return;
+    // The answer is the agent's part as `pattern`, beside the `request` it answers, and a `note`, with `bpm` and `swing` where it sets them. Under `theirs` it is the same, as the drum machine's own page has it
+    var all = holders(), which = all[0].request === req.id ? 0 : all[1] && all[1].request === req.id ? 1 : -1, got = all[which];
+    // An answer to a beat that was edited or cleared since names another request, and puts nothing back
+    if (which < 0) return;
+    var k = seen({ got: got }, "got");
+    if (k === req.taken) return;
+    req.taken = k;
+    // A part that is left out is the part as it stands
+    var first = !req.answered, said = [], was = theirs, part = got.pattern === undefined ? null : read(got.pattern, req.steps);
+    req.answered = true;
+    // A tempo or a swing is taken where the answer gives one within what the faders reach. The answer is the whole of what
+    // the agent said to this ask, so one left out is one not changed
+    var tempo = within(got.bpm, SLOWEST, FASTEST), lilt = within(got.swing, 0, LILT), heard = false;
+    if (tempo !== null && tempo !== bpm) { setTempo(tempo, true); said.push("set the tempo to " + tempo); heard = true; }
+    if (lilt !== null && lilt !== swing) { setSwing(lilt, true); said.push("set the swing to " + lilt); heard = true; }
+    if (part) {
+      if (req.steps !== steps) bars(req.steps);
+      if (first && req.ask === "trade") trades++;
+      theirs = part;
+      var added = 0;
+      theirs.d.forEach((row, r) => row.forEach((on, c) => { if (on && !mine.d[r][c]) added++; }));
+      theirs.b.forEach((v, c) => { if (v && v !== mine.b[c]) added++; });
+      said.unshift(added ? "plays " + added + (added === 1 ? " hit" : " hits") + " between yours" : "added no hits");
+      heard = heard || added > 0;
+    }
+    paint();
+    if (first) box.got();
+    // It is an answer to something the person asked, so it is heard at once
+    if (heard && !playing && my.shown()) { audio(); start(); }
+    if (part) land(was);
+    // The agent's own words are said as its own. Where it sent none, the page says in its own what came
+    var text = typeof got.note === "string" ? got.note.trim().slice(0, 160) : "";
+    if (text) box.say(text); else box.hint(AGENT + " " + (said.join(", and ") || "changed nothing") + ".");
+  }
+  // The agent's new hits come onto the pads as each is first played, and where nothing is playing, one after another in the order they are played
+  function land(was) {
+    if (calm) return;
+    var now = playing ? clock() : 0, i = 0;
+    for (var c = 0; c < steps; c++) {
+      var wait = playing ? Math.max(0, (next(c) - now) * 1000) : -1;
+      column[c].forEach((b) => {
+        if (!b.classList.contains("theirs")) return;
+        var r = b.getAttribute("data-r"), fresh = r !== null ? !was.d[+r][c] : was.b[c] !== +b.getAttribute("data-n");
+        if (!fresh) return;
+        b.classList.remove("land");
+        void b.offsetWidth;
+        b.style.setProperty("--d", Math.round(wait < 0 ? i++ * 70 : wait) + "ms");
+        b.classList.add("land");
+      });
+    }
+  }
+  // A hit that has come in is a hit like any other
+  barsEl.addEventListener("animationend", (e) => { if (e.animationName === "drums-land") e.target.classList.remove("land"); });
+  my.listen(hear);
+  dials();
+  paint();
+  tabsPaint();
+  box.idle();
+  box.hint(HINT);
+});
+</script>

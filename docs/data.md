@@ -28,6 +28,8 @@ Your pages and It's own records are in one folder, `~/.it`, which only your user
 
 A machine that joined an It on another computer runs no backend and holds no pages, so its folder has no `service.json`, no `backend/`, no `content/` and no `push.json`.
 
+One file is kept outside that folder, and only for a moment. While an agent gives you the tour, the picture of what you wrote on its whiteboard is written into the folder that agent's conversation works in, as `.it-tour-` followed by a long number and `.png`, readable by your account alone, so that the agent can look at it without asking you for leave to read anywhere else. It is taken away when the agent answers, and `it tour clear`, which ends the tour, takes away any that is left in that folder.
+
 When you confirm `it uninstall`, It deletes its own subfolders whole, including all databases, copies, page files and logs. Only the top level uses a list of recognised files, to leave unrelated files alone if `IT_HOME` named the wrong folder. [Stopping and removing It](install.md#stopping-and-removing-it) describes the ownership checks and what stays when removal cannot finish.
 
 Three things about the folder are worth knowing.

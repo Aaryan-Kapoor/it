@@ -381,15 +381,18 @@ if (!Object.hasOwn(BACKEND_LICENSE, release))
   throw new Error(`It fetches the release ${release} of the backend program: read from that program what license it names, and write it in BACKEND_LICENSE`)
 
 // The site also carries typefaces, which no bundle shows: files in web/public/fonts, served as
-// they are. Each is named here with whose it is and what it is under, and every file in that
-// folder has to be one of them: a face that was added and not named would be given out with no
-// word of whose it is.
+// they are. The tour's first page carries typefaces too, set into the page from
+// packages/cli/tour/fonts. Each is named here with whose it is and
+// what it is under, and every file in those folders has to be one of them: a face that was added
+// and not named would be given out with no word of whose it is.
 const FONTS = [
   {
     name: 'Inter and Inter Display 4.000',
     by: 'The Inter Project Authors (Rasmus Andersson)',
     files: ['display-600', 'display-700', 'display-800', 'text-400', 'text-500', 'text-600', 'text-700'],
     what: 'Latin subsets of seven weights',
+    tour: ['display-700', 'display-800', 'text-400', 'text-500', 'text-600'],
+    tourWhat: 'smaller subsets of five of those weights',
     says: 'Copyright 2016 The Inter Project Authors',
     license: 'SIL Open Font License 1.1',
     source: 'https://github.com/rsms/inter',
@@ -404,6 +407,17 @@ const FONTS = [
     license: 'SIL Open Font License 1.1',
     source: 'https://github.com/notofonts/symbols',
     kept: 'noto-sans-symbols-2-OFL.txt',
+  },
+  {
+    name: 'Caveat SemiBold 2.000',
+    by: 'The Caveat Project Authors',
+    files: [],
+    tour: ['caveat-600'],
+    tourWhat: 'the Latin letters and signs the page writes in it, and nothing else of it',
+    says: 'Copyright 2014 The Caveat Project Authors (https://github.com/googlefonts/caveat)',
+    license: 'SIL Open Font License 1.1',
+    source: 'https://github.com/googlefonts/caveat',
+    kept: 'caveat-OFL.txt',
   },
   {
     name: 'Arimo Bold 1.33',
@@ -425,15 +439,25 @@ if (served.join() !== named.join())
   throw new Error(
     `web/public/fonts holds ${served.join(', ')}, and scripts/notices.mjs names ${named.join(', ')}: every typeface the site serves is named there, with its license`,
   )
+const inTour = readdirSync(path.join(root, 'packages/cli/tour/fonts'))
+  .filter((file) => file.endsWith('.woff2'))
+  .map((file) => file.slice(0, -'.woff2'.length))
+  .sort()
+const namedInTour = FONTS.flatMap((f) => f.tour ?? []).sort()
+if (inTour.join() !== namedInTour.join())
+  throw new Error(
+    `packages/cli/tour/fonts holds ${inTour.join(', ')}, and scripts/notices.mjs names ${namedInTour.join(', ')}: every typeface the tour carries is named there, with its license`,
+  )
+const woff = (names) => names.map((name) => `\`${name}.woff2\``).join(', ')
 const fontLines = [
-  '## Typefaces the site carries',
+  '## Typefaces the site and the tour carry',
   '',
-  'The pictures on the first screen of the site are drawn in typefaces that the site serves from `/fonts/`, as files converted to WOFF2. Each remains under its own license, which is given here in full.',
+  "The pictures on the first screen of the site are drawn in typefaces that the site serves from `/fonts/`, and the tour's first page is set in typefaces it carries inside it, all as files converted to WOFF2. Each remains under its own license, which is given here in full.",
   '',
   ...FONTS.flatMap((f) => [
     `### ${f.name}`,
     '',
-    `By ${f.by}. License: ${f.license}. Served as: ${f.files.map((name) => `\`${name}.woff2\``).join(', ')}, which hold ${f.what}. The files themselves say: "${f.says}" Source: <${f.source}>.`,
+    `By ${f.by}. License: ${f.license}.${f.files.length ? ` Served as: ${woff(f.files)}, which hold ${f.what}.` : ''}${f.tour ? ` Carried in the tour's first page as ${woff(f.tour)}, which hold ${f.tourWhat}.` : f.tourWhat ? ` The tour's first page carries ${f.tourWhat}.` : ''} The files themselves say: "${f.says}" Source: <${f.source}>.`,
     '',
     fence(
       readFileSync(path.join(root, 'scripts/notices/fonts', f.kept), 'utf8')

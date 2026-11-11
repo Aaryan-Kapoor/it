@@ -1,0 +1,750 @@
+<!-- The studio: the front page of a made-up festival on an easel, beside a colour wheel. One drag on the wheel has the agent design the page, and a tap on any piece of it, with a word for what is wrong, has the agent change that piece. -->
+<style>
+  /* A bench of tools beside an easel, and on the easel the page that is being designed */
+  [data-part="studio"] .studio-room { position: relative; flex: 1 1 0; width: 100%; min-height: 0; display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 22px; }
+  .studio-bench { min-width: 0; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: clamp(7px, 1.5vh, 12px); }
+  .studio-note { height: 26px; font: 600 24px/1.1 Hand; color: var(--soft); white-space: nowrap; }
+  /* The wheel: the colours go round it, and grow pale towards its middle */
+  .studio-wheel { position: relative; flex: none; width: clamp(112px, 24vh, 190px); aspect-ratio: 1; margin: 7px; border-radius: 50%; outline: none; touch-action: none; cursor: crosshair; -webkit-user-select: none; user-select: none;
+    background: radial-gradient(closest-side, #f6f1e7 0%, rgba(246, 241, 231, 0) 74%), conic-gradient(#e5484d, #f76b15, #ffc53d, #a8cf2c, #46a758, #12a594, #00a2c7, #0090ff, #3e63dd, #6e56cf, #ab4aba, #e93d82, #e5484d);
+    box-shadow: 0 0 0 6px var(--card), 0 0 0 7px var(--line), 0 22px 36px -20px rgba(28, 26, 22, .55); transition: opacity .3s; }
+  .studio-wheel:focus-visible { box-shadow: 0 0 0 6px var(--card), 0 0 0 8px var(--green); }
+  .studio-knob { position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 3px 10px rgba(0, 0, 0, .38), inset 0 0 0 1px rgba(0, 0, 0, .14); pointer-events: none; transition: transform .15s; }
+  .studio-wheel.studio-held { cursor: grabbing; } .studio-wheel.studio-held .studio-knob { transform: scale(1.22); }
+  .studio-moods { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .studio-moods button { min-height: 36px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--line); background: transparent; font: 600 13.5px/1 Text; color: var(--ink); transition: background .2s, color .2s, border-color .2s, opacity .3s; }
+  .studio-moods button:hover { border-color: var(--ink); } .studio-moods button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .studio-moods button:focus-visible, .studio-ask button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+  [data-part="studio"][data-wait="1"] .studio-wheel, [data-part="studio"][data-wait="1"] .studio-moods button { opacity: .55; cursor: default; }
+  /* What the design is made of, as the agent chose it */
+  .studio-spec { width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 11px 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); font: 400 12px/1.2 var(--mono); color: var(--faint); }
+  .studio-swatches { display: flex; padding-right: 7px; } .studio-swatches i { width: 28px; height: 28px; margin-right: -7px; border-radius: 50%; border: 2px solid var(--card); background: var(--pad); box-shadow: 0 0 0 1px var(--line); transition: background .5s; }
+  .studio-made { flex: 1 1 100%; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .studio-made b { font-weight: 600; color: var(--ink); } .studio-made b:empty { display: none; }
+  .studio-made b + b::before { content: "·"; margin: 0 .55em; color: var(--faint); font-weight: 400; }
+  .studio-spec[data-made="0"] .studio-made b { font-weight: 400; color: var(--faint); }
+  .studio-spec[data-made="1"] .studio-swatches i { animation: studio-pop .45s cubic-bezier(.3, 1.5, .5, 1) backwards; }
+  .studio-spec[data-made="1"] .studio-swatches i:nth-child(2) { animation-delay: .08s; } .studio-spec[data-made="1"] .studio-swatches i:nth-child(3) { animation-delay: .16s; } .studio-spec[data-made="1"] .studio-swatches i:nth-child(4) { animation-delay: .24s; }
+  .studio-tools { width: 100%; margin-top: auto; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+
+  /* The easel, and the page on it. Everything on the page is cut to the easel's size, in ems of one size that is worked out from it */
+  .studio-easel { position: relative; min-width: 0; min-height: 0; container: studio-easel / size; }
+  .studio-art { position: absolute; inset: 0; overflow: hidden; overflow: clip; isolation: isolate; border-radius: 16px; background: var(--s-ground); color: var(--s-ink); box-shadow: 0 0 0 1px var(--line), 0 34px 60px -38px rgba(28, 26, 22, .6); -webkit-user-select: none; user-select: none;
+    /* The colours of a page that has no design yet are the tour's own paper and ink */
+    --s-ground: var(--card); --s-paper: var(--card); --s-ink: var(--ink); --s-accent: var(--ink); --s-on: var(--paper); --s-second: var(--soft); --s-on2: var(--paper); --s-tint: var(--pad); --s-loud: var(--ink); --s-shade: var(--soft); --s-deep: var(--ink); --s-dusk: var(--ink); --s-pale: var(--card);
+    --btn: .7em; --chip: 1em; --frame: 50% 50% 1.4em 1.4em / 38% 38% 1.4em 1.4em; --h: 3.1em;
+    font-size: calc(min(2.02cqw, 3.7cqh) * var(--studio-fit, 1));
+    display: grid; grid-template: "name side" auto "copy side" minmax(0, 1fr) "acts side" auto / minmax(0, 1.04fr) minmax(0, .96fr); gap: .8em 2.6em; padding: 1.9em 2.5em 1.7em; }
+  .studio-art.studio-measured, .studio-art.studio-measured * { transition: none !important; }
+  .studio-art[data-shape="round"] { --btn: 999px; --chip: 2.6em; --frame: 50%; }
+  .studio-art[data-shape="sharp"] { --btn: 0px; --chip: 0px; --frame: 0px; }
+  /* The colour that comes over the page with a design, from where the wheel is */
+  .studio-wash { position: absolute; inset: 0; z-index: -1; pointer-events: none; clip-path: circle(0% at 0% 50%); transition: clip-path .35s cubic-bezier(.3, 1.4, .5, 1); }
+
+  /* A piece of the page: something that can be pointed at */
+  .studio-piece { position: relative; display: block; min-width: 0; margin: 0; padding: 0; border: 0; border-radius: .2em; background: none; color: inherit; font: inherit; text-align: left; cursor: default; -webkit-tap-highlight-color: transparent; outline: none; transition: color .7s, opacity .4s, transform .3s; }
+  [data-part="studio"][data-wait="0"] .studio-piece { cursor: pointer; }
+  /* The line round the piece that is pointed at, which moves for as long as what was asked of it is with the agent */
+  .studio-piece::after { content: ""; position: absolute; inset: -.5em -.65em; z-index: 3; pointer-events: none; opacity: 0; transition: opacity .2s;
+    background: linear-gradient(90deg, var(--s-ink) 55%, transparent 0) 0 0 / 11px 2px repeat-x, linear-gradient(90deg, var(--s-ink) 55%, transparent 0) 0 100% / 11px 2px repeat-x, linear-gradient(0deg, var(--s-ink) 55%, transparent 0) 0 0 / 2px 11px repeat-y, linear-gradient(0deg, var(--s-ink) 55%, transparent 0) 100% 0 / 2px 11px repeat-y; }
+  @media (hover: hover) { [data-part="studio"][data-wait="0"] .studio-piece:hover::after { opacity: .4; } }
+  .studio-piece:focus-visible::after, .studio-piece.studio-on::after { opacity: 1; }
+  .studio-piece.studio-asked::after { animation: studio-march .5s linear infinite; }
+  @keyframes studio-march { to { background-position: 11px 0, -11px 100%, 0 -11px, 100% 11px; } }
+  /* Its tag: what was pointed at and what was asked of it, and then who changed it */
+  .studio-piece::before { content: attr(data-tag); position: absolute; left: -.65em; bottom: calc(100% + .5em + 5px); z-index: 4; padding: 4px 7px; border-radius: 5px; background: var(--s-ink); color: var(--s-paper); font: 600 11px/1 var(--mono); letter-spacing: 0; text-transform: none; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .2s; }
+  .studio-piece.studio-on::before, .studio-piece.studio-by::before { opacity: 1; }
+  .studio-piece.studio-by::before { background: var(--green); color: var(--on-green); }
+  .studio-name::before { bottom: auto; top: calc(100% + .5em + 5px); }
+  .studio-pic::before { left: .7em; bottom: auto; top: .7em; }
+  .studio-piece.studio-gone { opacity: 0; transform: scale(.9); }
+  .studio-piece.studio-pop > * { animation: studio-pop .5s cubic-bezier(.3, 1.5, .5, 1); }
+  @keyframes studio-pop { from { transform: scale(.82); opacity: .3; } }
+  /* The letters of an answer that are still to be written take their room from the start, so that nothing moves as they come */
+  .studio-rest { font-style: inherit; opacity: 0; }
+  .studio-piece[data-size="1"] { --z: .78; } .studio-piece[data-size="3"] { --z: 1.24; } .studio-piece[data-size="4"] { --z: 1.5; }
+
+  .studio-name { grid-area: name; justify-self: start; }
+  .studio-name > span { display: inline-flex; align-items: center; gap: .42em; font: 700 calc(1.12em * var(--z, 1)) / 1 Display; letter-spacing: -.02em; transform-origin: 0 50%; }
+  .studio-name svg { flex: none; width: 1.35em; height: 1.35em; }
+  .studio-tap { grid-area: name; justify-self: end; align-self: center; font: 600 1.45em/1 Hand; color: var(--s-ink); opacity: 0; transform: rotate(-3deg); transition: opacity .5s; pointer-events: none; white-space: nowrap; }
+  .studio-tap.studio-on { opacity: .75; }
+  .studio-copy { grid-area: copy; min-width: 0; min-height: 0; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; justify-content: safe center; gap: 1.05em; }
+  .studio-headline > span { display: block; font: 800 calc(var(--h) * var(--z, 1)) / .98 Display; letter-spacing: -.04em; text-wrap: balance; overflow-wrap: anywhere; transform-origin: 0 50%; }
+  .studio-art[data-type="poster"] { --h: 3.3em; } .studio-art[data-type="poster"] .studio-headline > span { line-height: .9; letter-spacing: -.05em; text-transform: uppercase; }
+  /* The bookish type is the system's own serif, chosen on purpose as the page's numbers are set in the system's own monospace: the page carries no serif face, and a festival's front page may look a little different from one machine to the next */
+  .studio-art[data-type="serif"] { --h: 3.25em; } .studio-art[data-type="serif"] .studio-headline > span { font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Noto Serif", serif; font-weight: 400; line-height: 1.02; letter-spacing: -.025em; }
+  .studio-art[data-type="serif"] .studio-name > span { font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Noto Serif", serif; font-weight: 400; font-style: italic; font-size: calc(1.3em * var(--z, 1)); letter-spacing: -.01em; }
+  .studio-art[data-type="hand"] { --h: 4.1em; } .studio-art[data-type="hand"] .studio-headline > span { font-family: Hand; font-weight: 600; line-height: .86; letter-spacing: -.01em; }
+  .studio-art[data-type="hand"] .studio-name > span { font-family: Hand; font-weight: 600; font-size: calc(1.6em * var(--z, 1)); letter-spacing: 0; }
+  .studio-art[data-type="mono"] { --h: 2.35em; } .studio-art[data-type="mono"] .studio-headline > span { font-family: var(--mono); font-weight: 700; line-height: 1.1; letter-spacing: -.06em; }
+  .studio-art[data-type="mono"] .studio-name > span, .studio-art[data-type="mono"] .studio-line > span, .studio-art[data-type="mono"] .studio-cta { font-family: var(--mono); letter-spacing: -.03em; }
+  .studio-headline[data-tone="quiet"] { color: color-mix(in srgb, var(--s-ink) 52%, var(--s-paper)); } .studio-headline[data-tone="loud"] { color: var(--s-loud); }
+  .studio-line > span { display: block; max-width: 34em; font: 400 calc(1.06em * var(--z, 1)) / 1.42 Text; color: color-mix(in srgb, var(--s-ink) 86%, var(--s-paper)); text-wrap: pretty; transition: color .7s; }
+  .studio-line[data-tone="quiet"] > span { color: color-mix(in srgb, var(--s-ink) 52%, var(--s-paper)); } .studio-line[data-tone="loud"] > span { color: var(--s-ink); font-weight: 600; }
+  .studio-cta { display: inline-flex; align-items: center; gap: .55em; padding: .86em 1.5em; border-radius: var(--btn); background: var(--s-accent); color: var(--s-on); font: 600 calc(1em * var(--z, 1)) / 1 Text; white-space: nowrap; transform-origin: 0 50%; transition: background .7s, color .7s, border-radius .6s cubic-bezier(.3, 1.3, .5, 1), box-shadow .5s; }
+  .studio-cta svg { flex: none; width: 1em; height: 1em; }
+  .studio-art[data-shape="sharp"] .studio-cta { box-shadow: .28em .28em 0 var(--s-shade); }
+  .studio-button[data-tone="quiet"] .studio-cta { background: transparent; color: var(--s-ink); box-shadow: inset 0 0 0 .12em var(--s-ink); }
+  .studio-button[data-tone="loud"] .studio-cta { font-weight: 700; letter-spacing: .05em; text-transform: uppercase; box-shadow: 0 0 0 .4em color-mix(in srgb, var(--s-accent) 26%, transparent); }
+  .studio-acts { grid-area: acts; justify-self: start; }
+  .studio-acts > span { display: block; font: 500 calc(.76em * var(--z, 1)) / 1.35 var(--mono); letter-spacing: .05em; text-transform: uppercase; color: color-mix(in srgb, var(--s-ink) 72%, var(--s-paper)); transition: color .7s; }
+  .studio-name[data-tone="quiet"], .studio-acts[data-tone="quiet"] { opacity: .5; }
+  .studio-name[data-tone="loud"] > span, .studio-acts[data-tone="loud"] > span { color: var(--s-loud); font-weight: 700; }
+
+  /* The picture, in a frame whose shape is the design's, and the date stuck over its corner */
+  .studio-side { grid-area: side; min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: flex-start; justify-content: safe center; }
+  .studio-hang { position: relative; flex: none; width: calc(min(100%, 22em) * var(--pz, 1)); aspect-ratio: 1; }
+  .studio-pic { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .studio-frame { position: absolute; inset: 0; display: block; overflow: hidden; border-radius: var(--frame); background: var(--s-tint); transition: border-radius .8s cubic-bezier(.3, 1.3, .5, 1), box-shadow .5s, filter .5s, background .7s; }
+  .studio-art[data-shape="sharp"] .studio-frame { box-shadow: .75em .75em 0 var(--s-ink); }
+  .studio-pic[data-tone="quiet"] .studio-frame { filter: saturate(.25) opacity(.7); } .studio-pic[data-tone="loud"] .studio-frame { filter: saturate(1.35) contrast(1.06); box-shadow: 0 0 0 .45em var(--s-accent); }
+  .studio-frame svg { display: block; width: 100%; height: 100%; }
+  .studio-scene { opacity: 0; transition: opacity .7s; }
+  .studio-art[data-picture="sun"] .studio-scene[data-scene="sun"], .studio-art[data-picture="boats"] .studio-scene[data-scene="boats"], .studio-art[data-picture="night"] .studio-scene[data-scene="night"], .studio-art[data-picture="flags"] .studio-scene[data-scene="flags"] { opacity: 1; }
+  [data-part="studio"] .k { stroke: var(--s-ink); stroke-width: 1.6; stroke-opacity: 0; transition: fill .7s, fill-opacity .7s, stroke-opacity .5s; }
+  [data-part="studio"] .k-sky { fill: var(--s-tint); } [data-part="studio"] .k-a { fill: var(--s-accent); } [data-part="studio"] .k-b { fill: var(--s-second); } [data-part="studio"] .k-i { fill: var(--s-ink); } [data-part="studio"] .k-p { fill: var(--s-paper); }
+  [data-part="studio"] .k-deep { fill: var(--s-deep); } [data-part="studio"] .k-dusk { fill: var(--s-dusk); } [data-part="studio"] .k-pale { fill: var(--s-pale); }
+  [data-part="studio"] .k-lp, [data-part="studio"] .k-li { fill: none; stroke-linecap: round; stroke-linejoin: round; transition: stroke .7s, stroke-opacity .5s; }
+  [data-part="studio"] .k-lp { stroke: var(--s-pale); stroke-width: 3.2; stroke-opacity: .9; } [data-part="studio"] .k-li { stroke: var(--s-ink); stroke-width: 2.6; }
+  /* With no design yet the picture is a drawing in line, and so is its frame */
+  .studio-art[data-skin="draft"] .k { fill-opacity: 0; stroke-opacity: .5; } .studio-art[data-skin="draft"] .k-lp { stroke: var(--s-ink); stroke-width: 1.6; stroke-opacity: .32; } .studio-art[data-skin="draft"] .k-li { stroke-width: 1.6; stroke-opacity: .5; }
+  .studio-art[data-skin="draft"] .studio-frame { background: transparent; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--s-ink) 40%, transparent); }
+  .studio-art[data-skin="draft"] .studio-date > span { background: var(--s-paper); color: var(--s-ink); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--s-ink) 40%, transparent); }
+  .studio-date { position: absolute; left: -1.3em; bottom: 1.7em; z-index: 2; }
+  .studio-date > span { display: block; max-width: 9.6em; padding: .78em 1.15em; border-radius: var(--chip); background: var(--s-second); color: var(--s-on2); font: 600 calc(.86em * var(--z, 1)) / 1.22 Text; text-align: center; text-wrap: balance; transform: rotate(-7deg); box-shadow: 0 .6em 1.3em -.7em rgba(0, 0, 0, .5); transition: background .7s, color .7s, border-radius .6s cubic-bezier(.3, 1.3, .5, 1), box-shadow .5s; }
+  .studio-date[data-tone="quiet"] > span { background: var(--s-paper); color: var(--s-ink); box-shadow: inset 0 0 0 1.5px var(--s-ink); } .studio-date[data-tone="loud"] > span { background: var(--s-accent); color: var(--s-on); transform: rotate(-11deg) scale(1.08); }
+  /* Without its picture the page is its words, and the date stands beside them */
+  .studio-art[data-lost~="picture"] { grid-template-columns: minmax(0, 1fr) auto; } .studio-art[data-lost~="picture"] .studio-hang { width: auto; height: auto; aspect-ratio: auto; } .studio-art[data-lost~="picture"] .studio-date { position: relative; left: 0; right: 0; bottom: 0; }
+
+  /* On an easel that is taller than it is wide the page is laid out as a tall one: the picture across it, and the words under */
+  @container studio-easel (max-aspect-ratio: 1 / 1) {
+    .studio-art { grid-template: "name" auto "side" calc(31cqh * var(--pz, 1)) "copy" minmax(0, 1fr) "acts" auto / minmax(0, 1fr); gap: .8em; padding: 1.25em 1.4em 1.15em; font-size: calc(min(4.25cqw, 3.3cqh) * var(--studio-fit, 1)); --frame: 999px 999px 1.3em 1.3em; --h: 2.5em; }
+    .studio-art[data-shape="round"] { --frame: 999px; } .studio-art[data-shape="sharp"] { --frame: 0px; }
+    .studio-art[data-type="poster"] { --h: 2.65em; } .studio-art[data-type="serif"] { --h: 2.6em; } .studio-art[data-type="hand"] { --h: 3.3em; } .studio-art[data-type="mono"] { --h: 1.9em; }
+    .studio-hang { width: 100%; height: 100%; aspect-ratio: auto; }
+    .studio-copy { justify-content: flex-start; gap: .78em; }
+    .studio-date { left: auto; right: .5em; bottom: -1em; } .studio-date > span { max-width: 11em; padding: .6em 1em; }
+    .studio-art[data-shape="sharp"] .studio-frame { box-shadow: .5em .5em 0 var(--s-ink); }
+    .studio-art[data-lost~="picture"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; }
+  }
+
+  /* The words for what is wrong with a piece, beside the piece that was pointed at */
+  .studio-ask { position: absolute; z-index: 6; left: 0; top: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px; border-radius: 20px; background: var(--ink); box-shadow: 0 22px 44px -14px rgba(0, 0, 0, .55); animation: studio-ask .18s ease-out; }
+  @keyframes studio-ask { from { opacity: 0; transform: translateY(6px) scale(.96); } }
+  .studio-ask button { min-height: 42px; padding: 0 16px; border: 0; border-radius: 13px; background: color-mix(in srgb, var(--paper) 13%, transparent); color: var(--paper); font: 600 14px/1 Text; white-space: nowrap; transition: background .15s, color .15s; }
+  .studio-ask button:hover { background: var(--paper); color: var(--ink); }
+
+  @media (min-width: 761px) and (max-height: 700px) { .studio-note { display: none; } }
+  @media (min-width: 761px) and (max-height: 610px) { .studio-spec { display: none; } }
+  @media (max-width: 760px) {
+    /* On a tall screen the page has the top of the stage, and the tools are a row under it */
+    [data-part="studio"] .studio-room { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 10px; }
+    .studio-easel { order: -1; }
+    .studio-bench { display: grid; grid-template-columns: 104px minmax(0, 1fr); grid-template-areas: "wheel moods" "wheel spec" "wheel tools"; align-items: center; gap: 6px 14px; }
+    .studio-note { display: none; }
+    .studio-wheel { grid-area: wheel; width: 96px; margin: 4px; box-shadow: 0 0 0 4px var(--card), 0 0 0 5px var(--line); } .studio-knob { width: 24px; height: 24px; margin: -12px 0 0 -12px; }
+    .studio-moods { grid-area: moods; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; } .studio-moods button { min-height: 30px; padding: 0; font-size: 12px; }
+    .studio-spec { grid-area: spec; gap: 10px; padding: 4px 9px; border-radius: 10px; font-size: 11px; } .studio-spec .pill { display: none; }
+    .studio-swatches i { width: 18px; height: 18px; margin-right: -5px; border-width: 1.5px; }
+    .studio-spec { flex-wrap: nowrap; } .studio-made { flex: 1 1 0; }
+    .studio-tools { grid-area: tools; margin: 0; justify-content: flex-start; gap: 6px; flex-wrap: nowrap; } .studio-tools .btn.small { min-height: 30px; padding: 0 11px; font-size: 12.5px; }
+    .studio-ask button { min-height: 40px; padding: 0 12px; font-size: 13.5px; }
+  }
+  @media (max-width: 380px) { .studio-bench { gap: 6px 10px; } .studio-tools .btn.small { padding: 0 8px; font-size: 12px; } }
+</style>
+<section class="part" data-part="studio" data-title="A studio" data-line="Drag on the colour wheel, and {agent} designs this page. Then tap a piece to fix it." data-wait="0" hidden>
+  <div class="studio-room" id="studio-room">
+    <div class="studio-bench">
+      <p class="studio-note" id="studio-note">drag, and let go</p>
+      <div class="studio-wheel" id="studio-wheel" tabindex="0" role="group" aria-label="The colour wheel. Drag on it and let go, or move with the arrow keys and press Enter."><i class="studio-knob" id="studio-knob"></i></div>
+      <div class="studio-moods" id="studio-moods" role="group" aria-label="The mood of the design">
+        <button type="button" data-mood="calm" aria-pressed="false">Calm</button><button type="button" data-mood="bold" aria-pressed="false">Bold</button><button type="button" data-mood="playful" aria-pressed="false">Playful</button><button type="button" data-mood="elegant" aria-pressed="false">Elegant</button>
+      </div>
+      <div class="studio-spec" id="studio-spec" data-made="0">
+        <span class="pill" id="studio-by" hidden><i></i><span id="studio-by-who"></span></span>
+        <div class="studio-swatches" id="studio-swatches" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <div class="studio-made"><b id="studio-palette"></b><b id="studio-type"></b><b id="studio-shape"></b></div>
+      </div>
+      <div class="studio-tools"><button class="btn ghost small" type="button" id="studio-again">Start again</button><button class="btn ghost small" type="button" id="studio-own" hidden>Tour’s own colours</button></div>
+    </div>
+    <div class="studio-easel" id="studio-easel">
+      <div class="studio-art" id="studio-art" data-skin="draft" data-type="display" data-shape="soft" data-picture="sun" data-lost="">
+        <i class="studio-wash" id="studio-wash"></i>
+        <button class="studio-piece studio-name" type="button" data-piece="name" aria-label="The name. Press to say what is wrong with it."><span><svg viewBox="0 0 24 24" aria-hidden="true"><path class="k k-a" d="M4 14a8 8 0 0 1 16 0z"/><path class="k-li" d="M2 19q2.5-3.4 5 0t5 0t5 0t5 0"/></svg><span class="studio-words"></span></span></button>
+        <span class="studio-tap" id="studio-tap" aria-hidden="true">now tap any piece of it</span>
+        <div class="studio-copy" id="studio-copy">
+          <button class="studio-piece studio-headline" type="button" data-piece="headline" aria-label="The headline. Press to say what is wrong with it."><span class="studio-words"></span></button>
+          <button class="studio-piece studio-line" type="button" data-piece="line" aria-label="The line under the headline. Press to say what is wrong with it."><span class="studio-words"></span></button>
+          <button class="studio-piece studio-button" type="button" data-piece="button" aria-label="The button. Press to say what is wrong with it."><span class="studio-cta"><span class="studio-words"></span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></span></button>
+        </div>
+        <div class="studio-side"><div class="studio-hang">
+          <button class="studio-piece studio-pic" type="button" data-piece="picture" aria-label="The picture. Press to say what is wrong with it."><span class="studio-frame"><svg viewBox="0 0 400 400" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+            <g class="studio-scene" data-scene="sun">
+              <rect class="k k-sky" width="400" height="400"/>
+              <circle class="k k-a" cx="200" cy="222" r="152" opacity=".13"/><circle class="k k-a" cx="200" cy="222" r="118" opacity=".22"/><circle class="k k-a" cx="200" cy="222" r="84"/>
+              <path class="k-li" d="M82 152q9-11 18 0q9-11 18 0M300 144q7-9 14 0q7-9 14 0"/>
+              <rect class="k k-b" y="222" width="400" height="178"/>
+              <path class="k k-i" d="M318 222h36l-8 12h-20zM333 194v26h-12zM336 201v19h10z"/>
+              <g class="k k-a"><rect x="138" y="236" width="124" height="9" rx="4.5"/><rect x="160" y="256" width="80" height="9" rx="4.5"/><rect x="178" y="276" width="44" height="9" rx="4.5"/></g>
+              <path class="k-lp" d="M20 252q14-12 28 0t28 0t28 0M292 262q14-12 28 0t28 0t28 0M44 300q14-12 28 0t28 0t28 0t28 0M246 322q14-12 28 0t28 0t28 0M112 352q14-12 28 0t28 0"/>
+            </g>
+            <g class="studio-scene" data-scene="boats">
+              <rect class="k k-sky" width="400" height="400"/>
+              <circle class="k k-a" cx="316" cy="152" r="30"/>
+              <path class="k-li" d="M58 162q8-10 16 0q8-10 16 0M104 146q6-8 12 0q6-8 12 0"/>
+              <rect class="k k-b" y="236" width="400" height="164"/>
+              <g><path class="k k-i" d="M92 228h172l-24 36H118z"/><path class="k k-i" d="M175 92h6v138h-6z"/><path class="k k-a" d="M171 108v110H96z"/><path class="k k-p" d="M186 126v92h66z"/><path class="k k-a" d="M181 92l28 9-28 9z"/></g>
+              <g transform="translate(290 198) scale(.4)"><path class="k k-i" d="M-80 76h172l-24 36H-54z"/><path class="k k-i" d="M3 -60h6v138h-6z"/><path class="k k-p" d="M-1 -44v110h-75z"/><path class="k k-a" d="M14 -26v92h66z"/></g>
+              <path class="k-lp" d="M22 286q14-12 28 0t28 0t28 0M250 280q14-12 28 0t28 0t28 0t28 0M128 318q14-12 28 0t28 0t28 0M36 350q14-12 28 0t28 0M272 346q14-12 28 0t28 0"/>
+            </g>
+            <g class="studio-scene" data-scene="night">
+              <rect class="k k-dusk" width="400" height="400"/>
+              <path class="k k-a" d="M132 134l164-40v70z" opacity=".22"/>
+              <circle class="k k-a" cx="296" cy="160" r="40"/><circle class="k k-dusk" cx="313" cy="147" r="35"/>
+              <g class="k k-pale"><circle cx="60" cy="150" r="2.6"/><circle cx="186" cy="140" r="2.2"/><circle cx="226" cy="186" r="2.6"/><circle cx="346" cy="200" r="2.2"/><circle cx="42" cy="196" r="2"/><circle cx="170" cy="198" r="1.8"/><circle cx="250" cy="134" r="2"/><circle cx="366" cy="136" r="2.4"/><circle cx="80" cy="80" r="2.4"/><circle cx="330" cy="70" r="2"/><path d="M204 150l3 9 9 3-9 3-3 9-3-9-9-3 9-3zM52 172l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/></g>
+              <rect class="k k-b" y="236" width="400" height="164"/><rect class="k k-deep" y="236" width="400" height="164" opacity=".45"/>
+              <g class="k k-a" opacity=".9"><rect x="262" y="250" width="72" height="7" rx="3.5"/><rect x="274" y="268" width="48" height="7" rx="3.5"/><rect x="286" y="286" width="24" height="7" rx="3.5"/></g>
+              <path class="k k-pale" d="M94 236l9-88h26l9 88z"/><path class="k k-a" d="M100.500 176h31l2 20h-35z"/><rect class="k k-a" x="104" y="130" width="24" height="18"/><path class="k k-pale" d="M98 130l18-15 18 15z"/>
+              <path class="k-lp" d="M24 290q14-12 28 0t28 0t28 0M180 316q14-12 28 0t28 0M300 330q14-12 28 0t28 0M60 350q14-12 28 0t28 0t28 0" opacity=".6"/>
+            </g>
+            <g class="studio-scene" data-scene="flags">
+              <rect class="k k-sky" width="400" height="400"/>
+              <circle class="k k-a" cx="88" cy="190" r="32"/>
+              <path class="k k-b" d="M0 264q200-34 400 0v136H0z"/>
+              <path class="k-li" d="M-4 96Q100 150 214 142M214 142Q320 150 404 96"/>
+              <path class="k k-a" d="M18 107h19l-7 21z"/><path class="k k-b" d="M60 124h19l-8 21z"/><path class="k k-i" d="M103 134h19l-9 21z"/><path class="k k-a" d="M148 140h19l-10 21z"/><path class="k k-b" d="M256 140h19l-9 21z"/><path class="k k-a" d="M296 135h19l-9 21z"/><path class="k k-i" d="M334 125h19l-11 21z"/><path class="k k-b" d="M369 108h19l-12 21z"/>
+              <path class="k k-pale" d="M214 164l-94 62v42h188v-42z"/><path class="k k-a" d="M214 164l-94 62v42h47v-42zM214 164v104h47v-42z"/>
+              <path class="k k-deep" d="M202 268v-22a12 12 0 0 1 24 0v22z"/><path class="k-li" d="M214 164v-22"/><path class="k k-a" d="M214 140l24 7-24 8z"/>
+              <g class="k k-a"><circle cx="318" cy="196" r="4"/><circle cx="58" cy="238" r="3.4"/></g><g class="k k-b"><circle cx="344" cy="228" r="3.6"/><circle cx="160" cy="196" r="3.4"/></g>
+            </g>
+          </svg></span></button>
+          <button class="studio-piece studio-date" type="button" data-piece="date" aria-label="The date. Press to say what is wrong with it."><span class="studio-words"></span></button>
+        </div></div>
+        <button class="studio-piece studio-acts" type="button" data-piece="acts" aria-label="The line of what is on. Press to say what is wrong with it."><span class="studio-words"></span></button>
+      </div>
+    </div>
+    <div class="studio-ask" id="studio-ask" role="group" aria-label="What is wrong with it" hidden><button type="button"></button><button type="button"></button><button type="button"></button><button type="button"></button></div>
+  </div>
+</section>
+<script>
+// A design studio. On the easel is the front page of a made-up festival, with no design yet.
+// The person gives a colour with one drag on the wheel, and a mood if they like, and the agent
+// answers with a design: one of the palettes the page worked out from that colour, a typeface,
+// a shape, a picture, and a headline and a line in its own words. The page plays the design in,
+// and dresses the frame of the tour in its colours. Then the person points at any piece of the
+// page and picks a word for what is wrong with it, and the agent changes that piece alone.
+// Whatever the agent names is used only where it is one of what the page offered, its colours
+// are taken only where they can be read, and its words go in as text.
+Shell.part("studio", (my) => {
+  var $ = Shell.$, box = my.box, tidy = Shell.tidy;
+  var part = my.el, room = $("studio-room"), art = $("studio-art"), wheel = $("studio-wheel"), knob = $("studio-knob"), ask = $("studio-ask");
+  var FOR = "Low Tide, a small festival by the sea: three days of music, food and cold swims";
+  var DRAFT = { name: "Low Tide", headline: "A small festival by the sea", line: "Three days of music, food and cold swims on Saltwick Bay.", button: "Get tickets", date: "14–16 August, Saltwick Bay", acts: "Brass bands · Oysters at dusk · Dawn swims" };
+  // The most letters each piece has room for
+  var MOST = { name: 18, headline: 40, line: 90, button: 16, date: 28, acts: 48 };
+  var LABEL = { name: "name", headline: "headline", line: "line", button: "button", date: "date", acts: "acts", picture: "picture" };
+  var TYPES = { display: "clean, modern", poster: "capitals, loud", serif: "bookish, elegant", hand: "handwritten, friendly", mono: "typewritten, exact" };
+  var SHAPES = ["round", "soft", "sharp"], SCENES = ["sun", "boats", "night", "flags"], SIZES = [1, 2, 3, 4], TONES = ["quiet", "plain", "loud"];
+  var IS = { paper: "light paper, their colour as the accent", tint: "a soft tint of their colour over everything", flood: "their colour over everything", night: "dark, their colour glowing", duo: "cream paper, their colour and its opposite" };
+  // The design that goes with a mood, and with a colour alone by how strong it is: a palette, a typeface, a shape and a picture
+  var LOOK = { calm: ["tint", "serif", "soft", "sun"], bold: ["flood", "poster", "sharp", "boats"], playful: ["duo", "hand", "round", "flags"], elegant: ["night", "serif", "sharp", "night"], pale: ["tint", "display", "soft", "sun"], soft: ["paper", "display", "round", "boats"], vivid: ["flood", "poster", "sharp", "flags"] };
+  var DID = { bigger: "asked for bigger", smaller: "asked for smaller", calmer: "asked for calmer", louder: "asked for louder", "say it differently": "asked to reword", "draw it differently": "asked to redraw", "lose it": "asked to lose it" };
+  var HINT = "Drag on the colour wheel and let go. What " + my.agent + " says of its design is written here.";
+  var own = (o, k) => typeof k === "string" && Object.prototype.hasOwnProperty.call(o, k);
+
+  // ── Colour ──
+  var DARK = [22, 19, 15], LIGHT = [255, 253, 248], CENTRE = [246, 241, 231];
+  var within = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  function hsl(h, s, l) {
+    h = ((h % 360) + 360) % 360;
+    // Whole numbers, as a colour is written, so that what is checked of a colour is checked of the colour that is drawn
+    var a = s * Math.min(l, 1 - l), f = (n) => { var k = (n + h / 30) % 12; return Math.round((l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))) * 255); };
+    return [f(0), f(8), f(4)];
+  }
+  /** A colour as its hue, how strong it is and how light. */
+  function tone(c) {
+    var r = c[0] / 255, g = c[1] / 255, b = c[2] / 255, max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, d = max - min;
+    if (d < 1e-6) return [0, 0, l];
+    var h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [(h * 60 + 360) % 360, within(d / (1 - Math.abs(2 * l - 1) || 1), 0, 1), l];
+  }
+  var hex = (c) => "#" + c.map((v) => Math.round(within(v, 0, 255)).toString(16).padStart(2, "0")).join("");
+  /** A colour that was written as #rgb or #rrggbb, and nothing where it was written any other way. */
+  function rgb(text) {
+    var m = typeof text === "string" ? /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(text.trim()) : null;
+    if (!m) return null;
+    var six = m[1].length === 3 ? m[1].replace(/./g, "$&$&") : m[1];
+    return [0, 2, 4].map((i) => parseInt(six.slice(i, i + 2), 16));
+  }
+  var lum = (c) => { var f = (v) => { v = within(v, 0, 255) / 255; return v <= .03928 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); }; return .2126 * f(c[0]) + .7152 * f(c[1]) + .0722 * f(c[2]); };
+  /** How far two colours stand apart, as the contrast between them: from 1, for the same, to 21, for black on white. */
+  var apart = (a, b) => { var x = lum(a), y = lum(b); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); };
+  var mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+  /** A colour of one hue made lighter or darker, as little as it takes, until it stands off another by as much as is asked. */
+  function off(h, s, l, from, want) {
+    for (var d = 0; d < 1; d += .01) for (var sign = -1; sign <= 1; sign += 2) {
+      var x = l + sign * d;
+      if (x < .04 || x > .97) continue;
+      var c = hsl(h, s, x);
+      if (apart(c, from) >= want) return c;
+    }
+    return lum(from) > .3 ? DARK : LIGHT;
+  }
+  /** A colour with what is written on it, the colour moved as little as it takes for that to be read. */
+  function sure(c) {
+    c = c.map(Math.round);
+    var on = apart(c, DARK) >= apart(c, LIGHT) ? DARK : LIGHT;
+    if (apart(c, on) >= 4.5) return [c, on];
+    var t = tone(c);
+    return [off(t[0], t[1], t[2], on, 4.5), on];
+  }
+  // The wheel, as it is drawn: twelve colours round it, each going over into the next, and all of them into the middle's
+  var STOPS = ["#e5484d", "#f76b15", "#ffc53d", "#a8cf2c", "#46a758", "#12a594", "#00a2c7", "#0090ff", "#3e63dd", "#6e56cf", "#ab4aba", "#e93d82", "#e5484d"].map(rgb);
+  var HUES = ["red", "orange", "yellow", "lime", "green", "teal", "cyan", "sky blue", "indigo", "violet", "plum", "pink"];
+  /** The colour at the rim of the wheel, so many degrees round it from the top. */
+  var rim = (at) => mix(STOPS[Math.floor(at / 30) % 12], STOPS[(Math.floor(at / 30) % 12) + 1], at / 30 - Math.floor(at / 30));
+  /** How strong the colour is so far out from the middle, from 0 to 1: it is whole over the outer quarter. */
+  var strong = (r) => within(r / .74, 0, 1);
+  var colourAt = (at, r) => mix(CENTRE, rim(at), strong(r));
+  var strength = (r) => (strong(r) < .36 ? "pale" : strong(r) < .78 ? "soft" : "vivid");
+  var called = (at, r) => "a " + strength(r) + " " + HUES[Math.round(at / 30) % 12];
+  /**
+   * The palettes a colour gives: each a paper, an ink that is read on it, an accent and a second
+   * colour that stand off the paper. They are what the agent chooses among.
+   */
+  function palettes(at, r) {
+    var h = tone(rim(at))[0], s = .22 + .7 * strong(r), picked = tone(colourAt(at, r)), made = {}, p, ink;
+    p = hsl(h, .08 + .3 * s, .955);
+    made.paper = [p, hsl(h, .35, .1), off(h, Math.max(s, .5), .5, p, 3.6), off(h + 180, .5, .42, p, 3)];
+    p = hsl(h, .2 + .5 * s, .87);
+    made.tint = [p, hsl(h, .5, .12), off(h, .45 + .4 * s, .3, p, 5), off(h + 38, .55, .4, p, 3)];
+    ink = apart(colourAt(at, r), hsl(h, .5, .07)) >= apart(colourAt(at, r), hsl(h, .4, .96)) ? hsl(h, .5, .07) : hsl(h, .4, .96);
+    p = off(picked[0], picked[1], picked[2], ink, 6);
+    // Its button is the lightest or the darkest there is, whichever the ink is not. Where that would be lost on the paper, it is the colour opposite, deep, and the second colour is another deep one
+    var block = lum(ink) < .3 ? LIGHT : DARK, plain = apart(block, p) >= 2.5;
+    made.flood = [p, ink, plain ? block : off(h + 180, .7, .3, p, 3), off(h + (plain ? 180 : 140), plain ? .7 : .6, .3, p, 3)];
+    p = hsl(h, .3 + .2 * s, .085);
+    made.night = [p, hsl(h, .25, .93), off(h, Math.max(s, .55), .62, p, 6.5), off(h + 40, .5, .6, p, 4.5)];
+    p = [246, 239, 226];
+    made.duo = [p, [29, 26, 22], off(h, Math.max(s, .6), .5, p, 3.4), off(h + 180, .65, .5, p, 2)];
+    return made;
+  }
+  /** Colours the agent gave of its own, as a paper, an ink, an accent and perhaps a second: taken only where each is a colour, the ink is read on the paper, and the accent is seen on it. */
+  function given(list) {
+    if (list.length < 3 || list.length > 4) return null;
+    var c = list.map(rgb);
+    if (c.some((x) => !x) || apart(c[1], c[0]) < 4.5 || apart(c[2], c[0]) < 1.5) return null;
+    if (!c[3] || apart(c[3], c[0]) < 1.5) { var t = tone(c[2]); c[3] = off(t[0] + 180, .55, .45, c[0], 3); }
+    return c;
+  }
+  /** What each colour of a palette is used for on the page, with what is written on the accent and on the second colour. */
+  function roles(p) {
+    var a = sure(p[2]), b = sure(p[3]), dark = lum(p[0]) < lum(p[1]);
+    return { paper: p[0], ink: p[1], accent: a[0], on: a[1], second: b[0], on2: b[1], tint: mix(p[0], a[0], .16), loud: apart(a[0], p[0]) >= 3 ? a[0] : apart(b[0], p[0]) >= 3 ? b[0] : p[1], shade: apart(p[1], a[0]) >= 1.6 ? p[1] : b[0], deep: dark ? p[0] : p[1], dusk: mix(dark ? p[0] : p[1], a[0], .17), pale: dark ? p[1] : p[0] };
+  }
+
+  // ── What is on the easel ──
+  var NAMES = ["name", "headline", "line", "button", "date", "acts", "picture"], pieces = {};
+  NAMES.forEach((n) => { var el = part.querySelector('[data-piece="' + n + '"]'); pieces[n] = { el: el, words: el.querySelector(".studio-words"), text: "", size: 2, tone: "plain", show: true }; });
+  var brief = { h: 22, r: .8, mood: null };       // the colour on the wheel and the mood, as the person has them
+  var look = null;                                 // the design in effect: its palette by name, its colours, typeface, shape and picture
+  var scene = "sun";                               // the picture that is shown
+  var busy = false, pending = null, chosen = null; // waiting for the agent; what was asked; the piece pointed at
+  var worn = false, held = false;                  // whether the frame of the tour wears the design; whether the wheel is held
+
+  // What of an answer is still to be played in. It is played at once where less motion was asked for, and where the part is not the one shown
+  var due = [], rushing = false;
+  function later(ms, fn) {
+    if (rushing || Shell.calm || !my.shown()) { fn(); return; }
+    var job = { fn: fn, timer: setTimeout(() => { due.splice(due.indexOf(job), 1); fn(); }, ms) };
+    due.push(job);
+  }
+  /** Finishes whatever is still being played in, in its order, so that the page is whole before anything else is done to it. */
+  function settle() {
+    rushing = true;
+    while (due.length) { var job = due.shift(); clearTimeout(job.timer); job.fn(); }
+    rushing = false;
+  }
+
+  /** Writes a piece's words: letter by letter where they are an answer that is played in, with room kept for all of them from the first. */
+  function write(n, text, typed) {
+    var p = pieces[n], el = p.words;
+    p.text = text;
+    el.textContent = text;
+    if (!typed || rushing || Shell.calm || !my.shown()) return;
+    var shown = document.createTextNode(""), rest = document.createElement("i"), i = 0, step = text.length > 50 ? 2 : 1;
+    rest.className = "studio-rest";
+    rest.textContent = text;
+    el.textContent = "";
+    el.appendChild(shown);
+    el.appendChild(rest);
+    (function next() {
+      // Other words have been written since
+      if (p.text !== text || rest.parentNode !== el) return;
+      i = Math.min(text.length, i + step);
+      shown.nodeValue = text.slice(0, i);
+      rest.textContent = text.slice(i);
+      if (i < text.length) later(24, next);
+    })();
+  }
+  /** Shows each piece as it stands: its size and tone from the page's own steps, and whether it is there at all. */
+  function stand() {
+    var lost = [];
+    NAMES.forEach((n) => {
+      var p = pieces[n];
+      p.el.setAttribute("data-size", p.size);
+      p.el.setAttribute("data-tone", p.tone);
+      p.el.hidden = !p.show;
+      p.el.classList.remove("studio-gone");
+      if (!p.show) lost.push(n);
+    });
+    art.setAttribute("data-lost", lost.join(" "));
+    art.style.setProperty("--pz", [.7, 1, 1.18, 1.38][pieces.picture.size - 1]);
+  }
+  /** Makes the page's words smaller, as little as it takes, where they do not fit the easel. */
+  function fit() {
+    var copy = $("studio-copy"), k = 1;
+    // The words are too much where the pieces come to more than the room they have, top to bottom or side to side
+    var over = () => {
+      var kids = [].filter.call(copy.children, (c) => !c.hidden), has = copy.getBoundingClientRect();
+      if (!kids.length || !has.height) return false;
+      return kids[kids.length - 1].getBoundingClientRect().bottom - kids[0].getBoundingClientRect().top > has.height + 1 || kids.some((c) => c.getBoundingClientRect().width > has.width + 1);
+    };
+    // Nothing eases from one size to the next while they are tried, or each would be measured as the one before
+    art.classList.add("studio-measured");
+    art.style.setProperty("--studio-fit", "1");
+    while (k > .56 && over()) {
+      k -= .04;
+      art.style.setProperty("--studio-fit", k.toFixed(2));
+    }
+    void art.offsetWidth;
+    art.classList.remove("studio-measured");
+  }
+  var VARS = ["paper", "ink", "accent", "on", "second", "on2", "tint", "loud", "shade", "deep", "dusk", "pale"];
+  function paint(r) {
+    VARS.forEach((k) => { if (r) art.style.setProperty("--s-" + k, hex(r[k])); else art.style.removeProperty("--s-" + k); });
+  }
+  var ground = (r) => { if (r) art.style.setProperty("--s-ground", hex(r.paper)); else art.style.removeProperty("--s-ground"); };
+  /** The place on the page's edge that is nearest the knob of the wheel, which is where colour comes onto the page from. */
+  function edge() {
+    var a = art.getBoundingClientRect(), k = knob.getBoundingClientRect();
+    return within(((k.left + k.width / 2 - a.left) / (a.width || 1)) * 100, 0, 100).toFixed(1) + "% " + within(((k.top + k.height / 2 - a.top) / (a.height || 1)) * 100, 0, 100).toFixed(1) + "%";
+  }
+  var dabbed = "0% 50%";
+  /** The colour the person picked is put on the edge of the page as a dab of paint, and stays there while the agent has it. With nothing, the dab is taken off. */
+  function dab(c) {
+    var w = $("studio-wash");
+    if (c) { dabbed = edge(); w.style.background = hex(c); }
+    w.style.transition = "";
+    w.style.clipPath = "circle(" + (c ? "2.1em" : "0%") + " at " + dabbed + ")";
+  }
+  /** The colour of a design comes over the page from where the dab is. */
+  function wash(r) {
+    var w = $("studio-wash");
+    w.style.transition = "background .3s, clip-path .9s cubic-bezier(.3, .7, .2, 1)";
+    w.style.background = hex(r.paper);
+    w.style.clipPath = "circle(150% at " + dabbed + ")";
+    later(900, () => { ground(r); w.style.transition = "none"; w.style.clipPath = "circle(0% at " + dabbed + ")"; });
+  }
+  /** What the design is made of, on the bench. */
+  function listed() {
+    var dots = $("studio-swatches").children, made = !!look;
+    $("studio-spec").setAttribute("data-made", "0");
+    ["paper", "ink", "accent", "second"].forEach((k, i) => { dots[i].style.background = made ? hex(look.colours[k]) : ""; });
+    $("studio-palette").textContent = made ? look.palette : "no design yet";
+    $("studio-type").textContent = made ? look.type : "";
+    $("studio-shape").textContent = made ? look.shape : "";
+    $("studio-by").hidden = !made;
+    if (made) { void $("studio-spec").offsetWidth; $("studio-spec").setAttribute("data-made", "1"); }
+    $("studio-own").hidden = !made;
+    $("studio-own").textContent = worn ? "Tour’s own colours" : "Wear the design";
+  }
+  /**
+   * Dresses the frame of the tour in the design: its accent, and a tint of it in the paper. The
+   * colours are worked out against the frame's own paper and ink, light or dark as they are, and
+   * the shell takes them only where everything can still be read.
+   */
+  function wear() {
+    Shell.wear(null);
+    worn = false;
+    if (!look) return;
+    var cs = window.getComputedStyle(document.documentElement), mine = (k) => rgb(cs.getPropertyValue(k));
+    var paper = mine("--paper"), card = mine("--card"), line = mine("--line");
+    if (!paper || !card || !line) return;
+    // The colour a design is known by is its accent, or where that is next to grey, the stronger of its paper and its second colour
+    var chroma = (t) => t[1] * (1 - Math.abs(2 * t[2] - 1)), known = [look.colours.accent, look.colours.paper, look.colours.second].map(tone);
+    var key = chroma(known[0]) >= .25 ? known[0] : chroma(known[1]) >= chroma(known[2]) ? known[1] : known[2], dark = lum(paper) < .2;
+    var accent = sure(off(key[0], within(key[1], .45, .85), dark ? .62 : .42, dark ? paper : card, 3.6)), tint = hsl(key[0], .7, dark ? .32 : .6);
+    worn = Shell.wear({ "--accent": hex(accent[0]), "--on-accent": hex(accent[1]), "--paper": hex(mix(paper, tint, .1)), "--card": hex(mix(card, tint, .045)), "--line": hex(mix(line, tint, .16)) });
+  }
+  function unmark() {
+    NAMES.forEach((n) => { pieces[n].el.classList.remove("studio-on", "studio-asked", "studio-by", "studio-pop"); pieces[n].el.removeAttribute("data-tag"); });
+  }
+  function hold(yes) {
+    busy = yes;
+    part.setAttribute("data-wait", yes ? "1" : "0");
+    [].forEach.call($("studio-moods").children, (b) => { b.disabled = yes; });
+  }
+
+  // ── The first gesture: a colour, and a mood, and the agent designs the page ──
+  function aim(h, r) {
+    brief.h = ((h % 360) + 360) % 360;
+    brief.r = within(r, 0, .96);
+    var a = (brief.h * Math.PI) / 180;
+    knob.style.left = (50 + Math.sin(a) * brief.r * 50).toFixed(2) + "%";
+    knob.style.top = (50 - Math.cos(a) * brief.r * 50).toFixed(2) + "%";
+    knob.style.background = hex(colourAt(brief.h, brief.r));
+  }
+  function design(why) {
+    if (busy) return;
+    settle();
+    shut();
+    unmark();
+    var offered = palettes(brief.h, brief.r), mood = brief.mood, set = LOOK[mood || strength(brief.r)];
+    var pick = { palette: set[0], type: set[1], shape: set[2], picture: set[3] }, sent = {};
+    Object.keys(offered).forEach((k) => { sent[k] = offered[k].map(hex); });
+    pending = { kind: "design", offered: offered, pick: pick };
+    $("studio-note").textContent = called(brief.h, brief.r) + (mood ? ", " + mood : "");
+    hold(true);
+    dab(colourAt(brief.h, brief.r));
+    box.did(why === "mood" ? "chose a mood" : "picked a colour");
+    asker.send("design", {
+      colour_is: called(brief.h, brief.r),
+      colour: hex(colourAt(brief.h, brief.r)),
+      mood: mood,
+      for: FOR,
+      pick: pick,
+      most: { headline: MOST.headline, line: MOST.line },
+      palettes: sent,
+      palette_is: IS,
+      type: TYPES,
+      shape: SHAPES,
+      picture: SCENES,
+      now: { headline: pieces.headline.text, line: pieces.line.text },
+    });
+  }
+  function designed(got, p) {
+    var name = own(p.offered, got.palette) ? got.palette : null;
+    var colours = name ? p.offered[name] : Array.isArray(got.palette) ? given(got.palette) : null;
+    if (!colours) { name = p.pick.palette; colours = p.offered[name]; }
+    look = {
+      palette: name || "its own",
+      colours: roles(colours),
+      type: own(TYPES, got.type) ? got.type : p.pick.type,
+      shape: SHAPES.indexOf(got.shape) >= 0 ? got.shape : p.pick.shape,
+      picture: SCENES.indexOf(got.picture) >= 0 ? got.picture : p.pick.picture,
+    };
+    var headline = tidy(got.headline, MOST.headline), line = tidy(got.line, MOST.line), first = art.getAttribute("data-skin") === "draft";
+    // A design is the whole page again: every piece is back, at its own size
+    NAMES.forEach((n) => { pieces[n].size = 2; pieces[n].tone = "plain"; pieces[n].show = true; });
+    unmark();
+    art.setAttribute("data-skin", "made");
+    paint(look.colours);
+    if (Shell.calm || !my.shown()) { ground(look.colours); dab(null); } else wash(look.colours);
+    wear();
+    later(380, () => {
+      art.setAttribute("data-type", look.type);
+      art.setAttribute("data-shape", look.shape);
+      art.setAttribute("data-picture", scene = look.picture);
+      stand();
+      // The words of the page stay as they are where the answer has none of its own
+      if (headline) write("headline", headline, true);
+      if (line) { write("line", line, false); pieces.line.el.classList.add("studio-pop"); }
+      fit();
+      listed();
+      $("studio-tap").textContent = "now tap any piece of it";
+      $("studio-tap").classList.toggle("studio-on", first);
+    });
+    my.line("Tap any piece of the page and say what is wrong with it. {agent} changes just that.");
+  }
+
+  // ── The second gesture: a piece is pointed at, with a word for what is wrong with it ──
+  /** The four words a piece is given, each with the change it asks for as the page has worked it out. */
+  function wishes(n) {
+    var p = pieces[n], at = TONES.indexOf(p.tone);
+    return [
+      p.size < SIZES.length ? { wish: "bigger", key: "size", change: { size: p.size + 1 } } : { wish: "smaller", key: "size", change: { size: p.size - 1 } },
+      at > 0 ? { wish: "calmer", key: "tone", change: { tone: TONES[at - 1] } } : { wish: "louder", key: "tone", change: { tone: TONES[at + 1] } },
+      n === "picture" ? { wish: "draw it differently", key: "picture", change: { picture: SCENES[(SCENES.indexOf(scene) + 1) % SCENES.length] } } : { wish: "say it differently", key: "text", change: { text: "<your words, at most " + MOST[n] + " letters>" } },
+      { wish: "lose it", key: "show", change: { show: false } },
+    ];
+  }
+  var words = [].slice.call(ask.children), offeredNow = [];
+  function shut() {
+    if (ask.hidden) return;
+    ask.hidden = true;
+    if (chosen && !busy) pieces[chosen].el.classList.remove("studio-on");
+    chosen = null;
+  }
+  /** Puts the words beside the piece: under it where there is room, over it where there is not, and on it where it is the picture. */
+  function place(n) {
+    var r = pieces[n].el.getBoundingClientRect(), all = room.getBoundingClientRect(), w = ask.offsetWidth || 300, h = ask.offsetHeight || 108;
+    var x = r.left - all.left, y = r.bottom - all.top + 16;
+    if (n === "picture") { x = r.left - all.left + (r.width - w) / 2; y = r.top - all.top + (r.height - h) / 2 + 18; }
+    else if (y + h > all.height) y = r.top - all.top - h - 16;
+    ask.style.left = within(x, 0, Math.max(0, all.width - w)).toFixed(0) + "px";
+    ask.style.top = within(y, 0, Math.max(0, all.height - h)).toFixed(0) + "px";
+  }
+  function point(n, byKey) {
+    if (busy) return;
+    settle();
+    var again = chosen === n && !ask.hidden;
+    shut();
+    if (again) return;
+    unmark();
+    chosen = n;
+    offeredNow = wishes(n);
+    words.forEach((b, i) => { var t = offeredNow[i].wish; b.textContent = t.charAt(0).toUpperCase() + t.slice(1); });
+    pieces[n].el.setAttribute("data-tag", LABEL[n]);
+    pieces[n].el.classList.add("studio-on");
+    $("studio-tap").classList.remove("studio-on");
+    ask.hidden = false;
+    place(n);
+    if (byKey) words[0].focus({ preventScroll: true });
+  }
+  function want(w) {
+    var n = chosen, p = pieces[n];
+    if (busy || !n || !w) return;
+    ask.hidden = true;
+    chosen = null;
+    p.el.setAttribute("data-tag", LABEL[n] + " · " + w.wish);
+    p.el.classList.add("studio-on", "studio-asked");
+    pending = { kind: "point", piece: n, wish: w.wish, key: w.key, change: w.change };
+    hold(true);
+    box.did(DID[w.wish]);
+    var data = { piece: n, wish: w.wish, try: w.change }, page = {};
+    if (w.key === "text") { data.text = p.text; data.most = MOST[n]; }
+    if (w.key === "size") { data.size = p.size; data.sizes = SIZES; }
+    if (w.key === "tone") { data.tone = p.tone; data.tones = TONES; }
+    if (w.key === "picture") { data.picture = scene; data.pictures = SCENES; }
+    NAMES.forEach((k) => { if (k !== "picture" && pieces[k].show) page[k] = pieces[k].text; });
+    data.mood = brief.mood;
+    data.for = FOR;
+    data.page = page;
+    asker.send("point", data);
+  }
+  function pointed(got, q) {
+    var n = q.piece, p = pieces[n], v;
+    unmark();
+    if (q.key === "size") p.size = SIZES.indexOf(got.size) >= 0 && got.size !== p.size ? got.size : q.change.size;
+    if (q.key === "tone") p.tone = TONES.indexOf(got.tone) >= 0 && got.tone !== p.tone ? got.tone : q.change.tone;
+    if (q.key === "picture") { v = SCENES.indexOf(got.picture) >= 0 && got.picture !== scene ? got.picture : q.change.picture; art.setAttribute("data-picture", scene = v); }
+    if (q.key === "show") p.show = got.show === true;
+    // A piece is given other words only where the answer has words of its own for it: the page writes none
+    v = q.key === "text" ? tidy(got.text, MOST[n]) : "";
+    if (!p.show) {
+      // It goes, and then the page closes up over where it was
+      p.el.classList.add("studio-gone");
+      later(280, () => { stand(); fit(); });
+      return;
+    }
+    stand();
+    if (v && v !== p.text) write(n, v, true);
+    fit();
+    p.el.setAttribute("data-tag", my.agent.slice(0, 16).toLowerCase());
+    p.el.classList.add("studio-by", "studio-pop");
+  }
+
+  var asker = my.asker((got) => {
+    var q = pending;
+    pending = null;
+    settle();
+    hold(false);
+    if (!q) return;
+    if (q.kind === "design") designed(got, q); else pointed(got, q);
+    box.say(got.say);
+  }, () => {
+    // No answer came, or It did not take it: the studio is the person's again, with nothing of the agent's drawn
+    hold(false);
+    if (pending && pending.kind === "design") dab(null);
+    if (pending && pending.kind === "point") pieces[pending.piece].el.classList.remove("studio-asked");
+  });
+
+  // ── The person's hands ──
+  var where = (e) => {
+    var r = wheel.getBoundingClientRect(), half = Math.min(r.width, r.height) / 2 || 1, dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+    return [(Math.atan2(dx, -dy) * 180) / Math.PI, Math.hypot(dx, dy) / half];
+  };
+  wheel.addEventListener("pointerdown", (e) => {
+    if (busy) return;
+    // What the person does to the colour now is what an answer still on its way was not asked about
+    asker.forget();
+    pending = null;
+    held = true;
+    try { wheel.setPointerCapture(e.pointerId); } catch (err) {}
+    wheel.classList.add("studio-held");
+    var at = where(e);
+    aim(at[0], at[1]);
+    $("studio-note").textContent = called(brief.h, brief.r);
+  });
+  wheel.addEventListener("pointermove", (e) => { if (!held) return; var at = where(e); aim(at[0], at[1]); $("studio-note").textContent = called(brief.h, brief.r); });
+  var let_go = () => { if (!held) return; held = false; wheel.classList.remove("studio-held"); design("colour"); };
+  wheel.addEventListener("pointerup", let_go);
+  wheel.addEventListener("pointercancel", let_go);
+  wheel.addEventListener("keydown", (e) => {
+    if (busy) return;
+    var step = { ArrowLeft: [-10, 0], ArrowRight: [10, 0], ArrowUp: [0, .08], ArrowDown: [0, -.08] }[e.key];
+    if (step) { e.preventDefault(); aim(brief.h + step[0], brief.r + step[1]); $("studio-note").textContent = called(brief.h, brief.r); }
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); design("colour"); }
+  });
+  [].forEach.call($("studio-moods").children, (b) => b.addEventListener("click", () => {
+    if (busy) return;
+    brief.mood = b.getAttribute("data-mood");
+    [].forEach.call($("studio-moods").children, (o) => o.setAttribute("aria-pressed", o === b ? "true" : "false"));
+    design("mood");
+  }));
+  // A press that came from the keyboard has no place on the screen, and takes the keyboard on to the words
+  NAMES.forEach((n) => pieces[n].el.addEventListener("click", (e) => point(n, e.detail === 0)));
+  words.forEach((b, i) => b.addEventListener("click", () => want(offeredNow[i])));
+  part.addEventListener("pointerdown", (e) => { if (!ask.hidden && !ask.contains(e.target) && !(e.target.closest && e.target.closest(".studio-piece"))) shut(); });
+  part.addEventListener("keydown", (e) => { if (e.key === "Escape") shut(); });
+  $("studio-own").addEventListener("click", () => {
+    if (worn) { Shell.wear(null); worn = false; } else wear();
+    $("studio-own").textContent = worn ? "Tour’s own colours" : "Wear the design";
+  });
+  function again() {
+    settle();
+    asker.forget();
+    pending = null;
+    hold(false);
+    shut();
+    unmark();
+    look = null;
+    Shell.wear(null);
+    worn = false;
+    paint(null);
+    ground(null);
+    dab(null);
+    art.setAttribute("data-skin", "draft");
+    art.setAttribute("data-type", "display");
+    art.setAttribute("data-shape", "soft");
+    art.setAttribute("data-picture", scene = "sun");
+    NAMES.forEach((n) => { var p = pieces[n]; p.size = 2; p.tone = "plain"; p.show = true; if (n !== "picture") write(n, DRAFT[n], false); });
+    stand();
+    brief.mood = null;
+    [].forEach.call($("studio-moods").children, (o) => o.setAttribute("aria-pressed", "false"));
+    aim(22, .8);
+    $("studio-note").textContent = "drag, and let go";
+    $("studio-tap").textContent = "a page with no design yet";
+    $("studio-tap").classList.add("studio-on");
+    listed();
+    fit();
+    my.line();
+    box.idle();
+    box.did("");
+    box.hint(HINT);
+  }
+  $("studio-again").addEventListener("click", again);
+
+  // The page is fitted to the easel again whenever the easel changes its size, and the words for a piece are put away, since their place was worked out for the old one
+  if (window.ResizeObserver) new ResizeObserver(() => { shut(); fit(); }).observe($("studio-easel"));
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit, () => {});
+  // The frame's own colours are others when the screen goes from light to dark, so what it wears is worked out again
+  var scheme = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+  if (scheme && scheme.addEventListener) scheme.addEventListener("change", () => { if (worn) { wear(); listed(); } });
+  my.onEnter(fit);
+  my.onLeave(() => { settle(); shut(); });
+  $("studio-by-who").textContent = my.agent;
+  again();
+});
+</script>

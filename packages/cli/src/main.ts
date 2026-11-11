@@ -9,6 +9,7 @@ import {
   appendFileSync,
   chmodSync,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -49,11 +50,14 @@ import {
   CODEX_RESTART,
   claudeReloadLine,
   claudeRunning,
+  type Facts,
   itForAgent,
+  notLoadedHere,
   onWindows,
   reloadLine,
   setupLine,
   tellWordForWord,
+  tooOldToReload,
 } from './arrives'
 import { CODEX_SAVE_ESCALATE } from './codex-settings'
 import { choices, conversationIds, local, type Route, refusedFor } from './connector'
@@ -125,7 +129,7 @@ import { joinedBefore, login, runsItsOwn } from './login'
 import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
 import { failure, foldRepeats, forPerson } from './output'
 import { keepToOwner } from './owner'
-import { gather, noteConversation, publish, unlinkedNote } from './publish'
+import { conversationFolder, gather, noteConversation, publish, unlinkedNote } from './publish'
 import { alone, asAdmin, nothingLeft, standing, startBackend } from './serve/backend'
 import { HTTPS_NAME, noteHttps, noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
@@ -161,7 +165,8 @@ import {
 } from './setup'
 import { printEnv } from './shell-env'
 import { zshDirectory } from './shell-profile'
-import { GUIDE, NAMES, END as TOUR_END, STEPS as TOUR_STEPS, tourPage } from './tour'
+import { GUIDE, NAMES, END as TOUR_END, TOUR_PREFIX, START as TOUR_START, STEPS as TOUR_STEPS, tourPage } from './tour'
+import { answerAction, dropPicture, dropPictures, keepPicture, START_SLUG } from './tour-answer'
 import { finishInstallationRemoval, installationFile, removeInstallationFiles, stepOutOf, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
 import { addonsSaid, afterUpgrade, RELOAD_OPEN, restartLine } from './upgraded'
@@ -338,6 +343,47 @@ async function piped(): Promise<string | undefined> {
     throw err
   })
   return all.trim() ? all : undefined
+}
+
+/**
+ * What a here-document or a pipe gave a command that was given no other input, where it was
+ * given one. Nothing where standard input is a terminal or no pipe or file at all, as where a
+ * harness gives a command `/dev/null`. A pipe that has given nothing at all after `grace`
+ * milliseconds is left, and taken for nothing: a harness may leave a command's standard input
+ * open and never write to it, and the command is not to wait on that for ever. A here-document is
+ * whole before the command begins, so it is never taken for nothing.
+ */
+async function pipedIfAny(grace: number): Promise<string | undefined> {
+  let kind: { isFIFO(): boolean; isFile(): boolean; isSocket(): boolean }
+  try {
+    kind = fstatSync(0)
+  } catch {
+    return undefined
+  }
+  if (process.stdin.isTTY || !(kind.isFIFO() || kind.isFile() || kind.isSocket())) return undefined
+  if (kind.isFile()) return piped()
+  let heard = false
+  const first = () => {
+    heard = true
+  }
+  process.stdin.once('data', first)
+  const reading = piped()
+  const quiet = await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(!heard), grace)
+    const ended = () => {
+      clearTimeout(timer)
+      resolve(false)
+    }
+    reading.then(ended, ended)
+  })
+  if (quiet) {
+    process.stdin.off('data', first)
+    process.stdin.pause()
+    process.stdin.destroy()
+    reading.catch(() => {})
+    return undefined
+  }
+  return reading
 }
 
 // ---------- pages ----------
@@ -686,7 +732,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   serve: [0, 'serve [--log <file>]'],
   service: [1, 'service install | uninstall | status | logs'],
   skill: [0, 'skill'],
-  tour: [2, 'tour [--wait] [show <name> | show next | clear]'],
+  tour: [3, "tour [--wait] [show <name> | show next | answer <action-id> [- | '<json>' | --file <path>] | next | clear]"],
   telemetry: [1, 'telemetry [on | off]'],
   upgrade: [0, 'upgrade [--check]'],
   updates: [1, 'updates [on | off]'],
@@ -724,7 +770,9 @@ function noMore(cmd: string, a: Args): void {
       ? ` If your shell split the JSON at a space, write it to a file and run \`it patch ${a._[0]} --file <path>\`.`
       : cmd === 'create' && text(a, 'state') !== undefined
         ? ' If your shell split the JSON of --state at a space, write it to a file and give it with `--state-file <path>`.'
-        : ''
+        : cmd === 'tour' && a._[0] === 'answer'
+          ? ` If your shell split the JSON at a space or at an apostrophe in it, give it in a here-document: \`it tour answer ${a._[1]} "$(cat <<'EOF'\`, then the JSON on a line of its own, then EOF on a line of its own, then \`)"\`.`
+          : ''
   throw new Problem(`It does not know what to do with "${a._[most]}".`, 'invalid', `Usage: it ${usage}${split}`)
 }
 
@@ -840,10 +888,15 @@ function anothers(slug: string, theirs: Made | null): Problem {
  * agent app's that does not say, which the skill tells to wait.
  */
 async function arrivalHere(slug?: string, tour = false): Promise<Arrives | undefined> {
+  const facts = await factsHere(slug, tour)
+  return facts && arrives(facts)
+}
+/** What It knows of the conversation a command runs in, which `arrives` goes by. Nothing where the command cannot tell which conversation that is. */
+async function factsHere(slug?: string, tour = false): Promise<Facts | undefined> {
   const session = sessionAsked()?.session
   if (!session) return undefined
   const route = await routeOf(session)
-  return arrives({
+  return {
     session,
     addonHere: addonHere(session.harness),
     claude: claudeRunning(),
@@ -852,7 +905,7 @@ async function arrivalHere(slug?: string, tour = false): Promise<Arrives | undef
     tour,
     codexPending: session.harness === 'codex' && codexHooksPending(),
     t3: t3Here(),
-  })
+  }
 }
 
 /** What the connector says of the way to a conversation (`/route`), or null where it could not be asked or gave no answer that is one. */
@@ -886,6 +939,20 @@ async function lineHere(connected: (harness: string) => boolean): Promise<string
   if (!setupLine({ ...facts, route: null })) return undefined
   return setupLine({ ...facts, route: await routeOf(session) })
 }
+/**
+ * Whether the conversation is a Claude Code one that has not loaded It's add-on and can load it
+ * with /reload-plugins: the case in which `arrives` has the agent tell the person to type that,
+ * in a Claude Code that is not too old to load an add-on into an open conversation.
+ */
+export const reloadsHere = (f: Facts | undefined): boolean => f !== undefined && notLoadedHere(f) && !tooOldToReload(f.claude)
+/**
+ * What the agent that shows the tour's first page is told to do where its conversation has not
+ * loaded the add-on. The page says so to the person and keeps what they do on it, and the agent
+ * ends its turn: Claude Code loads an add-on that /reload-plugins asks for only once the reply
+ * is over, so an agent that went on waiting would keep it from ever loading.
+ */
+export const asleepNext = (claude: string | undefined, it = itForAgent()): string =>
+  `It’s add-on is not running in this conversation yet, so the page says that it cannot be heard, and It keeps what the person does on it. Write the person one message that gives them the link to the page, and in that same message tell them this, word for word: “${reloadLine(claude)}” Then end your turn, and do not run \`${it} wait\`: Claude Code loads the add-on only once your reply is over. From then on what the person does arrives here by itself, as a message that begins [It], what was kept first.`
 
 async function published(
   done: { slug: string; version: number; url: string; note?: string; urlNote?: string },
@@ -893,8 +960,10 @@ async function published(
   fresh = false,
   tour = false,
   updated = false,
+  /** What is said of how things arrive, where whoever published the page has worked that out already, and what else to say beside it. */
+  worked?: { arrives: Arrives; beside: Record<string, unknown> },
 ): Promise<void> {
-  const arrival = await arrivalHere(done.slug, tour)
+  const arrival = worked?.arrives ?? (await arrivalHere(done.slug, tour))
   const result = {
     id: done.slug,
     version: done.version,
@@ -908,6 +977,7 @@ async function published(
     ...(fresh ? { tell: `Give the user this url in the chat, in one short line that says what is on the ${NOUN.one}.` } : {}),
     // Whether what the person does on it comes back here by itself, and so whether to end the turn or to wait
     ...(arrival ? { arrives: arrival } : {}),
+    ...worked?.beside,
   }
   let said: Record<string, unknown> & { hint?: string }
   if (!a.flags.open)
@@ -953,7 +1023,7 @@ const TOUR_ASK_EVERY_MS = 2500
  * What an agent that waited is told before the tour itself, when the person has asked for it
  * on the site.
  */
-const TOUR_ASKED = `The person pressed "Take the tour" on It's site a moment ago, and is looking at that screen now. Give them the tour below, in this conversation, starting now. The tour's menu is what answers their press, so show it before you say anything.`
+const TOUR_ASKED = `The person pressed "Take the tour" on It's site a moment ago, and is looking at that screen now. Give them the tour below, in this conversation, starting now. The tour's first page is what answers their press, so show it before you say anything.`
 /** The words the tour's first rule begins with, by which it is found. */
 const TOUR_RULE_ONE = '1. **Never block.**'
 /**
@@ -963,7 +1033,7 @@ const TOUR_RULE_ONE = '1. **Never block.**'
  * in the background, which an app without one runs in front and never hears from again: so
  * here the rule is another, in the place of the first, and not a second word against it.
  */
-const TOUR_RULE_ONE_WAITING = `1. **Wait for each thing they do.** This conversation was most likely open before It's add-on was installed, and then what the person does on a page does not arrive here by itself. What each \`it tour show\` prints says so under \`arrives\`. Where \`arrives.byItself\` is \`true\`, as it is in a thread of T3 Code, what they do arrives as a message that begins \`[It]\`: after each page and each answer, end your turn, and do not wait. Otherwise, after every page you show and every answer you give, run \`it wait --timeout 100\` and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Where it is refused because your harness does not tell \`it\` which conversation this is, add \`--id\` and the id of the page that is on the screen. Do not use \`--follow\`, and do not put the command in the background: it has to end for you to be shown what it printed. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing. During the tour, say nothing else of what \`arrives.next\` says. Where it gives words for the person to type /reload-plugins or to start a new conversation, you told them those words with the pairing link, as setup said to: do not say them again during the tour. If you did not, say them once, word for word, after the ending.`
+const TOUR_RULE_ONE_WAITING = `1. **Wait for each thing they do.** This conversation was most likely open before It's add-on was installed, and then what the person does on a page does not arrive here by itself. What each \`it tour show\` prints says so under \`arrives\`. Where \`arrives.byItself\` is \`true\`, as it is in a thread of T3 Code, what they do arrives as a message that begins \`[It]\`: after each page and each answer, end your turn, and do not wait. Otherwise, after every page you show and every answer you give, run \`it wait --timeout 100\` and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Where it is refused because your harness does not tell \`it\` which conversation this is, add \`--id\` and the id of the page that is on the screen. Do not use \`--follow\`, and do not put the command in the background: it has to end for you to be shown what it printed. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing. During the tour, say nothing else of what \`arrives.next\` says. Where it gives words for the person to type /reload-plugins or to start a new conversation, you told them those words with the pairing link, as setup said to: do not say them again during the tour. If you did not, say them once, word for word, after the ending. On the tour’s first page that waiting is done for you by \`it tour answer\` and \`it tour next\`, as its section says, and you run no \`it wait\` there. The one exception to waiting is the first page where showing it printed \`"asleep": true\`: there you give the person the words that its \`arrives.next\` gives and end your turn, as it says, since the add-on loads only once your reply is over.`
 /** The tour as an agent that waited for the button is given it. */
 function tourForOneThatWaited(guide: string): string {
   const lines = guide.split('\n')
@@ -979,11 +1049,12 @@ function tourForOneThatWaited(guide: string): string {
  * for someone. An agent reads what a command prints whole. The install guide it may not have
  * read at all: an agent app's own tool for fetching a page hands its agent a summary, and in
  * the summaries seen the guide's last step was gone, so the agent installed It, gave the
- * pairing link and stopped, with no tour. So the two steps that follow setup are said here,
- * with how to read the guide itself.
+ * pairing link and stopped, with no tour. So the step that follows setup is said here, with
+ * how to read the guide itself. The tour comes before the link: the agent puts its first page
+ * up, and the browser the person pairs with the link goes to that page.
  */
 export const afterSetup = (it = itForAgent()): string =>
-  `If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that \`${it} site --no-open\` prints, to open on this computer, then run \`${it} tour --wait\` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
+  `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`${it} tour\` and do what it prints. It has you put a first page up for the person and then give them the link that \`${it} site --no-open\` prints, to open on this computer, which opens on that page. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
 
 /**
  * The same, where something is left for the person to do and they have to be told it: in the
@@ -993,14 +1064,14 @@ export const afterSetup = (it = itForAgent()): string =>
  * goes without what the rest would have done. Where Codex is to be started again, which ends the
  * agent's turn, the tour is left until it has been, and the person is told to ask for it then.
  */
-export const afterSetupTelling = (lines: readonly string[], restart = false, it = itForAgent()): string =>
-  `If you are an agent installing It for someone, two steps of the install guide come after this one. First, write the person one message that gives them the link that \`${it} site --no-open\` prints, to open on this computer, and tells them ${
+export const afterSetupTelling = (lines: readonly string[], restart = false, it = itForAgent()): string => {
+  const words =
     lines.length === 1 ? `this, word for word: “${lines[0]}”` : `each of these, word for word:\n\n${lines.map((line) => `“${line}”`).join('\n\n')}\n\n`
-  }${
-    restart
-      ? ` Then end your turn, and do not run \`${it} tour --wait\` yet: Codex has to be started again first, which ends this turn anyway. Once it is back and the person asks for the tour, run \`${it} tour --wait\` and do what it prints.`
-      : ` Then, only once that message is written and in the same turn, run \`${it} tour --wait\` and do what it prints.`
-  } If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
+  const guide = ` If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
+  return restart
+    ? `If you are an agent installing It for someone, one step of the install guide comes after this one, and it waits until Codex has been started again. Write the person one message that gives them the link that \`${it} site --no-open\` prints, to open on this computer, and tells them ${words} Then end your turn, and do not run \`${it} tour\` yet: Codex has to be started again first, which ends this turn anyway. Once it is back and the person asks for the tour, run \`${it} tour\` and do what it prints.${guide}`
+    : `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`${it} tour\` and do what it prints. It has you put a first page up for the person, and then write them one message that gives them the link that \`${it} site --no-open\` prints, to open on this computer, and tells them ${words} What showing that page printed under \`arrives\` says whether to end your turn then or to wait.${guide}`
+}
 
 /** What a person in a Codex conversation is told after setup: to start Codex again, and to ask for the tour once it is back. */
 const CODEX_RESTART_SETUP = `${CODEX_RESTART} Once Codex is back, say “Give me the It tour.”`
@@ -1075,6 +1146,91 @@ async function tourWhenAsked(a: Args) {
   })
 }
 
+/** The folders a picture of the tour's may have been kept in for this conversation: the one this command runs in, and the one the conversation was last known to work in. */
+function pictureFolders(): (string | undefined)[] {
+  const me = sessionAsked()?.session
+  return [process.cwd(), me ? conversationFolder(me) : undefined]
+}
+
+/**
+ * `it tour answer <action-id> [- | '<json>']` and `it tour next`: what an agent answers the tour's
+ * first page with, and how it waits for what the person does there. One command answers: the
+ * answer is set under the part of the page the action came from, with the request it waits on,
+ * the action is acknowledged, and the picture kept for it is taken away. Then, where what the
+ * person does next arrives in this conversation by itself, the agent is told to end its turn.
+ * Where it does not, or It cannot tell, the command waits for it as `it wait` does and prints
+ * it, with any picture it carried already written to a file, so that the next answer is again
+ * one command. `it tour next` is that wait by itself.
+ */
+/**
+ * How an answer is given where nothing in it can end a shell's quoting: in a here-document whose
+ * text is the argument. Claude Code refuses a here-document given to a command as its standard
+ * input where it holds a brace and a quote, as JSON does, and takes it in this form.
+ */
+const HEREDOC = (id: string) =>
+  `Give the JSON in a here-document, where nothing in it ends anything: \`it tour answer ${id} "$(cat <<'EOF'\`, then the JSON on a line of its own, then EOF on a line of its own, then \`)"\`.`
+async function tourAnswer(a: Args, counted: (code?: string) => void) {
+  const USAGE = "tour answer <action-id> [- | '<json>' | --file <path>] [--wait | --no-wait] [--timeout <seconds>]"
+  const me = sessionAsked()?.session
+  if (a._[0] === 'answer') {
+    const id = need(a._[1], 'which action', USAGE)
+    if (a.flags.wait === true && a.flags['no-wait'] === true)
+      throw new Problem('`it tour answer` either waits for what is done next or does not, and this command was told both.', 'invalid', `Usage: it ${USAGE}`)
+    const file = text(a, 'file')
+    if (file !== undefined && a._[2] !== undefined)
+      throw new Problem('The answer is given once, on the command line or with --file, and this command was given both.', 'invalid', `Usage: it ${USAGE}`)
+    // The answer is the JSON on the command line, which the guide has the agent write as a
+    // here-document's text, where no apostrophe or quote in its words can end it. With `-` it is
+    // read from standard input, as a here-string piped to it in PowerShell is. With neither, a pipe
+    // or a here-document given all the same is read, so that an agent that left out the `-` is not
+    // taken to have given no answer
+    const stdin = a._[2] === '-'
+    if (stdin && file !== undefined)
+      throw new Problem('The answer is given once, on standard input or with --file, and this command was given both.', 'invalid', `Usage: it ${USAGE}`)
+    const given =
+      file !== undefined
+        ? fileText(file, 'the answer')
+        : stdin
+          ? need(await piped(), 'the answer, on standard input', USAGE)
+          : (a._[2] ?? (await pipedIfAny(500)))
+    const from = file !== undefined ? `The answer in ${file}` : stdin || a._[2] === undefined ? 'The answer on standard input' : 'The answer'
+    let read: unknown
+    try {
+      read = given === undefined ? undefined : json(given, from)
+    } catch (err) {
+      // Most often an apostrophe in the agent's words, which ended the quotes round the JSON
+      throw err instanceof Problem && from === 'The answer' ? new Problem(err.message, err.code, HEREDOC(id)) : err
+    }
+    const answer = read === undefined ? undefined : object(read, 'An answer')
+    const done = await answerAction(id, answer)
+    dropPicture(done.request, pictureFolders())
+    const answered = { answered: done.part ?? null }
+    // Told to end its turn only where It knows that the next thing arrives by itself: anywhere else the command waits for it
+    const byItself = a.flags.wait === true ? false : (await arrivalHere(START_SLUG, true))?.byItself === true
+    // With --no-wait the agent has something to do first, as setting the ideas after its first
+    // answer: it is told what to do once it has, and what is done meanwhile is kept for it
+    if (a.flags['no-wait'] === true)
+      return out({
+        ...answered,
+        next: byItself
+          ? 'Do what you have to do now, and then end your turn. What the person does meanwhile arrives in this conversation by itself, as a message that begins [It].'
+          : 'Do what you have to do now, and then run `it tour next`, which prints what the person did meanwhile, or waits for it.',
+      })
+    if (byItself)
+      return out({ ...answered, next: 'End your turn. What the person does next arrives in this conversation by itself, as a message that begins [It].' })
+    written(
+      process.stdout,
+      `${JSON.stringify({ ...answered, next: 'Waiting for what the person does next, which is printed below. Answer it with this command again.' })}\n`,
+    )
+  } else if (a._.length > 1) throw new Problem('`it tour next` takes nothing after it.', 'invalid', 'Usage: it tour next [--timeout <seconds>]')
+  // An agent app that does not say which conversation this is waits on the page by its id, as the tour tells it to
+  const waiting: Args = { _: [], flags: { timeout: text(a, 'timeout') ?? '100', ...(me ? {} : { id: START_SLUG }) }, many: {} }
+  return wait(waiting, counted, async (c) => {
+    const picture = await keepPicture(c, process.cwd())
+    return picture ? { picture } : {}
+  })
+}
+
 /**
  * The tour an agent gives of It. With nothing after it, the guide is printed for the agent to
  * follow. `show` publishes one of the tour's pages and brings it up, starting afresh each time,
@@ -1085,13 +1241,16 @@ async function tourWhenAsked(a: Args) {
  * not been: the agent that gives the tour keeps no count of its own. When all have been seen,
  * what comes next is the ending.
  */
-async function tour(a: Args) {
-  const USAGE = 'tour [--wait] [show <name> | show next | clear]'
+async function tour(a: Args, counted: (code?: string) => void) {
+  const USAGE = "tour [--wait] [show <name> | show next | answer <action-id> [- | '<json>'] | next | clear]"
   const what = a._[0]
   if (a.flags.wait === true && what === undefined) return tourWhenAsked(a)
   if (what === undefined) return written(process.stdout, GUIDE)
+  if (what === 'answer' || what === 'next') return tourAnswer(a, counted)
   if (what === 'clear') {
     const cleared = await call<{ requested: { slug: string; job: string }[]; kept: string[]; seen: number }>('mutation', api.tour.clear, {})
+    // And whatever pictures the tour kept for the agent go with its pages
+    dropPictures(pictureFolders())
     if (cleared.requested.length) usage.record('tour.ended', { seen: String(Math.min(cleared.seen, 5)) as '0' | '1' | '2' | '3' | '4' | '5' })
     const results = await Promise.all(cleared.requested.map(({ slug, job }) => deletionStatus(slug, job)))
     const pending = results.filter((r) => r.state !== 'completed')
@@ -1116,10 +1275,16 @@ async function tour(a: Args) {
     if (eq < 1) throw new Problem('--param is written name=value.', 'invalid')
     given[param.slice(0, eq)] = loose(param.slice(eq + 1))
   }
-  // The agent's plate on the page carries the name of the agent app that is giving the tour, where that is known
   aimedAt(a)
   await canAimById(a, TAKES.showById)
   await canAimEverywhere(a, TAKES.showEverywhere)
+  // The first page is shown as one that cannot be heard yet where the conversation showing it
+  // has not loaded It's add-on and can: the page then tells the person the line to type, and
+  // the agent is told to end its turn. Not where the agent said which it is to be
+  const facts = name === TOUR_START && given.asleep === undefined ? await factsHere(`${TOUR_PREFIX}${name}`, true) : undefined
+  const asleep = reloadsHere(facts)
+  if (asleep) given.asleep = true
+  // The page names the agent app that is giving the tour, where that is known
   const by = sessionAsked()?.session.harness
   const made = tourPage(name, given, text(a, 'agent') ?? (by && Object.hasOwn(KNOWN, by) ? KNOWN[by as Harness].label : undefined))
   // The page is this conversation's from now on, whoever showed it last. An agent app that does
@@ -1138,7 +1303,7 @@ async function tour(a: Args) {
   // Counted as a page of the tour that was shown, by its name, which is It's own
   usage.record('tour.shown', { page: name as usage.TourPage, agent: usage.agentOf(by) })
   a.flags.open = true
-  await published(done, a, false, true)
+  await published(done, a, false, true, false, asleep ? { arrives: { byItself: false, next: asleepNext(facts?.claude) }, beside: { asleep: true } } : undefined)
 }
 
 async function update(a: Args) {
@@ -3398,6 +3563,14 @@ This machine
   it tour --wait [--timeout <seconds>]
                                  Wait until the person presses "Take the tour" on the site, and
                                  print the tour then. For an agent that has just installed It.
+  it tour answer <action-id> [- | '<json>']
+                                 Answer something done on the tour's first page, for the agent
+                                 that gives the tour: set the answer on the page and acknowledge
+                                 the action. Where what is done next does not arrive by itself,
+                                 wait for it and print it, unless told --no-wait. With -, the
+                                 answer is read from standard input. It may be in a file
+                                 instead, with --file <path>.
+  it tour next                   Wait for the next thing done on the tour's first page.
   it telemetry [on | off]        Say whether It reports usage counts, or turn that on or off.
                                  It reports them until it is turned off.
   it upgrade [--check]           Put the newest It in place of this one, and start it again where
@@ -3644,7 +3817,7 @@ async function main(argv: string[]): Promise<void> {
       written(process.stdout, SKILL)
       return
     case 'tour':
-      return tour(a)
+      return tour(a, counted)
     case 'login': {
       /** What a folder is that has nothing to join, or has joined already. */
       const refused = () => {

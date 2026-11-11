@@ -88,6 +88,7 @@ import {
   t3ThreadOf,
   wentUnanswered,
 } from './t3'
+import { keepPictureFor } from './tour-answer'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, begin, record, startSender, thisMachine, thisProgram, three, timeBand } from './usage'
 import {
@@ -4470,6 +4471,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         }
         inbox = clicks
         for (const click of clicks) recoveredClicks.delete(click.id)
+        // A picture that an action of the tour's first page carried is written to a file for its agent now, so that it is there when the agent is told
+        for (const click of clicks) keepPictureFor(click, conversationFolder)
         void route()
       },
       (err) => {

@@ -29,13 +29,13 @@ import { behindMark, MARK, PORTS, TAKES, UPLOAD, WHEN } from '@it/protocol'
 
 // What setup says last to an agent, as the program has it: said here in the program's own words, so that a change of them is a change here
 const AFTER_SETUP =
-  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
+  'If you are an agent installing It for someone, one step of the install guide comes after this one: run `it tour` and do what it prints. It has you put a first page up for the person and then give them the link that `it site --no-open` prints, to open on this computer, which opens on that page. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
 
 /** What setup says Pi's user is to do once Pi is connected, as the program has it. */
 const PI_NOTE = 'Pi: If Pi is open, restart it or run /reload in it: it reads its extensions when it starts.'
 /** What setup says last to an agent where something is left for the person to do: the words, whole, in the step that gives the pairing link. */
 const AFTER_SETUP_TELLING = (words: string) =>
-  `If you are an agent installing It for someone, two steps of the install guide come after this one. First, write the person one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them ${words} Then, only once that message is written and in the same turn, run \`it tour --wait\` and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
+  `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`it tour\` and do what it prints. It has you put a first page up for the person, and then write them one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them ${words} What showing that page printed under \`arrives\` says whether to end your turn then or to wait. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
 
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
@@ -157,6 +157,7 @@ function run(
   env: Record<string, string> = {},
   runtime = process.execPath,
   before: string[] = [],
+  input = '',
 ): Promise<Ran> {
   return new Promise((resolve) => {
     const child = execFile(
@@ -171,7 +172,7 @@ function run(
           err: String(stderr),
         }),
     )
-    child.stdin?.end()
+    child.stdin?.end(input)
   })
 }
 
@@ -688,12 +689,22 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
         [['open', 'plan', 'Kitchen'], 'Kitchen'],
         [['delete', 'plan', 'other'], 'other'],
         [['status', 'now'], 'now'],
+        [['tour', 'show', 'start', 'again', 'more'], 'more'],
+        [['tour', 'answer', 'action-1', '{"say":"two', 'words"}'], 'words"}'],
       ] as const) {
         const ran = await run(m, [...args], b.env)
         expect([args, ran.code, ran.out]).toEqual([args, 2, ''])
         expect(error(ran)).toMatchObject({ code: 'invalid', message: `It does not know what to do with "${left}".` })
       }
       expect(b.asked).toEqual([])
+      // An answer whose JSON a shell split at a space is told how to give it whole
+      expect(error(await run(m, ['tour', 'answer', 'action-1', '{"say":"two', 'words"}'], b.env)).hint).toContain(
+        "give it in a here-document: `it tour answer action-1 \"$(cat <<'EOF'`",
+      )
+      expect(error(await run(m, ['tour', 'next', 'now'], b.env)).message).toBe('`it tour next` takes nothing after it.')
+      expect(error(await run(m, ['tour', 'answer'], b.env)).message).toBe('Say which action.')
+      expect(error(await run(m, ['tour', 'answer', 'action-1', '[1]'], b.env)).code).toBe('invalid')
+      expect(b.asked.filter((x) => x.path !== 'delivery:get')).toEqual([])
       // A command there is none of is said to be that, whatever it is called
       expect(error(await run(m, ['constructor', 'x'], b.env)).message).toBe('No such command: constructor')
       // `it set` and `it notify` read all their last words together as one text, and still do
@@ -908,6 +919,8 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(given.out).toContain('1. **Wait for each thing they do.**')
       expect(given.out).toContain('run `it wait --timeout 100` and act on what it prints')
       expect(given.out).not.toContain('1. **Never block.**')
+      // It keeps the one exception to waiting: the first page that cannot be heard yet, where the agent ends its turn
+      expect(given.out).toContain('The one exception to waiting is the first page where showing it printed `"asleep": true`')
       expect(given.out).not.toContain('Where what they do does arrive by itself, do not wait at all')
       // And the tour as anyone else is given it still has the rule that is replaced here
       expect((await run(m, ['tour'], env)).out).toContain('1. **Never block.**')
@@ -6849,7 +6862,7 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
     // What is left for the person to do in the app it connected is in that step, word for word
     expect(printed(one.ran).next).toBe(AFTER_SETUP_TELLING(`this, word for word: “${PI_NOTE}”`))
     expect(AFTER_SETUP).toContain('`it site --no-open`')
-    expect(AFTER_SETUP).toContain('`it tour --wait`')
+    expect(AFTER_SETUP).toContain('run `it tour` and do what it prints')
     expect(AFTER_SETUP).toContain('`curl -fsSL https://itcan.do/install.md`')
     // Where nothing was set up, nothing follows
     expect(printed(none.ran).next).toBeUndefined()
@@ -7819,6 +7832,159 @@ describe('whether what the person does arrives by itself, as a page’s command 
     }
   })
 
+  test('the tour’s first page, shown from such a conversation, is put up as one that cannot be heard yet, and its agent is told to give the line to type and end its turn, and not to wait', async () => {
+    const m = machine()
+    // The page that was begun last is the one that is finished
+    let begun = 'tour-start'
+    b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin') {
+        begun = String(args.slug)
+        return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      }
+      if (fn === 'publish:finish') return { slug: begun, version: 1, url: `https://site.example/p/${begun}` }
+      if (fn === 'displays:show') return { displays: ['Desk'] }
+      return null
+    })
+    const c = await connectorSaying(m, { connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    try {
+      const env = { ...b.env, CLAUDE_CODE_SESSION_ID: claude, CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.321' }
+      const said = printed(await run(m, ['tour', 'show', 'start'], env))
+      expect(said).toMatchObject({ id: 'tour-start', asleep: true, arrives: { byItself: false } })
+      expect(said.arrives.next).toContain(`word for word: “${reloadLine('2.1.321')}”`)
+      expect(said.arrives.next).toContain('end your turn')
+      expect(said.arrives.next).toContain('do not run `it wait`')
+      // The page itself is told, so that it says so to the person
+      const begun = b.asked.filter((x) => x.path === 'publish:begin').at(-1)!.args
+      expect(begun.slug).toBe('tour-start')
+      // An agent that says which it is to be is taken at its word
+      const awake = printed(await run(m, ['tour', 'show', 'start', '--param', 'asleep=false'], env))
+      expect(awake.asleep).toBeUndefined()
+      expect(awake.arrives.next).toContain('run `it tour next`, act on what it prints')
+      expect(awake.arrives.next).not.toContain('it wait')
+      // And any other page of the tour is told what a page is told there: to wait for what is done on it
+      const other = printed(await run(m, ['tour', 'show', 'button'], env))
+      expect(other.asleep).toBeUndefined()
+      expect(other.arrives.next).toContain('--timeout 100`')
+      expect(other.arrives.next).not.toContain('end your turn')
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
+  test('`it tour answer` sets the answer under the action’s own part and request, acknowledges it, takes its picture away, and tells an agent that things arrive for by themselves to end its turn', async () => {
+    const m = machine()
+    const request = 'ab'.repeat(16)
+    b = await backend(m, ({ path: fn }) => {
+      if (fn === 'delivery:get')
+        return {
+          id: 'action-1',
+          artifact: 'tour-start',
+          title: 'Getting started',
+          name: 'checked',
+          payload: JSON.stringify({ part: 'board', request, sum: '12 × 12 =' }),
+          at: 1,
+          attended: true,
+          session: null,
+        }
+      if (fn === 'state:get') return { json: JSON.stringify({ board: { blind: true, say: 'Earlier.' } }), revision: 3 }
+      if (fn === 'state:patch') return { revision: 4 }
+      if (fn === 'delivery:handedOff') return { already: false, at: 1, harness: 'claude-code' }
+      return null
+    })
+    const c = await connectorSaying(m, { connected: true, listening: true, runtime: 'active', thread: 'none' })
+    // The command runs in the folder the conversation works in
+    const folder = m.home
+    try {
+      // The picture It kept for the action, and a file of the person's beside it
+      writeFileSync(path.join(folder, `.it-tour-${request}.png`), 'png')
+      writeFileSync(path.join(folder, 'sheet.png'), 'theirs')
+      const env = { ...b.env, CLAUDE_CODE_SESSION_ID: claude, IT_HARNESS: 'claude-code', IT_SESSION: claude, CLAUDE_CODE_EXECPATH: '/x/versions/2.1.321' }
+      const ran = await run(m, ['tour', 'answer', 'action-1', '{"read":"144","right":true,"say":"Right.","request":"not-this-one"}'], env)
+      expect(printed(ran)).toEqual({
+        answered: 'board',
+        next: 'End your turn. What the person does next arrives in this conversation by itself, as a message that begins [It].',
+      })
+      expect(b.asked.map((x) => x.path)).toEqual(['delivery:get', 'state:get', 'state:patch', 'delivery:handedOff', 'delivery:settle'])
+      const patched = b.asked[2]!.args
+      expect(patched.slug).toBe('tour-start')
+      // In place of the answer before it, at the revision it was read at
+      expect(JSON.parse(String(patched.patch))).toEqual({ board: { blind: null, read: '144', right: true, say: 'Right.', request } })
+      expect(patched.baseRevision).toBe(3)
+      expect(b.asked[4]!.args).toEqual({ id: 'action-1', outcome: 'succeeded' })
+      expect([existsSync(path.join(folder, `.it-tour-${request}.png`)), readFileSync(path.join(folder, 'sheet.png'), 'utf8')]).toEqual([false, 'theirs'])
+
+      // On standard input, as a pipe gives it, no apostrophe or quote in the agent's words ends anything
+      const words = `That's it: "144", and it's right'`
+      const answers = () =>
+        b.asked
+          .filter((x) => x.path === 'state:patch')
+          .map((x) => Object.fromEntries(Object.entries(JSON.parse(String(x.args.patch)).board).filter(([, v]) => v !== null)))
+      b.asked.length = 0
+      expect(
+        printed(await run(m, ['tour', 'answer', 'action-1', '-'], env, process.execPath, [], `${JSON.stringify({ read: '144', say: words })}\n`)).answered,
+      ).toBe('board')
+      // And where the `-` was left out, what was given there is read all the same, and not taken for no answer
+      expect(printed(await run(m, ['tour', 'answer', 'action-1'], env, process.execPath, [], JSON.stringify({ say: words }))).answered).toBe('board')
+      // With --no-wait the agent is told to do what it has to first, as set the ideas, and then to go on as it would have
+      expect(printed(await run(m, ['tour', 'answer', 'action-1', '--no-wait', '{"say":"There."}'], env))).toEqual({
+        answered: 'board',
+        next: 'Do what you have to do now, and then end your turn. What the person does meanwhile arrives in this conversation by itself, as a message that begins [It].',
+      })
+      // And told both to wait and not to, it sets nothing
+      const both = await run(m, ['tour', 'answer', 'action-1', '--no-wait', '--wait', '{"say":"Both."}'], env)
+      expect(error(both).message).toBe('`it tour answer` either waits for what is done next or does not, and this command was told both.')
+      expect(answers()).toEqual([
+        { read: '144', say: words, request },
+        { say: words, request },
+        { say: 'There.', request },
+      ])
+      // An empty standard input after `-` is refused, and nothing is set
+      b.asked.length = 0
+      expect(error(await run(m, ['tour', 'answer', 'action-1', '-'], env)).message).toBe('Say the answer, on standard input.')
+      // JSON that an apostrophe cut short on the command line is refused, with the way that cannot be cut
+      expect(error(await run(m, ['tour', 'answer', 'action-1', '{"say":"That'], env)).hint).toContain("`it tour answer action-1 \"$(cat <<'EOF'`")
+      // And JSON on standard input that is not JSON is said to be that
+      expect(error(await run(m, ['tour', 'answer', 'action-1', '-'], env, process.execPath, [], '{"say":')).message).toBe(
+        'The answer on standard input is not valid JSON.',
+      )
+      expect(answers()).toEqual([])
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
+  test('where the conversation’s add-on is listening, or its Claude Code is too old to load one, the first page is put up awake', async () => {
+    const m = machine()
+    b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: 'tour-start', version: 1, url: 'https://site.example/p/tour-start' }
+      if (fn === 'displays:show') return { displays: ['Desk'] }
+      return null
+    })
+    const env = { ...b.env, CLAUDE_CODE_SESSION_ID: claude }
+    let c = await connectorSaying(m, { connected: true, listening: true, runtime: 'active', thread: 'none' })
+    try {
+      const said = printed(
+        await run(m, ['tour', 'show', 'start'], { ...env, IT_HARNESS: 'claude-code', IT_SESSION: claude, CLAUDE_CODE_EXECPATH: '/x/versions/2.1.321' }),
+      )
+      expect(said.asleep).toBeUndefined()
+      expect(said.arrives).toMatchObject({ byItself: true, via: 'addon' })
+    } finally {
+      await c.close()
+    }
+    c = await connectorSaying(m, { connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    try {
+      const old = printed(await run(m, ['tour', 'show', 'start'], { ...env, CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.280' }))
+      expect(old.asleep).toBeUndefined()
+      expect(old.arrives.next).toContain('Start a new Claude Code chat')
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
   test('one in a Claude Code too old for that is told to ask the person for a new conversation instead', async () => {
     const m = machine()
     b = await publishing(m)
@@ -7983,7 +8149,7 @@ else if (said === 'plugin install it-bridge@it --scope user') {
     const line = reloadLine('2.1.321')
     // The words are in the step that comes next, and not in a condition
     expect(said.next).toContain(
-      `write the person one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${line}” Then, only once that message is written`,
+      `write them one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${line}” What showing that page printed under \`arrives\` says whether to end your turn then or to wait.`,
     )
     expect(said.next).not.toContain('Where setup said')
     // And they are the last thing it prints, addressed to the agent

@@ -1,0 +1,674 @@
+<!-- The whiteboard: a sum on a whiteboard, which the person answers in their own hand with a marker from the tray. The agent is given a picture of the board, reads it, and marks it with the green marker. -->
+<style>
+  [data-part="board"] { --board-a: #fafbfa; --board-b: #eff1f0; --board-al1: #f3f4f5; --board-al2: #b7bbc1; --board-al3: #dde0e3; --board-corner: #969ba2; --board-shade: rgba(74, 56, 24, .5); --board-band: rgba(255, 255, 255, .9); --board-glint: rgba(255, 255, 255, .13); --board-room: rgba(0, 0, 0, 0); --board-pencil: rgba(38, 40, 48, .34); --board-black: #26231f; --board-green: #12805a; --board-wood: #c79a68; padding-bottom: 8px; }
+  @media (prefers-color-scheme: dark) { [data-part="board"] { --board-a: #cdcbc4; --board-b: #b6b4ad; --board-al1: #8b8e93; --board-al2: #4e5156; --board-al3: #74777c; --board-corner: #3a3d41; --board-shade: rgba(0, 0, 0, .85); --board-band: rgba(255, 255, 255, .16); --board-glint: rgba(255, 255, 255, .05); --board-room: rgba(14, 12, 9, .34); --board-pencil: rgba(30, 30, 34, .4); --board-green: #0d7450; --board-wood: #a57c50; } }
+  /* The board hangs on the wall and has all of the stage: its frame, its face, and under them the tray and the two buttons */
+  .board-wall { width: 100cqw; height: 100cqh; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+  .board-frame { position: relative; min-height: 0; padding: 9px; border-radius: 12px; background: linear-gradient(165deg, var(--board-al1), var(--board-al2) 36%, var(--board-al3) 60%, var(--board-al2)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), inset 0 -1px 0 rgba(0, 0, 0, .14), 0 24px 36px -26px var(--board-shade), 0 3px 9px -4px var(--board-shade); }
+  /* The four corner pieces of the frame */
+  .board-frame > i { position: absolute; width: 21px; height: 21px; background: var(--board-corner); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28), inset 0 -1px 0 rgba(0, 0, 0, .2); }
+  .board-frame > i:nth-of-type(1) { left: 0; top: 0; border-radius: 12px 3px 7px 3px; } .board-frame > i:nth-of-type(2) { right: 0; top: 0; border-radius: 3px 12px 3px 7px; }
+  .board-frame > i:nth-of-type(3) { left: 0; bottom: 0; border-radius: 3px 7px 3px 12px; } .board-frame > i:nth-of-type(4) { right: 0; bottom: 0; border-radius: 7px 3px 12px 3px; }
+  .board-face { position: relative; width: 100%; height: 100%; border-radius: 3px; background: linear-gradient(112deg, transparent 0 9%, var(--board-band) 12.5% 17%, transparent 21% 23.5%, var(--board-band) 25% 26.5%, transparent 29%), linear-gradient(180deg, var(--board-a), var(--board-b)); }
+  .board-face canvas, .board-face > svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+  [data-part="board"] #board-pen { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: crosshair; }
+  .board-face.board-holds #board-pen { cursor: none; } .board-face.board-busy #board-pen { cursor: progress; }
+  /* Over what is written: a breath of the same light, the dimness of the room at the board's edges, and the shadow the frame throws on the face */
+  .board-gloss { position: absolute; inset: 0; pointer-events: none; border-radius: inherit; background: linear-gradient(112deg, transparent 0 9%, var(--board-glint) 12.5% 17%, transparent 21% 23.5%, var(--board-glint) 25% 26.5%, transparent 29%), radial-gradient(130% 120% at 50% 18%, transparent 45%, var(--board-room)); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .09), inset 0 4px 9px -3px rgba(0, 0, 0, .2), inset 3px 0 7px -4px rgba(0, 0, 0, .12); }
+  .board-ask { font-family: Hand, "Segoe Print", "Bradley Hand", cursive; font-weight: 600; fill: var(--board-black); stroke: var(--board-black); }
+  .board-ask text { stroke-width: .7; } .board-ask path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .board-slot { transition: opacity .3s; } .board-slot.board-off { opacity: 0; }
+  .board-slot rect { fill: none; stroke: var(--board-pencil); stroke-width: 2.4; stroke-linecap: round; stroke-dasharray: .1 9; }
+  .board-slot text, #board-said, .board-wrote { font-family: Hand, "Segoe Print", "Bradley Hand", cursive; font-weight: 600; } .board-slot text { fill: var(--board-pencil); }
+  /* The agent's marks, in its green marker. Each is there once the marker has come to it */
+  .board-theirs { fill: none; stroke: var(--board-green); stroke-width: 6.6; stroke-linecap: round; stroke-linejoin: round; visibility: hidden; }
+  .board-wrote { fill: var(--board-green); stroke: var(--board-green); stroke-width: .8; visibility: hidden; } .board-theirs.on, .board-wrote.on { visibility: visible; }
+  /* A marker in the hand: the person's under a mouse, and the agent's as it marks. Its tip is where the element is */
+  .board-hand, .board-held { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; z-index: 3; will-change: transform; }
+  .board-hand svg, .board-held svg { position: absolute; left: 0; top: -11px; width: 136px; height: 22px; overflow: visible; transform-origin: 0 50%; transform: rotate(-56deg); filter: drop-shadow(-4px 8px 4px rgba(0, 0, 0, .24)); transition: transform .42s cubic-bezier(.4, 0, .2, 1), filter .2s; }
+  .board-hand.board-up svg { transform: translate(2px, -7px) rotate(-56deg); filter: drop-shadow(-9px 15px 7px rgba(0, 0, 0, .2)); } .board-hand.board-lying svg { transform: rotate(0deg); filter: none; }
+  .board-held svg { transition: none; } .board-held svg.board-block { left: -37px; top: -15px; width: 74px; height: 28px; transform-origin: 50% 50%; transform: rotate(-7deg); }
+  .board-held[data-tool="pen"] .board-block, .board-held[data-tool="eraser"] svg:not(.board-block) { display: none; }
+  .board-mk { fill: var(--mk); } .board-wood { fill: var(--board-wood); }
+  /* The tray under the frame, with what lies on it, and the buttons beside it */
+  .board-under { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: start; gap: 0 14px; }
+  .board-tray { grid-column: 2; position: relative; z-index: 2; display: flex; align-items: flex-end; gap: 12px; height: 31px; margin-top: -22px; padding: 0 30px 9px; }
+  .board-tray::before { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 9px; border-radius: 2px 2px 6px 6px; background: linear-gradient(180deg, var(--board-al1), var(--board-al2) 60%, var(--board-corner)); box-shadow: 0 7px 9px -6px var(--board-shade); }
+  .board-tool { position: relative; flex: none; display: flex; align-items: flex-end; height: 40px; padding: 0; border: 0; background: none; -webkit-tap-highlight-color: transparent; transform-origin: 24% 100%; transition: transform .2s cubic-bezier(.3, 1.5, .5, 1), filter .2s, opacity .15s; }
+  .board-tool svg { display: block; width: 98px; height: 18px; } .board-tool.board-rub svg { width: 66px; height: 25px; }
+  button.board-tool:hover { transform: translateY(-2px); } button.board-tool[aria-pressed="true"] { transform: translateY(-8px) rotate(-6deg); filter: drop-shadow(0 9px 4px rgba(0, 0, 0, .25)); }
+  button.board-tool:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; border-radius: 6px; }
+  .board-agent { margin-left: 18px; } .board-tool.board-out { opacity: 0; }
+  .board-acts { grid-column: 3; justify-self: end; min-width: 0; display: flex; align-items: center; gap: 8px; padding-top: 8px; }
+  .board-type { min-width: 0; } .board-type input { width: 170px; max-width: 100%; height: 38px; padding: 0 15px; border-radius: 999px; border: 1px solid var(--faint); background: var(--card); color: var(--ink); font: 500 15px/1 Text; } .board-type input:focus { outline: 2px solid var(--green); outline-offset: 1px; } .board-type input::placeholder { color: var(--faint); }
+  @media (max-width: 760px) {
+    .board-frame { padding: 7px; } .board-frame > i { width: 16px; height: 16px; }
+    .board-under { grid-template-columns: minmax(0, 1fr); } .board-tray { grid-column: 1; justify-content: center; gap: 6px; padding: 0 6px 8px; height: 28px; margin-top: -20px; } .board-tray::before { height: 8px; }
+    .board-tool svg { width: 50px; height: 9.2px; } .board-tool.board-rub svg { width: 44px; height: 16.6px; } .board-agent { margin-left: 8px; }
+    .board-acts { grid-column: 1; justify-self: stretch; justify-content: flex-end; } .board-type { flex: 1 1 0; } .board-type input { width: 100%; height: 36px; }
+    .board-hand svg, .board-held svg { width: 104px; height: 16.8px; top: -8.4px; }
+  }
+</style>
+<section class="part" data-part="board" data-title="A whiteboard" data-line="Write your answer on the board, and press Check it. {agent} marks it in green." hidden>
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute">
+    <symbol id="board-m" viewBox="0 0 100 18"><rect x="26" y="2" width="68" height="14" rx="3" fill="#f7f6f2" stroke="#000" stroke-opacity=".2" stroke-width=".8"/><rect class="board-mk" x="39" y="2" width="42" height="14"/><path d="M46 7.2h21M46 11h12" stroke="#fff" stroke-opacity=".8" stroke-width="1.6" stroke-linecap="round"/><rect x="27" y="3" width="66" height="3.2" rx="1.6" fill="#fff" opacity=".5"/><rect x="26" y="12.4" width="68" height="3.6" rx="1.8" opacity=".13"/><rect class="board-mk" x="92" y="3.2" width="8" height="11.6" rx="2.6"/><rect class="board-mk" y="1" width="33" height="16" rx="5"/><path d="M24 2.5v13M27.5 2.5v13" stroke="#000" stroke-opacity=".22" stroke-width="1.2"/><rect x="3.5" y="3.2" width="17" height="3" rx="1.5" fill="#fff" opacity=".34"/><rect x="1" y="12" width="31" height="4.2" rx="2.1" opacity=".17"/></symbol>
+    <symbol id="board-o" viewBox="0 0 124 20"><path class="board-mk" d="M.6 10c0-2.3 3.2-3.8 10-4.2v8.4C3.8 13.8.6 12.3.6 10z"/><path d="M.6 10c0-2.3 3.2-3.8 10-4.2v3C5 9 2 9.4.6 10z" fill="#fff" opacity=".22"/><path d="M10 4.4h9.5a2 2 0 0 1 2 2v7.2a2 2 0 0 1-2 2H10z" fill="#3b3a37"/><rect x="21" y="2" width="92" height="16" rx="3.6" fill="#f7f6f2" stroke="#000" stroke-opacity=".2" stroke-width=".8"/><rect class="board-mk" x="41" y="2" width="50" height="16"/><path d="M49 8h26M49 12.6h15" stroke="#fff" stroke-opacity=".8" stroke-width="1.8" stroke-linecap="round"/><rect x="22" y="3.2" width="90" height="3.6" rx="1.8" fill="#fff" opacity=".5"/><rect x="21" y="13.8" width="92" height="4.2" rx="2.1" opacity=".13"/><rect class="board-mk" x="111" y="3.4" width="12" height="13.2" rx="3"/></symbol>
+    <symbol id="board-e" viewBox="0 0 64 24"><rect class="board-wood" x="1" y="1" width="62" height="16" rx="4.6"/><rect x="5" y="3.4" width="54" height="3" rx="1.5" fill="#fff" opacity=".32"/><rect x="1" y="11" width="62" height="6" rx="3" opacity=".12"/><rect x="2" y="14.5" width="60" height="8.5" rx="2.6" fill="#47453f"/><path d="M6 18.8h52" stroke="#fff" stroke-opacity=".16" stroke-width="1.6" stroke-dasharray="1 3.2"/></symbol>
+  </svg>
+  <div class="fill">
+    <div class="board-wall">
+      <div class="board-frame"><i></i><i></i><i></i><i></i>
+        <div class="board-face" id="board-face">
+          <canvas id="board-ink" aria-hidden="true"></canvas>
+          <svg id="board-pen" role="img" aria-label="A whiteboard with one question on it: a square garden has sides of 12 m, what is its area? Write your answer on it with your finger or the mouse.">
+            <g class="board-ask" id="board-ask"></g>
+            <g id="board-at">
+              <g class="board-slot" id="board-slot"><rect rx="16"/><text text-anchor="middle">write your answer here</text></g>
+              <text id="board-said"></text>
+              <g id="board-marks"></g>
+            </g>
+            <text class="board-wrote" id="board-ruler" aria-hidden="true"></text>
+          </svg>
+          <div class="board-gloss"></div>
+          <div class="board-held" id="board-held" data-tool="pen" hidden><svg viewBox="0 0 124 20" aria-hidden="true"><use href="#board-o"/></svg><svg class="board-block" viewBox="0 0 64 24" aria-hidden="true"><use href="#board-e"/></svg></div>
+          <div class="board-hand board-lying" id="board-hand" style="--mk:var(--board-green)" hidden><svg viewBox="0 0 124 20" aria-hidden="true"><use href="#board-o"/></svg></div>
+        </div>
+      </div>
+      <div class="board-under">
+        <div class="board-tray" id="board-tray" role="group" aria-label="The markers and the eraser">
+          <button class="board-tool" type="button" data-tool="black" data-ink="#26231f" aria-pressed="false" aria-label="The black marker"><svg viewBox="0 0 100 18" aria-hidden="true"><use href="#board-m"/></svg></button>
+          <button class="board-tool" type="button" data-tool="blue" data-ink="#2450c8" aria-pressed="true" aria-label="The blue marker"><svg viewBox="0 0 100 18" aria-hidden="true"><use href="#board-m"/></svg></button>
+          <button class="board-tool" type="button" data-tool="red" data-ink="#d2372c" aria-pressed="false" aria-label="The red marker"><svg viewBox="0 0 100 18" aria-hidden="true"><use href="#board-m"/></svg></button>
+          <button class="board-tool" type="button" data-tool="purple" data-ink="#7a3fc2" aria-pressed="false" aria-label="The purple marker"><svg viewBox="0 0 100 18" aria-hidden="true"><use href="#board-m"/></svg></button>
+          <button class="board-tool board-rub" type="button" data-tool="eraser" aria-pressed="false" aria-label="The eraser"><svg viewBox="0 0 64 24" aria-hidden="true"><use href="#board-e"/></svg></button>
+          <span class="board-tool board-agent" id="board-theirs" style="--mk:var(--board-green)"><svg viewBox="0 0 100 18" aria-hidden="true"><use href="#board-m"/></svg></span>
+        </div>
+        <div class="board-acts"><label class="board-type" id="board-type" hidden><input id="board-typed" type="text" maxlength="24" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" placeholder="Type your answer" aria-label="Type your answer"></label><button class="btn ghost small" type="button" id="board-wipe">Clear</button><button class="btn small" type="button" id="board-check">Check it</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+<script>
+Shell.part("board", (my) => {
+  var $ = Shell.$, box = my.box;
+  var pen = $("board-pen"), face = $("board-face"), inkEl = $("board-ink"), ask = $("board-ask"), at = $("board-at"), slot = $("board-slot"), said = $("board-said"), marks = $("board-marks"), ruler = $("board-ruler");
+  var hand = $("board-hand"), held = $("board-held"), theirPen = $("board-theirs"), tools = [].slice.call($("board-tray").querySelectorAll("button"));
+  var checkBtn = $("board-check"), wipeBtn = $("board-wipe"), typeRow = $("board-type"), typeIn = $("board-typed");
+  var QUESTION = "A square garden has sides of 12 m. What is its area?", SUM = "12 × 12 =", ANSWER = "144", WORKING = "12 × 10 + 12 × 2";
+  var FONT = 'Hand, "Segoe Print", "Bradley Hand", cursive', DARK = "#111111";
+  // How thick a marker writes and how wide the eraser wipes, in the board's units
+  var PEN = 7, RUB = 46;
+  // The garden, as the question's writer drew it: a square with seedlings in it, and how long a side is under it. It is drawn 100 across
+  var PLOT = "M3 4Q50 1 97 3Q100 50 98 97Q50 100 2 98Q0 50 3 4M24 38v-13m0 7q-8-1-9-9m9 9q8-1 9-9M64 34v-13m0 7q-8-1-9-9m9 9q8-1 9-9M44 64v-13m0 7q-8-1-9-9m9 9q8-1 9-9M78 76v-13m0 7q-8-1-9-9m9 9q8-1 9-9M22 86v-13m0 7q-8-1-9-9m9 9q8-1 9-9M3 114H97M3 107v14M97 107v14";
+  // What is written on the board to begin with, for a wide board and for a tall one: each line with where it is and how large,
+  // the sum, the place for the answer, the garden, where a hint goes and how large the agent writes
+  var LAY = {
+    wide: { w: 900, h: 400, mx: 44, my: 30, ask: [["A square garden has sides of 12 m.", 0, 46, 48], ["What is its area?", 0, 100, 48]], sum: [0, 266, 100], slot: [372, 172, 290, 132], plot: [770, 4, 108], hint: 376, write: 44, label: 28 },
+    tall: { w: 340, h: 548, mx: 16, my: 14, ask: [["A square garden has", 0, 32, 36], ["sides of 12 m.", 0, 71, 36], ["What is its area?", 0, 110, 36]], sum: [0, 216, 80], slot: [0, 238, 340, 126], plot: [264, 50, 64], hint: 470, write: 34, label: 24 },
+  };
+  var clamp = (v, low, high) => Math.min(high, Math.max(low, v));
+  var make = (tag, attrs, into) => { var el = document.createElementNS(Shell.SVG, tag); Object.keys(attrs).forEach((k) => el.setAttribute(k, attrs[k])); if (into) into.appendChild(el); return el; };
+
+  // ── How the board lies on the screen ──
+  // The board has whatever shape the stage has. What is written on it is laid out for a wide board or for a tall one, as
+  // large as fits, and the rest is board to write on. `view` is the board in its own units: how many pixels one is, how
+  // many there are across and down, and where the place for the answer is, which everything the person writes and the
+  // agent marks is measured from, so that it stays beside the sum whatever becomes of the board's shape
+  var view = { mode: "", s: 1, w: 0, h: 0, ox: 0, oy: 0 }, built = "", dpr = 1;
+  // What the person's lines are drawn on, which is asked for when the first is
+  var ink = null, sought = false;
+  function inks() {
+    if (!sought) { sought = true; try { ink = inkEl.getContext("2d"); } catch (err) {} aimed(); }
+    return ink;
+  }
+  // It is drawn on in the board's units, from the place for the answer
+  function aimed() {
+    var k = dpr * view.s;
+    if (ink) ink.setTransform(k, 0, 0, k, k * view.ox, k * view.oy);
+  }
+  function build(mode) {
+    var L = LAY[mode], k = L.plot[2] / 100;
+    built = mode;
+    ask.textContent = "";
+    L.ask.concat([[SUM].concat(L.sum)]).forEach((l) => { make("text", { x: l[1], y: l[2], "font-size": l[3] }, ask).textContent = l[0]; });
+    make("path", { d: PLOT, transform: "translate(" + L.plot[0] + " " + L.plot[1] + ") scale(" + k + ")", "stroke-width": (3.4 / k).toFixed(2) }, ask);
+    make("text", { x: L.plot[0] + L.plot[2] / 2, y: L.plot[1] + L.plot[2] * 1.22 + L.label * 0.8, "font-size": L.label, "text-anchor": "middle" }, ask).textContent = "12 m";
+    var dashes = slot.firstChild, word = slot.lastChild;
+    dashes.setAttribute("width", L.slot[2]); dashes.setAttribute("height", L.slot[3]);
+    word.setAttribute("x", L.slot[2] / 2); word.setAttribute("y", L.slot[3] / 2 + L.label * 0.3); word.setAttribute("font-size", L.label);
+    typedShown();
+  }
+  function layout() {
+    var r = pen.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    var mode = r.width / r.height >= 1.25 ? "wide" : "tall", L = LAY[mode];
+    var s = Math.min(r.width / (L.w + 2 * L.mx), r.height / (L.h + 2 * L.my), 2.6);
+    var w = r.width / s, h = r.height / s, bx = (w - L.w) / 2, by = Math.max(L.my, (h - L.h) * 0.42);
+    view = { mode: mode, s: s, w: w, h: h, ox: bx + L.slot[0], oy: by + L.slot[1] };
+    pen.setAttribute("viewBox", "0 0 " + w.toFixed(2) + " " + h.toFixed(2));
+    if (built !== mode) build(mode);
+    ask.setAttribute("transform", "translate(" + bx.toFixed(2) + " " + by.toFixed(2) + ")");
+    at.setAttribute("transform", "translate(" + view.ox.toFixed(2) + " " + view.oy.toFixed(2) + ")");
+    dpr = Math.min(3, window.devicePixelRatio || 1);
+    var cw = Math.round(r.width * dpr), ch = Math.round(r.height * dpr);
+    if (inkEl.width !== cw || inkEl.height !== ch) { inkEl.width = cw; inkEl.height = ch; }
+    if (!current) edge = null;
+    redraw();
+  }
+
+  // ── The person's marker ──
+  // What the person wrote, as the whiteboard keeps its lines. `u` is where a line went in the board's units, with how
+  // heavy the marker lay at each point: `points` is the same as parts of the picture, made as the board is sent
+  var mine = [], current = null, active = null, busy = false, tool = "blue", colour = "blue", INKS = {};
+  // What the person typed in place of writing, where the agent could not look at a picture
+  var typed = "";
+  // Where there is ink on the board, once it has been looked for: null where there is none
+  var inkBox;
+  var mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  function tone(g, s, plain) {
+    g.lineCap = g.lineJoin = "round";
+    g.globalCompositeOperation = s.erase ? "destination-out" : "source-over";
+    g.strokeStyle = g.fillStyle = s.erase ? "#000000" : plain ? DARK : s.color;
+  }
+  // Where a line begins: the marker is set down
+  function dot(g, s, plain) {
+    if (!g) return;
+    tone(g, s, plain);
+    g.beginPath(); g.arc(s.u[0][0], s.u[0][1], (s.width * s.u[0][2]) / 2, 0, Math.PI * 2); g.fill();
+  }
+  // One more piece of a line, up to halfway to its point `i`: a curve through the point before, a little thinner where the hand went fast
+  function piece(g, s, i, plain) {
+    if (!g) return;
+    var p = s.u, a = i > 1 ? mid(p[i - 2], p[i - 1]) : p[0], b = mid(p[i - 1], p[i]), w = (s.width * (p[i - 1][2] + p[i][2])) / 2;
+    tone(g, s, plain);
+    g.lineWidth = w;
+    g.beginPath(); g.moveTo(a[0], a[1]); g.quadraticCurveTo(p[i - 1][0], p[i - 1][1], b[0], b[1]); g.stroke();
+  }
+  // Where a line ends: the marker is lifted
+  function tail(g, s, plain) {
+    var p = s.u, n = p.length;
+    if (!g || n < 2) return;
+    var a = mid(p[n - 2], p[n - 1]);
+    tone(g, s, plain);
+    g.lineWidth = s.width * p[n - 1][2];
+    g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(p[n - 1][0], p[n - 1][1]); g.stroke();
+  }
+  function whole(g, s, plain) {
+    dot(g, s, plain);
+    for (var i = 1; i < s.u.length; i++) piece(g, s, i, plain);
+    tail(g, s, plain);
+  }
+  function redraw() {
+    inkBox = undefined;
+    if (!(sought || mine.length) || !inks()) return;
+    ink.setTransform(1, 0, 0, 1, 0, 0);
+    ink.clearRect(0, 0, inkEl.width, inkEl.height);
+    aimed();
+    mine.forEach((s) => whole(ink, s, false));
+  }
+  // Where the ink that is left on the board is, in the board's units: looked for on the board itself, so that what the
+  // eraser took is not counted, and among the lines the marker drew where the browser will not say what is on its canvas
+  var probe = document.createElement("canvas");
+  function inked() {
+    if (inkBox !== undefined) return inkBox;
+    if (!mine.length) return (inkBox = null);
+    try {
+      var k = Math.min(1, 240 / inkEl.width), w = Math.max(1, Math.round(inkEl.width * k)), h = Math.max(1, Math.round(inkEl.height * k));
+      probe.width = w; probe.height = h;
+      var g = probe.getContext("2d", { willReadFrequently: true });
+      g.drawImage(inkEl, 0, 0, w, h);
+      var d = g.getImageData(0, 0, w, h).data, x0 = w, y0 = h, x1 = -1, y1 = -1;
+      for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) if (d[(y * w + x) * 4 + 3] > 20) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      var f = inkEl.width / w / (dpr * view.s);
+      return (inkBox = x1 < 0 ? null : { x: x0 * f - view.ox, y: y0 * f - view.oy, w: (x1 - x0 + 1) * f, h: (y1 - y0 + 1) * f });
+    } catch (err) {}
+    var xs = [], ys = [];
+    mine.forEach((s) => { if (!s.erase) s.u.forEach((p) => { xs.push(p[0]); ys.push(p[1]); }); });
+    if (!xs.length) return (inkBox = null);
+    var left = Math.min.apply(null, xs), top = Math.min.apply(null, ys);
+    return (inkBox = { x: left, y: top, w: Math.max.apply(null, xs) - left, h: Math.max.apply(null, ys) - top });
+  }
+  // What the person typed, written on the board in the place for the answer, in their marker's colour
+  function typedBox() {
+    var L = LAY[view.mode] || LAY.wide, size = clamp((L.slot[2] - 28) / Math.max(1, typed.length * 0.44), 30, L.slot[3] * 0.82);
+    return { x: 14, y: L.slot[3] * 0.5 - size * 0.42, w: wide(typed, size), h: size * 0.84, size: size, base: L.slot[3] * 0.5 + size * 0.3 };
+  }
+  function typedShown() {
+    said.textContent = typed;
+    if (!typed) return;
+    var b = typedBox();
+    said.setAttribute("x", b.x); said.setAttribute("y", b.base); said.setAttribute("font-size", b.size); said.setAttribute("fill", INKS[colour]);
+  }
+  var has = () => !!typed || !!inked();
+  function ready() {
+    var none = busy || !has();
+    checkBtn.disabled = none; wipeBtn.disabled = none; typeIn.disabled = busy;
+    face.classList.toggle("board-busy", busy);
+    slot.classList.toggle("board-off", has());
+    if (busy) inHand(false);
+  }
+  // The board is the person's again while an answer may still come, once the wait has run out. An answer is to the board
+  // as it was sent: where they write more, wipe some of it or clear it, it is no answer to what is there now, and is not drawn
+  function changed() {
+    clean();
+    if (!asker.waiting()) return;
+    asker.forget();
+    box.idle();
+  }
+  function pick(name) {
+    tool = name;
+    if (name !== "eraser") colour = name;
+    tools.forEach((b) => b.setAttribute("aria-pressed", String(b.getAttribute("data-tool") === name)));
+    held.setAttribute("data-tool", name === "eraser" ? "eraser" : "pen");
+    held.style.setProperty("--mk", INKS[colour]);
+    typedShown();
+  }
+  tools.forEach((b) => {
+    var name = b.getAttribute("data-tool");
+    if (name !== "eraser") { INKS[name] = b.getAttribute("data-ink"); b.style.setProperty("--mk", INKS[name]); }
+    b.addEventListener("click", () => pick(name));
+  });
+  // Under a mouse, the marker that was picked is in the hand, or the eraser is, and is not in the tray meanwhile
+  var edge = null;
+  function inHand(yes) {
+    if (held.hidden === !yes) return;
+    held.hidden = !yes;
+    face.classList.toggle("board-holds", yes);
+    tools.forEach((b) => b.classList.toggle("board-out", yes && b.getAttribute("data-tool") === tool));
+  }
+  function hold(e) {
+    var show = e.pointerType === "mouse" && !busy && !!view.mode;
+    if (show) { edge = edge || pen.getBoundingClientRect(); held.style.transform = "translate(" + (e.clientX - edge.left).toFixed(1) + "px," + (e.clientY - edge.top).toFixed(1) + "px)"; }
+    inHand(show);
+  }
+  var where = (e) => [(e.clientX - edge.left) / view.s - view.ox, (e.clientY - edge.top) / view.s - view.oy];
+  function more(e) {
+    var p = where(e), u = current.u, last = u[u.length - 1], far = Math.hypot(p[0] - last[0], p[1] - last[1]);
+    if (far < 0.7) return;
+    // The marker lies lighter on the board the faster the hand goes, and that changes little by little
+    var fast = far / Math.max(1, e.timeStamp - current.t), heavy = current.erase ? 1 : last[2] * 0.65 + clamp(1.2 - fast * 0.22, 0.68, 1.2) * 0.35;
+    current.t = e.timeStamp;
+    u.push([p[0], p[1], heavy]);
+    piece(inks(), current, u.length - 1, false);
+  }
+  pen.addEventListener("pointerdown", (e) => {
+    if (busy || active !== null || (e.pointerType === "mouse" && e.button)) return;
+    if (!view.mode) layout();
+    if (!view.mode) return;
+    e.preventDefault();
+    active = e.pointerId;
+    try { pen.setPointerCapture(e.pointerId); } catch (err) {}
+    edge = pen.getBoundingClientRect();
+    var rub = tool === "eraser", p = where(e);
+    current = { u: [[p[0], p[1], rub ? 1 : 1.15]], points: [], width: rub ? RUB : PEN, erase: rub, color: rub ? "" : INKS[colour], t: e.timeStamp };
+    mine.push(current);
+    dot(inks(), current, false);
+    inkBox = undefined;
+    // A hand on the board takes the place of what was typed
+    if (typed || typeIn.value) { typed = typeIn.value = ""; typedShown(); }
+    changed();
+    ready();
+  });
+  pen.addEventListener("pointermove", (e) => {
+    hold(e);
+    if (!current || e.pointerId !== active) return;
+    var all = typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : [];
+    (all.length ? all : [e]).forEach(more);
+  });
+  ["pointerup", "pointercancel"].forEach((kind) => pen.addEventListener(kind, (e) => {
+    if (!current || e.pointerId !== active) return;
+    tail(inks(), current, false);
+    current = null; active = null; inkBox = undefined;
+    // A board wiped quite clean with the eraser keeps none of its lines
+    if (!inked()) mine.length = 0;
+    ready();
+  }));
+  pen.addEventListener("pointerleave", () => { if (!current) edge = null; inHand(false); });
+  pen.addEventListener("contextmenu", (e) => e.preventDefault());
+  function wiped() {
+    mine.length = 0;
+    typed = typeIn.value = "";
+    typedShown();
+    redraw();
+  }
+  wipeBtn.addEventListener("click", () => {
+    if (busy) return;
+    wiped();
+    changed();
+    ready();
+  });
+  typeIn.addEventListener("input", () => {
+    typed = Shell.tidy(typeIn.value, 24);
+    // What is typed takes the place of what was written by hand, so that the board shows what will be checked
+    if (typed && mine.length) { mine.length = 0; redraw(); }
+    typedShown();
+    changed();
+    ready();
+  });
+  typeIn.addEventListener("keydown", (e) => { if (e.key === "Enter") checkBtn.click(); });
+
+  // ── The picture the agent reads ──
+  // The part of the board with the question, the sum and everything the person wrote, in the board's units
+  function region() {
+    var L = LAY[view.mode] || LAY.wide, b = inked();
+    var x0 = -L.slot[0] - 18, y0 = -L.slot[1] - 14, x1 = x0 + L.w + 36, y1 = L.slot[3] + 14;
+    if (b) { x0 = Math.min(x0, b.x - 16); y0 = Math.min(y0, b.y - 16); x1 = Math.max(x1, b.x + b.w + 16); y1 = Math.max(y1, b.y + b.h + 16); }
+    if (view.w) { x0 = Math.max(x0, -view.ox); y0 = Math.max(y0, -view.oy); x1 = Math.min(x1, view.w - view.ox); y1 = Math.min(y1, view.h - view.oy); }
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+  // The question as it is written on the board, on a canvas, from where the place for the answer is
+  function asked(g, L) {
+    g.fillStyle = g.strokeStyle = DARK;
+    L.ask.concat([[SUM].concat(L.sum)]).forEach((l) => { g.font = "600 " + l[3] + "px " + FONT; g.fillText(l[0], l[1] - L.slot[0], l[2] - L.slot[1]); });
+    g.font = "600 " + L.label + "px " + FONT;
+    g.textAlign = "center";
+    g.fillText("12 m", L.plot[0] + L.plot[2] / 2 - L.slot[0], L.plot[1] + L.plot[2] * 1.22 + L.label * 0.8 - L.slot[1]);
+    g.textAlign = "left";
+    if (typeof Path2D !== "function") return;
+    var k = L.plot[2] / 100;
+    g.translate(L.plot[0] - L.slot[0], L.plot[1] - L.slot[1]); g.scale(k, k);
+    g.lineWidth = 3.4 / k; g.lineCap = g.lineJoin = "round";
+    g.stroke(new Path2D(PLOT));
+  }
+  // A picture of that part of the board, the question, the sum and what the person wrote, in dark ink on white whatever
+  // the screen's colours and whichever marker they took, as large as a model reads a picture at. Where the browser can
+  // make none, there is none, and the lines are all the agent is given.
+  function picture(R) {
+    var fonts = document.fonts && document.fonts.load ? document.fonts.load("600 64px Hand").catch(() => {}) : null;
+    return Promise.resolve(fonts).then(() => new Promise((resolve) => {
+      try {
+        var k = Math.min(2.4, 1280 / Math.max(R.w, R.h)), c = document.createElement("canvas"), sheet = document.createElement("canvas");
+        c.width = sheet.width = Math.round(R.w * k); c.height = sheet.height = Math.round(R.h * k);
+        var g = c.getContext("2d"), lines = sheet.getContext("2d");
+        if (!g || !lines) return resolve(null);
+        // The lines are drawn on a sheet of their own, so that what the eraser took is taken from them and not from the question
+        lines.setTransform(k, 0, 0, k, -R.x * k, -R.y * k);
+        mine.forEach((s) => whole(lines, s, true));
+        g.fillStyle = "#ffffff"; g.fillRect(0, 0, c.width, c.height);
+        g.setTransform(k, 0, 0, k, -R.x * k, -R.y * k);
+        asked(g, LAY[view.mode] || LAY.wide);
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        g.drawImage(sheet, 0, 0);
+        c.toBlob((made) => resolve(made || null), "image/png");
+      } catch (err) { resolve(null); }
+    }));
+  }
+/*whiteboard.fitting*/
+
+  // ── The agent's marker ──
+  // The agent's marks come onto the board one after another, each drawn as a hand draws it, by the green marker from the
+  // tray. Taking them off also stops those that have not come yet, so that none is drawn on a board that was cleared or
+  // written on since. `playing` is the marks that are on their way, and `kept` those that came while the part was not shown
+  var marking = 0, playing = null, kept = null, clips = 0;
+  var live = typeof window.requestAnimationFrame === "function" && typeof document.createElementNS(Shell.SVG, "path").getTotalLength === "function";
+  function rest() { hand.hidden = true; hand.classList.add("board-lying"); hand.classList.remove("board-up"); theirPen.classList.remove("board-out"); }
+  function clean() { marking++; playing = kept = null; rest(); marks.textContent = ""; }
+  var later = (mark, ms, fn) => setTimeout(() => { if (mark === marking) fn(); }, ms);
+  // How wide words are in the hand the board is written in
+  function wide(text, size) {
+    try { ruler.setAttribute("font-size", size); ruler.textContent = text; var w = ruler.getComputedTextLength(); ruler.textContent = ""; if (w > 0) return w; } catch (err) {}
+    return text.length * size * 0.4;
+  }
+  function wrap(text, size, most) {
+    var lines = [""];
+    text.split(" ").forEach((word) => { var next = lines[lines.length - 1] ? lines[lines.length - 1] + " " + word : word; if (lines[lines.length - 1] && wide(next, size) > most) lines.push(word); else lines[lines.length - 1] = next; });
+    return lines;
+  }
+  // A line of the marker's: drawn along its length, with the tip of the marker where it has got to
+  function line(id, d, ms) {
+    var el = make("path", { class: "board-theirs", d: d }, marks), long = 0;
+    if (id) el.id = id;
+    return {
+      el: el, ms: ms,
+      from: () => el.getPointAtLength(0),
+      to: () => el.getPointAtLength(el.getTotalLength()),
+      start() { long = el.getTotalLength(); el.style.strokeDasharray = long + " " + long; el.style.strokeDashoffset = long; },
+      go(p) { var e = p < 0.5 ? 2 * p * p : 1 - Math.pow(2 - 2 * p, 2) / 2, q = el.getPointAtLength(long * e); el.style.strokeDashoffset = long * (1 - e); return [q.x, q.y]; },
+      done() { el.style.strokeDasharray = el.style.strokeDashoffset = ""; },
+    };
+  }
+  // Words of the agent's: written from left to right, the marker going up and down as it goes along
+  function words(id, text, x, y, size) {
+    var name = "board-clip-" + ++clips, w = wide(text, size) + size * 0.3;
+    var clip = make("rect", { x: x - 5, y: y - size, width: 0, height: size * 1.5 }, make("clipPath", { id: name }, marks));
+    var el = make("text", { class: "board-wrote", x: x, y: y, "font-size": size, "clip-path": "url(#" + name + ")" }, marks);
+    el.textContent = text;
+    if (id) el.id = id;
+    return {
+      el: el, ms: Math.max(240, text.length * 62),
+      from: () => ({ x: x, y: y - size * 0.3 }),
+      to: () => ({ x: x + w, y: y - size * 0.3 }),
+      start() {},
+      go(p) { clip.setAttribute("width", (w * p).toFixed(1)); return [x - 5 + w * p, y - size * 0.3 + Math.sin(p * text.length * 4.4) * size * 0.17]; },
+      done() { clip.setAttribute("width", w); },
+    };
+  }
+  function shown(step) { step.el.classList.add("on"); step.done(); }
+  // The marker in the agent's hand, with its tip at a place on the board
+  var tipAt = (x, y) => { hand.style.transform = "translate(" + ((x + view.ox) * view.s).toFixed(1) + "px," + ((y + view.oy) * view.s).toFixed(1) + "px)"; };
+  function home() {
+    var m = theirPen.getBoundingClientRect(), f = face.getBoundingClientRect();
+    hand.style.transform = "translate(" + (m.left - f.left).toFixed(1) + "px," + (m.top + m.height / 2 - f.top).toFixed(1) + "px)";
+  }
+  function drawn(step, mark) {
+    if (!live) return shown(step);
+    var began = performance.now();
+    hand.style.transition = "none";
+    hand.classList.remove("board-up");
+    step.start();
+    step.el.classList.add("on");
+    (function frame() {
+      if (mark !== marking) return;
+      var p = Math.min(1, (performance.now() - began) / step.ms), tip = step.go(p);
+      tipAt(tip[0], tip[1]);
+      if (p < 1) requestAnimationFrame(frame); else step.done();
+    })();
+  }
+  function perform(steps) {
+    if (!steps.length) return;
+    if (Shell.calm) return steps.forEach(shown);
+    // Marks that come while the person is in another part are drawn when they come back, where they can see it done
+    if (!my.shown()) { kept = steps; return; }
+    var mark = marking, t = 0, was = null;
+    playing = steps;
+    if (live) {
+      // The green marker is taken from the tray
+      hand.style.transition = "none";
+      hand.classList.add("board-lying");
+      home();
+      hand.hidden = false;
+      void hand.offsetWidth;
+      theirPen.classList.add("board-out");
+    }
+    steps.forEach((step) => {
+      var a = live ? step.from() : null, go = !was ? 520 : live ? clamp(Math.hypot(a.x - was.x, a.y - was.y) * 1.2, 120, 320) : 160;
+      // It is lifted, and goes to where the next mark begins
+      later(mark, t, () => {
+        if (!live) return;
+        hand.style.transition = "transform " + go + "ms cubic-bezier(.5, 0, .2, 1)";
+        hand.classList.remove("board-lying");
+        hand.classList.add("board-up");
+        tipAt(a.x, a.y);
+      });
+      later(mark, t + go, () => drawn(step, mark));
+      t += go + step.ms + 60;
+      was = live ? step.to() : {};
+    });
+    // And is laid back in the tray
+    later(mark, t + 140, () => {
+      if (!live) return;
+      hand.style.transition = "transform 520ms cubic-bezier(.5, 0, .2, 1)";
+      hand.classList.add("board-lying");
+      home();
+    });
+    later(mark, t + 700, () => { playing = null; rest(); });
+  }
+  // Each marking is its own hand: no two rings are quite the same
+  function dice(seed) { var a = seed >>> 0 || 7; return () => { a = (Math.imul(a, 1664525) + 1013904223) >>> 0; return a / 4294967296; }; }
+  var n1 = (v) => v.toFixed(1);
+  // A ring round something, begun at its upper left and closed a little past where it began
+  function ring(cx, cy, rx, ry, rnd) {
+    var from = -2.5 + rnd() * 0.5, lean = rnd() * 6, d = "";
+    for (var i = 0; i <= 60; i++) {
+      var t = i / 60, a = from + Math.PI * 2.13 * t, k = 0.955 + 0.1 * t + 0.028 * Math.sin(a * 2 + lean);
+      d += (i ? "L" : "M") + n1(cx + Math.cos(a) * rx * k) + " " + n1(cy + Math.sin(a) * ry * k);
+    }
+    return d;
+  }
+  // An arrow from the ring to what is written beside it, as two lines: its shaft, and its head
+  function arrow(cx, cy, rx, ry, to) {
+    var dx = to.x + to.w / 2 - cx, dy = to.y + to.h / 2 - cy, far = Math.hypot(dx, dy) || 1;
+    dx /= far; dy /= far;
+    var a = 1 / Math.sqrt((dx * dx) / (rx * rx) + (dy * dy) / (ry * ry)) + 12;
+    var b = far - Math.min(Math.abs(dx) > 0.01 ? to.w / 2 / Math.abs(dx) : 1e9, Math.abs(dy) > 0.01 ? to.h / 2 / Math.abs(dy) : 1e9) - 12;
+    if (b - a < 24) return [];
+    var x1 = cx + dx * a, y1 = cy + dy * a, x2 = cx + dx * b, y2 = cy + dy * b, bow = (b - a) * 0.1;
+    return [
+      line("board-arrow", "M" + n1(x1) + " " + n1(y1) + "Q" + n1((x1 + x2) / 2 - dy * bow) + " " + n1((y1 + y2) / 2 + dx * bow) + " " + n1(x2) + " " + n1(y2), 200),
+      line("board-head", "M" + n1(x2 - dx * 20 - dy * 12) + " " + n1(y2 - dy * 20 + dx * 12) + "L" + n1(x2) + " " + n1(y2) + "L" + n1(x2 - dx * 20 + dy * 13) + " " + n1(y2 - dy * 20 - dx * 13), 170),
+    ];
+  }
+  var tick = (k, t) => "M" + n1(k.x + t * 0.06) + " " + n1(k.y + t * 0.56) + "Q" + n1(k.x + t * 0.22) + " " + n1(k.y + t * 0.66) + " " + n1(k.x + t * 0.36) + " " + n1(k.y + t * 0.93) + "Q" + n1(k.x + t * 0.52) + " " + n1(k.y + t * 0.4) + " " + n1(k.x + t) + " " + n1(k.y + t * 0.03);
+  // A star in one line, as it is drawn without lifting the marker
+  function star(cx, cy, r, rnd) {
+    var d = "", turn = (rnd() - 0.5) * 0.3;
+    for (var i = 0; i <= 5; i++) { var a = -Math.PI / 2 + turn + (i % 5) * Math.PI * 0.8, k = r * (0.94 + rnd() * 0.12 + (i === 5 ? 0.06 : 0)); d += (i ? "L" : "M") + n1(cx + Math.cos(a) * k) + " " + n1(cy + Math.sin(a) * k); }
+    return d;
+  }
+  var over = (a, b) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  // A place on the board for something of this size: the first of the places tried that is on the board and on nothing else,
+  // which is `free`, and where none is, the one that, moved onto the board, lies over the least
+  function spot(w, h, tries, used, F) {
+    var best = null;
+    for (var i = 0; i < tries.length; i++) {
+      var r = { x: clamp(tries[i][0], F.x, Math.max(F.x, F.x + F.w - w)), y: clamp(tries[i][1], F.y, Math.max(F.y, F.y + F.h - h)), w: w, h: h };
+      r.lies = used.reduce((n, u) => n + over(r, u), 0);
+      r.free = !r.lies && r.x === tries[i][0] && r.y === tries[i][1] && w <= F.w && h <= F.h;
+      if (r.free) return r;
+      if (!best || r.lies < best.lies) best = r;
+    }
+    return best;
+  }
+  // The marking itself: a ring round what the person wrote, an arrow to the right answer and a hint where they are wrong,
+  // and a tick, a star and a few words where they are right. Each is put where the board is free
+  function marked(got) {
+    var L = LAY[view.mode] || LAY.wide, sx = L.slot[0], sy = L.slot[1], rnd = dice(parseInt(String(got.request).slice(0, 7), 16));
+    var F = { x: 12 - view.ox, y: 10 - view.oy, w: (view.w || L.w + 2 * L.mx) - 24, h: (view.h || L.h + 2 * L.my) - 20 - 20 / view.s };
+    var b = typed ? typedBox() : inked() || { x: 30, y: 20, w: L.slot[2] - 60, h: L.slot[3] - 40 };
+    // Where the question is, which nothing is written over
+    var used = L.ask.concat([[SUM].concat(L.sum)]).map((l) => ({ x: l[1] - sx, y: l[2] - l[3] * 0.78 - sy, w: wide(l[0], l[3]), h: l[3] * 1.02 }));
+    var sum = used[used.length - 1];
+    used.push({ x: L.plot[0] - sx - 8, y: L.plot[1] - sy - 8, w: L.plot[2] + 16, h: L.plot[2] * 1.22 + L.label + 16 });
+    var steps = [], near = [], cx = b.x + b.w / 2, cy = b.y + b.h / 2, low, size = L.write;
+    var read = Shell.tidy(got.read, 16), hint = Shell.tidy(got.hint, 44);
+    if (read && !typed) make("title", {}, marks).textContent = my.agent + " read this as " + read;
+    if (got.right === true) {
+      var t = clamp(b.h, 64, 118);
+      used.push({ x: b.x - 6, y: b.y - 6, w: b.w + 12, h: b.h + 12 });
+      var k = spot(t, t, [[b.x + b.w + 24, cy - t * 0.6], [cx - t / 2, b.y + b.h + 14], [b.x - t - 24, cy - t * 0.6], [cx - t / 2, b.y - t - 14]], used, F);
+      steps.push(line("board-tick", tick(k, t), 400));
+      used.push(k);
+      var r = t * 0.3, s = spot(r * 2, r * 2, [[k.x + t + 12, k.y + t * 0.1], [k.x + t * 0.25, k.y + t + 8], [k.x - r * 2 - 12, k.y + t * 0.1], [k.x + t * 0.25, k.y - r * 2 - 8]], used, F);
+      steps.push(line("board-star", star(s.x + r, s.y + r, r, rnd), 680));
+      used.push(s);
+      near = [[s.x + r * 2 + 20, s.y + r - size * 0.5], [b.x, Math.max(b.y + b.h, k.y + t, s.y + r * 2) + 14]];
+      low = Math.max(b.y + b.h, k.y + t, s.y + r * 2);
+    } else {
+      var rx = Math.max(50, b.w / 2 + 26), ry = Math.max(42, b.h / 2 + 20), answer = Shell.tidy(got.answer, 8);
+      steps.push(line("board-ring", ring(cx, cy, rx, ry, rnd), 760));
+      used.push({ x: cx - rx - 6, y: cy - ry - 6, w: rx * 2 + 12, h: ry * 2 + 12 });
+      low = cy + ry;
+      if (answer) {
+        var as = clamp(b.h, 58, L.sum[2]), aw = wide(answer, as), ah = as * 0.78, gap = 74;
+        // Beside the ring, or after the sum where that is free, as it is on a tall board, or under the ring, before it, or over it
+        var a = spot(aw, ah, [[cx + rx + gap, cy - ah / 2], [sum.x + sum.w + 20, sum.y + (sum.h - ah) / 2], [cx - aw / 2, cy + ry + gap * 0.72], [cx - rx - gap - aw, cy - ah / 2], [cx - aw / 2, cy - ry - gap * 0.72 - ah]], used, F);
+        steps = steps.concat(arrow(cx, cy, rx, ry, a));
+        steps.push(words("board-right", answer, a.x, a.y + ah * 0.94, as));
+        used.push(a);
+        low = Math.max(low, a.y + ah);
+      }
+    }
+    if (hint) {
+      // Under everything, at the left of what is written, and smaller where the board has no room for it as large as that
+      for (var small = 1, lines, h; small > 0.6; small -= 0.16) {
+        size = L.write * small;
+        lines = wrap(hint, size, Math.min(L.w, F.w));
+        var hw = Math.max.apply(null, lines.map((text) => wide(text, size))), hh = lines.length * size * 1.04;
+        h = spot(hw, hh, near.concat([[-sx, Math.max(L.hint - sy - size * 0.8, low + 16)], [-sx, low + 16], [b.x, low + 16], [-sx, F.y + F.h - hh], [cx + 60, low + 16]]), used, F);
+        if (h.free) break;
+      }
+      lines.forEach((text, i) => steps.push(words(i ? "" : "board-hint", text, h.x, h.y + size * 0.8 + i * size * 1.04, size)));
+    }
+    perform(steps);
+  }
+  var asker = my.asker((got) => {
+    clean();
+    busy = false;
+    // An agent that cannot look at pictures says so, and marks nothing, whatever else it says: its sentence is shown, the
+    // board is left as the person wrote it, and from then on they may type their answer under it
+    if (got.blind === true) {
+      typeRow.hidden = false;
+      my.line("Type your answer under the board, and press Check it. {agent} marks what you typed.");
+    } else marked(got);
+    box.say(got.say);
+    ready();
+  }, () => { busy = false; ready(); });
+  checkBtn.addEventListener("click", () => {
+    if (busy || !has()) return;
+    var began = Date.now();
+    busy = true;
+    clean();
+    ready();
+    box.sending(began);
+    // A typed answer goes as it is, with no picture: the agent marks it as it would one it had read
+    if (typed) {
+      box.did("typed an answer");
+      asker.send("checked", { answer: ANSWER, typed: typed, saved: null, question: QUESTION, sum: SUM, working: WORKING, png: null, strokes: [] }, began);
+      return;
+    }
+    var R = region();
+    mine.forEach((s) => { s.points = s.u.map((p) => [(p[0] - R.x) / R.w, (p[1] - R.y) / R.h]); });
+    picture(R).then((png) => {
+      var data = fitted(png);
+      // Sent as it is, it would be refused, and again each time: so the person is told what would let it go
+      if (!data) {
+        busy = false;
+        ready();
+        box.idle();
+        box.did("");
+        box.hint("That is too many lines to send at once. Clear the board, and write it again.");
+        return;
+      }
+      box.did("wrote an answer");
+      // The picture is what the agent reads, and It has it written to a file for the agent before it hears of this, under
+      // a name that this request gives it: `saved` is that name, in the folder the agent works in. The lines go only
+      // where there is no picture to read. What the agent needs first is first: the right answer, and where the picture is
+      var request = Shell.newId();
+      asker.send("checked", { answer: ANSWER, saved: data.png ? ".it-tour-" + request + ".png" : null, question: QUESTION, sum: SUM, working: WORKING, png: data.png, strokes: data.png ? [] : data.strokes }, began, request);
+    });
+  });
+  my.onEnter(() => {
+    layout();
+    if (kept) { var steps = kept; kept = null; perform(steps); }
+  });
+  // Marks that are on their way when the person leaves are all there when they come back
+  my.onLeave(() => {
+    inHand(false);
+    if (!playing) return;
+    var steps = playing;
+    marking++;
+    playing = null;
+    rest();
+    steps.forEach(shown);
+  });
+  if (typeof ResizeObserver === "function") new ResizeObserver(layout).observe(face);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (typed) typedShown(); }).catch(() => {});
+  theirPen.title = my.agent + " marks with the green marker";
+  pick("blue");
+  layout();
+  ready();
+  box.idle();
+  box.did("");
+  box.hint("Pick a marker from the tray, write your answer on the board, and press Check it.");
+});
+</script>

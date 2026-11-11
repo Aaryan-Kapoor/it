@@ -1805,10 +1805,10 @@ describe('tour page ownership', () => {
     const m = await machineOf(t, 'tour-clear-all')
     await m.as.mutation(api.tour.wait, { waitId: 'waiting-command', first: true })
     const waiting = await m.as.query(api.tour.get, {})
-    for (const name of ['menu', 'whiteboard', 'chess', 'checklist', 'drums', 'button', 'done']) await make(m, name)
+    for (const name of ['start', 'menu', 'whiteboard', 'chess', 'checklist', 'drums', 'button', 'done']) await make(m, name)
     await publish(m, 'tour-of-my-project')
     expect(await m.as.mutation(api.tour.clear, {})).toEqual({
-      requested: ['tour-menu', 'tour-whiteboard', 'tour-chess', 'tour-checklist', 'tour-drums', 'tour-button', 'tour-done'].map((slug) => ({
+      requested: ['tour-start', 'tour-menu', 'tour-whiteboard', 'tour-chess', 'tour-checklist', 'tour-drums', 'tour-button', 'tour-done'].map((slug) => ({
         slug,
         job: expect.any(String),
       })),

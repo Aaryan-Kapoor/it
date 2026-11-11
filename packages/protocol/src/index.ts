@@ -122,9 +122,13 @@ export function comparePlaces(a: ActionPlace | null, b: ActionPlace | null): num
 /** The word the interface uses for a thing shown on a display. It is said in one place so that it can be changed in one. */
 export const NOUN = { one: 'page', many: 'pages', One: 'Page', Many: 'Pages' } as const
 
-/** The built-in tour's fixed page ids and the order in which its examples are shown. */
-export const TOUR = { prefix: 'tour-', menu: 'menu', end: 'done', steps: ['whiteboard', 'chess', 'checklist', 'drums', 'button'] } as const
-export const TOUR_NAMES: readonly string[] = [TOUR.menu, ...TOUR.steps, TOUR.end]
+/**
+ * The built-in tour's fixed page ids: the page it begins on, which holds a first run of It on
+ * its own, and then the menu, the examples in the order in which they are shown, and the ending,
+ * for a person who asks to see more.
+ */
+export const TOUR = { prefix: 'tour-', start: 'start', menu: 'menu', end: 'done', steps: ['whiteboard', 'chess', 'checklist', 'drums', 'button'] } as const
+export const TOUR_NAMES: readonly string[] = [TOUR.start, TOUR.menu, ...TOUR.steps, TOUR.end]
 
 /** Token audiences. A token made for one is refused everywhere else. */
 export const AUDIENCE = {
@@ -1176,9 +1180,23 @@ export interface CameraPicture {
   close(): void
 }
 
+/**
+ * Where something done on a page has got to, as the site tells a page of It's own tour, which
+ * shows it to the person: the action, by the id it was answered with when It took it; whether it
+ * was handed to the agent's conversation; and what is known of the agent's turn for it, which is
+ * `running`, `ended`, or null where nothing is known. It is what the bar above the page goes by.
+ */
+export interface ActionProgress {
+  id: string
+  handed: boolean
+  turn: 'running' | 'ended' | null
+}
+
 export type SiteToPage =
   /** The page's whole state. */
   | { type: 'it:state'; state: unknown; revision: number }
+  /** Where the last few things done on the page have got to, newest first. Sent to a page of It's own tour, each time it changes. */
+  | { type: 'it:progress'; actions: ActionProgress[] }
   /** What changed of the page's state since what was last sent: the agent's part, whole, where it changed, and each value the page keeps that changed, with `null` for one taken away. */
   | { type: 'it:changed'; revision: number; state?: unknown; kept: [string, unknown][] }
   /** Accepted. Of values the page keeps, `revision` is the state's revision that has them. */

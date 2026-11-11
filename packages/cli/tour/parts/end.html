@@ -1,0 +1,399 @@
+<!-- The ending: what the person's own agent could build for them here, each idea a card with a drawing of the kind of interface it is, a box to ask for anything else, and the way out of the tour. Pressing "Make this" is the person's first real use of It: the agent builds that page and opens it in the tour's place. -->
+<style>
+  [data-part="end"] { align-items: stretch; justify-content: flex-start; }
+  .end-wrap { flex: 1 1 0; min-height: 0; width: 100%; max-width: 1280px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+  /* Three cards over all the room there is. Their rows are one grid, so that the names, the lines and the buttons stand level whatever each says */
+  .end-cards { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr) auto auto auto auto; column-gap: 16px; justify-content: center; }
+  .end-cards[data-n="2"] { grid-template-columns: repeat(2, minmax(0, 500px)); } .end-cards[data-n="1"] { grid-template-columns: minmax(0, 560px); }
+  .end-card { position: relative; grid-row: 1 / -1; display: grid; grid-template-rows: subgrid; min-width: 0; min-height: 0; padding: 12px 12px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 22px; box-shadow: 0 24px 44px -34px rgba(28, 26, 22, .6); transition: transform .3s cubic-bezier(.22, 1, .36, 1), border-color .3s; }
+  .end-card.has:hover { transform: translateY(-4px); border-color: var(--faint); }
+  .end-card.in { animation: end-deal .6s cubic-bezier(.22, 1, .36, 1) both; animation-delay: calc(var(--i) * 110ms); }
+  @keyframes end-deal { from { opacity: 0; transform: translateY(28px) rotate(calc((var(--i) - 1) * 2.5deg)) scale(.96); } }
+  /* The drawing of the kind of interface an idea is, on a sheet of dotted paper */
+  .end-art { position: relative; min-width: 0; min-height: 0; container-type: size; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: var(--sheet) radial-gradient(var(--dotc) 1.2px, transparent 1.3px) 0 0 / 16px 16px; }
+  .end-art svg { display: block; width: min(96cqw, calc(96cqh * 320 / 200)); height: auto; aspect-ratio: 320 / 200; overflow: visible; }
+  .end-art svg > g { transition: transform .35s cubic-bezier(.22, 1, .36, 1); }
+  .end-card.has:hover .end-art svg > g:last-child { transform: translateY(-4px); }
+  /* An answer that has come is drawn a layer at a time */
+  .end-card.in .end-art svg > g { animation: end-pop .55s cubic-bezier(.22, 1, .36, 1) both; animation-delay: calc(var(--i) * 110ms + 240ms); }
+  .end-card.in .end-art svg > g:nth-child(2) { animation-delay: calc(var(--i) * 110ms + 340ms); } .end-card.in .end-art svg > g:nth-child(3) { animation-delay: calc(var(--i) * 110ms + 440ms); }
+  .end-card.in .end-art svg > g:nth-child(4) { animation-delay: calc(var(--i) * 110ms + 540ms); } .end-card.in .end-art svg > g:nth-child(n + 5) { animation-delay: calc(var(--i) * 110ms + 640ms); }
+  @keyframes end-pop { from { opacity: 0; transform: translateY(10px); } }
+  .end-ping { transform-origin: 31px 32px; animation: end-ping 1.7s ease-out infinite; } @keyframes end-ping { to { transform: scale(2.6); opacity: 0; } }
+  .end-kind { margin: 9px 6px 0; font: 600 21px/1.05 Hand, cursive; color: var(--soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .end-name { margin: 3px 6px 0; font: 700 clamp(19px, 1.85vw, 24px)/1.14 Display; letter-spacing: -.022em; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .end-line { margin: 6px 6px 0; font-size: 14.5px; line-height: 1.42; color: var(--soft); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+  .end-make { margin: 14px 4px 0; justify-self: start; }
+  /* A card that waits for its idea: nothing of the agent's is on it, and it moves only for as long as the answer is waited for */
+  .end-card.wait { box-shadow: none; } .end-card.wait .end-make { visibility: hidden; }
+  .end-card.wait .end-kind, .end-card.wait .end-name, .end-card.wait .end-line { border-radius: 7px; background: var(--line); animation: end-breathe 1.1s ease-in-out infinite alternate; animation-delay: calc(var(--i) * 160ms); }
+  .end-card.wait .end-kind { width: 34%; height: 12px; margin-top: 14px; } .end-card.wait .end-name { width: 68%; height: 22px; margin-top: 9px; } .end-card.wait .end-line { width: 90%; height: 13px; margin-top: 11px; box-shadow: 0 21px 0 -1px var(--line); margin-bottom: 21px; overflow: visible; }
+  .end-flow { stroke-dasharray: 7 8; animation: end-flow 1s linear infinite; } @keyframes end-flow { to { stroke-dashoffset: -30; } }
+  @keyframes end-breathe { from { opacity: .4; } to { opacity: 1; } }
+  .end-card.still { opacity: .6; } .end-card.still * { animation: none !important; }
+  /* The idea that was chosen, alone on the stage while the agent builds it */
+  .end-hero { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 36px; animation: swap .4s ease-out; }
+  .end-hero > div:last-child { align-self: center; min-width: 0; }
+  .end-hero .end-art { border-radius: 22px; box-shadow: 0 30px 60px -40px rgba(28, 26, 22, .7); }
+  .end-hero .end-art::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(100deg, transparent 40%, color-mix(in srgb, var(--sun) 20%, transparent) 50%, transparent 60%) 0 0 / 260% 100%; animation: end-sweep 2.4s linear infinite; }
+  @keyframes end-sweep { from { background-position: 130% 0; } to { background-position: -130% 0; } }
+  .end-hero .end-kind { margin: 0; font-size: 24px; white-space: normal; }
+  .end-hero-name { margin: 6px 0 0; font: 800 clamp(28px, 3.5vw, 48px)/1.04 Display; letter-spacing: -.035em; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+  .end-hero-name.long { font-size: clamp(20px, 2.1vw, 28px); line-height: 1.16; letter-spacing: -.02em; -webkit-line-clamp: 7; }
+  .end-hero .end-line { margin: 12px 0 0; font-size: 17px; -webkit-line-clamp: 4; }
+  .end-status { display: flex; align-items: flex-start; gap: 11px; margin-top: 22px; padding: 12px 15px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); font-size: 14px; line-height: 1.45; color: var(--soft); }
+  .end-status i { flex: none; width: 10px; height: 10px; margin-top: 5px; border-radius: 50%; background: var(--green); animation: beat 1.3s ease-out infinite; }
+  .end-wrap[data-mode="ideas"] .end-hero, .end-wrap[data-mode="making"] .end-cards, .end-wrap[data-mode="making"] .end-field, .end-wrap[data-mode="making"] #end-more { display: none; }
+  .end-wrap[data-mode="making"] .end-ask { justify-content: flex-end; }
+  /* Asking for anything else, and the ways on */
+  .end-ask { flex: none; display: flex; align-items: center; gap: 10px; }
+  .end-field { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 11px; height: 52px; padding: 0 6px 0 18px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); transition: border-color .2s, box-shadow .2s; }
+  .end-field:focus-within { border-color: var(--ink); box-shadow: 0 0 0 4px var(--green-soft); }
+  .end-field > svg { flex: none; width: 18px; height: 18px; color: var(--faint); }
+  .end-field input { flex: 1 1 0; min-width: 0; height: 100%; border: 0; outline: 0; background: none; color: var(--ink); font: 400 16px/1.2 Text, -apple-system, "Segoe UI", system-ui, sans-serif; }
+  .end-field input::placeholder { color: var(--faint); opacity: 1; }
+  .end-field .btn { min-height: 40px; padding: 0 18px; box-shadow: none; } .end-ask > .btn { min-height: 52px; }
+  .end-foot { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: -4px; font: 400 12px/1.3 var(--mono); color: var(--faint); }
+  .end-foot span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } .end-foot .skip { font-family: Text, -apple-system, "Segoe UI", system-ui, sans-serif; padding: 2px; }
+  .end-foot .end-narrow { display: none; }
+  @media (max-width: 760px) {
+    .end-wrap { gap: 8px; }
+    /* On a tall screen the cards are rows: the drawing with its button under it, and the words beside them over the whole height */
+    .end-cards, .end-cards[data-n] { container-type: size; grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-auto-rows: minmax(0, 1fr); row-gap: 8px; }
+    .end-card { grid-row: auto; grid-template-columns: 33% minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; column-gap: 12px; max-height: 172px; padding: 8px 12px 8px 8px; border-radius: 18px; }
+    .end-card .end-art { grid-column: 1; grid-row: 1 / 3; border-radius: 11px; }
+    .end-card .end-make { grid-column: 1; grid-row: 3; justify-self: stretch; margin: 6px 0 0; min-height: 32px; padding: 0 4px; gap: 6px; font-size: 13px; box-shadow: none; } .end-card .end-make svg { width: 14px; height: 14px; }
+    .end-card .end-kind { display: none; }
+    .end-card .end-name { grid-column: 2; grid-row: 1; margin: 1px 0 0; font-size: 16px; line-height: 1.18; }
+    .end-card .end-line { grid-column: 2; grid-row: 2 / 4; align-self: start; margin: 3px 0 0; font-size: 13px; line-height: 1.34; }
+    /* As many whole lines of an idea as the three cards have the height for, and never half of one. On a short screen the drawing goes, and the button stands beside the words */
+    @container (max-height: 340px) { .end-card .end-line { -webkit-line-clamp: 2; } }
+    @container (max-height: 292px) {
+      .end-card { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: minmax(0, 1fr) auto auto minmax(0, 1fr); padding: 6px 10px 6px 14px; }
+      .end-card .end-art { display: none; }
+      .end-card .end-name { grid-column: 1; grid-row: 2; margin: 0; }
+      .end-card .end-line { grid-column: 1; grid-row: 3; margin: 2px 0 0; -webkit-line-clamp: 1; }
+      .end-card .end-make { grid-column: 2; grid-row: 1 / -1; align-self: center; justify-self: end; margin: 0; padding: 0 13px; }
+    }
+    @container (max-height: 208px) { .end-card .end-line { display: none; } .end-card .end-name { -webkit-line-clamp: 1; } }
+    .end-card.wait .end-name { margin-top: 6px; height: 17px; } .end-card.wait .end-line { margin-top: 10px; height: 11px; box-shadow: 0 18px 0 -1px var(--line); }
+    .end-hero { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 12px; }
+    .end-hero .end-art { border-radius: 18px; } .end-hero .end-kind { font-size: 20px; } .end-hero .end-line { margin-top: 6px; font-size: 14.5px; -webkit-line-clamp: 3; }
+    .end-hero-name { margin-top: 2px; -webkit-line-clamp: 3; } .end-hero-name.long { -webkit-line-clamp: 5; }
+    .end-status { margin-top: 10px; padding: 10px 12px; font-size: 13px; }
+    .end-ask { flex-wrap: wrap; gap: 8px; } .end-field { flex-basis: 100%; height: 46px; padding-left: 15px; } .end-field .btn { min-height: 34px; padding: 0 14px; font-size: 14px; }
+    .end-ask > .btn { flex: 1 1 0; min-height: 38px; padding: 0 10px; font-size: 14px; }
+    .end-foot { margin-top: -2px; font: 400 11.5px/1.3 Text, -apple-system, "Segoe UI", system-ui, sans-serif; } .end-foot .skip { font-size: 12px; }
+    .end-foot .end-wide { display: none; } .end-foot .end-narrow { display: inline; }
+  }
+</style>
+<section class="part" data-part="end" data-title="Now yours" data-line="{agent} can build any of these for you now. Press one, or say what you want." hidden>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+    <filter id="end-sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="3" stdDeviation="3.5" flood-color="#3b2f1c" flood-opacity=".16"/></filter>
+    <filter id="end-up" x="-40%" y="-40%" width="180%" height="210%"><feDropShadow dx="0" dy="9" stdDeviation="7" flood-color="#3b2f1c" flood-opacity=".3"/></filter>
+  </defs></svg>
+  <div class="end-wrap" id="end-wrap" data-mode="ideas">
+    <div class="end-cards" id="end-cards" aria-live="polite"></div>
+    <div class="end-hero" id="end-hero">
+      <div class="end-art" id="end-hero-art"></div>
+      <div>
+        <p class="end-kind" id="end-hero-kind"></p>
+        <p class="end-hero-name" id="end-hero-name"></p>
+        <p class="end-line" id="end-hero-line"></p>
+        <p class="end-status" role="status"><i></i><span id="end-status"></span></p>
+      </div>
+    </div>
+    <div class="end-ask">
+      <label class="end-field"><svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 15l1-4 8.5-8.5a1.6 1.6 0 0 1 2.3 0l.7.7a1.6 1.6 0 0 1 0 2.3L7 14z"/><path d="M11 4l3 3"/></svg><input id="end-text" type="text" maxlength="300" autocomplete="off" enterkeyhint="send" placeholder="Or say what you want built" aria-label="Say what you want built instead"><button class="btn" type="button" id="end-go" disabled>Make it</button></label>
+      <button class="btn ghost" type="button" id="end-more">Other ideas</button>
+      <button class="btn ghost" type="button" id="end-finish">Go to my pages <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button>
+    </div>
+    <div class="end-foot"><span><span class="end-wide">Whatever it builds opens on any screen you pair, your phone too.</span><span class="end-narrow">Pages open on any screen you pair, your phone too.</span></span><button class="skip" type="button" id="end-again">See it again</button></div>
+  </div>
+</section>
+<script>
+Shell.part("end", (my) => {
+  var $ = Shell.$, box = my.box, tidy = Shell.tidy;
+  // How long the agent has to build a page before the ending is the person's again: a page is minutes of an agent's work, where an answer is seconds
+  var LONG = 300000;
+  var HINT = "Press Make this on one, and " + my.agent + " builds it as a real page of yours.";
+  var NONE = "No ideas came. Say what you want built in the box, or ask again.";
+  var TAKES = "This one takes longer than the others: " + my.agent + " builds a real page for it, which opens here by itself.";
+
+  // ── The drawings: one for each kind of interface an idea may be, which the agent names and the page draws ──
+  // Each is a few layers on a sheet of 320 by 200, in the page's own colours. Nothing in them is the agent's
+  var v = (c) => "var(--" + c + ")";
+  var Q = (x, y, w, h, r, c, more) => '<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" rx="' + r + '" fill="' + (c ? v(c) : "none") + '"' + (more || "") + "/>";
+  var P = (x, y, w, h, r) => Q(x, y, w, h, r || 10, "card", ' stroke="var(--line)" filter="url(#end-sh)"');
+  var B = (x, y, w, c, h, o) => Q(x, y, w, h || 5, (h || 5) / 2, c || "line", o ? ' opacity="' + o + '"' : "");
+  var O = (x, y, r, c, more) => '<circle cx="' + x + '" cy="' + y + '" r="' + r + '" fill="' + (c ? v(c) : "none") + '"' + (more || "") + "/>";
+  var S = (d, c, w, more) => '<path d="' + d + '" fill="none" stroke="' + v(c) + '" stroke-width="' + (w || 2) + '" stroke-linecap="round" stroke-linejoin="round"' + (more || "") + "/>";
+  var F = (d, c, more) => '<path d="' + d + '" fill="' + v(c) + '"' + (more || "") + "/>";
+  var T = (x, y, text, size, c, face) => '<text x="' + x + '" y="' + y + '" text-anchor="middle" font-family="' + (face || "Text, sans-serif") + '" font-weight="700" font-size="' + size + '" fill="' + v(c) + '">' + text + "</text>";
+  var G = (layers) => layers.map((l) => "<g>" + l + "</g>").join("");
+  var EDGE = ' stroke="var(--line)" stroke-width="1.4"', POINTER = (x, y) => F("M" + x + " " + y + "l2 22 6-6 5 11 5-2-5-11 8-1z", "ink", ' stroke="var(--card)" stroke-width="1.5" stroke-linejoin="round"');
+  var ART = {
+    dashboard: () => G([
+      P(14, 14, 138, 78) + B(26, 27, 46, "faint", 5, .6) + '<text x="25" y="77" font-family="Display, sans-serif" font-weight="800" font-size="36" letter-spacing="-1.5" fill="var(--ink)">128</text>' + Q(102, 54, 38, 22, 11, "green-soft") + S("M114 69l7-8 7 8", "green", 2.2),
+      P(166, 14, 140, 78) + B(178, 27, 38, "faint", 5, .6) + F("M178 80V66l20-6 18 8 20-20 20 6 20-18 18 4v40z", "green", ' opacity=".13"') + S("M178 66l20-6 18 8 20-20 20 6 20-18 18 4", "green", 2.4) + O(294, 40, 4.5, "green", ' stroke="var(--card)" stroke-width="2"'),
+      P(14, 106, 292, 80) + B(26, 119, 54, "faint", 5, .6) + [22, 30, 18, 36, 28, 46, 34, 26, 40, 30].map((h, i) => Q(31 + i * 27, 177 - h, 15, h, 4, i === 5 ? "clay" : "sage")).join(""),
+    ]),
+    board: () => G([
+      [14, 115, 216].map((x) => Q(x, 14, 90, 172, 12, "pad") + B(x + 10, 25, 32, "faint", 5, .7)).join(""),
+      [[22, 42], [22, 84], [22, 126], [123, 42], [224, 42], [224, 84]].map((p, i) => P(p[0], p[1], 74, 36, 8) + B(p[0] + 9, p[1] + 11, 30 + ((i * 13) % 26), "ink", 5, .5) + B(p[0] + 9, p[1] + 21, 22 + ((i * 7) % 20))).join("") + Q(123, 84, 74, 36, 8, "", ' stroke="var(--faint)" stroke-width="1.4" stroke-dasharray="4 5"'),
+      '<g transform="translate(158 98) rotate(-7)">' + Q(0, 0, 78, 40, 9, "card", ' stroke="var(--green)" stroke-width="1.8" filter="url(#end-up)"') + B(10, 12, 40, "green") + B(10, 23, 26) + "</g>" + POINTER(224, 126),
+    ]),
+    review: () => G([
+      P(14, 14, 186, 172, 12) + Q(26, 61, 152, 23, 5, "amber-soft", ' stroke="var(--amber-line)"') + Q(26, 117, 112, 23, 5, "green-soft") + [[28, 120], [42, 150], [70, 112], [96, 142], [110, 96], [126, 70], [152, 150], [166, 70]].map((l) => B(l[0] === 70 || l[0] === 126 ? 34 : 28, l[0], l[1], "ink", 5, l[0] === 70 || l[0] === 126 ? .6 : .2)).join(""),
+      O(178, 72, 11, "clay", ' stroke="var(--card)" stroke-width="2"') + T(178, 76.5, "1", 12, "card") + O(138, 128, 11, "green", ' stroke="var(--card)" stroke-width="2"') + T(138, 132.5, "2", 12, "on-green"),
+      P(212, 20, 94, 52) + O(226, 34, 6, "clay") + B(238, 31.5, 44, "ink", 5, .5) + B(222, 47, 72) + B(222, 58, 50) + P(212, 82, 94, 52) + O(226, 96, 6, "green") + B(238, 93.5, 36, "ink", 5, .5) + B(222, 109, 66) + B(222, 120, 42),
+      Q(212, 150, 60, 28, 14, "ink") + S("M235 164l5 5 9-10", "paper", 2.2) + Q(278, 150, 28, 28, 14, "", EDGE) + S("M288 160l8 8m0-8l-8 8", "faint", 1.8),
+    ]),
+    form: () => G([
+      P(44, 8, 232, 184, 14),
+      B(60, 21, 44, "faint", 5, .7) + Q(60, 31, 200, 25, 8, "paper", ' stroke="var(--line)"') + B(70, 41, 84, "ink", 5, .55),
+      B(60, 67, 60, "faint", 5, .7) + Q(60, 77, 60, 23, 11.5, "ink") + B(74, 86, 32, "paper", 5, .9) + Q(126, 77, 60, 23, 11.5, "", EDGE) + B(140, 86, 32, "faint", 5, .7) + Q(192, 77, 60, 23, 11.5, "", EDGE) + B(206, 86, 32, "faint", 5, .7),
+      B(60, 111, 36, "faint", 5, .7) + Q(60, 121, 126, 25, 8, "paper", ' stroke="var(--green)" stroke-width="1.8"') + B(70, 131, 52, "ink", 5, .55) + S("M128 127v13", "green", 2) + Q(214, 122, 44, 23, 11.5, "green") + O(246.5, 133.5, 8, "card"),
+      Q(182, 157, 78, 26, 13, "ink") + B(204, 167.5, 34, "paper", 5, .9) + B(138, 167.5, 30, "faint", 5, .7),
+    ]),
+    timeline: () => G([
+      P(14, 14, 292, 172, 12) + [62, 110, 158, 206, 254].map((x) => S("M" + x + " 44v130", "line", 1.2, ' stroke-dasharray="2 5"') + B(x - 31, 27, 22, "faint", 5, .6)).join("") + B(271, 27, 22, "faint", 5, .6),
+      Q(28, 52, 98, 18, 9, "sage") + Q(84, 80, 124, 18, 9, "green") + Q(148, 108, 74, 18, 9, "clay") + Q(200, 136, 92, 18, 9, "wood") + [[38, 61], [94, 89], [158, 117], [210, 145]].map((p) => O(p[0], p[1], 3.5, "card", ' opacity=".9"')).join(""),
+      S("M176 40v138", "ink", 1.8) + Q(161, 30, 30, 15, 7.5, "ink") + B(169, 35.5, 14, "paper", 4, .9) + O(176, 89, 5, "card", ' stroke="var(--ink)" stroke-width="2"'),
+    ]),
+    monitor: () => G([
+      P(14, 14, 196, 172, 12) + O(31, 32, 5, "green") + O(31, 32, 5, "", ' stroke="var(--green)" stroke-width="1.5" class="end-ping"') + B(44, 29, 46, "ink", 6, .55) + [0, 1, 2, 3].map((i) => { var y = 56 + i * 31, w = [168, 168, 104, 0][i]; return B(28, y, [58, 74, 50, 66][i], "faint", 5, .7) + Q(28, y + 10, 168, 8, 4, "pad") + (w ? Q(28, y + 10, w, 8, 4, "green") : "") + (i < 2 ? S("M186 " + (y + 2) + "l3 3 6-7", "green", 2) : ""); }).join(""),
+      S("M216 91c6 5 6 13 0 18", "green", 2.2) + S("M222 84c10 9 10 23 0 32", "green", 2.2, ' opacity=".45"'),
+      Q(234, 30, 72, 140, 14, "card", ' stroke="var(--ink)" stroke-width="2.2" filter="url(#end-sh)"') + B(260, 38, 20, "line", 4) + Q(242, 54, 56, 42, 8, "green-soft") + O(252, 65, 4, "green") + B(260, 62.5, 28, "ink", 5, .55) + B(248, 77, 42) + B(248, 86, 28) + Q(242, 134, 56, 24, 12, "ink") + B(257, 143.5, 26, "paper", 5, .9),
+    ]),
+    game: () => G([
+      Q(72, 12, 176, 176, 14, "wood-dark", ' filter="url(#end-sh)"') + Array.from({ length: 16 }, (_, i) => Q(80 + (i % 4) * 40, 20 + (i >> 2) * 40, 40, 40, 0, ((i % 4) + (i >> 2)) % 2 ? "sq-dark" : "sq")).join(""),
+      [[100, 40], [180, 40], [140, 80]].map((p) => O(p[0], p[1], 13, "wall") + O(p[0], p[1], 7.5, "", ' stroke="var(--paper)" stroke-opacity=".4" stroke-width="1.5"')).join("") + [[100, 160], [220, 160], [180, 120]].map((p) => O(p[0], p[1], 13, "clay", ' stroke="var(--clay-dark)" stroke-width="1.5"')).join(""),
+      S("M140 160q22-60 72-68", "card", 2.2, ' stroke-dasharray="3 6"') + O(140, 160, 13, "", ' stroke="var(--card)" stroke-width="1.6" stroke-dasharray="3 5"') + O(218, 86, 15, "clay", ' stroke="var(--clay-dark)" stroke-width="1.5" filter="url(#end-up)"'),
+      Q(256, 20, 52, 26, 13, "card", ' stroke="var(--line)"') + T(282, 37.5, "2 : 1", 12, "ink", "ui-monospace, Menlo, monospace") + Q(262, 140, 40, 40, 10, "card", ' stroke="var(--line)" filter="url(#end-sh)"') + [[272, 150], [292, 150], [282, 160], [272, 170], [292, 170]].map((p) => O(p[0], p[1], 3.2, "ink")).join("") + O(36, 36, 11, "clay") + B(22, 55, 28, "faint", 5, .7),
+    ]),
+    compare: () => G([
+      [14, 216].map((x, i) => P(x, 30, 90, 140, 12) + Q(x + 10, 40, 70, 46, 8, "pad") + (i ? F("M" + (x + 45) + " 50l15 27h-30z", "wood") : O(x + 45, 63, 14, "sage")) + B(x + 12, 98, 50, "ink", 5, .5) + B(x + 12, 110, 62) + B(x + 12, 120, 40) + Q(x + 12, 138, 66, 22, 11, "", EDGE)).join(""),
+      Q(110, 18, 100, 164, 14, "card", ' stroke="var(--green)" stroke-width="2.2" filter="url(#end-up)"') + Q(122, 30, 76, 52, 9, "green-soft") + Q(146, 42, 28, 28, 8, "clay") + B(124, 96, 56, "ink", 5, .6) + B(124, 108, 70) + B(124, 118, 48) + Q(124, 142, 72, 26, 13, "green") + B(142, 152.5, 36, "on-green", 5, .95),
+      O(204, 24, 12, "green", ' stroke="var(--card)" stroke-width="2.5"') + S("M198 24l4 4 8-9", "on-green", 2.2),
+    ]),
+    approve: () => G([
+      P(14, 44, 152, 112, 12) + O(28, 58, 3, "line") + O(38, 58, 3, "line") + O(48, 58, 3, "line") + B(26, 74, 90, "ink", 5, .5) + B(26, 86, 120) + Q(26, 104, 128, 38, 9, "amber-soft", ' stroke="var(--amber-line)"') + Q(38, 115, 5, 16, 2, "amber") + Q(47, 115, 5, 16, 2, "amber") + B(62, 116, 60, "ink", 5, .5) + B(62, 127, 40, "amber-line"),
+      S("M176 84c7 7 7 25 0 32", "green", 2.4) + S("M186 74c13 13 13 39 0 52", "green", 2.4, ' opacity=".6"') + S("M196 64c19 19 19 53 0 72", "green", 2.4, ' opacity=".3"'),
+      Q(214, 12, 92, 176, 20, "card", ' stroke="var(--ink)" stroke-width="2.4" filter="url(#end-sh)"') + B(248, 22, 24, "line", 5) + B(230, 46, 60, "ink", 5, .55) + B(238, 58, 44) + B(244, 172, 32, "line", 4),
+      O(260, 122, 32, "clay-dark") + O(260, 116, 32, "clay") + '<path d="M247 116l9 9 17-19" fill="none" stroke="#fffdf8" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>',
+    ]),
+    checklist: () => G([
+      P(54, 10, 212, 180, 14) + B(72, 26, 84, "ink", 6, .6),
+      [0, 1, 2].map((i) => { var y = 46 + i * 28; return Q(72, y, 18, 18, 6, "green") + S("M77 " + (y + 9) + "l3 3 6-7", "on-green", 2) + B(100, y + 6.5, [96, 72, 110][i]); }).join(""),
+      Q(72, 130, 18, 18, 6, "", ' stroke="var(--faint)" stroke-width="1.6"') + B(100, 136.5, 62, "ink", 5, .55) + Q(176, 129, 74, 20, 6, "green") + '<rect x="182" y="134" width="10" height="10" rx="3.5" fill="#fff" opacity=".92"/>' + Q(185, 137, 4, 4, 1.5, "green") + B(198, 136.5, 44, "on-green", 5, .92),
+      Q(72, 160, 176, 22, 8, "", ' stroke="var(--line)" stroke-width="1.4" stroke-dasharray="4 5"') + S("M84 171h8m-4-4v8", "faint", 1.8),
+    ]),
+    table: () => G([
+      P(14, 14, 292, 172, 12) + B(46, 27, 44, "faint", 5, .7) + S("M97 28l3 3.5 3-3.5", "faint", 1.5) + B(138, 27, 34, "faint", 5, .7) + B(204, 27, 30, "faint", 5, .7) + B(266, 27, 26, "faint", 5, .7) + S("M14 43.5h292", "line", 1),
+      Q(19, 74, 282, 26, 7, "green-soft"),
+      [0, 1, 2, 3, 4].map((i) => { var c = 60 + i * 27, on = i === 1 || i === 3, chip = ["amber-soft", "card", "green-soft", "amber-soft", "pad"][i], dot = ["amber", "green", "green", "amber", "faint"][i]; return Q(26, c - 7, 14, 14, 4.5, on ? "green" : "", on ? "" : ' stroke="var(--faint)" stroke-width="1.4"') + (on ? S("M29.5 " + c + "l2.5 2.5 4.5-5.5", "on-green", 1.8) : "") + B(46, c - 2.5, [70, 56, 78, 48, 64][i], "ink", 5, .5) + B(138, c - 2.5, [44, 52, 30, 48, 38][i]) + Q(200, c - 8, 46, 16, 8, chip) + O(209, c, 3, dot) + B(216, c - 2.5, 22, dot, 5, .6) + B(266, c - 2.5, [24, 18, 26, 20, 22][i]); }).join(""),
+    ]),
+    sliders: () => G([
+      P(14, 14, 136, 172, 12) + [0, 1, 2].map((i) => { var y = 52 + i * 46, w = [70, 38, 92][i]; return B(28, y - 17, [40, 54, 34][i], "faint", 5, .7) + Q(28, y, 108, 6, 3, "pad") + Q(28, y, w, 6, 3, "green") + O(28 + w, y + 3, 9, "card", ' stroke="var(--ink)" stroke-width="2"'); }).join(""),
+      P(164, 14, 142, 172, 12) + Q(176, 26, 118, 102, 10, "pad") + O(222, 74, 30, "clay") + O(256, 66, 21, "sage", ' opacity=".92"') + S("M176 104q20-24 39-7t40-11 39 5", "ink", 2.2),
+      B(178, 142, 70, "ink", 6, .55) + B(178, 157, 100) + B(178, 168, 62),
+    ]),
+    // What an idea of no kind the page draws is given, and what the person asked for in their own words
+    page: () => G([
+      P(36, 14, 248, 172, 14) + O(52, 29, 3.5, "line") + O(63, 29, 3.5, "line") + O(74, 29, 3.5, "line") + S("M36 44h248", "line", 1),
+      O(98, 96, 26, "clay") + Q(138, 70, 52, 52, 13, "sage") + F("M236 68l30 54h-60z", "wood", ' stroke="var(--wood)" stroke-width="4" stroke-linejoin="round"'),
+      Q(108, 144, 96, 26, 13, "green") + B(134, 154.5, 44, "on-green", 5, .95) + POINTER(200, 148),
+    ]),
+  };
+  // A card with no idea on it yet: the outline of a page, and nothing in it
+  var EMPTY = G([Q(36, 14, 248, 172, 14, "", ' stroke="var(--faint)" stroke-width="1.6" class="end-flow"')]);
+  // What each kind is for, in a few words written by hand under its drawing
+  var NOTE = { dashboard: "numbers at a glance", board: "drag to arrange", review: "point at what to change", form: "tell it what it needs", timeline: "what happens when", monitor: "watch it run, from anywhere", game: "your move, then the agent’s", compare: "side by side, pick one", approve: "one press, from another room", checklist: "tick it off together", table: "sort, tick, triage", sliders: "tune it and see", page: "a page of your own" };
+  var KINDS = Object.keys(NOTE).filter((k) => k !== "page");
+  var drawn = (kind) => '<svg viewBox="0 0 320 200" aria-hidden="true">' + (kind ? ART[kind]() : EMPTY) + "</svg>";
+
+  // ── The three cards ──
+  var wrap = $("end-wrap"), deck = $("end-cards"), more = $("end-more"), fin = $("end-finish"), field = $("end-text"), go = $("end-go");
+  var cards = [0, 1, 2].map((i) => {
+    var el = document.createElement("div"), c = { el: el, idea: null };
+    el.style.setProperty("--i", i);
+    ["art", "kind", "name", "line"].forEach((k) => { c[k] = document.createElement(k === "art" ? "div" : "p"); c[k].className = "end-" + k; el.appendChild(c[k]); });
+    c.make = document.createElement("button");
+    c.make.type = "button"; c.make.className = "btn end-make";
+    c.make.innerHTML = 'Make this <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg>';
+    c.make.addEventListener("click", () => { if (c.idea) make({ name: c.idea.name, line: c.idea.line, kind: c.idea.kind, text: null }); });
+    el.appendChild(c.make);
+    deck.appendChild(el);
+    return c;
+  });
+  // What is on the cards now, as text: the ideas last drawn, or nothing. `empty` is whether the cards wait for ideas
+  var current = "", last = [], empty = true, tried = false, mode = "ideas", making = null, asked = 0, newest = null, old = Object.create(null), seen = [];
+  /** The ideas in an answer that can be shown: at most three, each a name and a line that are text, of a kind the page draws. */
+  function read(got) {
+    var out = [];
+    (Array.isArray(got.ideas) ? got.ideas : []).forEach((x) => {
+      if (out.length >= 3 || !x || typeof x !== "object" || Array.isArray(x) || typeof x.name !== "string" || typeof x.line !== "string") return;
+      var name = tidy(x.name, 48), line = tidy(x.line, 160);
+      if (name && line) out.push({ name: name, line: line, kind: typeof x.kind === "string" && KINDS.indexOf(x.kind) >= 0 ? x.kind : "page" });
+    });
+    return out;
+  }
+  function deal(ideas) {
+    empty = !ideas;
+    deck.setAttribute("data-n", ideas ? ideas.length : 3);
+    cards.forEach((c, i) => {
+      var idea = ideas ? ideas[i] || null : null;
+      c.idea = idea;
+      c.el.hidden = !!ideas && !idea;
+      c.el.className = "end-card";
+      // Drawn afresh each time, so that ideas that have just come are seen to come
+      void c.el.offsetWidth;
+      c.el.className = "end-card " + (idea ? "has in" : "wait");
+      c.art.innerHTML = drawn(idea ? idea.kind : null);
+      c.kind.textContent = idea ? NOTE[idea.kind] : "";
+      c.name.textContent = c.name.title = idea ? idea.name : "";
+      c.line.textContent = c.line.title = idea ? idea.line : "";
+      c.make.disabled = !idea;
+      c.make.setAttribute("aria-label", idea ? "Make this: " + idea.name : "Make this");
+    });
+  }
+  /** Draws ideas that are in the state, and says what the agent said with them. */
+  function show(ideas, got) {
+    current = JSON.stringify(ideas);
+    last = ideas;
+    ideas.forEach((x) => { if (seen.indexOf(x.name) < 0) seen.push(x.name); });
+    deal(ideas);
+    more.textContent = "Other ideas";
+    more.disabled = false;
+    if (mode !== "ideas") return;
+    my.line();
+    var said = typeof got.say === "string" ? tidy(got.say, 400) : "";
+    if (said) box.say(said); else box.hint(HINT);
+  }
+  /** Takes whatever ideas the state has that are not on the cards: those the agent set before it was asked, and those of an answer. Never those of a request that another has taken the place of. */
+  function sync() {
+    var got = my.answers(), ideas = read(got);
+    if (!ideas.length || (typeof got.request === "string" && old[got.request])) return;
+    if (JSON.stringify(ideas) !== current || empty) show(ideas, got);
+  }
+  /** No ideas came: the cards are still, and the person types what they want, asks again or leaves. The ideas there were before are theirs to press again. */
+  function still(got) {
+    if (last.length) deal(last);
+    else { deal(null); cards.forEach((c) => c.el.classList.add("still")); }
+    more.textContent = last.length ? "Other ideas" : "Ask again";
+    more.disabled = false;
+    if (mode !== "ideas") return;
+    my.line(last.length ? "" : "Say what you want on your screen, and {agent} builds it.");
+    var said = got && typeof got.say === "string" ? tidy(got.say, 400) : "";
+    if (said) box.say(said); else box.hint(last.length ? HINT : NONE);
+  }
+  var asker = my.asker((got) => { if (read(got).length) sync(); else still(got); }, () => still());
+  function ask(did) {
+    if (mode !== "ideas" || more.disabled) return;
+    tried = true;
+    if (newest) old[newest] = true;
+    deal(null);
+    more.textContent = "Other ideas";
+    more.disabled = true;
+    my.line("Asking {agent} what it could build for you here.");
+    box.did(did);
+    box.hint("");
+    // Everything an answer is made of but the ideas themselves: how many, the kinds the page can draw, and what has been shown already
+    newest = asker.send("ideas", { want: 3, kinds: KINDS, shown: seen.slice(-9) });
+  }
+  more.addEventListener("click", () => ask(last.length ? "asked for more" : "asked again"));
+  my.listen(sync);
+  my.onEnter(() => {
+    sync();
+    // Ideas the agent set while the person was elsewhere are simply here. Where there are none, coming here asks for them, once
+    if (!current && !tried) ask("came to the end");
+  });
+
+  // ── Making one: the person's first real use of It ──
+  function setMode(to) { mode = to; wrap.setAttribute("data-mode", to); }
+  function unmake() {
+    making = null;
+    setMode("ideas");
+    // A wait for ideas that was given up for this is not taken up again by itself
+    if (empty) still(); else my.line();
+  }
+  /** Asks the agent to build a page: one of its ideas as the card has it, or what the person typed. The answer is the page itself, opened in this one's place. */
+  function make(what) {
+    if (mode !== "ideas") return;
+    var id = Shell.newId(), kind = what.kind || "page", words = what.name || what.text;
+    asker.forget();
+    making = { request: id, sent: false, early: null };
+    $("end-hero-art").innerHTML = drawn(kind);
+    $("end-hero-kind").textContent = what.text ? "in your own words" : NOTE[kind];
+    $("end-hero-name").textContent = what.text ? "“" + words + "”" : words;
+    $("end-hero-name").classList.toggle("long", words.length > 56);
+    $("end-hero-line").textContent = what.line || "";
+    $("end-status").textContent = my.agent + " has been asked to build this as a page of your own. It opens here by itself.";
+    setMode("making");
+    my.line("Asked {agent} for this page. A page takes a minute or two to build.");
+    box.did("asked for a page");
+    box.hint(HINT);
+    box.sending();
+    my.send("make", Object.assign({ request: id }, what)).then((result) => {
+      if (!making || making.request !== id) return;
+      making.sent = true;
+      // The dock goes on saying where this has got to for as long as a page may take, and says why it is long
+      box.asked(() => { if (making && making.request === id) unmake(); }, result, { most: LONG, line: TAKES });
+      if (making.early) answered(making.early);
+    }, () => {
+      if (!making || making.request !== id) return;
+      box.refused();
+      unmake();
+    });
+  }
+  /** The agent answered on this page in place of building one, which is how it says that it cannot: its sentence is shown, and the ideas are the person's again. */
+  function answered(got) {
+    box.got();
+    unmake();
+    box.say(typeof got.say === "string" ? got.say : "");
+  }
+  my.listen(() => {
+    var got = my.answers();
+    if (!making || got.request !== making.request) return;
+    if (!making.sent) making.early = got; else answered(got);
+  });
+  function typed() {
+    var text = tidy(field.value, 300);
+    if (!text || mode !== "ideas") return;
+    field.value = "";
+    go.disabled = true;
+    make({ text: text, name: null, line: null, kind: null });
+  }
+  field.addEventListener("input", () => { go.disabled = !tidy(field.value, 300); });
+  field.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); typed(); } });
+  go.addEventListener("click", typed);
+
+  $("end-again").addEventListener("click", () => Shell.go(0));
+  // The agent takes the tour's pages away, and the screen goes back to the person's own pages. The
+  // answer is the page going: where it has not gone a while after, the button is the person's again
+  fin.addEventListener("click", () => {
+    if (fin.disabled) return;
+    var mine = ++asked;
+    fin.disabled = true;
+    asker.forget();
+    if (making) unmake();
+    box.did("left the tour");
+    box.hint(my.agent + " takes the tour away, and then you are at your pages.");
+    box.sending();
+    my.send("finish", { from: "start" }).then((result) => {
+      if (mine !== asked) return;
+      box.asked(() => { if (mine === asked) fin.disabled = false; }, result);
+    }, () => {
+      if (mine !== asked) return;
+      fin.disabled = false;
+      box.refused();
+    });
+  });
+  deal(null);
+  cards.forEach((c) => c.el.classList.add("still"));
+  box.idle();
+  box.hint(HINT);
+  sync();
+});
+</script>

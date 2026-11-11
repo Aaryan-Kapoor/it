@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started with It</title>
+<style>
+/*fonts.css*/
+  :root { color-scheme: light dark; --paper: #f3efe6; --card: #fffdf8; --ink: #1c1a16; --soft: #6d685d; --faint: #a39d8f; --line: #e2dbcc; --green: #17805a; --green-soft: #e3f1e9; --on-green: #ffffff; --accent: #1c1a16; --on-accent: #f3efe6; --clay: #cf6f4d; --clay-dark: #b85c3c; --sage: #9fab93; --sage-dark: #87947b; --wood: #b98c5d; --wood-dark: #8c6238; --floor: #ead9bb; --plank: #d9c49d; --sheen: #f1e4cb; --rug: #cdd5d4; --rug-line: #b9c4c3; --wall: #2a2722; --sun: #ffffff; --sheet: #f6f2e8; --dotc: rgba(28, 26, 22, .13); --bezel: #15130f; --asked: rgba(255, 253, 248, .7); --amber: #9a5b00; --amber-soft: #fbefd6; --amber-line: #ecc98a; --sq: #efe5d2; --sq-dark: #c9a77f; --sq-last: #f2d98a; --pad: #ebe4d6; --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
+  @media (prefers-color-scheme: dark) {
+    :root { --paper: #100f0d; --card: #1a1916; --ink: #f4f0e7; --soft: #aaa497; --faint: #777165; --line: #2f2c27; --green: #3ecf93; --green-soft: #12281f; --on-green: #06150e; --accent: #f4f0e7; --on-accent: #100f0d; --clay: #d97a58; --clay-dark: #b9603f; --sage: #6f7c66; --sage-dark: #56624f; --wood: #8f6a44; --wood-dark: #5e4226; --floor: #2a231a; --plank: #382f23; --sheen: #30281e; --rug: #37403f; --rug-line: #445050; --wall: #ded8cb; --sun: #ffe9b0; --sheet: #1f1d19; --dotc: rgba(244, 240, 231, .12); --bezel: #000000; --asked: rgba(26, 25, 22, .7); --amber: #f5bd5c; --amber-soft: #2a2010; --amber-line: #5c4419; --sq: #b8a98c; --sq-dark: #8a7455; --sq-last: #cdb565; --pad: #26241f; }
+    body::before { opacity: .25; } .btn { box-shadow: none; }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body { background: var(--paper); color: var(--ink); font: 400 16px/1.5 Text, -apple-system, "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  body::before { content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .5; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .3 0 0 0 0 .22 0 0 0 .09 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E"); }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  [hidden] { display: none !important; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 48px; padding: 0 22px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); font: 600 15px/1 Text; white-space: nowrap; transition: transform .12s, box-shadow .2s; box-shadow: 0 10px 24px -14px rgba(28, 26, 22, .6); }
+  .btn:hover { transform: translateY(-1px); } .btn:active { transform: translateY(1px); } .btn svg { width: 16px; height: 16px; }
+  .btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); box-shadow: none; } .btn.ghost:hover { border-color: var(--ink); }
+  .btn.small { min-height: 38px; padding: 0 16px; font-size: 14px; box-shadow: none; }
+  .btn:disabled { opacity: .45; cursor: default; transform: none; }
+  .btn:focus-visible, .skip:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+  .skip { background: none; border: 0; color: var(--soft); text-decoration: underline; text-underline-offset: 3px; font-size: 13px; padding: 6px 2px; white-space: nowrap; } .skip:hover { color: var(--ink); }
+  .pill { display: inline-flex; align-items: center; gap: 7px; background: var(--green); color: var(--on-green); font: 600 12.5px/1 Text; padding: 6px 10px 6px 8px; border-radius: 8px; letter-spacing: .01em; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .pill i { flex: none; width: 12px; height: 12px; border-radius: 4px; background: rgba(255,255,255,.9); position: relative; } .pill i::after { content: ""; position: absolute; inset: 3px; border-radius: 2px; background: var(--green); }
+
+  /* The frame: a slim line at the top, the part that is shown over all the room between, and the agent's dock under it. Nothing scrolls */
+  .frame { position: relative; height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
+  .top, .asleep, .dock { flex: none; }
+  .top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px 18px; padding: 8px 16px; min-height: 54px; border-bottom: 1px solid var(--line); }
+  .count { display: flex; align-items: center; gap: 5px; color: var(--soft); } .count span { margin-right: 6px; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .count i { width: 16px; height: 3px; border-radius: 2px; background: var(--line); } .count i.on { background: var(--accent); }
+  .what { min-width: 0; display: flex; align-items: baseline; gap: 12px; }
+  .what h1 { flex: none; font: 700 19px/1.2 Display; letter-spacing: -.02em; }
+  .what p { min-width: 0; font-size: 14.5px; line-height: 1.35; color: var(--soft); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .nav { display: flex; align-items: center; gap: 8px; }
+  /* Said where the conversation that put the page up cannot hear it yet */
+  .asleep { margin: 8px 16px 0; display: flex; gap: 12px; align-items: flex-start; padding: 10px 14px; border: 1px solid var(--amber-line); border-radius: 14px; background: var(--amber-soft); color: var(--ink); font-size: 14px; line-height: 1.45; }
+  .asleep b { color: var(--amber); font-weight: 600; }
+  .asleep code { font: 600 13.5px/1 var(--mono); padding: 2px 6px; border-radius: 6px; background: var(--card); border: 1px solid var(--amber-line); color: var(--amber); white-space: nowrap; }
+  .asleep i { flex: none; width: 10px; height: 10px; margin-top: 6px; border-radius: 50%; background: var(--amber); }
+  .stage { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; }
+  /* A part has the whole of the stage, and lays itself out in it */
+  .part { position: absolute; inset: 0; min-width: 0; min-height: 0; padding: 14px 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; }
+  .part.swap { animation: swap .35s ease-out; } @keyframes swap { from { opacity: 0; transform: translateY(8px); } }
+  /* What fills the room a part has left, for a drawing of a fixed shape to be fitted into: its child takes its size from 100cqw and 100cqh */
+  .fill { flex: 1 1 0; min-width: 0; min-height: 0; width: 100%; container-type: size; display: grid; place-items: center; }
+  /* A row of a part's own buttons and small words, under what fills it */
+  .foot { flex: none; width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; font: 400 12px/1.3 var(--mono); color: var(--faint); flex-wrap: wrap; }
+
+  /* The agent's dock: who answers this page, and where what the person last did has got to on its way there and back */
+  .dock { position: relative; display: grid; grid-template-columns: auto minmax(430px, 1.3fr) minmax(0, 1fr); align-items: center; gap: 6px 26px; padding: 12px 16px 12px; min-height: 96px; border-top: 1px solid var(--line); background: var(--card); }
+  /* For as long as what the person did is with It or with the agent, a line moves along the dock's upper edge */
+  .dock::before { content: ""; position: absolute; left: 0; right: 0; top: -2px; height: 3px; opacity: 0; background: linear-gradient(90deg, transparent, var(--green) 35%, var(--green) 65%, transparent) 0 0 / 40% 100% no-repeat; transition: opacity .3s; }
+  .dock[data-stage="sending"]::before, .dock[data-stage="took"]::before, .dock[data-stage="reached"]::before, .dock[data-stage="working"]::before { opacity: 1; animation: along 1.5s linear infinite; }
+  @keyframes along { from { background-position: -70% 0; } to { background-position: 170% 0; } }
+  .dock .who { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; max-width: 220px; }
+  .dock .who small { font-size: 11.5px; line-height: 1.2; color: var(--faint); white-space: nowrap; }
+  .track { list-style: none; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .track li { position: relative; min-width: 0; display: grid; justify-items: center; gap: 4px; text-align: center; padding: 0 3px; }
+  /* The way from the stage before to this one */
+  .track li::before { content: ""; position: absolute; top: 8px; right: 50%; width: 100%; height: 2px; background: var(--line); }
+  .track li:first-child::before { display: none; }
+  .track li i { position: relative; z-index: 1; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line); background: var(--card); transition: background .25s, border-color .25s; }
+  .track li b { max-width: 100%; font: 600 13px/1.15 Text; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color .25s; }
+  .track li .short { display: none; }
+  .track li span { max-width: 100%; min-height: 1.25em; font: 400 11px/1.25 var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+  /* Reached, and when; passed, as an answer shows it was, where the page was not told when */
+  .track li.done i { background: var(--green); border-color: var(--green); }
+  .track li.done i::after { content: ""; position: absolute; left: 4px; top: 2.5px; width: 4px; height: 7px; border: solid var(--on-green); border-width: 0 2px 2px 0; transform: rotate(40deg); } .track li.past i { background: var(--green-soft); border-color: var(--green); }
+  .track li.done::before, .track li.past::before, .track li.live::before { background: var(--green); }
+  .track li.done b, .track li.past b, .track li.live b { color: var(--ink); } .track li.done span, .track li.live span { color: var(--soft); }
+  /* Waited for next: the way to it is on the move for as long as it is waited for */
+  .track li.next::before { background: repeating-linear-gradient(90deg, var(--green) 0 7px, transparent 7px 14px) 0 0 / 28px 2px; animation: flow .7s linear infinite; }
+  @keyframes flow { to { background-position: 28px 0; } }
+  .track li.next i { border-color: var(--green); } .track li.next b { color: var(--soft); }
+  /* Known to be going on now */
+  .track li.live i { background: var(--green); border-color: var(--green); animation: beat 1.3s ease-out infinite; }
+  @keyframes beat { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 55%, transparent); } to { box-shadow: 0 0 0 10px transparent; } }
+  .track li.off i { border-color: var(--clay-dark); background: var(--card); } .track li.off b { color: var(--clay-dark); }
+  .dock .say { min-width: 0; }
+  .dock .state { font-size: 13px; line-height: 1.3; color: var(--soft); } .dock .state b { margin-left: 2px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .dock[data-stage="slow"] .state, .dock[data-stage="refused"] .state { color: var(--clay-dark); }
+  .dock .line { margin-top: 4px; min-height: 2.9em; font: 400 14px/1.45 var(--mono); color: var(--ink); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+  .dock .line.hint { font: 400 13.5px/1.45 Text; color: var(--faint); }
+  .caret::after { content: ""; display: inline-block; width: 7px; height: 1.05em; margin-left: 2px; background: var(--green); vertical-align: -.18em; animation: blink 1s steps(2) infinite; } @keyframes blink { 50% { opacity: 0; } }
+
+/*parts.css*/
+
+  @media (max-width: 760px) {
+    .top { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "count nav" "what what"; padding: 8px 12px 9px; }
+    .count { grid-area: count; } .nav { grid-area: nav; gap: 6px; } .what { grid-area: what; flex-direction: column; align-items: flex-start; gap: 1px; }
+    .count i { width: 10px; }
+    .what h1 { font-size: 18px; } .what p { font-size: 13.5px; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+    .btn.small { min-height: 36px; padding: 0 13px; font-size: 13.5px; } .skip { font-size: 12.5px; }
+    .asleep { margin: 8px 12px 0; font-size: 13.5px; }
+    .part { padding: 10px 12px; }
+    .dock { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 9px 12px 10px; min-height: 0; }
+    .dock .who { flex-direction: row; align-items: center; gap: 9px; max-width: none; }
+    .track li b { font-size: 11px; } .track li span { font-size: 10.5px; } .track li { padding: 0 1px; } .track li .long { display: none; } .track li .short { display: block; }
+    .dock .line { min-height: 2.9em; font-size: 13px; }
+  }
+  @media (max-width: 360px) { .count i { width: 6px; } .count span { margin-right: 3px; } }
+  @media (prefers-reduced-motion: reduce) { * { animation-duration: .01s !important; transition-duration: .01s !important; } }
+</style>
+</head>
+<body>
+<div class="frame" id="frame">
+  <header class="top">
+    <div class="count" id="count" aria-live="polite"></div>
+    <div class="what"><h1 id="title"></h1><p id="line"></p></div>
+    <nav class="nav" aria-label="The tour"><button class="btn ghost small" id="back" type="button">Back</button><button class="btn small" id="next" type="button">Next <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button><button class="skip" id="skip" type="button">Skip the tour</button></nav>
+  </header>
+  <div class="asleep" id="asleep" role="status" hidden><i></i><p><b>Your agent cannot hear this page yet.</b> In the Claude Code chat that put it up, type <code>/reload-plugins</code>. What you do here is kept, and the answers come once it has loaded.</p></div>
+  <main class="stage" id="stage">
+
+<!--parts.html-->
+
+  </main>
+  <footer class="dock" id="dock" data-stage="idle">
+    <div class="who"><span class="pill"><i></i><span id="dock-who"></span></span><small>your agent, in its own conversation</small></div>
+    <ol class="track" id="track" aria-hidden="true">
+      <li data-k="you"><i></i><b>You</b><span class="long"></span><span class="short"></span></li>
+      <li data-k="it"><i></i><b>It</b><span class="long"></span><span class="short"></span></li>
+      <li data-k="chat"><i></i><b></b><span class="long"></span><span class="short"></span></li>
+      <li data-k="work"><i></i><b>Working</b><span class="long"></span><span class="short"></span></li>
+      <li data-k="page"><i></i><b>Answer</b><span class="long"></span><span class="short"></span></li>
+    </ol>
+    <div class="say" aria-live="polite"><p class="state"><span id="dock-state"></span><b id="dock-secs"></b></p><p class="line" id="dock-line"></p></div>
+  </footer>
+</div>
+<script>
+// The shell of the tour's first page: the frame, the going from one part to the next, and the
+// agent's dock. The parts themselves are in tour/parts, one file each, and tour/parts/README.md
+// says what a part is given here and what it owes. The page goes from part to part by itself and
+// asks nothing of the agent to do it. What the person does in a part goes to the agent as one
+// action, and the agent answers in the page's state, under the name of that part. Every answer
+// to something the person did names the request it answers, and an answer to an earlier one is
+// not drawn.
+var Shell = (() => {
+  var It = window.It || { state: {}, revision: 0, onState: () => () => {}, action: () => Promise.resolve() };
+  var P = window.__PARAMS || {};
+  var AGENT = String(P.agent || "") || "Your agent";
+  // How long an agent has to answer before what was asked of it is the person's to do again
+  var SLOW = 40000;
+  var calm = !!window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var $ = (id) => document.getElementById(id);
+  var SVG = "http://www.w3.org/2000/svg";
+  // The agent's answers for one part of the page, as the state has them
+  var answers = (key) => { var v = (It.state || {})[key]; return v && typeof v === "object" && !Array.isArray(v) ? v : {}; };
+  var newId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (n) => n.toString(16).padStart(2, "0")).join("");
+  var tidy = (v, most) => (typeof v === "string" || typeof v === "number" ? String(v).replace(/\s+/g, " ").trim().slice(0, most) : "");
+  var listen = (fn) => { var off = It.onState(fn); return typeof off === "function" ? off : () => {}; };
+  var named = (text) => String(text || "").replace(/\{agent\}/g, AGENT);
+
+  var sections = [].slice.call(document.querySelectorAll("#stage > section.part"));
+  var NAMES = sections.map((s) => s.getAttribute("data-part"));
+  var parts = {}, at = -1;
+  var shown = () => (at >= 0 ? parts[NAMES[at]] : null);
+
+  // ── Where the conversation that put the page up cannot hear it yet ──
+  // The page says so, and what to type, until the first answer of the agent's arrives
+  var asleep = P.asleep === true || P.asleep === "true";
+  $("asleep").hidden = !asleep;
+  function heardFrom() {
+    if (!asleep) return;
+    asleep = false;
+    $("asleep").hidden = true;
+    if (shown()) draw(shown().box.model);
+  }
+
+  // ── The agent's dock ──
+  // Five stages that what the person did goes through, each said only once the page knows it:
+  // the person did it; It took it, which is `It.action` answering; it reached the agent's
+  // conversation and the agent is at work on it, which the site says where it is told
+  // (`It.onProgress`); and the agent answered, which is the answer in the state. Each has the
+  // time it was known at, by this browser's clock, counted from what the person did. A stage
+  // the page was never told of is not said to have been reached: once the answer has come it is
+  // drawn as passed, with no time, since an answer does not come without it. Nothing here goes
+  // on by a timer but the count of seconds, and what the agent is doing is said only in the
+  // agent's own words, which come in the state.
+  var KEYS = ["you", "it", "chat", "work", "page"];
+  var dock = $("dock"), node = {};
+  KEYS.forEach((k) => { node[k] = dock.querySelector('[data-k="' + k + '"]'); });
+  $("dock-who").textContent = AGENT;
+  node.chat.querySelector("b").textContent = AGENT;
+  var LEGEND = { you: "do something", it: "takes it", chat: "gets it", work: "works on it", page: "comes here" };
+  // The same in as few letters as a narrow screen has room for under each
+  var BRIEF = { you: "do it", it: "takes it", chat: "gets it", work: "works", page: "lands" };
+  // Where what the person did has got to, in a line of the page's own, for as long as it is on its way
+  var TEACH = {
+    sending: "What you did is on its way to It, the program on your computer that shows this page.",
+    took: "It keeps it for " + AGENT + ", which made this page from a conversation of its own.",
+    reached: AGENT + " was handed what you did, in its own conversation.",
+    working: AGENT + "’s turn is running there now. What it answers is drawn on this page.",
+  };
+  var took = (ms) => (ms / 1000).toFixed(1) + " s";
+  var WAITING = { sending: 1, took: 1, reached: 1, working: 1 };
+  /** What the dock says of one part, in words: which stage, the sentence for it, and the seconds beside it. */
+  function wordsOf(m) {
+    var s = m.stage, since = m.t0 >= 0 ? Date.now() - m.t0 : 0, whole = Math.max(1, Math.round(since / 1000)) + " s";
+    if (s === "sending") return ["Sending what you did to It", ""];
+    if (s === "took") return ["It has it. Waiting for " + AGENT, whole];
+    if (s === "reached") return [m.ended ? AGENT + "’s turn ended, and no answer has come here yet" : AGENT + " has it, in its own conversation", whole];
+    if (s === "working") return [AGENT + " is working on it", whole];
+    if (s === "answered") return [AGENT + " answered" + (m.at.page === undefined ? "" : " in " + took(m.at.page)), ""];
+    if (s === "slow") return ["No answer after " + Math.round((m.long ? m.long.most : SLOW) / 1000) + " s. This is yours again" + (m.late ? ", and a late answer is still shown." : "."), ""];
+    if (s === "refused") return ["It did not take that. Do it again.", ""];
+    return [m.idle || (asleep ? AGENT + " cannot hear this page yet" : AGENT + " hears what you do here"), ""];
+  }
+  /** How each stage stands: reached with its time, passed, waited for next, going on now, where it stopped, or not yet. */
+  function stagesOf(m) {
+    var s = m.stage, a = m.at, out = {}, waited = false;
+    KEYS.forEach((k) => { out[k] = { cls: "", text: LEGEND[k], short: BRIEF[k] }; });
+    if (s === "idle") return out;
+    // `short` is what a narrow screen has room for under each: the time alone
+    var live = Math.max(1, Math.round((Date.now() - m.t0 - a.work) / 1000)) + " s";
+    out.you = { cls: "done", text: m.did || "did something" };
+    if (a.it !== undefined) out.it = { cls: "done", text: "took it · " + took(a.it), short: took(a.it) };
+    if (a.chat !== undefined) out.chat = { cls: "done", text: "got it · " + took(a.chat), short: took(a.chat) };
+    else if (s === "answered") out.chat = { cls: "past", text: "got it" };
+    if (s === "working") out.work = { cls: "live", text: "for " + live, short: live };
+    else if (s === "answered") out.work = a.work !== undefined && a.page !== undefined ? { cls: "done", text: "for " + took(Math.max(0, a.page - a.work)), short: took(Math.max(0, a.page - a.work)) } : { cls: "past", text: "worked on it" };
+    if (s === "answered") out.page = { cls: "done", text: a.page === undefined ? "on this page" : "in " + took(a.page), short: a.page === undefined ? "" : took(a.page) };
+    // The first stage not reached is the one waited for, or where it stopped
+    KEYS.forEach((k) => {
+      if (waited || out[k].cls) return;
+      waited = true;
+      if (WAITING[s]) out[k].cls = "next";
+      else if (s === "slow" || s === "refused") out[k] = { cls: "off", text: k === "it" ? "did not take it" : out[k].text, short: out[k].short };
+    });
+    return out;
+  }
+  function draw(m) {
+    var words = wordsOf(m), stages = stagesOf(m), line = $("dock-line");
+    dock.setAttribute("data-stage", m.stage);
+    $("dock-state").textContent = words[0];
+    $("dock-secs").textContent = words[1] ? " · " + words[1] : "";
+    // A wait that a part has said is a long one says why it is, once It has what was done
+    var waiting = !!WAITING[m.stage], told = waiting ? (m.long && m.stage !== "sending" && m.long.line) || TEACH[m.stage] : m.stage === "slow" || m.stage === "refused" ? m.hint : m.typed || m.hint;
+    KEYS.forEach((k) => {
+      node[k].className = stages[k].cls;
+      node[k].querySelector(".long").textContent = stages[k].text;
+      node[k].querySelector(".short").textContent = stages[k].short || "";
+    });
+    // The agent's own words are set as its own. Anything else in that line is the page's: what to do here, or where what was done has got to
+    line.className = "line" + (told && told === m.typed ? (m.typing ? " caret" : "") : " hint");
+    line.textContent = told || "";
+    line.title = told === m.typed ? m.words : "";
+  }
+  /** What the site last said of the actions it has handed on, where it says. */
+  var latest = null;
+  var boxes = [];
+  /** The dock as one part has it. It is drawn while that part is the one shown, and kept while it is not. */
+  function Box(name) {
+    var m = { stage: "idle", idle: "", did: "", words: "", typed: "", typing: false, hint: "", t0: -1, at: {}, action: null, ended: false, long: null, late: true };
+    var tick = 0, quiet = 0, typing = 0;
+    var mine = () => shown() !== null && shown().box === box;
+    var show = () => { if (mine()) draw(m); };
+    var since = () => Date.now() - m.t0;
+    function stopClock() { clearTimeout(tick); clearTimeout(quiet); tick = quiet = 0; }
+    function clock() { clearTimeout(tick); tick = setTimeout(() => { show(); clock(); }, 1000); }
+    /** What the site says has become of the action this part waits on. */
+    function heard() {
+      if (!latest || !m.action || !WAITING[m.stage] || m.stage === "sending") return;
+      var a = null;
+      (Array.isArray(latest.actions) ? latest.actions : []).forEach((x) => { if (x && x.id === m.action) a = x; });
+      if (!a) return;
+      if (a.handed === true && m.stage === "took") { m.stage = "reached"; m.at.chat = since(); }
+      if (a.turn === "running" && m.stage === "reached") { m.stage = "working"; m.ended = false; m.at.work = since(); }
+      else if (a.turn !== "running" && m.stage === "working") { m.stage = "reached"; m.ended = a.turn === "ended"; delete m.at.work; }
+      show();
+    }
+    var box = {
+      model: m,
+      /** What the person did, in a few words of the page's. */
+      did(t) { m.did = t || ""; show(); },
+      /** The agent's own words, written out as they come. */
+      say(t) {
+        var run = ++typing, words = tidy(t, 400), i = 0;
+        m.words = words; m.hint = words ? "" : m.hint;
+        if (calm || !words) { m.typed = words; m.typing = false; show(); return; }
+        m.typing = true;
+        (function next() {
+          if (run !== typing) return;
+          m.typed = words.slice(0, ++i);
+          if (i >= words.length) m.typing = false;
+          show();
+          if (m.typing) setTimeout(next, words.charAt(i - 1) === "." ? 110 : 14);
+        })();
+      },
+      said: () => m.typed,
+      /** What the person can do here, in the page's words, where the agent has said nothing yet. */
+      hint(t) { ++typing; m.words = m.typed = ""; m.typing = false; m.hint = t || ""; show(); },
+      idle(t) { stopClock(); m.stage = "idle"; m.idle = t || ""; m.t0 = -1; m.at = {}; m.action = null; m.ended = false; m.long = null; show(); },
+      sending(when) { stopClock(); m.stage = "sending"; m.t0 = typeof when === "number" ? when : Date.now(); m.at = { you: 0 }; m.action = null; m.ended = false; m.long = null; show(); clock(); },
+      /**
+       * It took what was done: `result` is what `It.action` answered with, which names the action.
+       * Where nothing has come a while after, `back` gives the person their part again. That while
+       * is the forty seconds, unless the part says in `long` that what it asked takes longer, as a
+       * page that is to be built does: `most` is how long, and `line` is the page's sentence of why.
+       * `long.late` is false where an answer that comes after that is not drawn, as a chess move is
+       * not once the person has their move back.
+       */
+      asked(back, result, long) {
+        stopClock();
+        m.long = long && typeof long.most === "number" && long.most > SLOW ? { most: long.most, line: tidy(long.line, 200) } : null;
+        m.late = !(long && long.late === false);
+        if (m.t0 < 0) { m.t0 = Date.now(); m.at = { you: 0 }; }
+        m.stage = "took"; m.ended = false;
+        if (m.at.it === undefined) m.at.it = since();
+        m.action = result && typeof result.id === "string" ? result.id : null;
+        heard();
+        show();
+        clock();
+        quiet = setTimeout(() => {
+          quiet = 0; clearTimeout(tick);
+          m.stage = "slow";
+          show();
+          if (back) back();
+        }, m.long ? m.long.most : SLOW);
+      },
+      got() {
+        stopClock();
+        if (m.t0 >= 0) m.at.page = since(); else m.at = {};
+        m.stage = "answered";
+        show();
+        heardFrom();
+      },
+      refused() { stopClock(); m.stage = "refused"; show(); },
+      waiting: () => !!WAITING[m.stage],
+      heard: heard,
+    };
+    boxes.push(box);
+    return box;
+  }
+  if (typeof It.onProgress === "function") It.onProgress((said) => { latest = said && typeof said === "object" ? said : null; boxes.forEach((b) => b.heard()); });
+
+  /**
+   * One thing at a time that the person asks of the agent in a part of the page, and its answer.
+   * The answer counts where it names the request that is waiting, and only once. It may be heard
+   * before the page hears that It took the request, as a connection that dropped between the two
+   * brings them back: it is kept, and drawn when the request is known to have gone.
+   */
+  function Asker(key, box, apply, back) {
+    var me = { request: null, sent: false, early: null };
+    // `id` is given where what is sent has to name its own request, and is made here otherwise
+    me.send = (name, data, when, id) => {
+      id = id || newId();
+      me.request = id; me.sent = false; me.early = null;
+      box.sending(when);
+      It.action(name, Object.assign({ part: key, request: id }, data)).then((result) => {
+        if (me.request !== id) return;
+        me.sent = true;
+        box.asked(() => { if (me.request === id) back(); }, result);
+        var kept = me.early;
+        me.early = null;
+        if (kept) take(kept);
+      }, () => {
+        if (me.request !== id) return;
+        me.request = null;
+        box.refused();
+        back();
+      });
+      return id;
+    };
+    me.forget = () => { me.request = null; me.early = null; };
+    me.waiting = () => me.request !== null;
+    function take(got) {
+      me.request = null;
+      box.got();
+      apply(got);
+    }
+    listen(() => {
+      var got = answers(key);
+      if (!me.request || got.request !== me.request) return;
+      if (!me.sent) { me.early = got; return; }
+      take(got);
+    });
+    return me;
+  }
+
+  // ── Going from one part to the next, which is the page's own and asks nothing of anyone ──
+  function count(n) {
+    $("count").innerHTML = "<span>" + (n + 1) + " of " + NAMES.length + "</span>" + NAMES.map((_, i) => '<i class="' + (i <= n ? "on" : "") + '"></i>').join("");
+  }
+  function go(to) {
+    var n = typeof to === "string" ? NAMES.indexOf(to) : to;
+    n = Math.max(0, Math.min(NAMES.length - 1, n));
+    var was = at, last = n === NAMES.length - 1;
+    if (was >= 0 && n !== was) parts[NAMES[was]].leave.forEach((fn) => fn());
+    at = n;
+    sections.forEach((s, i) => { s.hidden = i !== n; });
+    var p = parts[NAMES[n]];
+    p.el.classList.remove("swap");
+    void p.el.offsetWidth;
+    // The part the page opens on is simply there: only a part gone to comes in
+    if (!calm && was >= 0) p.el.classList.add("swap");
+    $("title").textContent = p.title;
+    $("line").textContent = p.line;
+    $("back").hidden = n === 0;
+    $("next").hidden = $("skip").hidden = last;
+    count(n);
+    draw(p.box.model);
+    p.enter.forEach((fn) => fn());
+  }
+  $("back").addEventListener("click", () => go(at - 1));
+  $("next").addEventListener("click", () => go(at + 1));
+  $("skip").addEventListener("click", () => go(NAMES.length - 1));
+
+  /** A part as the shell keeps it: its section, its words in the top line, its dock, and what it does as it is come to and left. */
+  function kept(name) {
+    var el = sections[NAMES.indexOf(name)];
+    if (!el) throw new Error('The page has no part called "' + name + '"');
+    return parts[name] || (parts[name] = { el: el, title: named(el.getAttribute("data-title")), line: named(el.getAttribute("data-line")), enter: [], leave: [], box: Box(name) });
+  }
+  /** Hands a part to the shell: `setup` is given what the part works with, once, as the page loads. */
+  function part(name, setup) {
+    var p = kept(name);
+    setup({
+      name: name,
+      el: p.el,
+      agent: AGENT,
+      $: (selector) => p.el.querySelector(selector),
+      /** The agent's answers for this part, as the state has them now. */
+      answers: () => answers(name),
+      /** Hears each change of the page's state. */
+      listen: listen,
+      /** How many times the state has been set, where It says, and -1 where it does not. */
+      revision: () => (typeof It.revision === "number" ? It.revision : -1),
+      /** The dock, as this part has it. */
+      box: p.box,
+      /** One thing at a time asked of the agent, and its answer: `apply` draws the answer, and `back` gives the part back to the person where none came. */
+      asker: (apply, back) => Asker(name, p.box, apply, back || (() => {})),
+      /** Sends an action by itself, named for this part: one that waits for no answer, or one whose answer the part matches itself. What it resolves with is for `box.asked`. */
+      send: (action, data) => It.action(action, Object.assign({ part: name }, data || {})),
+      onEnter: (fn) => { p.enter.push(fn); },
+      onLeave: (fn) => { p.leave.push(fn); },
+      /** Says something else in the one line at the top, or with nothing, what the part says there to begin with. */
+      line: (text) => { p.line = named(text) || named(p.el.getAttribute("data-line")); if (shown() === p) $("line").textContent = p.line; },
+      shown: () => shown() === p,
+    });
+  }
+  // ── The frame in other colours ──
+  // A part may dress the frame in an accent and a tint of its own, and put the frame's own back.
+  // The accent is the colour of the person's own buttons and of the count of parts. The agent's
+  // green is never worn: it is how the page says what is the agent's, in the dock, on the board
+  // and in each part, and a design's red or amber there would read as something gone wrong. Only
+  // these five can be given, each as #rrggbb. All are refused together where what is written on
+  // the accent or on the paper could not be read, the accent could not be seen on the paper, or
+  // the agent's green could no longer be seen on it.
+  var WORN = ["--accent", "--on-accent", "--paper", "--card", "--line"];
+  function wear(colours) {
+    var root = document.documentElement, given = colours && typeof colours === "object" ? colours : null;
+    WORN.forEach((k) => root.style.removeProperty(k));
+    if (!given) return false;
+    var own = window.getComputedStyle(root), has = (k) => (Object.prototype.hasOwnProperty.call(given, k) ? given[k] : own.getPropertyValue(k).trim());
+    var light = (c) => [1, 3, 5].reduce((sum, i, n) => { var v = parseInt(c.slice(i, i + 2), 16) / 255; return sum + [.2126, .7152, .0722][n] * (v <= .03928 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4)); }, 0);
+    var apart = (a, b) => { var x = light(has(a)), y = light(has(b)); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); };
+    var keys = Object.keys(given), all = WORN.concat("--ink", "--green").every((k) => /^#[0-9a-f]{6}$/i.test(has(k)));
+    if (!keys.length || !all || keys.some((k) => WORN.indexOf(k) < 0)) return false;
+    if (apart("--on-accent", "--accent") < 4.5 || apart("--accent", "--paper") < 3 || apart("--accent", "--card") < 3 || apart("--ink", "--paper") < 7 || apart("--ink", "--card") < 7) return false;
+    if (apart("--green", "--paper") < 2.5 || apart("--green", "--card") < 2.5) return false;
+    keys.forEach((k) => root.style.setProperty(k, given[k]));
+    return true;
+  }
+  return {
+    part: part,
+    wear: wear,
+    /** Shows the first part. Called once every part has been handed over. */
+    start: () => { NAMES.forEach(kept); go(0); },
+    go: go,
+    names: () => NAMES.slice(),
+    at: () => NAMES[at],
+    /** What the dock says of a part, whether or not it is the one shown: its stage, its sentence with the seconds, what the person did and what the agent said. */
+    read: (name) => { var m = kept(name).box.model, w = wordsOf(m), st = stagesOf(m), stages = {}; KEYS.forEach((k) => { stages[k] = st[k]; }); return { stage: m.stage, state: w[0] + (w[1] ? " " + w[1] : ""), did: m.did, said: m.typed, hint: m.hint, stages: stages }; },
+    agent: AGENT, SLOW: SLOW, calm: calm, SVG: SVG, $: $, newId: newId, tidy: tidy,
+  };
+})();
+</script>
+<!--parts.js-->
+<script>Shell.start();</script>
+</body>
+</html>
