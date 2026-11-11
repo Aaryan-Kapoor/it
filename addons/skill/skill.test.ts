@@ -929,7 +929,7 @@ describe('the agent skill', () => {
   test('says where the command is when its name is not found', () => {
     // By its name alone first. From where it is only when the name is not found, and then with the path
     // written out: a harness that cannot read a command plainly (`$HOME/.it/bin/it …`) stops and asks the person
-    expect(skill).toContain('Run it by that name alone, `it`, every time.')
+    expect(skill).toContain('Run it by that name alone, `it` (on Windows `it.exe`), every time.')
     expect(skill).toMatch(/Only if the name is not found .* is the command run from where it is, `~\/\.it\/bin\/it`/)
     expect(skill).toContain('with no variable such as `$HOME` in it')
     expect(source('../../packages/cli/src/setup.ts')).toContain("inHome('bin', windows ? 'it.exe' : 'it')")

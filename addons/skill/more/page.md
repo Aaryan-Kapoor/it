@@ -223,6 +223,10 @@ A control that is not a form field, such as a tab or the item that is open, work
 </script>
 ```
 
+## Large state
+
+A single argument on a command line has a limit, about 128 KB on Linux and under 32 KB on Windows, so state larger than that cannot be given as one argument on that system. Write it with your own file tool to a file in the temporary folder, so as to leave nothing in the user's project, and give its path instead: `it patch board --file /tmp/board.json`, `it set board order --file /tmp/order.json` for one value, or `--state-file <path>` on `it create`.
+
 ## On Windows
 
 Run It as `it.exe` on Windows, as in `it.exe state board`, and never as a bare `it`. Windows PowerShell 5.1 carries Pester, a test framework with a command of its own called `It`, and a bare `it` runs that command and fails with "The It command may only be used inside a Describe block" wherever It's folder is not on the PATH yet, as in the conversation that installed It, and wherever Pester has been loaded, even with It's folder on the PATH. `it.exe` is always It's program. Where it is not found ("is not recognized"), run It by its full path with forward slashes, as in `C:/Users/ana/.it/bin/it.exe state board` in PowerShell or Git Bash. In PowerShell put `&` before a path in quotes, as in `& "C:/Users/Ana Lee/.it/bin/it.exe" state board`, and in cmd write it in quotes with backslashes, as in `"C:\Users\Ana Lee\.it\bin\it.exe" state board`.
