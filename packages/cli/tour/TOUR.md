@@ -202,7 +202,7 @@ Build it now, small and whole. The person is watching the seconds count, and the
 :root{color-scheme:light dark;--paper:#f3efe6;--card:#fffdf8;--ink:#1c1a16;--soft:#6d685d;--line:#e2dbcc;--accent:#17805a}@media(prefers-color-scheme:dark){:root{--paper:#100f0d;--card:#1a1916;--ink:#f4f0e7;--soft:#aaa497;--line:#2f2c27;--accent:#3ecf93}}
 ```
 
-2. Publish it and bring it up in one command, with the page itself in the command, written with double quotes only so that nothing ends it early. This is a command your harness already lets you run, where writing a file may stop to ask the person, who is not looking at you, and where a page given as the text of a here-document is refused for the script in it:
+2. Publish it and bring it up in one command, with the page itself in the command, written with double quotes only so that nothing ends it early, and with no line that begins with `#`, which Claude Code refuses inside quotes: put a CSS rule for an id after something else on its line. This is a command your harness already lets you run, where writing a file may stop to ask the person, who is not looking at you, and where a page given as the text of a here-document is refused for the script in it:
 
 ```sh
 it create "<the idea's name>" --id <a-short-id> --open --html '<the whole page>'
