@@ -2960,7 +2960,8 @@ async function httpsCommand(a: Args) {
     if (!status.ok) throw tailscaleRefused('say what it serves', status)
     let served: unknown = {}
     try {
-      served = status.out.trim() ? JSON.parse(status.out) : {}
+      served = JSON.parse(status.out)
+      if (!served || typeof served !== 'object' || Array.isArray(served)) throw new Error('Invalid Serve status')
     } catch {
       throw new Problem('Tailscale returned an unreadable Serve status. HTTPS was not enabled.', 'tailscale')
     }
