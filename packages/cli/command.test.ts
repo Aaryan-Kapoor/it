@@ -7525,7 +7525,7 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
 
   // Whichever app an agent installs It from, what it is told to pass on is that app's own note,
   // whole, in the step that gives the pairing link and again as the last thing setup prints
-  const passedOn = async (setup: { err: string; out: string; code: number | null }, note: string) => {
+  const passedOn = (setup: Awaited<ReturnType<typeof run>>, note: string) => {
     expect(setup.code).toBe(0)
     expect(printed(setup).next).toBe(AFTER_SETUP_TELLING(`this, word for word: “${note}”`))
     expect(printed(setup).tell).toBe(`Tell the person this in your next message, word for word: “${note}”`)
@@ -7542,11 +7542,11 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
       // Pi sets PI_SESSION_ID for the commands its agent runs, and It's add-on, once it runs there, IT_PI_SESSION
       const inPi = { ...b.env, PI_SESSION_ID: 'pi-1' }
       const first = await run(m, ['setup', '--no-service', '--only', 'pi'], inPi)
-      await passedOn(first, PI_RELOAD)
+      passedOn(first, PI_RELOAD)
       // It takes the place of Pi's general note in what the agent passes on, as Claude Code's and Codex's do
       expect(printed(first).next).not.toContain(PI_NOTE)
       // Asked again in the same conversation, which has still not loaded it, the same is said: Pi is connected already, and that changes nothing here
-      await passedOn(await run(m, ['setup', '--no-service', '--only', 'pi'], inPi), PI_RELOAD)
+      passedOn(await run(m, ['setup', '--no-service', '--only', 'pi'], inPi), PI_RELOAD)
       // Once the add-on runs in the conversation, nothing is left to say of it
       const loaded = await run(m, ['setup', '--no-service', '--only', 'pi'], { ...inPi, IT_PI_SESSION: 'pi-1' })
       expect([loaded.code, printed(loaded).next, printed(loaded).tell]).toEqual([0, AFTER_SETUP, undefined])
@@ -7563,7 +7563,7 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
     try {
       const setup = await run(m, ['setup', '--no-service', '--only', 'opencode'], { ...b.env, OPENCODE_SESSION_ID: 'ses_1' })
       expect(printed(setup).harnesses).toEqual([{ id: 'opencode', version: '1.18.32', addon: 'connected' }])
-      await passedOn(
+      passedOn(
         setup,
         'OpenCode: If OpenCode is open, restart it: it reads its plugins when it starts.\nA saved conversation you open in OpenCode starts listening once you send a message in it.',
       )
@@ -7580,7 +7580,7 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
       [
         '#!/bin/sh',
         'PATH=/bin:/usr/bin',
-        'folder="${HERMES_HOME:-$HOME/.hermes}"',
+        'folder="$HOME/.hermes"',
         'case "$*" in',
         '  --version) echo "Hermes Agent v0.23.1" ;;',
         '  "plugins enable it-bridge") : > "$HOME/hermes-on" ;;',
@@ -7600,7 +7600,7 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
       const setup = await run(m, ['setup', '--no-service', '--only', 'hermes'], { ...b.env, HERMES_SESSION_ID: '20261110_120000_abcd' })
       expect(printed(setup).harnesses).toEqual([{ id: 'hermes', version: '0.23.1', addon: 'connected' }])
       const note = `Hermes Agent: ${afterHermes('0.23.1')}`
-      await passedOn(setup, note)
+      passedOn(setup, note)
       // The three things an agent in Hermes was seen to pass on only the first of
       expect(note).toContain('If Hermes is open, restart it')
       expect(note).toContain('\n    hermes config set plugins.entries.it-bridge.allow_gateway_injection true\n')
@@ -7639,7 +7639,11 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
     )
     const b = await mine(m)
     try {
-      const setup = await run(m, ['setup', '--no-service', '--only', 'codex'], { ...b.env, CODEX_THREAD_ID: 'thread-1', CODEX_HOME: path.join(m.home, 'codex') })
+      const setup = await run(m, ['setup', '--no-service', '--only', 'codex'], {
+        ...b.env,
+        CODEX_THREAD_ID: 'thread-1',
+        CODEX_HOME: path.join(m.home, 'codex'),
+      })
       expect(setup.code).toBe(0)
       // Codex has yet to run It's hooks, which it does once it is started again and they are trusted
       const said = printed(setup)
