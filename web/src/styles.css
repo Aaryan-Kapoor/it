@@ -4154,12 +4154,13 @@ fieldset.media-bar {
     animation: none;
   }
 }
-/* On a phone, the camera's chip and a recording's beside it would push It's bar onto a second row and the page down with it: the mark steps aside, Stop shows only its square and Discard only its bin, and the camera's chip says just "Live". Each keeps its own label for whoever hears the screen read */
+/* On a phone, the camera's chip and a recording's beside it would push It's bar onto a second row and the page down with it: the mark steps aside, Stop shows only its square and Discard only its bin, and the camera's chip says just "Live". So does a recording beside a question It asks, which takes the title's place. Each keeps its own label for whoever hears the screen read */
 @media (max-width: 520px) {
   .page-nav:has(.media-cam):has(.media-rec) .page-nav-mark {
     display: none;
   }
-  .page-nav:has(.media-cam):has(.media-rec) :is(.media-rec-discard, .media-cam-stop) {
+  .page-nav:has(.media-cam):has(.media-rec) :is(.media-rec-discard, .media-cam-stop),
+  .page-nav:has(.media-rec):has(.media-ask, .media-waiting) .media-rec-discard {
     gap: 0;
     padding: 0 7px;
     font-size: 0;

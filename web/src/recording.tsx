@@ -308,9 +308,10 @@ function Note({ page }: { page: string }) {
 /**
  * Everything about the microphone and the camera for the page shown, in It's bar, where nothing
  * on the page can cover it: It's question, or which page the browser is asking about, or the
- * photo being taken, or what records, or how the last recording stopped. The camera live to the
- * page is said beside whichever of those is shown, since it goes on all the while, a recording of
- * sound beside it among them.
+ * photo being taken, or how the last recording stopped. The camera live to the page, and what
+ * records for it, are said beside whichever of those is shown, since each goes on all the while:
+ * a page recording sound that asks for the camera still shows its recording, with Discard, while
+ * It asks.
  */
 export function MediaBar({ page }: { page: string }) {
   useMediaChanges()
@@ -322,16 +323,15 @@ export function MediaBar({ page }: { page: string }) {
   return (
     <>
       {c && <CameraLive c={c} />}
+      {l && <Recording l={l} />}
       {asking?.page === page ? (
         <Ask page={page} />
       ) : browser?.page === page ? (
         <BrowserAsks page={page} />
       ) : shooting?.page === page ? (
         <Photo page={page} />
-      ) : l ? (
-        <Recording l={l} />
       ) : (
-        <Note page={page} />
+        !l && <Note page={page} />
       )}
     </>
   )
