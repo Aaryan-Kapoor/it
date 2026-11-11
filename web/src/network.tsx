@@ -35,9 +35,10 @@ export function useWhere(): Where {
   const said = useQuery(api.network.get, {}) as { on: boolean; addresses: string[] } | undefined
   const [chosen, choose] = useState<string | null>(null)
   const here = ownAddress()
-  // Compare destinations as origins, keeping the first spelling for display.
+  // Compare destinations as origins, keeping the first spelling for display. The backend lists
+  // the network's addresses only while it is on, and the tailnet's over https whether or not
   const origins = new Map<string, string>()
-  for (const address of [...(here ? [here] : []), ...(said?.on ? said.addresses : [])]) {
+  for (const address of [...(here ? [here] : []), ...(said?.addresses ?? [])]) {
     const origin = new URL(address).origin
     if (!origins.has(origin)) origins.set(origin, address)
   }
@@ -186,7 +187,8 @@ export function useNetwork() {
     exposed: said?.exposed ?? null,
     /** Whether It answers the internet too, which the command on the machine It runs on turned on. */
     internet: said?.on === true && said.internet === true,
-    addresses: said?.on ? said.addresses : [],
+    // The backend says the address over https whether or not the network is on, and the network's only while it is
+    addresses: said?.addresses ?? [],
     /** What is being turned to, while the service has not yet said what became of it. */
     turning: mine ? mine.to : null,
     /** It has gone unanswered for longer than the service takes to look. */

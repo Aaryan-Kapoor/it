@@ -23,7 +23,7 @@
 // grants, control messages) is signed, and checked here against the backend's public keys.
 import { createHash, randomBytes } from 'node:crypto'
 import { statfs } from 'node:fs/promises'
-import { AUDIENCE, contentPort, contentType, isSafePath, LIMITS, onThisMachine, policyHost, SANDBOX, STORAGE, UPLOAD } from '@it/protocol'
+import { AUDIENCE, contentPort, contentType, httpsPort, isSafePath, LIMITS, onThisMachine, policyHost, SANDBOX, STORAGE, UPLOAD } from '@it/protocol'
 import { createRemoteJWKSet, customFetch, errors, jwtVerify } from 'jose'
 import { createFiles, type Declared, type Files, nameOf } from './files'
 import { createLimits, type Limits } from './limits'
@@ -185,7 +185,8 @@ function siteAt(basePort: number, named: string | null, secure: boolean, inPolic
   const host = named !== null && named.length <= 260 ? HOST.exec(named)?.[1]?.toLowerCase() : undefined
   if (!host) return null
   try {
-    const site = new URL(`${secure ? 'https' : 'http'}://${host}:${basePort}`)
+    // Over https the site is at the port Tailscale takes https at for the door's, and not at the door's own
+    const site = new URL(`${secure ? 'https' : 'http'}://${host}:${secure ? httpsPort(basePort) : basePort}`)
     const said = policyHost(site.hostname)
     return inPolicy && said !== site.hostname ? `${site.protocol}//${said}${site.port ? `:${site.port}` : ''}` : site.origin
   } catch {

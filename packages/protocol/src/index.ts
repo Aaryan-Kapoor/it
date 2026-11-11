@@ -148,9 +148,16 @@ export const onThisMachine = (address: string): boolean => address === '::1' || 
  * site, pairing, the live connection and uploads. Every page is shown from the port after
  * it. The backend's two ports are for this machine only.
  */
-export const PORTS = { base: 4700, content: 1, backendApi: 40, backendSite: 41 } as const
+export const PORTS = { base: 4700, content: 1, https: 2, backendApi: 40, backendSite: 41 } as const
 /** The port pages are shown from. */
 export const contentPort = (base: number): number => base + PORTS.content
+/**
+ * Where Tailscale takes https for one of the door's two ports, with \`it https on\`: two above it,
+ * so that the site is at 4702 and the pages at 4703, one above it as over plain http. It is a
+ * port of its own and not the door's, since Tailscale listens on the machine's address on the
+ * tailnet, and the door may listen on every address the machine has.
+ */
+export const httpsPort = (port: number): number => port + PORTS.https
 
 /**
  * A host's name as a policy can say it. A policy names a host only in letters, digits, dots and
@@ -582,6 +589,40 @@ export const SHRINK = {
   types: ['image/jpeg', 'image/png', 'image/webp', 'image/bmp', 'image/avif', 'image/heic', 'image/heif'],
 } as const
 
+/**
+ * What a page may ask to use of the screen it is shown on: the microphone, the camera, or both.
+ * A page asks by calling for them (`It.record`, `It.photo`), and nothing else asks: the site
+ * records for it only once the person at that screen has said yes to that page, in It's own bar,
+ * and that bar says that it is recording all the while.
+ *
+ * A page itself is never given the device. A sandboxed document has no origin of its own, and no
+ * browser gives the microphone or the camera to one, so the site, whose origin the browser asks
+ * the person about, records, and hands the page what it recorded as a file.
+ */
+export const MEDIA_KINDS = ['mic', 'camera'] as const
+export type MediaKind = (typeof MEDIA_KINDS)[number]
+/** Whether something is one of the kinds, as the backend and the command check what they are given. */
+export const isMediaKind = (kind: unknown): kind is MediaKind => (MEDIA_KINDS as readonly unknown[]).includes(kind)
+/** The kinds a recording asks for, by what it asks the browser for: sound is the microphone's, and pictures the camera's. */
+export const mediaFor = (asked: { audio: boolean; video: boolean }): MediaKind[] => [
+  ...(asked.audio ? ['mic' as const] : []),
+  ...(asked.video ? ['camera' as const] : []),
+]
+/** The bounds the site holds a recording to, whatever the page asks for. */
+export const RECORDING = {
+  /** Bits a second of sound, the least and the most a page may ask for, and what it is given when it asks for none. */
+  audioBits: { least: 16_000, most: 512_000, given: 128_000 },
+  /** Bits a second of pictures, likewise. */
+  videoBits: { least: 100_000, most: 8_000_000, given: 1_500_000 },
+  /** How long one recording may run, in milliseconds. It is stopped then, and given to the page. */
+  longestMs: 60 * 60_000,
+  /** How large one recording may grow, in bytes: the most a file an action carries may be. It is stopped before then, and given to the page. */
+  mostBytes: LIMITS.actionFileBytes,
+} as const
+
+/** What a person allows a page on a screen lasts until they take it back, or until it goes this long without being used: each use begins the time again. */
+export const MEDIA_GRANT = { unusedMs: 30 * 24 * 60 * 60_000 } as const
+
 /** A file's name as It keeps it: the last part of a path, with nothing in it that is not to be printed, and not too long. */
 export function fileName(name: unknown): string {
   const plain = String(typeof name === 'string' ? name : '')
@@ -933,6 +974,17 @@ export type PageToSite =
    * while it is still handling the message.
    */
   | { type: 'it:open'; url: string }
+  /**
+   * Begin recording. This call is the page's asking: the person is asked in It's bar where the
+   * page is not allowed what it wants on this screen yet. What the browser is to be asked for is
+   * the page's to say, and the site takes no more of it than plain sizes and switches. Answered
+   * once recording has begun, with its id.
+   */
+  | { type: 'it:record'; requestId: string; audio: unknown; video: unknown; audioBitsPerSecond?: unknown; videoBitsPerSecond?: unknown; mimeType?: unknown }
+  /** End a recording. With `keep` the page is answered with what was recorded, as a file, and without it that is thrown away. */
+  | { type: 'it:record-stop'; requestId: string; recording: string; keep: boolean }
+  /** A photo, which the person takes in It's own view of the camera. Answered with the photo as a file. */
+  | { type: 'it:photo'; requestId: string; facing?: unknown }
 
 export type SiteToPage =
   /** The page's whole state. */
@@ -940,9 +992,33 @@ export type SiteToPage =
   /** What changed of the page's state since what was last sent: the agent's part, whole, where it changed, and each value the page keeps that changed, with `null` for one taken away. */
   | { type: 'it:changed'; revision: number; state?: unknown; kept: [string, unknown][] }
   /** Accepted. Of values the page keeps, `revision` is the state's revision that has them. */
-  | { type: 'it:result'; requestId: string; ok: true; actionId?: string; revision?: number }
+  | {
+      type: 'it:result'
+      requestId: string
+      ok: true
+      actionId?: string
+      revision?: number
+      /** A recording that has begun: its id, and the kind of file it will be. */
+      recording?: { id: string; mimeType: string }
+      /** What was recorded, or the photo that was taken. */
+      file?: Blob
+    }
   /** Refused, with why. `retryAfterMs` where it was refused for coming too fast, and is taken when it is sent again that much later. */
   | { type: 'it:result'; requestId: string; ok: false; error: string; retryAfterMs?: number }
+  /**
+   * A recording was paused, went on, or ended without the page asking: paused while the screen
+   * does not show It, and ended when the person stopped it in It's bar or took back what they
+   * had allowed, when another conversation took the page over, when the page is no longer shown,
+   * when the device went away, or when it ran as long or grew as large as one may. Where it ended
+   * and what was recorded is the page's to have, it comes with it.
+   */
+  | {
+      type: 'it:recording'
+      recording: string
+      state: 'recording' | 'paused' | 'ended'
+      why?: 'person' | 'taken_back' | 'not_shown' | 'device' | 'too_long' | 'taken_over' | 'too_large'
+      file?: Blob
+    }
 
 /** The key in a page's state that belongs to the page itself (It.store). */
 export const STORE_KEY = '_page'

@@ -3899,3 +3899,207 @@ form.row-main {
 .deletion-line {
   margin: 0.5rem 0;
 }
+
+/* The microphone and the camera (recording.tsx), all of it inside It's bar, the height of the bar's own buttons, and nothing over the page */
+.media-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 28px;
+  font-size: 12px;
+  color: var(--fg);
+  white-space: nowrap;
+}
+fieldset.media-bar {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.media-bar-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--fg-muted);
+}
+.media-bar-text {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  overflow: hidden;
+}
+/* The page's name gives way first, and what it wants stays whole */
+.media-bar-page {
+  font-weight: 550;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.media-bar-what {
+  flex: none;
+  color: var(--fg-muted);
+}
+.media-bar-btn {
+  flex: none;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--interactive);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.media-bar-btn:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+/* It's question, the page the browser asks about, and a photo take the title's place while they show */
+.media-ask,
+.media-waiting,
+.media-photo {
+  flex: 0 1 auto;
+}
+.page-nav:has(.media-ask, .media-waiting, .media-photo) .page-nav-titlewrap {
+  display: none;
+}
+.page-nav:has(.media-ask, .media-waiting, .media-photo) .page-nav-actions {
+  margin-left: auto;
+}
+.media-bar-short {
+  display: none;
+}
+.media-ask {
+  padding-left: 2px;
+}
+.media-ask .media-bar-icon,
+.media-waiting .media-bar-icon {
+  color: var(--danger);
+}
+/* While a page records: a red dot, how long, and Stop */
+.media-rec {
+  flex: none;
+  gap: 7px;
+  padding: 0 3px 0 9px;
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--danger) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--danger) 45%, transparent);
+}
+.media-rec:has(.media-thumb) {
+  padding-left: 3px;
+}
+.media-rec-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: media-rec-pulse 1.4s ease-in-out infinite;
+}
+.media-rec[data-state="paused"] .media-rec-dot {
+  animation: none;
+  background: var(--wait);
+}
+.media-rec-time {
+  font-variant-numeric: tabular-nums;
+}
+.media-rec-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px 0 7px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--danger-solid);
+  color: #fff;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.media-rec-stop:hover {
+  background: var(--danger);
+}
+/* What the camera records, inside the bar, the height of the bar's row */
+.media-thumb {
+  flex: none;
+  display: block;
+  height: 22px;
+  width: auto;
+  max-width: 40px;
+  border-radius: var(--r-pill);
+  background: #000;
+}
+@keyframes media-rec-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.nav-action.media-allowed {
+  color: var(--danger);
+}
+.media-note,
+.media-takeback {
+  flex: none;
+}
+.media-view-mirrored {
+  transform: scaleX(-1);
+}
+/* A photo: the camera's picture hangs from the bar under Take and Cancel, as small as a person can still aim by */
+.media-photo {
+  position: relative;
+}
+.media-photo-view {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 3;
+  display: block;
+  padding: 3px;
+  border-radius: var(--r-md);
+  background: var(--bg);
+  box-shadow:
+    0 0 0 1px var(--line),
+    var(--shadow-lift);
+}
+.media-photo-video {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 192px;
+  max-height: 192px;
+  border-radius: calc(var(--r-md) - 3px);
+  background: #000;
+}
+/* On a phone the bar's own buttons and the mark step aside while It asks or a photo is taken, so that the question fits on the bar's one row */
+@media (max-width: 520px) {
+  .page-nav:has(.media-ask, .media-waiting, .media-photo, .media-takeback) .page-nav-mark,
+  .page-nav:has(.media-ask, .media-waiting, .media-photo) .page-nav-actions {
+    display: none;
+  }
+  .page-nav:has(.media-takeback) .page-nav-titlewrap,
+  .page-nav-actions:has(.media-takeback) > :not(.media-takeback) {
+    display: none;
+  }
+  .media-bar-btn {
+    padding: 0 9px;
+  }
+  /* Shrunk to the row, and never put on a row of its own: the page's name gives way first */
+  .media-ask,
+  .media-waiting,
+  .media-photo {
+    flex: 1 1 0;
+  }
+  .media-bar-long {
+    display: none;
+  }
+  .media-bar-short {
+    display: inline;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .media-rec-dot {
+    animation: none;
+  }
+}
