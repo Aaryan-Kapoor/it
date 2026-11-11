@@ -137,7 +137,9 @@ describe('a command that may not read It’s folder', () => {
     const said = notSetUp()
     expect(said.code).toBe('blocked')
     expect(said.message).toContain('may not read It’s folder')
-    expect(said.hint).not.toContain('network')
+    // The complete recovery policy names the administrative network command. The prose
+    // must still avoid suggesting that network access fixes a file permission refusal.
+    expect(said.hint?.replace(/`prefix_rule\([^`]*\)`/g, '')).not.toContain('network')
     // An agent in Codex is told to ask to run it outside the sandbox, and given the rule to pass on
     expect(keptOut({ CODEX_THREAD_ID: 'thr' }).hint).toContain(CODEX_SHUT_SAID)
   })
