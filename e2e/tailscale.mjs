@@ -39,7 +39,7 @@ const head = (res) => {
 export function standInTailscale({ door, listen = 0, tls }) {
   const to = { host: '127.0.0.1', port: door }
   const open = new Set()
-  const server = (tls ? https.createServer.bind(https, tls) : http.createServer)((req, res) => {
+  const handOn = (req, res) => {
     const on = http.request({ ...to, method: req.method, path: req.url, headers: handedOn(req.headers) }, (answer) => {
       res.writeHead(answer.statusCode, answer.statusMessage, answer.rawHeaders)
       answer.pipe(res)
@@ -49,7 +49,8 @@ export function standInTailscale({ door, listen = 0, tls }) {
       res.end()
     })
     req.pipe(on)
-  })
+  }
+  const server = tls ? https.createServer(tls, handOn) : http.createServer(handOn)
   // A connection that asks to become something else, which is how the live connection begins:
   // the door's answer is written back as it came, and the two are joined from then on
   server.on('upgrade', (req, socket, first) => {
