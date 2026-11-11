@@ -3624,8 +3624,9 @@ describe('clicks and their delivery', () => {
   test('clicks are rate limited for one page, so that one page cannot use up what the others need', async () => {
     const { alice, m, click } = await setup()
     const results = []
-    for (let i = 0; i < 40; i++) results.push(await code(click(`click-${String(i).padStart(4, '0')}`)))
-    expect(results.filter((r) => r === 'ok').length).toBe(30)
+    // More than a person clicks in half a minute of quick play is taken at once
+    for (let i = 0; i < 130; i++) results.push(await code(click(`click-${String(i).padStart(4, '0')}`)))
+    expect(results.filter((r) => r === 'ok').length).toBe(120)
     expect(results.at(-1)).toBe('rate_limited')
     const other = await publish(m, 'other', { session: SESSION })
     expect(
@@ -3666,17 +3667,18 @@ describe('clicks and their delivery', () => {
   test.each([0, 3, 59_999, 60_000])('a retry delay includes a refill time that is %i milliseconds ahead', async (ahead) => {
     const { t, click } = await setup()
     const countedAt = Date.now()
-    for (let i = 0; i < 30; i++) await click(`click-${String(i).padStart(4, '0')}`)
+    for (let i = 0; i < 120; i++) await click(`click-${String(i).padStart(4, '0')}`)
     await runWhatIsDue(t)
     vi.setSystemTime(countedAt - ahead)
-    await expect(click('click-refused')).rejects.toThrow(`"retryAfterMs":${ahead + 1000}`)
+    await expect(click('click-refused')).rejects.toThrow(`"retryAfterMs":${ahead + 500}`)
 
-    // Waiting for the future baseline earns nothing. The next token needs another second.
+    // Waiting for the future baseline earns nothing. The next token needs another half second.
     vi.setSystemTime(countedAt)
-    await expect(click('click-at-baseline')).rejects.toThrow('"retryAfterMs":1000')
-    vi.setSystemTime(countedAt + 999)
-    await expect(click('click-before-ready')).rejects.toThrow('"retryAfterMs":1')
-    vi.setSystemTime(countedAt + 1000)
+    await expect(click('click-at-baseline')).rejects.toThrow('"retryAfterMs":500')
+    vi.setSystemTime(countedAt + 499)
+    // A moment more, or two where the fractions of a token do not come out even
+    await expect(click('click-before-ready')).rejects.toThrow(/"retryAfterMs":[12]\b/)
+    vi.setSystemTime(countedAt + 500)
     expect(await code(click('click-ready'))).toBe('ok')
     expect(await code(click('click-no-second-token'))).toBe('rate_limited')
   })
@@ -3692,8 +3694,8 @@ describe('clicks and their delivery', () => {
       if (results.at(-1) !== 'ok') dropWhatAFailedCallScheduled()
     }
     // The limit is met all the same: counted afresh for each that came out of order, none would ever be refused
-    expect(results.filter((r) => r === 'ok')).toHaveLength(30)
-    expect(results.filter((r) => r === 'rate_limited')).toHaveLength(370)
+    expect(results.filter((r) => r === 'ok')).toHaveLength(120)
+    expect(results.filter((r) => r === 'rate_limited')).toHaveLength(280)
   })
 
   test('only so many clicks may wait: on one page, and for one person', async () => {
