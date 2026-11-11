@@ -1611,6 +1611,49 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(PI_NOT_LOADED).not.toContain('/reload-plugins')
   })
 
+  test('an OpenCode whose log says it refused to load It’s add-on is not called connected, and none of its conversations is reopened until its add-on is heard from', async () => {
+    const data = mkdtempSync(path.join(os.tmpdir(), 'it-opencode-data-'))
+    made.push(data)
+    const had = process.env.XDG_DATA_HOME
+    process.env.XDG_DATA_HOME = data
+    try {
+      await reopensFor('opencode', 'conversation-1', { addon: false })
+      // What It put into OpenCode, and the line OpenCode 2.x writes as it refuses it
+      const config = path.join(home, 'opencode-config')
+      mkdirSync(path.join(config, 'plugins'), { recursive: true })
+      const plugin = path.join(config, 'plugins', 'it-bridge.js')
+      writeFileSync(plugin, '// the add-on')
+      mkdirSync(path.join(home, 'addons'), { recursive: true })
+      writeFileSync(
+        path.join(home, 'addons', 'opencode.json'),
+        JSON.stringify({ installs: [{ version: ADDONS.opencode!.version, at: Date.now(), dir: config }] }),
+      )
+      mkdirSync(path.join(data, 'opencode', 'log'), { recursive: true })
+      writeFileSync(
+        path.join(data, 'opencode', 'log', 'opencode.log'),
+        `timestamp=${new Date(Date.now() + 1000).toISOString()} level=WARN run=9f604eaf message="failed to load plugin" target=${plugin} cause="Cause([Fail(PluginModule.LoadError: Plugin must export a default definition with an id and an effect or setup function.)])"\n`,
+      )
+      const opencode = async () => (await local<{ addons: Record<string, { state: string; detail: string }> }>('/health'))?.addons.opencode
+      await until(async () => (await opencode())?.state === 'incompatible', 10_000)
+      expect((await opencode())?.detail).toMatch(/^OpenCode refused to load It’s add-on/)
+      expect(said).toContain('OpenCode refused to load It’s add-on, as its log says; its clicks wait, and its conversations are not reopened')
+      // A click for a conversation that may be open in it waits, and nothing is reopened for it
+      offered({ ...click(1), session: { harness: 'opencode', id: 'conversation-1' } })
+      await new Promise((r) => setTimeout(r, 2500))
+      expect(failures()).toEqual([])
+      expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+      // Its add-on is heard from after the refusal: OpenCode loaded it after all, and the click is the add-on's
+      await local('/addon', {
+        method: 'POST',
+        body: { harness: 'opencode', instance: 'loaded', addon: { api: 1, version: ADDONS.opencode!.build, delivery: true, idle: false } },
+      })
+      expect((await opencode())?.state).toBe('active')
+    } finally {
+      if (had === undefined) delete process.env.XDG_DATA_HOME
+      else process.env.XDG_DATA_HOME = had
+    }
+  })
+
   test.each(['opencode', 'hermes'])('a conversation of %s is reopened as before, whatever is noted of It’s add-on in it', async (harness) => {
     await reopensFor(harness, 'conversation-1', { addon: false })
     offered({ ...click(1), session: { harness, id: 'conversation-1' } })
