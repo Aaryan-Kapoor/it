@@ -331,6 +331,7 @@ export default function (pi) {
       if (session && id !== session && file && kept === file) shared.moves.push({ was: session, now: id })
       session = id
       file = kept
+      named(id)
       settle()
       if (!open()) {
         await ask('/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
@@ -362,6 +363,17 @@ export default function (pi) {
     }
   }
 
+  // The commands the agent runs are told that this add-on runs in their conversation, by its id,
+  // which Pi passes on to them beside its own PI_SESSION_ID. A conversation that was open before
+  // the add-on was installed names none, and It then knows it is open without the add-on: a click
+  // on its pages waits for /reload, where reopening it would start a second copy beside it.
+  function named(id) {
+    try {
+      if (typeof id === 'string' && id) process.env.IT_PI_SESSION = id
+      else delete process.env.IT_PI_SESSION
+    } catch {}
+  }
+
   function stop() {
     if (timer) clearInterval(timer)
     timer = null
@@ -381,6 +393,7 @@ export default function (pi) {
     try {
       session = ctx.sessionManager.getSessionId()
       file = ctx.sessionManager.getSessionFile?.() ?? null
+      named(session)
     } catch {}
     timer = setInterval(() => void check(), 1000)
     // The timer alone must never keep Pi from exiting
@@ -397,6 +410,7 @@ export default function (pi) {
     // Clicks given to Pi and not yet shown in the conversation were never reported as handed
     // over, so the connector offers them again to whoever listens next.
     stop()
+    named(null)
   })
   pi.on('agent_start', () => {
     running = true

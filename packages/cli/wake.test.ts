@@ -23,8 +23,9 @@ import path from 'node:path'
 import { describeClick } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import shims from './fixtures/windows-shims.json'
-import { claudeAddonHere } from './src/lib'
-import { conversationFolder, conversationsFile, noteConversation, publishedWithoutAddon } from './src/publish'
+import { claimLock } from './src/legacy-lock'
+import { addonHere, claudeAddonHere, piAddonHere } from './src/lib'
+import { addonMarks, conversationFolder, conversationsFile, forgetAddonMark, noteConversation, publishedWithoutAddon } from './src/publish'
 import {
   Budget,
   bootId,
@@ -1061,12 +1062,66 @@ describe('the folder a conversation was held in', () => {
     expect(publishedWithoutAddon({ harness: 'claude-code', id: 'never-noted' })).toBe(false)
   })
 
+  test('a page published without the add-on writes the note with the time now each time, so that it is newer than the add-on’s last word', async () => {
+    const folder = path.join(scratch, 'held here')
+    mkdirSync(folder)
+    const pi = { harness: 'pi', id: 'pi-1' }
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    try {
+      await noteConversation(pi, folder, null, false)
+      expect(addonMarks('pi').get('pi-1')).toBe(1_000_000)
+      clock.mockReturnValue(1_060_000)
+      await noteConversation(pi, folder, null, false)
+      expect(addonMarks('pi').get('pi-1')).toBe(1_060_000)
+      expect(addonMarks('claude-code').size).toBe(0)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  test('the note that a conversation published without the add-on is taken away only where it was written no later than the add-on was heard, and the rest of it is kept', async () => {
+    const pi = { harness: 'pi', id: 'pi-1' }
+    const note = { cwd: scratch, at: 5_000, profile: { version: 1, paths: {} }, addon: false }
+    writeFileSync(conversationsFile(), JSON.stringify({ 'pi:pi-1': note }))
+    await forgetAddonMark(pi, 4_999)
+    expect(addonMarks('pi').get('pi-1')).toBe(5_000)
+    await forgetAddonMark(pi, 5_000)
+    expect(JSON.parse(readFileSync(conversationsFile(), 'utf8'))['pi:pi-1']).toEqual({ cwd: scratch, at: 5_000, profile: { version: 1, paths: {} } })
+  })
+
+  test('a note written while the add-on’s note is waiting to be taken away is read again under the lock, and a newer one is kept', async () => {
+    const pi = { harness: 'pi', id: 'pi-1' }
+    writeFileSync(conversationsFile(), JSON.stringify({ 'pi:pi-1': { cwd: scratch, at: 5_000, addon: false } }))
+    const release = claimLock(`${conversationsFile()}.lock`, 10_000, 'abcdef0123456789')!
+    const forgetting = forgetAddonMark(pi, 6_000)
+    await new Promise((r) => setTimeout(r, 100))
+    // Another command publishes without the add-on meanwhile, from another folder
+    const other = path.join(scratch, 'elsewhere')
+    writeFileSync(conversationsFile(), JSON.stringify({ 'pi:pi-1': { cwd: other, at: 7_000, addon: false } }))
+    release()
+    await forgetting
+    expect(JSON.parse(readFileSync(conversationsFile(), 'utf8'))['pi:pi-1']).toEqual({ cwd: other, at: 7_000, addon: false })
+  })
+
   test('whether It’s add-on runs in a Claude Code conversation is told by what the add-on sets for its commands', () => {
     expect(claudeAddonHere({})).toBeUndefined()
     expect(claudeAddonHere({ CODEX_THREAD_ID: 'thread-1' })).toBeUndefined()
     expect(claudeAddonHere({ CLAUDE_CODE_SESSION_ID: 'session-1' })).toBe(false)
     expect(claudeAddonHere({ CLAUDE_CODE_SESSION_ID: 'session-1', IT_HARNESS: 'codex', IT_SESSION: 'thread-1' })).toBe(false)
     expect(claudeAddonHere({ CLAUDE_CODE_SESSION_ID: 'session-1', IT_HARNESS: 'claude-code', IT_SESSION: 'session-1' })).toBe(true)
+  })
+
+  test('whether It’s add-on runs in a Pi conversation is told by the conversation it names for its commands, which must be the one Pi names', () => {
+    expect(piAddonHere({})).toBeUndefined()
+    expect(piAddonHere({ CLAUDE_CODE_SESSION_ID: 'session-1' })).toBeUndefined()
+    // Open before the add-on was installed, as the conversation that installed It is until /reload
+    expect(piAddonHere({ PI_SESSION_ID: 'pi-1' })).toBe(false)
+    // A Pi without the add-on started from one with it inherits the outer one's name for its own conversation
+    expect(piAddonHere({ PI_SESSION_ID: 'pi-2', IT_PI_SESSION: 'pi-1' })).toBe(false)
+    expect(piAddonHere({ PI_SESSION_ID: 'pi-1', IT_PI_SESSION: 'pi-1' })).toBe(true)
+    expect(addonHere('pi', { PI_SESSION_ID: 'pi-1' })).toBe(false)
+    expect(addonHere('claude-code', { CLAUDE_CODE_SESSION_ID: 'session-1' })).toBe(false)
+    expect(addonHere('opencode', { OPENCODE_SESSION_ID: 'o-1' })).toBeUndefined()
   })
 
   test('a note that is not as It wrote it says nothing', () => {

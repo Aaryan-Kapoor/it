@@ -1906,6 +1906,23 @@ export function claudeAddonHere(e: NodeJS.ProcessEnv = process.env): boolean | u
   return e.IT_HARNESS === 'claude-code' && Boolean(e.IT_SESSION)
 }
 
+/**
+ * Whether It's add-on runs in the Pi conversation this command was started from. Pi says which
+ * conversation a command is run in with PI_SESSION_ID, and It's add-on, once it runs there,
+ * names the same conversation in IT_PI_SESSION, which Pi passes on to the commands its agent
+ * runs. A conversation that was open before the add-on was installed has not loaded it, and
+ * names none. Undefined where the command was not started from a Pi conversation.
+ */
+export function piAddonHere(e: NodeJS.ProcessEnv = process.env): boolean | undefined {
+  if (!e.PI_SESSION_ID) return undefined
+  return e.IT_PI_SESSION === e.PI_SESSION_ID
+}
+
+/** Whether It's add-on runs in the conversation this command was started from, where its app lets that be told (`claudeAddonHere`, `piAddonHere`). */
+export function addonHere(harness: string, e: NodeJS.ProcessEnv = process.env): boolean | undefined {
+  return harness === 'claude-code' ? claudeAddonHere(e) : harness === 'pi' ? piAddonHere(e) : undefined
+}
+
 /** The agent session a command is running inside, as `sessionAsked` finds it. */
 export function currentSession(
   e: NodeJS.ProcessEnv = process.env,

@@ -7,21 +7,7 @@ import { type FileHandle, open } from 'node:fs/promises'
 import path from 'node:path'
 import { type FileEntry, isSafePath, LIMITS, NOUN, PUBLICATION, sizeSaid, UPLOAD, uploadBudgetMs } from '@it/protocol'
 import { claimLock } from './legacy-lock'
-import {
-  api,
-  call,
-  claudeAddonHere,
-  direct,
-  doorRefusal,
-  inHome,
-  machine,
-  Problem,
-  readJson,
-  sessionAsked,
-  sessionNote,
-  throughDoor,
-  writePrivate,
-} from './lib'
+import { addonHere, api, call, direct, doorRefusal, inHome, machine, Problem, readJson, sessionAsked, sessionNote, throughDoor, writePrivate } from './lib'
 import { type Profile, profileOf } from './profiles'
 import { aloneAt } from './serve/backend'
 import { makeOnce } from './serve/config'
@@ -278,8 +264,11 @@ export async function noteConversation(
     const key = `${session.harness}:${session.id}`
     type Note = { cwd: string; at: number; profile?: Profile; addon?: false }
     const read = () => readJson<Record<string, Note>>(conversationsFile()) ?? {}
-    // A note an hour or more from the clock, either way, is written again with the time now
+    // A note an hour or more from the clock, either way, is written again with the time now. One
+    // that says the add-on did not run is written with the time now each time it is said, since
+    // the connector goes by whether it was said after the add-on was last heard from
     const unchanged = (noted: Note | undefined) =>
+      addon !== false &&
       noted?.cwd === cwd &&
       JSON.stringify(noted.profile) === JSON.stringify(profile ?? noted.profile) &&
       (addon === undefined || (noted.addon === false) === !addon) &&
@@ -324,6 +313,53 @@ export async function noteConversation(
  */
 export function publishedWithoutAddon(session: { harness: string; id: string }): boolean {
   return readJson<Record<string, { addon?: unknown }>>(conversationsFile())?.[`${session.harness}:${session.id}`]?.addon === false
+}
+
+/**
+ * The conversations of an app whose note says they last published a page here while It's add-on
+ * did not run in them (`publishedWithoutAddon`), by id, each with when that note was written.
+ */
+export function addonMarks(harness: string): Map<string, number> {
+  const notes = readJson<Record<string, { addon?: unknown; at?: unknown }>>(conversationsFile()) ?? {}
+  const marks = new Map<string, number>()
+  for (const [key, note] of Object.entries(notes))
+    if (key.startsWith(`${harness}:`) && note?.addon === false && typeof note.at === 'number') marks.set(key.slice(harness.length + 1), note.at)
+  return marks
+}
+
+/**
+ * Takes away the note that a conversation published without It's add-on, now that the add-on
+ * has been heard from in it, where the note was written no later than `heard`, and leaves the
+ * rest of the note as it was. A note written after that, by a page published without the
+ * add-on since, is kept. It is read again once the lock is held, so a note written meanwhile is
+ * never taken for the one that was looked at. Nothing where the note says no such thing.
+ */
+export async function forgetAddonMark(session: { harness: string; id: string }, heard: number): Promise<void> {
+  try {
+    const key = `${session.harness}:${session.id}`
+    type Note = { cwd?: unknown; at?: unknown; addon?: unknown }
+    const stale = (noted: Note | undefined) => noted?.addon === false && typeof noted.at === 'number' && noted.at <= heard
+    if (!stale(readJson<Record<string, Note>>(conversationsFile())?.[key])) return
+    const until = performance.now() + 3000
+    while (performance.now() < until) {
+      const release = claimLock(`${conversationsFile()}.lock`, 10_000, randomBytes(8).toString('hex'))
+      if (release) {
+        try {
+          const kept = readJson<Record<string, Note>>(conversationsFile()) ?? {}
+          if (!stale(kept[key])) return
+          const { addon: _, ...rest } = kept[key]!
+          kept[key] = rest
+          writePrivate(conversationsFile(), kept)
+          return
+        } finally {
+          release()
+        }
+      }
+      await sleep(5 + Math.random() * 20)
+    }
+  } catch {
+    // Taken away the next time the add-on is heard from
+  }
 }
 
 /** The recorded profile stays local, alongside the working folder. */
@@ -671,7 +707,7 @@ export async function publish(input: {
       // only as it is finished.
       // With whether It's add-on runs in it, where this command can tell: a conversation that
       // publishes without it is told so by the connector, should it not be able to be reopened
-      if (session) await noteConversation(session, undefined, undefined, session.harness === 'claude-code' ? claudeAddonHere() : undefined)
+      if (session) await noteConversation(session, undefined, undefined, addonHere(session.harness))
       // Counted: which agent app, new or not, how large and of how many files in a few bands, and
       // four things that are each so or not: whether it was given a state to start with, whether it
       // sends anything back, whether it carries a picture, and whether it was brought up at once.

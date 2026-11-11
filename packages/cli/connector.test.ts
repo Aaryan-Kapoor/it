@@ -313,8 +313,22 @@ vi.mock('./src/lib', async (original) => {
   }
 })
 
-import { type ConnectorInfo, infoFile, local, mac, NOT_LOADED, notLoadedToo, OPEN_WITHOUT_ADDON, type Route, runConnector, wayOf } from './src/connector'
+import {
+  type ConnectorInfo,
+  infoFile,
+  local,
+  mac,
+  NOT_LOADED,
+  notLoadedToo,
+  OPEN_WITHOUT_ADDON,
+  PI_NOT_LOADED,
+  PI_OPEN_WITHOUT_ADDON,
+  type Route,
+  runConnector,
+  wayOf,
+} from './src/connector'
 import { DeliveryRecovery, eraseDeliveryRecovery } from './src/delivery-recovery'
+import { claimLock } from './src/legacy-lock'
 import * as files from './src/lib'
 import { readJson } from './src/lib'
 import { alone, startOf } from './src/serve/backend'
@@ -1503,7 +1517,101 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(stand.recorded.find((r) => r.name === 'agent.woken')!.properties).toEqual({ result: 'declined', agent: 'claude-code', why: 'no_folder' })
   })
 
-  test.each(['pi', 'opencode', 'hermes'])('a conversation of %s is reopened as before, whatever is noted of It’s add-on in it', async (harness) => {
+  test('a Pi conversation that published its page without It’s add-on, and has not been heard from since, is never reopened, and its page says to type /reload in it', async () => {
+    await reopensFor('pi', 'conversation-1', { addon: false })
+    offered({ ...click(1), session: { harness: 'pi', id: 'conversation-1' } })
+    await until(() => holds().length > 0)
+    expect(holds()[0]!.args).toEqual({ ids: ['click-1'], why: PI_OPEN_WITHOUT_ADDON })
+    expect(PI_OPEN_WITHOUT_ADDON).toContain('type /reload in it')
+    expect(PI_OPEN_WITHOUT_ADDON).not.toContain('/reload-plugins')
+    expect(PI_OPEN_WITHOUT_ADDON.length).toBeLessThanOrEqual(300)
+    await until(() => said.some((line) => line.includes('is open without It’s add-on, so it is not reopened; its page says to type /reload in it')))
+    await new Promise((r) => setTimeout(r, 2500))
+    expect(holds()).toHaveLength(1)
+    expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+    expect(failures()).toEqual([])
+  })
+
+  const piNote = () => JSON.parse(readFileSync(path.join(home, 'conversations.json'), 'utf8'))
+  const piHeard = (session: string, was?: string) => local('/session', { method: 'POST', body: { harness: 'pi', session, ...(was ? { was } : {}) } })
+  const piClick = (n: number, id = 'conversation-1') => ({ ...click(n), session: { harness: 'pi', id } })
+
+  test('a Pi conversation whose add-on is heard from after it published without it has the note taken away on the disk, and is reopened as before, also after the connector starts again', async () => {
+    await reopensFor('pi', 'conversation-1', { addon: false, at: Date.now() - 60_000 })
+    expect(await piHeard('conversation-1')).toEqual({ ok: true })
+    await until(() => piNote()['pi:conversation-1'].addon === undefined)
+    // Started again, with nothing heard since: what is on the disk is all it goes by
+    const folder = home
+    await stop!()
+    stop = null
+    await start('socket', { wanted: ['pi'], found: [...CONNECTED, { id: 'pi', version: '2.1.300', addon: 'connected' }] }, () => {}, folder)
+    stand.watching.get('machines:me')!({ wanted: ['pi'], wakes: [{ harness: 'pi', since: Date.now() - 60_000 }] })
+    offered(piClick(1))
+    await until(() => failures().length > 0)
+    expect(failures()[0]!.args).toEqual({ for: { harness: 'pi', id: 'conversation-1' }, why: GONE })
+    expect(holds()).toEqual([])
+  })
+
+  test('a Pi conversation that publishes without It’s add-on after its add-on was heard from, as where the add-on was switched off and Pi reloaded, is held back all the same', async () => {
+    await reopensFor('pi', 'conversation-1', null)
+    expect(await piHeard('conversation-1')).toEqual({ ok: true })
+    // A page published a moment later without the add-on, which no longer asks
+    await new Promise((r) => setTimeout(r, 50))
+    writeFileSync(
+      path.join(home, 'conversations.json'),
+      JSON.stringify({ 'pi:conversation-1': { cwd: path.join(home, 'gone'), at: Date.now(), addon: false } }),
+    )
+    await new Promise((r) => setTimeout(r, 5500))
+    offered(piClick(1))
+    await until(() => holds().length > 0)
+    expect(holds()[0]!.args).toEqual({ ids: ['click-1'], why: PI_OPEN_WITHOUT_ADDON })
+    expect(stand.calls.some((c) => c.name === 'machines:runBegan')).toBe(false)
+  })
+
+  test('a Pi conversation that published without It’s add-on between two words from its add-on a moment apart has the note taken away at the second', async () => {
+    await reopensFor('pi', 'conversation-1', null)
+    expect(await piHeard('conversation-1')).toEqual({ ok: true })
+    await new Promise((r) => setTimeout(r, 50))
+    writeFileSync(
+      path.join(home, 'conversations.json'),
+      JSON.stringify({ 'pi:conversation-1': { cwd: path.join(home, 'gone'), at: Date.now(), addon: false } }),
+    )
+    await new Promise((r) => setTimeout(r, 50))
+    expect(await piHeard('conversation-1')).toEqual({ ok: true })
+    await until(() => piNote()['pi:conversation-1'].addon === undefined)
+  })
+
+  test('a word from a Pi conversation’s add-on that comes while its note is waiting for the lock to be taken away is not passed over', async () => {
+    await reopensFor('pi', 'conversation-1', { addon: false, at: Date.now() - 60_000 })
+    const release = claimLock(`${path.join(home, 'conversations.json')}.lock`, 10_000, 'abcdef0123456789')!
+    expect(await piHeard('conversation-1')).toEqual({ ok: true })
+    await new Promise((r) => setTimeout(r, 100))
+    // A page published without the add-on meanwhile, and then the add-on heard from again
+    writeFileSync(
+      path.join(home, 'conversations.json'),
+      JSON.stringify({ 'pi:conversation-1': { cwd: path.join(home, 'gone'), at: Date.now(), addon: false } }),
+    )
+    await new Promise((r) => setTimeout(r, 20))
+    expect(await piHeard('conversation-1')).toEqual({ ok: true })
+    release()
+    await until(() => piNote()['pi:conversation-1'].addon === undefined)
+  })
+
+  test('the note that a Pi conversation published without It’s add-on is taken away for the id it carried on from too, once its add-on is heard from under the new one', async () => {
+    await reopensFor('pi', 'conversation-old', { addon: false, at: Date.now() - 60_000 })
+    expect(await piHeard('conversation-new', 'conversation-old')).toEqual({ ok: true })
+    await until(() => piNote()['pi:conversation-old'].addon === undefined)
+  })
+
+  test('the reason a Pi conversation could not be reopened is followed by the advice to type /reload, cut to fit', () => {
+    const said = notLoadedToo(`Pi exited with 1, and its last words were: ${'x'.repeat(400)}`, 'pi')
+    expect(said.length).toBeLessThanOrEqual(300)
+    expect(said.endsWith(PI_NOT_LOADED)).toBe(true)
+    expect(PI_NOT_LOADED).toContain('type /reload in it')
+    expect(PI_NOT_LOADED).not.toContain('/reload-plugins')
+  })
+
+  test.each(['opencode', 'hermes'])('a conversation of %s is reopened as before, whatever is noted of It’s add-on in it', async (harness) => {
     await reopensFor(harness, 'conversation-1', { addon: false })
     offered({ ...click(1), session: { harness, id: 'conversation-1' } })
     await until(() => failures().length > 0)

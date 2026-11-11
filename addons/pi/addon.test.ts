@@ -250,6 +250,30 @@ describe('the Pi add-on', () => {
     expect(() => app.emit('before_agent_start', { prompt: 'hello' })).not.toThrow()
   })
 
+  it('names its conversation to the commands the agent runs, follows it to the next one, and names none once Pi shuts it down', async () => {
+    standIn()
+    await connect()
+    delete process.env.IT_PI_SESSION
+    const p = pi('session-named')
+    // Loaded for a command that has no conversation, as for pi list, it names none
+    expect(process.env.IT_PI_SESSION).toBeUndefined()
+    p.start()
+    expect(process.env.IT_PI_SESSION).toBe('session-named')
+    await settled()
+    // Pi gives the conversation a new id, and the add-on names that one at its next check
+    p.state.session = 'session-renamed'
+    await second()
+    expect(process.env.IT_PI_SESSION).toBe('session-renamed')
+    // /new puts another conversation in the window, which is named as it starts
+    p.shutdown({ reason: 'new' })
+    expect(process.env.IT_PI_SESSION).toBeUndefined()
+    p.state.session = 'session-new'
+    p.start({ reason: 'new' })
+    expect(process.env.IT_PI_SESSION).toBe('session-new')
+    p.shutdown()
+    expect(process.env.IT_PI_SESSION).toBeUndefined()
+  })
+
   it('asks the connector for this conversation, as pi, once a second', async () => {
     standIn()
     await connect()
