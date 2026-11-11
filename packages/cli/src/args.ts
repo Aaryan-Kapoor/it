@@ -1,5 +1,5 @@
 // Reading a command line, kept apart from the commands so it can be tested by itself.
-import { readFileSync, statSync } from 'node:fs'
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs'
 import { sizeSaid, UPLOAD } from '@it/protocol'
 import { Problem } from './lib'
 
@@ -250,18 +250,44 @@ export function setValue(value: string, fromFile: string): unknown {
  */
 export function fileText(file: string, what: string): string {
   if (file === '') throw new Problem(`Say which file ${what} is in.`, 'invalid')
-  let bytes: Buffer
+  const link = () =>
+    new Problem(`${file} is a link, and It does not read JSON through a link.`, 'invalid', 'Give the path of the file itself, not of a link to it.')
+  // A link is never followed, as a page's own files are not: a link in a project could point at
+  // any file on the machine, and what is read here goes into a page's state, which the page reads.
+  // It is refused before opening, and by the system itself as the file is opened, in case one was
+  // put there in between; and the file is never waited for, as a pipe put there would be
+  let fd: number
   try {
-    const stat = statSync(file)
-    if (!stat.isFile()) throw new Problem(`${file} is not an ordinary file.`, 'invalid')
-    if (stat.size > UPLOAD.requestBytes) throw new Problem(`${file} is larger than this command reads (${sizeSaid(UPLOAD.requestBytes)}).`, 'limit')
-    bytes = readFileSync(file)
+    if (lstatSync(file).isSymbolicLink()) throw link()
+    fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
   } catch (err) {
     if (err instanceof Problem) throw err
-    if ((err as { code?: string })?.code === 'ENOENT') throw new Problem(`No such file: ${file}`, 'invalid')
+    const code = (err as { code?: string })?.code
+    if (code === 'ENOENT') throw new Problem(`No such file: ${file}`, 'invalid')
+    if (code === 'ELOOP' || code === 'EMLINK') throw link()
     throw err
   }
-  return decoded(bytes, file)
+  try {
+    const stat = fstatSync(fd)
+    if (!stat.isFile()) throw new Problem(`${file} is not an ordinary file.`, 'invalid')
+    const tooLarge = () => new Problem(`${file} is larger than this command reads (${sizeSaid(UPLOAD.requestBytes)}).`, 'limit')
+    if (stat.size > UPLOAD.requestBytes) throw tooLarge()
+    // Read no further than the limit and one byte more, however the file grows while it is read
+    const most = UPLOAD.requestBytes + 1
+    const pieces: Buffer[] = []
+    let got = 0
+    while (got < most) {
+      const piece = Buffer.allocUnsafe(Math.min(most - got, 1 << 20))
+      const n = readSync(fd, piece, 0, piece.length, null)
+      if (n === 0) break
+      pieces.push(piece.subarray(0, n))
+      got += n
+    }
+    if (got > UPLOAD.requestBytes) throw tooLarge()
+    return decoded(Buffer.concat(pieces, got), file)
+  } finally {
+    closeSync(fd)
+  }
 }
 /** Bytes as text: UTF-8, or UTF-16 of either order where they begin with its mark. Bytes that are not whole and valid characters in that encoding are refused. */
 export function decoded(bytes: Uint8Array, file: string): string {
