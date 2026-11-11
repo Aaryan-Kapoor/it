@@ -120,7 +120,7 @@ describe('the agent’s dock', () => {
     // The person did it, and It has not said that it took it
     expect(page.read('room').stage).toBe('sending')
     expect(stages(page)).toEqual({ you: 'done', it: 'next', chat: '', work: '', page: '' })
-    expect(page.read('room').stages.you!.text).toBe('moved the armchair')
+    expect(page.read('room').stages.you!.text).toBe('moved the chair')
     expect(page.$('#dock-line').textContent).toContain('on its way to It')
     await page.advance(300)
     await move.accept()

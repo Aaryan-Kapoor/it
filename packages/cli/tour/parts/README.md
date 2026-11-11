@@ -59,7 +59,7 @@ Most parts ask one thing at a time, and `my.asker` does all of it:
 
 ```js
 var asker = my.asker((got) => { /* draw the answer */ }, () => { /* the part is the person's again */ });
-my.box.did("moved the armchair");
+my.box.did("moved the chair");
 asker.send("moved", { armchair: [390, 190], free: [[419, 309]] });
 ```
 
@@ -82,7 +82,7 @@ The dock is the shell's, and shows where what the person last did in the part th
 
 | | |
 |---|---|
-| `my.box.did(text)` | What the person did, in a few words that begin with a verb, as in "moved the armchair". Eighteen letters or fewer are shown whole |
+| `my.box.did(text)` | What the person did, in a few words that begin with a verb, as in "moved the chair". Eighteen letters or fewer are shown whole |
 | `my.box.hint(text)` | What the person can do here, in the page's words, shown until the agent has said something |
 | `my.box.say(text)` | The agent's own words, from its answer. Nothing else is ever put here: the page writes no sentence for the agent |
 | `my.box.idle()` | Nothing is waiting, as after "Start again" |
