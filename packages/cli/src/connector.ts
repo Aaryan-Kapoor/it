@@ -2631,8 +2631,25 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     const marked = publishedWithoutAddon(session) && ![key, follow(key)].some((k) => heardBefore.has(k) || sessions.has(k))
     return session.harness === 'claude-code' && (marked || notLoadedNow(open).some((c) => follow(keyOf(c.harness, c.sessionId)) === follow(key)))
   }
-  /** The Pi conversations whose note is being taken away at this moment (`forgetPiMarks`). */
-  const piForgetting = new Set<string>()
+  /**
+   * The Pi conversations whose note is being taken away at this moment (`forgetPiMarks`), each
+   * with the time of the latest word from the add-on that came while it was: once the one under
+   * way is over, the note is looked at again by that time, so that no word is passed over.
+   */
+  const piForgetting = new Map<string, number | undefined>()
+  /** Takes away one Pi conversation's note, as of `heard`, and again as of any later word that came meanwhile. */
+  const forgetPiMark = (mark: string, heard: number) => {
+    if (piForgetting.has(mark)) {
+      piForgetting.set(mark, Math.max(piForgetting.get(mark) ?? 0, heard))
+      return
+    }
+    piForgetting.set(mark, undefined)
+    void forgetAddonMark({ harness: 'pi', id: mark.slice(mark.indexOf(':') + 1) }, heard).finally(() => {
+      const later = piForgetting.get(mark)
+      piForgetting.delete(mark)
+      if (later !== undefined && !over) forgetPiMark(mark, later)
+    })
+  }
   /**
    * Takes away, on the disk, the note that a Pi conversation published without It's add-on, of
    * the conversation heard from now and of every id it carried on from, where it was written no
@@ -2645,9 +2662,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     const now = Date.now()
     for (const [id, at] of addonMarks('pi')) {
       const mark = keyOf('pi', id)
-      if (at > now || piForgetting.has(mark) || follow(mark) !== follow(key)) continue
-      piForgetting.add(mark)
-      void forgetAddonMark({ harness: 'pi', id }, now).finally(() => piForgetting.delete(mark))
+      if (at <= now && follow(mark) === follow(key)) forgetPiMark(mark, now)
     }
   }
   /**

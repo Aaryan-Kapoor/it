@@ -324,6 +324,7 @@ import {
   wayOf,
 } from './src/connector'
 import { DeliveryRecovery, eraseDeliveryRecovery } from './src/delivery-recovery'
+import { claimLock } from './src/legacy-lock'
 import * as files from './src/lib'
 import { readJson } from './src/lib'
 import { alone, startOf } from './src/serve/backend'
@@ -1572,6 +1573,22 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     )
     await new Promise((r) => setTimeout(r, 50))
     expect(await piHeard('conversation-1')).toEqual({ ok: true })
+    await until(() => piNote()['pi:conversation-1'].addon === undefined)
+  })
+
+  test('a word from a Pi conversation’s add-on that comes while its note is waiting for the lock to be taken away is not passed over', async () => {
+    await reopensFor('pi', 'conversation-1', { addon: false, at: Date.now() - 60_000 })
+    const release = claimLock(`${path.join(home, 'conversations.json')}.lock`, 10_000, 'abcdef0123456789')!
+    expect(await piHeard('conversation-1')).toEqual({ ok: true })
+    await new Promise((r) => setTimeout(r, 100))
+    // A page published without the add-on meanwhile, and then the add-on heard from again
+    writeFileSync(
+      path.join(home, 'conversations.json'),
+      JSON.stringify({ 'pi:conversation-1': { cwd: path.join(home, 'gone'), at: Date.now(), addon: false } }),
+    )
+    await new Promise((r) => setTimeout(r, 20))
+    expect(await piHeard('conversation-1')).toEqual({ ok: true })
+    release()
     await until(() => piNote()['pi:conversation-1'].addon === undefined)
   })
 
