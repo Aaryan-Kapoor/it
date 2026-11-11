@@ -1,0 +1,182 @@
+<!-- The whiteboard: a sum the person answers in their own hand. The agent is given a picture of the sheet, reads it and marks it. -->
+<style>
+  [data-part="board"] .sheet { width: min(100cqw, calc(100cqh * 720 / 420)); aspect-ratio: 720 / 420; border-radius: 12px; background: var(--sheet) radial-gradient(circle at 1px 1px, var(--dotc) 1px, transparent 0) 0 0 / 22px 22px; touch-action: none; cursor: crosshair; }
+  svg.pen { display: block; width: 100%; height: auto; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .pen .hand { font-family: Hand, "Segoe Print", "Bradley Hand", cursive; font-weight: 600; fill: var(--ink); }
+  .pen .ink { fill: none; stroke: var(--ink); stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+  .pen .theirs { fill: none; stroke: var(--green); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset .8s ease-out; } .pen .theirs.on { stroke-dashoffset: 0; }
+  .pen .said { font-family: Hand, "Segoe Print", "Bradley Hand", cursive; font-weight: 600; fill: var(--green); opacity: 0; transition: opacity .5s; } .pen .said.on { opacity: 1; }
+  #slot-word { transition: opacity .3s; }
+</style>
+<section class="part" data-part="board" data-title="A whiteboard" data-line="Write your answer on the sheet in your own hand, and press Check it. {agent} reads it and marks it." hidden>
+  <div class="fill">
+    <div class="sheet"><svg class="pen" id="pen" viewBox="0 0 720 420" role="img" aria-label="A sheet of homework with one sum on it. Write your answer on it with your finger or the mouse.">
+      <text class="hand" x="46" y="74" font-size="40">a square garden has sides of 12 m.</text>
+      <text class="hand" x="46" y="122" font-size="40">what is its area?</text>
+      <g transform="translate(560 54)" stroke="var(--ink)" stroke-width="2.4" fill="rgba(23,128,90,.07)"><rect width="96" height="96"/><path d="M0 114h96M0 108v12M96 108v12" fill="none"/></g><text class="hand" x="608" y="194" font-size="26" text-anchor="middle">12 m</text>
+      <text class="hand" id="eq" x="46" y="278" font-size="64">12 × 12 =</text>
+      <rect id="slot" x="306" y="196" width="200" height="120" rx="14" fill="none" stroke="var(--faint)" stroke-width="1.5" stroke-dasharray="5 7"/><text id="slot-word" x="406" y="340" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="var(--faint)" letter-spacing="1.5">WRITE YOUR ANSWER HERE</text>
+      <g id="inks"></g>
+      <ellipse class="theirs" id="ring" pathLength="1"/><path class="theirs" id="arrow" pathLength="1"/><path class="theirs" id="tick" pathLength="1"/>
+      <text class="said" id="right" font-size="64"></text><text class="said" id="hint" x="46" y="384" font-size="44"></text>
+    </svg></div>
+  </div>
+  <div class="foot"><span>Homework · question 3 of 8</span><span><button class="btn ghost small" type="button" id="wipe">Clear</button> <button class="btn small" type="button" id="check">Check it</button></span></div>
+</section>
+<script>
+Shell.part("board", (my) => {
+  var $ = Shell.$;
+  var box = my.box, pen = $("pen"), inks = $("inks"), checkBtn = $("check"), wipeBtn = $("wipe");
+  var W = 720, H = 420, INK = "#1c1a16";
+  var QUESTION = "A square garden has sides of 12 m. What is its area?", SUM = "12 × 12 =", ANSWER = "144";
+  // The lines the person wrote, as parts of the sheet (0 to 1 across and down), as the whiteboard keeps them
+  var mine = [], current = null, busy = false;
+  var spots = ["ring", "arrow", "tick", "right", "hint"];
+  // The agent's marks come onto the sheet one after another. Taking them off also stops those that
+  // have not come yet, so that none is drawn on a sheet that was cleared or written on since
+  var marking = 0;
+  var clean = () => { marking++; spots.forEach((id) => $(id).classList.remove("on")); };
+  // The sheet is the person's again while an answer may still come, once the wait has run out. An
+  // answer is to the sheet as it was sent: where they write more or clear it, it is no answer to
+  // what is there now, and is not drawn
+  function changed() {
+    if (!asker.waiting()) return;
+    asker.forget();
+    box.idle();
+  }
+  function ready() { checkBtn.disabled = busy || !mine.length; wipeBtn.disabled = busy || !mine.length; }
+  function draw(s) { s.el.setAttribute("points", s.points.map((p) => (p[0] * W).toFixed(1) + "," + (p[1] * H).toFixed(1)).join(" ")); }
+  var point = (e) => {
+    var r = pen.getBoundingClientRect();
+    return [Math.min(1, Math.max(0, (e.clientX - r.left) / (r.width || W))), Math.min(1, Math.max(0, (e.clientY - r.top) / (r.height || H)))];
+  };
+  pen.addEventListener("pointerdown", (e) => {
+    if (busy) return;
+    try { pen.setPointerCapture(e.pointerId); } catch (err) {}
+    var el = document.createElementNS(Shell.SVG, "polyline");
+    el.setAttribute("class", "ink");
+    inks.appendChild(el);
+    current = { points: [point(e)], width: 5, erase: false, color: INK, el: el };
+    mine.push(current);
+    draw(current);
+    changed();
+    clean();
+    $("slot-word").style.opacity = 0;
+    ready();
+  });
+  pen.addEventListener("pointermove", (e) => { if (current) { current.points.push(point(e)); draw(current); } });
+  ["pointerup", "pointercancel", "pointerleave"].forEach((kind) => pen.addEventListener(kind, () => { current = null; }));
+  wipeBtn.addEventListener("click", () => {
+    if (busy) return;
+    mine.splice(0).forEach((s) => s.el.remove());
+    changed();
+    clean();
+    $("slot-word").style.opacity = 1;
+    ready();
+  });
+
+  // A picture of the sheet as the person sees it, the question, the sum and what they wrote, in
+  // dark ink on white whatever the screen's colours, as large as a model reads a picture at.
+  // Where the browser can make none, there is none, and the lines are all the agent is given.
+  function picture() {
+    var fonts = document.fonts && document.fonts.load ? document.fonts.load('600 64px Hand').catch(() => {}) : null;
+    return Promise.resolve(fonts).then(() => new Promise((resolve) => {
+      try {
+        var k = 2, c = document.createElement("canvas");
+        c.width = W * k; c.height = H * k;
+        var g = c.getContext("2d");
+        if (!g) return resolve(null);
+        g.scale(k, k);
+        g.fillStyle = "#ffffff"; g.fillRect(0, 0, W, H);
+        g.fillStyle = "#111111"; g.strokeStyle = "#111111";
+        g.font = '600 40px Hand, "Segoe Print", cursive';
+        g.fillText("a square garden has sides of 12 m.", 46, 74);
+        g.fillText("what is its area?", 46, 122);
+        g.lineWidth = 2.4; g.strokeRect(560, 54, 96, 96);
+        g.font = '600 26px Hand, "Segoe Print", cursive';
+        g.fillText("12 m", 584, 194);
+        g.font = '600 64px Hand, "Segoe Print", cursive';
+        g.fillText(SUM, 46, 278);
+        g.lineWidth = 3.6; g.lineCap = "round"; g.lineJoin = "round";
+        mine.forEach((s) => {
+          g.beginPath();
+          s.points.forEach((p, i) => (i ? g.lineTo(p[0] * W, p[1] * H) : g.moveTo(p[0] * W, p[1] * H)));
+          if (s.points.length === 1) g.lineTo(s.points[0][0] * W + 0.1, s.points[0][1] * H);
+          g.stroke();
+        });
+        c.toBlob((made) => resolve(made || null), "image/png");
+      } catch (err) { resolve(null); }
+    }));
+  }
+/*whiteboard.fitting*/
+  // Where the person's ink is on the sheet, which the agent's marks are drawn round
+  function inked() {
+    var xs = [], ys = [];
+    mine.forEach((s) => s.points.forEach((p) => { xs.push(p[0] * W); ys.push(p[1] * H); }));
+    var x = Math.min.apply(null, xs), y = Math.min.apply(null, ys);
+    return { x: x, y: y, w: Math.max.apply(null, xs) - x, h: Math.max.apply(null, ys) - y };
+  }
+  var asker = my.asker((got) => {
+    clean();
+    // An agent that cannot look at pictures says so, and marks nothing: its sentence is shown, and the sheet is left as the person wrote it
+    if (got.blind === true) {
+      box.say(got.say);
+      busy = false;
+      ready();
+      return;
+    }
+    var b = inked(), mark = marking, later = (ms, fn) => setTimeout(() => { if (mark === marking) fn(); }, Shell.calm ? 0 : ms);
+    if (got.right === true) {
+      var tx = Math.min(600, b.x + b.w + 30), ty = b.y + b.h / 2;
+      $("tick").setAttribute("d", "M" + tx + " " + (ty + 6) + " l22 24 l44 -62");
+      $("tick").classList.add("on");
+    } else {
+      var ring = $("ring");
+      ring.setAttribute("cx", b.x + b.w / 2); ring.setAttribute("cy", b.y + b.h / 2); ring.setAttribute("rx", b.w / 2 + 24); ring.setAttribute("ry", b.h / 2 + 18);
+      ring.classList.add("on");
+      var x = Math.min(548, b.x + b.w + 32), y = b.y + b.h / 2;
+      $("arrow").setAttribute("d", "M" + x + " " + y + " h46 m-14 -11 l14 11 l-14 11");
+      later(500, () => $("arrow").classList.add("on"));
+      var right = $("right");
+      right.setAttribute("x", x + 56); right.setAttribute("y", y + 21);
+      right.textContent = Shell.tidy(got.answer, 8);
+      later(900, () => right.classList.add("on"));
+    }
+    $("hint").textContent = Shell.tidy(got.hint, 44);
+    later(1300, () => $("hint").classList.add("on"));
+    box.say(got.say);
+    busy = false;
+    ready();
+  }, () => { busy = false; ready(); });
+  checkBtn.addEventListener("click", () => {
+    if (busy || !mine.length) return;
+    var began = Date.now();
+    busy = true;
+    clean();
+    ready();
+    box.sending(began);
+    picture().then((png) => {
+      var data = fitted(png);
+      // Sent as it is, it would be refused, and again each time: so the person is told what would let it go
+      if (!data) {
+        busy = false;
+        ready();
+        box.idle();
+        box.did("");
+        box.hint("That is too many lines to send at once. Clear the sheet, and write it again.");
+        return;
+      }
+      box.did("wrote an answer");
+      // The picture is what the agent reads, and It has it written to a file for the agent before it
+      // hears of this, under a name that this request gives it: `saved` is that name, in the folder
+      // the agent works in. The lines go only where there is no picture to read
+      var request = Shell.newId();
+      asker.send("checked", { question: QUESTION, sum: SUM, answer: ANSWER, saved: data.png ? ".it-tour-" + request + ".png" : null, png: data.png, strokes: data.png ? [] : data.strokes }, began, request);
+    });
+  });
+  ready();
+  box.idle();
+  box.did("");
+  box.hint("Write your answer on the sheet with your finger or the mouse, and press Check it.");
+});
+</script>

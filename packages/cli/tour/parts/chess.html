@@ -1,0 +1,322 @@
+<!-- The chessboard: the person plays White and the agent Black. Each move goes to the agent with a few sound answers and every move it may make. -->
+<style>
+  /* One square is 1em of the board, so that everything on it is cut to its size */
+  .board { position: relative; width: min(100cqw, 100cqh); aspect-ratio: 1; display: grid; grid-template: repeat(8, 1fr) / repeat(8, 1fr); border-radius: 12px; overflow: hidden; container-type: inline-size; line-height: 1; -webkit-user-select: none; user-select: none; touch-action: manipulation; will-change: transform; transition: opacity .3s; }
+  .sq { position: relative; min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; -webkit-appearance: none; appearance: none; font-size: 12.5cqi; cursor: default; background: var(--sq); color: var(--sq-dark); }
+  .sq.dk { background: var(--sq-dark); color: var(--sq); }
+  .sq.last { background: var(--sq-last); color: var(--wood-dark); }
+  .sq.check { background: var(--clay); color: #fff; }
+  .sq.can { cursor: pointer; }
+  @media (hover: hover) { .sq.can:hover { box-shadow: inset 0 0 0 .05em rgba(14, 14, 16, .25); } }
+  .sq.pick, .sq.pick:hover { box-shadow: inset 0 0 0 .065em var(--ink); }
+  .sq:focus-visible { outline: 0; box-shadow: inset 0 0 0 .065em var(--green); }
+  .sq.to::after { content: ""; position: absolute; left: 50%; top: 50%; width: 30%; height: 30%; margin: -15% 0 0 -15%; border-radius: 50%; background: rgba(14, 14, 16, .26); pointer-events: none; }
+  .sq.to.cap::after { width: 90%; height: 90%; margin: -45% 0 0 -45%; background: none; box-shadow: inset 0 0 0 .075em rgba(14, 14, 16, .34); }
+  .co { position: absolute; font-size: max(9px, .17em); font-weight: 700; font-style: normal; line-height: 1; pointer-events: none; }
+  .co.r { left: 6%; top: 6%; } .co.f { right: 7%; bottom: 5%; }
+  .pc { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-family: Pieces, "Noto Sans Symbols 2", "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", sans-serif; font-size: .86em; font-weight: 400; line-height: 1; color: #1c1a16; pointer-events: none;
+    /* The face draws its pieces in the upper part of the line, a seventh of a square above the middle. The space above the line brings each down to the middle of its square, and a piece that is moving with it */
+    padding-top: .33em; }
+  .pc.w { color: #fffdf8; -webkit-text-stroke: .075em #1c1a16; paint-order: stroke fill; }
+  .pc.fly { inset: auto; width: 12.5%; height: 12.5%; z-index: 3; }
+  [data-part="chess"][data-wait="1"] .board { opacity: .92; }
+  [data-part="chess"] .foot { width: min(100%, 100cqw); justify-content: flex-end; }
+  @media (prefers-color-scheme: dark) {
+    /* On the board's dimmer squares the black pieces are given a thin light edge, so that they stand off both colours */
+    .pc:not(.w) { -webkit-text-stroke: .035em rgba(244, 240, 231, .7); paint-order: stroke fill; }
+  }
+</style>
+<section class="part" data-part="chess" data-title="A game of chess" data-line="You play White. Tap a piece and where it goes, and {agent} answers on the board." data-wait="0" hidden>
+  <div class="fill"><div class="board" id="board" role="group" aria-label="The chessboard. You play White, from the bottom."></div></div>
+  <div class="foot"><span></span><button class="btn ghost small" id="new-game" type="button">New game</button></div>
+</section>
+<script>
+/*chess.engine*/
+// A game of chess. The person plays White from the bottom and the agent plays Black. Each
+// move of the person goes to the agent with the position it left, a few sound answers and
+// every move the agent may answer with; the agent answers by setting its move in the state,
+// and the page plays it on the board. The rules are the engine's: nothing here decides a move.
+Shell.part("chess", (my) => {
+  var $ = Shell.$;
+  var box = my.box, C = Chess, AGENT = my.agent, calm = Shell.calm, newId = Shell.newId;
+  var card = my.el, boardEl = $("board");
+  // The solid figures (U+265A to U+265F), each followed by the mark that asks for it as text and not as a picture
+  var FIGURE = { k: "♚︎", q: "♛︎", r: "♜︎", b: "♝︎", n: "♞︎", p: "♟︎" };
+  var still = calm;
+  var pos = C.read(C.START), now = C.state(pos);   // the position, and how it stands for the side to move
+  var picked = -1, goes = {}, last = null;          // the square picked up, where it may go, and the last move
+  var waiting = false, sent = false, turn = 0;      // waiting for the agent; whether it has been told; which move this is
+  var pendingId = null;
+  var played = null;                                // the reply that was played last in this game
+  var early = null;                                 // what the agent set for this move before it was known to have been told
+  var cells = [], shown = [], figures = [], home = 12;
+  var HINT = "You are White. What " + AGENT + " says of its move is written here.";
+
+  // ── Sound answers, for the agent to choose among ──
+  // A few of Black's moves that lose nothing at once, best first, from a count of what each
+  // takes and what it leaves to be taken, with a little for bringing a piece out. They are
+  // sent beside every move Black may make, so that an agent in a hurry has good ones to
+  // pick from, and nothing here plays a move: the agent's own is what is played.
+  var WORTH = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+  function sound(after, state) {
+    var scored = state.legal.map((m, i) => {
+      var next = C.play(after, m), theirs = C.state(next), kind = C.kind(m.piece), s = 0;
+      if (theirs.over === "checkmate") return { m: m, s: 1000, i: i };
+      if (theirs.over) return { m: m, s: -5, i: i };
+      if (m.took) s += WORTH[C.kind(m.took)];
+      if (m.promo) s += WORTH[m.promo] - 1;
+      if (theirs.check) s += 0.4;
+      // What White can take next, and what that costs: all of a piece that nothing guards, and otherwise what it is worth beyond the piece that takes it
+      var worst = 0, mated = false;
+      theirs.legal.forEach((w) => {
+        if (w.took) {
+          var v = WORTH[C.kind(w.took)], guarded = w.flag !== "ep" && C.attacked(next.b, w.to, "b");
+          worst = Math.max(worst, guarded ? Math.max(0, v - WORTH[C.kind(w.piece)]) : v);
+        }
+        var then = C.play(next, w);
+        if (C.inCheck(then, "b") && C.state(then).over === "checkmate") mated = true;
+      });
+      s -= worst;
+      if (mated) s -= 500;
+      // A little for what a sound opening does: a knight or bishop brought out, the centre taken, the king castled
+      var from = m.from >> 3, to = m.to >> 3, file = m.to & 7;
+      if ((kind === "n" || kind === "b") && from === 7) s += 0.35;
+      if (kind === "p" && (file === 3 || file === 4) && to <= 5 && to >= 3) s += to === 4 ? 0.4 : 0.25;
+      if (m.flag === "short" || m.flag === "long") s += 0.6;
+      if (kind === "k" && !m.flag) s -= 0.4;
+      if (kind === "q" && after.full < 8) s -= 0.2;
+      if (kind === "n" && (file === 0 || file === 7)) s -= 0.2;
+      return { m: m, s: s, i: i };
+    });
+    scored.sort((a, b) => b.s - a.s || a.i - b.i);
+    return scored.slice(0, 4).map((x) => C.uci(x.m));
+  }
+
+  function figure(p) {
+    var el = document.createElement("span");
+    el.className = "pc " + C.side(p);
+    el.setAttribute("aria-hidden", "true");
+    el.textContent = FIGURE[C.kind(p)];
+    return el;
+  }
+  function square(s) {
+    var el = document.createElement("button"), f = s & 7, r = s >> 3;
+    el.type = "button";
+    el.setAttribute("data-sq", C.name(s));
+    el.tabIndex = s === home ? 0 : -1;
+    var mark = (cls, text) => {
+      var i = document.createElement("i");
+      i.className = "co " + cls;
+      i.setAttribute("aria-hidden", "true");
+      i.textContent = text;
+      el.appendChild(i);
+    };
+    if (f === 0) mark("r", String(r + 1));
+    if (r === 0) mark("f", "abcdefgh".charAt(f));
+    el.addEventListener("click", () => tap(s));
+    // One square of the board is in the order of the tab key, and the arrows go from it to the others
+    el.addEventListener("focus", () => {
+      cells[home].tabIndex = -1;
+      home = s;
+      el.tabIndex = 0;
+    });
+    cells[s] = el;
+    shown[s] = "";
+    figures[s] = null;
+    return el;
+  }
+  for (var row = 7; row >= 0; row--) for (var file = 0; file < 8; file++) boardEl.appendChild(square(row * 8 + file));
+  boardEl.addEventListener("keydown", (e) => {
+    var step = { ArrowUp: 8, ArrowDown: -8, ArrowLeft: -1, ArrowRight: 1 }[e.key], at = cells.indexOf(document.activeElement);
+    if (!step || at < 0) return;
+    e.preventDefault();
+    var to = at + step;
+    if (to >= 0 && to < 64 && (step === 8 || step === -8 || (to >> 3) === (at >> 3))) cells[to].focus();
+  });
+
+  function render() {
+    var mine = !waiting && !now.over && pos.turn === "w";
+    goes = {};
+    // A pawn of the person's that reaches the far side always becomes a queen
+    if (mine && picked >= 0) now.legal.forEach((m) => { if (m.from === picked && (!m.promo || m.promo === "q")) goes[m.to] = m; });
+    var hot = now.check ? C.king(pos.b, pos.turn) : -1;
+    for (var s = 0; s < 64; s++) {
+      var el = cells[s], p = pos.b[s], m = goes[s], own = mine && C.side(p) === "w";
+      el.className = "sq" + (((s & 7) + (s >> 3)) % 2 ? "" : " dk") + (last && (last.from === s || last.to === s) ? " last" : "") +
+        (s === hot ? " check" : "") + (mine && s === picked ? " pick" : "") + (m ? " to" + (m.took ? " cap" : "") : "") + (own || m ? " can" : "");
+      el.setAttribute("aria-label", C.name(s) + (p ? ", " + (C.side(p) === "w" ? "white " : "black ") + C.NAME[C.kind(p)] : "") +
+        (s === hot ? ", in check" : "") + (mine && s === picked ? ", picked up" : "") + (m ? (m.took ? ", can take here" : ", can go here") : ""));
+      if (shown[s] !== p) {
+        if (figures[s]) el.removeChild(figures[s]);
+        figures[s] = p ? el.appendChild(figure(p)) : null;
+        shown[s] = p;
+      }
+    }
+    card.setAttribute("data-wait", waiting ? "1" : "0");
+    my.line(now.over === "checkmate" ? "Checkmate. " + (pos.turn === "b" ? "You won." : AGENT + " won.")
+      : now.over ? "Stalemate. " + (pos.turn === "b" ? AGENT + " has" : "You have") + " no move, so it is a draw."
+      : now.check && pos.turn === "w" ? "Your king is in check."
+      : waiting ? "The move is " + AGENT + "’s." : "You play White. Tap a piece and where it goes, and " + AGENT + " answers on the board.");
+  }
+
+  // A piece drawn over the board, on the square `s`, for as long as it is moving
+  function flying(p, s) {
+    var el = figure(p);
+    el.className += " fly";
+    el.style.left = (s & 7) * 12.5 + "%";
+    el.style.top = (7 - (s >> 3)) * 12.5 + "%";
+    return boardEl.appendChild(el);
+  }
+  // Slides what now stands on `to` there from `from`. The piece itself is already in its place:
+  // only a picture of it travels, so that nothing is left half-way if the board changes meanwhile.
+  function slide(from, to, ms) {
+    var real = figures[to];
+    if (!real || still || !real.animate) return;
+    var fly = flying(pos.b[to], to), dx = ((from & 7) - (to & 7)) * 100, dy = ((to >> 3) - (from >> 3)) * 100;
+    real.style.visibility = "hidden";
+    var a = fly.animate([{ transform: "translate(" + dx + "%," + dy + "%)" }, { transform: "translate(0,0)" }], { duration: ms, easing: "cubic-bezier(.3,.75,.3,1)" });
+    a.onfinish = a.oncancel = () => { real.style.visibility = ""; fly.remove(); };
+  }
+  // Plays a move on the board: the position, then the picture of it
+  function put(m, ms) {
+    var took = m.took ? { piece: m.took, at: m.flag === "ep" ? m.to + (pos.turn === "w" ? -8 : 8) : m.to } : null;
+    pos = C.play(pos, m);
+    now = C.state(pos);
+    last = m;
+    picked = -1;
+    turn++;
+    return () => {
+      // The piece that was taken fades where it stood, under the one that takes it
+      if (took && !still && boardEl.animate) {
+        var ghost = flying(took.piece, took.at), a = ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: ms, easing: "ease-in" });
+        a.onfinish = a.oncancel = () => ghost.remove();
+      }
+      slide(m.from, m.to, ms);
+      // In castling the rook goes too
+      if (m.flag === "short") slide(m.to + 1, m.to - 1, ms);
+      if (m.flag === "long") slide(m.to - 2, m.to + 1, ms);
+    };
+  }
+  // A move as something done, by the person ("moved a pawn to e4") or by the agent ("moved its knight to f6")
+  function told(m, mine) {
+    var who = C.NAME[C.kind(m.piece)], at = C.name(m.to), text;
+    var the = mine ? (who === "king" || who === "queen" ? "the " : "a ") : "its ";
+    if (m.flag === "short" || m.flag === "long") text = "castled " + (m.flag === "short" ? "kingside" : "queenside");
+    else if (m.flag === "ep") text = "took " + (mine ? "a" : "your") + " pawn en passant on " + at;
+    else if (m.took) text = "took " + (mine ? "the " : "your ") + C.NAME[C.kind(m.took)] + " on " + at + (mine ? " with " + the + who : "");
+    else text = "moved " + the + who + " to " + at;
+    if (m.promo) text += " and made a " + C.NAME[m.promo];
+    return text + (now.over ? ", " + now.over : now.check ? ", check" : "");
+  }
+
+  // The person's move: played at once, and told to the agent with all it needs to answer
+  function mine(m) {
+    var before = { pos: pos, last: last }, draw = put(m, 180), at = turn, began = Date.now();
+    waiting = !now.over;
+    sent = false;
+    early = null;
+    pendingId = newId();
+    render();
+    draw();
+    box.did(told(m, true));
+    box.sending(began);
+    my.send("move", { request: pendingId, move: C.uci(m), said: C.said(m, now), good: now.over ? [] : sound(pos, now), check: now.check, over: now.over, fen: C.fen(pos), legal: now.legal.map(C.uci) }).then((result) => {
+      if (turn !== at) return;
+      var kept = early;
+      sent = true;
+      early = null;
+      // A move that ended the game has no answer to wait for
+      if (now.over) box.idle();
+      else box.asked(null, result);
+      // The agent had answered already: its answer is played now
+      if (kept) answer(kept.reply, kept.fresh);
+    }, () => {
+      if (turn !== at) return;
+      // The agent was not told: the move is taken back, so that the board and the agent do not come apart
+      pos = before.pos; last = before.last; now = C.state(pos); waiting = false; early = null; pendingId = null; turn++;
+      box.did("");
+      box.refused();
+      render();
+    });
+  }
+  // The agent's move
+  function theirs(m, reply) {
+    var draw = put(m, 250);
+    waiting = false;
+    pendingId = null;
+    played = reply;
+    render();
+    draw();
+    box.got();
+    box.say(told(m, false));
+  }
+  function tap(s) {
+    if (waiting || now.over || pos.turn !== "w") return;
+    if (goes[s]) return mine(goes[s]);
+    // Another of their pieces is picked up in its place; the same one again, or anywhere else, puts it down
+    picked = C.side(pos.b[s]) === "w" && s !== picked ? s : -1;
+    render();
+  }
+  // What the agent set as its move. It counts only while the move is the agent's and the agent
+  // has been told of the person's. The agent may be told, and answer, before the page hears
+  // that it was: a connection that dropped between the two brings them back in that order. So
+  // what is set meanwhile is kept for that move, and played when the move is known to have gone.
+  function answer(reply, fresh) {
+    if (!waiting || now.over || pos.turn !== "b" || !pendingId) return;
+    var prefix = pendingId + ":";
+    if (!reply.startsWith(prefix)) return;
+    var move = reply.slice(prefix.length).trim();
+    if (!move) return;
+    // Hearing the same answer twice before the move was accepted must keep its request for a correction.
+    if (!sent) { early = { reply: reply, fresh: fresh || !!(early && early.reply === reply && early.fresh) }; return; }
+    var m = C.find(now.legal, move);
+    if (m) { theirs(m, reply); noted(); }
+    // Not a move it may make: the agent is told so, once for what it set, and the person is shown nothing of it
+    else if (fresh) my.send("illegal", { request: pendingId, move: move.slice(0, 40), good: sound(pos, now), fen: C.fen(pos), legal: now.legal.map(C.uci) }).catch(() => {});
+  }
+  var text = (v) => (v == null ? "" : String(v));
+  // The agent's move is `move` beside the `request` it answers. `reply`, which is the two with a colon between them, is the chessboard page's own way of saying the same
+  var replyOf = (st) => (text(st.request) && text(st.move) ? text(st.request) + ":" + text(st.move) : text(st.reply));
+  var revision = my.revision;
+  // What was in the state when the page opened is of an earlier game, and is not a move in this one
+  var seenReply = replyOf(my.answers()), seenNote = "", heardNote = "", seenRev = revision();
+  // The agent's words about its move belong to the reply they are set beside. They are shown while
+  // that reply is the one that was played: beside a reply to an earlier move, or to a game that was
+  // started again, they are about a board that is no longer there
+  function noted() {
+    var st = my.answers(), note = text(st.note).slice(0, 160);
+    if (!played || replyOf(st) !== played || note === seenNote) return;
+    seenNote = note;
+    if (note) box.say(note);
+  }
+  function heard() {
+    var st = my.answers(), reply = replyOf(st), note = text(st.note).slice(0, 160);
+    var rev = revision(), again = seenRev >= 0 && rev > seenRev, sameNote = note === heardNote;
+    seenRev = rev;
+    heardNote = note;
+    if (reply !== seenReply) {
+      seenReply = reply;
+      answer(reply, true);
+    } else if (again && sameNote) {
+      // A repeated state still belongs only to the request its reply names.
+      answer(reply, false);
+    }
+    noted();
+  }
+  $("new-game").addEventListener("click", () => {
+    var at = ++turn;
+    pendingId = null;
+    pos = C.read(C.START); now = C.state(pos); last = null; picked = -1; waiting = false; sent = false; early = null; played = null;
+    render();
+    box.did("");
+    box.hint(HINT);
+    box.idle();
+    my.send("reset", {}).then(() => { if (turn === at) box.idle(); }, () => {});
+  });
+  my.listen(heard);
+  render();
+  heard();
+  box.idle();
+  box.hint(HINT);
+});
+</script>

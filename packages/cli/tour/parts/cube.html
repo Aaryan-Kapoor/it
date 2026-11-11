@@ -1,0 +1,205 @@
+<!-- The cube: a Rubik's cube the person turns or mixes up. The agent is asked for the next turns, and is given the way back to solved. -->
+<style>
+  .cube-views { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .cube-views figure { text-align: center; } .cube-views figcaption { font: 400 11.5px/1 var(--mono); color: var(--faint); margin-top: 6px; letter-spacing: .06em; }
+  svg.cube { display: block; width: 100%; height: auto; max-height: min(34vh, 40cqh); outline: none; }
+  svg.cube .body { fill: #1c1a16; } svg.cube polygon.st { stroke-linejoin: round; transition: fill .28s; }
+  svg.cube:focus-visible .body { stroke: var(--green); stroke-width: .06; }
+  .keys { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-top: 12px; }
+  .key { min-height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); font: 600 15px/1 var(--mono); color: var(--ink); }
+  .key:hover { border-color: var(--ink); } .key:disabled { opacity: .45; cursor: default; }
+  .cube-foot { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+  .cube-foot .said { margin-left: auto; font: 400 12px/1.3 var(--mono); color: var(--faint); }
+  .key:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+  [data-part="cube"] .cube-card { width: min(100cqw, 760px); }
+  @media (max-width: 760px) { .cube-foot .said { margin-left: 0; width: 100%; } }
+</style>
+<section class="part" data-part="cube" data-title="A Rubik’s cube" data-line="Turn the faces or mix it up, then ask for the next turns. {agent} plays them one at a time." hidden>
+  <div class="fill"><div class="cube-card">
+    <p class="foot" style="padding: 0 0 8px"><span>A Rubik’s cube</span><span id="cube-turns">solved</span></p>
+  <div class="cube-views">
+    <figure><svg class="cube" id="cube-front" viewBox="-2.9 -3.1 5.8 6.2" tabindex="0" role="img" aria-label="The cube from the front, top and right. Press U, D, L, R, F or B to turn a face, with Shift to turn it the other way."></svg><figcaption>FRONT, TOP, RIGHT</figcaption></figure>
+    <figure><svg class="cube" id="cube-back" viewBox="-2.9 -3.1 5.8 6.2" role="img" aria-label="The cube from the back, bottom and left"></svg><figcaption>BACK, BOTTOM, LEFT</figcaption></figure>
+  </div>
+  <div class="keys" id="keys" role="group" aria-label="Turn a face"></div>
+  <div class="cube-foot"><button class="btn small" type="button" id="cube-ask">Ask for the next turns</button><button class="btn ghost small" type="button" id="cube-mix">Mix it up</button><button class="btn ghost small" type="button" id="cube-solve">Start solved</button><span class="said" id="cube-said"></span></div>
+  </div></div>
+</section>
+<script>
+// A Rubik's cube, kept as the 54 letters that name each sticker by the face whose colour it
+// has, face by face in the order U, R, F, D, L, B, each read row by row as that face is seen
+// from outside with U above (and B above for D, and F above for U). A turn is named as cubers
+// name it: U, D, L, R, F or B turns that face a quarter clockwise as seen from outside, with '
+// for the other way and 2 for a half turn.
+Shell.part("cube", (my) => {
+  var $ = Shell.$;
+  var box = my.box, calm = Shell.calm, SVG = Shell.SVG;
+  var FACES = "URFDLB", SOLVED = "UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
+  var NORMAL = { U: [0, 1, 0], R: [1, 0, 0], F: [0, 0, 1], D: [0, -1, 0], L: [-1, 0, 0], B: [0, 0, -1] };
+  var COLOUR = { U: "#f4f1ea", R: "#c8402e", F: "#1f9d5f", D: "#f2c230", L: "#ec7a24", B: "#2d63c8" };
+  var NAMED = /^[UDLRFB](2|')?$/;
+  // Where each sticker is: the small cube it is on, from -1 to 1 along each way, and the way it faces
+  function where(face, r, c) {
+    return { U: [-1 + c, 1, -1 + r], R: [1, 1 - r, 1 - c], F: [-1 + c, 1 - r, 1], D: [-1 + c, -1, 1 - r], L: [-1, 1 - r, -1 + c], B: [1 - c, 1 - r, -1] }[face];
+  }
+  var STICKERS = [];
+  FACES.split("").forEach((f) => { for (var i = 0; i < 9; i++) STICKERS.push({ at: where(f, Math.floor(i / 3), i % 3), n: NORMAL[f] }); });
+  var dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  var cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  // A quarter turn clockwise, seen from outside along `n`
+  var quarter = (n, v) => { var c = cross(n, v), k = dot(n, v); return [n[0] * k - c[0], n[1] * k - c[1], n[2] * k - c[2]]; };
+  var same = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+  var find = (at, n) => STICKERS.findIndex((s) => same(s.at, at) && same(s.n, n));
+  // Which sticker goes where in each face's quarter turn
+  var MOVES = {};
+  FACES.split("").forEach((f) => {
+    var n = NORMAL[f], to = STICKERS.map((s, i) => (dot(s.at, n) === 1 ? find(quarter(n, s.at), quarter(n, s.n)) : i));
+    MOVES[f] = to;
+  });
+  function turn(faces, name) {
+    var times = name.length === 1 ? 1 : name.charAt(1) === "2" ? 2 : 3, to = MOVES[name.charAt(0)], out = faces.split("");
+    for (var t = 0; t < times; t++) { var next = out.slice(); to.forEach((j, i) => { next[j] = out[i]; }); out = next; }
+    return out.join("");
+  }
+  window.__cube = { turn: turn, SOLVED: SOLVED };
+
+  // ── Drawing it: two views, from the front, top and right, and from the back, bottom and left ──
+  var VIEWS = [{ el: $("cube-front"), d: [1, 1, 1] }, { el: $("cube-back"), d: [-1, -1, -1] }];
+  VIEWS.forEach((v) => {
+    var len = Math.hypot.apply(null, v.d), d = v.d.map((x) => x / len), r = cross([0, 1, 0], d), rl = Math.hypot.apply(null, r);
+    r = r.map((x) => x / rl);
+    var up = cross(d, r);
+    var flat = (p) => [dot(p, r), -dot(p, up)];
+    var pts = (list) => list.map((p) => flat(p).map((x) => x.toFixed(3)).join(",")).join(" ");
+    v.polys = [];
+    // The body: each face that is seen, as one dark square under its stickers
+    FACES.split("").forEach((f) => {
+      var n = NORMAL[f];
+      if (dot(n, d) <= 0) return;
+      var u = n[0] ? [0, 1, 0] : [1, 0, 0], w = cross(n, u);
+      var c = n.map((x) => x * 1.5), poly = document.createElementNS(SVG, "polygon");
+      poly.setAttribute("class", "body");
+      poly.setAttribute("points", pts([[-1, -1], [1, -1], [1, 1], [-1, 1]].map((k) => [0, 1, 2].map((i) => c[i] + 1.56 * (k[0] * u[i] + k[1] * w[i])))));
+      v.el.appendChild(poly);
+    });
+    STICKERS.forEach((s, i) => {
+      if (dot(s.n, d) <= 0) return;
+      var u = s.n[0] ? [0, 1, 0] : [1, 0, 0], w = cross(s.n, u), c = [0, 1, 2].map((k) => s.at[k] + s.n[k] * 0.5);
+      var poly = document.createElementNS(SVG, "polygon");
+      poly.setAttribute("class", "st");
+      poly.setAttribute("stroke-width", "0.07");
+      poly.setAttribute("points", pts([[-1, -1], [1, -1], [1, 1], [-1, 1]].map((k) => [0, 1, 2].map((j) => c[j] + 0.4 * (k[0] * u[j] + k[1] * w[j])))));
+      poly.setAttribute("data-i", i);
+      v.el.appendChild(poly);
+      v.polys.push({ el: poly, i: i });
+    });
+  });
+  var faces = SOLVED, turns = [], busy = false, playing = 0;
+  function paint() {
+    VIEWS.forEach((v) => v.polys.forEach((p) => { var c = COLOUR[faces.charAt(p.i)]; p.el.setAttribute("fill", c); p.el.setAttribute("stroke", c); }));
+    $("cube-turns").textContent = faces === SOLVED ? "solved" : turns.length + (turns.length === 1 ? " turn" : " turns") + " since it was solved";
+    $("cube-ask").disabled = busy || faces === SOLVED;
+    $("cube-mix").disabled = $("cube-solve").disabled = busy;
+    [].forEach.call($("keys").children, (k) => { k.disabled = busy; });
+  }
+  // The turns since the cube was solved, as few as they are: two turns of one face in a row are one, or none
+  var quarters = (name) => (name.length === 1 ? 1 : name.charAt(1) === "2" ? 2 : 3);
+  function apply(name) {
+    faces = turn(faces, name);
+    var before = turns[turns.length - 1];
+    if (before && before.charAt(0) === name.charAt(0)) {
+      var q = (quarters(before) + quarters(name)) % 4;
+      turns.pop();
+      if (q) turns.push(name.charAt(0) + ["", "", "2", "'"][q]);
+    } else turns.push(name);
+    if (faces === SOLVED) turns = [];
+  }
+  // Every turn since the cube was solved is kept, since undoing them from the last is the agent's
+  // sure way back. So the person's own turns stop at a number that an action still carries with ease
+  var MOST = 200;
+  function full(more) {
+    if (turns.length + more <= MOST) return false;
+    $("cube-said").textContent = "The cube keeps " + MOST + " turns of yours at most. Ask for the next turns, or start solved.";
+    return true;
+  }
+  function mineTurn(name) {
+    if (busy || full(1)) return;
+    asker.forget();
+    apply(name);
+    $("cube-said").textContent = "";
+    paint();
+  }
+  ["U", "R", "F", "D", "L", "B", "U'", "R'", "F'", "D'", "L'", "B'"].forEach((name) => {
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "key"; b.textContent = name;
+    b.setAttribute("aria-label", "Turn " + name);
+    b.addEventListener("click", () => mineTurn(name));
+    $("keys").appendChild(b);
+  });
+  $("cube-front").addEventListener("keydown", (e) => {
+    var k = (e.key || "").toUpperCase();
+    if (FACES.indexOf(k) < 0 || k.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+    e.preventDefault();
+    mineTurn(e.shiftKey ? k + "'" : k);
+  });
+  $("cube-mix").addEventListener("click", () => {
+    if (busy || full(12)) return;
+    asker.forget();
+    var lastFace = "";
+    for (var i = 0; i < 12; i++) {
+      var f;
+      do f = FACES.charAt(Math.floor(Math.random() * 6)); while (f === lastFace);
+      lastFace = f;
+      apply(f + ["", "'", "2"][Math.floor(Math.random() * 3)]);
+    }
+    box.did("mixed the cube up");
+    $("cube-said").textContent = "";
+    paint();
+  });
+  $("cube-solve").addEventListener("click", () => {
+    if (busy) return;
+    asker.forget();
+    faces = SOLVED; turns = [];
+    box.did("");
+    $("cube-said").textContent = "";
+    paint();
+  });
+  var asker = my.asker((got) => {
+    var given = Array.isArray(got.moves) ? got.moves.slice(0, 20) : [];
+    var good = given.filter((m) => typeof m === "string" && NAMED.test(m.trim())).map((m) => m.trim());
+    var left = given.length - good.length;
+    box.say(got.say);
+    // Each turn the agent gives is played one at a time, and only one that is a turn's name. The
+    // cube is the agent's while they are played, an answer that came late too
+    busy = true;
+    paint();
+    var run = ++playing, i = 0;
+    (function next() {
+      if (run !== playing) return;
+      if (i >= good.length) {
+        busy = false;
+        $("cube-said").textContent = "Played " + good.length + (good.length === 1 ? " turn" : " turns") + (left ? ". " + left + " " + (left === 1 ? "was not a turn's name, and was" : "were not turns' names, and were") + " left out" : "") + (faces === SOLVED ? ". Solved." : ".");
+        paint();
+        return;
+      }
+      apply(good[i++]);
+      paint();
+      setTimeout(next, calm ? 0 : 450);
+    })();
+  }, () => { busy = false; paint(); });
+  $("cube-ask").addEventListener("click", () => {
+    if (busy || faces === SOLVED) return;
+    busy = true;
+    playing++;
+    $("cube-said").textContent = "";
+    paint();
+    box.did("asked for the next turns");
+    // `back` is the way back to solved as far as the page plays in one answer: the turns since it was solved, undone from the last
+    var undo = turns.slice().reverse().map((t) => t.charAt(0) + (t.length === 1 ? "'" : t.charAt(1) === "2" ? "2" : ""));
+    asker.send("turned", { back: undo.slice(0, 20), more: Math.max(0, undo.length - 20), solved: faces === SOLVED, faces: faces, turns: turns.slice() });
+  });
+  paint();
+  box.idle();
+  box.hint("Turn a face, or mix it up, and then ask for the next turns.");
+});
+</script>

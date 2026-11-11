@@ -1,0 +1,379 @@
+<!-- The drum machine: the person taps a beat, and the agent adds hits of its own between theirs. It is the one part that makes a sound. -->
+<style>
+  .pads { display: grid; grid-template-columns: repeat(4, 1fr) 10px repeat(4, 1fr); grid-auto-rows: 1fr; gap: 8px; }
+  .lanes { display: grid; grid-template-rows: repeat(4, 1fr); gap: 8px; font: 600 11px/1 var(--mono); color: var(--faint); letter-spacing: .08em; text-transform: uppercase; }
+  .lanes span { display: flex; align-items: center; }
+  .drum-grid { display: grid; grid-template-columns: 52px 1fr; gap: 10px; }
+  .pad { position: relative; min-width: 0; aspect-ratio: 1; padding: 0; border: 0; border-radius: 12px; cursor: pointer; background: var(--pad); transition: background .15s, transform .1s, box-shadow .15s; }
+  .pad[data-r="0"] { --on: #cf6f4d; } .pad[data-r="1"] { --on: #d8a24a; } .pad[data-r="2"] { --on: #87947b; } .pad[data-r="3"] { --on: #3d7d84; }
+  .pad.on { background: var(--on); }
+  .pad:active { transform: scale(.94); }
+  .pad:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+  .pad.now { box-shadow: 0 0 0 2px var(--ink); } .pad.now.on { transform: scale(1.05); }
+  .pad.theirs { animation: land .5s cubic-bezier(.22, 1, .36, 1) backwards; animation-delay: var(--d, 0ms); }
+  .pad.theirs::after { content: ""; position: absolute; right: 6px; top: 6px; width: 9px; height: 9px; border-radius: 3px; background: var(--green); box-shadow: 0 0 0 2px var(--card); }
+  @keyframes land { from { transform: scale(.6); opacity: .3; } }
+  .drum-foot { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .drum-foot .key-of { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--soft); } .drum-foot .key-of i { width: 9px; height: 9px; border-radius: 3px; background: var(--green); }
+  .drum-foot .hint { margin-left: auto; font-size: 12.5px; color: var(--faint); }
+  [data-part="drums"] .drum-card { width: min(100cqw, calc((100cqh - 60px) * 2.15), 1100px); }
+  @media (max-width: 760px) { .drum-grid { grid-template-columns: 1fr; } .lanes { display: none; } .pads { gap: 5px; grid-template-columns: repeat(4, 1fr) 4px repeat(4, 1fr); } .pad { border-radius: 9px; } }
+</style>
+<section class="part" data-part="drums" data-title="A drum machine" data-line="Tap a few pads. A moment after you stop, {agent} plays between your hits. Press Play to hear it." hidden>
+  <div class="fill"><div class="drum-card">
+  <div class="drum-grid"><div class="lanes" aria-hidden="true"><span>Hat</span><span>Clap</span><span>Snare</span><span>Kick</span></div><div class="pads" id="pads" role="group" aria-label="The pads: four drums, eight steps"></div></div>
+  <div class="drum-foot"><button class="btn small" type="button" id="play" data-on="0"><span>Play</span></button><button class="btn ghost small" type="button" id="clear">Clear</button><span class="hint" id="drum-hint">Tap a few pads to start</span><span class="key-of" id="drum-key" hidden><i></i><span></span></span></div>
+  </div></div>
+</section>
+<script>
+// The person taps hits onto the pads. A moment after they stop, the page tells the agent the
+// beat, and the agent answers with hits of its own. Those are shown on the same pads with a
+// green dot, and are played in the same loop.
+Shell.part("drums", (my) => {
+  var $ = Shell.$;
+  var box = my.box, AGENT = my.agent, newId = Shell.newId;
+  var ROWS = ["hat", "clap", "snare", "kick"], NAMES = ["Hat", "Clap", "Snare", "Kick"];
+  // Eight steps are two beats, four steps to the beat
+  var STEPS = 8, BPM = 118, STEP = 60 / BPM / 2;
+  var padsEl = $("pads"), playBtn = $("play"), clearBtn = $("clear"), hint = $("drum-hint"), key = $("drum-key");
+  var blank = () => ROWS.map(() => { var row = []; for (var c = 0; c < STEPS; c++) row.push(false); return row; });
+  var count = (g) => g.reduce((n, row) => n + row.filter(Boolean).length, 0);
+  var mine = blank(), theirs = blank(), ignoreReplies = false, request = null;
+  var HINT = "Tap a few pads. A moment after you stop, " + AGENT + " plays between your hits, and says here what it added.";
+  var taken = null, noteWas = "", asked = false, waiting = false, sentAt = 0, sentKey = null, sendTimer = 0;
+  // How many times the state has been set, where It says
+  var turn = () => Math.max(0, my.revision());
+  // How much has been played so far, kept where it can be counted
+  var meter = (window.__drums = { audio: "none", steps: 0, notes: 0 });
+
+  // ── The sound: every drum is made here, from a tone or from noise ──
+  var AC = window.AudioContext || window.webkitAudioContext, ctx = null, out = null, hiss = null;
+  // The browser lets sound start only from a tap, so this is called from every one
+  function audio() {
+    if (!AC) return null;
+    if (!ctx) {
+      try {
+        ctx = new AC();
+        // Every drum at once is held under the top, so that nothing is ever cut off
+        var squeeze = ctx.createDynamicsCompressor(), trim = ctx.createGain();
+        out = ctx.createGain();
+        out.gain.value = .8;
+        trim.gain.value = .8;
+        out.connect(squeeze);
+        squeeze.connect(trim);
+        trim.connect(ctx.destination);
+        hiss = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+        var d = hiss.getChannelData(0);
+        for (var i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+        meter.audio = ctx.state;
+        ctx.onstatechange = () => { meter.audio = ctx.state; };
+      } catch (e) {
+        ctx = null; AC = null;
+        return null;
+      }
+    }
+    if (ctx.state !== "running" && ctx.resume) {
+      try { var p = ctx.resume(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+    }
+    return ctx;
+  }
+  // A tone that may fall from one pitch to another, and dies away
+  function tone(t, to, shape, from, down, fall, peak, len) {
+    var o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = shape;
+    o.frequency.setValueAtTime(from, t);
+    if (down !== from) o.frequency.exponentialRampToValueAtTime(down, t + fall);
+    g.gain.setValueAtTime(.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + .004);
+    g.gain.exponentialRampToValueAtTime(.0001, t + len);
+    o.connect(g); g.connect(to);
+    o.start(t); o.stop(t + len + .02);
+  }
+  // A burst of noise through a filter, dying away
+  function burst(t, to, kind, freq, q, peak, len) {
+    var s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+    s.buffer = hiss;
+    f.type = kind; f.frequency.value = freq; f.Q.value = q;
+    g.gain.setValueAtTime(peak, t);
+    g.gain.exponentialRampToValueAtTime(.0001, t + len);
+    s.connect(f); f.connect(g); g.connect(to);
+    s.start(t, Math.random() * .6, len + .03);
+  }
+  var VOICE = [
+    // Hat: a tick of the highest noise
+    (t, to) => burst(t, to, "highpass", 7500, .7, .34, .05),
+    // Clap: three bursts a few thousandths of a second apart, the last one ringing
+    (t, to) => {
+      burst(t, to, "bandpass", 1200, 1.1, 1.5, .02);
+      burst(t + .011, to, "bandpass", 1200, 1.1, 1.5, .02);
+      burst(t + .022, to, "bandpass", 1200, 1.1, 1.7, .17);
+    },
+    // Snare: noise, and a short tone under it
+    (t, to) => { burst(t, to, "highpass", 1400, .6, .55, .17); tone(t, to, "triangle", 180, 180, 0, .5, .11); },
+    // Kick: a sine that falls fast, with a tick at its start for speakers too small for the rest
+    (t, to) => { tone(t, to, "sine", 150, 45, .11, 1, .34); burst(t, to, "lowpass", 1800, .7, .22, .012); },
+  ];
+
+  // ── The loop: steps are given their times a little ahead, on the sound's own clock ──
+  var playing = false, live = false, timer = 0, frame = 0, step = 0, at = 0, due = [], bus = null, lit = -1;
+  // The sound's clock where there is sound, and the page's where there is none
+  var clock = () => (live ? ctx.currentTime : performance.now() / 1000);
+  function line() {
+    if (!bus) { bus = ctx.createGain(); bus.connect(out); }
+    return bus;
+  }
+  function ahead() {
+    var on = !!(ctx && ctx.state === "running");
+    // Sound has come or gone: the loop goes on by the other clock, from the first step not yet played
+    if (on !== live) {
+      if (!on && bus) { try { bus.disconnect(); } catch (e) {} bus = null; }
+      step = (step - (due.length % STEPS) + STEPS) % STEPS;
+      live = on; at = clock() + .05; due = [];
+    }
+    var now = clock();
+    // Fallen behind, as in a tab nobody is looking at: what was missed is left out, and the place is kept
+    if (at < now - .03) {
+      var missed = Math.ceil((now - at) / STEP);
+      step = (step + missed) % STEPS;
+      at += missed * STEP;
+    }
+    var far = document.hidden ? 1.25 : .12;
+    while (at < now + far) {
+      if (live) for (var r = 0; r < ROWS.length; r++) if (mine[r][step] || theirs[r][step]) { VOICE[r](at, line()); meter.notes++; }
+      due.push({ step: step, at: at });
+      meter.steps++;
+      step = (step + 1) % STEPS;
+      at += STEP;
+    }
+    if (due.length > 16) due.splice(0, due.length - 16);
+  }
+  // The light follows what is heard
+  function show() {
+    var now = clock() - (live ? Math.min(ctx.outputLatency || 0, .25) : 0), cur = -1;
+    while (due.length && due[0].at <= now) cur = due.shift().step;
+    if (cur >= 0) light(cur);
+    frame = requestAnimationFrame(show);
+  }
+  function light(c) {
+    if (c === lit) return;
+    if (lit >= 0) pad.forEach((row) => row[lit].classList.remove("now"));
+    lit = c;
+    if (c >= 0) pad.forEach((row) => row[c].classList.add("now"));
+    padsEl.setAttribute("data-step", c);
+  }
+  function start() {
+    if (playing) return;
+    playing = true;
+    live = !!(ctx && ctx.state === "running");
+    step = 0; at = clock() + .06; due = [];
+    timer = setInterval(ahead, 25);
+    ahead();
+    frame = requestAnimationFrame(show);
+    paint();
+  }
+  function stop() {
+    if (!playing) return;
+    playing = false;
+    clearInterval(timer);
+    cancelAnimationFrame(frame);
+    // What was already given a time is not heard
+    if (bus) {
+      var b = bus;
+      bus = null;
+      try { b.gain.setTargetAtTime(0, ctx.currentTime, .008); } catch (e) {}
+      setTimeout(() => { try { b.disconnect(); } catch (e) {} }, 400);
+    }
+    due = [];
+    light(-1);
+    paint();
+  }
+  // A page that is looked at again takes its sound up again, and one that is left is given its steps further ahead
+  document.addEventListener("visibilitychange", () => {
+    if (!playing) return;
+    if (!document.hidden) audio();
+    ahead();
+  });
+  // Nothing plays in another part of the page
+  my.onLeave(stop);
+
+  // ── The pads ──
+  var pad = ROWS.map((name, r) => {
+    var row = [];
+    for (var c = 0; c < STEPS; c++) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "pad";
+      b.setAttribute("data-r", r);
+      b.setAttribute("data-c", c);
+      b.style.gridRow = String(r + 1);
+      b.style.gridColumn = String(c < 4 ? c + 1 : c + 2);
+      padsEl.appendChild(b);
+      row.push(b);
+    }
+    return row;
+  });
+  key.querySelector("span").textContent = AGENT + "’s hits";
+  function paint() {
+    var any = count(theirs) > 0;
+    pad.forEach((row, r) => row.forEach((b, c) => {
+      var m = mine[r][c], t = theirs[r][c];
+      b.classList.toggle("on", m || t);
+      b.classList.toggle("mine", m);
+      b.classList.toggle("theirs", t);
+      b.setAttribute("aria-pressed", m ? "true" : "false");
+      b.setAttribute("aria-label", NAMES[r] + ", step " + (c + 1) + (t ? ", " + AGENT + " plays here" : ""));
+    }));
+    hint.hidden = any;
+    key.hidden = !any;
+    clearBtn.disabled = !any && !count(mine) && !playing;
+    playBtn.setAttribute("data-on", playing ? "1" : "0");
+    playBtn.querySelector("span").textContent = playing ? "Stop" : "Play";
+  }
+  function tap(r, c) {
+    var a = audio();
+    mine[r][c] = !mine[r][c];
+    // Replies to the previous beat stop applying as soon as a pad changes.
+    ignoreReplies = true; request = null;
+    if (mine[r][c] && a) VOICE[r](a.currentTime, out);
+    paint();
+    // The beat goes to the agent once the person has left it alone for a moment, however few hits are in it
+    clearTimeout(sendTimer);
+    sendTimer = setTimeout(send, 1500);
+  }
+  padsEl.addEventListener("click", (e) => {
+    var b = e.target.closest(".pad");
+    if (b) tap(+b.getAttribute("data-r"), +b.getAttribute("data-c"));
+  });
+  // The arrow keys go from pad to pad
+  padsEl.addEventListener("keydown", (e) => {
+    var b = e.target.closest(".pad"), d = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] }[e.key];
+    if (!b || !d) return;
+    var r = +b.getAttribute("data-r") + d[0], c = +b.getAttribute("data-c") + d[1];
+    if (r < 0 || r >= ROWS.length || c < 0 || c >= STEPS) return;
+    e.preventDefault();
+    pad[r][c].focus();
+  });
+  playBtn.addEventListener("click", () => {
+    audio();
+    if (playing) stop(); else start();
+  });
+  clearBtn.addEventListener("click", () => {
+    clearTimeout(sendTimer);
+    // The agent's hits go from the pads with the person's own, and stay gone until it plays others
+    mine = blank(); theirs = blank(); ignoreReplies = true; request = null;
+    sentKey = null; asked = false; waiting = false;
+    stop();
+    paint();
+    box.did("");
+    box.hint(HINT);
+    box.idle();
+    my.send("cleared", {}).then(() => box.idle(), () => {});
+  });
+
+  // ── What goes to the agent, and what comes back ──
+  function send() {
+    var n = count(mine), pattern = mine.map((row) => row.map((on) => (on ? "x" : ".")).join("")), k = pattern.join("/");
+    // An edit that restores the same beat still needs a fresh request for its answer.
+    if (k === sentKey && (!n || request)) return;
+    // With the last hit taken off there is no beat to play between. An agent that was told of
+    // one is told that the pads are empty, as the button that empties them tells it
+    if (!n) {
+      if (sentKey === null) return;
+      sentKey = k; waiting = false; asked = false; ignoreReplies = true; request = null;
+      theirs = blank();
+      stop();
+      paint();
+      box.did("");
+      box.hint(HINT);
+      box.idle();
+      my.send("cleared", {}).then(() => box.idle(), () => { if (sentKey === k) sentKey = null; });
+      return;
+    }
+    sentKey = k; asked = true; waiting = true; ignoreReplies = false; sentAt = turn();
+    request = newId();
+    var sentRequest = request;
+    box.did("put down " + n + (n === 1 ? " hit" : " hits"));
+    box.sending();
+    my.send("beat", { request: sentRequest, pattern: pattern, fits: fitting(), rows: ROWS.slice(), bpm: BPM }).then((result) => {
+      if (request === sentRequest && waiting) box.asked(null, result);
+    }, () => {
+      if (request !== sentRequest) return;
+      sentKey = null; request = null;
+      box.refused();
+    });
+  }
+  // Hits that go with the person's, for the agent to take or to change: a hat on every step
+  // between the beats that the person left empty, a clap on the second beat of a pair where
+  // they put none on either, and a kick that pushes into the next beat where theirs leaves room
+  function fitting() {
+    var g = blank(), free = (r, c) => !mine[r][c];
+    [1, 3, 5, 7].forEach((c) => { if (free(0, c)) g[0][c] = true; });
+    if (!mine[1].some(Boolean) && !mine[2][2] && !mine[2][6]) { g[1][2] = true; g[1][6] = true; }
+    [3, 7].forEach((c) => { if (free(3, c) && !mine[3][(c + 1) % STEPS]) g[3][c] = true; });
+    return g.map((row) => row.map((on) => (on ? "x" : ".")).join(""));
+  }
+  // The agent's hits: four rows of eight, an `x` where it plays. None at all is no hits, and anything else is not taken.
+  function read(v) {
+    if (typeof v === "string" && v.charAt(0) === "[") { try { v = JSON.parse(v); } catch (e) { return null; } }
+    if (v == null || v === "" || (Array.isArray(v) && !v.length)) return blank();
+    if (!Array.isArray(v) || v.length !== ROWS.length) return null;
+    var g = [];
+    for (var r = 0; r < v.length; r++) {
+      if (typeof v[r] !== "string" || v[r].length !== STEPS) return null;
+      g.push(v[r].split("").map((ch) => ch === "x" || ch === "X"));
+    }
+    return g;
+  }
+  function hear() {
+    var st = my.answers(), k = taken, fresh = false;
+    // The agent's hits are `pattern` beside the `request` they answer, with a `note`. Under `theirs` they are the same, as the drum machine's own page has them
+    if (typeof st.request === "string" && st.pattern !== undefined) st = { theirs: { request: st.request, pattern: st.pattern, note: st.note } };
+    try { k = JSON.stringify(st.theirs === undefined ? null : st.theirs); } catch (e) {}
+    // A reply to a beat that was edited or cleared cannot put its hits or note back.
+    if (ignoreReplies) { taken = k; return; }
+    // Pattern and note arrive together with the id of the beat they answer.
+    var reply = st.theirs;
+    if (request && (!reply || reply.request !== request)) return;
+    var pattern = request ? reply.pattern : reply, none = false;
+    if (k !== taken) {
+      var got = read(pattern);
+      if (got) {
+        taken = k; theirs = got; fresh = count(got) > 0; none = !fresh;
+        // They land in the order they are played
+        for (var c = 0, i = 0; c < STEPS; c++) for (var r = 0; r < ROWS.length; r++) if (got[r][c]) pad[r][c].style.setProperty("--d", i++ * 70 + "ms");
+      }
+    }
+    // A matching reply may repeat the same hits as the previous beat.
+    else if (waiting && turn() > sentAt) {
+      var same = read(pattern);
+      if (same && count(same) > 0) { theirs = same; fresh = true; }
+    }
+    var text = request ? reply.note : st.note;
+    var note = typeof text === "string" ? text.trim().slice(0, 160) : "";
+    var said = !!note && note !== noteWas;
+    noteWas = note;
+    paint();
+    if (fresh) {
+      var added = 0;
+      waiting = false;
+      theirs.forEach((row, r) => row.forEach((on, c) => { if (on && !mine[r][c]) added++; }));
+      box.got();
+      if (!said) box.say(added ? "added " + added + (added === 1 ? " hit" : " hits") + " between yours" : "played the same hits as you");
+      // It is an answer to a beat the person sent, so it is heard at once
+      if (asked && !playing && my.shown()) { audio(); start(); }
+    }
+    // An answer to the beat that is waiting may have no hits in it, as where every pad is taken: it is an answer all the same
+    if (none && waiting && request) {
+      waiting = false;
+      box.got();
+      if (!said) box.say("added no hits");
+    }
+    if (said) box.say(note);
+  }
+  my.listen(hear);
+  hear();
+  paint();
+  box.idle();
+  box.hint(HINT);
+});
+</script>

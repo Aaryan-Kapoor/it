@@ -1,0 +1,327 @@
+// The shell of the tour's first page: its frame, the going from one part to the next, the
+// agent's dock and what it says at each stage, and how the page is put together from its parts.
+// Each part's own tests are beside it, in parts/<name>.test.ts.
+import { readFileSync } from 'node:fs'
+import { describe, expect, test } from 'vitest'
+import { tourPage } from '../src/tour'
+import { opened, type Page, pointer, SLOW, STEPS } from './start-page'
+
+// The module that puts the page together is plain JavaScript, with no types of its own
+const { assembled, partOf } = (await import('../tour-parts.mjs' as string)) as {
+  assembled: (shell: string, names: unknown, read: (name: string) => string) => string
+  partOf: (name: string, read: (name: string) => string) => { style: string; section: string; script: string }
+}
+
+/** The armchair of the room put down on the coffee table, which is the page's first way to ask the agent something. */
+const moved = (page: Page) => {
+  const chair = page.$('#chair')
+  const at = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(chair.style.transform)!.slice(1).map(Number)
+  pointer(page, chair, 'pointerdown', at[0]! + 39, at[1]! + 39)
+  pointer(page, chair, 'pointermove', 430 + 39, 230 + 39)
+  pointer(page, chair, 'pointerup', 430 + 39, 230 + 39)
+  return page.sentOf('moved').at(-1)!
+}
+/** How the five stages of the dock stand for a part, as the classes they are drawn with. */
+const stages = (page: Page, step = 'room') => Object.fromEntries(Object.entries(page.read(step).stages).map(([k, v]) => [k, v.cls]))
+
+describe('the frame of the tour’s first page', () => {
+  test('is seven parts in their order with a count of them, and Next, Back and Skip go between them by themselves and send nothing', async () => {
+    const page = await opened()
+    expect(STEPS).toEqual(['room', 'board', 'studio', 'chess', 'cube', 'drums', 'end'])
+    expect(page.w.Shell.names()).toEqual(STEPS)
+    expect(page.shown()).toBe('room')
+    expect(page.$('#count span').textContent).toBe('1 of 7')
+    expect(page.$('#back').hidden).toBe(true)
+    for (let i = 1; i < STEPS.length; i++) {
+      page.$('#next').click()
+      expect([page.shown(), page.$('#count span').textContent]).toEqual([STEPS[i], `${i + 1} of 7`])
+      expect(page.w.document.querySelectorAll('#count i.on')).toHaveLength(i + 1)
+    }
+    // The ending has nowhere to go on to, and nothing to skip
+    expect([page.$('#next').hidden, page.$('#skip').hidden, page.$('#back').hidden]).toEqual([true, true, false])
+    page.$('#back').click()
+    expect(page.shown()).toBe('drums')
+    page.to('end')
+    page.$('#again').click()
+    expect(page.shown()).toBe('room')
+    // A person may stop at any point and still reach the ending
+    page.to('cube')
+    page.$('#skip').click()
+    expect(page.shown()).toBe('end')
+    // However long it is left, nothing goes to the agent that the person did not do
+    await page.advance(5 * 60_000)
+    expect(page.sent).toEqual([])
+    expect(page.errors).toEqual([])
+    page.close()
+  })
+
+  test('has no mark of It’s and no column of words: a title and one line for the part that is shown, and nothing that scrolls', async () => {
+    const page = await opened()
+    expect(page.$('.mark')).toBeNull()
+    expect(page.$('.lede')).toBeNull()
+    expect(page.w.document.querySelectorAll('h1')).toHaveLength(1)
+    for (const step of STEPS) {
+      page.w.Shell.go(step)
+      const section = page.section(step)
+      expect(page.$('#title').textContent).toBe(section.getAttribute('data-title'))
+      // The line names the agent app where the part's own words leave a place for it
+      expect(page.$('#line').textContent).toBe(section.getAttribute('data-line').replace(/\{agent\}/g, 'Claude Code'))
+      expect(page.$('#line').textContent).not.toContain('{agent}')
+      // One part is shown at a time, over the whole of the stage
+      expect(STEPS.filter((s) => !page.section(s).hidden)).toEqual([step])
+    }
+    const css = page.w.document.querySelector('style').textContent as string
+    expect(css).toMatch(/html, body \{ height: 100%; overflow: hidden; \}/)
+    expect(css).toMatch(/\.part \{ position: absolute; inset: 0;/)
+    page.close()
+  })
+
+  test('where the conversation that put it up cannot hear it yet, says so in amber with the line to type, until the first answer', async () => {
+    const quiet = await opened()
+    expect(quiet.$('#asleep').hidden).toBe(true)
+    expect(quiet.state('room')).toBe('Claude Code hears what you do here')
+    quiet.close()
+    const page = await opened({ asleep: true })
+    expect(page.$('#asleep').hidden).toBe(false)
+    expect(page.$('#asleep').textContent).toContain('/reload-plugins')
+    expect(page.$('#asleep').textContent).toContain('What you do here is kept')
+    // The dock does not say that the agent hears a page it cannot hear
+    expect(page.state('room')).toBe('Claude Code cannot hear this page yet')
+    // What the person does is sent all the same, for It to keep
+    const asked = moved(page)
+    await asked.accept()
+    expect(page.$('#asleep').hidden).toBe(false)
+    await page.set({ room: { request: asked.data.request, armchair: asked.data.free[0], say: 'There.' } })
+    expect(page.$('#asleep').hidden).toBe(true)
+    page.to('board')
+    expect(page.state('board')).toBe('Claude Code hears what you do here')
+    page.close()
+  })
+})
+
+describe('the agent’s dock', () => {
+  test('names the agent app on every part, and before anything is done shows the five stages as what will happen, none of them reached', async () => {
+    const page = await opened()
+    expect(page.$('#dock-who').textContent).toBe('Claude Code')
+    expect([...page.w.document.querySelectorAll('#track li b')].map((b: any) => b.textContent)).toEqual(['You', 'It', 'Claude Code', 'Working', 'Answer'])
+    for (const step of STEPS) {
+      page.w.Shell.go(step)
+      expect(page.$('#dock').getAttribute('data-stage')).toBe('idle')
+      expect(stages(page, step)).toEqual({ you: '', it: '', chat: '', work: '', page: '' })
+      expect(page.$('#dock-state').textContent).toBe('Claude Code hears what you do here')
+    }
+    page.close()
+  })
+
+  test('says each stage only once it is known, with the time it was known at: done, taken by It, handed to the agent, the agent’s turn running, answered', async () => {
+    const page = await opened()
+    const move = moved(page)
+    // The person did it, and It has not said that it took it
+    expect(page.read('room').stage).toBe('sending')
+    expect(stages(page)).toEqual({ you: 'done', it: 'next', chat: '', work: '', page: '' })
+    expect(page.read('room').stages.you!.text).toBe('moved the armchair')
+    expect(page.$('#dock-line').textContent).toContain('on its way to It')
+    await page.advance(300)
+    await move.accept()
+    // It took it: that much is known, and no more
+    expect(page.read('room').stage).toBe('took')
+    expect(stages(page)).toEqual({ you: 'done', it: 'done', chat: 'next', work: '', page: '' })
+    expect(page.read('room').stages.it!.text).toBe('took it · 0.3 s')
+    expect(page.state('room')).toBe('It has it. Waiting for Claude Code 1 s')
+    await page.advance(2000)
+    expect(page.state('room')).toBe('It has it. Waiting for Claude Code 2 s')
+    // The site says of another action that it was handed on: that is nothing to this one
+    await page.progress([{ id: 'action-99', handed: true, turn: 'running' }])
+    expect(page.read('room').stage).toBe('took')
+    // It was handed to the agent's conversation
+    await page.progress([{ id: move.id, handed: true, turn: null }])
+    expect(page.read('room').stage).toBe('reached')
+    expect(stages(page)).toEqual({ you: 'done', it: 'done', chat: 'done', work: 'next', page: '' })
+    expect(page.read('room').stages.chat!.text).toBe('got it · 2.3 s')
+    expect(page.state('room')).toBe('Claude Code has it, in its own conversation 2 s')
+    await page.advance(1000)
+    // The agent's turn is running
+    await page.progress([{ id: move.id, handed: true, turn: 'running' }])
+    expect(page.read('room').stage).toBe('working')
+    expect(stages(page)).toEqual({ you: 'done', it: 'done', chat: 'done', work: 'live', page: 'next' })
+    expect(page.state('room')).toBe('Claude Code is working on it 3 s')
+    expect(page.$('#dock-line').textContent).toBe('Claude Code’s turn is running there now. What it answers is drawn on this page.')
+    await page.advance(3000)
+    expect(page.read('room').stages.work!.text).toBe('for 3 s')
+    // The agent answered, and what it wrote is its own words in the dock
+    await page.set({ room: { request: move.data.request, armchair: move.data.free[0], lamp: true, say: 'Off the table, by the rug.' } })
+    expect(page.read('room').stage).toBe('answered')
+    expect(stages(page)).toEqual({ you: 'done', it: 'done', chat: 'done', work: 'done', page: 'done' })
+    expect(page.read('room').stages.page!.text).toBe('in 6.3 s')
+    expect(page.read('room').stages.work!.text).toBe('for 3.0 s')
+    expect(page.state('room')).toBe('Claude Code answered in 6.3 s')
+    expect([page.$('#dock-line').textContent, page.$('#dock-line').classList.contains('hint')]).toEqual(['Off the table, by the rug.', false])
+    expect(page.$('#dock').getAttribute('data-stage')).toBe('answered')
+    page.close()
+  })
+
+  test('a stage the page was never told of is not said to have been reached: it is waited for, and drawn as passed, with no time, once the answer has come', async () => {
+    const page = await opened()
+    const move = moved(page)
+    await move.accept()
+    await page.advance(5000)
+    // Nothing says that it reached the agent, so the dock does not
+    expect(stages(page)).toEqual({ you: 'done', it: 'done', chat: 'next', work: '', page: '' })
+    expect(page.state('room')).toBe('It has it. Waiting for Claude Code 5 s')
+    await page.set({ room: { request: move.data.request, armchair: move.data.free[0], say: 'There.' } })
+    expect(stages(page)).toEqual({ you: 'done', it: 'done', chat: 'past', work: 'past', page: 'done' })
+    expect([page.read('room').stages.chat!.text, page.read('room').stages.work!.text]).toEqual(['got it', 'worked on it'])
+    expect(page.state('room')).toBe('Claude Code answered in 5.0 s')
+    page.close()
+  })
+
+  test('a turn that is said to have stopped before any answer is not shown as going on', async () => {
+    const page = await opened()
+    const move = moved(page)
+    await move.accept()
+    await page.progress([{ id: move.id, handed: true, turn: 'running' }])
+    expect(page.read('room').stage).toBe('working')
+    await page.progress([{ id: move.id, handed: true, turn: 'ended' }])
+    expect(page.read('room').stage).toBe('reached')
+    expect(stages(page).work).toBe('next')
+    expect(page.state('room')).toContain('Claude Code’s turn ended, and no answer has come here yet')
+    // And one that is no longer known is said as it was before it was known
+    await page.progress([{ id: move.id, handed: true, turn: 'running' }])
+    await page.progress([{ id: move.id, handed: true, turn: null }])
+    expect(page.state('room')).toContain('Claude Code has it, in its own conversation')
+    page.close()
+  })
+
+  test('what the site said of an action before the page knew which action was its own is taken once it does', async () => {
+    const page = await opened()
+    const move = moved(page)
+    await page.progress([{ id: move.id, handed: true, turn: 'running' }])
+    expect(page.read('room').stage).toBe('sending')
+    await move.accept()
+    expect(page.read('room').stage).toBe('working')
+    page.close()
+  })
+
+  test('after forty seconds without an answer the part is the person’s again, the dock says so, and a late answer is still shown with its time', async () => {
+    const page = await opened()
+    const move = moved(page)
+    await move.accept()
+    await page.progress([{ id: move.id, handed: true, turn: null }])
+    await page.advance(SLOW)
+    expect(page.read('room').stage).toBe('slow')
+    expect(page.state('room')).toBe('No answer after 40 s. This is yours again, and a late answer is still shown.')
+    // What was reached stays reached, and the stage that never came is where it stopped
+    expect(stages(page)).toEqual({ you: 'done', it: 'done', chat: 'done', work: 'off', page: '' })
+    expect(page.$('#chair').classList.contains('still')).toBe(false)
+    await page.advance(7000)
+    await page.set({ room: { request: move.data.request, armchair: move.data.free[0], say: 'Late, and here.' } })
+    expect(page.state('room')).toBe('Claude Code answered in 47.0 s')
+    expect(page.said('room')).toBe('Late, and here.')
+    page.close()
+  })
+
+  test('an action It refused is said as that, at the stage where it stopped', async () => {
+    const page = await opened()
+    const move = moved(page)
+    await move.refuse()
+    expect(page.read('room').stage).toBe('refused')
+    expect(page.state('room')).toBe('It did not take that. Do it again.')
+    expect(stages(page)).toEqual({ you: 'done', it: 'off', chat: '', work: '', page: '' })
+    expect(page.read('room').stages.it!.text).toBe('did not take it')
+    page.close()
+  })
+
+  test('keeps each part’s own journey, and shows the one of the part that is shown', async () => {
+    const page = await opened()
+    const move = moved(page)
+    await move.accept()
+    page.to('chess')
+    // Chess has had nothing done on it: the dock shows that, and the room's wait goes on unseen
+    expect(page.$('#dock').getAttribute('data-stage')).toBe('idle')
+    expect(page.read('room').stage).toBe('took')
+    await page.set({ room: { request: move.data.request, armchair: move.data.free[0], say: 'Done while you were away.' } })
+    expect(page.$('#dock').getAttribute('data-stage')).toBe('idle')
+    page.w.Shell.go('room')
+    expect(page.$('#dock').getAttribute('data-stage')).toBe('answered')
+    expect(page.$('#dock-line').textContent).toBe('Done while you were away.')
+    page.close()
+  })
+
+  test('every action a part sends says which part it is from, first, with the request it waits on', async () => {
+    const page = await opened()
+    const move = moved(page)
+    expect(Object.keys(move.data).slice(0, 2)).toEqual(['part', 'request'])
+    expect(move.data.part).toBe('room')
+    page.close()
+  })
+
+  test('a browser whose It says nothing of where an action has got to is shown the same page, with those stages unknown', async () => {
+    const page = await opened({}, (w) => {
+      delete w.It.onProgress
+    })
+    const move = moved(page)
+    await move.accept()
+    expect(page.read('room').stage).toBe('took')
+    expect(page.errors).toEqual([])
+    page.close()
+  })
+})
+
+describe('how the first page is put together', () => {
+  const shell = readFileSync(new URL('./pages/start.html', import.meta.url), 'utf8')
+  const part = (name: string, more: { section?: string; script?: string; style?: string; extra?: string } = {}) =>
+    `${more.style ?? '<style>\n  [data-part="x"] { color: red; }\n</style>'}\n${
+      more.section ?? `<section class="part" data-part="${name}" data-title="A ${name}" data-line="Do it." hidden><p id="${name}-p">x</p></section>`
+    }\n${more.script ?? `<script>\nShell.part("${name}", (my) => {});\n</script>`}\n${more.extra ?? ''}`
+  const reads = (files: Record<string, string>) => (name: string) => {
+    if (!Object.hasOwn(files, name)) throw new Error('no such file')
+    return files[name]!
+  }
+
+  test('each part named in pages.json is set into the shell where the shell marks the place for its styles, its section and its script, in that order', () => {
+    const html = assembled(shell, ['one', 'two'], reads({ one: part('one'), two: part('two') }))
+    expect(html.indexOf('data-part="one"')).toBeLessThan(html.indexOf('data-part="two"'))
+    expect(html.indexOf('Shell.part("one"')).toBeLessThan(html.indexOf('Shell.part("two"'))
+    expect(html.indexOf('Shell.part("two"')).toBeLessThan(html.indexOf('Shell.start()'))
+    for (const mark of ['/*parts.css*/', '<!--parts.html-->', '<!--parts.js-->']) expect(html).not.toContain(mark)
+    // And the page that is published is put together so, from the parts that are there
+    const made = tourPage('start').html
+    for (const step of STEPS) expect(made).toContain(`Shell.part("${step}"`)
+    expect(Object.keys(JSON.parse(tourPage('start').state))).toEqual(STEPS)
+  })
+
+  test('a part that is named and not there, or that does not name itself, stops the build', () => {
+    const good = { one: part('one') }
+    expect(() => assembled(shell, ['one', 'gone'], reads(good))).toThrow('pages.json names the part "gone", and tour/parts/gone.html is not there')
+    expect(() => assembled(shell, ['one'], reads({ one: part('other') }))).toThrow('tour/parts/one.html does not name itself')
+    expect(() => assembled(shell, ['one'], reads({ one: part('one', { script: '<script>\nShell.part("other", () => {});\n</script>' }) }))).toThrow(
+      'does not hand itself to the shell',
+    )
+    expect(() =>
+      assembled(shell, ['one'], reads({ one: part('one', { section: '<section class="part" data-part="one" data-title="A" hidden></section>' }) })),
+    ).toThrow('says its data-line')
+    expect(() =>
+      assembled(shell, ['one'], reads({ one: part('one', { section: '<section class="part" data-part="one" data-title="A" data-line="B"></section>' }) })),
+    ).toThrow('is hidden until the shell shows it')
+    expect(() => assembled(shell, ['one'], reads({ one: part('one', { script: '' }) }))).toThrow('holds 0 <script> elements')
+    expect(() => assembled(shell, ['one'], reads({ one: part('one', { extra: '<p>loose</p>' }) }))).toThrow(
+      'holds something outside its style, its section and its script',
+    )
+    expect(() => assembled(shell, ['One'], reads(good))).toThrow('is no name for a part')
+    expect(() => assembled(shell, ['one', 'one'], reads(good))).toThrow('names a part of the first page twice')
+    expect(() => assembled(shell, [], reads(good))).toThrow('gives the first page no parts')
+  })
+
+  test('two parts may not give an element the same id, since an element is found by its id from anywhere on the page', () => {
+    const same = (name: string) =>
+      part(name, { section: `<section class="part" data-part="${name}" data-title="A" data-line="B" hidden><p id="same">x</p></section>` })
+    expect(() => assembled(shell, ['one', 'two'], reads({ one: same('one'), two: same('two') }))).toThrow('two elements with the id "same"')
+  })
+
+  test('a part is its styles, its one section and its one script', () => {
+    const made = partOf('one', reads({ one: part('one') }))
+    expect(made.section.startsWith('<section class="part" data-part="one"')).toBe(true)
+    expect(made.script.startsWith('<script>')).toBe(true)
+    expect(made.style).toBe('  [data-part="x"] { color: red; }')
+  })
+})

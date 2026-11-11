@@ -1,0 +1,60 @@
+<!-- The ending: three things to ask an agent for, and the way out of the tour, which the agent takes away when it is asked. -->
+<style>
+  [data-part="end"] .end-card { width: min(100%, 700px); max-height: 100%; overflow: auto; }
+  [data-part="end"] h2 { font: 800 clamp(26px, 4.2vw, 46px)/1.05 Display; letter-spacing: -.035em; } [data-part="end"] h2 em { font-style: normal; color: var(--faint); }
+  .prompts { display: grid; gap: 10px; margin-top: 22px; }
+  .prompt { display: flex; align-items: center; gap: 14px; justify-content: space-between; padding: 12px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+  .prompt small { display: block; font-size: 10.5px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--faint); margin-bottom: 3px; } .prompt span { font-size: 15.5px; }
+  [data-part="end"] .end-row { display: flex; align-items: center; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
+  @media (max-width: 760px) { .prompt { padding: 10px 12px; gap: 10px; } .prompt span { font-size: 14.5px; } .prompts { margin-top: 16px; gap: 8px; } }
+</style>
+<section class="part" data-part="end" data-title="That is It" data-line="Say what you want to see or to use, in your own words, and {agent} builds the page." hidden>
+  <div class="end-card">
+    <h2>Now ask your agent <em>for a page of your own.</em></h2>
+    <div class="prompts" id="prompts"></div>
+    <div class="end-row"><button class="btn" type="button" id="fin">Go to my pages <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button><button class="btn ghost" type="button" id="again">See it again</button></div>
+  </div>
+</section>
+<script>
+Shell.part("end", (my) => {
+  var $ = Shell.$, box = my.box;
+  var PROMPTS = [["To decide", "Lay out the options side by side and let me pick one"], ["Before a change", "Show me the plan first, and let me approve it before you touch anything"], ["While you are away", "When you need a decision, ask me on my phone and wait for my answer"]];
+  var list = $("prompts"), fin = $("fin"), asked = 0;
+  PROMPTS.forEach((p) => {
+    var row = document.createElement("div"), words = document.createElement("span"), small = document.createElement("small"), copy = document.createElement("button");
+    row.className = "prompt";
+    small.textContent = p[0];
+    words.appendChild(small);
+    words.appendChild(document.createTextNode(p[1]));
+    copy.type = "button"; copy.className = "btn ghost small"; copy.textContent = "Copy";
+    copy.addEventListener("click", () => {
+      var done = () => { copy.textContent = "Copied"; };
+      try { if (navigator.clipboard) navigator.clipboard.writeText(p[1]).then(done, () => {}); } catch (e) {}
+    });
+    row.appendChild(words);
+    row.appendChild(copy);
+    list.appendChild(row);
+  });
+  $("again").addEventListener("click", () => Shell.go(0));
+  // The agent takes the tour's pages away, and the screen goes back to the person's own pages. The
+  // answer is the page going: where it has not gone a while after, the button is the person's again
+  fin.addEventListener("click", () => {
+    if (fin.disabled) return;
+    var mine = ++asked;
+    fin.disabled = true;
+    box.did("asked for your pages");
+    box.hint(my.agent + " takes the tour away, and then you are at your pages.");
+    box.sending();
+    my.send("finish", { from: "start" }).then((result) => {
+      if (mine !== asked) return;
+      box.asked(() => { if (mine === asked) fin.disabled = false; }, result);
+    }, () => {
+      if (mine !== asked) return;
+      fin.disabled = false;
+      box.refused();
+    });
+  });
+  box.idle();
+  box.hint("Copy one of these into " + my.agent + "’s chat whenever you like. They work in any conversation.");
+});
+</script>

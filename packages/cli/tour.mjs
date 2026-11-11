@@ -2,12 +2,18 @@
 // The pages are whole pages, written here and not by the agent, so that the first things a new
 // person sees are the same for everyone. What all of them share (their look, the agent's plate,
 // the two buttons that go on) is written once, in tour/kit, and set into each page here where
-// the page marks the place for it. The tour's first page carries the typefaces it is set in, from
+// the page marks the place for it.
+//
+// The tour's first page is put together here from a shell, tour/pages/start.html, and one file
+// for each of its parts, tour/parts/<name>.html, in the order pages.json gives under `parts`.
+// tour/parts/README.md says what a part is. A part that is named and not there, or that does
+// not name itself, stops the build. The first page carries the typefaces it is set in, from
 // tour/fonts, and takes the rules of chess and the fitting of a drawing into an action from the
 // chessboard and the whiteboard, so that each is written once.
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { assembled } from './tour-parts.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const from = path.join(here, 'tour')
@@ -47,8 +53,13 @@ const KIT = {
   '/*whiteboard.fitting*/': lifted('whiteboard', '    function snapshot(', '    sendBtn.addEventListener', false),
 }
 const pages = {}
-for (const [name, page] of Object.entries(said)) {
+for (const [name, { parts, ...page }] of Object.entries(said)) {
   let html = readFileSync(path.join(from, 'pages', `${name}.html`), 'utf8')
+  if (parts) {
+    html = assembled(html, parts, (part) => readFileSync(path.join(from, 'parts', `${part}.html`), 'utf8'))
+    // The agent answers each part under the part's own name in the state, which begins empty
+    page.state = { ...Object.fromEntries(parts.map((part) => [part, {}])), ...page.state }
+  }
   for (const [mark, text] of Object.entries(KIT)) {
     // Each place is marked once in a page that has it. The words are set in as they are: a `$` in them is only a `$`
     if (html.split(mark).length > 2) throw new Error(`tour/pages/${name}.html marks the place for ${mark} more than once`)

@@ -1,0 +1,14 @@
+<!-- The studio: a place kept for a part that is still to be made. It shows nothing to do, sends nothing, and reads nothing from the state. -->
+<style>
+  [data-part="studio"] .studio-soon { max-width: 46ch; padding: 26px 28px; border: 1px dashed var(--line); border-radius: 18px; text-align: center; color: var(--soft); font-size: 15.5px; }
+  [data-part="studio"] .studio-soon b { display: block; margin-bottom: 6px; font: 700 20px/1.2 Display; letter-spacing: -.02em; color: var(--ink); }
+</style>
+<section class="part" data-part="studio" data-title="A studio" data-line="This part of the tour is still being made. Press Next to go on." hidden>
+  <div class="studio-soon" id="studio-soon"><b>Nothing here yet</b>This part of the tour is still being made.</div>
+</section>
+<script>
+Shell.part("studio", (my) => {
+  my.box.idle();
+  my.box.hint("There is nothing to do on this part yet.");
+});
+</script>
