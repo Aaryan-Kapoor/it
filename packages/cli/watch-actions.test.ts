@@ -13,6 +13,8 @@ const stand = vi.hoisted(() => ({
   answer: (_name: string, _args: any): unknown => null,
   /** What the backend says it takes at its door: true, false, or unknown where it could not be asked. */
   takes: true as boolean | undefined,
+  /** Whether asking It's door again finds this command shut in, as a sandbox shuts one in. */
+  kept: false,
   /** Each live watch made, with what it watches and how to tell it something. */
   watches: [] as { name: string; args: any; update: (v: any) => void; fail: (e: unknown) => void; removed: boolean }[],
   notKnown: null as null | (() => void),
@@ -32,6 +34,7 @@ vi.mock('./src/lib', async (original) => {
       return said
     },
     backendTakes: async () => stand.takes,
+    doorKeptFrom: async () => stand.kept,
     machine: () => ({ id: 'machine-1', name: 'test', key: {} }),
     live: (onNotKnown?: () => void) => {
       stand.notKnown = onNotKnown ?? null
@@ -318,6 +321,18 @@ describe('following the actions on a page', () => {
     expect((await ended)?.code).toBe('offline')
     expect(stand.calls.map((c) => c.name)).toEqual(['artifacts:get'])
     expect(stand.watches).toEqual([])
+  })
+
+  test('where It cannot be asked what it takes because the system keeps this command from It, that is said, and not that It is offline', async () => {
+    stand.takes = undefined
+    stand.kept = true
+    try {
+      const { ended } = follow()
+      expect((await ended)?.code).toBe('blocked')
+      expect(stand.watches).toEqual([])
+    } finally {
+      stand.kept = false
+    }
   })
 
   test('before it moves on to a new watch it asks It again: it keeps its watch while It cannot be asked, and ends where It says it no longer has the read', async () => {

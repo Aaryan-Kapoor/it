@@ -723,7 +723,14 @@ export const keptFromIt = async (err: unknown): Promise<boolean> => {
  * one that says the backend is busy among them, came through.
  */
 export const doorKeptFrom = async (): Promise<boolean> => {
-  const failed = await direct(`${backend().site}/cli/config`, { signal: within(15_000) }).then(
+  let site: string
+  try {
+    site = backend().site
+  } catch {
+    // Where It is not set up here there is no door to ask, and nothing says that a sandbox is in the way
+    return false
+  }
+  const failed = await direct(`${site}/cli/config`, { signal: within(15_000) }).then(
     () => undefined,
     (err: unknown) => err ?? new Error('failed'),
   )
