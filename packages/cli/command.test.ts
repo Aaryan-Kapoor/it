@@ -2961,6 +2961,24 @@ syncBuiltinESMExports()
     for (const name of ['backend', 'bin', 'content', 'logs']) expect(readFileSync(path.join(project, name, 'source'), 'utf8')).toBe('mine')
   })
 
+  test('a note an earlier command left in a project does not let setup take the project for an It home', async () => {
+    const m = machine(false)
+    const project = path.join(m.home, 'project')
+    mkdirSync(path.join(project, 'logs'), { recursive: true })
+    writeFileSync(path.join(project, 'logs', 'source'), 'mine')
+    expect((await run(m, ['--version'], { IT_HOME: project, DO_NOT_TRACK: '1' })).code).toBe(0)
+    expect((await run(m, ['updates', 'off'], { IT_HOME: project })).code).toBe(0)
+    const left = readdirSync(project).filter((name) => name !== 'logs')
+    expect(left).toContain('telemetry-off')
+    expect(left).toContain('updates-off')
+    const refused = await run(m, ['setup', '--none', '--no-service'], { IT_HOME: project })
+    expect(refused.code).toBe(2)
+    expect(error(refused).message).toContain('contains files but no It records')
+    expect(existsSync(path.join(project, INSTALLATION_FILE))).toBe(false)
+    expect((await run(m, ['uninstall', '--yes'], { IT_HOME: project })).code).toBe(2)
+    expect(readFileSync(path.join(project, 'logs', 'source'), 'utf8')).toBe('mine')
+  })
+
   test('`it uninstall` refuses unrelated JSON records and preserves unknown files in a marked installation', async () => {
     const m = machine(true, true)
     writeFileSync(
