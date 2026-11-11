@@ -63,7 +63,16 @@ try {
 const top = path.join(here, '../..')
 execFileSync(process.execPath, [path.join(top, 'packages/runtime/build.mjs')], { cwd: top, stdio: ['ignore', 'ignore', 'inherit'] })
 execFileSync('npm', ['run', '-s', 'build', '-w', 'web'], { cwd: top, stdio: ['ignore', 'ignore', 'inherit'], shell: process.platform === 'win32' })
-await import('./addons.mjs')
+const { codexPluginKept } = await import('./addons.mjs')
+// Codex ties its approval of It's hooks to every file in the plugin folder, so a release that
+// changes one turns the hooks off for everyone who upgrades. That is done only on purpose, by
+// changing the fingerprint that addons-pack.mjs records.
+if (!codexPluginKept) {
+  console.error(
+    "Codex's plugin folder is not the one whose fingerprint packages/cli/addons-pack.mjs records, so this release would turn It's hooks off in Codex until each person approves them again",
+  )
+  process.exit(1)
+}
 await import('./tour.mjs')
 await import('./site.mjs')
 const { FUNCTIONS_HASH } = await import('../../scripts/functions.mjs')

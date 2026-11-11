@@ -1,6 +1,7 @@
 // The add-ons as they are packed into the CLI: each harness's files, with the skill, the license
 // and the note of which It folder installed it, and the two ids each add-on is known by.
 // `addons.mjs` writes what this makes into the program; a test makes it with another skill.
+// The Codex plugin's folder is packed as it is committed, and its fingerprint is kept here.
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
@@ -22,11 +23,13 @@ const SKILL_AT = {
 }
 /**
  * Where the license goes in each add-on: the folder the harness copies as the add-on. OpenCode
- * is given no folder, only a file to load, and that file's first lines say the terms.
+ * is given no folder, only a file to load, and that file's first lines say the terms. Codex's
+ * plugin folder carries a license of its own, committed in it (see `CODEX_PLUGIN`), so the
+ * terms as they are now go beside that folder, at the root of the marketplace Codex reads.
  */
 const LICENSE_AT = {
   'claude-code': 'it-bridge/LICENSE.md',
-  codex: 'plugins/it-bridge/LICENSE.md',
+  codex: 'LICENSE.md',
   pi: 'LICENSE.md',
   openclaw: 'LICENSE.md',
   hermes: 'it-bridge/LICENSE.md',
@@ -35,11 +38,12 @@ const LICENSE_AT = {
 /**
  * Where each add-on carries the note of which It folder installed it: inside what the harness
  * keeps as the add-on, so that the note goes wherever the add-on goes. OpenCode keeps no folder
- * for an add-on, so there it lies beside the skill. `it setup` fills in the folder's name.
+ * for an add-on, so there it lies beside the skill. `it setup` fills in the folder's name. Codex's
+ * note is committed in its plugin folder, as `plugins/it-bridge/it-home.json`, so that a change
+ * to the wording here leaves that folder as it is.
  */
 const HOME_AT = {
   'claude-code': 'it-bridge/it-home.json',
-  codex: 'plugins/it-bridge/it-home.json',
   pi: 'it-home.json',
   opencode: 'skills/it/it-home.json',
   openclaw: 'it-home.json',
@@ -90,4 +94,27 @@ export function packAddons({ root, skill, license }) {
     addons[id] = { version, build, files }
   }
   return addons
+}
+
+/** Where Codex's plugin is in its add-on: the folder Codex copies into its own and keeps. */
+export const CODEX_PLUGIN_AT = 'plugins/it-bridge/'
+/**
+ * The fingerprint of Codex's plugin folder as it is packed, before `it setup` fills in the
+ * address of the hook and the It folder it was installed from, which stay the same from one
+ * release to the next on one machine. Codex 0.167 ties its approval of the plugin's hooks to
+ * every file in that folder, so a release that changes any of them turns It's hooks off on
+ * every machine that upgrades, until the person approves them again, and in T3 Code and the
+ * Codex desktop app nothing asks them to. The folder is therefore committed whole and packed
+ * as it is: no license, skill, version or wording from elsewhere is put into it. Change this
+ * fingerprint only together with a change to the hooks that is worth that approval.
+ */
+export const CODEX_PLUGIN = 'd864bdcebce824f287cf7fa0fec30326c643a6ed0fa55f51665239b34df65e9a'
+
+/** The fingerprint of the Codex plugin folder in add-ons packed by `packAddons`. */
+export function codexPluginFingerprint(addons) {
+  const files = Object.entries(addons.codex.files)
+    .filter(([name]) => name.startsWith(CODEX_PLUGIN_AT))
+    .map(([name, text]) => [name.slice(CODEX_PLUGIN_AT.length), text])
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  return createHash('sha256').update(JSON.stringify(files)).digest('hex')
 }
