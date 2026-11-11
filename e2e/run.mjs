@@ -3023,7 +3023,6 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
     askedToRecord,
   )
   // Stopped from It's bar, the microphone closes, and the page's stream ends with it
-  const piecesAtStop = (await soundHeard()).pieces
   await micRow.getByRole('button', { name: 'Stop the microphone' }).click()
   const micStopped = await recOut(page)
     .filter({ hasText: /^microphone ended/ })
@@ -3032,13 +3031,15 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
       () => recOut(page).textContent(),
       () => recOut(page).textContent(),
     )
+  // Counted from when the page was told: what was on its way as Stop was pressed is the page's still
+  const piecesAtStop = (await soundHeard()).pieces
   await page.waitForTimeout(1000)
   const afterStop = await soundHeard()
   check(
     'Stop in It’s bar closes the microphone live to the page, the page is told the person stopped it, its stream ends, and no more sound is passed on',
     micStopped === 'microphone ended: The person stopped the microphone in It’s bar.' &&
       afterStop.track === 'ended' &&
-      afterStop.pieces - piecesAtStop <= 10 &&
+      afterStop.pieces === piecesAtStop &&
       (await micRow.count()) === 0,
     JSON.stringify({ micStopped, piecesAtStop, afterStop, row: await micRow.count() }),
   )
