@@ -254,6 +254,15 @@ describe('the agent skill', () => {
     expect(source('../../packages/protocol/src/index.ts')).toContain('[It] The user typed this to you in the box above the ')
   })
 
+  test('tells an agent on Windows to give JSON in a file, which Windows PowerShell 5.1 cannot change, and not to pipe it there', () => {
+    expect(more.page).toContain('## Giving JSON on Windows')
+    expect(more.page).toContain('`it patch board --file ')
+    expect(more.page).toContain('`--state-file <path>` on `it create`')
+    expect(more.page).toContain('Do not pipe JSON into `it` from Windows PowerShell 5.1')
+    // The program names the same form in what it says when it refuses such JSON
+    expect(main).toContain('`it patch ${slug} --file <path>`')
+  })
+
   test('names only commands that the `it` command has', () => {
     const named = [...new Set(commands.map((words) => words[1]!))].sort()
     expect(named.length).toBeGreaterThan(15)
@@ -270,7 +279,7 @@ describe('the agent skill', () => {
         const flag = /^[[(]?(--[a-z-]+)/.exec(word)?.[1]
         if (flag) flags.set(words[1]!, (flags.get(words[1]!) ?? new Set()).add(flag))
       }
-    expect([...flags.keys()].sort()).toEqual(['ack', 'actions', 'create', 'delete', 'notify', 'open', 'patch', 'save', 'update', 'wait'])
+    expect([...flags.keys()].sort()).toEqual(['ack', 'actions', 'create', 'delete', 'notify', 'open', 'patch', 'save', 'set', 'update', 'wait'])
     for (const [command, taken] of flags) {
       // What the program's own help says of that command
       const said = help

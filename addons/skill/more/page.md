@@ -173,6 +173,10 @@ A control that is not a form field, such as a tab or the item that is open, work
 </script>
 ```
 
+## Giving JSON on Windows
+
+Windows PowerShell 5.1, the PowerShell every Windows has, takes the double quotes out of an argument it hands to a program, so `it patch board '{"order":["c1"]}'` reaches It as `{order:[c1]}` and is refused. Writing the quotes as `\"` works only while no value has a space in it. On Windows, write the JSON with your own file tool to a file in the temporary folder, so as to leave nothing in the user's project, and give its path: `it patch board --file C:\Users\ana\AppData\Local\Temp\board.json`, `it set board order --file <path>` for one value, or `--state-file <path>` on `it create`. A file reads the same in every shell, PowerShell 7, cmd and Git Bash among them. A value with no double quote in it is safe on the command line, as in `it set board status "Deploying 3 of 7"`. Do not pipe JSON into `it` from Windows PowerShell 5.1, which sends what it pipes in ASCII, so that every letter outside ASCII arrives as a question mark.
+
 ## Changing state that something else may have changed
 
 A page can change its own state while you work, and so can another conversation. Where a change of yours must not overwrite one you have not seen, read the state with `it state deploy-plan`, which prints its `revision` beside it, and give that number back: `it patch deploy-plan '{"total":42}' --if-revision 7`. The change is made only while the state is still at that revision. If it has moved on, the command is refused with the code `conflict`: read the state again and decide anew.
