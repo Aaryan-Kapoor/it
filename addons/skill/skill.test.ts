@@ -260,7 +260,7 @@ describe('the agent skill', () => {
     expect(more.page).toContain('`--state-file <path>` on `it create`')
     expect(more.page).toContain('Do not pipe JSON into `it` from Windows PowerShell 5.1')
     // The program names the same form in what it says when it refuses such JSON
-    expect(main).toContain('`it patch ${slug} --file <path>`')
+    expect(main).toContain('it patch $' + '{slug} --file <path>')
   })
 
   test('names only commands that the `it` command has', () => {
