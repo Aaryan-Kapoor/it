@@ -1,10 +1,12 @@
 // What every command shares: where things are kept on this machine, how the machine proves who
 // it is, and how to reach the backend.
 import {
+  accessSync,
   chmodSync,
   closeSync,
   existsSync,
   fchmodSync,
+  constants as fsConstants,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -622,19 +624,32 @@ export const readOnlyHere = (e: NodeJS.ProcessEnv = process.env) =>
     outOfTheSandbox(e, 'Run `it` outside that sandbox. Do not start It again.'),
   )
 /**
- * Whether an error is the system refusing a write into It's folder. Node's recursive `mkdir` gives
- * a folder that may not be written as missing (ENOENT) where the folder it would go in is there,
- * so that is taken for a refusal as well. A file elsewhere that may not be written is the
- * command's own to say, with the file's name.
+ * Whether an error is the system refusing a write into It's folder. A read-only file system
+ * refuses only writes, so EROFS under It's folder is one. EACCES and EPERM are said of reads as
+ * well, and Node's recursive `mkdir` gives a folder that may not be made as missing (ENOENT), as
+ * it gives a folder whose place holds a link that leads nowhere. So each of those is one only
+ * where the nearest folder above it that is there may not be written into, which the system is
+ * asked: a file that may not be read in a folder that may be written to is the command's own to
+ * say, with its name, and so is a link that leads nowhere. A file outside It's folder is too.
  */
 export function writeRefused(err: unknown): boolean {
-  const e = err as { code?: unknown; path?: unknown; syscall?: unknown } | null
-  if (typeof e?.path !== 'string') return false
+  const e = err as { code?: unknown; path?: unknown } | null
+  if (typeof e?.path !== 'string' || !['EROFS', 'EACCES', 'EPERM', 'ENOENT'].includes(String(e.code))) return false
   const at = path.resolve(e.path)
   const relative = path.relative(home(), at)
-  if (relative.startsWith('..') || path.isAbsolute(relative)) return false
-  if (e.code === 'EROFS' || e.code === 'EACCES' || e.code === 'EPERM') return true
-  return e.code === 'ENOENT' && e.syscall === 'mkdir' && existsSync(home())
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false
+  if (e.code === 'EROFS') return true
+  if (e.code === 'ENOENT' && (err as { syscall?: unknown }).syscall !== 'mkdir') return false
+  // The nearest folder that is there, from the one the file is in up to It's folder
+  let folder = path.dirname(at)
+  while (folder !== home() && !existsSync(folder) && path.dirname(folder) !== folder) folder = path.dirname(folder)
+  if (!existsSync(folder)) return false
+  try {
+    accessSync(folder, fsConstants.W_OK)
+    return false
+  } catch {
+    return true
+  }
 }
 /**
  * What an agent that is kept from It in a sandbox is told to do. Codex is the app that does
@@ -703,11 +718,22 @@ export const keptFromIt = async (err: unknown): Promise<boolean> => {
   return shutInByAsking()
 }
 /**
- * The asking half of `keptFromIt`, for where It's door gave no answer and what went wrong is not
- * to hand: whether the system keeps this command from the network, or It's own socket answers
- * while its port does not.
+ * Whether It's door, asked again where it gave no answer that could be read, is kept from this
+ * command as a sandbox keeps it. Only a connection that failed counts: an answer of any kind,
+ * one that says the backend is busy among them, came through.
  */
-export const shutInByAsking = async (): Promise<boolean> => {
+export const doorKeptFrom = async (): Promise<boolean> => {
+  const failed = await direct(`${backend().site}/cli/config`, { signal: within(15_000) }).then(
+    () => undefined,
+    (err: unknown) => err ?? new Error('failed'),
+  )
+  return failed !== undefined && keptFromIt(failed)
+}
+/**
+ * The asking half of `keptFromIt`: whether the system keeps this command from the network, or
+ * It's own socket answers while its port does not.
+ */
+const shutInByAsking = async (): Promise<boolean> => {
   if (await closedToNetwork()) return true
   if (process.env.IT_URL || basePort() === undefined || !connectorThere) return false
   return connectorThere().catch(() => false)

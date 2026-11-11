@@ -3292,6 +3292,12 @@ fs.mkdirSync = (dir, options) => {
   if (inside(dir) && !fs.existsSync(dir)) throw Object.assign(new Error('ENOENT: no such file or directory, mkdir ' + JSON.stringify(String(dir))), { code: 'ENOENT', syscall: 'mkdir', path: String(dir) })
   return make(dir, options)
 }
+const access = fs.accessSync
+// And asked whether a folder there may be written into, the system says no, as for a read-only file system
+fs.accessSync = (file, mode) => {
+  if (inside(file) && mode !== undefined && (mode & fs.constants.W_OK)) throw Object.assign(new Error('EROFS: read-only file system, access ' + JSON.stringify(String(file))), { code: 'EROFS', syscall: 'access', path: String(file) })
+  return access(file, mode)
+}
 const open = fs.openSync
 fs.openSync = (file, flags, mode) => {
   if (inside(file) && /[wa+]/.test(String(flags ?? 'r'))) throw Object.assign(new Error('EROFS: read-only file system, open ' + JSON.stringify(String(file))), { code: 'EROFS', syscall: 'open', path: String(file) })
@@ -3402,6 +3408,43 @@ syncBuiltinESMExports()
       expect(b.asked).toEqual([])
     } finally {
       await b.close()
+    }
+  })
+
+  test('`it actions --id` says that It could not be asked, and not that it is shut in, where It’s door answers that it is busy', async () => {
+    const m = machine()
+    const busy = http.createServer((_req, res) => {
+      res.writeHead(503)
+      res.end('busy')
+    })
+    await new Promise<void>((resolve) => busy.listen(0, '127.0.0.1', resolve))
+    const url = `http://127.0.0.1:${(busy.address() as net.AddressInfo).port}`
+    writeFileSync(
+      path.join(m.it, 'token.json'),
+      JSON.stringify({ token: 'a-token', exp: Math.floor(Date.now() / 1000) + 3600, machine: 'machine-1', site: url }),
+    )
+    try {
+      const said = error(await run(m, ['actions', '--id', 'p'], { IT_URL: url, IT_SITE_URL: url }))
+      expect(said.code).toBe('offline')
+    } finally {
+      await new Promise((resolve) => busy.close(resolve))
+    }
+  })
+
+  test('`it service logs` names a log it may not read, in a folder it may write to, and does not say that it is shut in', async () => {
+    const m = machine(true, true)
+    mkdirSync(path.join(m.it, 'logs'))
+    const log = path.join(m.it, 'logs', 'it.log')
+    writeFileSync(log, 'a line\n')
+    chmodSync(log, 0o000)
+    try {
+      const ran = await run(m, ['service', 'logs'])
+      if (process.getuid?.() !== 0) {
+        expect(error(ran).message).toContain('EACCES')
+        expect(ran.err).not.toContain('It’s folder may not be written')
+      }
+    } finally {
+      chmodSync(log, 0o600)
     }
   })
 
