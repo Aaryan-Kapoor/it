@@ -38,7 +38,7 @@
   .board-tool svg { display: block; width: 98px; height: 18px; } .board-tool.board-rub svg { width: 66px; height: 25px; }
   button.board-tool:hover { transform: translateY(-2px); } button.board-tool[aria-pressed="true"] { transform: translateY(-8px) rotate(-6deg); filter: drop-shadow(0 9px 4px rgba(0, 0, 0, .25)); }
   button.board-tool:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; border-radius: 6px; }
-  .board-agent { margin-left: 18px; } .board-agent.board-out { opacity: 0; }
+  .board-agent { margin-left: 18px; } .board-tool.board-out { opacity: 0; }
   .board-acts { grid-column: 3; justify-self: end; min-width: 0; display: flex; align-items: center; gap: 8px; padding-top: 8px; }
   .board-type { min-width: 0; } .board-type input { width: 170px; max-width: 100%; height: 38px; padding: 0 15px; border-radius: 999px; border: 1px solid var(--faint); background: var(--card); color: var(--ink); font: 500 15px/1 Text; } .board-type input:focus { outline: 2px solid var(--green); outline-offset: 1px; } .board-type input::placeholder { color: var(--faint); }
   @media (max-width: 760px) {
@@ -245,7 +245,7 @@ Shell.part("board", (my) => {
     checkBtn.disabled = none; wipeBtn.disabled = none; typeIn.disabled = busy;
     face.classList.toggle("board-busy", busy);
     slot.classList.toggle("board-off", has());
-    if (busy) held.hidden = true;
+    if (busy) inHand(false);
   }
   // The board is the person's again while an answer may still come, once the wait has run out. An answer is to the board
   // as it was sent: where they write more, wipe some of it or clear it, it is no answer to what is there now, and is not drawn
@@ -268,12 +268,18 @@ Shell.part("board", (my) => {
     if (name !== "eraser") { INKS[name] = b.getAttribute("data-ink"); b.style.setProperty("--mk", INKS[name]); }
     b.addEventListener("click", () => pick(name));
   });
-  // Under a mouse, the marker that was picked is in the hand, or the eraser is
+  // Under a mouse, the marker that was picked is in the hand, or the eraser is, and is not in the tray meanwhile
   var edge = null;
+  function inHand(yes) {
+    if (held.hidden === !yes) return;
+    held.hidden = !yes;
+    face.classList.toggle("board-holds", yes);
+    tools.forEach((b) => b.classList.toggle("board-out", yes && b.getAttribute("data-tool") === tool));
+  }
   function hold(e) {
     var show = e.pointerType === "mouse" && !busy && !!view.mode;
     if (show) { edge = edge || pen.getBoundingClientRect(); held.style.transform = "translate(" + (e.clientX - edge.left).toFixed(1) + "px," + (e.clientY - edge.top).toFixed(1) + "px)"; }
-    if (held.hidden === show) { held.hidden = !show; face.classList.toggle("board-holds", show); }
+    inHand(show);
   }
   var where = (e) => [(e.clientX - edge.left) / view.s - view.ox, (e.clientY - edge.top) / view.s - view.oy];
   function more(e) {
@@ -317,7 +323,7 @@ Shell.part("board", (my) => {
     if (!inked()) mine.length = 0;
     ready();
   }));
-  pen.addEventListener("pointerleave", () => { if (!current) edge = null; if (!held.hidden) { held.hidden = true; face.classList.remove("board-holds"); } });
+  pen.addEventListener("pointerleave", () => { if (!current) edge = null; inHand(false); });
   pen.addEventListener("contextmenu", (e) => e.preventDefault());
   function wiped() {
     mine.length = 0;
@@ -654,7 +660,7 @@ Shell.part("board", (my) => {
   });
   // Marks that are on their way when the person leaves are all there when they come back
   my.onLeave(() => {
-    held.hidden = true;
+    inHand(false);
     if (!playing) return;
     var steps = playing;
     marking++;
