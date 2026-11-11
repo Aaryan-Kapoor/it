@@ -1935,17 +1935,18 @@ iframe.page-frame.is-loaded {
   display: none;
   flex: 0 0 auto;
   align-self: center;
-  width: 24px;
-  height: 24px;
-  margin-right: -4px;
+  width: 36px;
+  height: 36px;
+  margin: -4px -2px -4px 0;
   padding: 0;
   border: 0;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
   align-items: center;
   justify-content: center;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .card-more svg {
@@ -1956,6 +1957,9 @@ iframe.page-frame.is-loaded {
   color: var(--fg);
 }
 
+/* A screen that cannot hover has a button for each card's actions. The tray stays out of the way,
+   of a press, of the keyboard and of a screen reader, until that button opens it: a press that
+   leaves the focus on the button, or a hover a touch leaves behind, does not show it. */
 @media (hover: none) {
   .card-more {
     display: flex;
@@ -1964,10 +1968,24 @@ iframe.page-frame.is-loaded {
     color: var(--fg);
     background: var(--interactive);
   }
+  .card-actions {
+    visibility: hidden;
+    transition:
+      opacity 0.16s var(--ease-swift),
+      transform 0.2s var(--ease-out),
+      visibility 0s linear 0.2s;
+  }
   .page-card.is-menu-open .card-actions {
     opacity: 1;
     transform: none;
     pointer-events: auto;
+    visibility: visible;
+    transition-delay: 0s;
+  }
+  .card-action {
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
   }
 }
 
