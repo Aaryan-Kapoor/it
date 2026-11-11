@@ -186,3 +186,7 @@ If an install or update was stopped while it was replacing `it.exe`, run the ins
 A service registered by this version can restore the exact previous program recorded by an interrupted install or update. It checks the writer's process number and creation time, so an unrelated process that later receives the same number does not prevent recovery. Once the writer has stopped, it checks that the file matches the recorded checksum before giving it the `it.exe` name again. It leaves a program already at that name alone. A missing or unreadable record, or a file that does not match it, needs the installer again.
 
 An older service launcher has no recovery step. Once the command is available, run `it service install` to refresh that launcher. A terminal command cannot repair its own missing executable, and a computer with no background service also needs the installer run again.
+
+## Public addresses after upgrading from 0.1.36
+
+A 0.1.36 machine with `it network on` could be reached at a public address. After upgrading, that setting allows private networks only. To restore access through a public address, run `it network internet` on that machine.
