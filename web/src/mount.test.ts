@@ -4,7 +4,7 @@
 // channel and no more, and what the site says about whether the person was at the page is the
 // site's own judgement, never the page's.
 
-import { CHANNEL_VERSION, LIMITS } from '@it/protocol'
+import { CHANNEL_VERSION, LIMITS, WHO_MS } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { act, createElement } from 'react'
@@ -23,7 +23,19 @@ const client = {
     if (name === 'actions:replayGrant') return { until: Date.now() + 6 * 86400_000 }
     calls.push({ fn: name, args })
     if (name === 'mounts:create') return { mountId: `mount-${calls.filter((c) => c.fn === name).length}`, version: 7 }
-    if (name === 'actions:submit') return { actionId: 'action-1' }
+    if (name === 'actions:submit') {
+      if (submitHeld) await submitHeld
+      if (submitLost) {
+        submitLost = false
+        throw new Error('[CONVEX M(actions:submit)] Connection lost while the action was on its way')
+      }
+      if (submitLostAlways) throw new Error('[CONVEX M(actions:submit)] Connection lost while the action was on its way')
+      if (submitBusy) {
+        submitBusy = false
+        throw new ConvexError({ code: 'unavailable', message: 'It is busy. Try again in a moment.' })
+      }
+      return { actionId: 'action-1' }
+    }
     if (name === 'state:store') {
       if (storeRefusal) throw new ConvexError(storeRefusal)
       return { revision: 4 }
@@ -37,6 +49,14 @@ const client = {
     return { ticket: `ticket-for-${args.mountId}` }
   }),
 }
+/** What the stand-in backend's answer to an action waits on, where it is held back. */
+let submitHeld: Promise<void> | null = null
+/** Whether the next action's answer is lost on the way, with no word from It of what became of it. */
+let submitLost = false
+/** Whether every action's answer is lost on the way, until the test says otherwise. */
+let submitLostAlways = false
+/** Whether the next action is refused for now, as It refuses one when it is busy, to be sent again later. */
+let submitBusy = false
 /** What the stand-in backend refuses a page's write of what it keeps with, where it refuses it. */
 let storeRefusal: Record<string, string | number> | null = null
 // The page's state, which is the same thing each time it is asked for until it changes: whole
@@ -53,6 +73,9 @@ vi.mock('convex/react', () => ({
 // Where pages are shown from: the name the site itself was reached by, on the port after its own
 const PAGES = `http://${location.hostname}:${Number(location.port) + 1}`
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms))
+/** A wait of the machine's own, whatever clock a test holds: the asking of which document a frame shows takes seconds by the held one. */
+const machineTimeout = setTimeout
+const pause = (ms = 20) => new Promise((r) => machineTimeout(r, ms))
 let root: Root
 let host: HTMLElement
 let active = false
@@ -101,18 +124,31 @@ async function arrived(what: () => boolean): Promise<void> {
     await act(turn)
   }
 }
-/** The frame the site is showing now, with what the site posts into it written down. */
+/**
+ * The frame the site is showing now, with what the site posts into it written down. The document
+ * in it answers the site's asking which document it is, as It's script in a page does, with the
+ * name it last said hello with, until the test says it is a document that answers nothing.
+ */
 function framed() {
   const frame = host.querySelector('iframe') as HTMLIFrameElement
   /** What the site posted into the frame, with the ports it handed over. */
   const posted: { data: any; to: string; ports: MessagePort[] }[] = []
   const inside = frame.contentWindow as Window
-  inside.postMessage = ((data: unknown, to: string, ports: MessagePort[] = []) => void posted.push({ data, to, ports })) as never
+  const document = { name: '', answers: true }
+  inside.postMessage = ((data: any, to: string, ports: MessagePort[] = []) => {
+    posted.push({ data, to, ports })
+    if (data?.type === 'it:who' && document.answers && document.name)
+      queueMicrotask(() =>
+        window.dispatchEvent(new MessageEvent('message', { data: { type: 'it:here', nonce: data.nonce, doc: document.name }, origin: 'null', source: inside })),
+      )
+  }) as never
   // A sandboxed page has no origin of its own to name: a browser gives "null" for it
   const fromFrame = (data: unknown, origin = 'null', source: Window = inside) =>
     act(async () => {
+      const said = data as { type?: unknown; doc?: unknown } | null
+      if (said?.type === 'it:hello' && typeof said.doc === 'string' && source === inside) document.name = said.doc
       window.dispatchEvent(new MessageEvent('message', { data, origin, source }))
-      await tick()
+      await pause()
     })
   const ports = () => posted.filter((p) => p.data.type === 'it:port').map((p) => p.ports[0]!)
   /** Sends something on a channel as the page would, and gives back what the site answered. */
@@ -120,10 +156,17 @@ function framed() {
     const heard: any[] = []
     port.onmessage = (m) => heard.push(m.data)
     port.postMessage(message)
-    await act(() => tick(waitMs))
+    await act(() => pause(waitMs))
     return heard
   }
-  return { frame, fromFrame, ports, send, posted }
+  /** A document of the page's loads in the frame: one of It's, which answers, or one that answers nothing, as `about:blank` does. */
+  const loads = (answers = true) =>
+    act(async () => {
+      document.answers = answers
+      frame.dispatchEvent(new Event('load'))
+      await pause()
+    })
+  return { frame, fromFrame, ports, send, posted, loads }
 }
 /** Shows a page, up to the point where the page's own script can say hello. */
 async function show() {
@@ -627,10 +670,10 @@ describe('the frame around a page', () => {
     expect(calls.some((c) => c.fn === 'state:store')).toBe(false)
   })
 
-  test('a page’s channel says that it takes several stored values at once, and what the page keeps goes to the backend as one write', async () => {
+  test('a page’s channel says that it takes several stored values at once and that the site hosts embeds, and what the page keeps goes to the backend as one write', async () => {
     const page = await show()
     await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
-    expect(page.posted.find((p) => p.data.type === 'it:port')?.data).toEqual({ type: 'it:port', v: CHANNEL_VERSION })
+    expect(page.posted.find((p) => p.data.type === 'it:port')?.data).toEqual({ type: 'it:port', v: CHANNEL_VERSION, embeds: true })
     const port = page.ports()[0]!
     const heard = await page.send(port, {
       type: 'it:store',
@@ -1003,6 +1046,482 @@ describe('fullscreen, which a page asks the site for', () => {
     browser.enabled = false
     const page = await connected()
     expect(page.heard.at(-1)).toEqual({ type: 'it:fullscreen', on: false, enabled: false })
+  })
+})
+
+describe('players and maps the site hosts over a page', () => {
+  /** The frames the site hosts over the page, in the layer over its frame. */
+  const hosted = () => [...host.querySelectorAll<HTMLIFrameElement>('.mount > .embeds iframe')]
+
+  test('an embed a page asks for over its channel is framed in a layer over the page’s frame, inside the same box, and not one that is not on the list', async () => {
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    const port = page.ports()[0]!
+    const heard = await page.send(port, { type: 'it:embed', id: 'e1', url: 'https://www.youtube.com/embed/aqz-KE-bpKQ' })
+    expect(hosted().map((f) => f.src)).toEqual(['https://www.youtube.com/embed/aqz-KE-bpKQ'])
+    // The layer comes after the page's frame in the same box, so that it lies over it, and goes into fullscreen with it
+    expect(host.querySelector('.mount > iframe + .embeds')).not.toBeNull()
+    expect(heard.filter((m) => m.type !== 'it:state' && m.type !== 'it:fullscreen')).toEqual([])
+    const refused = await page.send(port, { type: 'it:embed', id: 'e2', url: 'https://evil.example/embed/abc' })
+    expect(refused).toEqual([{ type: 'it:embed-refused', id: 'e2', error: 'That address is not the embed of a provider It hosts.' }])
+    expect(hosted().length).toBe(1)
+    // Nothing about an embed reaches the backend
+    expect(calls.filter((c) => c.fn !== 'mounts:create' && c.fn !== 'mounts:ticket')).toEqual([])
+  })
+
+  test('the embeds of a document go when the frame shows another, and none of the old channel’s are taken after', async () => {
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    const first = page.ports()[0]!
+    await page.send(first, { type: 'it:embed', id: 'e1', url: 'https://www.youtube.com/embed/a' })
+    expect(hosted().length).toBe(1)
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-2' })
+    expect(hosted()).toEqual([])
+    await page.send(first, { type: 'it:embed', id: 'e2', url: 'https://www.youtube.com/embed/b' })
+    expect(hosted()).toEqual([])
+    await page.send(page.ports()[1]!, { type: 'it:embed', id: 'e3', url: 'https://player.vimeo.com/video/1' })
+    expect(hosted().map((f) => f.src)).toEqual(['https://player.vimeo.com/video/1'])
+  })
+
+  test('a page that says hello for a name of its own and then takes its frame to a document that answers nothing loses its players and its channel once the site has asked', async () => {
+    const page = await show()
+    // The asking takes seconds: the site's clock is held, and moved on by the test
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    await page.loads()
+    await page.send(page.ports()[0]!, { type: 'it:embed', id: 'e1', url: 'https://www.youtube.com/embed/a' })
+    // A hello for a name the page chose: a channel of its own, over which it asks for a player directly
+    await page.fromFrame({ type: 'it:hello', doc: 'chosen-by-the-page' })
+    const forged = page.ports()[1]!
+    await page.send(forged, { type: 'it:embed', id: 'e2', url: 'https://player.vimeo.com/video/1' })
+    expect(hosted().map((f) => f.src)).toEqual(['https://player.vimeo.com/video/1'])
+    // Then the frame goes to a document that answers nothing, as `about:blank` is
+    await page.loads(false)
+    expect(page.posted.filter((p) => p.data.type === 'it:who').length).toBe(2)
+    // While the site waits for an answer, no click reaches the player
+    expect((host.querySelector('.embed-shield') as HTMLElement).hidden).toBe(false)
+    await act(async () => {
+      vi.advanceTimersByTime(WHO_MS)
+      await pause()
+    })
+    expect(hosted()).toEqual([])
+    // Nothing that arrives on that channel is taken from now on: no player, and no action
+    await page.send(forged, { type: 'it:embed', id: 'e3', url: 'https://www.youtube.com/embed/b' })
+    await page.send(forged, action('after-it-went'))
+    expect(hosted()).toEqual([])
+    expect(submitted().map((e) => e.clientActionId)).not.toContain('after-it-went')
+    // And the frame is told, so that a document of It's that was only slow asks for a channel again
+    expect(page.posted.at(-1)?.data).toEqual({ type: 'it:gone' })
+  }, 15_000)
+
+  test('a page that hands its channel to another window and takes its frame to a document that answers nothing cannot use the channel to put players over that document', async () => {
+    const page = await show()
+    // The asking takes seconds: the site's clock is held, and moved on by the test
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    await page.loads()
+    // The channel is now in the hands of a window the page opened; the frame goes to a document that answers nothing
+    const handedOn = page.ports()[0]!
+    await page.send(handedOn, { type: 'it:embed', id: 'e1', url: 'https://www.youtube.com/embed/a' })
+    await page.loads(false)
+    await act(async () => {
+      vi.advanceTimersByTime(WHO_MS)
+      await pause()
+    })
+    expect(hosted()).toEqual([])
+    const after = await page.send(handedOn, { type: 'it:embed', id: 'e2', url: 'https://www.youtube.com/embed/b' })
+    await page.send(handedOn, { type: 'it:embed-at', id: 'e2', x: 0, y: 0, width: 300, height: 200, cut: [0, 0, 0, 0], round: 0, shown: true })
+    expect(hosted()).toEqual([])
+    expect(after).toEqual([])
+    // The site asked the frame's own window, never the channel: what the other window holds was told nothing of the asking
+    const asked = page.posted.filter((p) => p.data.type === 'it:who')
+    expect(asked.length).toBe(2)
+    expect(new Set(asked.map((p) => p.data.nonce)).size).toBe(2)
+  }, 15_000)
+
+  test('a document that answers with another value, or for another channel, is not taken as the one the channel was made for', async () => {
+    const page = await show()
+    // The asking takes seconds: the site's clock is held, and moved on by the test
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    await page.loads()
+    await page.send(page.ports()[0]!, { type: 'it:embed', id: 'e1', url: 'https://www.youtube.com/embed/a' })
+    await page.loads(false)
+    const nonce = page.posted.filter((p) => p.data.type === 'it:who').at(-1)!.data.nonce
+    await page.fromFrame({ type: 'it:here', nonce: 'a-value-of-its-own', doc: 'doc-1' })
+    await page.fromFrame({ type: 'it:here', nonce, doc: 'another-document' })
+    // From another window than the frame's, even with the right value
+    await page.fromFrame({ type: 'it:here', nonce, doc: 'doc-1' }, 'null', window)
+    await act(async () => {
+      vi.advanceTimersByTime(WHO_MS)
+      await pause()
+    })
+    expect(hosted()).toEqual([])
+  }, 15_000)
+
+  test('an action on its way when the site took its document to be gone, sent again as it was over the next channel, is done once, and the page is told there what became of it', async () => {
+    const page = await show()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    await page.loads()
+    // The backend has the action and has not answered yet
+    let answer = () => {}
+    submitHeld = new Promise((resolve) => {
+      answer = resolve
+    })
+    try {
+      page.ports()[0]!.postMessage(action('slow-0001'))
+      await act(() => pause(60))
+      expect(submitted().map((e) => e.clientActionId)).toEqual(['slow-0001'])
+      // Busy, the document misses the asking, and the site takes it to be gone
+      await page.loads(false)
+      await act(async () => {
+        vi.advanceTimersByTime(WHO_MS)
+        await pause()
+      })
+      expect(page.posted.at(-1)?.data).toEqual({ type: 'it:gone' })
+      // It was only slow: it says hello under a new name, and sends the action again as it was, under the same id
+      await page.fromFrame({ type: 'it:hello', doc: 'doc-1-again' })
+      const next = page.ports()[1]!
+      const heard: any[] = []
+      next.onmessage = (m) => heard.push(m.data)
+      next.postMessage(action('slow-0001'))
+      await act(() => pause(60))
+      answer()
+      await act(() => pause(100))
+      expect(submitted().map((e) => e.clientActionId)).toEqual(['slow-0001'])
+      expect(heard.filter((m) => m.type === 'it:result')).toEqual([{ type: 'it:result', requestId: 'r-slow-0001', ok: true, actionId: 'action-1' }])
+      // Sent once more after It accepted it, it is told the same, and the backend is not asked again
+      const again = await page.send(next, action('slow-0001'))
+      expect(again.find((m) => m.type === 'it:result')).toEqual({ type: 'it:result', requestId: 'r-slow-0001', ok: true, actionId: 'action-1' })
+      expect(submitted().length).toBe(1)
+    } finally {
+      submitHeld = null
+      answer()
+    }
+  }, 15_000)
+
+  test('actions sent again after their channel was lost are none of them refused for coming too fast, however many were on their way', async () => {
+    const page = await show()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    await page.loads()
+    let answer = () => {}
+    submitHeld = new Promise((resolve) => {
+      answer = resolve
+    })
+    try {
+      // Twenty-five actions, sent no faster than a page may send them, all of them with It and none answered yet
+      const ids = Array.from({ length: 25 }, (_, n) => `many-${String(n).padStart(4, '0')}`)
+      // The hello took one of the twenty a page may send at once
+      for (const id of ids.slice(0, 19)) page.ports()[0]!.postMessage(action(id))
+      await act(() => pause(200))
+      vi.advanceTimersByTime(2000)
+      for (const id of ids.slice(19)) page.ports()[0]!.postMessage(action(id))
+      await act(() => pause(200))
+      expect(submitted().length).toBe(25)
+      await page.loads(false)
+      await act(async () => {
+        vi.advanceTimersByTime(WHO_MS)
+        await pause()
+      })
+      // Back with a new channel, the document sends all of them again at once, as it was
+      await page.fromFrame({ type: 'it:hello', doc: 'doc-1-again' })
+      const next = page.ports()[1]!
+      const heard: any[] = []
+      next.onmessage = (m) => heard.push(m.data)
+      for (const id of ids) next.postMessage({ ...action(id), again: true })
+      await act(() => pause(100))
+      answer()
+      await act(() => pause(200))
+      const results = heard.filter((m) => m.type === 'it:result')
+      expect(results.length).toBe(25)
+      expect(results.filter((m) => !m.ok)).toEqual([])
+      expect(submitted().length).toBe(25)
+    } finally {
+      submitHeld = null
+      answer()
+    }
+  }, 15_000)
+
+  test('an action It accepted while its channel was gone is told as accepted when it is sent again, however long after, and the backend is not asked again', async () => {
+    const page = await show()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    await page.loads()
+    let answer = () => {}
+    submitHeld = new Promise((resolve) => {
+      answer = resolve
+    })
+    try {
+      page.ports()[0]!.postMessage(action('late-0001'))
+      await act(() => pause(60))
+      await page.loads(false)
+      await act(async () => {
+        vi.advanceTimersByTime(WHO_MS)
+        await pause()
+      })
+      // It accepts the action with nobody there to be told
+      answer()
+      submitHeld = null
+      await act(() => pause(100))
+      expect(submitted().map((e) => e.clientActionId)).toEqual(['late-0001'])
+      // Days later the document is back, and sends it again
+      await act(async () => {
+        vi.advanceTimersByTime(8 * 86400_000)
+        await pause()
+      })
+      await page.fromFrame({ type: 'it:hello', doc: 'doc-1-again' })
+      const heard = await page.send(page.ports()[1]!, { ...action('late-0001'), again: true })
+      expect(heard.find((m) => m.type === 'it:result')).toEqual({ type: 'it:result', requestId: 'r-late-0001', ok: true, actionId: 'action-1' })
+      expect(submitted().length).toBe(1)
+    } finally {
+      submitHeld = null
+      answer()
+    }
+  }, 15_000)
+
+  /** Shows a page whose document says hello and answers, with the backend's answer to its next action held until `answer`. */
+  async function heldAction(id: string) {
+    const page = await show()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    await page.loads()
+    let answer = () => {}
+    submitHeld = new Promise((resolve) => {
+      answer = resolve
+    })
+    page.ports()[0]!.postMessage(action(id))
+    await act(() => pause(60))
+    return {
+      page,
+      answer: () => {
+        submitHeld = null
+        answer()
+      },
+      /** The document misses the asking which document it is, and the site takes it to be gone. */
+      gone: async () => {
+        await page.loads(false)
+        await act(async () => {
+          vi.advanceTimersByTime(WHO_MS)
+          await pause()
+        })
+      },
+      /** The document is back, with a new channel, and sends the action again as it was. */
+      sentAgain: async () => {
+        await page.fromFrame({ type: 'it:hello', doc: 'doc-1-again' })
+        return page.send(page.ports().at(-1)!, { ...action(id), again: true }, 200)
+      },
+    }
+  }
+
+  test('an action refused for now while its channel was gone, which the browser then sends again by itself and It accepts, is told as accepted when it is sent again, and never as refused', async () => {
+    const held = await heldAction('busy-0001')
+    try {
+      await held.gone()
+      // It refuses it for now, with nobody there to be told: the browser keeps it, sends it again by itself, and It takes it
+      submitBusy = true
+      held.answer()
+      await act(() => pause(300))
+      expect(submitted().map((e) => e.clientActionId)).toEqual(['busy-0001', 'busy-0001'])
+      const heard = await held.sentAgain()
+      expect(heard.find((m) => m.type === 'it:result')).toEqual({ type: 'it:result', requestId: 'r-busy-0001', ok: true, actionId: 'action-1' })
+      expect(submitted().length).toBe(2)
+    } finally {
+      submitBusy = false
+      held.answer()
+    }
+  }, 15_000)
+
+  test('a refusal for now that the page was there to be told of, as it sent the action again, is never kept as a refusal for good', async () => {
+    const held = await heldAction('trans-0001')
+    try {
+      await held.gone()
+      // Sent again while It's answer is still on its way: it waits on it, so the page is there to be told
+      const answered = held.sentAgain()
+      await act(() => pause(50))
+      submitBusy = true
+      held.answer()
+      const heard = await answered
+      expect(heard.find((m) => m.type === 'it:result')).toMatchObject({ requestId: 'r-trans-0001', ok: false, error: 'It is busy. Try again in a moment.' })
+      // Lost again, and sent again: what became of it is not known here, and it is not said to be refused
+      await held.gone()
+      await held.page.fromFrame({ type: 'it:hello', doc: 'doc-1-third' })
+      const later = await held.page.send(held.page.ports().at(-1)!, { ...action('trans-0001'), again: true }, 200)
+      expect(later.find((m) => m.type === 'it:result')).toMatchObject({
+        requestId: 'r-trans-0001',
+        ok: false,
+        error: expect.stringMatching(/cannot tell whether this was done/),
+      })
+      expect(submitted().length).toBe(1)
+    } finally {
+      submitBusy = false
+      held.answer()
+    }
+  }, 15_000)
+
+  test('an action sent again that this showing never had is told that It cannot tell whether it was done, and nothing is sent for it', async () => {
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    const heard = await page.send(page.ports()[0]!, { ...action('never-0001'), again: true }, 200)
+    expect(heard.find((m) => m.type === 'it:result')).toMatchObject({
+      requestId: 'r-never-0001',
+      ok: false,
+      error: expect.stringMatching(/cannot tell whether this was done/),
+    })
+    expect(submitted()).toEqual([])
+    expect(asked('actions:replayGrant')).toEqual([])
+  })
+
+  test('an action whose fate is not known here is told so when it is sent again, at once, and is never sent again from here, however long the browser would have waited for another tab first', async () => {
+    // A stand-in for the browser's locks, under which a click is sent: another tab holds them until the test lets go
+    const nav = navigator as unknown as { locks?: unknown }
+    const before = nav.locks
+    let letGo = () => {}
+    const heldByAnother = new Promise<void>((resolve) => {
+      letGo = resolve
+    })
+    let locked = false
+    try {
+      const held = await heldAction('fate-0001')
+      // Its answer is lost while the document is there to be told, so the browser does not keep it: what became of it is not known
+      submitLost = true
+      held.answer()
+      await act(() => pause(100))
+      expect(submitted().map((e) => e.clientActionId)).toEqual(['fate-0001'])
+      Object.defineProperty(navigator, 'locks', {
+        configurable: true,
+        value: {
+          request: async (_key: string, options: unknown, work?: (lock: unknown) => unknown) => {
+            const run = (typeof options === 'function' ? options : work) as (lock: unknown) => unknown
+            locked = true
+            await heldByAnother
+            return run({})
+          },
+        },
+      })
+      const answered = held.sentAgain()
+      await act(() => pause(100))
+      // Eight days on, the other tab lets go
+      await act(async () => {
+        vi.advanceTimersByTime(8 * 86400_000)
+        await pause()
+      })
+      letGo()
+      const heard = await answered
+      await act(() => pause(100))
+      expect(heard.find((m) => m.type === 'it:result')).toMatchObject({
+        requestId: 'r-fate-0001',
+        ok: false,
+        error: expect.stringMatching(/cannot tell whether this was done/),
+      })
+      expect(locked).toBe(false)
+      expect(submitted().length).toBe(1)
+      expect(asked('actions:replayGrant').length).toBe(0)
+    } finally {
+      letGo()
+      submitLost = false
+      Object.defineProperty(navigator, 'locks', { configurable: true, value: before })
+    }
+  }, 15_000)
+
+  test('an action the browser sent from what it kept, while its channel was gone, is told as accepted when it is sent again eight days later, and nothing is sent for it from here', async () => {
+    const held = await heldAction('kept-0001')
+    try {
+      await held.gone()
+      submitLost = true
+      held.answer()
+      await act(() => pause(300))
+      expect(submitted().map((e) => e.clientActionId)).toEqual(['kept-0001', 'kept-0001'])
+      await act(async () => {
+        vi.advanceTimersByTime(8 * 86400_000)
+        await pause()
+      })
+      const heard = await held.sentAgain()
+      expect(heard.find((m) => m.type === 'it:result')).toEqual({ type: 'it:result', requestId: 'r-kept-0001', ok: true, actionId: 'action-1' })
+      expect(submitted().length).toBe(2)
+    } finally {
+      submitLost = false
+      held.answer()
+    }
+  }, 15_000)
+
+  test('an action another tab sent from what this browser kept is told that It cannot tell whether it was done, once the browser no longer holds it, and nothing is sent for it from here', async () => {
+    const held = await heldAction('tabs-0001')
+    try {
+      await held.gone()
+      // Its answer is lost, and the browser keeps it; every sending of it from here meets trouble too
+      submitLostAlways = true
+      held.answer()
+      await act(() => pause(300))
+      const sentSoFar = submitted().length
+      const heard: any[] = []
+      await held.page.fromFrame({ type: 'it:hello', doc: 'doc-1-again' })
+      const next = held.page.ports().at(-1)!
+      next.onmessage = (m) => heard.push(m.data)
+      next.postMessage({ ...action('tabs-0001'), again: true })
+      await act(() => pause(100))
+      // It waits while the browser holds it; then another tab sends it, and it is gone from here with nothing said of how
+      expect(heard.filter((m) => m.type === 'it:result')).toEqual([])
+      submitLostAlways = false
+      for (const key of Object.keys(localStorage)) if (key.startsWith('it.outbox.') && key.endsWith('.tabs-0001')) localStorage.removeItem(key)
+      await act(async () => {
+        vi.advanceTimersByTime(1500)
+        await pause(100)
+      })
+      expect(heard.filter((m) => m.type === 'it:result')).toEqual([
+        expect.objectContaining({ requestId: 'r-tabs-0001', ok: false, error: expect.stringMatching(/cannot tell whether this was done/) }),
+      ])
+      expect(submitted().length).toBe(sentSoFar)
+    } finally {
+      submitLostAlways = false
+      held.answer()
+    }
+  }, 15_000)
+
+  test('a document of It’s that answers keeps its players and its channel, and a click reaches its player once the answer has come and it has been still for a moment', async () => {
+    const page = await show()
+    // The asking takes seconds: the site's clock is held, and moved on by the test
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    const port = page.ports()[0]!
+    await page.send(port, { type: 'it:embed', id: 'e1', url: 'https://www.youtube.com/embed/a' })
+    await page.loads()
+    await act(async () => {
+      vi.advanceTimersByTime(WHO_MS + 700)
+      await pause()
+    })
+    expect(hosted().length).toBe(1)
+    expect((host.querySelector('.embed-shield') as HTMLElement).hidden).toBe(true)
+    const heard = await page.send(port, action('still-heard'))
+    expect(heard.find((m) => m.type === 'it:result')).toMatchObject({ ok: true })
+    // A page that goes on to another of its own documents is asked again, and that document answers for its own channel
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-2' })
+    await page.send(page.ports()[1]!, { type: 'it:embed', id: 'e2', url: 'https://player.vimeo.com/video/1' })
+    await page.loads()
+    await act(async () => {
+      vi.advanceTimersByTime(WHO_MS + 700)
+      await pause()
+    })
+    expect(hosted().map((f) => f.src)).toEqual(['https://player.vimeo.com/video/1'])
+  }, 15_000)
+
+  test('every embed goes when the page’s showing ends, and with the page when it leaves the screen', async () => {
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    await page.send(page.ports()[0]!, { type: 'it:embed', id: 'e1', url: 'https://www.youtube.com/embed/a' })
+    // The showing is over: the site asks for a new one, and frames the page again, with nothing of the old one's laid over it
+    await page.send(page.ports()[0]!, { type: 'it:lapsed' })
+    await act(() => tick(50))
+    expect(hosted()).toEqual([])
+    const again = framed()
+    await again.fromFrame({ type: 'it:hello', doc: 'doc-2' })
+    await again.send(again.ports()[0]!, { type: 'it:embed', id: 'e2', url: 'https://www.youtube.com/embed/b' })
+    expect(hosted().length).toBe(1)
+    await act(async () => root.unmount())
+    expect(host.querySelectorAll('iframe').length).toBe(0)
+    // Torn down already: the test's own teardown has nothing left to do
+    root = createRoot(host)
   })
 })
 

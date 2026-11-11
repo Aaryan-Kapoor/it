@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Players</title>
+<style>
+  body { margin: 0; font: 14px sans-serif; }
+  /* A player written as any page writes one, which It takes up */
+  #film { display: block; margin: 40px 0 0 60px; width: 480px; height: 270px; border: 0; }
+  /* A box that scrolls, with a place in it that the page asks It to put a player over */
+  #box { margin: 30px 0 0 60px; width: 400px; height: 160px; overflow: auto; }
+  #inner { height: 600px; padding-top: 100px; }
+  #map { width: 320px; height: 180px; }
+  #tall { height: 2000px; }
+</style>
+</head>
+<body>
+<iframe id="film" src="https://www.youtube.com/embed/stand-in?enablejsapi=1"></iframe>
+<div id="box"><div id="inner"><div id="map"></div></div></div>
+<div id="tall"></div>
+<script>
+  window.heard = []
+  window.loads = 0
+  window.player = It.embed(document.getElementById('film'))
+  window.player.onmessage = (e) => window.heard.push(e.data)
+  window.player.onload = () => window.loads++
+  window.map = It.embed(document.getElementById('map'), 'https://player.vimeo.com/video/1')
+</script>
+</body>
+</html>

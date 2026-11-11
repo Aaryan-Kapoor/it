@@ -92,6 +92,21 @@ describe('the script inside a page', () => {
     expect(load().hellos[0].doc).not.toBe(p.hellos[0].doc)
   })
 
+  test('asked by the site which document is in its frame, it answers with its own name and the value it was asked with, to the site alone, and to nobody else who asks', async () => {
+    const p = load()
+    await p.advance(10)
+    const named = p.hellos[0].doc
+    const ask = (origin: string, source: unknown, data: unknown) =>
+      p.w.dispatchEvent(Object.assign(new p.w.Event('message'), { origin, source, data, ports: [] }))
+    ask(APP, p.w.parent, { type: 'it:who', nonce: 'asked-1' })
+    expect(p.hellos.filter((m) => m.type === 'it:here')).toEqual([{ type: 'it:here', nonce: 'asked-1', doc: named }])
+    // Asked from another window, or by the window above with something other than the site in it, it says nothing
+    const elsewhere = new JSDOM('', { url: APP }).window
+    ask(APP, elsewhere, { type: 'it:who', nonce: 'asked-2' })
+    ask('https://evil.example', p.w.parent, { type: 'it:who', nonce: 'asked-3' })
+    expect(p.hellos.filter((m) => m.type === 'it:here').length).toBe(1)
+  })
+
   test('a port is taken only from the window that framed the page, and only while the site is what is in it', async () => {
     const p = load()
     void p.It.action('approve', {})

@@ -3002,8 +3002,10 @@ span.card-fallback {
   min-height: 0;
   position: relative;
   background: var(--bg);
+  /* What is laid over the page stays beneath the site's own menus and toasts */
+  isolation: isolate;
 }
-.mount iframe {
+.mount > iframe {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -3012,8 +3014,38 @@ span.card-fallback {
   background: #fff;
   visibility: hidden;
 }
-.mount iframe[data-shown="true"] {
+.mount > iframe[data-shown="true"] {
   visibility: visible;
+}
+/* Players and maps from the providers on It's list, hosted by the site over the places the page
+   keeps for them. The layer takes no pointer itself: only a player does, where it lies. */
+.embeds {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.embed {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: auto;
+}
+.embed iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  /* As the players' own documents are, so that the browser draws no backdrop of its own behind one */
+  color-scheme: normal;
+}
+/* Over a player that has just appeared or moved, for a moment: it takes a click meant for the page */
+.embed-shield {
+  position: absolute;
+  inset: 0;
+}
+.embed-shield[hidden] {
+  display: none;
 }
 .mount-note {
   position: absolute;

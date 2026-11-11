@@ -70,6 +70,7 @@ import { leaks, PRIVATE_MARK, printCleanly, redact, stackLogs, verdict } from '.
 import {
   APP,
   againstPolicy,
+  againstPolicyBeginning,
   BROWSER,
   becomeAScreen,
   cookieOf,
@@ -769,6 +770,18 @@ const saidTo = (port, bytes, ms = 2500) =>
 const PAGE_MAY = ['allow-scripts', 'allow-forms', 'allow-modals', 'allow-popups', 'allow-popups-to-escape-sandbox', 'allow-downloads', 'allow-pointer-lock']
 /** The whole policy every answer from where pages are shown carries, for a site reached at this address: the box a page is kept in, and that only that site may frame it. */
 const pagesPolicy = (site) => ({ sandbox: PAGE_MAY, 'frame-ancestors': [site] })
+/** The hosts of the players and maps the site hosts over a page, each named exactly and over https: It's fixed list of them. */
+const PLAYERS = [
+  'https://www.youtube.com',
+  'https://www.youtube-nocookie.com',
+  'https://player.vimeo.com',
+  'https://open.spotify.com',
+  'https://w.soundcloud.com',
+  'https://www.google.com',
+  'https://maps.google.com',
+  'https://www.openstreetmap.org',
+  'https://player.twitch.tv',
+]
 /** The whole policy every answer of the site carries, for a site reached at this address whose pages are shown at that one. */
 const sitePolicy = (site, pages) => ({
   'default-src': ["'self'"],
@@ -776,7 +789,7 @@ const sitePolicy = (site, pages) => ({
   'style-src': ["'self'"],
   'img-src': ["'self'"],
   'connect-src': ["'self'", site.replace(/^http/, 'ws')],
-  'frame-src': [pages],
+  'frame-src': [pages, ...PLAYERS],
   'worker-src': ["'self'"],
   'manifest-src': ["'self'"],
   'object-src': ["'none'"],
@@ -1935,7 +1948,8 @@ try {
     one,
     [
       {
-        says: againstPolicy(`Framing '${out}/'`, `frame-src ${pages}`),
+        // The pages' port comes first in what the site frames, and the players' hosts follow it
+        says: againstPolicyBeginning(`Framing '${out}/'`, `frame-src ${pages}`),
         because: 'a link inside a closed shadow root declared in markup took the page’s frame to another site',
       },
     ],
@@ -2402,6 +2416,193 @@ try {
     'Escape in the box closes it, and does not leave the page',
     (await page.locator('.page-talk-box').count()) === 0 && new URL(page.url()).pathname === `/p/${slug}`,
   )
+
+  // ------------------------------------------------------------------
+  section('Players and maps a page embeds')
+  // A page that frames a player as any page writes one, and asks It for another over a place in
+  // a box that scrolls (e2e/fixtures/embeds). A page is shown in a sandbox, where a player has no
+  // origin and no storage, so the site frames each one itself, from its own origin, over the
+  // page. Both addresses are on It's fixed list, at real providers' hosts: this browser alone has
+  // each request for them answered by a stand-in player of the run's own, which notes how it was
+  // asked and what it is sent, and answers what it is posted. Nothing of It is changed for that.
+  const pslug = `${slug}-players`
+  await it(A, ['create', marked('Players'), '--id', pslug, '--dir', path.join(root, 'e2e/fixtures/embeds')])
+  const STAND_IN = `<!doctype html><title>A stand-in player</title><style>html,body{margin:0;height:100%;background:#123}</style><script>
+window.clicks = 0
+let kept = 'no storage'
+try { localStorage.setItem('kept', 'yes'); kept = localStorage.getItem('kept') } catch {}
+window.seen = { origin: location.origin, referrer: document.referrer, kept }
+addEventListener('click', () => window.clicks++)
+addEventListener('message', (e) => { window.got = { data: e.data, origin: e.origin }; e.source.postMessage({ answer: e.data }, e.origin) })
+</script>`
+  const PLAYED = /^https:\/\/(www\.youtube\.com\/embed\/stand-in|player\.vimeo\.com\/video\/1)(\?|$)/
+  const standInAsked = []
+  const standIn = (route) => {
+    standInAsked.push({ url: route.request().url(), referer: route.request().headers().referer ?? '' })
+    // A request the page's own frame began before It took the frame up may be gone by now
+    route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: STAND_IN }).catch(() => {})
+  }
+  await one.context.route(PLAYED, standIn)
+  const watching = await one.context.newPage()
+  try {
+    await watching.goto(`${APP}/p/${pslug}`)
+    await pageIn(watching, { id: pslug })
+    const inPlayers = (fn, arg) => frameOf(watching).evaluate(fn, arg)
+    const hosted = watching.locator('.mount > .embeds iframe')
+    const placed = watching.locator('.mount > .embeds .embed')
+    const YOUTUBE = 'https://www.youtube.com/embed/stand-in'
+    /** The stand-in player the site framed at an address, to be read from inside. */
+    const playerAt = (start) => watching.frames().find((f) => f.parentFrame() === watching.mainFrame() && f.url().startsWith(start))
+    await until(async () => (await hosted.count()) === 2 && playerAt(YOUTUBE) && playerAt('https://player.vimeo.com/'), 20_000)
+    const taken = await inPlayers(() => ({
+      srcdoc: document.getElementById('film').getAttribute('srcdoc'),
+      src: document.getElementById('film').getAttribute('src'),
+    }))
+    const framedAs = await hosted.evaluateAll((fs) =>
+      fs.map((f) => ({ src: f.src, referrer: f.getAttribute('referrerpolicy'), allow: f.getAttribute('allow'), sandbox: f.getAttribute('sandbox') ?? '' })),
+    )
+    check(
+      'a frame a page writes for a player on It’s list keeps its place with an empty document of its own, and the site frames the player over it, with what only the site knows put into its address',
+      taken.srcdoc === '' &&
+        taken.src === `${YOUTUBE}?enablejsapi=1` &&
+        JSON.stringify(framedAs.map((f) => f.src)) ===
+          JSON.stringify([`${YOUTUBE}?enablejsapi=1&origin=${encodeURIComponent(APP)}`, 'https://player.vimeo.com/video/1']) &&
+        framedAs.every(
+          (f) =>
+            f.referrer === 'strict-origin' &&
+            f.allow === 'autoplay; encrypted-media; fullscreen; picture-in-picture' &&
+            f.sandbox.split(' ').includes('allow-same-origin') &&
+            !f.sandbox.includes('allow-top-navigation'),
+        ),
+      JSON.stringify({ taken, framedAs }),
+    )
+    const seen = await playerAt(YOUTUBE).evaluate(() => window.seen)
+    const askedBySite = standInAsked.filter((a) => a.referer !== '')
+    check(
+      'the player runs at its own origin, with storage of its own, and is told the site’s origin as where it is shown, and nothing of the page’s address',
+      seen?.origin === 'https://www.youtube.com' &&
+        seen.kept === 'yes' &&
+        seen.referrer === `${APP}/` &&
+        askedBySite.length >= 2 &&
+        askedBySite.every((a) => a.referer === `${APP}/`),
+      JSON.stringify({ seen, asked: standInAsked.map((a) => a.referer) }),
+    )
+    /** How far, in pixels, a hosted frame is from its place in the page, at whichever edge is furthest. */
+    const offBy = async (id, which) => {
+      const frameBox = await watching.locator('.mount > iframe').boundingBox()
+      const slot = await inPlayers((one) => {
+        const r = document.getElementById(one).getBoundingClientRect()
+        return { x: r.x, y: r.y, width: r.width, height: r.height }
+      }, id)
+      const box = await hosted.nth(which).boundingBox()
+      if (!frameBox || !box) return Number.POSITIVE_INFINITY
+      return Math.max(
+        Math.abs(frameBox.x + slot.x - box.x),
+        Math.abs(frameBox.y + slot.y - box.y),
+        Math.abs(slot.width - box.width),
+        Math.abs(slot.height - box.height),
+      )
+    }
+    /** How much of a hosted frame is cut off, at top, right, bottom and left, and whether it is to be seen. */
+    const cutOf = (which) =>
+      placed.nth(which).evaluate((box) => {
+        const n = (/inset\(([^)]*)\)/.exec(box.style.clipPath)?.[1] ?? '').split(/\s+/).map((v) => Number.parseFloat(v))
+        const [t, r = t, b = t, l = r] = n
+        return { cut: [t, r, b, l], seen: box.style.visibility !== 'hidden' }
+      })
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+    const atRest = await until(async () => (await offBy('film', 0)) < 1 && (await offBy('map', 1)) < 1)
+    check('each player lies exactly over its place in the page', atRest, JSON.stringify([await offBy('film', 0), await offBy('map', 1)]))
+    await inPlayers(() => scrollTo(0, 100))
+    const scrolled = await until(async () => (await offBy('film', 0)) < 1 && same(await cutOf(0), { cut: [60, 0, 0, 0], seen: true }))
+    check(
+      'it goes with the page as the page scrolls, and is cut where the window cuts its place',
+      scrolled,
+      JSON.stringify([await offBy('film', 0), await cutOf(0)]),
+    )
+    await inPlayers(() => scrollTo(0, 0))
+    const inBox = await until(async () => same(await cutOf(1), { cut: [0, 0, 120, 0], seen: true }))
+    await inPlayers(() => {
+      document.getElementById('box').scrollTop = 50
+    })
+    const boxScrolled = await until(async () => (await offBy('map', 1)) < 1 && same(await cutOf(1), { cut: [0, 0, 70, 0], seen: true }))
+    await inPlayers(() => {
+      document.getElementById('box').scrollTop = 300
+    })
+    const scrolledOut = await until(async () => !(await cutOf(1)).seen)
+    check(
+      'and cut where a box of the page that scrolls cuts it, and hidden once none of its place can be seen there',
+      inBox && boxScrolled && scrolledOut,
+      JSON.stringify(await cutOf(1)),
+    )
+    await inPlayers(() => {
+      document.getElementById('film').style.visibility = 'hidden'
+    })
+    const hidden = await until(async () => !(await cutOf(0)).seen)
+    await inPlayers(() => {
+      document.getElementById('film').style.visibility = ''
+    })
+    check('a player is hidden while its place is hidden, and shown again with it', hidden && (await until(async () => (await cutOf(0)).seen)))
+    // A click that lands just after a player appeared or moved is taken by a shield, so that a
+    // page cannot slide a player under a click that was about to land on the page. The site's
+    // shield is counted from the site's side, and the player counts what reaches it
+    await watching.evaluate(() => {
+      window.shielded = 0
+      document.querySelector('.mount > .embeds').addEventListener('click', (e) => e.target.classList.contains('embed-shield') && window.shielded++, true)
+    })
+    const clicks = () => playerAt(YOUTUBE).evaluate(() => window.clicks)
+    let shielded = 0
+    let leaked = 0
+    for (let tries = 0, y = 30; tries < 4 && shielded === 0; tries++, y += 10) {
+      await inPlayers((to) => scrollTo(0, to), y)
+      await until(() => watching.locator('.embed-shield').first().isVisible(), 2000, 10)
+      const box = await hosted.nth(0).boundingBox()
+      await watching.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+      shielded = await watching.evaluate(() => window.shielded)
+      leaked = await clicks()
+      if (shielded === 0) await watching.waitForTimeout(1000)
+    }
+    // Once it has been still for a moment, a click reaches it
+    await watching.waitForTimeout(1000)
+    const still = await hosted.nth(0).boundingBox()
+    await watching.mouse.click(still.x + still.width / 2, still.y + still.height / 2)
+    const reached = await until(async () => (await clicks()) === leaked + 1, 5000)
+    check(
+      'a click that lands just after a player appeared or moved goes to nobody, and one made once it has been still for a moment reaches it',
+      shielded === 1 && leaked === 0 && reached && (await watching.evaluate(() => window.shielded)) === 1,
+      JSON.stringify({ shielded, leaked, reachedIt: await clicks() }),
+    )
+    // What the page posts reaches the player, which knows it came from the site, and the
+    // player's answer comes back to the page
+    await inPlayers((mark) => window.player.post(`${mark}ping`), PRIVATE_MARK)
+    const got = await until(() => playerAt(YOUTUBE).evaluate(() => window.got))
+    const answered = await until(() => inPlayers(() => (window.heard.length > 0 ? { heard: window.heard, loads: window.loads } : null)))
+    check(
+      'what a page posts to its player reaches it from the site’s origin, and the player’s answer comes back to the page, once the page has been told the player loaded',
+      got?.data === `${PRIVATE_MARK}ping` && got.origin === APP && answered?.heard[0]?.answer === `${PRIVATE_MARK}ping` && answered.loads >= 1,
+      JSON.stringify({ got, answered }),
+    )
+    // A player goes with its place, and all of them go with the page's document: another
+    // document of the page asks for its own, and the old ones are not left behind
+    await inPlayers(() => document.getElementById('film').remove())
+    const wentWithIt = await until(async () => (await hosted.count()) === 1)
+    await inPlayers(() => location.reload())
+    await until(async () => (await inPlayers(() => document.getElementById('film') !== null).catch(() => false)) === true, 20_000)
+    const again = await until(async () => {
+      const srcs = await hosted.evaluateAll((fs) => fs.map((f) => f.src))
+      return srcs.length === 2 && srcs[1] === 'https://player.vimeo.com/video/1' ? srcs : null
+    }, 20_000)
+    check(
+      'a player goes when its place leaves the page, and every one goes with the page’s document, before the next document asks for its own',
+      wentWithIt && again !== undefined && (await hosted.count()) === 2,
+      JSON.stringify(again),
+    )
+  } finally {
+    await watching.close()
+    // The page goes before the stand-in does, so that no card's picture of it later asks the real host for the stand-in's address
+    await it(A, ['delete', pslug]).catch(() => {})
+    await one.context.unroute(PLAYED, standIn)
+  }
 
   // ------------------------------------------------------------------
   section('Files sent with actions')
@@ -3358,7 +3559,7 @@ try {
     await plain(`${APP}/assets/nothing-there.js`),
   ]
   check(
-    'the site is served saying what it may load, whole: its own files and nothing else, no script written into a page or made from text, no plug-in, no base address and no form sent anywhere, a frame only for where pages are shown, a connection only to itself, and that nothing may frame it',
+    'the site is served saying what it may load, whole: its own files and nothing else, no script written into a page or made from text, no plug-in, no base address and no form sent anywhere, a frame only for where pages are shown and for the players and maps on It’s list, a connection only to itself, and that nothing may frame it',
     saysExactly(front.headers['content-security-policy'], sitePolicy(APP, pages)) &&
       otherAnswers.every((r) => saysExactly(r.headers['content-security-policy'], sitePolicy(APP, pages))),
     JSON.stringify(toldOf([front, ...otherAnswers])),
@@ -3388,7 +3589,11 @@ try {
       says: againstPolicy(`Loading the image '${anotherOne.origin}/picture.png'`, `img-src ${itsOwn}`),
       because: 'the site’s document asked another site for a picture',
     },
-    { says: againstPolicy(`Framing '${anotherOne.origin}/'`, `frame-src ${pages}`), because: 'the site’s document framed another site' },
+    {
+      // The rule names the players' hosts after the pages' port, and is longer than what is kept of the browser's words
+      says: againstPolicyBeginning(`Framing '${anotherOne.origin}/'`, `frame-src ${[pages, ...PLAYERS.slice(0, 3)].join(' ')}`),
+      because: 'the site’s document framed another site',
+    },
     {
       says: againstPolicy(`Connecting to '${anotherOne.origin}/answer'`, `connect-src ${itsOwn} ${APP.replace(/^http/, 'ws')}`),
       because: 'the site’s document asked another site for an answer',

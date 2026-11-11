@@ -27,10 +27,12 @@ import {
   SANDBOX,
   type SiteToPage,
   STORE_EVERY_MS,
+  WHO_MS,
 } from '@it/protocol'
 import { useConvex } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { askTwice } from './backend'
+import { EmbedLayer } from './embeds'
 import { enterFullscreen, fullscreenAvailable, fullscreenJustLeft, fullscreenOn, leaveFullscreen, NOT_FULLSCREEN, onFullscreenChange } from './fullscreen'
 import { api, displayKey, type Id, note, refusal } from './lib'
 import { useLiveState } from './live'
@@ -55,7 +57,7 @@ import {
   type Why,
   whileTheBrowserAsks,
 } from './media'
-import { type Sent, submit } from './outbox'
+import { onItsWay, outcomeOf, type Sent, settled, submit } from './outbox'
 import { reportPage } from './presence'
 
 type Phase = { is: 'loading' } | { is: 'shown' } | { is: 'failed'; why: string }
@@ -135,6 +137,8 @@ export function Mount({
 }) {
   const convex = useConvex()
   const frame = useRef<HTMLIFrameElement>(null)
+  /** The layer over the page's frame that players and maps from the providers on It's list are hosted in. */
+  const layer = useRef<HTMLDivElement>(null)
   const [attempt, setAttempt] = useState(0)
   const [mount, setMount] = useState<{ address: string; mountId: string; version: number } | null>(null)
   const [phase, setPhase] = useState<Phase>({ is: 'loading' })
@@ -269,6 +273,14 @@ export function Mount({
       }
     }
     const toPage = (to: MessagePort, message: SiteToPage) => to.postMessage(message)
+    // The players and maps of the document the frame shows now, which go when it does
+    const embeds = layer.current
+      ? new EmbedLayer(
+          layer.current,
+          () => frame.current,
+          (message) => port.current && toPage(port.current, message),
+        )
+      : null
 
     // The microphone and the camera (media.ts). The site records for the page, one thing at a
     // time, when the page calls for it, and only once the person at this screen has allowed it.
@@ -587,6 +599,68 @@ export function Mount({
       storeTokens -= 1
       return 0
     }
+    // Every action this showing was sent, by the id the page gave it, with what became of it: on
+    // its way, with the channel waiting to be told; left in the browser's outbox, to be sent from
+    // there; accepted; refused; or ended with that not known here. A document that lost its channel
+    // sends each action that was on its way again over its next one, as it was and marked as sent
+    // again. That is never sent to It from here, under any deadline: it is the same action, and is
+    // only told what became of the one already sent. It waits for one on its way, or for the outbox
+    // to be done with it, and is told the action accepted or why it was refused; and where what
+    // became of it is not known here, it is told so. None of it costs the page what new actions
+    // cost it, since none of it is new. An action sent again that this showing does not know, as
+    // one whose channel closed before it arrived, or one sent under another showing, is told that
+    // It cannot tell whether it was done, and nothing is sent for it: whatever sent it first may
+    // have sent it, and only the person can tell.
+    type Known =
+      | { is: 'going'; waiting: MessagePort; done: Promise<{ actionId: string }> }
+      | { is: 'outbox' }
+      | { is: 'accepted'; actionId: string }
+      | { is: 'refused'; error: string }
+      /** With what It said, for a refusal for now, to the page waiting on it then, and only to that page. */
+      | { is: 'unsure'; now?: string }
+    const ledger = new Map<string, Known>()
+    /** Whether the ledger has let go of an action, having been sent more than it keeps: an action sent again that it does not know may then be one of those. */
+    let forgot = false
+    const LEDGER_MOST = 5000
+    const UNKNOWN =
+      'It cannot tell whether this was done: the page lost its channel to It while it was on its way, and what became of it is not known here. Check what your agent received before sending it again.'
+    const noted = (id: string, known: Known) => {
+      ledger.delete(id)
+      ledger.set(id, known)
+      if (ledger.size <= LEDGER_MOST) return
+      const oldest = ledger.keys().next().value
+      if (oldest !== undefined) ledger.delete(oldest)
+      forgot = true
+    }
+    /** What became of an action this showing already has, for a page that sent it again. Nothing is sent to It for it. */
+    const whatBecameOf = async (id: string, from: MessagePort): Promise<{ actionId: string }> => {
+      for (;;) {
+        const known = ledger.get(id)
+        if (!known || known.is === 'unsure') throw new Error(UNKNOWN)
+        if (known.is === 'accepted') return { actionId: known.actionId }
+        if (known.is === 'refused') throw new Error(known.error)
+        if (known.is === 'going') {
+          // Told what becomes of the one on its way, over this channel now
+          known.waiting = from
+          try {
+            return await known.done
+          } catch {
+            // What became of it is in the ledger by now. A refusal for now is told to this page, which
+            // was waiting on it, as it would have been to the page that sent it
+            const after = ledger.get(id)
+            if (after === known) throw new Error(UNKNOWN)
+            if (after?.is === 'unsure' && after.now) throw new Error(after.now)
+            continue
+          }
+        }
+        // Left in the outbox, which sends it under the deadline it was first given: waited for while it holds it
+        while (live && onItsWay(user, artifactId, id)) await new Promise((resolve) => setTimeout(resolve, 1000))
+        if (!live) throw new Error(UNKNOWN)
+        if (ledger.get(id) !== known) continue
+        const how = outcomeOf(user, artifactId, id)
+        noted(id, how === undefined ? { is: 'unsure' } : 'actionId' in how ? { is: 'accepted', actionId: how.actionId } : { is: 'refused', error: how.refused })
+      }
+    }
     /** Shows the page again, but not in a loop: one shown again so soon after the last time is shown again when that while has passed. */
     const showAgain = () => {
       const remount = () => {
@@ -598,7 +672,9 @@ export function Mount({
       else later ??= setTimeout(remount, wait)
     }
     const fromPage = async (from: MessagePort, message: PageToSite) => {
-      if (!message || typeof message !== 'object') return
+      // Only the channel of the document the frame shows now is heard: one whose document is gone was closed, and nothing on it is taken
+      if (!message || typeof message !== 'object' || from !== port.current) return
+      if (embeds?.take(message)) return
       if (message.type === 'it:lapsed') {
         // The page's showing is over. Show it again. It is not let go by, since a document says
         // that its showing is over only once, and the page would stay as it is with nothing
@@ -675,7 +751,12 @@ export function Mount({
         }
       }
       try {
-        if (message.type === 'it:action' && !allowed()) throw new Error('This page is sending too much at once. Try again in a moment.')
+        // An action the page sends again is not new, and is never refused for coming too fast
+        const known =
+          message.type === 'it:action' ? ledger.get(typeof message.envelope?.clientActionId === 'string' ? message.envelope.clientActionId : '') : undefined
+        const again = message.type === 'it:action' && message.again === true
+        if (message.type === 'it:action' && !known && !(again && forgot) && !allowed())
+          throw new Error('This page is sending too much at once. Try again in a moment.')
         if (message.type === 'it:action') {
           const e = message.envelope
           // The name of what a person types above a page is the site's own, and no page's to send under
@@ -696,8 +777,38 @@ export function Mount({
             ...(typeof e.baseStateRevision === 'number' ? { baseStateRevision: e.baseStateRevision } : {}),
             attended: was === true,
           }
-          // The document that sent it is still there only while its own channel is the one in use
-          const done = await submit(convex, user, artifactId, envelope, () => live && port.current === from, typeof was === 'function' ? was : undefined, files)
+          const id = envelope.clientActionId
+          let done: { actionId: string }
+          if (known || again) done = await whatBecameOf(id, from)
+          else {
+            const one: Known & { is: 'going' } = { is: 'going', waiting: from, done: Promise.resolve({ actionId: '' }) }
+            // The document that sent it is there to be told only while the channel waiting for its answer is the one in use
+            const there = () => live && port.current !== null && one.waiting === port.current
+            one.done = (async () => {
+              try {
+                const accepted = await submit(convex, user, artifactId, envelope, there, typeof was === 'function' ? was : undefined, files)
+                if (ledger.get(id) === one) noted(id, { is: 'accepted', actionId: accepted.actionId })
+                return accepted
+              } catch (err) {
+                // Kept in the outbox, which sends it again by itself; or refused by It for good, and not to be sent
+                // again by anyone; or neither, as for a refusal for now that the page was there to be told of,
+                // and what became of it is not known here to anyone who asks again
+                const answered = err instanceof Error && 'data' in err
+                if (ledger.get(id) === one)
+                  noted(
+                    id,
+                    onItsWay(user, artifactId, id)
+                      ? { is: 'outbox' }
+                      : settled(err)
+                        ? { is: 'refused', error: refusal(err).message }
+                        : { is: 'unsure', ...(answered ? { now: refusal(err).message } : {}) },
+                  )
+                throw err
+              }
+            })()
+            noted(id, one)
+            done = await one.done
+          }
           toPage(from, { type: 'it:result', requestId, ok: true, actionId: done.actionId })
         } else {
           // The same rules the backend keeps, kept here so that nothing long is sent only to be refused.
@@ -733,6 +844,56 @@ export function Mount({
           ...(said.code === 'rate_limited' && typeof said.retryAfterMs === 'number' ? { retryAfterMs: said.retryAfterMs } : {}),
         })
       }
+    }
+
+    // Which document the frame shows. Neither a hello nor holding the channel says that: a page can
+    // say hello for a name of its choosing, hand its channel to another window, and then take its
+    // frame to a document that says nothing, as `about:blank` is. So each time a document has
+    // loaded in the frame, which the site hears from the frame itself whatever the document is,
+    // the frame's own window is asked whether it holds the document the channel was made for,
+    // with a value made for that asking. Only that window can be answered from, and only a
+    // document there can have been asked. Until it answers, no click reaches a player.
+    let asking: { nonce: string; timer: ReturnType<typeof setTimeout> } | null = null
+    /**
+     * The document the channel was made for is gone. Its channel is closed, so that whatever holds
+     * the other end now is heard no more, and everything it began here ends with it: its players
+     * and maps, and what it asked of the microphone and the camera or began with them. This is the
+     * one place that ends what a document began, whether it was replaced by one that said hello or
+     * by one that did not answer.
+     */
+    const documentGone = () => {
+      port.current?.close()
+      port.current = null
+      embeds?.clear()
+      // And what it asked of the microphone and the camera, or began with them: the next document asks for itself
+      docs += 1
+      if (question) {
+        letGo = question
+        question.cancel()
+      }
+      photo?.cancel()
+      recording?.end('not_shown')
+      recording = null
+      // And its camera closes now, and not at a picture that a page which stopped drawing would never be sent
+      camera?.end('not_shown')
+    }
+    const askWho = () => {
+      const inside = frame.current?.contentWindow
+      if (!inside) return
+      clearTimeout(asking?.timer)
+      const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('')
+      embeds?.hold()
+      asking = {
+        nonce,
+        timer: setTimeout(() => {
+          asking = null
+          documentGone()
+          embeds?.release()
+          // A document of It's that was only slow to answer asks for a channel again when it hears this
+          frame.current?.contentWindow?.postMessage({ type: 'it:gone' }, '*')
+        }, WHO_MS),
+      }
+      inside.postMessage({ type: 'it:who', nonce }, '*')
     }
 
     const onMessage = (e: MessageEvent) => {
@@ -798,6 +959,15 @@ export function Mount({
         )
         return
       }
+      if (type === 'it:here') {
+        const said = e.data as { nonce?: unknown; doc?: unknown }
+        if (asking && said.nonce === asking.nonce && typeof said.doc === 'string' && said.doc === answered && port.current) {
+          clearTimeout(asking.timer)
+          asking = null
+          embeds?.release()
+        }
+        return
+      }
       if (type === 'it:hello') {
         if (!ready) {
           // The page's own script is running: the page is there to be seen
@@ -815,31 +985,25 @@ export function Mount({
         if (!doc || doc === answered) return
         if (!allowed()) return
         answered = doc
-        docs += 1
-        // What the document before asked for, or began, is that document's: it is let go, and the new one asks for itself
-        if (question) {
-          letGo = question
-          question.cancel()
-        }
-        photo?.cancel()
-        recording?.end('not_shown')
-        recording = null
-        // And its camera closes now, and not at a picture that a page which stopped drawing would never be sent
-        camera?.end('not_shown')
-        port.current?.close()
+        documentGone()
         const channel = new MessageChannel()
         port.current = channel.port1
         channel.port1.onmessage = (m) => void fromPage(channel.port1, m.data as PageToSite)
         // Sent to whatever document the page has put in its frame. The channel is for this one
         // showing, and gives a document there nothing the page did not already have.
-        ;(e.source as Window).postMessage({ type: 'it:port', v: CHANNEL_VERSION }, '*', [channel.port2])
+        ;(e.source as Window).postMessage({ type: 'it:port', v: CHANNEL_VERSION, embeds: embeds !== null }, '*', [channel.port2])
         const whole = liveState.whole()
         if (whole) toPage(channel.port1, whole)
+        // A document that says hello while the frame is being asked is there to be asked again, as the one this channel is for
+        if (asking) askWho()
         // And whether It is fullscreen, which also tells the page that the site takes its asking for it
         toPage(channel.port1, fullscreenSaid())
       }
     }
     window.addEventListener('message', onMessage)
+
+    const shown = frame.current
+    shown?.addEventListener('load', askWho)
     // The page's frame taken to another site by a way the script in the page cannot see, such as
     // a link inside a closed shadow root that the page's own markup declares. The browser refuses
     // it, since the frame may show only the pages' port, and in Chromium leaves its error page in
@@ -885,6 +1049,9 @@ export function Mount({
       recording = null
       camera?.end('not_shown')
       camera = null
+      shown?.removeEventListener('load', askWho)
+      clearTimeout(asking?.timer)
+      embeds?.dispose()
       port.current?.close()
       port.current = null
     }
@@ -935,6 +1102,7 @@ export function Mount({
           data-shown={phase.is === 'shown'}
         />
       )}
+      <div className="embeds" ref={layer} />
       {phase.is === 'loading' && (
         <div className="mount-note" role="status">
           Opening…

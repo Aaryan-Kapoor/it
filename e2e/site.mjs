@@ -373,6 +373,12 @@ export const mayNotLeave = (tab) => new RegExp(`^Unsafe attempt to initiate navi
  */
 export const againstPolicy = (tried, directive) =>
   new RegExp(`^${literally(tried)} violates the following Content Security Policy directive\\b.*?["']${literally(directive)}["']`)
+/**
+ * The same, for a directive longer than what is kept of a browser's words: by how the directive
+ * begins, which is as much of it as is kept.
+ */
+export const againstPolicyBeginning = (tried, directive) =>
+  new RegExp(`^${literally(tried)} violates the following Content Security Policy directive\\b.*?["']${literally(directive)}`)
 /** For an answer a document asked another site for and its content policy forbids it to ask: by the address it asked. */
 export const notAsked = (asked) =>
   new RegExp(`^Fetch API cannot load ${literally(asked)}\\. Refused to connect because it violates the document's Content Security Policy\\.`)

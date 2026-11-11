@@ -15,7 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gunzipSync, gzipSync } from 'node:zlib'
-import { AUDIENCE, contentPort, SANDBOX, UPLOAD } from '@it/protocol'
+import { AUDIENCE, contentPort, EMBED_HOSTS, SANDBOX, UPLOAD } from '@it/protocol'
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
@@ -3249,12 +3249,25 @@ describe('The site', () => {
     }
   })
 
-  test('Every answer for the site says what the site may load: itself, its own live connection and the pages’ ports of the same machine, by the name it was reached by, and nothing written into a page', async () => {
+  test('Every answer for the site says what the site may load: itself, its own live connection, the pages’ ports of the same machine by the name it was reached by, the hosts of the players and maps it hosts over a page, and nothing written into a page', async () => {
     /** A policy taken apart: what each kind of thing may come from. */
     const parts = (policy: string) => Object.fromEntries(policy.split('; ').map((part) => [part.split(' ')[0]!, part.split(' ').slice(1)]))
+    /** The players and maps on It's list, each host named exactly and over https, and nothing more of the internet. */
+    const players = [
+      'https://www.youtube.com',
+      'https://www.youtube-nocookie.com',
+      'https://player.vimeo.com',
+      'https://open.spotify.com',
+      'https://w.soundcloud.com',
+      'https://www.google.com',
+      'https://maps.google.com',
+      'https://www.openstreetmap.org',
+      'https://player.twitch.tv',
+    ]
+    expect(EMBED_HOSTS.map((name) => `https://${name}`)).toEqual(players)
     // A policy cannot name an IPv6 address. Reached by one, the site may frame the pages' port of any host, and its own address covers its live connection
     const six = (name: string) => name.startsWith('[')
-    const pages = (name: string, base: number) => [`http://${six(name) ? '*' : name}:${contentPort(base)}`]
+    const pages = (name: string, base: number) => [`http://${six(name) ? '*' : name}:${contentPort(base)}`, ...players]
     // By the names this machine has for itself, and, where a test may turn the network on, by its host name and its addresses on a network as well
     const wide = await open(mayOpen)
     try {
@@ -3275,7 +3288,7 @@ describe('The site', () => {
               'img-src': ["'self'"],
               // Its own address, and its live connection there, which not every browser takes the first to cover
               'connect-src': six(name) ? ["'self'"] : ["'self'", `ws://${name}:${wide.base}`],
-              // A page being shown, on its own port of this same machine by this same name, and nothing else
+              // A page being shown, on its own port of this same machine by this same name, and the players and maps on It's list
               'frame-src': pages(name, wide.base),
               'worker-src': ["'self'"],
               'manifest-src': ["'self'"],
@@ -3292,9 +3305,13 @@ describe('The site', () => {
     } finally {
       await wide.stop()
     }
-    // Nowhere does it let a page's own script or style run, or anything be read as script
+    // Nowhere does it let a page's own script or style run, or anything be read as script, and
+    // nothing of the internet is named but the players' hosts, as what may be framed
     const policy = (await ask(door.base)).headers['content-security-policy']!
-    expect(policy).not.toMatch(/unsafe-inline|unsafe-eval|\*|data:|blob:|https?:\/\/(?!127\.0\.0\.1:)/)
+    const framing = parts(policy)['frame-src']!
+    expect(framing.slice(1)).toEqual(players)
+    const rest = policy.replace(players.map((p) => ` ${p}`).join(''), '')
+    expect(rest).not.toMatch(/unsafe-inline|unsafe-eval|\*|data:|blob:|https?:\/\/(?!127\.0\.0\.1:)/)
     // Reached on the port a browser leaves out of the name, the site frames the port after it and connects to its own
     const { answerSite } = await import('./src/serve/site')
     const said = (host: string) => parts(answerSite(siteStandIn, 'GET', '/', new Headers({ host })).headers.get('content-security-policy')!)
@@ -3314,7 +3331,7 @@ describe('The site', () => {
       ['tv.living_room.local:4700', 'http://*.local:4701', null],
       ['tv.living_room:4700', 'http://*:4701', null],
     ] as const)
-      expect([host, said(host)['frame-src'], said(host)['connect-src']]).toEqual([host, [frames], connects ? ["'self'", connects] : ["'self'"]])
+      expect([host, said(host)['frame-src'], said(host)['connect-src']]).toEqual([host, [frames, ...players], connects ? ["'self'", connects] : ["'self'"]])
     // What is no host gives no address to frame or to connect to
     for (const host of ['a b:1', 'x:1 ; script-src *', 'localhost:', ':80', 'localhost:123456', '[::1', 'http://localhost', ''])
       expect([host, said(host)['frame-src'], said(host)['connect-src'], said(host)['script-src']]).toEqual([host, ["'none'"], ["'self'"], ["'self'"]])
@@ -3712,7 +3729,10 @@ describe('Over https, through Tailscale on this machine', () => {
     const site = await answer(secure(), viaTailscale())
     expect(site.status).toBe(200)
     const said = policyOf(site.headers.get('content-security-policy'))
-    expect([said['frame-src'], said['connect-src']]).toEqual([[`https://${NAME}:${door.base + 3}`], ["'self'", `wss://${NAME}:${door.base + 2}`]])
+    expect([said['frame-src'], said['connect-src']]).toEqual([
+      [`https://${NAME}:${door.base + 3}`, ...EMBED_HOSTS.map((name) => `https://${name}`)],
+      ["'self'", `wss://${NAME}:${door.base + 2}`],
+    ])
     // Over https a window the site opens can do nothing to it, which a browser takes only from a secure site
     expect(site.headers.get('cross-origin-opener-policy')).toBe('same-origin')
     // Not where the settings say nothing of https, nor at another name, nor without Tailscale's word that it came over https
@@ -3726,7 +3746,7 @@ describe('Over https, through Tailscale on this machine', () => {
     expect((await answer(secure(), viaTailscale(), { address: '100.101.42.17' })).status).toBe(421)
     // The site as it always was, for this machine itself
     const plain = policyOf((await answer(secure(), { host: `localhost:${door.base}` })).headers.get('content-security-policy'))
-    expect(plain['frame-src']).toEqual([`http://localhost:${contentPort(door.base)}`])
+    expect(plain['frame-src']).toEqual([`http://localhost:${contentPort(door.base)}`, ...EMBED_HOSTS.map((name) => `https://${name}`)])
   })
 
   test('A page shown over https may be framed only by the site at its https address', async () => {

@@ -2,7 +2,7 @@
 // was built (packages/cli/site.mjs), and nothing is read from disk or fetched.
 import { createHash } from 'node:crypto'
 import { gunzipSync } from 'node:zlib'
-import { contentPort, policyHost } from '@it/protocol'
+import { contentPort, EMBED_HOSTS, policyHost } from '@it/protocol'
 import { SITE } from '../site.generated'
 
 /** One file of the site: its type and stored bytes in base64, compressed only when that is smaller. */
@@ -57,10 +57,12 @@ export function hostOf(header: string | null): { name: string; port: number } | 
  * a page of the site could bring in or reach anything else. Scripts, styles and everything
  * else come from the site itself, and no script or style written into a page is run. The site
  * talks to the door it came from, by request and by its live connection, which is named
- * outright since not every browser takes the site's own address to cover it. The only thing
- * framed is a page being shown, at its own port of the same machine. It is worked out from the
- * name the site was reached by, which is the name the browser will reach the rest by, with the
- * port it was reached on: the door has already held both to this machine's own.
+ * outright since not every browser takes the site's own address to cover it. What is framed is
+ * a page being shown, at its own port of the same machine, and the players and maps the site
+ * hosts over a page, from the hosts on It's list of them, each named exactly and over https.
+ * The pages' port is worked out from the name the site was reached by, which is the name the
+ * browser will reach the rest by, with the port it was reached on: the door has already held
+ * both to this machine's own. Where no page can be shown, nothing is framed at all.
  *
  * A policy can name a host only in letters, digits, dots and hyphens. An IPv6 address is none
  * of those, and neither is a machine's name with an underscore in it: no browser takes either
@@ -83,7 +85,7 @@ function policy(header: string | null, secure: boolean): string {
     "style-src 'self'",
     "img-src 'self'",
     `connect-src 'self'${host && said === host.name ? ` ${secure ? 'wss' : 'ws'}://${host.name}:${host.port}` : ''}`,
-    `frame-src ${host ? `${secure ? 'https' : 'http'}://${said}:${contentPort(host.port)}` : "'none'"}`,
+    `frame-src ${host ? [`${secure ? 'https' : 'http'}://${said}:${contentPort(host.port)}`, ...EMBED_HOSTS.map((name) => `https://${name}`)].join(' ') : "'none'"}`,
     "worker-src 'self'",
     "manifest-src 'self'",
     "object-src 'none'",

@@ -73,6 +73,8 @@ interface Entry {
   madeWithin?: number
   /** Its page has finished with it and left it here to be sent when it can be. */
   left?: boolean
+  /** Which sending of the click this is, made when a page sent it: what became of it is said only of that sending. */
+  sending?: string
   /**
    * Until when the tab that saved it is still sending it. That tab moves this forward every few
    * seconds for as long as it is; a tab that has gone stops, and the time runs out. Until it
@@ -540,7 +542,8 @@ const notNow = (err: unknown) => ['rate_limited', 'limit'].includes(refusal(err)
 const waitFor = (err: unknown) =>
   Math.max(250, Number((refusal(err) as { retryAfterMs?: number }).retryAfterMs ?? (refusal(err).code === 'limit' ? 30_000 : 1000)))
 /** A refusal that will be the same however often the click is sent again. */
-const settled = (err: unknown) => ['invalid', 'not_found', 'conflict'].includes(refusal(err).code)
+/** Whether a refusal is for good: the same however often it is asked again. */
+export const settled = (err: unknown) => ['invalid', 'not_found', 'conflict'].includes(refusal(err).code)
 
 // The clicks this tab is sending this very moment. The sending of what was left over passes
 // them by: a click is one request at a time, so that what its page is told is what became of it.
@@ -596,6 +599,8 @@ export function outboxBelongsTo(user: string | null, under: string | null = null
   const replaced = user !== pairedFor || under !== session
   if (replaced) {
     memoryGrants.clear()
+    // Nor what became of clicks sent under another pairing, or another session of the same person's
+    finals.clear()
     pairings++
     // Nor what was given up under another pairing: only this one's is said from now on
     if (user !== null) tidyGivenUp({ user, session: under })
@@ -721,9 +726,76 @@ whenLetGo((person, whole) => {
     retry.delete(user)
   }
   for (const key of [...unkept.keys()]) if (whole || (person !== null && key.startsWith(`${person}.`))) unkept.delete(key)
+  // And what became of clicks sent under that pairing: nothing said of a click is said under another
+  for (const key of [...finals.keys()]) if (whole || (person !== null && key.startsWith(`${PREFIX}${person}.`))) finals.delete(key)
   discardPending(whole ? undefined : (person ?? undefined))
   changed()
 })
+
+/**
+ * How each click this tab sent from what was kept here came to an end, by its key: accepted, as
+ * the action It made of it, or refused for good, with why. A page whose channel was lost while its
+ * click was on its way asks for this once the click has gone from here, and is told it. Only so
+ * many are remembered, the latest. Each is of one sending: a new sending under the same key, and a
+ * new pairing, take it away, so that it is never told of another.
+ */
+const finals = new Map<string, { how: { actionId: string } | { refused: string }; sending: string | undefined }>()
+const FINALS_MOST = 1000
+/**
+ * The latest sending of each key that a page of this tab began, by a name made for it that no
+ * other sending has: what became of a click is said only where it was that sending. A sending of
+ * what was kept before, which ends after a page began a new one, perhaps waiting on its lock all
+ * the while, is of the entry it read, and says nothing of the new one. Where the latest is not
+ * known here any more, nothing is said.
+ */
+const latest = new Map<string, string>()
+const LATEST_MOST = 5000
+function newSending(key: string): string {
+  const name = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('')
+  latest.delete(key)
+  latest.set(key, name)
+  if (latest.size > LATEST_MOST) {
+    const oldest = latest.keys().next().value
+    if (oldest !== undefined) latest.delete(oldest)
+  }
+  return name
+}
+function ended(key: string, how: { actionId: string } | { refused: string }, sending: string | undefined): void {
+  finals.delete(key)
+  finals.set(key, { how, sending })
+  if (finals.size > FINALS_MOST) {
+    const oldest = finals.keys().next().value
+    if (oldest !== undefined) finals.delete(oldest)
+  }
+}
+/** How a click that was kept here came to an end, where this tab sent it as the latest sending a page of this tab began: nothing where that is not known here. */
+export function outcomeOf(user: string, artifactId: string, clientActionId: string): { actionId: string } | { refused: string } | undefined {
+  const key = keyOf(user, artifactId, clientActionId)
+  const now = latest.get(key)
+  const said = finals.get(key)
+  return now !== undefined && said?.sending === now ? said.how : undefined
+}
+
+/**
+ * Whether a click is still on its way from this browser: being sent by some tab, or kept here to
+ * be sent. It is known by the id its page gave it, which is what It knows it by too.
+ */
+export function onItsWay(user: string, artifactId: string, clientActionId: string): boolean {
+  const key = keyOf(user, artifactId, clientActionId)
+  if (sending.has(key)) return true
+  try {
+    const raw = localStorage.getItem(key)
+    if (raw === null) return false
+    // One kept only to say that it was refused for good is not on its way: nobody sends it again
+    try {
+      return !(JSON.parse(raw) as Partial<Entry>).refused
+    } catch {
+      return true
+    }
+  } catch {
+    return false
+  }
+}
 
 /**
  * Saves, sends, and resolves once It has accepted the click. Throws with a message for the
@@ -772,12 +844,15 @@ export async function submit(
   if (!Number.isInteger(envelope.contentVersion) || (envelope.baseStateRevision !== undefined && !Number.isInteger(envelope.baseStateRevision)))
     throw new Error('That is not an action this page can send.')
   const key = keyOf(user, artifactId, envelope.clientActionId)
+  // What became of an earlier sending under this key was of that sending, and not of this one, nor is what becomes of one still going
+  finals.delete(key)
+  const which = newSending(key)
   const shared = locks()
   const pairing = thisPairing()
   const release = holdPending(user)
   const work = () => {
     if (!stillPairedFor(user, pairing)) throw new Error('This browser’s pairing has ended.')
-    return sendNow(convex, user, artifactId, envelope, key, made, stillThere, judge, undefined, files)
+    return sendNow(convex, user, artifactId, envelope, key, made, stillThere, judge, undefined, files, which)
   }
   // Waiting for another tab's lock remains pending work under the original pairing.
   try {
@@ -799,6 +874,8 @@ async function sendNow(
   judge?: () => Promise<boolean>,
   operation?: Operation,
   files: Blob[] = [],
+  /** Which sending this is, where a page sent it: written on what is kept, whether new or kept from before. */
+  which?: string,
 ): Promise<{ actionId: string | null }> {
   const pairing = thisPairing()
   const mine = () => stillPairedFor(user, pairing)
@@ -826,6 +903,8 @@ async function sendNow(
     ...(what ? { files: what } : {}),
   }
   entry.held = Date.now() + HOLD_MS
+  // What is sent now is this sending, kept from before or not: what becomes of it is said of this one
+  if (which !== undefined) entry.sending = which
   // Too many already unsent means something is wrong, and one more would only push an older one
   // out. One page may hold only part of what the browser keeps, so it cannot crowd out the rest.
   const waiting = entries(user).filter(([saved]) => saved !== key)
@@ -1149,21 +1228,24 @@ async function replay(convex: ConvexReactClient, user: string, key: string): Pro
   }
   const release = holdPending(user)
   try {
-    await send(convex, entry, key)
+    const sent = (await send(convex, entry, key)) as { actionId?: unknown } | null
     // Removed only as the person who sent it: if the browser was paired for someone else
     // meanwhile, the answer was not about this person's click
     if (!mine()) return 'stop'
     drop(key)
+    if (typeof sent?.actionId === 'string') ended(key, { actionId: sent.actionId }, entry.sending)
     return 'done'
   } catch (err) {
     if (!mine()) return 'stop'
     if (settled(err)) {
       note('a saved request was refused for good', refusal(err).code)
-      if (entry.operation?.kind === 'message' || (entry.format !== 2 && refusal(err).code === 'conflict'))
+      if (entry.operation?.kind === 'message' || (entry.format !== 2 && refusal(err).code === 'conflict')) {
         put(key, JSON.stringify({ ...entry, refused: refusal(err).message, held: undefined }))
-      else {
+        ended(key, { refused: refusal(err).message }, entry.sending)
+      } else {
         forget(key)
         givenUp(entry)
+        ended(key, { refused: refusal(err).message }, entry.sending)
         changed()
       }
       return 'done'
