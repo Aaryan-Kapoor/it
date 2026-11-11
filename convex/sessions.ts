@@ -56,7 +56,7 @@ export const invitedBy = (from: InvitedBy): InvitedBy => ({
   ...(from.bySession ? { bySession: from.bySession } : {}),
 })
 
-async function invite(ctx: MutationCtx, c: Caller, role: Role): Promise<{ code: string; expiresAt: number }> {
+export async function invite(ctx: MutationCtx, c: Caller, role: Role, teammate?: Id<'teammates'>): Promise<{ code: string; expiresAt: number }> {
   const userId = c.user._id
   await rateLimit(ctx, 'invite', userId)
   const code = Array.from(crypto.getRandomValues(new Uint8Array(20)), (b) => ALPHABET[b & 31]).join('')
@@ -64,7 +64,15 @@ async function invite(ctx: MutationCtx, c: Caller, role: Role): Promise<{ code: 
   // A machine that asks is what the code descends from. A browser that asks hands on the
   // machine it descends from itself, and is named beside it.
   const by = c.kind === 'machine' ? { byMachine: c.machine._id } : invitedBy({ byMachine: c.session.byMachine, bySession: c.session._id })
-  await ctx.db.insert('invites', { userId, codeHash: await sha256(code), role, createdAt: now, expiresAt: now + CODE_MS, ...by })
+  await ctx.db.insert('invites', {
+    userId,
+    codeHash: await sha256(code),
+    role,
+    createdAt: now,
+    expiresAt: now + CODE_MS,
+    ...(teammate ? { teammate } : {}),
+    ...by,
+  })
   log('invite.made', { userId, role, by: c.kind })
   return { code, expiresAt: now + CODE_MS }
 }
@@ -527,6 +535,8 @@ export const _redeem = internalMutation({
       createdAt: now,
       lastSeenAt: now,
       cookieAt: now,
+      // A code made for a teammate makes the browser that teammate's, for as long as it is paired
+      ...(named.teammate ? { teammate: named.teammate } : {}),
       ...invitedBy(named),
     })
     log('session.begun', { userId: user._id, sessionId, role: named.role })

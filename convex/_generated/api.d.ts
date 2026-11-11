@@ -44,6 +44,7 @@ import type * as retention from "../retention.js";
 import type * as sessions from "../sessions.js";
 import type * as shared from "../shared.js";
 import type * as state from "../state.js";
+import type * as team from "../team.js";
 import type * as tour from "../tour.js";
 import type * as turns from "../turns.js";
 
@@ -90,6 +91,7 @@ declare const fullApi: ApiFromModules<{
   sessions: typeof sessions;
   shared: typeof shared;
   state: typeof state;
+  team: typeof team;
   tour: typeof tour;
   turns: typeof turns;
 }>;

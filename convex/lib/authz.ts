@@ -86,16 +86,33 @@ const others = (userId: Id<'users'>, what: string, record: { _id: string; userId
   if (record && record.userId !== userId) log('access.denied', { userId, what, id: record._id }, 'warn')
 }
 
+// A teammate's browser. It is a screen that was paired for a teammate, and so may do nothing a
+// screen may not. Of the person's pages it is shown those shared with the team and those sent
+// to its teammate that the teammate has not sent back, and to it any other page is no page at
+// all, exactly as a page that does not exist.
+/** The teammate a caller's browser was paired for, or null: a machine, the person's own browser and a plain screen are nobody's teammate. */
+export const teammateOf = (c: Caller | null): Id<'teammates'> | null => (c?.kind === 'browser' ? (c.session.teammate ?? null) : null)
+/** Whether a page is one that a teammate is shown. */
+export const shownTo = (teammate: Id<'teammates'>, a: Doc<'artifacts'>): boolean =>
+  a.team === true || (a.sentTo ?? []).some((x) => x.teammate === teammate && x.backAt === undefined)
+/** Whether whoever is calling may be shown this page at all, which only a teammate's browser may not. */
+export async function mayOpen(ctx: Ctx, a: Doc<'artifacts'>): Promise<boolean> {
+  const teammate = teammateOf(await caller(ctx))
+  return teammate === null || shownTo(teammate, a)
+}
+
 export async function ownArtifact(ctx: Ctx, userId: Id<'users'>, id: Id<'artifacts'>): Promise<Doc<'artifacts'>> {
   const a = await ctx.db.get(id)
   others(userId, 'page', a)
-  return a && a.userId === userId ? a : fail('not_found', 'No such page.')
+  // Every function that finds a page finds it here or by its slug below, so this is where a teammate's browser is held to what it is shown
+  return a && a.userId === userId && (await mayOpen(ctx, a)) ? a : fail('not_found', 'No such page.')
 }
 export async function artifactBySlug(ctx: Ctx, userId: Id<'users'>, slug: string): Promise<Doc<'artifacts'> | null> {
-  return ctx.db
+  const a = await ctx.db
     .query('artifacts')
     .withIndex('by_user_slug', (q) => q.eq('userId', userId).eq('slug', slug))
     .unique()
+  return a && (await mayOpen(ctx, a)) ? a : null
 }
 export async function ownDisplay(ctx: Ctx, userId: Id<'users'>, id: Id<'displays'>): Promise<Doc<'displays'>> {
   const d = await ctx.db.get(id)
