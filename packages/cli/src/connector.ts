@@ -2181,12 +2181,14 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    * noted and never said to be over did not end as a turn ends, whether it was still there to
    * be ended now or went with the machine being started again.
    */
-  const settling = new Map<string, Promise<boolean>>()
+  const settling = new Map<string, { was: Run; task: Promise<boolean> }>()
   const settleOld = (key: string, was: Run): Promise<boolean> => {
     const pending = settling.get(key)
-    if (pending) return pending
+    // What is being settled already is that run's answer. Another note of the conversation's,
+    // which came to be held meanwhile, is not settled by it: it is still held, and looked at again
+    if (pending) return pending.was === was ? pending.task : pending.task.then(() => false)
     const task = settleRun(key, was).finally(() => settling.delete(key))
-    settling.set(key, task)
+    settling.set(key, { was, task })
     return task
   }
   const settleRun = async (key: string, was: Run): Promise<boolean> => {
@@ -2207,6 +2209,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         return false
       }
     }
+    // The note being settled, as it stands now. Whatever becomes of the conversation's note while
+    // the run is looked at (let go of with `it runs clear`, and another run's held in its place)
+    // is not this one's to change
+    const held = unsettled.get(key)
     const became = await endTree(was.pid, was.since, {
       harness: key.slice(0, colon),
       session: key.slice(colon + 1),
@@ -2215,14 +2221,14 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       run: was.run,
       ...(was.cgroup ? { cgroup: was.cgroup } : {}),
     }).catch(() => 'unknown' as const)
-    if (became === 'unknown') return false
+    if (became === 'unknown' || unsettled.get(key) !== held) return false
     // An older uncertain record may have no run mark. With its leader gone, there is then
     // nothing by which to find a detached child missed before. Only a known reboot or the
     // person's explicit clearance can settle that record.
     if (was.unsure && !was.run && !fromAnotherStart(was.boot)) return false
     // The saved uncertainty makes recovery inspect the run again. Once that inspection has
     // accounted for its marked processes, a connector crash alone is no reason to hold it.
-    const { unsure: _unsure, ...settled } = unsettled.get(key) ?? was
+    const { unsure: _unsure, ...settled } = held ?? was
     unsettled.set(key, settled)
     was = settled
     if (became === 'ended')
@@ -2328,12 +2334,19 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         const still = unsettled.get(key)
         if (still) {
           const now = pendingStops.has(key) ? null : processes([still.pid])
-          // (Another process that has its number by now is not the agent. On Windows nothing is asked by number, and it stays as it was)
-          if (now === null || now.get(still.pid) === still.since) continue
+          // (Another process that has its number by now is not the agent. On Windows nothing is asked
+          // by number, and a note that told a process's start another way cannot be compared: both stay as they were)
+          if (now === null || still.told !== SINCE_TOLD || now.get(still.pid) === still.since) continue
         }
-        await call('mutation', api.machines.runEnded, ended).then(
-          () => {
+        await call<{ stopped?: boolean } | null>('mutation', api.machines.runEnded, ended).then(
+          (said) => {
             if (pendingEnds.get(key) === ended) pendingEnds.delete(key)
+            // A person stopped it just before It was told it was over, and the word of that went
+            // with it: its conversation is told it was stopped, as it would have been on hearing it
+            if (said?.stopped && !reopenedNow.has(key)) {
+              rememberStopped(key)
+              if (!pendingStops.has(key) && cutOff.delete(key)) keepCutOff()
+            }
           },
           () => {},
         )

@@ -247,7 +247,7 @@ export const runBegan = mutation({
 /**
  * And that the conversation it reopened has ended. With none named, that nothing it reopened is
  * running, which is so when its connector starts. Where it ran, anything said earlier of why it
- * could not be reopened is taken back.
+ * could not be reopened is taken back. Answers whether what it took away had been asked to stop.
  */
 export const runEnded = mutation({
   args: { for: v.optional(session), ok: v.optional(v.boolean()), run: v.optional(v.string()) },
@@ -261,7 +261,9 @@ export const runEnded = mutation({
     const fails = machine.fails ?? []
     const stillFailed = s && ok ? fails.filter((f) => f.harness !== s.harness || f.sessionId !== s.id) : fails
     if (left.length !== now.length || stillFailed.length !== fails.length) await ctx.db.patch(machine._id, { runs: left, fails: stillFailed })
-    return null
+    // Whether a person had asked for what is taken away to be stopped: the connector may not have
+    // heard of that yet, and the run that carried the word is gone with this
+    return { stopped: now.some((r) => r.stop === true && !left.includes(r)) }
   },
 })
 
