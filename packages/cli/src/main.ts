@@ -3321,6 +3321,10 @@ State
                                  the double quotes out of the JSON in an argument.
   it state <id>
   it say <id> "<text>"           A line of your own words above the ${NOUN.one}, where the person is
+  it join <id> --as <name>       Join another conversation’s ${NOUN.one} as a named member
+  it post <id> "<text>"          Say something to the other members of a shared ${NOUN.one} (--to <name> for one)
+  it posts <id>                  Who is on a shared ${NOUN.one} and what was posted (--after <n> for what is new)
+  it leave <id>                  Leave a ${NOUN.one} you joined
                                  looking: an answer that has no place on the ${NOUN.one} itself.
                                  With no text, what was said before is taken away.
 
@@ -3914,6 +3918,28 @@ async function main(argv: string[]): Promise<void> {
       // it, what was said before is taken away
       return out({ id: slug, ...(await call('mutation', api.artifacts.say, { slug, text: a._.slice(1).join(' ') })) })
     }
+    case 'join': {
+      const slug = need(a._[0], `which ${NOUN.one}`, 'join <id> --as <name>')
+      const name = need(text(a, 'as'), 'the name to join under', 'join <id> --as <name>')
+      return out(await call('mutation', api.shared.join, { slug, name, session: conversationHere('join') }))
+    }
+    case 'leave': {
+      const slug = need(a._[0], `which ${NOUN.one}`, 'leave <id>')
+      return out(await call('mutation', api.shared.leave, { slug, session: conversationHere('leave') }))
+    }
+    case 'post': {
+      const slug = need(a._[0], `which ${NOUN.one}`, 'post <id> "<text>" [--to <name>]')
+      const to = text(a, 'to')
+      return out(
+        await call('mutation', api.shared.post, { slug, session: conversationHere('post'), text: a._.slice(1).join(' '), ...(to === undefined ? {} : { to }) }),
+      )
+    }
+    case 'posts': {
+      const slug = need(a._[0], `which ${NOUN.one}`, 'posts <id> [--after <n>]')
+      const after = text(a, 'after')
+      const mine = sessionAsked()?.session
+      return out(await call('query', api.shared.read, { slug, ...(after === undefined ? {} : { after: Number(after) }), ...(mine ? { session: mine } : {}) }))
+    }
     case 'state': {
       const slug = need(a._[0], `which ${NOUN.one}`, 'state <id>')
       const s = await call<{ json: string; revision: number }>('query', api.state.get, { slug })
@@ -4178,3 +4204,15 @@ main(process.argv.slice(2)).then(
     return end(p.code === 'invalid' ? 2 : 1)
   },
 )
+
+/** The conversation a command about a shared page is run in. A member is a conversation, so one that cannot be told has no part in a shared page. */
+function conversationHere(command: string): { harness: string; id: string } {
+  const here = sessionAsked()?.session
+  if (!here)
+    throw new Problem(
+      `Which conversation this is could not be told, and only a conversation can be a member of a shared ${NOUN.one}.`,
+      'invalid',
+      `Run \`it ${command}\` from inside your agent app, or with IT_HARNESS and IT_SESSION set to your own.`,
+    )
+  return here
+}

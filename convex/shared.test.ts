@@ -40,7 +40,13 @@ async function withPage() {
       session: WRITER,
       agent: 'claude-code',
     })
-    return { user: user._id as string, owner: (await paired('owner')) as string, screen: (await paired('screen')) as string, machine: machine._id as string, page }
+    return {
+      user: user._id as string,
+      owner: (await paired('owner')) as string,
+      screen: (await paired('screen')) as string,
+      machine: machine._id as string,
+      page,
+    }
   })
   const browser = t.withIdentity({ issuer: SITE, subject: user, kind: 'browser', sid: owner, role: 'owner' })
   const display = t.withIdentity({ issuer: SITE, subject: user, kind: 'browser', sid: screen, role: 'screen' })
@@ -67,8 +73,14 @@ describe('a page that several conversations share', () => {
       { name: 'writer', owner: true },
       { name: 'reviewer', owner: false },
     ])
-    expect(await agent.mutation(api.shared.post, { slug: 'review', session: WRITER, text: ' the patch is ready ', to: 'reviewer' })).toMatchObject({ seq: 1, from: 'writer' })
-    expect(await agent.mutation(api.shared.post, { slug: 'review', session: REVIEWER, text: 'line 12 leaks a handle' })).toMatchObject({ seq: 2, from: 'reviewer' })
+    expect(await agent.mutation(api.shared.post, { slug: 'review', session: WRITER, text: ' the patch is ready ', to: 'reviewer' })).toMatchObject({
+      seq: 1,
+      from: 'writer',
+    })
+    expect(await agent.mutation(api.shared.post, { slug: 'review', session: REVIEWER, text: 'line 12 leaks a handle' })).toMatchObject({
+      seq: 2,
+      from: 'reviewer',
+    })
     // The reviewer reads what the writer said, and the writer what the reviewer said after it
     const all = await agent.query(api.shared.read, { slug: 'review', session: REVIEWER })
     expect(all.you).toBe('reviewer')
@@ -100,7 +112,9 @@ describe('a page that several conversations share', () => {
   test('refuses a post from a conversation that has not joined', async () => {
     const { agent } = await withPage()
     await agent.mutation(api.shared.join, { slug: 'review', session: REVIEWER, name: 'reviewer' })
-    await expect(agent.mutation(api.shared.post, { slug: 'review', session: STRANGER, text: 'let me in' })).rejects.toThrow(/Only a conversation that has joined/)
+    await expect(agent.mutation(api.shared.post, { slug: 'review', session: STRANGER, text: 'let me in' })).rejects.toThrow(
+      /Only a conversation that has joined/,
+    )
     expect((await agent.query(api.shared.read, { slug: 'review' })).posts).toEqual([])
   })
 
@@ -117,7 +131,9 @@ describe('a page that several conversations share', () => {
     const { agent } = await withPage()
     await agent.mutation(api.shared.join, { slug: 'review', session: REVIEWER, name: 'reviewer' })
     expect(await agent.mutation(api.shared.leave, { slug: 'review', session: REVIEWER })).toMatchObject({ left: true })
-    await expect(agent.mutation(api.shared.post, { slug: 'review', session: REVIEWER, text: 'one more' })).rejects.toThrow(/Only a conversation that has joined/)
+    await expect(agent.mutation(api.shared.post, { slug: 'review', session: REVIEWER, text: 'one more' })).rejects.toThrow(
+      /Only a conversation that has joined/,
+    )
   })
 
   test('lets the person take a member off, who may then neither post nor join again', async () => {
@@ -127,7 +143,9 @@ describe('a page that several conversations share', () => {
     const seen = await browser.query(api.shared.read, { artifactId: page })
     expect(seen.members[1]).toMatchObject({ name: 'reviewer', harness: 'codex', sessionId: 'conversation-2' })
     expect(await browser.mutation(api.shared.remove, { artifactId: page, name: 'reviewer' })).toEqual({ removed: true })
-    await expect(agent.mutation(api.shared.post, { slug: 'review', session: REVIEWER, text: 'still here' })).rejects.toThrow(/Only a conversation that has joined/)
+    await expect(agent.mutation(api.shared.post, { slug: 'review', session: REVIEWER, text: 'still here' })).rejects.toThrow(
+      /Only a conversation that has joined/,
+    )
     await expect(agent.mutation(api.shared.join, { slug: 'review', session: REVIEWER, name: 'reviewer' })).rejects.toThrow(/taken off this page/)
     expect((await state()).shared.members).toEqual([{ name: 'owner', owner: true }])
   })
