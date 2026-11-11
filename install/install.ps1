@@ -136,30 +136,39 @@ public static bool LacksSse42() {
   # lock, the folders its downloads went to, and an empty bin) is not counted as anything in the
   # folder, and neither are the notes the program itself keeps before It is set up: whether
   # usage is reported and updates looked for, and where the program was downloaded from. A link
-  # is never taken for any of those.
+  # is never taken for any of those. The folder is looked at again just before the record is
+  # written, since anything may have been put in it while the downloads came.
   $installation = '{"product":"It","format":1,"about":"This folder holds an installation of It."}' + "`n"
   $installationAt = Join-Path $root 'installation.json'
   $licenses = @('06f412e8c0ab7d324b09d1ff1261ff667a4986546a5f38170966eb6542c6b20d', '5c2b54bcb8f96e22f8994364182b4e0f3fa06dfb448378e81ede85bcc9003e09')
-  $notes = @('telemetry.json', 'telemetry-off', 'telemetry-sending', 'usage.jsonl', 'usage.jsonl.taken', 'updates-off', 'releases.json')
   function Test-Plain($path) { ([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint) -eq 0 }
-  if ((Get-Kind $root) -eq 'folder') {
+  # `$again` is for the second look, under this install's own lock
+  function Assert-Claimable($again) {
+    if ((Get-Kind $root) -ne 'folder') { return }
     if ((Get-Kind $installationAt) -ne 'nothing') {
       # A damaged or linked record is never silently replaced
       if ((Get-Kind $installationAt) -ne 'file' -or [IO.File]::ReadAllText($installationAt) -cne $installation) {
         throw "The installation record in $root is not the one It wrote. Inspect it before installing again. Nothing was installed."
       }
-    } elseif (-not ((Get-Kind $target) -eq 'file' -and (Test-Plain $dir) -and (Get-Kind $notices) -eq 'file' -and (Get-Kind $license) -eq 'file' -and $licenses -contains (Get-FileHash -Algorithm SHA256 -LiteralPath $license).Hash.ToLower())) {
-      foreach ($entry in [IO.Directory]::GetFileSystemEntries($root)) {
-        $called = [IO.Path]::GetFileName($entry)
-        $kind = Get-Kind $entry
-        if ((Test-Plain $entry) -and (($called -eq '.installing' -and $kind -eq 'file') -or ($called -like '.install.*' -and $kind -eq 'folder') -or ($called -eq 'bin' -and $kind -eq 'folder' -and [IO.Directory]::GetFileSystemEntries($entry).Count -eq 0) -or ($notes -contains $called -and $kind -eq 'file'))) { continue }
-        # A folder that holds It's install lock is one an install of It is putting its files in,
-        # or was until it stopped: the lock, below, says which, and waits for it or takes over
-        if ((Get-Kind (Join-Path $root '.installing')) -eq 'file') { break }
-        throw "$root already holds files, and nothing in it shows that it is It's. It is installed only in a folder that is new, empty or It's already, since taking It off again removes It's own folders there whole, such as bin, logs and content. Nothing was installed. Set IT_HOME to a new or empty folder, or move what is in $root somewhere else first."
+      return
+    }
+    if ((Get-Kind $target) -eq 'file' -and (Test-Plain $dir) -and (Get-Kind $notices) -eq 'file' -and (Get-Kind $license) -eq 'file' -and $licenses -contains (Get-FileHash -Algorithm SHA256 -LiteralPath $license).Hash.ToLower()) { return }
+    foreach ($entry in [IO.Directory]::GetFileSystemEntries($root)) {
+      $called = [IO.Path]::GetFileName($entry)
+      $kind = Get-Kind $entry
+      if ((Test-Plain $entry) -and (($called -eq '.installing' -and $kind -eq 'file') -or ($called -like '.install.*' -and $kind -eq 'folder') -or ($called -eq 'bin' -and $kind -eq 'folder' -and [IO.Directory]::GetFileSystemEntries($entry).Count -eq 0) -or (($called -like 'telemetry*' -or $called -like 'usage.jsonl*' -or $called -eq 'updates-off' -or $called -eq 'releases.json') -and $kind -eq 'file'))) { continue }
+      # Where an install of It that is still running holds its lock, the files it has put in so
+      # far are its own, and that is what is said. Windows lets go of the lock when its install
+      # ends, however it ends, so a lock that can be opened shows nothing.
+      if (-not $again -and (Get-Kind (Join-Path $root '.installing')) -eq 'file') {
+        $held = $false
+        try { [IO.File]::Open((Join-Path $root '.installing'), [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None).Dispose() } catch [IO.IOException] { $held = $true } catch {}
+        if ($held) { throw "Another install of It is putting its files in $root. Run this again when it has finished." }
       }
+      throw "$root already holds files, and nothing in it shows that it is It's. It is installed only in a folder that is new, empty or It's already, since taking It off again removes It's own folders there whole, such as bin, logs and content. Nothing was installed. Set IT_HOME to a new or empty folder, or move what is in $root somewhere else first."
     }
   }
+  Assert-Claimable $false
   # Made by its name exactly as it is, whatever characters are in it
   [IO.Directory]::CreateDirectory($dir) | Out-Null
   # Only this user may look inside It's folder: the machine's key is kept there. Whatever access
@@ -319,6 +328,8 @@ public static bool LacksSse42() {
     # anything stops this before then. A program that is running cannot be written over or
     # removed, and can be renamed: so the old program is kept beside the new one under another
     # name, and the old terms in the folder made for this run.
+    # Whatever was put in the folder while the downloads came is looked at before the record goes in
+    Assert-Claimable $true
     [IO.File]::WriteAllText((Join-Path $stage 'installation'), $installation, (New-Object Text.UTF8Encoding($false)))
     $places = @(
       @{ New = (Join-Path $stage 'program.exe'); At = $target; Old = (Join-Path $dir ('it.old.{0}.exe' -f [DateTime]::UtcNow.Ticks)); Begun = $false },
