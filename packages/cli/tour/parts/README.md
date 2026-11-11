@@ -51,7 +51,7 @@ The shell's `.btn`, `.btn.ghost`, `.btn.small` and `.pill` are a part's to use, 
 | `my.onEnter(fn)`, `my.onLeave(fn)` | Called as the part is come to and as it is left |
 | `my.shown()` | Whether the part is the one shown |
 
-`Shell` itself has `Shell.$` (an element by its id), `Shell.newId()`, `Shell.tidy(value, most)` (a string or number as one line of at most so many characters, and nothing else as the empty string), `Shell.calm` (whether the person asked for less motion), `Shell.SVG`, `Shell.SLOW` (the forty seconds) and `Shell.go(name)`.
+`Shell` itself has `Shell.$` (an element by its id), `Shell.newId()`, `Shell.tidy(value, most)` (a string or number as one line of at most so many characters, and nothing else as the empty string), `Shell.calm` (whether the person asked for less motion), `Shell.SVG`, `Shell.SLOW` (the forty seconds) and `Shell.go(name)`. `Shell.wear(colours)` dresses the frame in other colours, as the studio does with the agent's design: `--green`, `--on-green`, `--green-soft`, `--paper`, `--card` and `--line`, each as `#rrggbb`. It says whether it took them, and takes none where what the frame writes on the accent or on the paper could not be read. `Shell.wear(null)` puts the frame's own colours back.
 
 ## Asking the agent, and hearing its answer
 
