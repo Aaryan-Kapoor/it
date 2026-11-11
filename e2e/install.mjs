@@ -1426,7 +1426,7 @@ try {
       })
       check(
         'Windows PowerShell takes a bare `it` for Pester’s command where It’s folder is not on the PATH',
-        /^Function Pester\s*$/.test(pester.said),
+        /^Function Pester\s*$/m.test(pester.said),
         pester.said,
       )
       const typed = await install(
