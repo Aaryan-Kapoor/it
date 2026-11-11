@@ -527,6 +527,13 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
     view.srcObject = null
     throw err
   }
+  // Gone while it was being opened, when nothing was listening for that yet: it is not opened
+  if (wentAway(stream)) {
+    sound?.close()
+    for (const t of stream.getTracks()) t.stop()
+    view.srcObject = null
+    throw new Error(WENT_AWAY)
+  }
   /** The pictures sent that the page has not said it drew, and how many are being made. */
   const sent = new Set<number>()
   let making = 0
@@ -667,13 +674,22 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
  * What the site holds live sound to. `pieceMs`: how much sound goes in one piece. `mostSamples`:
  * the most samples one piece may hold, whatever the rate of the sound. `atOnce`: how many pieces a
  * page may have been sent and not yet said it took. `startMs`: how long the browser is given to
- * start passing the sound on. `checkEveryMs` and `usedEveryMs` are as the live camera's.
+ * load what gathers the sound, and again to start passing it on. `checkEveryMs` and `usedEveryMs` are as the live camera's.
  */
 export const LIVE_MICROPHONE = { pieceMs: 20, mostSamples: 4096, atOnce: 10, startMs: 2000, checkEveryMs: 1000, usedEveryMs: 60 * 60_000 } as const
 /** Where the site keeps what gathers the microphone's sound into pieces: a file of its own, since the site runs no script that is not one of its files. */
 const PIECES = '/sound-worklet.js'
 const NO_SOUND = 'This browser cannot pass the microphone’s sound on to a page.'
 
+/** What is waited for while the microphone's sound is made ready, for `startMs` at most: whoever waits goes on then, whether or not it is done. */
+const soon = (doing: Promise<unknown>): Promise<unknown> => {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([doing, new Promise((resolve) => (timer = setTimeout(resolve, LIVE_MICROPHONE.startMs)))]).finally(() => clearTimeout(timer))
+}
+/** What a page is told where the device went away while it was being opened: unplugged, or turned off from the browser's own controls. */
+const WENT_AWAY = 'The microphone or the camera went away while it was being opened.'
+/** Whether a device of this stream has gone away, which nothing was listening for while it was being opened. */
+const wentAway = (stream: MediaStream): boolean => stream.getTracks().some((t) => t.readyState === 'ended')
 /** Sound on its way to a page, as whatever opened the microphone holds it. */
 interface Relay {
   sampleRate: number
@@ -699,9 +715,16 @@ async function relaySound(
   let source: MediaStreamAudioSourceNode
   try {
     if (!context.audioWorklet) throw new Error(NO_SOUND)
-    await context.audioWorklet.addModule(PIECES)
-    // A browser may hold sound back until the person has done something on the site. It is given a moment, and not waited on for ever
-    await Promise.race([context.resume(), new Promise((r) => setTimeout(r, LIVE_MICROPHONE.startMs))])
+    // What gathers the pieces is given a moment to load, and not waited on for ever: the microphone is open all the while, with nothing yet in It's bar to say so
+    let loaded = false
+    await soon(
+      context.audioWorklet.addModule(PIECES).then(() => {
+        loaded = true
+      }),
+    )
+    if (!loaded) throw new Error(NO_SOUND)
+    // A browser may hold sound back until the person has done something on the site. It is given a moment too
+    await soon(context.resume())
     if (context.state !== 'running') throw new Error('The browser did not start the sound for It on this screen. Ask again from a click on the page.')
     const samples = Math.min(LIVE_MICROPHONE.mostSamples, Math.max(1, Math.round((context.sampleRate * LIVE_MICROPHONE.pieceMs) / 1000)))
     // One channel, mixed down where the microphone gives more
@@ -830,6 +853,12 @@ export async function openMicrophone(audio: true | MediaTrackConstraints, page: 
   } catch (err) {
     for (const t of stream.getTracks()) t.stop()
     throw err
+  }
+  // Gone while its sound was being made ready, when nothing was listening for that yet: it is not opened
+  if (wentAway(stream)) {
+    sound.close()
+    for (const t of stream.getTracks()) t.stop()
+    throw new Error(WENT_AWAY)
   }
   function close(): boolean {
     if (over) return false

@@ -577,7 +577,7 @@ function standInCamera(size = { width: 640, height: 480 }) {
 // with, which says whether it runs, waits or was closed, and what gathers the microphone's sound
 // into pieces, whose pieces the test gives when it likes. The real ones are the browsers' own, in
 // the end-to-end run, and what gathers the pieces is tested by itself below.
-function standInSound(options: { rate?: number; starts?: boolean; gathers?: boolean } = {}) {
+function standInSound(options: { rate?: number; starts?: boolean; gathers?: boolean | 'never'; whileLoading?: () => void } = {}) {
   const contexts: { state: string; sampleRate: number; asked: string[]; connected: number }[] = []
   const nodes: { options: any; port: { onmessage: ((m: { data: unknown }) => void) | null } }[] = []
   class Context {
@@ -589,7 +589,10 @@ function standInSound(options: { rate?: number; starts?: boolean; gathers?: bool
     audioWorklet = {
       addModule: async (url: string) => {
         this.asked.push(url)
+        options.whileLoading?.()
         if (options.gathers === false) throw new Error('The browser would not load it')
+        // A file that never comes, as from a site that has stopped answering
+        if (options.gathers === 'never') await new Promise(() => {})
       },
     }
     constructor() {
@@ -1410,6 +1413,44 @@ describe('the microphone, live to a page', () => {
       await expect(opening).rejects.toThrow('This browser cannot pass the microphone’s sound on to a page.')
       expect(device.tracks.map((t) => t.stopped)).toEqual([true])
       expect(made!.contexts[0]!.state).toBe('closed')
+    })
+
+    test('for not loading what gathers the pieces in two seconds, it waits no longer, says so, and lets go of the microphone, which was open all the while', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      let made: ReturnType<typeof standInSound> | null = null
+      const { device, opening } = await refused(() => {
+        made = standInSound({ gathers: 'never' })
+      })
+      const outcome = opening.then(
+        () => 'opened',
+        (err: Error) => err.message,
+      )
+      await vi.advanceTimersByTimeAsync(LIVE_MICROPHONE.startMs - 1)
+      expect(device.tracks.map((t) => t.stopped)).toEqual([false])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(await outcome).toBe('This browser cannot pass the microphone’s sound on to a page.')
+      expect(device.tracks.map((t) => t.stopped)).toEqual([true])
+      expect(made!.contexts[0]!.state).toBe('closed')
+      expect(microphoneFor('page-1')).toBeUndefined()
+    })
+
+    test('a microphone that went away while its sound was being made ready, when nothing was listening for that yet, is not opened, and nothing is listed for It’s bar', async () => {
+      allow('person-1', grant('page-1', ['mic']))
+      const device = standInCamera()
+      // Unplugged while what gathers its sound is loading
+      const made = standInSound({ whileLoading: () => Object.assign(device.tracks[0]!, { readyState: 'ended' }) })
+      const opening = openMicrophone(true, {
+        ...microphone,
+        id: 'mic-1',
+        grant: grantFor('person-1', 'page-1', OWNER, ['mic'])!,
+        still: () => null,
+        sound: () => {},
+        told: () => {},
+      })
+      await expect(opening).rejects.toThrow('The microphone or the camera went away while it was being opened.')
+      expect(device.tracks.map((t) => t.stopped)).toEqual([true])
+      expect(made.contexts[0]!.state).toBe('closed')
+      expect(microphoneFor('page-1')).toBeUndefined()
     })
 
     test('for not starting sound, it is given two seconds and no longer, and the page is told to ask again from a click', async () => {
