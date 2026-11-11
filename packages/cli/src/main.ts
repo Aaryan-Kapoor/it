@@ -814,6 +814,7 @@ async function published(
   a: Args,
   fresh = false,
   tour = false,
+  updated = false,
 ): Promise<void> {
   const arrival = await arrivalHere(done.slug, tour)
   const result = {
@@ -834,7 +835,7 @@ async function published(
   if (!a.flags.open)
     said = {
       ...result,
-      hint: fresh
+      hint: !updated
         ? shownNowhere(done.slug, false)
         : `No display was asked to bring this page up, because --open was not given. Displays already showing it update by themselves. Run \`it open ${done.slug}\` to bring it up on a display.`,
     }
@@ -1072,7 +1073,7 @@ async function update(a: Args) {
     take: a.flags.take === true,
     shown: a.flags.open === true,
   })
-  await published(done, a)
+  await published(done, a, false, false, true)
 }
 
 /** A page as an agent sees it: the id is the one it chose, not the backend's own. */
