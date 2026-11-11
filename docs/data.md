@@ -380,7 +380,7 @@ The steps on Linux are tested as they are written here, by a test of It's own, w
 | A file a page sent with an action | As long as its action. One whose action was never sent goes after eight days. All of them go with their page, and when you erase everything |
 | A notification | A month. One sent to every display keeps which displays it was for, those there when it was sent, with a row in each of their trays that goes with it |
 | What each tab of a display last said of itself: whether it was visible, which page it showed and its version, and when | Two and a half minutes from when the newest of it was said, and at most sixteen tabs. What a display said last is dropped when it next speaks, or at the hourly cleaning once it has run out, so a display that was closed keeps it for an hour or so at most. Gone when the display is forgotten |
-| When you last used a display: clicked, tapped or typed there | One time per display, written over each time, at most once in five seconds. In the records download. Gone when the display is forgotten |
+| When you last used a display: clicked, tapped or typed there | One time per display, written over each time a tab of it says you used it, as of when you did. In the records download. Gone when the display is forgotten |
 | Whether a display is open to agents | Until you change it. In the records download, as `agents`. Gone when the display is forgotten |
 | The page a display is locked to | Until it is unlocked, or that page is deleted, which ends the lock. Gone when the display is forgotten |
 | A publish that was begun and never finished | An hour. Completing it is allowed for thirty minutes |

@@ -43,6 +43,12 @@ export const TAKES = {
    */
   displayReports: 'displays.report',
   /**
+   * When the person used a display, said with a tab's report of a use (`usedAt`), so that a use
+   * said once ten seconds were up is kept as of when it happened. The site sends it only where
+   * the backend names it, since an older one refuses the whole report.
+   */
+  displayUsedAt: 'displays.report.usedAt',
+  /**
    * A page's waiting actions read a bounded page at a time, the newest by default and those
    * after a place with `after`, each with its place: what `it actions --id` lists and `--follow`
    * watches. An earlier backend has only `delivery.waiting`, which gives the oldest 50.

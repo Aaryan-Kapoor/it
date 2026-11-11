@@ -6,7 +6,7 @@ import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { REPORT_MS, REPORT_SKEW_MS } from './displays'
+import { REPORT_MS, REPORT_SKEW_MS, USED_WITHIN_MS } from './displays'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -360,7 +360,7 @@ describe('what each tab of a display says of itself', () => {
     expect(tabs).toEqual([tab(5)])
   })
 
-  test('a use is kept as a time, at most once in five seconds, and only from a tab that is visible', async () => {
+  test('a use is kept as a time, each time it is newer than the one kept, and only from a tab that is visible', async () => {
     const { browser, seen } = await household()
     const laptop = await browser('owner', key(1))
     const registered = (await seen(laptop.id)).usedAt
@@ -370,14 +370,35 @@ describe('what each tab of a display says of itself', () => {
     await laptop.as.mutation(api.displays.report, said(laptop, TAB, 1, false, { used: true }))
     expect((await seen(laptop.id)).usedAt).toBe(registered)
     await laptop.as.mutation(api.displays.report, said(laptop, TAB, 2, true, { used: true }))
-    const used = Date.now()
-    expect((await seen(laptop.id)).usedAt).toBe(used)
+    expect((await seen(laptop.id)).usedAt).toBe(Date.now())
+    // Two seconds later is newer, and is kept: another display used in between would otherwise win
     vi.advanceTimersByTime(2000)
     await laptop.as.mutation(api.displays.report, said(laptop, TAB, 3, true, { used: true }))
-    expect((await seen(laptop.id)).usedAt).toBe(used)
-    vi.advanceTimersByTime(4000)
-    await laptop.as.mutation(api.displays.report, said(laptop, TAB, 4, true, { used: true }))
     expect((await seen(laptop.id)).usedAt).toBe(Date.now())
+  })
+
+  test('a use is kept as of when the tab says it happened, never after its report and never more than ten seconds before', async () => {
+    const { browser, seen } = await household()
+    const laptop = await browser('owner', key(1))
+    vi.advanceTimersByTime(60_000)
+    // A use said once the tab's ten seconds were up, eight seconds after it happened
+    const happened = Date.now() - 8000
+    expect(await laptop.as.mutation(api.displays.report, said(laptop, TAB, 1, true, { used: true, usedAt: happened }))).toMatchObject({ used: true })
+    expect((await seen(laptop.id)).usedAt).toBe(happened)
+    // One from before the use kept is taken, and moves nothing back
+    vi.advanceTimersByTime(1000)
+    expect(await laptop.as.mutation(api.displays.report, said(laptop, TAB, 2, true, { used: true, usedAt: happened - 500 }))).toMatchObject({ used: true })
+    expect((await seen(laptop.id)).usedAt).toBe(happened)
+    // A time after the report was made is taken as then, and one longer ago than a tab says a use in as ten seconds before it
+    vi.advanceTimersByTime(60_000)
+    await laptop.as.mutation(api.displays.report, said(laptop, TAB, 3, true, { used: true, usedAt: Date.now() + 5000 }))
+    expect((await seen(laptop.id)).usedAt).toBe(Date.now())
+    vi.advanceTimersByTime(60_000)
+    await laptop.as.mutation(api.displays.report, said(laptop, TAB, 4, true, { used: true, usedAt: Date.now() - 3_600_000 }))
+    expect((await seen(laptop.id)).usedAt).toBe(Date.now() - USED_WITHIN_MS)
+    // A time that is no number, or one said without a use or without when the report was made, is refused
+    for (const extra of [{ used: true, usedAt: Number.NaN }, { usedAt: Date.now() }, { used: true, usedAt: Date.now(), observedAt: undefined }])
+      await expect(laptop.as.mutation(api.displays.report, said(laptop, TAB, 9, true, extra))).rejects.toThrow(/not what a tab says/)
   })
 
   test('a report held back through an outage longer than a use stands is kept as of when it was made, and is no use now', async () => {
@@ -585,6 +606,31 @@ describe('which display an agent’s page goes to where it names none', () => {
     expect(await shown(h)).toMatchObject({ displayIds: [h.tv.id], chosen: 'last_used' })
     // Only the chosen display is asked to bring the page up
     expect((await h.row(h.phone.id)).showing).toBeUndefined()
+  })
+
+  test('a use the phone said once its ten seconds were up does not win over the laptop clicked after it', async () => {
+    const h = await three()
+    // The phone is tapped, and the laptop clicked five seconds later
+    const tapped = Date.now()
+    await tell(h.phone, TAB, 1, true, true)
+    vi.advanceTimersByTime(5000)
+    await tell(h.laptop, TAB, 1, true, true)
+    // The phone says a use of a moment after the tap only once its ten seconds are up
+    vi.advanceTimersByTime(5000)
+    await h.phone.as.mutation(api.displays.report, {
+      key: h.phone.key,
+      epoch: 0,
+      tab: TAB,
+      sequence: 2,
+      phase: 'none',
+      visible: true,
+      expectedSession: h.phone.session,
+      observedAt: Date.now(),
+      used: true,
+      usedAt: tapped + 1000,
+    })
+    vi.advanceTimersByTime(2000)
+    expect(await shown(h)).toMatchObject({ displayIds: [h.laptop.id], chosen: 'open' })
   })
 
   test('one visible tab of several keeps a display open, all hidden close it, and stale reports give way to the heartbeat', async () => {

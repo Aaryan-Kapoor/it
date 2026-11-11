@@ -339,6 +339,8 @@ const TABS = 16
  * arguments it had, says what was so then, and is kept as said then.
  */
 export const REPORT_SKEW_MS = 10_000
+/** How long before its report a tab's use can have been: a tab says a use within ten seconds of it. */
+export const USED_WITHIN_MS = 10_000
 
 /**
  * What one tab of a display says of itself: whether it is visible, whether the person used it a
@@ -351,8 +353,9 @@ export const REPORT_SKEW_MS = 10_000
  *
  * What it shows is a showing (`mountId`) that this display made itself, under its sign-out number
  * now: `loading`, `shown` once its ticket was given, or `failed`, and `none` with no showing.
- * Nothing of what the person did is kept, only when: `usedAt`, written at most once in five
- * seconds. All of it is the browser's word, and never proof of what is on the glass.
+ * Nothing of what the person did is kept, only when: `usedAt`, as of when the tab says the use
+ * happened (`usedAt` in the report), where it says so. All of it is the browser's word, and never
+ * proof of what is on the glass.
  *
  * Each report says when the tab made it (`observedAt`), by the backend's clock as the tab learned
  * it, and is kept as of then, never later than now: a report that was held back, as the
@@ -375,6 +378,7 @@ export const report = mutation({
     mountId: v.optional(v.string()),
     used: v.optional(v.boolean()),
     observedAt: v.optional(v.number()),
+    usedAt: v.optional(v.number()),
     expectedSession: v.string(),
   },
   handler: async (ctx, a) => {
@@ -386,6 +390,8 @@ export const report = mutation({
     if (a.phase === 'none' && a.mountId !== undefined) fail('invalid', 'A tab that shows nothing names no showing.')
     if (a.phase !== 'none' && a.mountId === undefined) fail('invalid', 'A tab that shows a page names its showing.')
     if (a.observedAt !== undefined && !Number.isFinite(a.observedAt)) fail('invalid', 'That is not what a tab says of itself.')
+    if (a.usedAt !== undefined && (!Number.isFinite(a.usedAt) || a.used !== true || a.observedAt === undefined))
+      fail('invalid', 'That is not what a tab says of itself.')
     const now = Date.now()
     if (a.epoch !== d.epoch) return { accepted: false, now }
     // As of when the tab made it, which no clock can make later than now
@@ -429,10 +435,14 @@ export const report = mutation({
     // Written to the display's presence, and never to the display itself, whose record a tray and
     // much of the site read: a report a few times a minute would have them all read again
     const change: Partial<Doc<'presence'>> = { reports, reportedAt: Math.max(...reports.map((r) => r.at)) }
-    // Whether the use it said was taken, which the tab goes by to say it again or not: a use
-    // within five seconds of the last one written is taken, and needs no writing
+    // Whether the use it said was taken, which the tab goes by to say it again or not. It is kept
+    // as of when it happened, where the tab says so, within the ten seconds a tab says a use in and
+    // never after the report was made: a use the tab said once its ten seconds were up is not
+    // taken for one at the moment it was said. One no newer than the use kept is taken, and needs
+    // no writing
     const used = a.visible && a.used === true && timely
-    if (used && at - (seen.usedAt ?? 0) > 5000) change.usedAt = at
+    const usedAt = Math.max(at - USED_WITHIN_MS, Math.min(at, a.usedAt ?? at))
+    if (used && usedAt > (seen.usedAt ?? 0)) change.usedAt = usedAt
     if (kept) await ctx.db.patch(kept._id, change)
     else await ctx.db.insert('presence', { userId: d.userId, displayId: d._id, ...change })
     return { accepted: true, now, used }
