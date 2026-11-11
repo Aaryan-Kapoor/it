@@ -53,27 +53,72 @@ function tail(file: string, size: number, most = TAIL): string {
 /** Paths are told apart without regard to case where the system does so too. */
 const fold = (text: string, platform: NodeJS.Platform) => (platform === 'win32' ? text.toLowerCase() : text)
 
-/** How each file is written on a line of OpenCode's log: its path, its path with each backslash doubled as a quoted value may have it, and its address. */
+/** How a file is named in the field of OpenCode's log that says which plugin it is: by its path, or by its address. */
 function namesOf(file: string, platform: NodeJS.Platform): string[] {
-  return [...new Set([file, file.replaceAll('\\', '\\\\'), pathToFileURL(file).href].map((name) => fold(name, platform)))]
+  return [...new Set([file, pathToFileURL(file).href].map((name) => fold(name, platform)))]
+}
+
+/**
+ * The fields of a line of OpenCode's log, which is written as `key=value` pairs with a value
+ * that has spaces or quotes in it put in double quotes. A quoted value is read whole, so that
+ * nothing inside it, such as an error's own words, is taken for a field of the line.
+ */
+export function fieldsOf(line: string): Map<string, string> {
+  const fields = new Map<string, string>()
+  for (const [, key, value] of line.matchAll(/(?:^|\s)([A-Za-z_][\w.]*)=("(?:[^"\\]|\\.)*"|[^\s"]*)/g)) {
+    if (fields.has(key!)) continue
+    let read = value!
+    if (read.startsWith('"')) {
+      try {
+        read = JSON.parse(read)
+      } catch {
+        // An escape JSON does not have, as a Windows path written with single backslashes does
+        read = read.slice(1, -1)
+      }
+    }
+    fields.set(key!, read)
+  }
+  return fields
 }
 
 /**
  * The last time this text of OpenCode's log says that OpenCode refused to load one of these
- * files after it was put there (`since`, by the clock of this machine in milliseconds).
+ * files after it was put there (`since`, by the clock of this machine in milliseconds). A line
+ * counts only where its message is that a plugin failed to load and the field that names the
+ * plugin (`path` in 1.x, `target` in 2.x) is one of these files, whole.
  */
 export function refusedIn(text: string, files: readonly { file: string; since: number }[], platform: NodeJS.Platform = process.platform): number | undefined {
   const named = files.map((f) => ({ names: namesOf(f.file, platform), since: f.since }))
   let last: number | undefined
   for (const line of text.split('\n')) {
     if (!line.includes('failed to load plugin')) continue
-    const folded = fold(line, platform)
-    const file = named.find((f) => f.names.some((name) => folded.includes(name)))
+    const fields = fieldsOf(line)
+    if ((fields.get('message') ?? fields.get('msg')) !== 'failed to load plugin') continue
+    const plugin = fields.get('target') ?? fields.get('path')
+    if (plugin === undefined) continue
+    const file = named.find((f) => f.names.includes(fold(plugin, platform)))
     if (!file) continue
-    const at = Date.parse(/^timestamp=(\S+)/.exec(line)?.[1] ?? '')
+    const at = Date.parse(fields.get('timestamp') ?? '')
     if (Number.isFinite(at) && at >= file.since && (last === undefined || at > last)) last = at
   }
   return last
+}
+
+/**
+ * Whether a refusal seen at `at` still stands where the log no longer shows it, as once
+ * OpenCode has written so much since that the line is past the part of the log that is read:
+ * It's file is there and none of them has been put there again since. Only the add-on being
+ * heard from, or a file put there anew, shows that the refusal is over.
+ */
+export function unchangedSince(plugins: readonly string[], at: number): boolean {
+  const times = plugins.flatMap((file) => {
+    try {
+      return [statSync(file).mtimeMs]
+    } catch {
+      return []
+    }
+  })
+  return times.length > 0 && times.every((t) => t <= at)
 }
 
 /**

@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { opencodePlugins, opencodeRefusedAt, refusedIn } from './src/opencode-refused'
+import { fieldsOf, opencodePlugins, opencodeRefusedAt, refusedIn, unchangedSince } from './src/opencode-refused'
 
 // The lines OpenCode writes when it refuses a plugin, as each version wrote them (seen with
 // OpenCode 1.18.32 and 2.2.7 on Linux, and with 2.2.5 on Windows in #424)
@@ -76,10 +76,36 @@ describe('whether OpenCode refused to load It’s add-on', () => {
     expect(opencodeRefusedAt([], [logs])).toBeUndefined()
   })
 
-  test('reads only the end of a long log, where a refusal OpenCode has just written is', () => {
+  test('reads only the end of a long log, where a refusal OpenCode has just written is, and says nothing of one before that', () => {
     const filler = 'timestamp=2026-11-11T00:00:00.000Z level=INFO message="something else"'
+    log(refusedBy2(after(1000), plugin), ...Array.from({ length: 20_000 }, () => filler))
+    expect(opencodeRefusedAt([plugin], [logs])).toBeUndefined()
     log(refusedBy2(after(1000), plugin), ...Array.from({ length: 20_000 }, () => filler), refusedBy2(after(2000), plugin))
     expect(opencodeRefusedAt([plugin], [logs])).toBe(after(2000).getTime())
+  })
+
+  test('takes a refusal the log no longer shows to stand while It’s file is as it was then, and not once it has been put there again', () => {
+    expect(unchangedSince([plugin], after(1000).getTime())).toBe(true)
+    utimesSync(plugin, after(2000), after(2000))
+    expect(unchangedSince([plugin], after(1000).getTime())).toBe(false)
+    expect(unchangedSince([path.join(dir, 'gone.js')], after(1000).getTime())).toBe(false)
+    expect(unchangedSince([], after(1000).getTime())).toBe(false)
+  })
+
+  test('counts only a line whose own field names It’s file whole, and not one that mentions it elsewhere', () => {
+    const files = [{ file: plugin, since: put.getTime() }]
+    const at = after(1000).toISOString()
+    // Another plugin whose name begins with It's
+    expect(refusedIn(refusedBy2(after(1000), `${plugin}.backup.js`), files)).toBeUndefined()
+    // Another plugin whose error names It's file
+    const other = path.join(path.dirname(plugin), 'other.js')
+    expect(refusedIn(`timestamp=${at} level=WARN message="failed to load plugin" target=${other} cause="cannot read ${plugin}"`, files)).toBeUndefined()
+    // Words inside a quoted value are not fields of the line
+    expect(refusedIn(`timestamp=${at} level=WARN message="failed to load plugin" target=${other} cause="x target=${plugin}"`, files)).toBeUndefined()
+    expect(refusedIn(`timestamp=${at} level=INFO message="loaded" note="failed to load plugin target=${plugin}"`, files)).toBeUndefined()
+    // And in quotes, as 2.x writes a path with spaces in it, It's file is found
+    expect(refusedIn(`timestamp=${at} level=WARN message="failed to load plugin" target="${plugin}" cause="…"`, files)).toBe(after(1000).getTime())
+    expect(fieldsOf('timestamp=1 message="a \\"b\\" c" path=x').get('message')).toBe('a "b" c')
   })
 
   test('reads no log last written before the add-on was put there', () => {
