@@ -671,7 +671,10 @@
     // The lines the person wrote, as parts of the sheet (0 to 1 across and down), as the whiteboard keeps them
     var mine = [], current = null, busy = false;
     var spots = ["ring", "arrow", "tick", "right", "hint"];
-    var clean = () => spots.forEach((id) => $(id).classList.remove("on"));
+    // The agent's marks come onto the sheet one after another. Taking them off also stops those that
+    // have not come yet, so that none is drawn on a sheet that was cleared or written on since
+    var marking = 0;
+    var clean = () => { marking++; spots.forEach((id) => $(id).classList.remove("on")); };
     // The sheet is the person's again while an answer may still come, once the wait has run out. An
     // answer is to the sheet as it was sent: where they write more or clear it, it is no answer to
     // what is there now, and is not drawn
@@ -754,7 +757,7 @@
     }
     var asker = Asker("board", box, (got) => {
       clean();
-      var b = inked(), later = (ms, fn) => setTimeout(() => { if (!asker.waiting()) fn(); }, calm ? 0 : ms);
+      var b = inked(), mark = marking, later = (ms, fn) => setTimeout(() => { if (mark === marking) fn(); }, calm ? 0 : ms);
       if (got.right === true) {
         var tx = Math.min(600, b.x + b.w + 30), ty = b.y + b.h / 2;
         $("tick").setAttribute("d", "M" + tx + " " + (ty + 6) + " l22 24 l44 -62");
@@ -1341,7 +1344,7 @@
     var MOST = 200;
     function full(more) {
       if (turns.length + more <= MOST) return false;
-      $("cube-said").textContent = "That is " + MOST + " turns. Ask for the next turns, or start solved.";
+      $("cube-said").textContent = "The cube keeps " + MOST + " turns of yours at most. Ask for the next turns, or start solved.";
       return true;
     }
     function mineTurn(name) {

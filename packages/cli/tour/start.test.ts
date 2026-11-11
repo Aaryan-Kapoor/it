@@ -436,6 +436,45 @@ describe('the whiteboard', () => {
     },
   )
 
+  test('marks that have not come onto the sheet yet do not come once the person clears it or writes on it', async () => {
+    // Something moves here, so that the marks come one after another
+    const page = await opened({}, (w) => {
+      canvas(PICTURE)(w)
+      w.matchMedia = () => ({ matches: false })
+    })
+    page.to('board')
+    const answered = async () => {
+      written(page, [
+        [330, 220],
+        [345, 290],
+      ])
+      const sent = await checked(page)
+      await sent.accept()
+      await page.set({ board: { request: sent.data.request, read: '1', right: false, answer: '144', hint: 'try again', say: 'Not quite.' } })
+      expect(on(page, 'ring')).toBe(true)
+    }
+    await answered()
+    await page.advance(100)
+    page.$('#wipe').click()
+    await page.advance(2000)
+    expect([on(page, 'ring'), on(page, 'arrow'), on(page, 'right'), on(page, 'hint')]).toEqual([false, false, false, false])
+    await answered()
+    await page.advance(100)
+    written(page, [
+      [400, 220],
+      [430, 290],
+    ])
+    await page.advance(2000)
+    expect([on(page, 'ring'), on(page, 'arrow'), on(page, 'right'), on(page, 'hint')]).toEqual([false, false, false, false])
+    // Left alone, they all come
+    page.$('#wipe').click()
+    await answered()
+    await page.advance(2000)
+    expect([on(page, 'ring'), on(page, 'arrow'), on(page, 'right'), on(page, 'hint')]).toEqual([true, true, true, true])
+    expect(page.errors).toEqual([])
+    page.close()
+  })
+
   test('an answer that comes late to a sheet the person left as it was is still drawn', async () => {
     const page = await opened({}, canvas(PICTURE))
     page.to('board')
@@ -796,7 +835,7 @@ describe('the cube’s late answers and long histories', () => {
     await turned.refuse()
     for (let i = 61; i < 260; i++) press(page, i % 2 ? 'U' : 'R')
     expect(page.$('#cube-turns').textContent).toBe('200 turns since it was solved')
-    expect(page.$('#cube-said').textContent).toBe('That is 200 turns. Ask for the next turns, or start solved.')
+    expect(page.$('#cube-said').textContent).toBe('The cube keeps 200 turns of yours at most. Ask for the next turns, or start solved.')
     page.$('#cube-mix').click()
     expect(page.$('#cube-turns').textContent).toBe('200 turns since it was solved')
     page.$('#cube-ask').click()
