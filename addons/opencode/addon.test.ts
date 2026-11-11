@@ -1300,15 +1300,26 @@ describe('the OpenCode add-on', () => {
       expect(opencode.prompts).toEqual([{ sessionID: 'ses_parent', text: click('k1').text, delivery: 'steer' }])
     })
 
-    it('says that this OpenCode is open before any conversation is known, and that it lacks a call it needs', async () => {
+    it('says that this OpenCode is open before any conversation is known', async () => {
+      standIn()
+      const c = await connector()
+      await load2()
+      await seconds(2)
+      expect(c.state.runtimes[0]).toMatchObject({ harness: 'opencode', addon: { api: 1, delivery: true, idle: false, missing: [] } })
+      expect(c.polls()).toEqual([])
+    })
+
+    it('does nothing at all where OpenCode calls it with a context that cannot hand a message over, as OpenCode 1.x’s copy of the 2.x host does', async () => {
       standIn()
       const c = await connector()
       const opencode = fakeOpenCode2()
-      const cleanup = (await addon.default.setup({ ...opencode.ctx, session: { hook: opencode.ctx.session.hook } } as any)) as () => Promise<void>
-      loaded.push({ dispose: cleanup } as any)
-      await seconds(2)
-      expect(c.state.runtimes[0]).toMatchObject({ harness: 'opencode', addon: { api: 1, delivery: false, idle: false, missing: ['session', 'submit'] } })
-      expect(c.polls()).toEqual([])
+      // As OpenCode 1.18.32 calls it: its own `server` is what takes clicks there, and this must not say that OpenCode cannot
+      const cleanup = await addon.default.setup({ ...opencode.ctx, session: { hook: opencode.ctx.session.hook } } as any)
+      expect(cleanup).toBeUndefined()
+      await seconds(3)
+      expect(c.state.runtimes).toEqual([])
+      expect(c.state.asked).toEqual([])
+      expect(opencode.state.subscribed).toBe(0)
     })
 
     it('lets go of everything it set up when OpenCode unloads it', async () => {

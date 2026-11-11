@@ -612,8 +612,13 @@ async function server({ client }) {
  * asks about that conversation too and hands its clicks to the conversation that started it.
  */
 async function setup(ctx) {
-  const session = typeof ctx?.session?.get === 'function'
-  const submit = typeof ctx?.session?.prompt === 'function'
+  // OpenCode 1.x carries an early copy of the 2.x plugin host beside its own, which loads this
+  // file too and calls `setup` with a context that cannot hand a message over. That OpenCode runs
+  // `server` as well, which can. So where the context lacks any call a click needs, this does
+  // nothing at all: it says nothing to the connector, which would otherwise take OpenCode for one
+  // that cannot take clicks.
+  const can = (domain, name) => typeof ctx?.[domain]?.[name] === 'function'
+  if (!(can('session', 'get') && can('session', 'prompt') && can('session', 'hook') && can('shell', 'hook') && can('event', 'subscribe'))) return
   const rootOf = roots(async (id) => {
     try {
       const got = await ctx.session.get({ sessionID: id })
@@ -633,7 +638,7 @@ async function setup(ctx) {
     if (map.size > 500) map.delete(map.keys().next().value)
   }
   const b = bridge({
-    missing: [...(session ? [] : ['session']), ...(submit ? [] : ['submit'])],
+    missing: [],
     ready: () => true,
     async submit(s, text) {
       try {
