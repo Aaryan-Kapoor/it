@@ -67,6 +67,23 @@ export const WAS_CUT_OFF =
   '[It] An earlier turn of this conversation that It had reopened was cut off before it ended, so some of what it was working on may already be done. What is above may be that same work given again, or something new, or both: go by the action ids. Look at the page’s state, and at what you last did in this conversation, before you do any of it, and do not do twice what was already done.'
 
 /**
+ * What is said straight after `WAS_CUT_OFF`, of what the turn that was cut off had started and
+ * left running. A turn that is cut off has what it left ended before its conversation is
+ * reopened again (see `carryOn` and `endTree`), and an agent that is not told so takes a server
+ * that turn started to be up still, or a command it was in the middle of to have finished.
+ */
+export const LEFT_ENDED =
+  'Nothing that turn had started is still running: It ended whatever it had left running when it was cut off. So a command it was in the middle of did not finish, and a server or anything else it had started and left running is not there any more. Start again what is still needed.'
+
+/**
+ * What is said in its place where It could not tell what was left of the turn, and the person
+ * let its conversation be reopened all the same, with `it runs clear`: nothing was ended, and
+ * what the turn started may be running beside whatever this one starts.
+ */
+export const LEFT_MAY_RUN =
+  'It could not tell whether what that turn had started was still running, and ended none of it, so a command or a server that turn started may still be running. Look for it before you start the same thing again, so that it does not run twice.'
+
+/**
  * What a conversation is told, the next time it is reopened, when the person stopped its last
  * reopened turn from the page. Said so that nothing of that turn is taken up again: an app that
  * is ended in the middle of a turn leaves, in the conversation, what the turn was asked and
