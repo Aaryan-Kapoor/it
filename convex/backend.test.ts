@@ -3670,15 +3670,14 @@ describe('clicks and their delivery', () => {
     for (let i = 0; i < 120; i++) await click(`click-${String(i).padStart(4, '0')}`)
     await runWhatIsDue(t)
     vi.setSystemTime(countedAt - ahead)
-    await expect(click('click-refused')).rejects.toThrow(`"retryAfterMs":${ahead + 500}`)
+    await expect(click('click-refused')).rejects.toThrow(`"retryAfterMs":${ahead + 1000}`)
 
-    // Waiting for the future baseline earns nothing. The next token needs another half second.
+    // Waiting for the future baseline earns nothing. The next token needs another second.
     vi.setSystemTime(countedAt)
-    await expect(click('click-at-baseline')).rejects.toThrow('"retryAfterMs":500')
-    vi.setSystemTime(countedAt + 499)
-    // A moment more, or two where the fractions of a token do not come out even
-    await expect(click('click-before-ready')).rejects.toThrow(/"retryAfterMs":[12]\b/)
-    vi.setSystemTime(countedAt + 500)
+    await expect(click('click-at-baseline')).rejects.toThrow('"retryAfterMs":1000')
+    vi.setSystemTime(countedAt + 999)
+    await expect(click('click-before-ready')).rejects.toThrow('"retryAfterMs":1')
+    vi.setSystemTime(countedAt + 1000)
     expect(await code(click('click-ready'))).toBe('ok')
     expect(await code(click('click-no-second-token'))).toBe('rate_limited')
   })
