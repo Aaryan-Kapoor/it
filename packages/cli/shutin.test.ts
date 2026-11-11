@@ -1,10 +1,10 @@
 import { execFile } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, describe, expect, test } from 'vitest'
-import { askConnectorWith, closedToNetwork, keptFromIt, notLet } from './src/lib'
+import { askConnectorWith, closedToNetwork, keptFromIt, notLet, writeRefused } from './src/lib'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const bundle = path.join(here, 'dist', 'it.mjs')
@@ -96,5 +96,50 @@ describe('a command that the system keeps from the network', () => {
     const freely = JSON.parse(free.out) as { blocked?: boolean; running: boolean; hint: string }
     expect(freely.hint).toContain('It is not running on this machine.')
     expect([freely.blocked, freely.running]).toEqual([undefined, false])
+  })
+})
+
+describe('a write into It’s folder that the system refuses', () => {
+  test('is told by a read-only file system in It’s folder, and otherwise only where the folder the file would go in may not be written into', () => {
+    const home = path.join(tmp, 'refused')
+    mkdirSync(home, { recursive: true })
+    const before = process.env.IT_HOME
+    process.env.IT_HOME = home
+    try {
+      const refused = (code: string, file: string, syscall = 'open') => writeRefused(Object.assign(new Error(code), { code, syscall, path: file }))
+      const inside = path.join(home, 'publication-pending', 'a.json')
+      // A read-only file system refuses only writes, wherever in It's folder, a child whose name begins with two dots among them
+      expect([refused('EROFS', inside), refused('EROFS', path.join(home, '..cache', 'a'))]).toEqual([true, true])
+      // Where the folder may be written into, a refusal is something else: a file that may not be read, or a link that leads nowhere
+      expect([refused('EACCES', inside), refused('EPERM', inside), refused('ENOENT', path.join(home, 'publication-pending'), 'mkdir')]).toEqual([
+        false,
+        false,
+        false,
+      ])
+      // A refusal outside It's folder, a file that is only missing, and an error with no file are never one
+      expect([
+        refused('EROFS', path.join(tmp, 'elsewhere.png')),
+        refused('EACCES', `${home}-beside/a`),
+        refused('ENOENT', inside),
+        writeRefused(Object.assign(new Error('EROFS'), { code: 'EROFS' })),
+        writeRefused(null),
+      ]).toEqual([false, false, false, false, false])
+      // Where It's folder may not be written into, a refused write and Node's word for a folder it could not make are one
+      if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+        chmodSync(home, 0o500)
+        try {
+          expect([refused('EACCES', inside), refused('EPERM', inside), refused('ENOENT', path.join(home, 'publication-pending'), 'mkdir')]).toEqual([
+            true,
+            true,
+            true,
+          ])
+        } finally {
+          chmodSync(home, 0o700)
+        }
+      }
+    } finally {
+      if (before === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before
+    }
   })
 })
