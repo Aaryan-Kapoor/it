@@ -13,6 +13,7 @@ import { MARK, PROTOCOL_VERSION, TAKES, WAKE_BACK_MS } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS } from './src/addons.generated'
+import { arrives } from './src/arrives'
 import { conversationFolder, conversationProfile, noteConversation } from './src/publish'
 import * as wake from './src/wake'
 
@@ -215,15 +216,20 @@ vi.mock('./src/service', async (original) => {
   const real = await original<typeof import('./src/service')>()
   return { ...real, restartWay: () => stand.restartWay ?? real.restartWay() }
 })
-vi.mock('./src/setup', () => ({
-  claudeFolders: () => stand.claudeFolders,
-  detectAll: async () => stand.found,
-  newerProgramSeen: () => false,
-  reconcile: async (chosen: readonly string[] | (() => readonly string[])) => {
-    stand.reconciled.push([...(typeof chosen === 'function' ? chosen() : chosen)])
-    return []
-  },
-}))
+vi.mock('./src/setup', async (original) => {
+  const { KNOWN, older } = await original<typeof import('./src/setup')>()
+  return {
+    KNOWN,
+    older,
+    claudeFolders: () => stand.claudeFolders,
+    detectAll: async () => stand.found,
+    newerProgramSeen: () => false,
+    reconcile: async (chosen: readonly string[] | (() => readonly string[])) => {
+      stand.reconciled.push([...(typeof chosen === 'function' ? chosen() : chosen)])
+      return []
+    },
+  }
+})
 // Claude Code's notes of the conversations it has open are read as it writes them. Whether the
 // process a note names is the Claude Code that wrote it is for claude-open.test.ts to try, on each
 // system: here the note names this test's own process, which is no Claude Code
@@ -6619,6 +6625,20 @@ describe('how what is done on a conversation’s pages would reach it, as the co
     expect(await way('codex', 'thread-1')).toMatchObject({ connected: true, listening: true, thread: 'none' })
     // An app the person has not connected here is said to be not connected
     expect(await way('opencode', 'ses_abc')).toMatchObject({ connected: false, listening: false, thread: 'none' })
+  })
+
+  test('an open idle Codex queue makes arrivals automatic after a minute without a hook', async () => {
+    await start()
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: false } })
+    const real = Date.now
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => real() + 60_000)
+    try {
+      const route = await way('codex', 'thread-1')
+      expect(route).toMatchObject({ listening: true })
+      expect(arrives({ session: { harness: 'codex', id: 'thread-1' }, addonHere: undefined, route: route! })).toMatchObject({ byItself: true, via: 'addon' })
+    } finally {
+      clock.mockRestore()
+    }
   })
 
   test('Codex remains reachable after five seconds without a hook', async () => {

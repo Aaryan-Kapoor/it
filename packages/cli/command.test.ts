@@ -1462,6 +1462,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
             notShown: [
               { display: 'TV', displayId: 'k57tv', reason: 'agents_off' },
               { display: 'Phone', displayId: 'p1', reason: 'not_chosen' },
+              { display: 'Gym', displayId: 'g1', reason: 'locked' },
             ],
             took: false,
             chosen: 'open',
@@ -1474,6 +1475,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       const said = printed(opened)
       expect(said).toMatchObject({ shownOn: ['Desk'], shownDisplayIds: ['jh7desk'] })
       expect(said.hint).toContain('No display was named, so it is shown on "Desk" alone')
+      expect(said.hint).toContain('most recently used unlocked display')
       expect(said.hint).toContain('--everywhere')
     } finally {
       await b.close()
@@ -1488,6 +1490,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       // Sent to the display used last, whose site is closed: the person needs the link
       answer = { displays: ['Desk'], displayIds: ['jh7desk'], notShown: [], took: false, chosen: 'last_used', url: 'http://127.0.0.1:39000/p/board' }
       let said = printed(await run(m, ['open', 'board'], b.env))
+      expect(said.hint).toContain('most recently used unlocked display')
       expect(said.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/p\/board$/)
       expect(said.hint).toContain('give them `url` in the chat')
       // At the place the owner chose for links, where It is reached there
