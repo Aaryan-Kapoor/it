@@ -275,6 +275,15 @@ export function fileText(file: string, what: string): string {
     // Where the system cannot refuse a link as it opens a file, as on Windows, the name may have
     // been pointed at another file after it was looked at: what was opened must be what was looked at
     if (stat.ino !== before.ino || stat.dev !== before.dev) throw link()
+    // Windows may give no usable id for a file: 0 where the file system keeps none, or every bit
+    // set where it cannot make one unique. Two files then look the same, and so where a link
+    // cannot be refused as the file is opened, a file without a usable id is not read at all
+    if (constants.O_NOFOLLOW === undefined && (stat.ino === 0n || stat.ino === 0xffffffffffffffffn))
+      throw new Problem(
+        `It cannot tell on this drive whether ${file} is the file it looked at, so it does not read it.`,
+        'invalid',
+        "Write the JSON to a file in the user's temporary folder, on the system drive, and give that path.",
+      )
     const tooLarge = () => new Problem(`${file} is larger than this command reads (${sizeSaid(UPLOAD.requestBytes)}).`, 'limit')
     if (stat.size > BigInt(UPLOAD.requestBytes)) throw tooLarge()
     // Read no further than the limit and one byte more, however the file grows while it is read
