@@ -276,7 +276,7 @@ Shell.part("cube", (my) => {
   function arrow(t, cam, now) {
     var b = (t.a + 1) % 3, c = (t.a + 2) % 3, N = 40, pts = [];
     var flat = t.l !== 0 && (cam[t.a] * t.l) / FAR > 0.6, mid = flat ? (t.a === 2 ? QUARTER : t.a === 0 ? 0 : Math.atan2(-cam[c], -cam[b])) : Math.atan2(cam[c], cam[b]);
-    var round = flat ? 4.5 : 1.7, out = flat ? 1.0 : 2.3, along = flat ? t.l * (1 + REACH + 0.06) : t.l;
+    var round = flat ? 4.5 : 1.7, out = flat ? 1.0 : 2.2, along = flat ? t.l * (1 + REACH + 0.06) : t.l;
     for (var i = 0; i <= N; i++) {
       var phi = mid + t.q * (i / N - 0.5) * round, v = [0, 0, 0];
       v[t.a] = along; v[b] = out * Math.cos(phi); v[c] = out * Math.sin(phi);
@@ -327,7 +327,8 @@ Shell.part("cube", (my) => {
   function draw(now) {
     if (!ctx) ctx = canvas.getContext("2d");
     if (!ctx) return;
-    var r = Math.min(window.devicePixelRatio || 1, 3);
+    // As sharp as the screen is, up to what a small device draws with ease
+    var r = Math.min(window.devicePixelRatio || 1, 3, Math.max(1, Math.sqrt(2.6e6 / (W * H))));
     if (r !== dpr || canvas.width !== Math.round(W * r) || canvas.height !== Math.round(H * r)) { dpr = r; canvas.width = Math.round(W * r); canvas.height = Math.round(H * r); }
     dark = !!scheme && scheme.matches;
     aim();
@@ -397,6 +398,8 @@ Shell.part("cube", (my) => {
     var solved = home(faces), step = walk && walk.steps[walk.at];
     $("cube-count-of").textContent = solved ? "Solved" : count(way.length) + " back to solved";
     $("cube-turns").classList.toggle("home", solved);
+    // Said large beside the cube once it has come home, and so not twice
+    $("cube-turns").style.visibility = won ? "hidden" : "";
     // Before its first mix the cube is solved and nothing is made of that
     var done = solved && !playing && !first;
     askBtn.hidden = !!walk || done;
