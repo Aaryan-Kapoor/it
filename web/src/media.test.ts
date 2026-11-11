@@ -996,6 +996,8 @@ describe('the camera, live to a page', () => {
       expect(host.querySelectorAll('.media-live')).toHaveLength(1)
       expect(host.querySelector('.media-cam')?.textContent).toBe('Camera and mic liveStop')
       expect(host.querySelector('.media-cam')?.getAttribute('aria-label')).toBe('The camera and the microphone are live to “Page page-1”')
+      // Marked as the wider chip, which on a phone shows only the square of its Stop
+      expect(host.querySelector('.media-cam')?.hasAttribute('data-sound')).toBe(true)
       await act(async () => (host.querySelector('button[aria-label="Stop the camera and the microphone"]') as HTMLButtonElement).click())
       expect(told).toHaveBeenCalledWith('ended', 'person')
       expect(device.tracks.map((t) => t.stopped)).toEqual([true, true])

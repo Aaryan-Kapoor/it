@@ -173,7 +173,8 @@ function View({ stream, className, onView }: { stream: MediaStream; className: s
  * The camera live to a page, in the bar: a red dot, that the page sees the camera as it happens,
  * and Stop. No picture of the camera is shown here, since the page shows the picture itself.
  * Opened with sound, it says that the microphone is live with it, and its Stop ends both. On a
- * phone, beside the microphone's own chip or a question, it says only "Cam".
+ * phone, beside the microphone's own chip or a question, it says only "Cam", and with sound its
+ * Stop shows only its square, so that the bar stays on one row.
  */
 function CameraLive({ c }: { c: LiveCamera }) {
   const paused = c.state === 'paused'
@@ -183,6 +184,7 @@ function CameraLive({ c }: { c: LiveCamera }) {
     <span
       className="media-bar media-live media-cam"
       data-state={c.state}
+      data-sound={sound ? '' : undefined}
       role="status"
       aria-label={`${what} ${paused ? 'paused' : 'live'} to “${c.title}”`}
       title={

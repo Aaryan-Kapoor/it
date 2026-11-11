@@ -4149,12 +4149,12 @@ fieldset.media-bar {
     animation: none;
   }
 }
-/* On a phone, the camera's chip and the microphone's side by side, or either beside a question It asks, which takes the title's place, would push It's bar onto a second row and the page down with it: the mark steps aside, each Stop shows only its square, and each chip says just "Cam" or "Mic". Each keeps its own label for whoever hears the screen read */
+/* On a phone, the camera's chip and the microphone's side by side, or either beside a question It asks, which takes the title's place, would push It's bar onto a second row and the page down with it: the mark steps aside, each Stop shows only its square, and each chip says just "Cam" or "Mic". A camera opened with sound says both are live in one chip, which is as wide as two: the mark steps aside and its Stop shows only its square. Each keeps its own label for whoever hears the screen read */
 @media (max-width: 520px) {
-  .page-nav:has(.media-cam):has(.media-mic) .page-nav-mark {
+  .page-nav:is(:has(.media-cam):has(.media-mic), :has(.media-cam[data-sound])) .page-nav-mark {
     display: none;
   }
-  .page-nav:is(:has(.media-cam):has(.media-mic), :has(.media-live):has(.media-ask, .media-waiting)) .media-live-stop {
+  .page-nav:is(:has(.media-cam):has(.media-mic), :has(.media-cam[data-sound]), :has(.media-live):has(.media-ask, .media-waiting)) .media-live-stop {
     gap: 0;
     padding: 0 7px;
     font-size: 0;
