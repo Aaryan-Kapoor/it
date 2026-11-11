@@ -225,7 +225,7 @@ A control that is not a form field, such as a tab or the item that is open, work
 
 ## Large state
 
-A single argument on a command line has a limit, about 128 KB on Linux and under 32 KB on Windows, so state larger than that cannot be given as one argument on any system. Write it with your own file tool to a file in the temporary folder, so as to leave nothing in the user's project, and give its path instead: `it patch board --file /tmp/board.json`, `it set board order --file /tmp/order.json` for one value, or `--state-file <path>` on `it create`.
+A single argument on a command line has a limit, about 128 KB on Linux and under 32 KB on Windows, so state larger than that cannot be given as one argument on that system. Write it with your own file tool to a file in the temporary folder, so as to leave nothing in the user's project, and give its path instead: `it patch board --file /tmp/board.json`, `it set board order --file /tmp/order.json` for one value, or `--state-file <path>` on `it create`.
 
 ## On Windows
 
