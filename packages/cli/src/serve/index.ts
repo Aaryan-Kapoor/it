@@ -19,6 +19,7 @@ import { KEEP_MS, keepItsFolder } from './kept'
 import { onTheInternet, reachable } from './network'
 import { recoverStartup } from './startup'
 import { tailnetAddresses, tailnetName } from './tailnet'
+import { watchTask } from './task'
 
 /**
  * Runs the service until it is asked to stop. A backend that ends by itself, and a newer It
@@ -45,6 +46,18 @@ export async function serve(say: (line: string) => void = (line) => void process
     say('asked to stop')
     hear('SIGTERM')
   }, 500)
+  // On Windows, where Task Scheduler told to stop It's task ends only the console the launcher
+  // runs in, the service stops by itself once that has gone, as it does when it is asked to, and
+  // ends well, which ends its launcher with it: see `./task`
+  let taskEnded = false
+  const unwatch =
+    process.platform === 'win32' && supervised()
+      ? watchTask((why) => {
+          taskEnded = true
+          say(`${why}; the service stops`)
+          hear('SIGTERM')
+        }, say)
+      : () => {}
   // On Windows, It's folder is kept to the person from the moment the service starts and for as
   // long as it runs, whatever another program opens it to meanwhile
   const said = new Set<string>()
@@ -75,8 +88,10 @@ export async function serve(say: (line: string) => void = (line) => void process
       { supervised: supervised(), signal: asked.signal, say },
     )
   } catch (err) {
-    // Asked to stop while it was still starting, it has stopped, which is no failure
-    if (!(err instanceof Problem && err.code === 'stopped')) {
+    // Asked to stop while it was still starting, it has stopped, which is no failure. Nor is
+    // anything that went wrong once its task had ended: nothing is to start it again then
+    if (taskEnded) say(`stopping, it could not start: ${err instanceof Problem ? err.code : why(err)}`)
+    else if (!(err instanceof Problem && err.code === 'stopped')) {
       // Counted by the one word of what went wrong, where It has a word for it, and never by what was said of it
       record('service.failed', { what: failureOf(err instanceof Problem ? err.code : undefined) })
       throw err
@@ -84,14 +99,18 @@ export async function serve(say: (line: string) => void = (line) => void process
   } finally {
     clearInterval(asking)
     clearInterval(keeping)
+    unwatch()
     process.off('SIGINT', hear)
     process.off('SIGTERM', hear)
   }
   // Stopped to be started again as the program installed now, as after an update from the site,
   // it ends with the code that says so to its launcher, and with no other failure's
+  // With its task ended, it ends well whatever else happened, so that its launcher ends too and
+  // starts nothing again: the task, started again, starts a launcher of its own
+  if (taskEnded) process.exitCode = 0
   const restart = process.exitCode === RESTART_CODE
   say(restart ? 'service stopped, to be started again by its launcher as the program installed now' : 'service stopped')
-  if (failed) process.exitCode = restart ? RESTART_CODE : 1
+  if (failed && !taskEnded) process.exitCode = restart ? RESTART_CODE : 1
 }
 
 /** The ports the door listens on: the site's, and the pages'. */
