@@ -7,21 +7,7 @@ import { type FileHandle, open } from 'node:fs/promises'
 import path from 'node:path'
 import { type FileEntry, isSafePath, LIMITS, NOUN, PUBLICATION, sizeSaid, UPLOAD, uploadBudgetMs } from '@it/protocol'
 import { claimLock } from './legacy-lock'
-import {
-  api,
-  call,
-  claudeAddonHere,
-  direct,
-  doorRefusal,
-  inHome,
-  machine,
-  Problem,
-  readJson,
-  sessionAsked,
-  sessionNote,
-  throughDoor,
-  writePrivate,
-} from './lib'
+import { addonHere, api, call, direct, doorRefusal, inHome, machine, Problem, readJson, sessionAsked, sessionNote, throughDoor, writePrivate } from './lib'
 import { type Profile, profileOf } from './profiles'
 import { aloneAt } from './serve/backend'
 import { makeOnce } from './serve/config'
@@ -671,7 +657,7 @@ export async function publish(input: {
       // only as it is finished.
       // With whether It's add-on runs in it, where this command can tell: a conversation that
       // publishes without it is told so by the connector, should it not be able to be reopened
-      if (session) await noteConversation(session, undefined, undefined, session.harness === 'claude-code' ? claudeAddonHere() : undefined)
+      if (session) await noteConversation(session, undefined, undefined, addonHere(session.harness))
       // Counted: which agent app, new or not, how large and of how many files in a few bands, and
       // four things that are each so or not: whether it was given a state to start with, whether it
       // sends anything back, whether it carries a picture, and whether it was brought up at once.

@@ -23,7 +23,7 @@ import path from 'node:path'
 import { describeClick } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import shims from './fixtures/windows-shims.json'
-import { claudeAddonHere } from './src/lib'
+import { addonHere, claudeAddonHere, piAddonHere } from './src/lib'
 import { conversationFolder, conversationsFile, noteConversation, publishedWithoutAddon } from './src/publish'
 import {
   Budget,
@@ -1067,6 +1067,19 @@ describe('the folder a conversation was held in', () => {
     expect(claudeAddonHere({ CLAUDE_CODE_SESSION_ID: 'session-1' })).toBe(false)
     expect(claudeAddonHere({ CLAUDE_CODE_SESSION_ID: 'session-1', IT_HARNESS: 'codex', IT_SESSION: 'thread-1' })).toBe(false)
     expect(claudeAddonHere({ CLAUDE_CODE_SESSION_ID: 'session-1', IT_HARNESS: 'claude-code', IT_SESSION: 'session-1' })).toBe(true)
+  })
+
+  test('whether It’s add-on runs in a Pi conversation is told by the conversation it names for its commands, which must be the one Pi names', () => {
+    expect(piAddonHere({})).toBeUndefined()
+    expect(piAddonHere({ CLAUDE_CODE_SESSION_ID: 'session-1' })).toBeUndefined()
+    // Open before the add-on was installed, as the conversation that installed It is until /reload
+    expect(piAddonHere({ PI_SESSION_ID: 'pi-1' })).toBe(false)
+    // A Pi without the add-on started from one with it inherits the outer one's name for its own conversation
+    expect(piAddonHere({ PI_SESSION_ID: 'pi-2', IT_PI_SESSION: 'pi-1' })).toBe(false)
+    expect(piAddonHere({ PI_SESSION_ID: 'pi-1', IT_PI_SESSION: 'pi-1' })).toBe(true)
+    expect(addonHere('pi', { PI_SESSION_ID: 'pi-1' })).toBe(false)
+    expect(addonHere('claude-code', { CLAUDE_CODE_SESSION_ID: 'session-1' })).toBe(false)
+    expect(addonHere('opencode', { OPENCODE_SESSION_ID: 'o-1' })).toBeUndefined()
   })
 
   test('a note that is not as It wrote it says nothing', () => {

@@ -7187,6 +7187,25 @@ describe('whether what the person does arrives by itself, as a page’s command 
     }
   })
 
+  test('a Pi conversation that publishes without It’s add-on is noted so, for the connector to keep from reopening it, and one with the add-on is not', async () => {
+    const m = machine()
+    b = await publishing(m)
+    const c = await connectorSaying(m, { connected: true, listening: false, runtime: 'inactive', thread: 'none' })
+    try {
+      // Open since before the add-on was installed, as the conversation that installed It is until /reload
+      await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], { ...b.env, PI_SESSION_ID: 'pi-open' })
+      expect(notes(m)['pi:pi-open']).toMatchObject({ addon: false })
+      // After /reload the add-on names the conversation for its commands, and the mark is taken away
+      await run(m, ['update', 'plan', '--html', '<p>again</p>'], { ...b.env, PI_SESSION_ID: 'pi-open', IT_PI_SESSION: 'pi-open' })
+      expect(notes(m)['pi:pi-open']).not.toHaveProperty('addon')
+      await run(m, ['create', 'Other', '--id', 'other', '--html', '<p>hi</p>'], { ...b.env, PI_SESSION_ID: 'pi-loaded', IT_PI_SESSION: 'pi-loaded' })
+      expect(notes(m)['pi:pi-loaded']).not.toHaveProperty('addon')
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
   test('one in a Claude Code too old for that is told to ask the person for a new conversation instead', async () => {
     const m = machine()
     b = await publishing(m)
