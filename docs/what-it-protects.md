@@ -58,7 +58,7 @@ What was recorded is given to the page that asked, as a file, and to nothing els
 
 ### The site loads only itself
 
-The site runs no script and uses no style, picture or anything else that does not come from the site itself. It talks only to the door it came from, it frames only a page being shown, it sends a form nowhere, and nothing may frame it.
+The site runs no script and uses no style, picture or anything else that does not come from the site itself. It talks only to the door it came from, it frames only a page being shown and the players and maps from a fixed list of providers that a page embeds, it sends a form nowhere, and nothing may frame it. [A player or a map in a page is the provider's](#a-player-or-a-map-in-a-page-is-the-providers) says what that list is and what framing them gives away.
 
 ### Other devices reach only the door
 
@@ -206,6 +206,15 @@ With `it https on`, Tailscale on the machine It runs on reads everything that pa
 A program on the machine It runs on can say that a request came over `https` through Tailscale. It gains nothing by it that it could not have already, since it can ask the door anything as a program.
 
 Tailscale's certificate for the machine's name is made by Let's Encrypt, and every certificate it makes is written into public logs that anyone can read. So the machine's name on your tailnet, and your tailnet's own name, become public once `it https on` has run. Nothing else about It is in them. Do not turn on Tailscale Funnel for It's ports: Funnel opens a name to the whole internet, and It is not made for that.
+
+### A player or a map in a page is the provider's
+
+A page is kept in a sandbox where a player from another site has no origin and no storage, and where YouTube refuses to play. So a page that embeds a player or a map from one of a fixed list of providers has it framed by the site itself, over the place the page keeps for it. The list is YouTube (`www.youtube.com` and `www.youtube-nocookie.com`), Vimeo (`player.vimeo.com`), Spotify (`open.spotify.com`), SoundCloud (`w.soundcloud.com`), Google Maps (`www.google.com` and `maps.google.com`, at the addresses of their maps for embedding only), OpenStreetMap (`www.openstreetmap.org`) and Twitch (`player.twitch.tv`). It is written into It and cannot be added to, and the site frames no address of those hosts that is not one of their embeds. You are not asked, and nothing on the screen says whose a player is.
+
+- **The provider learns where you reached the site.** The browser tells it the site's origin, as YouTube needs before it will play, and nothing of the page's own address. On your tailnet that origin is the machine's name, which is public already through the logs that every certificate is written to. On your home network it is the machine's address there, and on the machine itself it is `localhost`. Twitch is told the site's host name besides, which it plays only beside, and YouTube's player API is told the site's origin where a page uses it.
+- **A player runs with your own sign-in for that provider.** It is framed in the browser that shows the page, at the provider's own origin, with that browser's cookies and storage for the provider as the browser allows them in a frame. So what you watch or play there can go into your history with that provider, and a page can choose what is played as you. It is the provider's page, kept apart from the site and from the page as any other site's is: it cannot read either, and they reach it only by the messages a page sends it through the site, at its own origin. It can open windows of its own, and cannot move the tab the site is in.
+- **A page decides what is played and where.** A page can put any embed on the list anywhere in its own area, start it and drive it, without a word to you. A player never covers the site's own bar or menus, and a click that lands within 0.6 seconds of one appearing, moving, changing size or being uncovered, by however little, is taken by a shield and reaches nothing, so that a page cannot slide a player under a click meant for the page. When a page's document is replaced, the players it asked for go with it: at once where the next document is one of It's, and otherwise within five seconds, during which no click reaches them. Whatever the old document left behind, such as its channel to the site in another window's hands, is heard no more from then on.
+- **A player lies over the page rather than in it.** Nothing of the page can be drawn over a player, the wheel or a swipe over one does not scroll the page, and a page that puts one of its own elements in fullscreen leaves its players behind. While the page scrolls, a player can trail its place by a frame in some browsers.
 
 ### A notification passes through the browser's push service
 

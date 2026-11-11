@@ -3,7 +3,21 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { forgetAll, keepFor, letGoElsewhere } from './lib'
-import { drain, dropOld, givenUpFor, outboxBelongsTo, recoverLeftovers, type Sent, seenGivenUp, submit, unsaved, unsent, watchOutbox } from './outbox'
+import {
+  drain,
+  dropOld,
+  givenUpFor,
+  onItsWay,
+  outboxBelongsTo,
+  outcomeOf,
+  recoverLeftovers,
+  type Sent,
+  seenGivenUp,
+  submit,
+  unsaved,
+  unsent,
+  watchOutbox,
+} from './outbox'
 
 const envelope = (id: string, over: Partial<Sent> = {}): Sent => ({ v: 1, clientActionId: id, name: 'approve', payload: '{"n":1}', contentVersion: 1, ...over })
 const refuse = (code: string, extra: Record<string, unknown> = {}) => new ConvexError({ code, message: code, ...extra })
@@ -18,6 +32,30 @@ function backend(answers: (unknown | Error | 'never')[]) {
     return next instanceof Error ? Promise.reject(next) : Promise.resolve(next ?? { actionId: 'a1' })
   })
   return { client: { mutation, connectionState: () => ({ isWebSocketConnected: connected }) } as never, calls }
+}
+/** A stand-in for the backend that answers each click by its id: with what `answers` holds for it, or as accepted. */
+function byId(answers: Record<string, unknown | Error>) {
+  const mutation = vi.fn((_fn: unknown, args: { envelope: Sent }) => {
+    if (getFunctionName(_fn as never) === 'actions:replayGrant') return Promise.resolve({ until: Date.now() + 6 * 86400_000 })
+    const next = answers[args.envelope.clientActionId]
+    return next instanceof Error ? Promise.reject(next) : Promise.resolve(next ?? { actionId: 'a1' })
+  })
+  return { mutation, connectionState: () => ({ isWebSocketConnected: true }) } as never
+}
+/**
+ * A page sends a click and has gone before It answers, which It refuses for now: the click is
+ * kept here, as that sending, to be sent later. It is refused for now while the outbox at once
+ * tries again what it keeps, and that try is let finish, so that the test's own sending is the next.
+ */
+async function leftBehind(id: string) {
+  const busy = {
+    mutation: vi.fn((fn: unknown) =>
+      getFunctionName(fn as never) === 'actions:replayGrant' ? Promise.resolve({ until: Date.now() + 6 * 86400_000 }) : Promise.reject(refuse('unavailable')),
+    ),
+    connectionState: () => ({ isWebSocketConnected: true }),
+  } as never
+  await expect(submit(busy, 'alice', 'page1', envelope(id), () => false)).rejects.toBeInstanceOf(ConvexError)
+  await new Promise((resolve) => setTimeout(resolve, 50))
 }
 let connected = true
 const keep = (user: string, id: string, at = Date.now() - 60_000, artifactId = 'page1') =>
@@ -61,6 +99,146 @@ describe('the outbox', () => {
     expect(await submit(b.client, 'alice', 'page1', envelope('click-0001'))).toEqual({ actionId: 'a1' })
     expect(stored()).toEqual([])
     expect(b.calls[0]).toMatchObject({ artifactId: 'page1', envelope: { clientActionId: 'click-0001' } })
+  })
+
+  test('a click is said to be on its way while it is being sent and while it is kept here to be sent, by the id its page gave it, and not once it is accepted', async () => {
+    const answer: { done?: () => void } = {}
+    // A backend that answers the click only when the test says
+    const slow = {
+      mutation: (fn: unknown) =>
+        getFunctionName(fn as never) === 'actions:replayGrant'
+          ? Promise.resolve({ until: Date.now() + 6 * 86400_000 })
+          : new Promise((resolve) => {
+              answer.done = () => resolve({ actionId: 'a1' })
+            }),
+      connectionState: () => ({ isWebSocketConnected: true }),
+    } as never
+    const sent = submit(slow, 'alice', 'page1', envelope('click-0090'))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(onItsWay('alice', 'page1', 'click-0090')).toBe(true)
+    expect(onItsWay('alice', 'page1', 'click-0091')).toBe(false)
+    expect(onItsWay('alice', 'page2', 'click-0090')).toBe(false)
+    answer.done?.()
+    await sent
+    expect(onItsWay('alice', 'page1', 'click-0090')).toBe(false)
+    // One kept here from before, to be sent when it can be
+    keep('alice', 'click-0092')
+    expect(onItsWay('alice', 'page1', 'click-0092')).toBe(true)
+  })
+
+  test('a click a page of this tab sent, kept here and sent later, is remembered by how it ended: accepted, as the action It made of it, or refused for good, with why', async () => {
+    await leftBehind('click-0095')
+    await leftBehind('click-0096')
+    expect(outcomeOf('alice', 'page1', 'click-0095')).toBeUndefined()
+    await drain(byId({ 'click-0095': { actionId: 'a95' }, 'click-0096': refuse('invalid') }), 'alice')
+    expect(outcomeOf('alice', 'page1', 'click-0095')).toEqual({ actionId: 'a95' })
+    expect(outcomeOf('alice', 'page1', 'click-0096')).toEqual({ refused: 'invalid' })
+    expect(outcomeOf('alice', 'page2', 'click-0095')).toBeUndefined()
+    // And nothing is said of a click kept here that no page of this tab sent, such as one from before the site was opened
+    keep('alice', 'click-0094')
+    await drain(byId({ 'click-0094': { actionId: 'a94' } }), 'alice')
+    expect(outcomeOf('alice', 'page1', 'click-0094')).toBeUndefined()
+  })
+
+  test('how a sending of a click ended is not said of a later sending under the same id, nor once the pairing it was made under is let go of', async () => {
+    await leftBehind('click-0098')
+    await drain(byId({ 'click-0098': { actionId: 'a98' } }), 'alice')
+    expect(outcomeOf('alice', 'page1', 'click-0098')).toEqual({ actionId: 'a98' })
+    // Sent again under the same id: what became of the first sending is not what becomes of this one
+    const again = submit(byId({ 'click-0098': { actionId: 'a98-b' } }), 'alice', 'page1', envelope('click-0098'))
+    expect(outcomeOf('alice', 'page1', 'click-0098')).toBeUndefined()
+    await again
+    expect(outcomeOf('alice', 'page1', 'click-0098')).toBeUndefined()
+    // And what became of a click is forgotten with the pairing it was sent under
+    await leftBehind('click-0099')
+    await drain(byId({ 'click-0099': { actionId: 'a99' } }), 'alice')
+    expect(outcomeOf('alice', 'page1', 'click-0099')).toEqual({ actionId: 'a99' })
+    try {
+      forgetAll('alice')
+      expect(outcomeOf('alice', 'page1', 'click-0099')).toBeUndefined()
+    } finally {
+      // Paired for her again, as every other test here begins
+      keepFor('alice')
+      outboxBelongsTo('alice')
+    }
+  })
+
+  test('a sending of what was kept before that ends after a new sending under the same id began does not say what became of the new one', async () => {
+    keep('alice', 'click-0100')
+    // The click kept from before is being sent, and its answer is held
+    let answerOld: (err: Error) => void = () => {}
+    const calls: string[] = []
+    const client = {
+      connectionState: () => ({ isWebSocketConnected: true }),
+      mutation: vi.fn((fn: unknown, args: { envelope: Sent }) => {
+        if (getFunctionName(fn as never) === 'actions:replayGrant') return Promise.resolve({ until: Date.now() + 6 * 86400_000 })
+        calls.push(args.envelope.clientActionId)
+        if (calls.length === 1)
+          return new Promise((_, reject) => {
+            answerOld = reject
+          })
+        return Promise.reject(refuse('unavailable'))
+      }),
+    } as never
+    const draining = drain(client, 'alice')
+    await vi.waitFor(() => expect(calls).toEqual(['click-0100']))
+    // A page sends a click under the same id meanwhile, which It refuses for now
+    await expect(submit(client, 'alice', 'page1', envelope('click-0100'))).rejects.toBeInstanceOf(ConvexError)
+    // Only now is the one from before refused for good: that is not what became of the new one
+    answerOld(refuse('invalid'))
+    await draining
+    expect(outcomeOf('alice', 'page1', 'click-0100')).toBeUndefined()
+  })
+
+  test('a sending of what was kept before, whose lock is given only after a page began a new sending under the same id, does not say what became of the new one', async () => {
+    keep('alice', 'click-0102')
+    // The browser's locks, given a moment after they are asked for, one holder at a time
+    const taken = new Set<string>()
+    const later = {
+      request: async (name: string, options: { ifAvailable?: boolean }, work: (lock: unknown) => Promise<unknown>) => {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        if (taken.has(name)) {
+          if (options.ifAvailable) return work(null)
+          while (taken.has(name)) await new Promise((resolve) => setTimeout(resolve, 5))
+        }
+        taken.add(name)
+        try {
+          return await work({ name })
+        } finally {
+          taken.delete(name)
+        }
+      },
+    }
+    Object.defineProperty(navigator, 'locks', { configurable: true, value: later })
+    try {
+      // What was kept asks for the lock first, and a page sends the same id before it is given
+      const b = backend([refuse('invalid'), refuse('unavailable')])
+      const draining = drain(b.client, 'alice')
+      const sent = submit(b.client, 'alice', 'page1', envelope('click-0102'))
+      // The one kept from before is refused for good; the page's is refused for now, and it was told
+      await expect(sent).rejects.toBeInstanceOf(ConvexError)
+      await draining
+      expect(b.calls.length).toBe(2)
+      expect(outcomeOf('alice', 'page1', 'click-0102')).toBeUndefined()
+    } finally {
+      Reflect.deleteProperty(navigator, 'locks')
+    }
+  })
+
+  test('what became of a kept click is forgotten when the browser is paired under another session, of the same person or another', async () => {
+    await leftBehind('click-0101')
+    await drain(byId({ 'click-0101': { actionId: 'a101' } }), 'alice')
+    expect(outcomeOf('alice', 'page1', 'click-0101')).toEqual({ actionId: 'a101' })
+    outboxBelongsTo('alice', 'session-2')
+    expect(outcomeOf('alice', 'page1', 'click-0101')).toBeUndefined()
+  })
+
+  test('a kept click refused for good, and kept only so that the person is told, is not on its way', async () => {
+    // Kept from before the upgrade, and refused as a conflict when it is sent: kept to say so, and never sent again
+    keep('alice', 'click-0097')
+    await drain(byId({ 'click-0097': refuse('conflict') }), 'alice')
+    expect(stored()).toContain('it.outbox.alice.page1.click-0097')
+    expect(onItsWay('alice', 'page1', 'click-0097')).toBe(false)
   })
 
   test('told to slow down, it waits and tries again, since the person did click', async () => {

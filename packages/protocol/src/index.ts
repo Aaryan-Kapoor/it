@@ -938,15 +938,145 @@ export class BackendClock {
   }
 }
 
+// ---------- players and maps that the site hosts over a page ----------
+
+/**
+ * A provider of players or maps whose embed the site hosts over a page. A page is a sandboxed
+ * document with no origin, and so is every frame inside it: it has no storage, and it sends no
+ * `Referer`, which YouTube refuses to play without. So the site frames the embed itself, from
+ * its own origin, in a layer over the place the page keeps for it.
+ */
+export interface EmbedProvider {
+  /** Its name, as a person knows it. */
+  name: string
+  /** The hosts its embeds are framed from, each named exactly. */
+  hosts: readonly string[]
+  /** Whether an address on one of those hosts is one of its embeds: by its path, and by its query where the path alone does not say. */
+  embeds: (url: URL) => boolean
+}
+
+/**
+ * The providers It hosts embeds for, and no others: a fixed list, written here and nowhere
+ * else, which the script in a page, the site and the site's content policy are all written
+ * from. A host on it is taken only at the paths of its embeds, so that nothing else of
+ * `www.google.com`, say, can be framed by the site.
+ */
+export const EMBEDS: readonly EmbedProvider[] = [
+  { name: 'YouTube', hosts: ['www.youtube.com', 'www.youtube-nocookie.com'], embeds: (u) => /^\/embed(\/[A-Za-z0-9_-]{1,64})?\/?$/.test(u.pathname) },
+  { name: 'Vimeo', hosts: ['player.vimeo.com'], embeds: (u) => /^\/video\/\d{1,20}\/?$/.test(u.pathname) },
+  { name: 'Spotify', hosts: ['open.spotify.com'], embeds: (u) => /^\/embed(-podcast)?(\/[A-Za-z0-9_-]{1,64}){1,3}\/?$/.test(u.pathname) },
+  { name: 'SoundCloud', hosts: ['w.soundcloud.com'], embeds: (u) => /^\/player\/?$/.test(u.pathname) },
+  {
+    name: 'Google Maps',
+    hosts: ['www.google.com', 'maps.google.com'],
+    // The map Google gives to embed, and the older form of a map's own address that asks to be embedded
+    embeds: (u) =>
+      /^\/maps\/(d\/)?embed(\/v1\/[a-z]{1,20})?\/?$/.test(u.pathname) || (/^\/maps\/?$/.test(u.pathname) && u.searchParams.get('output') === 'embed'),
+  },
+  { name: 'OpenStreetMap', hosts: ['www.openstreetmap.org'], embeds: (u) => u.pathname === '/export/embed.html' },
+  { name: 'Twitch', hosts: ['player.twitch.tv'], embeds: (u) => /^\/?$/.test(u.pathname) },
+]
+
+/** Every host an embed is framed from, as the site's content policy names it. */
+export const EMBED_HOSTS: readonly string[] = EMBEDS.flatMap((p) => p.hosts)
+
+/** How the site hosts embeds: how many one page may have at once, how long a frame that appeared or moved is shielded from a click, and how much one message to or from a player may carry. */
+export const EMBED = { most: 16, shieldMs: 600, messageBytes: 64 * 1024, addressLength: 4096 } as const
+
+/** An embed It hosts: its provider's name, and its address in the one spelling it has. */
+export interface Embed {
+  provider: string
+  url: string
+}
+
+/**
+ * The embed an address is, or nothing where it is no embed of a provider on the list. An
+ * address is taken only whole: on https (or on http, which is taken as the same address on
+ * https, since every provider on the list serves only that), with no name or password before
+ * the host, on the usual port, at a host on the list spelled exactly, and at the path of that
+ * provider's embeds. What is given is read as a browser reads an address, so that what it says
+ * is what would be framed.
+ */
+export function embedFor(address: unknown): Embed | null {
+  if (typeof address !== 'string' || address.length > EMBED.addressLength) return null
+  let url: URL
+  try {
+    url = new URL(address)
+  } catch {
+    return null
+  }
+  if (url.protocol === 'http:') url.protocol = 'https:'
+  if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.port !== '') return null
+  const provider = EMBEDS.find((p) => p.hosts.includes(url.hostname))
+  if (!provider?.embeds(url)) return null
+  return { provider: provider.name, url: url.href }
+}
+
+/**
+ * The address the site frames for an embed, with what only the site knows put in: for Twitch,
+ * the site's own host name as `parent`, which Twitch plays only beside; for YouTube, the site's
+ * own origin as `origin`, which its player API answers only to, where the page uses that API.
+ * What the page itself said for either is replaced, since the page cannot know it.
+ */
+export function embedAddress(embed: Embed, site: { origin: string; hostname: string }): string {
+  const url = new URL(embed.url)
+  if (embed.provider === 'Twitch') {
+    url.searchParams.delete('parent')
+    url.searchParams.append('parent', site.hostname)
+  }
+  if (embed.provider === 'YouTube' && (url.searchParams.get('enablejsapi') === '1' || url.searchParams.has('origin')))
+    url.searchParams.set('origin', site.origin)
+  return url.href
+}
+
+/** A box on the screen, by where its four edges are. */
+export interface Edges {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
+/**
+ * How much of a box is cut off at each side by what it is shown within: the boxes of what
+ * holds it and clips what it holds, and the window. Given as the insets a `clip-path` takes:
+ * top, right, bottom, left. Nothing where none of it is left to be seen.
+ */
+export function cutOff(box: Edges, within: readonly Edges[]): [number, number, number, number] | null {
+  let { left, top, right, bottom } = box
+  for (const w of within) {
+    left = Math.max(left, w.left)
+    top = Math.max(top, w.top)
+    right = Math.min(right, w.right)
+    bottom = Math.min(bottom, w.bottom)
+  }
+  if (!(right > left && bottom > top)) return null
+  return [top - box.top, box.right - right, box.bottom - bottom, left - box.left]
+}
+
 // ---------- between the page's runtime and the site ----------
 
 /**
  * What the site's channel to a page says it speaks, in the message that hands the page its
  * port. At 2 it takes several values a page keeps at once (`changes`), and sends what changed
  * of the page's state (`it:changed`) rather than the whole of it each time. A site that says no
- * version takes one value at a time, as `key` and `value`, and sends the whole state.
+ * version takes one value at a time, as `key` and `value`, and sends the whole state. A site
+ * that hosts embeds over the page says so in the same message, with `embeds: true`: a card's
+ * small picture of a page does not, and neither does a site from before embeds were hosted.
  */
 export const CHANNEL_VERSION = 2
+/**
+ * How long the site waits, after a document has loaded in a page's frame, for the document there
+ * to say that it is the one the channel was made for: long enough for a phone busy with a page's
+ * own work just after it has loaded, since no click reaches a player meanwhile. The site asks the frame's own window
+ * (`it:who`, with a value made for that asking), never the channel, which a page can hand to
+ * another window, and only an answer from that window with the same value and the channel's
+ * document (`it:here`) will do. A document that is not It's, as `about:blank` is not, has nobody
+ * to answer. With no such answer by then the document is taken to be gone: its channel is closed
+ * and all it began is ended, and the frame is told so (`it:gone`), so that a document of It's that
+ * was only slow to answer asks for a channel again.
+ */
+export const WHO_MS = 5000
 /**
  * How long the script in a page waits after one write of what the page keeps before it sends
  * the next, gathering what is set meanwhile: a page that writes at every movement of the pen
@@ -958,13 +1088,20 @@ export const STORE_EVERY_MS = 50
 export type PageToSite =
   /** `doc` names the document that is asking, so that asking twice is answered once. */
   | { type: 'it:hello'; v: typeof PROTOCOL_VERSION; doc: string }
-  | { type: 'it:action'; requestId: string; envelope: ActionEnvelope }
+  /**
+   * `again` where the page sends an action again as it was, under the same id, over a new channel,
+   * after it lost the one it was sent over before it was answered: the site then takes it as that
+   * action, and never as new work it knows nothing of.
+   */
+  | { type: 'it:action'; requestId: string; envelope: ActionEnvelope; again?: true }
   /** Values the page keeps for itself, set within a moment of each other: each name with the last value set under it, as JSON text, of which `null` takes the value away. */
   | { type: 'it:store'; requestId: string; changes: [string, string][] }
   /** One value, as a site whose channel says no version takes it. */
   | { type: 'it:store'; requestId: string; key: string; value: unknown }
   /** The page's showing is over. The site shows the page again. */
   | { type: 'it:lapsed' }
+  /** The answer to the site's `it:who`, posted to the window that framed the page and not over the channel: the value it was asked with, and this document's own name. */
+  | { type: 'it:here'; nonce: string; doc: string }
   /** The page's own script failed with this. The site says so above the page: left unsaid, a button that does nothing looks like an agent that does not answer. */
   | { type: 'it:fault'; message: string }
   /**
@@ -1003,6 +1140,28 @@ export type PageToSite =
    * only for a click. Sent only to a site that has said what its fullscreen is.
    */
   | { type: 'it:fullscreen'; requestId: string; on: boolean }
+  /** An embed for the site to host over an element of the page, by a name the page gave it, at an address on the list. Only to a site that said it hosts embeds. */
+  | { type: 'it:embed'; id: string; url: string }
+  /**
+   * Where the inside of that element is now, in the page's own pixels from the top left of its
+   * window, how much of it is cut off at each side (top, right, bottom, left) by what holds it
+   * and by the window, and how round its corners are. Where `shown` is false the embed is hidden.
+   */
+  | {
+      type: 'it:embed-at'
+      id: string
+      x: number
+      y: number
+      width: number
+      height: number
+      cut: [number, number, number, number]
+      round: number
+      shown: boolean
+    }
+  /** A message for the player, which the site passes on to it at its own origin and to nothing else. */
+  | { type: 'it:embed-post'; id: string; data: unknown }
+  /** The embed is to go. */
+  | { type: 'it:embed-end'; id: string }
 
 /** A picture of the live camera, as a page is given it: an `ImageBitmap`, which is the page's to draw and close. */
 export interface CameraPicture {
@@ -1063,6 +1222,12 @@ export type SiteToPage =
    * the page. It is the site that is fullscreen, with It's bar above the page.
    */
   | { type: 'it:fullscreen'; on: boolean; enabled: boolean }
+  /** The player's frame has loaded, and what the page posts reaches it from now on. */
+  | { type: 'it:embed-loaded'; id: string }
+  /** What the player sent, from its own origin. */
+  | { type: 'it:embed-message'; id: string; data: unknown }
+  /** The site will not host this embed, with why. */
+  | { type: 'it:embed-refused'; id: string; error: string }
 
 /** The key in a page's state that belongs to the page itself (It.store). */
 export const STORE_KEY = '_page'

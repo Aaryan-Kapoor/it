@@ -19,6 +19,7 @@ import {
   STORE_EVERY_MS,
   STORE_KEY,
 } from '@it/protocol'
+import { embeds } from './embeds'
 
 interface Config {
   app: string
@@ -83,6 +84,13 @@ let arrived = false
 const listeners: Listener[] = []
 /** What is waiting for the site's answer, by the request it answers. */
 const waiting = new Map<string, (result: Result) => void>()
+/**
+ * The actions sent and not yet answered, as they were sent, by the request each is. Where the
+ * channel is lost, each is sent again as it was over the next one, under the same id: the site and
+ * the backend know an action by that id, so it is one action however often it is sent, and the
+ * page is told what became of it.
+ */
+const actionsOnTheirWay = new Map<string, PageToSite>()
 const unsent: PageToSite[] = []
 let staged: Record<string, unknown> = {}
 
@@ -211,6 +219,7 @@ function post(to: MessagePort, message: PageToSite): void {
     if (!('requestId' in message)) return
     const answer = waiting.get(message.requestId)
     waiting.delete(message.requestId)
+    actionsOnTheirWay.delete(message.requestId)
     answer?.({
       type: 'it:result',
       requestId: message.requestId,
@@ -229,6 +238,7 @@ function send(message: PageToSite): void {
 function ask(message: PageToSite & { requestId: string }): Promise<Result> {
   return new Promise((answered) => {
     waiting.set(message.requestId, answered)
+    if (message.type === 'it:action') actionsOnTheirWay.set(message.requestId, message)
     send(message)
   })
 }
@@ -252,6 +262,7 @@ function withKept(s: State, kept: State): State {
 }
 
 function receive(message: SiteToPage): void {
+  if (players.received(message)) return
   if (message.type === 'it:state') {
     sent = isObject(message.state) ? message.state : {}
     revision = message.revision
@@ -274,6 +285,7 @@ function receive(message: SiteToPage): void {
     const answer = waiting.get(message.requestId)
     if (!answer) return
     waiting.delete(message.requestId)
+    actionsOnTheirWay.delete(message.requestId)
     answer(message)
   } else if (message.type === 'it:recording') heard(message)
   else if (message.type === 'it:camera-frame' || message.type === 'it:camera-state') seen(message)
@@ -438,18 +450,61 @@ function store(key: string, value: unknown): Promise<unknown> {
   })
 }
 
+// Players and maps from the providers on It's list, which the site hosts over the page where the
+// site says that it does (embeds.ts)
+const players = embeds(send, id)
+
+/** What a page is told of a value it kept with a site that takes one at a time, which was on its way when its channel to the site was lost. */
+const LOST = 'The page lost its channel to It for a moment, so this may not have been kept. Keep it again.'
+/**
+ * The site took this document to be gone, as it does when the document does not say in time that
+ * it is the one the channel was made for, and closed the channel. This document is here after all,
+ * only slow: it lets go of the channel, and says hello again under a new name, so that it is given
+ * another. Nothing it was waiting on is refused for that. Each action that was on its way is sent
+ * again over the new channel as it was, under the same id, which the site and the backend take as
+ * the same action, so that it is done once and the page is told what became of it. A value kept
+ * with It.store is sent again with whatever was set since.
+ */
+function lost(): void {
+  if (!port) return
+  port.onmessage = null
+  port.close()
+  port = null
+  players.lost()
+  for (const [requestId, answer] of [...waiting]) {
+    if (actionsOnTheirWay.has(requestId)) continue
+    waiting.delete(requestId)
+    answer({ type: 'it:result', requestId, ok: false, error: LOST, retryAfterMs: 0 })
+  }
+  // Marked as sent again, so that the site takes each as the action it is, and never as new work
+  unsent.unshift(...[...actionsOnTheirWay.values()].map((message) => ({ ...message, again: true }) as PageToSite))
+  doc = id()
+  hello()
+}
+
 // The site answers the hello with a port. Only the window that framed this one is listened to,
-// and only while what is in it is the site.
+// and only while what is in it is the site. The site also asks that window, each time a document
+// has loaded in it, whether this is the document the channel was made for (`it:who`), and says so
+// when it has taken this document to be gone (`it:gone`).
 window.addEventListener('message', (e) => {
-  if (e.source !== window.parent || e.origin !== config.app || e.data?.type !== 'it:port' || !e.ports[0] || port) return
+  if (e.source !== window.parent || e.origin !== config.app) return
+  const type = e.data?.type
+  if (type === 'it:who') {
+    if (typeof e.data.nonce === 'string') window.parent.postMessage({ type: 'it:here', nonce: e.data.nonce.slice(0, 64), doc } satisfies PageToSite, config.app)
+    return
+  }
+  if (type === 'it:gone') return lost()
+  if (type !== 'it:port' || !e.ports[0] || port) return
   port = e.ports[0]
   channel = typeof e.data.v === 'number' ? e.data.v : 0
   port.onmessage = (m) => receive(m.data as SiteToPage)
   for (const m of unsent.splice(0)) post(port, m)
+  players.hosted(e.data.embeds === true)
   flush()
 })
-// This document's own name. The site answers each document once, however often it asks.
-const doc = id()
+// This document's own name. The site answers each document once, however often it asks. It is
+// named afresh only when the site has taken it to be gone, and it asks for a channel again.
+let doc = id()
 function hello(attempt = 0): void {
   if (port || attempt > 40) return
   window.parent.postMessage({ type: 'it:hello', v: 1, doc } satisfies PageToSite, config.app)
@@ -2082,6 +2137,8 @@ const api = {
     },
     set: store,
   },
+  /** A player or a map from a provider on It's list, hosted by the site over an element of the page. */
+  embed: players.embed,
   /** Makes It fullscreen, with It's bar above the page. Call it from a click: a browser allows fullscreen only then. */
   fullscreen,
   exitFullscreen,
