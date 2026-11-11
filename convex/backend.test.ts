@@ -4179,6 +4179,7 @@ describe('displays and machines', () => {
         'displays.show.displayId',
         'notifications.send.displayId',
         'displays.report',
+        'displays.report.usedAt',
         'delivery.waitingPage',
         'displays.show.everywhere',
         'notifications.send.everywhere',

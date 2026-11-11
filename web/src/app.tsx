@@ -557,6 +557,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
         clock: backendClock,
         // And the report a closing tab makes goes the way that outlasts the tab
         last: (r) => lastWord(r, { key, epoch, expectedSession: session }, heldToken()),
+        takesUsedAt: () => backendTakes(TAKES.displayUsedAt),
       },
     )
   }, [convex, key, epoch, session])
