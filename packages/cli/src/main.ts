@@ -38,7 +38,7 @@ import {
   withoutFiles,
 } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
-import { type Args, json, loose, need, nested, OPTIONS, optionsFor, outputArgs, parse, text } from './args'
+import { type Args, fileText, json, loose, need, nested, OPTIONS, optionsFor, outputArgs, parse, setValue, text } from './args'
 import { type Arrives, arrives, claudeAfterSetup, claudeReloadLine, claudeRunning, reloadLine, tellWordForWord } from './arrives'
 import { choices, conversationIds, local, type Route, refusedFor } from './connector'
 import { deletePage, deletionStatus } from './delete'
@@ -646,6 +646,8 @@ function notified(sent: { id: string } & Partial<Shown>): {
 }
 
 const LOGIN = 'login --url <address> --code <invite> [--name <name>] [--no-setup]'
+const PATCH_USAGE = "patch <id> ('<json>' | --file <path>) [--replace] [--if-revision <n>]"
+const SET_USAGE = 'set <id> <key> (<value> | --file <path>) [--if-revision <n>]'
 // How many words each command takes besides its switches, and how it is written. `set` and
 // `notify` are not here: they read all their last words together as one text.
 const WORDS: Record<string, [most: number, usage: string]> = {
@@ -671,7 +673,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   read: [1, 'read <id>'],
   delete: [1, 'delete <id> [--status]'],
   rollback: [2, 'rollback <id> <version>'],
-  patch: [2, "patch <id> '<json>' [--replace] [--if-revision <n>]"],
+  patch: [2, PATCH_USAGE],
   state: [1, 'state <id>'],
   open: [1, 'open <id> [--on "<display>" | --on-id <display-id> | --everywhere]'],
   displays: [0, 'displays'],
@@ -689,7 +691,11 @@ const WORDS: Record<string, [most: number, usage: string]> = {
 function noMore(cmd: string, a: Args): void {
   if (!Object.hasOwn(WORDS, cmd)) return
   const [most, usage] = WORDS[cmd]!
-  if (a._.length > most) throw new Problem(`It does not know what to do with "${a._[most]}".`, 'invalid', `Usage: it ${usage}`)
+  if (a._.length <= most) return
+  // A patch with more words after it is one a shell split at a space, as Windows PowerShell 5.1
+  // does to JSON whose quotes were written \" and that has a space in a value
+  const split = cmd === 'patch' ? ` If your shell split the JSON at a space, write it to a file and run \`it patch ${a._[0]} --file <path>\`.` : ''
+  throw new Problem(`It does not know what to do with "${a._[most]}".`, 'invalid', `Usage: it ${usage}${split}`)
 }
 
 function object(value: unknown, what: string): Record<string, unknown> {
@@ -701,8 +707,17 @@ async function create(a: Args) {
   const title = need(a._[0], `the ${NOUN.one}'s title`, 'create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)')
   const slug = text(a, 'id')
   if (slug !== undefined && !isSlug(slug)) throw new Problem('An id is lowercase letters, digits, dots, dashes and underscores, at most 64.', 'invalid')
-  const state = text(a, 'state')
-  if (state !== undefined) object(json(state, '--state'), '--state')
+  // The starting state is given on the command line or in a file, which reads the same in every
+  // shell: Windows PowerShell 5.1 takes the double quotes out of the JSON in an argument
+  const stateFile = text(a, 'state-file')
+  if (stateFile !== undefined && text(a, 'state') !== undefined)
+    throw new Problem('The starting state is given once, with --state or with --state-file, and this command was given both.', 'invalid')
+  const state = stateFile === undefined ? text(a, 'state') : fileText(stateFile, 'the state')
+  if (state !== undefined)
+    object(
+      stateFile === undefined ? json(state, '--state', 'it create … --state-file <path>') : json(state, `The state in ${stateFile}`),
+      stateFile === undefined ? '--state' : `The state in ${stateFile}`,
+    )
   // A conversation that makes a page is the one that hears what is done on it. Where the id is
   // already another conversation's page, nothing is made, and the conversation is told whose it
   // is: two that each chose `counter` ended with one page, and the first went on telling its
@@ -2988,7 +3003,7 @@ async function serviceCommand(a: Args) {
 const HELP = `it ${VERSION}: put a live ${NOUN.one} on any display you own, and hear back what happens on it.
 
 Pages
-  it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)  [--state '{…}'] [--open [--on "<display>" | --on-id <display-id> | --everywhere]]
+  it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)  [--state '{…}' | --state-file <path>] [--open [--on "<display>" | --on-id <display-id> | --everywhere]]
   it update <id> (--file f | --dir d | --html "<…>" | pipe) [--title "<title>"] [--open [--on "<display>" | --on-id <display-id> | --everywhere]]
                                  Both take [--agent <name>], a label for who made it,
                                  which its owning conversation can change explicitly, and
@@ -2999,10 +3014,14 @@ Pages
   it delete <id> [--status]      Delete a page, or check its last deletion.
 
 State
-  it set <id> <key> <value>      A key may be dotted, and a value that parses as JSON is JSON.
-  it patch <id> '<json>' [--replace] [--if-revision <n>]
+  it set <id> <key> (<value> | --file <path>) [--if-revision <n>]
+                                 A key may be dotted, and a value that parses as JSON is JSON.
+  it patch <id> ('<json>' | --file <path>) [--replace] [--if-revision <n>]
                                  --if-revision changes the state only while it is still at
-                                 that revision, which \`it state\` prints.
+                                 that revision, which \`it state\` prints. --file, and
+                                 --state-file on create, read the JSON from a file, which
+                                 reads the same in every shell: Windows PowerShell 5.1 takes
+                                 the double quotes out of the JSON in an argument.
   it state <id>
   it say <id> "<text>"           A line of your own words above the ${NOUN.one}, where the person is
                                  looking: an answer that has no place on the ${NOUN.one} itself.
@@ -3533,23 +3552,46 @@ async function main(argv: string[]): Promise<void> {
     }
 
     case 'set': {
-      const slug = need(a._[0], `which ${NOUN.one}`, 'set <id> <key> <value>')
-      const key = need(a._[1], 'which key', 'set <id> <key> <value>')
-      const value = need(a._.slice(2).join(' ') || undefined, 'the value', 'set <id> <key> <value>')
+      const slug = need(a._[0], `which ${NOUN.one}`, SET_USAGE)
+      const key = need(a._[1], 'which key', SET_USAGE)
+      // The value is the words after the key, or the JSON in a file, which reads the same in every shell
+      const file = text(a, 'file')
+      const words = a._.slice(2).join(' ')
+      if (file !== undefined && words)
+        throw new Problem('The value is given once, after the key or with --file, and this command was given both.', 'invalid', `Usage: it ${SET_USAGE}`)
+      const value =
+        file === undefined
+          ? setValue(need(words || undefined, 'the value', SET_USAGE), `it set ${slug} ${key} --file <path>`)
+          : json(fileText(file, 'the value'), `The value in ${file}`)
       // Held to the revision it was read at, where one is given, as `it patch` is: taken and
       // passed over, the write would go over a change the agent had not seen, and say nothing
       const base = text(a, 'if-revision')
       return out(
         await call('mutation', api.state.patch, {
           slug,
-          patch: JSON.stringify(nested(key, loose(value))),
+          patch: JSON.stringify(nested(key, value)),
           ...(base === undefined ? {} : { baseRevision: Number(base) }),
         }),
       )
     }
     case 'patch': {
-      const slug = need(a._[0], `which ${NOUN.one}`, "patch <id> '<json>'")
-      const body = object(json(need(a._[1] ?? (await piped()), 'the patch', "patch <id> '<json>'"), 'The patch'), 'A patch')
+      const slug = need(a._[0], `which ${NOUN.one}`, PATCH_USAGE)
+      // The patch is given on the command line, piped in, or in a file, which reads the same in
+      // every shell: Windows PowerShell 5.1 takes the double quotes out of the JSON in an argument,
+      // and writes what it pipes to a program in ASCII
+      const file = text(a, 'file')
+      if (file !== undefined && a._[1] !== undefined)
+        throw new Problem(
+          'The patch is given once, on the command line or with --file, and this command was given both.',
+          'invalid',
+          `Usage: it ${PATCH_USAGE}`,
+        )
+      const body = object(
+        file === undefined
+          ? json(need(a._[1] ?? (await piped()), 'the patch', PATCH_USAGE), 'The patch', `it patch ${slug} --file <path>`)
+          : json(fileText(file, 'the patch'), `The patch in ${file}`),
+        'A patch',
+      )
       const base = text(a, 'if-revision')
       return out(
         await call('mutation', api.state.patch, {

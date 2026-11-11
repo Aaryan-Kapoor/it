@@ -578,7 +578,8 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     try {
       for (const args of [
         ['set', 'plan', 'count', '1', '--replace'],
-        ['patch', 'plan', '--file', 'missing.json'],
+        ['patch', 'plan', '--state-file', 'missing.json'],
+        ['set', 'plan', 'count', '--state-file', 'missing.json'],
         ['create', 'Plan', '--if-revision', '1'],
         ['update', 'plan', '--state', '{}'],
         ['delete', 'plan', '--take'],
@@ -2046,6 +2047,200 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(b.asked.filter((x) => x.path === 'publish:begin')).toHaveLength(1)
       expect(b.asked.filter((x) => x.path === 'publish:abandon')).toEqual([])
       expect(readdirSync(folder)).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it patch`, `it set` and `it create` read their JSON from a file, which reads the same whatever the shell did to the command line', async () => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: 'plan', version: 1, url: 'https://site.example/p/plan' }
+      return { revision: 2 }
+    })
+    try {
+      const sentFor = async (words: string[]) => {
+        b.asked.length = 0
+        const ran = await run(m, words, b.env)
+        expect([words, ran.code, ran.err]).toEqual([words, 0, ''])
+        return b.asked
+      }
+      const patched = async (words: string[]) => (await sentFor(words)).find((x) => x.path === 'state:patch')!.args
+      // Written as an agent's own tool writes it, in UTF-8, and as Windows PowerShell 5.1 writes it,
+      // with Out-File in UTF-16 and with Set-Content -Encoding UTF8 behind the mark of UTF-8
+      const patch = { note: 'café, two words', n: 7 }
+      writeFileSync(path.join(m.home, 'plain.json'), JSON.stringify(patch))
+      writeFileSync(path.join(m.home, 'utf16.json'), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`${JSON.stringify(patch)}\r\n`, 'utf16le')]))
+      const be = Buffer.from(`${JSON.stringify(patch)}\r\n`, 'utf16le')
+      for (let i = 0; i < be.length; i += 2) [be[i], be[i + 1]] = [be[i + 1]!, be[i]!]
+      writeFileSync(path.join(m.home, 'utf16be.json'), Buffer.concat([Buffer.from([0xfe, 0xff]), be]))
+      writeFileSync(path.join(m.home, 'marked.json'), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(`${JSON.stringify(patch)}\r\n`)]))
+      for (const file of ['plain.json', 'utf16.json', 'utf16be.json', 'marked.json']) {
+        expect([file, JSON.parse(String((await patched(['patch', 'plan', '--file', file])).patch))]).toEqual([file, patch])
+        expect([file, await patched(['patch', 'plan', '--file', path.join(m.home, file), '--replace', '--if-revision', '3'])]).toEqual([
+          file,
+          { slug: 'plan', patch: JSON.stringify(patch), replace: true, baseRevision: 3 },
+        ])
+      }
+      // `it set` takes its value from a file as JSON, whatever it is
+      writeFileSync(path.join(m.home, 'list.json'), '["a","b c"]\n')
+      expect(await patched(['set', 'plan', 'steps.list', '--file', 'list.json'])).toEqual({ slug: 'plan', patch: '{"steps":{"list":["a","b c"]}}' })
+      writeFileSync(path.join(m.home, 'text.json'), '"[beta]"')
+      expect(await patched(['set', 'plan', 'label', '--file', 'text.json', '--if-revision', '4'])).toEqual({
+        slug: 'plan',
+        patch: '{"label":"[beta]"}',
+        baseRevision: 4,
+      })
+      // `it create` takes the state it starts with from a file
+      const begun = (await sentFor(['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>', '--state-file', 'utf16.json'])).find(
+        (x) => x.path === 'publish:begin',
+      )!
+      expect(JSON.parse(String(begun.args.state))).toEqual(patch)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('JSON from a file that is not there, not text, not JSON or given twice is refused, and nothing is sent', async () => {
+    const m = machine()
+    const b = await backend(m, () => ({ revision: 2 }))
+    try {
+      writeFileSync(path.join(m.home, 'ok.json'), '{"a":1}')
+      writeFileSync(path.join(m.home, 'array.json'), '[1]')
+      writeFileSync(path.join(m.home, 'broken.json'), '{"a":')
+      // Set-Content in Windows PowerShell 5.1 writes in the system's own code page, which is not UTF-8: it is not guessed at
+      writeFileSync(path.join(m.home, 'ansi.json'), Buffer.from([0x7b, 0x22, 0x61, 0x22, 0x3a, 0x22, 0x63, 0x61, 0x66, 0xe9, 0x22, 0x7d]))
+      mkdirSync(path.join(m.home, 'folder.json'))
+      for (const [words, said] of [
+        [['patch', 'plan', '--file', 'missing.json'], { code: 'invalid', message: 'No such file: missing.json' }],
+        [['patch', 'plan', '--file', 'folder.json'], { code: 'invalid', message: 'folder.json is not an ordinary file.' }],
+        [['patch', 'plan', '--file', ''], { code: 'invalid', message: 'Say which file the patch is in.' }],
+        [
+          ['patch', 'plan', '--file', 'ansi.json'],
+          { code: 'invalid', message: 'ansi.json is not text in UTF-8 or UTF-16.', hint: 'Write the file again in UTF-8.' },
+        ],
+        [['patch', 'plan', '--file', 'broken.json'], { code: 'invalid', message: 'The patch in broken.json is not valid JSON.' }],
+        [['patch', 'plan', '--file', 'array.json'], { code: 'invalid', message: 'A patch is a JSON object.' }],
+        [['set', 'plan', 'a', '--file', 'broken.json'], { code: 'invalid', message: 'The value in broken.json is not valid JSON.' }],
+        [['create', 'Plan', '--html', '<p>hi</p>', '--state-file', 'array.json'], { code: 'invalid', message: 'The state in array.json is a JSON object.' }],
+        [['create', 'Plan', '--html', '<p>hi</p>', '--state-file', 'missing.json'], { code: 'invalid', message: 'No such file: missing.json' }],
+        [
+          ['patch', 'plan', '{"a":1}', '--file', 'ok.json'],
+          {
+            code: 'invalid',
+            message: 'The patch is given once, on the command line or with --file, and this command was given both.',
+            hint: "Usage: it patch <id> ('<json>' | --file <path>) [--replace] [--if-revision <n>]",
+          },
+        ],
+        [
+          ['set', 'plan', 'a', '1', '--file', 'ok.json'],
+          {
+            code: 'invalid',
+            message: 'The value is given once, after the key or with --file, and this command was given both.',
+            hint: 'Usage: it set <id> <key> (<value> | --file <path>) [--if-revision <n>]',
+          },
+        ],
+        [
+          ['create', 'Plan', '--html', '<p>hi</p>', '--state', '{}', '--state-file', 'ok.json'],
+          { code: 'invalid', message: 'The starting state is given once, with --state or with --state-file, and this command was given both.' },
+        ],
+      ] as const) {
+        b.asked.length = 0
+        const ran = await run(m, [...words], b.env)
+        expect([words, ran.code, ran.out, error(ran)]).toEqual([words, 2, '', said])
+        expect(b.asked.filter((x) => x.path === 'state:patch' || x.path.startsWith('publish:'))).toEqual([])
+      }
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('JSON that Windows PowerShell 5.1 took the double quotes out of is refused, never guessed back, and the refusal names the file form', async () => {
+    const m = machine()
+    const b = await backend(m, () => ({ revision: 2 }))
+    try {
+      const SHELL = 'as when a shell takes them out of an argument, which Windows PowerShell 5.1 does'
+      for (const [words, said] of [
+        // `it patch plan '{"number":4}'`, as PowerShell 5.1 hands it over
+        [
+          ['patch', 'plan', '{number:4}'],
+          {
+            code: 'invalid',
+            message: `The patch is not valid JSON: it has no double quotes, ${SHELL}.`,
+            hint: 'Write the JSON to a file and run `it patch plan --file <path>`, which works the same in every shell.',
+          },
+        ],
+        // `it patch plan '{"note":"two words"}'`
+        [
+          ['patch', 'plan', '{note:two', 'words}'],
+          {
+            code: 'invalid',
+            message: 'It does not know what to do with "words}".',
+            hint: "Usage: it patch <id> ('<json>' | --file <path>) [--replace] [--if-revision <n>] If your shell split the JSON at a space, write it to a file and run `it patch plan --file <path>`.",
+          },
+        ],
+        // `it patch plan '{\"note\":\"two words\"}'`, split at the space and not unquoted
+        [
+          ['patch', 'plan', '{"note":"two', 'words"}'],
+          {
+            code: 'invalid',
+            message: 'It does not know what to do with "words"}".',
+            hint: "Usage: it patch <id> ('<json>' | --file <path>) [--replace] [--if-revision <n>] If your shell split the JSON at a space, write it to a file and run `it patch plan --file <path>`.",
+          },
+        ],
+        // JSON that is wrong for another reason still names the file form, without blaming the shell
+        [
+          ['patch', 'plan', '{"a":1,}'],
+          {
+            code: 'invalid',
+            message: 'The patch is not valid JSON.',
+            hint: 'Write the JSON to a file and run `it patch plan --file <path>`, which works the same in every shell.',
+          },
+        ],
+        [
+          ['create', 'Plan', '--html', '<p>hi</p>', '--state', '{a:b c}'],
+          {
+            code: 'invalid',
+            message: `--state is not valid JSON: it has no double quotes, ${SHELL}.`,
+            hint: 'Write the JSON to a file and run `it create … --state-file <path>`, which works the same in every shell.',
+          },
+        ],
+        // `it set plan list '["a","b c"]'`, which would otherwise have put the text "[a,b c]" on the page
+        [
+          ['set', 'plan', 'list', '[a,b', 'c]'],
+          {
+            code: 'invalid',
+            message: `The value [a,b c] begins and ends as JSON does, but is not JSON and has no double quotes, ${SHELL}. Nothing was changed.`,
+            hint: 'Write the JSON to a file and run `it set plan list --file <path>`, which works the same in every shell. To set this very text, write it in the file as a JSON string.',
+          },
+        ],
+        [
+          ['set', 'plan', 'steps', '{build:done}'],
+          {
+            code: 'invalid',
+            message: `The value {build:done} begins and ends as JSON does, but is not JSON and has no double quotes, ${SHELL}. Nothing was changed.`,
+            hint: 'Write the JSON to a file and run `it set plan steps --file <path>`, which works the same in every shell. To set this very text, write it in the file as a JSON string.',
+          },
+        ],
+      ] as const) {
+        b.asked.length = 0
+        const ran = await run(m, [...words], b.env)
+        expect([words, ran.code, ran.out, error(ran)]).toEqual([words, 2, '', said])
+        expect(b.asked.filter((x) => x.path === 'state:patch' || x.path.startsWith('publish:'))).toEqual([])
+      }
+      // What is text, or JSON, on the command line is set as before
+      for (const [words, patch] of [
+        [['set', 'plan', 'note', '[beta]', 'release'], '{"note":"[beta] release"}'],
+        [['set', 'plan', 'list', '["a","b c"]'], '{"list":["a","b c"]}'],
+        [['set', 'plan', 'list', '[]'], '{"list":[]}'],
+        [['set', 'plan', 'n', '4'], '{"n":4}'],
+        [['patch', 'plan', '{"note":"two words"}'], '{"note":"two words"}'],
+      ] as const) {
+        b.asked.length = 0
+        const ran = await run(m, [...words], b.env)
+        expect([words, ran.code, b.asked.find((x) => x.path === 'state:patch')?.args.patch]).toEqual([words, 0, patch])
+      }
     } finally {
       await b.close()
     }
@@ -4982,7 +5177,9 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
     expect(ran.out).toMatch(/^ {2}it login --url <address> --code <invite> \[--name <name>\] \[--no-setup\]$/m)
     // Every command the program takes is in it, each with its switches, and none is a line with no words
     for (const line of [
-      /^ {2}it patch <id> '<json>' \[--replace\] \[--if-revision <n>\]$/m,
+      /^ {2}it patch <id> \('<json>' \| --file <path>\) \[--replace\] \[--if-revision <n>\]$/m,
+      /^ {2}it set <id> <key> \(<value> \| --file <path>\) \[--if-revision <n>\]$/m,
+      /\[--state '\{…\}' \| --state-file <path>\]/,
       /^ {2}it serve \[--log <file>\] {2,}\S/m,
       /--yes connects\s+every app it would otherwise ask about/,
       /--no-setup joins and\s+connects no agent app/,

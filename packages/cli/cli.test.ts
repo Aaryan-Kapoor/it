@@ -26,7 +26,7 @@ import { briefClick, describeClick, LIMITS, PORTS, STORAGE, sizeSaid } from '@it
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { ADDONS, SKILL } from './src/addons.generated'
 import { agentApp, agentAppsAbove, appsFrom, linuxProc, type Proc, psAbove, psTable, psWords } from './src/ancestry'
-import { loose, nested, parse } from './src/args'
+import { decoded, loose, nested, parse, quotesTakenOut } from './src/args'
 import { choices, codexCommand, codexQueue, local, mac, refusedFor, reports } from './src/connector'
 import {
   backend,
@@ -151,6 +151,33 @@ describe('command line', () => {
     expect(loose('{"a":1}')).toEqual({ a: 1 })
     expect(loose('null')).toBe(null)
     expect(loose('Deploying 3 of 7')).toBe('Deploying 3 of 7')
+  })
+})
+
+describe('JSON a shell may have changed on the way', () => {
+  test('what Windows PowerShell 5.1 leaves of a JSON object or array, with every double quote taken out, is known for that', () => {
+    for (const left of ['{number:4}', '{note:two words}', ' [a,b c] ', '{a:{b:[1,x]}}', '[beta]', '{x}'])
+      expect([left, quotesTakenOut(left)]).toEqual([left, true])
+    // JSON, text that does not begin and end as JSON does, and anything with a double quote left in it are not
+    for (const other of ['{}', '[]', '[1,2]', '{"a":1}', '{"a":', 'Deploying 3 of 7', '[beta] notes', 'done', '{a:"b"}', '42', ''])
+      expect([other, quotesTakenOut(other)]).toEqual([other, false])
+  })
+  test('a file is read as UTF-8, or as UTF-16 of either order behind its mark, and nothing else is guessed at', () => {
+    const said = '{"note":"café 支付 👍"}'
+    const be = Buffer.from(said, 'utf16le')
+    for (let i = 0; i < be.length; i += 2) [be[i], be[i + 1]] = [be[i + 1]!, be[i]!]
+    expect(decoded(Buffer.from(said), 'f')).toBe(said)
+    expect(decoded(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(said)]), 'f')).toBe(said)
+    expect(decoded(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(said, 'utf16le')]), 'f')).toBe(said)
+    expect(decoded(Buffer.concat([Buffer.from([0xfe, 0xff]), be]), 'f')).toBe(said)
+    // Windows-1252, a byte cut off a UTF-16 file, and a lone half of a pair are refused
+    for (const bytes of [
+      Buffer.from([0x63, 0x61, 0x66, 0xe9]),
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(said, 'utf16le').subarray(0, 5)]),
+      Buffer.concat([Buffer.from([0xfe, 0xff]), be.subarray(0, 5)]),
+      Buffer.from([0xff, 0xfe, 0x3d, 0xd8]),
+    ])
+      expect(() => decoded(bytes, 'f.json')).toThrow('f.json is not text in UTF-8 or UTF-16.')
   })
 })
 
