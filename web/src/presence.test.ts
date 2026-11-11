@@ -573,6 +573,39 @@ test('a second click in a frame, learned only seconds later, is still said once 
   expect(uses.map((u) => u.usedAt! - AHEAD)).toEqual([start, start + LOOK_EVERY_MS])
 })
 
+test('a frame use said again after the backend did not take it still says when it was, within what the backend keeps', async () => {
+  const word = activationOf()
+  const c = clockOf()
+  c.set(Date.now() + AHEAD)
+  const sent: Report[] = []
+  let refuse = false
+  stop = startReports(
+    (r) => {
+      sent.push(r)
+      return Promise.resolve({ accepted: true, used: r.used === true && !refuse })
+    },
+    () => true,
+    { document, window, now: () => Date.now(), clock: { ...c.clock, at: () => Date.now() + AHEAD }, takesUsedAt: () => true },
+  )
+  const start = Date.now()
+  await vi.advanceTimersByTimeAsync(1500)
+  word.acted()
+  await vi.advanceTimersByTimeAsync(2000)
+  word.acted()
+  // The second click is learned at eight seconds, and its report at twelve is not taken
+  refuse = true
+  await vi.advanceTimersByTimeAsync(12_000 - 3500)
+  expect(usesOf(sent)).toHaveLength(2)
+  refuse = false
+  // The clock is learned afresh at seventeen seconds, and the use is said again
+  await vi.advanceTimersByTimeAsync(5000)
+  c.learn(Date.now() + AHEAD)
+  await vi.advanceTimersByTimeAsync(0)
+  const again = usesOf(sent)[2]!
+  expect(again.usedAt! - AHEAD).toBe(start + LOOK_EVERY_MS)
+  expect(again.observedAt! - again.usedAt!).toBeLessThan(USED_EVERY_MS + ACTIVATION_MS)
+})
+
 test('a use said once the ten seconds are up says when it happened, and says nothing of it where the backend does not take that', async () => {
   const sent = timedReporter()
   await vi.advanceTimersByTimeAsync(0)

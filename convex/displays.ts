@@ -339,8 +339,13 @@ const TABS = 16
  * arguments it had, says what was so then, and is kept as said then.
  */
 export const REPORT_SKEW_MS = 10_000
-/** How long before its report a tab's use can have been: a tab says a use within ten seconds of it. */
-export const USED_WITHIN_MS = 10_000
+/**
+ * How long before its report a tab's use can have been. A tab says a use within ten seconds of
+ * learning of it, and a use it learned of from the browser's word that the person has just acted
+ * may have been up to six seconds before that, so a use said that late is still kept as of when
+ * it was, and never moved later.
+ */
+export const USED_WITHIN_MS = 16_000
 
 /**
  * What one tab of a display says of itself: whether it is visible, whether the person used it a
@@ -436,8 +441,8 @@ export const report = mutation({
     // much of the site read: a report a few times a minute would have them all read again
     const change: Partial<Doc<'presence'>> = { reports, reportedAt: Math.max(...reports.map((r) => r.at)) }
     // Whether the use it said was taken, which the tab goes by to say it again or not. It is kept
-    // as of when it happened, where the tab says so, within the ten seconds a tab says a use in and
-    // never after the report was made: a use the tab said once its ten seconds were up is not
+    // as of when it happened, where the tab says so, within the time a tab says a use in
+    // (`USED_WITHIN_MS`) and never after the report was made: a use the tab said once its ten seconds were up is not
     // taken for one at the moment it was said. One no newer than the use kept is taken, and needs
     // no writing
     const used = a.visible && a.used === true && timely

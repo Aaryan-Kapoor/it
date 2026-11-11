@@ -377,7 +377,7 @@ describe('what each tab of a display says of itself', () => {
     expect((await seen(laptop.id)).usedAt).toBe(Date.now())
   })
 
-  test('a use is kept as of when the tab says it happened, never after its report and never more than ten seconds before', async () => {
+  test('a use is kept as of when the tab says it happened, never after its report and never more than sixteen seconds before', async () => {
     const { browser, seen } = await household()
     const laptop = await browser('owner', key(1))
     vi.advanceTimersByTime(60_000)
@@ -385,11 +385,17 @@ describe('what each tab of a display says of itself', () => {
     const happened = Date.now() - 8000
     expect(await laptop.as.mutation(api.displays.report, said(laptop, TAB, 1, true, { used: true, usedAt: happened }))).toMatchObject({ used: true })
     expect((await seen(laptop.id)).usedAt).toBe(happened)
+    // One a tab learned of from the browser's word, six seconds after it may have been, and said
+    // ten seconds after that, is kept as of when it may have been, and not moved later
+    vi.advanceTimersByTime(60_000)
+    const learnedLate = Date.now() - 15_000
+    await laptop.as.mutation(api.displays.report, said(laptop, OTHER, 1, true, { used: true, usedAt: learnedLate }))
+    expect((await seen(laptop.id)).usedAt).toBe(learnedLate)
     // One from before the use kept is taken, and moves nothing back
     vi.advanceTimersByTime(1000)
-    expect(await laptop.as.mutation(api.displays.report, said(laptop, TAB, 2, true, { used: true, usedAt: happened - 500 }))).toMatchObject({ used: true })
-    expect((await seen(laptop.id)).usedAt).toBe(happened)
-    // A time after the report was made is taken as then, and one longer ago than a tab says a use in as ten seconds before it
+    expect(await laptop.as.mutation(api.displays.report, said(laptop, TAB, 2, true, { used: true, usedAt: learnedLate - 500 }))).toMatchObject({ used: true })
+    expect((await seen(laptop.id)).usedAt).toBe(learnedLate)
+    // A time after the report was made is taken as then, and one longer ago than a tab says a use in as that long before it
     vi.advanceTimersByTime(60_000)
     await laptop.as.mutation(api.displays.report, said(laptop, TAB, 3, true, { used: true, usedAt: Date.now() + 5000 }))
     expect((await seen(laptop.id)).usedAt).toBe(Date.now())
