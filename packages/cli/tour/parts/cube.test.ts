@@ -247,7 +247,11 @@ describe('the cube', () => {
     // The back face turned, as the cube first stands
     const page = await cube(dice(...TWO))
     turn(page, 'back-face-clockwise')
-    expect(page.w.__cube.nameOf(now(page).way[2], 0)).toMatchObject({ turn: 'back-face-clockwise', plain: 'the back face, clockwise as seen from the front', hard: true })
+    expect(page.w.__cube.nameOf(now(page).way[2], 0)).toMatchObject({
+      turn: 'back-face-clockwise',
+      plain: 'the back face, clockwise as seen from the front',
+      hard: true,
+    })
     const asked = ask(page)
     // Held with the right face in front, that face is the right column, and the right column is the front face
     expect(asked.data.back.map((b: any) => b.turn)).toEqual(['right-column-up', 'front-face-anticlockwise', 'top-row-right'])
@@ -356,7 +360,10 @@ describe('the agent’s turns on the cube', () => {
   })
 
   test('where they do not lead home, the page says what was sent and where the cube stands, and nothing else', async () => {
-    const page = await answered([{ turn: 'left-column-up', say: 'Try the left' }, { turn: 'nonsense' }, { turn: 'bottom-row-right', say: 'And the bottom' }], 'Trust me.')
+    const page = await answered(
+      [{ turn: 'left-column-up', say: 'Try the left' }, { turn: 'nonsense' }, { turn: 'bottom-row-right', say: 'And the bottom' }],
+      'Trust me.',
+    )
     page.$('#cube-auto').click()
     await page.advance(3000)
     expect(way(page)).toEqual(['top-row-left', 'right-column-up', 'left-column-up', 'bottom-row-right'])
