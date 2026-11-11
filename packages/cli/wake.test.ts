@@ -30,6 +30,7 @@ import {
   bootId,
   carrying,
   carryOn,
+  cgroupOf,
   claudeModeOf,
   claudeResume,
   claudeWroteAt,
@@ -360,6 +361,69 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     ).toBe(STOPPED)
     expect(said).toEqual([])
     expect(readdirSync(kept)).toEqual([])
+  })
+
+  test.each([
+    ['is killed', 'kill -KILL $$', 'Claude Code exited with SIGKILL'],
+    ['fails', 'exit 3', 'Claude Code exited with 3'],
+  ])(
+    'one that %s in the middle of its turn has what it left running ended before it is answered for, and says that its turn was broken off',
+    async (_, ending, why) => {
+      const command = path.join(scratch, 'dies')
+      const mark = path.join(scratch, 'left.pid')
+      const apart = path.join(scratch, 'left.js')
+      // A command of its own that it started apart from itself, which neither its group nor its family holds once it is gone
+      writeFileSync(
+        apart,
+        `const c = require('node:child_process').spawn('sleep', ['300'], { detached: true, stdio: 'ignore' }); require('node:fs').writeFileSync(${JSON.stringify(mark)}, String(c.pid)); c.unref()\n`,
+      )
+      // And one in its own group, as a shell runs a command it is waiting on
+      writeFileSync(command, `#!/bin/sh\ncat > /dev/null\n"${process.execPath}" "${apart}"\nsleep 300 &\necho $! > "${mark}.group"\n${ending}\n`)
+      chmodSync(command, 0o755)
+      let brokeOff = 0
+      let unsure = 0
+      const ran = await carryOn(
+        { argv: [command], input: 'a click', app: 'Claude Code' },
+        scratch,
+        { harness: 'claude-code', session: 'x', run: randomUUID() },
+        { brokeOff: () => brokeOff++, unsure: () => unsure++ },
+      )
+      expect(ran).toBe(why)
+      expect([brokeOff, unsure]).toEqual([1, 0])
+      for (const file of [mark, `${mark}.group`]) {
+        const its = Number(readFileSync(file, 'utf8'))
+        expect(() => process.kill(its, 0)).toThrow()
+      }
+    },
+    20_000,
+  )
+
+  test('one that ends well by itself leaves what it started running, such as a server it was asked to start', async () => {
+    const command = path.join(scratch, 'serves')
+    const mark = path.join(scratch, 'server.pid')
+    const apart = path.join(scratch, 'server.js')
+    writeFileSync(
+      apart,
+      `const c = require('node:child_process').spawn('sleep', ['300'], { detached: true, stdio: 'ignore' }); require('node:fs').writeFileSync(${JSON.stringify(mark)}, String(c.pid)); c.unref()\n`,
+    )
+    writeFileSync(command, `#!/bin/sh\ncat > /dev/null\n"${process.execPath}" "${apart}"\nexit 0\n`)
+    chmodSync(command, 0o755)
+    let brokeOff = 0
+    expect(
+      await carryOn(
+        { argv: [command], input: 'a click', app: 'Claude Code' },
+        scratch,
+        { harness: 'claude-code', session: 'x', run: randomUUID() },
+        { brokeOff: () => brokeOff++ },
+      ),
+    ).toBeNull()
+    expect(brokeOff).toBe(0)
+    const its = Number(readFileSync(mark, 'utf8'))
+    try {
+      expect(() => process.kill(its, 0)).not.toThrow()
+    } finally {
+      process.kill(its, 'SIGKILL')
+    }
   })
 
   test('a command that does not end when it is asked to is ended for it, on Stop and at the time limit, and the run is not said to be over while it is still there', async () => {
@@ -1309,6 +1373,112 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       }
     },
   )
+
+  test.skipIf(process.platform !== 'linux')(
+    'a process of the same person’s that cannot be read keeps a run uncertain only where it may be the run’s, by what the system shows of it',
+    async () => {
+      // Numbers no process can have, so that nothing real is ever looked at or signalled
+      const L = 4_400_000
+      type Fake = { ppid: number; pgrp?: number; session?: number; tick: number; cgroup?: string; env?: string[] }
+      const list = fs.readdirSync
+      const read = fs.readFileSync
+      const stat = fs.statSync
+      let table = new Map<number, Fake>()
+      const missing = () => Object.assign(new Error('no such process'), { code: 'ENOENT' })
+      const fake = (file: unknown): number | null => {
+        const m = /^\/proc\/(\d+)(?:\/|$)/.exec(String(file))
+        return m && Number(m[1]) >= L ? Number(m[1]) : null
+      }
+      try {
+        fs.readdirSync = new Proxy(list, {
+          apply(target, self, args) {
+            return args[0] === '/proc' ? [...table.keys()].map(String) : Reflect.apply(target, self, args)
+          },
+        })
+        fs.statSync = new Proxy(stat, {
+          apply(target, self, args) {
+            const pid = fake(args[0])
+            if (pid === null) return Reflect.apply(target, self, args)
+            if (!table.has(pid)) throw missing()
+            return { uid: process.getuid!() }
+          },
+        })
+        fs.readFileSync = new Proxy(read, {
+          apply(target, self, args) {
+            const pid = fake(args[0])
+            if (pid === null) return Reflect.apply(target, self, args)
+            const it = table.get(pid)
+            if (!it) throw missing()
+            const what = String(args[0]).slice(String(args[0]).lastIndexOf('/') + 1)
+            if (what === 'stat') return `${pid} (tool) ${['S', it.ppid, it.pgrp ?? pid, it.session ?? pid, ...Array(15).fill('0'), it.tick].join(' ')}`
+            if (what === 'cgroup') {
+              if (it.cgroup === undefined) throw Object.assign(new Error('cannot be read'), { code: 'EACCES' })
+              return `0::${it.cgroup}\n`
+            }
+            if (what === 'environ') {
+              if (!it.env) throw Object.assign(new Error('the environment cannot be read'), { code: 'EACCES' })
+              return `${it.env.join('\0')}\0`
+            }
+            throw missing()
+          },
+        })
+        syncBuiltinESMExports()
+        // The run began at tick 1000, in It's own control group, and its own process is gone
+        const of = { harness: 'claude-code', session: 'held', run: 'the-run', told: SINCE_TOLD, cgroup: '/user.slice/it.service' }
+        const judged = async (fakes: Record<number, Fake>, noted = of) => {
+          table = new Map(Object.entries(fakes).map(([pid, f]) => [Number(pid), f]))
+          return endTree(L, 'tick 1000', noted)
+        }
+        const U = L + 1
+        // gpg-agent, started by systemd or from a terminal while the run went on: in a control group of its own
+        expect(await judged({ [U]: { ppid: L + 9, tick: 2000, cgroup: '/user.slice/app.slice/gpg-agent.service' } })).toBe('gone')
+        // A helper of a program that was running before the run began, beside it in the same control group, as a
+        // browser's or a test runner's is where It runs from a terminal
+        expect(
+          await judged({
+            [U]: { ppid: L + 2, tick: 2000, cgroup: '/user.slice/it.service' },
+            [L + 2]: { ppid: L + 3, tick: 1500, cgroup: '/user.slice/it.service', env: ['PATH=/bin'] },
+            [L + 3]: { ppid: 1, tick: 500, cgroup: '/user.slice/it.service', env: ['PATH=/bin'] },
+          }),
+        ).toBe('gone')
+        // In the run's own session or group, which what the run starts keeps: it may be the run's
+        expect(await judged({ [U]: { ppid: 1, session: L, tick: 2000, cgroup: '/user.slice/it.service' } })).toBe('unknown')
+        expect(await judged({ [U]: { ppid: 1, pgrp: L, tick: 2000, cgroup: '/user.slice/other.scope' } })).toBe('unknown')
+        // Left without its parent in It's control group, as a command the run started and left would be
+        expect(await judged({ [U]: { ppid: 1, tick: 2000, cgroup: '/user.slice/it.service' } })).toBe('unknown')
+        // And taken in by a program in another control group after its parent went, as systemd takes in every such process
+        expect(
+          await judged({
+            [U]: { ppid: L + 4, tick: 2000, cgroup: '/user.slice/it.service' },
+            [L + 4]: { ppid: 1, tick: 10, cgroup: '/user.slice/init.scope', env: ['PATH=/bin'] },
+          }),
+        ).toBe('unknown')
+        // Made by a process begun since the run that carries no mark of it, and was made by the run
+        expect(
+          await judged({
+            [U]: { ppid: L + 5, tick: 2000, cgroup: '/user.slice/it.service' },
+            [L + 5]: { ppid: L, tick: 1500, cgroup: '/user.slice/it.service', env: ['PATH=/bin'] },
+          }),
+        ).toBe('unknown')
+        // Nothing to tell its control group apart by: a note from before It noted one, or a group that cannot be read
+        const { cgroup: _, ...older } = of
+        expect(await judged({ [U]: { ppid: 1, tick: 2000, cgroup: '/user.slice/app.slice/gpg-agent.service' } }, older)).toBe('unknown')
+        expect(await judged({ [U]: { ppid: 1, tick: 2000 } })).toBe('unknown')
+        // Begun before the run, it is passed over as before
+        expect(await judged({ [U]: { ppid: 1, tick: 900, cgroup: '/user.slice/it.service' } })).toBe('gone')
+      } finally {
+        fs.readdirSync = list
+        fs.readFileSync = read
+        fs.statSync = stat
+        syncBuiltinESMExports()
+      }
+    },
+  )
+
+  test.skipIf(process.platform !== 'linux')('the control group of the system a process is in is read as Linux says it', () => {
+    expect(cgroupOf('self')).toMatch(/^\//)
+    expect(cgroupOf(4_400_000)).toBeUndefined()
+  })
 
   test.skipIf(process.platform !== 'linux')(
     'a command carrying the run’s name is ended though another process of the same person’s cannot be read, and the run stays uncertain',

@@ -233,8 +233,8 @@ export function lastWords(text: string): string | null {
  * with its message on the command's input. Null when the command ran the turn. Otherwise why
  * it did not, for the log, in this program's own words: never what the command printed, which
  * may repeat the message. Where the command ended badly by itself, the last line it printed is
- * handed to `said`, for the person whose app it is and for nothing that is kept. Stopped by
- * the signal, it is ended and says so.
+ * handed to `said`, for the person whose app it is and for nothing that is kept, and what it
+ * left running is ended (`brokeOff`). Stopped by the signal, it is ended and says so.
  */
 export function carryOn(
   how: Carrying,
@@ -247,12 +247,18 @@ export function carryOn(
     signal?: AbortSignal
     said?: (words: string) => void
     keepIn?: string
-    /** `since` is how the run is known again, to go into its note: when it began, or on Windows `IN_JOB`. Undefined where that could not be told. */
-    began?: (pid: number, since: string | undefined) => void
+    /**
+     * `since` is how the run is known again, to go into its note: when it began, or on Windows
+     * `IN_JOB`. Undefined where that could not be told. `cgroup` is the control group of the
+     * system it was started in, on Linux, where that could be told: see `mayBeTheRuns`.
+     */
+    began?: (pid: number, since: string | undefined, cgroup?: string) => void
     /** Called where the run was ended and the system would not say what of it was left: whoever noted it keeps the note. */
     unsure?: () => void
     /** Called where the run is being ended because its time is over: it was at work, and did not finish. */
     overtime?: () => void
+    /** Called where the app ended badly by itself, killed or failing, in the middle of whatever it was doing: what it left running is ended before this answers. */
+    brokeOff?: () => void
   } = {},
 ): Promise<string | null> {
   const patience = opts.patience ?? 15 * 60_000
@@ -330,6 +336,10 @@ export function carryOn(
     // The identity is captured while this child is ours. Every later signal checks it again.
     // On Windows the run is known by its job, and its number is never signalled once it is not ours.
     const since = windows ? IN_JOB : child.pid ? identity([child.pid]).get(child.pid) : undefined
+    // It began in this program's own control group, as every child does
+    const cgroup = windows ? undefined : cgroupOf('self')
+    /** Ends what is left of the run, by its number and by its name: see `endTree`. */
+    const endLeft = () => endTree(child.pid!, since!, { ...marks, run: windows ? job : marks.run, told: SINCE_TOLD, ...(cgroup ? { cgroup } : {}) })
     let ending = false
     const exited = new Promise<boolean>((done) => child.once('exit', () => done(true)))
     const quit = (why: string | null) => {
@@ -350,7 +360,7 @@ export function carryOn(
       const first = windows ? Promise.race([exited, new Promise<boolean>((done) => setTimeout(() => done(false), 10_000).unref())]) : Promise.resolve(true)
       void first
         .then(async (gone) => {
-          const outcome = await endTree(child.pid!, since, { ...marks, run: windows ? job : marks.run, told: SINCE_TOLD })
+          const outcome = await endLeft()
           // A keeper that did not end when it was ended may still start something
           return gone ? outcome : 'unknown'
         })
@@ -384,21 +394,37 @@ export function carryOn(
             : `${how.app} was not found`,
       ),
     )
-    child.once('exit', (code, signal) =>
-      ending
-        ? undefined
-        : stopped
-          ? end(STOPPED)
-          : code === 0
-            ? end(null)
-            : windows && code === KEPT_MISSING
-              ? end(`${how.app} was not found`)
-              : windows && code === KEPT_UNSTARTED
-                ? end(`${how.app} could not be started: Windows would not start its program`)
-                : windows && code === KEPT_NOT
-                  ? end(`${how.app} could not be started: Windows would not keep it in a job of its own, which It needs to be able to end it`)
-                  : end(`${how.app} exited with ${signal ?? code ?? 'an error'}`, signal === null),
-    )
+    child.once('exit', (code, signal) => {
+      if (ending) return
+      if (stopped) return end(STOPPED)
+      if (code === 0) return end(null)
+      if (windows && code === KEPT_MISSING) return end(`${how.app} was not found`)
+      if (windows && code === KEPT_UNSTARTED) return end(`${how.app} could not be started: Windows would not start its program`)
+      if (windows && code === KEPT_NOT)
+        return end(`${how.app} could not be started: Windows would not keep it in a job of its own, which It needs to be able to end it`)
+      const why = `${how.app} exited with ${signal ?? code ?? 'an error'}`
+      // Ended badly by itself, killed or failing, in the middle of its turn: what it was asked
+      // is tried again, and nothing it left running is to be there beside that. What it left
+      // is ended as a run that is stopped is, and the run is answered for only once nothing
+      // of it is left, or it is held as one that may still be there. A turn that ended well
+      // leaves what it started running, such as a server it was asked to start.
+      ending = true
+      opts.brokeOff?.()
+      if (!child.pid || since === undefined) {
+        opts.unsure?.()
+        return end(why, signal === null)
+      }
+      void endLeft().then(
+        (outcome) => {
+          if (outcome === 'unknown') opts.unsure?.()
+          end(why, signal === null)
+        },
+        () => {
+          opts.unsure?.()
+          end(why, signal === null)
+        },
+      )
+    })
     child.stdin?.on('error', () => {})
     // Whoever started it is told which process it is, to write down, before it is given
     // anything to do: a connector that dies has no other way of knowing, when it next starts,
@@ -406,7 +432,7 @@ export function carryOn(
     // having done nothing: a run that nobody could find again is not left to run.
     if (child.pid && opts.began)
       try {
-        opts.began(child.pid, since)
+        opts.began(child.pid, since, cgroup)
       } catch {
         return quit(`${how.app} was started and could not be noted down, so it was ended before it was given anything to do`)
       }
@@ -434,6 +460,10 @@ export function carryOn(
  * carries none is left alone, and while it is there the answer is `unknown`: it may be a
  * command of the run's that was started with nothing handed on, or something else altogether.
  *
+ * Where something of this person's cannot be read, the look for the run's name is not whole,
+ * and the answer is `unknown`, only where that may be the run's (see `mayBeTheRuns`). The
+ * control group the run was started in (`cgroup`) is what tells most of the rest apart.
+ *
  * On Windows none of that is asked. A run there was started in a job of the system's, named by
  * the run (`since` is then `IN_JOB`), and everything in the job is ended at once: see `endJob`.
  * No process is signalled there by its number. A note that does not name its run says nothing
@@ -442,7 +472,7 @@ export function carryOn(
 export async function endTree(
   pid: number,
   since: string,
-  of?: { harness: string; session: string; boot?: string; told?: number; run?: string },
+  of?: { harness: string; session: string; boot?: string; told?: number; run?: string; cgroup?: string },
 ): Promise<'ended' | 'gone' | 'unknown'> {
   if (process.platform === 'win32') return since === IN_JOB && of?.run ? endJob(of.run) : 'unknown'
   // Noted before the machine was last started: nothing of it is left, whatever has its number now
@@ -464,7 +494,8 @@ export async function endTree(
   // Whatever carries this run's own name, wherever it is by now: a command the run started in
   // a group of its own is in neither the run's family nor its group once the run is gone, and
   // is the run's all the same. No other run has the name, so what carries it is ended with it.
-  const looked = of?.run ? marked(of.run, since) : { found: new Map<number, string>(), whole: true }
+  const near: Near = { leader: pid, ...(of?.cgroup ? { cgroup: of.cgroup } : {}) }
+  const looked = of?.run ? marked(of.run, since, near) : { found: new Map<number, string>(), whole: true }
   const markedNow = looked?.found ?? null
   // Failed discovery leaves uncertainty, but does not prevent ending processes whose
   // identities can still be checked. In particular, Stop still reaches a known leader, and
@@ -502,7 +533,7 @@ export async function endTree(
   // have lost its mark while the system would not let us read it.
   const signalled = new Map<number, string>()
   const left = (): Map<number, string> => {
-    const again = of?.run ? marked(of.run, since) : { found: new Map<number, string>(), whole: true }
+    const again = of?.run ? marked(of.run, since, near) : { found: new Map<number, string>(), whole: true }
     if (!again?.whole) uncertain = true
     for (const [p, at] of again?.found ?? []) were.set(p, at)
     // One identity snapshot for the whole tick. On macOS each call runs ps, so asking for
@@ -592,9 +623,11 @@ export const jobName = (run: string): string | null => (/^[A-Za-z0-9-]{1,64}$/.t
  * anything: the job's name, the app's command line, and the program that started it, which it
  * makes sure of by when that began. It puts itself in the job before it starts the app, so that
  * everything the app starts is in it from its first moment. It then waits for the app and for
- * the program that started it, whichever ends first. The app ending by itself, the job is told
- * to end nothing more when it is let go, and what the app left running is let be, as it is on
- * Linux and macOS, until It's service ends. On Windows, Node and Bun alike put every program
+ * the program that started it, whichever ends first. The app ending well by itself, the job is
+ * told to end nothing more when it is let go, and what the app left running is let be, as it is
+ * on Linux and macOS, until It's service ends. The app ending badly, with any code but 0, the job
+ * is left as it is, so that what the app left running ends as the keeper lets go of the job, as
+ * it is ended on Linux and macOS. On Windows, Node and Bun alike put every program
  * they start into a job of their own that ends them when they end, the keeper among them, and
  * the run's job is inside that one: so what a run left running ends with the service, where on
  * Linux and macOS it goes on. The program that started it ending, the job is ended at once. A
@@ -716,8 +749,10 @@ public static class ItJob {
     }
     uint code;
     if (!GetExitCodeProcess(run.hProcess, out code)) code = 1;
-    limits.Basic.LimitFlags = 0;
-    SetInformationJobObject(job, 9, ref limits, size);
+    if (code == 0) {
+      limits.Basic.LimitFlags = 0;
+      SetInformationJobObject(job, 9, ref limits, size);
+    }
     return unchecked((int)code);
   }
 
@@ -770,7 +805,7 @@ const POWERSHELL = ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand
  * the app runs. The app is given the keeper's own input and output, which are what this program
  * gives the keeper, and its environment without what the keeper was told by. A run there ends
  * with the program that started it, however that program ended: on Linux and macOS it goes on
- * until the next one ends it. And what a run left running when it ended by itself ends with that
+ * until the next one ends it. And what a run left running when it ended well by itself ends with that
  * program too (see `JOB_CODE`). Why it cannot be started this way, as a string.
  */
 export function keeper(argv: string[], run: string, env: NodeJS.ProcessEnv): { file: string; args: string[]; env: NodeJS.ProcessEnv } | string {
@@ -1082,10 +1117,13 @@ function belongs(pid: number, of: { harness: string; session: string }): boolean
  * The processes that carry a run's own name in what they were started with, wherever they are.
  * Null where the system could not be asked. Another person's process cannot be read and is
  * passed over: it is not this run's, which runs as this person. One of this person's own that
- * cannot be read may be the run's, so then the look is not `whole`. What it found is found all
- * the same, and is ended with the run, whatever other process of theirs began meanwhile.
+ * cannot be read, and that may be the run's (`mayBeTheRuns`), makes the look not `whole`. One
+ * that the system shows is not the run's is passed over too: a person's own programs that let
+ * nobody read them, such as gpg-agent and ssh-agent, are started all the time beside a run, and
+ * each would otherwise hold the run's conversation for as long as it lived. What it found is
+ * found all the same, and is ended with the run, whatever other process of theirs began meanwhile.
  */
-function marked(run: string, since: string): { found: Map<number, string>; whole: boolean } | null {
+function marked(run: string, since: string, near?: Near): { found: Map<number, string>; whole: boolean } | null {
   const mark = `IT_RUN=${run}`
   const found = new Map<number, string>()
   let whole = true
@@ -1125,6 +1163,7 @@ function marked(run: string, since: string): { found: Map<number, string>; whole
         } catch (gone) {
           if (['ENOENT', 'ESRCH'].includes((gone as NodeJS.ErrnoException).code ?? '')) continue
         }
+        if (near && !mayBeTheRuns(Number(name), near, since, mark)) continue
         whole = false
       }
     }
@@ -1141,6 +1180,81 @@ function marked(run: string, since: string): { found: Map<number, string>; whole
   }
   found.delete(process.pid)
   return { found, whole }
+}
+
+/** What a run is known by where something cannot be read: the process it was started as, and the control group of the system it was started in, where that was told. */
+export type Near = { leader: number; cgroup?: string }
+
+/**
+ * The control group of the system that a process is in, as Linux says it: the one place in the
+ * single hierarchy of control groups, or else in the hierarchy systemd keeps. A process starts in
+ * its parent's, and stays there unless something with the right to moves it: systemd gives each
+ * service, each window of a terminal and each app a group of its own. Undefined where that cannot
+ * be told, and on every other system.
+ */
+export function cgroupOf(pid: number | 'self'): string | undefined {
+  if (process.platform !== 'linux') return undefined
+  try {
+    const lines = readFileSync(`/proc/${pid}/cgroup`, 'utf8').split('\n')
+    const at = lines.find((l) => l.startsWith('0::')) ?? lines.find((l) => /^\d+:name=systemd:/.test(l))
+    const group = at?.slice(at.indexOf(':', at.indexOf(':') + 1) + 1).trim()
+    return group?.startsWith('/') ? group : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** What Linux says of a process that anyone may read: its parent, its group, its session and the tick it began at. Null where it is gone, and undefined where that cannot be read. */
+function statOf(pid: number): { ppid: number; pgrp: number; session: number; tick: number } | null | undefined {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+    if (fields[0] === 'Z' || fields[0] === 'X') return null
+    const [ppid, pgrp, session, tick] = [fields[1], fields[2], fields[3], fields[19]].map(Number)
+    return [ppid, pgrp, session, tick].every((n) => Number.isInteger(n)) ? { ppid: ppid!, pgrp: pgrp!, session: session!, tick: tick! } : undefined
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    return code === 'ENOENT' || code === 'ESRCH' ? null : undefined
+  }
+}
+
+/**
+ * Whether a process of this person's whose environment cannot be read, begun since a run began,
+ * may be that run's, by what Linux shows of every process. It may be where it is in the run's
+ * own group or session, which a run is started with and what it starts keeps, or descends from
+ * the run or from a process that carries the run's name. It is not where it is in another
+ * control group than the one the run was started in, since a process starts in its parent's;
+ * nor where its parent, in the same control group as it is, was running before the run began,
+ * since such a parent made it and is not the run's. Anything else may be the run's: one whose
+ * parent has gone, or has taken it in after its own parent went, as systemd and the first
+ * process of the system take in every process left without one, is not shown to be anybody's.
+ */
+function mayBeTheRuns(pid: number, near: Near, since: string, mark: string): boolean {
+  if (!/^tick \d+$/.test(since)) return true
+  const began = Number(since.slice(5))
+  const first = statOf(pid)
+  if (first === null) return false
+  if (first === undefined) return true
+  if (first.pgrp === near.leader || first.session === near.leader) return true
+  const group = cgroupOf(pid)
+  if (near.cgroup !== undefined && group !== undefined && group !== near.cgroup && !group.startsWith(`${near.cgroup}/`)) return false
+  let at = { stat: first, group }
+  for (let step = 0; step < 64; step++) {
+    const parent = at.stat.ppid
+    if (parent === near.leader || parent <= 1) return true
+    const its = statOf(parent)
+    if (!its) return true
+    const theirs = cgroupOf(parent)
+    // A parent in another control group may have taken it in, and not have made it
+    if (theirs === undefined || at.group === undefined || theirs !== at.group) return true
+    if (its.tick < began) return false
+    // Begun since the run, it may be one of the run's, which says so where it can be read
+    try {
+      if (readFileSync(`/proc/${parent}/environ`, 'utf8').split('\0').includes(mark)) return true
+    } catch {}
+    at = { stat: its, group: theirs }
+  }
+  return true
 }
 
 /**
