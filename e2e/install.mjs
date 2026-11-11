@@ -564,7 +564,10 @@ try {
     // A note the program left before in It's folder, whatever it holds, is the program's own, and an install leaves it as it is
     const saysOff = `${JSON.stringify({ enabled: false, offBy: 'command', told: 1 }, null, 1)}\n`
     mkdirSync(path.join(tmp, 'note-says-off', '.it'), { recursive: true })
-    writeFileSync(path.join(tmp, 'note-says-off', '.it', 'installation.json'), '{"product":"It","format":1,"about":"This folder holds an installation of It."}\n')
+    writeFileSync(
+      path.join(tmp, 'note-says-off', '.it', 'installation.json'),
+      '{"product":"It","format":1,"about":"This folder holds an installation of It."}\n',
+    )
     writeFileSync(path.join(tmp, 'note-says-off', '.it', 'telemetry.json'), saysOff)
     const noteSaysOff = await install('note-says-off', {}, { terminal: true })
     check(
