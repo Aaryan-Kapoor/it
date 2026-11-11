@@ -1020,7 +1020,8 @@ export const afterSetup = (it = itForAgent()): string =>
  * agent's turn, the tour is left until it has been, and the person is told to ask for it then.
  */
 export const afterSetupTelling = (lines: readonly string[], restart = false, it = itForAgent()): string => {
-  const words = lines.length === 1 ? `this, word for word: “${lines[0]}”` : `each of these, word for word:\n\n${lines.map((line) => `“${line}”`).join('\n\n')}\n\n`
+  const words =
+    lines.length === 1 ? `this, word for word: “${lines[0]}”` : `each of these, word for word:\n\n${lines.map((line) => `“${line}”`).join('\n\n')}\n\n`
   const guide = ` If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
   return restart
     ? `If you are an agent installing It for someone, one step of the install guide comes after this one, and it waits until Codex has been started again. Write the person one message that gives them the link that \`${it} site --no-open\` prints, to open on this computer, and tells them ${words} Then end your turn, and do not run \`${it} tour\` yet: Codex has to be started again first, which ends this turn anyway. Once it is back and the person asks for the tour, run \`${it} tour\` and do what it prints.${guide}`

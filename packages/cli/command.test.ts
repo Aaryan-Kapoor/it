@@ -8049,7 +8049,7 @@ else if (said === 'plugin install it-bridge@it --scope user') {
     const line = reloadLine('2.1.321')
     // The words are in the step that comes next, and not in a condition
     expect(said.next).toContain(
-      `write them one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${line}” Then end your turn`,
+      `write them one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${line}” What showing that page printed under \`arrives\` says whether to end your turn then or to wait.`,
     )
     expect(said.next).not.toContain('Where setup said')
     // And they are the last thing it prints, addressed to the agent
