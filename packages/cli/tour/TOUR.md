@@ -91,7 +91,7 @@ The person has a Rubik's cube that is a few turns from solved, and asked you to 
 it tour answer <the action's id> '{"moves":[{"turn":"right-column-down","say":"<a few words>"},{"turn":"top-row-left","say":"<a few words>"}],"say":"<one sentence>"}'
 ```
 
-The page shows your turns on the cube one at a time, each as an arrow round its layer with your words beside it, and the person makes the turn or has it played. Say each turn as a person sees it, as in "pull the right column down", and never by a letter as cubers do. Three turns are shown at most. Where `more` is above 0, the way back is longer than `back`, and they ask again after these.
+The page shows your turns on the cube one at a time, each as an arrow round its layer with your words beside it, and the person makes the turn or has it played. Say each turn as a person sees it, as in "pull the right column down", and never by a letter as cubers do. Use no apostrophe in your words, since they are inside the single quotes of the command. Three turns are shown at most. Where `more` is above 0, the way back is longer than `back`, and they ask again after these.
 
 A turn's name says what it looks like as the cube is held: a row to the left or the right (`top-row-left`, `middle-row-right`, `bottom-row-left`), a column up or down (`left-column-up`, `middle-column-down`, `right-column-up`), or a layer turned like the hand of a clock as seen from the front (`front-face-clockwise`, `middle-layer-anticlockwise`, `back-face-clockwise`). A turn of your own by one of these names is shown as well, and anything else is left out. `cube` is the colours of each face, nine letters row by row, and you need none of it to answer.
 
