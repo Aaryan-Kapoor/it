@@ -4,6 +4,7 @@
 // it arrives by itself ends its turn; one told anything else waits for it with `it wait`.
 
 import { existsSync } from 'node:fs'
+import { TOUR } from '@it/protocol'
 import type { Route } from './connector'
 import { claudeAddonHere, inHome } from './lib'
 import { KNOWN, older } from './setup'
@@ -133,9 +134,9 @@ export const onWindows = (platform: string = process.platform): string =>
     ? ` On Windows, name It’s program as ${itForAgent(platform) === 'it.exe' ? 'it.exe, or by its whole path,' : 'it is written here'} and not as a bare \`it\`: in Windows PowerShell a bare \`it\` runs Pester’s \`It\` command instead, until It’s folder is on the PATH of an app started after It was installed.`
     : ''
 
-/** What the agent is told to run while nothing arrives by itself. */
+/** What the agent is told to run while nothing arrives by itself. On the tour's first page that is the tour's own wait, which also writes a picture an action carried to a file for the agent. */
 const waitFor = (slug: string | undefined) =>
-  `After you show the ${slug ? 'page' : 'person a page'}, run \`${itForAgent()} wait ${slug ? `--id ${slug} ` : ''}--timeout 100\`, act on what it prints, and run it again when it prints {"timedOut": true}: do not put it in the background, since it has to end for you to see what it printed.${onWindows()}`
+  `After you show the ${slug ? 'page' : 'person a page'}, run \`${itForAgent()} ${slug === `${TOUR.prefix}${TOUR.start}` ? 'tour next' : `wait ${slug ? `--id ${slug} ` : ''}--timeout 100`}\`, act on what it prints, and run it again when it prints {"timedOut": true}: do not put it in the background, since it has to end for you to see what it printed.${onWindows()}`
 
 export interface Facts {
   /** The conversation the command runs in, where its agent app says which. */

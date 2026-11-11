@@ -690,7 +690,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   serve: [0, 'serve [--log <file>]'],
   service: [1, 'service install | uninstall | status | logs'],
   skill: [0, 'skill'],
-  tour: [2, 'tour [--wait] [show <name> | show next | clear]'],
+  tour: [3, "tour [--wait] [show <name> | show next | answer <action-id> ['<json>' | --file <path>] | next | clear]"],
   telemetry: [1, 'telemetry [on | off]'],
   upgrade: [0, 'upgrade [--check]'],
   updates: [1, 'updates [on | off]'],
@@ -728,7 +728,9 @@ function noMore(cmd: string, a: Args): void {
       ? ` If your shell split the JSON at a space, write it to a file and run \`it patch ${a._[0]} --file <path>\`.`
       : cmd === 'create' && text(a, 'state') !== undefined
         ? ' If your shell split the JSON of --state at a space, write it to a file and give it with `--state-file <path>`.'
-        : ''
+        : cmd === 'tour' && a._[0] === 'answer'
+          ? ` If your shell split the JSON at a space, write it to a file and run \`it tour answer ${a._[1]} --file <path>\`.`
+          : ''
   throw new Problem(`It does not know what to do with "${a._[most]}".`, 'invalid', `Usage: it ${usage}${split}`)
 }
 

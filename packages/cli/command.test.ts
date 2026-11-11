@@ -688,12 +688,20 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
         [['open', 'plan', 'Kitchen'], 'Kitchen'],
         [['delete', 'plan', 'other'], 'other'],
         [['status', 'now'], 'now'],
+        [['tour', 'show', 'start', 'again', 'more'], 'more'],
+        [['tour', 'answer', 'action-1', '{"say":"two', 'words"}'], 'words"}'],
       ] as const) {
         const ran = await run(m, [...args], b.env)
         expect([args, ran.code, ran.out]).toEqual([args, 2, ''])
         expect(error(ran)).toMatchObject({ code: 'invalid', message: `It does not know what to do with "${left}".` })
       }
       expect(b.asked).toEqual([])
+      // An answer whose JSON a shell split at a space is told how to give it whole
+      expect(error(await run(m, ['tour', 'answer', 'action-1', '{"say":"two', 'words"}'], b.env)).hint).toContain('run `it tour answer action-1 --file <path>`')
+      expect(error(await run(m, ['tour', 'next', 'now'], b.env)).message).toBe('`it tour next` takes nothing after it.')
+      expect(error(await run(m, ['tour', 'answer'], b.env)).message).toBe('Say which action.')
+      expect(error(await run(m, ['tour', 'answer', 'action-1', '[1]'], b.env)).code).toBe('invalid')
+      expect(b.asked.filter((x) => x.path !== 'delivery:get')).toEqual([])
       // A command there is none of is said to be that, whatever it is called
       expect(error(await run(m, ['constructor', 'x'], b.env)).message).toBe('No such command: constructor')
       // `it set` and `it notify` read all their last words together as one text, and still do
@@ -7823,9 +7831,14 @@ describe('whether what the person does arrives by itself, as a page’s command 
 
   test('the tour’s first page, shown from such a conversation, is put up as one that cannot be heard yet, and its agent is told to give the line to type and end its turn, and not to wait', async () => {
     const m = machine()
+    // The page that was begun last is the one that is finished
+    let begun = 'tour-start'
     b = await backend(m, ({ path: fn, args }) => {
-      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
-      if (fn === 'publish:finish') return { slug: args.slug ?? 'tour-start', version: 1, url: 'https://site.example/p/tour-start' }
+      if (fn === 'publish:begin') {
+        begun = String(args.slug)
+        return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      }
+      if (fn === 'publish:finish') return { slug: begun, version: 1, url: `https://site.example/p/${begun}` }
       if (fn === 'displays:show') return { displays: ['Desk'] }
       return null
     })
@@ -7843,12 +7856,57 @@ describe('whether what the person does arrives by itself, as a page’s command 
       // An agent that says which it is to be is taken at its word
       const awake = printed(await run(m, ['tour', 'show', 'start', '--param', 'asleep=false'], env))
       expect(awake.asleep).toBeUndefined()
-      expect(awake.arrives.next).toContain('`it wait --id tour-start --timeout 100`')
+      expect(awake.arrives.next).toContain('run `it tour next`, act on what it prints')
+      expect(awake.arrives.next).not.toContain('it wait')
       // And any other page of the tour is told what a page is told there: to wait for what is done on it
       const other = printed(await run(m, ['tour', 'show', 'button'], env))
       expect(other.asleep).toBeUndefined()
       expect(other.arrives.next).toContain('--timeout 100`')
       expect(other.arrives.next).not.toContain('end your turn')
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
+  test('`it tour answer` sets the answer under the action’s own part and request, acknowledges it, takes its picture away, and tells an agent that things arrive for by themselves to end its turn', async () => {
+    const m = machine()
+    const request = 'ab'.repeat(16)
+    b = await backend(m, ({ path: fn }) => {
+      if (fn === 'delivery:get')
+        return {
+          id: 'action-1',
+          artifact: 'tour-start',
+          title: 'Getting started',
+          name: 'checked',
+          payload: JSON.stringify({ part: 'board', request, sum: '12 × 12 =' }),
+          at: 1,
+          attended: true,
+          session: null,
+        }
+      if (fn === 'state:patch') return { revision: 4 }
+      if (fn === 'delivery:handedOff') return { already: false, at: 1, harness: 'claude-code' }
+      return null
+    })
+    const c = await connectorSaying(m, { connected: true, listening: true, runtime: 'active', thread: 'none' })
+    // The command runs in the folder the conversation works in
+    const folder = m.home
+    try {
+      // The picture It kept for the action, and a file of the person's beside it
+      writeFileSync(path.join(folder, `.it-tour-${request}.png`), 'png')
+      writeFileSync(path.join(folder, 'sheet.png'), 'theirs')
+      const env = { ...b.env, CLAUDE_CODE_SESSION_ID: claude, IT_HARNESS: 'claude-code', IT_SESSION: claude, CLAUDE_CODE_EXECPATH: '/x/versions/2.1.321' }
+      const ran = await run(m, ['tour', 'answer', 'action-1', '{"read":"144","right":true,"say":"Right.","request":"not-this-one"}'], env)
+      expect(printed(ran)).toEqual({
+        answered: 'board',
+        next: 'End your turn. What the person does next arrives in this conversation by itself, as a message that begins [It].',
+      })
+      expect(b.asked.map((x) => x.path)).toEqual(['delivery:get', 'state:patch', 'delivery:handedOff', 'delivery:settle'])
+      const patched = b.asked[1]!.args
+      expect(patched.slug).toBe('tour-start')
+      expect(JSON.parse(String(patched.patch))).toEqual({ board: { read: '144', right: true, say: 'Right.', request } })
+      expect(b.asked[3]!.args).toEqual({ id: 'action-1', outcome: 'succeeded' })
+      expect([existsSync(path.join(folder, `.it-tour-${request}.png`)), readFileSync(path.join(folder, 'sheet.png'), 'utf8')]).toEqual([false, 'theirs'])
     } finally {
       await c.close()
       await b.close()
