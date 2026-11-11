@@ -51,6 +51,7 @@ export const VALUED = new Set([
   'number',
   'after',
   'state-file',
+  'session',
 ])
 export interface Args {
   _: string[]
@@ -89,6 +90,7 @@ export const OPTIONS: Record<string, readonly string[]> = {
   serve: ['log', 'supervised'],
   service: [],
   skill: [],
+  mcp: ['session'],
   tour: ['wait', 'timeout'],
   'tour show': ['agent', 'param', 'on', 'on-id', 'everywhere'],
   'tour clear': [],

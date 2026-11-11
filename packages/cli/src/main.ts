@@ -123,6 +123,7 @@ import {
 } from './lib'
 import { joinedBefore, login, runsItsOwn } from './login'
 import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
+import { newSession, runner, serveMcp, sessionNamed } from './mcp'
 import { failure, foldRepeats, forPerson } from './output'
 import { keepToOwner } from './owner'
 import { gather, noteConversation, publish, unlinkedNote } from './publish'
@@ -3392,6 +3393,9 @@ This machine
                                  its folder with every page in it. It asks first, and --yes
                                  answers for you.
   it skill                       Print the instructions an agent needs to use It.
+  it mcp [--session <name>]      Serve these commands as MCP tools on standard input and output, for an agent that
+                                 cannot run a command here. --session names its conversation, so that its pages
+                                 are its own the next time it is started.
   it tour [show <name> | clear]  Print the tour an agent gives of It. With show, bring up one of
                                  its pages, or with show next the next one not yet seen, and
                                  with clear, remove them all.
@@ -3643,6 +3647,17 @@ async function main(argv: string[]): Promise<void> {
     case 'skill':
       written(process.stdout, SKILL)
       return
+    case 'mcp': {
+      if (a._.length) throw new Problem('`it mcp` takes no words after it.', 'invalid', 'Usage: it mcp [--session <name>]')
+      // The conversation the server's pages belong to: one for each time it is started, or the one the person names so that it is the same next time
+      const named = text(a, 'session')
+      if (named !== undefined && !sessionNamed(named))
+        throw new Problem('--session is a short name of letters, digits, dots, hyphens and underscores.', 'invalid', 'Usage: it mcp [--session <name>]')
+      // Standard output is the protocol's alone from here on: every tool is a command of its own, which prints to the server and never to the client
+      return new Promise<void>((done) => {
+        serveMcp({ input: process.stdin, output: process.stdout, version: VERSION, ...runner(named ?? newSession()), done })
+      })
+    }
     case 'tour':
       return tour(a)
     case 'login': {
