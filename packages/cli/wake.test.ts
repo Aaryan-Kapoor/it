@@ -1395,7 +1395,7 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
             return args[0] === '/proc' ? [...table.keys()].map(String) : Reflect.apply(target, self, args)
           },
         })
-        fs.statSync = new Proxy(stat, {
+        ;(fs as { statSync: typeof fs.statSync }).statSync = new Proxy(stat, {
           apply(target, self, args) {
             const pid = fake(args[0])
             if (pid === null) return Reflect.apply(target, self, args)
@@ -1425,7 +1425,7 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
         syncBuiltinESMExports()
         // The run began at tick 1000, in It's own control group, and its own process is gone
         const of = { harness: 'claude-code', session: 'held', run: 'the-run', told: SINCE_TOLD, cgroup: '/user.slice/it.service' }
-        const judged = async (fakes: Record<number, Fake>, noted = of) => {
+        const judged = async (fakes: Record<number, Fake>, noted: Parameters<typeof endTree>[2] = of) => {
           table = new Map(Object.entries(fakes).map(([pid, f]) => [Number(pid), f]))
           return endTree(L, 'tick 1000', noted)
         }
@@ -1469,7 +1469,7 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       } finally {
         fs.readdirSync = list
         fs.readFileSync = read
-        fs.statSync = stat
+        ;(fs as { statSync: typeof fs.statSync }).statSync = stat
         syncBuiltinESMExports()
       }
     },
