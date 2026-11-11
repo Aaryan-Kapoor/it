@@ -468,7 +468,11 @@ describe('more to make music with than four drums', () => {
     // The part is as it was, since the answer is merged into what the state held
     expect(lit(page, '.pad.theirs')).toEqual(['0:1'])
     // The asks say what they would do now
-    expect(asks(page).map((b) => b.textContent).slice(3, 5)).toEqual(['Straighten', 'Half time'])
+    expect(
+      asks(page)
+        .map((b) => b.textContent)
+        .slice(3, 5),
+    ).toEqual(['Straighten', 'Half time'])
     const wrong = [
       { bpm: 49, swing: 61 },
       { bpm: 181, swing: -1 },
@@ -550,6 +554,37 @@ describe('more to make music with than four drums', () => {
     page.$('#drums-clear').click()
     await page.advance(5000)
     expect([bars(), page.sent.length, shown(page).join(), page.$('[data-part="drums"] .on')]).toEqual(['1', sent, '118,0', null])
+    page.close()
+  })
+
+  test('where one bar is shown at a time, a tab keeps its bar in view until it is tapped again, and a tap on a pad keeps the bar it is in until the beat has gone', async () => {
+    const page = await begun()
+    const viewed = () => [...page.w.document.querySelectorAll('.drums-bar')].map((b: any) => b.classList.contains('view'))
+    const tabs = () => [...page.w.document.querySelectorAll('.drums-tab')].map((t: any) => [t.classList.contains('view'), t.classList.contains('held')])
+    page.$('[data-ask="trade"]').click()
+    const trade = page.sent.at(-1)!
+    await trade.accept()
+    await answered(page, trade.data.fits)
+    expect(viewed()).toEqual([true, false])
+    page.$('.drums-tab[data-bar="1"]').click()
+    expect([viewed(), tabs()]).toEqual([
+      [false, true],
+      [
+        [false, false],
+        [true, true],
+      ],
+    ])
+    // A tap in the bar that a tab keeps leaves it kept, through the sending of the beat
+    tapped(page, 1, 12)
+    await page.advance(1500)
+    expect(tabs()[1]).toEqual([true, true])
+    page.$('.drums-tab[data-bar="1"]').click()
+    expect(tabs()[1]).toEqual([true, false])
+    // A tap on a pad keeps its bar by itself, and lets it go as the beat is sent
+    tapped(page, 1, 13)
+    expect(tabs()[1]).toEqual([true, true])
+    await page.advance(1500)
+    expect(tabs()[1]).toEqual([true, false])
     page.close()
   })
 

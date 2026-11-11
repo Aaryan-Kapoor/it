@@ -95,10 +95,10 @@ To play turns of your own instead, give up to twenty as a list, as in `["F","Ri"
 
 ### The drum machine: `beat`
 
-The person and you make music on one loop. `ask` says in words what they want of you, and `fits` is an answer to it that is already made: answer with `fits` as it is, or with your own change of it, and a few words about what you played.
+The person and you make music on one loop. `ask` says in words what they want of you, and `fits` is an answer to it that is already made: answer with `fits` as it is, or with your own change of it, and a few words about what you played. Answer what was asked and no more, since the person has a button for each thing and hears each change best by itself.
 
 ```sh
-it tour answer <the action's id> '{"pattern":["...x.x.x","..x...x.","........","...x....","1..1..5."],"note":"<a few words>"}'
+it tour answer <the action's id> '{"pattern":["...x.x.x","..x...x.","........","...x....","........"],"note":"<a few words>"}'
 ```
 
 `pattern` in your answer is the whole of your own part: one string for each of `rows`, as long as `steps`. In the four drums `x` is a hit. In the last row, the bass, a digit from 1 to 5 is a note of the scale, low to high, and any five of them sound right together. `pattern` in the action is the person's own hits in the same form, and they stay whatever you answer, so play on the steps they left empty. `yours` is your part as it plays now.
