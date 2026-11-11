@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { learnClock, readClocks, reportClock } from './lib'
-import { lastWord, type Report, reportPage, startReports, USED_EVERY_MS, VISIBLE_EVERY_MS } from './presence'
+import { ACTIVATION_MS, LOOK_EVERY_MS, lastWord, type Report, reportPage, startReports, USED_EVERY_MS, VISIBLE_EVERY_MS } from './presence'
 
 let stop: (() => void) | undefined
 let shown: 'visible' | 'hidden'
@@ -446,4 +446,130 @@ test('the last word goes to the backend’s address for a call, kept going after
   } finally {
     vi.unstubAllGlobals()
   }
+})
+
+/**
+ * The browser's word that the person has just acted, as this test sets it: on for five seconds
+ * after each time they act, as Chromium and Firefox keep it, wherever they act, in a frame too.
+ */
+function activationOf() {
+  let until = Number.NEGATIVE_INFINITY
+  const word = {
+    hasBeenActive: true,
+    get isActive() {
+      return Date.now() < until
+    },
+  }
+  vi.spyOn(window.navigator, 'userActivation', 'get').mockReturnValue(word)
+  return {
+    acted: () => {
+      until = Date.now() + 5000
+    },
+  }
+}
+// jsdom has no word of the browser's own that the person has just acted: one is given for the spy to stand in for
+if (!('userActivation' in window.navigator)) Object.defineProperty(window.navigator, 'userActivation', { configurable: true, get: () => undefined })
+
+/** The backend's clock, a fixed way ahead of this browser's, and a reporter that says when each use happened by it. */
+const AHEAD = 1_000_000
+function timedReporter(takesUsedAt = true) {
+  const sent: Report[] = []
+  stop = startReports(
+    (r) => {
+      sent.push(r)
+      return Promise.resolve({ accepted: true, used: r.used === true })
+    },
+    () => true,
+    {
+      document,
+      window,
+      now: () => Date.now(),
+      clock: { at: () => Date.now() + AHEAD, ask: () => {}, learned: () => () => {} },
+      takesUsedAt: () => takesUsedAt,
+    },
+  )
+  return sent
+}
+const usesOf = (sent: Report[]) => sent.filter((r) => r.used)
+
+test('one click on the site is one use, though the browser goes on saying for seconds after it that the person has just acted', async () => {
+  const word = activationOf()
+  const sent = timedReporter()
+  await vi.advanceTimersByTimeAsync(1000)
+  const clicked = Date.now()
+  click()
+  word.acted()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(usesOf(sent)).toEqual([expect.objectContaining({ used: true, usedAt: clicked + AHEAD })])
+  // Nothing more is done here: no other use is said, at the end of the ten seconds or after
+  await vi.advanceTimersByTimeAsync(USED_EVERY_MS * 3)
+  expect(usesOf(sent)).toHaveLength(1)
+})
+
+test('a tap is one use, where the browser takes its end for the person acting after the site last looked', async () => {
+  const word = activationOf()
+  const sent = timedReporter()
+  await vi.advanceTimersByTimeAsync(LOOK_EVERY_MS - 100)
+  window.dispatchEvent(new Event('touchstart'))
+  await vi.advanceTimersByTimeAsync(300)
+  window.dispatchEvent(new Event('touchend'))
+  word.acted()
+  await vi.advanceTimersByTimeAsync(USED_EVERY_MS * 3)
+  expect(usesOf(sent)).toHaveLength(1)
+})
+
+test('a key pressed on the site is one use', async () => {
+  const word = activationOf()
+  const sent = timedReporter()
+  await vi.advanceTimersByTimeAsync(500)
+  window.dispatchEvent(new Event('keydown'))
+  word.acted()
+  await vi.advanceTimersByTimeAsync(USED_EVERY_MS * 3)
+  expect(usesOf(sent)).toHaveLength(1)
+})
+
+test('a click inside a page’s frame is one use, as of the earliest moment it can have been', async () => {
+  const word = activationOf()
+  const sent = timedReporter()
+  const looked = Date.now()
+  await vi.advanceTimersByTimeAsync(1500)
+  // Seen only through the browser's word, which the site looks at every two seconds
+  word.acted()
+  await vi.advanceTimersByTimeAsync(USED_EVERY_MS * 3)
+  expect(usesOf(sent)).toEqual([expect.objectContaining({ usedAt: looked + AHEAD })])
+})
+
+test('acting in a frame on and on is counted again, once the browser could no longer be saying so for what was counted', async () => {
+  const word = activationOf()
+  const sent = timedReporter()
+  await vi.advanceTimersByTimeAsync(1500)
+  // A click every second for twenty seconds
+  for (let i = 0; i < 20; i++) {
+    word.acted()
+    await vi.advanceTimersByTimeAsync(1000)
+  }
+  const uses = usesOf(sent)
+  expect(uses.length).toBeGreaterThanOrEqual(2)
+  // None is said as later than the browser's word can show it to have been
+  for (const u of uses) expect(u.usedAt! - AHEAD).toBeLessThanOrEqual(u.observedAt! - AHEAD)
+  expect(uses.at(-1)!.usedAt! - AHEAD).toBeGreaterThanOrEqual(Date.now() - 20_000 + ACTIVATION_MS)
+})
+
+test('a use said once the ten seconds are up says when it happened, and says nothing of it where the backend does not take that', async () => {
+  const sent = timedReporter()
+  await vi.advanceTimersByTimeAsync(0)
+  click()
+  await vi.advanceTimersByTimeAsync(3000)
+  const again = Date.now()
+  click()
+  await vi.advanceTimersByTimeAsync(USED_EVERY_MS)
+  const uses = usesOf(sent)
+  expect(uses).toHaveLength(2)
+  expect(uses[1]).toMatchObject({ usedAt: again + AHEAD })
+  expect(uses[1]!.observedAt).toBeGreaterThan(again + AHEAD + 5000)
+  stop?.()
+  const plain = timedReporter(false)
+  click()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(usesOf(plain)).toEqual([expect.not.objectContaining({ usedAt: expect.anything() })])
 })

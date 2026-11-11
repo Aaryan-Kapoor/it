@@ -13,7 +13,14 @@ export const VISIBLE_EVERY_MS = 60_000
  */
 export const USED_EVERY_MS = 10_000
 /** How often the site looks whether the browser says the person has just acted, which covers what they do inside a page's frame. */
-const LOOK_EVERY_MS = 2000
+export const LOOK_EVERY_MS = 2000
+/**
+ * How long, at the most, a browser goes on saying that the person has just acted after one click,
+ * tap or key: five seconds in Chromium, Firefox and Safari, and a second more here for the timers'
+ * leeway. Once this long has passed since a use that was counted, the browser saying so again
+ * means the person has acted since.
+ */
+export const ACTIVATION_MS = 6000
 
 /** Where the page a tab shows has got to: none shown, loading, shown, or failed to show. */
 export type PagePhase = 'none' | 'loading' | 'shown' | 'failed'
@@ -43,6 +50,12 @@ export interface Report {
   visible: boolean
   /** That the person clicked, tapped, typed or scrolled here within the last ten seconds. */
   used?: true
+  /**
+   * When they last did, by the backend's clock as this browser has learned it, said with `used`
+   * where the backend takes it: a use that waited for the ten seconds to be up is then kept as of
+   * when it happened, and not as of when it was said.
+   */
+  usedAt?: number
   /**
    * When this report was made, by the backend's clock as this browser has learned it. The
    * connection holds a call through an outage and sends it again as it was, so this is how the
@@ -98,7 +111,9 @@ export const tabId = (): string => Array.from(crypto.getRandomValues(new Uint8Ar
  * A report says when it was made, by the backend's clock, only where this browser knows that
  * clock closely enough (`clock`). Where it does not, as before the first heartbeat is answered and
  * after the machine slept, the report says no time and no use, the backend's clock is asked for at
- * once, and once it is learned a report is made again with the use that was kept.
+ * once, and once it is learned a report is made again with the use that was kept. A use says when
+ * it happened as well (`usedAt`), where the backend takes that (`takesUsedAt`), so that one said
+ * once the ten seconds are up is not taken for a use at the moment it was said.
  *
  * Nothing is sent while `takes()` is false, which is asked each time: a backend whose functions
  * are older than the site has nowhere to take a report, and one that is updated while the site is
@@ -107,12 +122,22 @@ export const tabId = (): string => Array.from(crypto.getRandomValues(new Uint8Ar
  * A click, tap, key or wheel on the site itself is seen here. What the person does inside a
  * page's frame is not, since the frame is another origin: the browser's own word that the person
  * has just acted, which covers every frame, stands in for it, and so does the keyboard going into
- * a frame.
+ * a frame. The browser keeps saying that for a few seconds after a click on the site too, and
+ * that is not counted as another use.
  */
 export function startReports(
   send: (report: Report) => Promise<unknown>,
   takes: () => boolean,
-  at: { document: Document; window: Window; now: () => number; wall?: () => number; clock?: ReportClock; last?: (report: Report) => void } = {
+  at: {
+    document: Document
+    window: Window
+    now: () => number
+    wall?: () => number
+    clock?: ReportClock
+    last?: (report: Report) => void
+    /** Whether the backend takes when a use happened (`usedAt`), asked each time a use is said. */
+    takesUsedAt?: () => boolean
+  } = {
     document,
     window,
     now: () => performance.now(),
@@ -137,8 +162,10 @@ export function startReports(
    */
   let usedWallAt = Number.NEGATIVE_INFINITY
   let spent = true
+  /** How long ago the last use was, by whichever of the two clocks says it was longer. */
+  const age = () => Math.max(now() - usedAt, wall() - usedWallAt, 0)
   const fresh = () => {
-    if (!spent && Math.max(now() - usedAt, wall() - usedWallAt, 0) >= USED_EVERY_MS) spent = true
+    if (!spent && age() >= USED_EVERY_MS) spent = true
     return !spent
   }
   let saidUseOf = Number.NEGATIVE_INFINITY
@@ -156,12 +183,14 @@ export function startReports(
     if (untimed) clock!.ask()
     const used = !untimed && shown && usedAt > saidUseOf && fresh()
     const what = closing ? { phase: 'none' as const } : page
+    // When the use was, as long ago as the clock that says longer has it, so never later than it was
+    const when = used && observedAt !== undefined && at.takesUsedAt?.() ? { usedAt: Math.floor(observedAt - age()) } : {}
     return {
       tab,
       sequence: ++sequence,
       ...what,
       visible: shown,
-      ...(used ? { used: true as const } : {}),
+      ...(used ? { used: true as const, ...when } : {}),
       ...(observedAt !== undefined ? { observedAt } : {}),
     }
   }
@@ -195,12 +224,17 @@ export function startReports(
         }
       })
   }
-  const used = () => {
+  /** The person used the site here, now or at `when` a moment ago, by the clock that only goes forward. */
+  const used = (when?: number) => {
     if (!visible()) return
-    usedAt = now()
-    usedWallAt = wall()
+    const t = now()
+    const then = Math.min(when ?? t, t)
+    // A use from before the one kept says nothing new
+    if (!spent && then <= usedAt) return
+    usedAt = then
+    usedWallAt = wall() - (t - then)
     spent = false
-    const wait = toldUsedAt + USED_EVERY_MS - usedAt
+    const wait = toldUsedAt + USED_EVERY_MS - t
     if (wait <= 0) tell()
     else if (later === undefined)
       later = win.setTimeout(() => {
@@ -208,12 +242,46 @@ export function startReports(
         tell()
       }, wait)
   }
+  /**
+   * Up to when, by the clock that only goes forward, every time the person acted is already
+   * counted: as of each click, tap, key or wheel seen on the site, the keyboard going into a frame,
+   * and each time the browser's word that the person has just acted was counted.
+   */
+  let counted = Number.NEGATIVE_INFINITY
+  /** A use seen on the site itself, which is counted at once and as of then. */
+  const seen = () => {
+    counted = now()
+    used()
+  }
+  /** The end of a tap or a click, which the browser counts as acting, and which the use seen as it began has counted. */
+  const ended = () => {
+    counted = now()
+  }
   const intoFrame = () => {
-    if (doc.activeElement?.tagName === 'IFRAME') used()
+    if (doc.activeElement?.tagName !== 'IFRAME') return
+    counted = now()
+    used()
   }
   const activation = (win.navigator as { userActivation?: { isActive: boolean } }).userActivation
+  // The browser goes on saying that the person has just acted for a few seconds after they did, so
+  // its word is counted only where it means something done since the last use counted: where it
+  // did not say so when last asked, or where it says so longer after that use than it would for
+  // that use alone. What was done is then counted as of the earliest moment it can have been, so
+  // that one click is one use, and never a use later than it was
+  let lookedAt = now()
+  let wasActive = activation?.isActive === true
   const look = () => {
-    if (activation?.isActive) used()
+    const t = now()
+    const active = activation?.isActive === true
+    if (active) {
+      const since = Math.max(t - ACTIVATION_MS, wasActive ? Number.NEGATIVE_INFINITY : lookedAt)
+      if (since >= counted) {
+        counted = t
+        used(since)
+      }
+    }
+    wasActive = active
+    lookedAt = t
   }
   // A tab that is closed shows nothing any more: said at once, whatever else is on its way
   const closing = () => {
@@ -226,7 +294,9 @@ export function startReports(
     at.last?.(r)
   }
   const kinds = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const
-  for (const kind of kinds) win.addEventListener(kind, used, { capture: true, passive: true })
+  const ends = ['pointerup', 'touchend'] as const
+  for (const kind of kinds) win.addEventListener(kind, seen, { capture: true, passive: true })
+  for (const kind of ends) win.addEventListener(kind, ended, { capture: true, passive: true })
   win.addEventListener('blur', intoFrame)
   doc.addEventListener('visibilitychange', tell)
   win.addEventListener('pagehide', closing)
@@ -243,7 +313,8 @@ export function startReports(
   return () => {
     closing()
     stopped = true
-    for (const kind of kinds) win.removeEventListener(kind, used, { capture: true })
+    for (const kind of kinds) win.removeEventListener(kind, seen, { capture: true })
+    for (const kind of ends) win.removeEventListener(kind, ended, { capture: true })
     win.removeEventListener('blur', intoFrame)
     doc.removeEventListener('visibilitychange', tell)
     win.removeEventListener('pagehide', closing)
