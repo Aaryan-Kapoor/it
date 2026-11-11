@@ -188,7 +188,8 @@ export function failure(
   const code = r.error?.code
   const how =
     code === 'ETIMEDOUT' || (forMs !== undefined && r.signal && ms >= forMs)
-      ? `${name} did not answer within ${Math.round((forMs ?? ms) / 1000)} seconds and was ended`
+      ? // How long it had run is said too: a limit that ended a command long before it was reached would be told so
+        `${name} was ended at its limit of ${Math.round((forMs ?? ms) / 1000)} seconds, after ${took}`
       : r.error && r.status === null && !r.signal
         ? `${name} could not be started (${code ?? r.error.message})`
         : r.signal
@@ -219,7 +220,8 @@ function run(cmd: string, args: string[], forMs?: number): Ran {
   const ok = r.status === 0 && !r.error
   const ms = Date.now() - began
   const name = path.win32.basename(cmd).replace(/\.exe$/i, '')
-  const timedOut = (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' || (forMs !== undefined && !!r.signal && ms >= forMs)
+  // Ended at its limit, and only where the limit had been reached: one ended sooner is asked again
+  const timedOut = forMs !== undefined && ms >= forMs * 0.9 && ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' || !!r.signal)
   return { ok, out, status: r.status, timedOut, why: ok ? '' : failure(name === 'powershell' ? 'PowerShell' : name, { ...r, out }, ms, forMs) }
 }
 /** How long the system is given to answer a question about the service. */

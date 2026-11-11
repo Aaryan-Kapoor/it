@@ -140,7 +140,11 @@ describe('a question to Windows that is not answered (#404)', () => {
   test('says how the command ended, how long it ran and what it printed, whichever way it failed', () => {
     const timedOut = Object.assign(new Error('spawnSync powershell.exe ETIMEDOUT'), { code: 'ETIMEDOUT' })
     expect(failure('PowerShell', { status: null, signal: 'SIGKILL', error: timedOut, out: '' }, 30_004, 30_000)).toBe(
-      'PowerShell did not answer within 30 seconds and was ended, and printed nothing',
+      'PowerShell was ended at its limit of 30 seconds, after 30.0 seconds, and printed nothing',
+    )
+    // A limit that ended it long before it was reached says so
+    expect(failure('PowerShell', { status: null, signal: 'SIGKILL', error: timedOut, out: '' }, 2812, 30_000)).toBe(
+      'PowerShell was ended at its limit of 30 seconds, after 2.8 seconds, and printed nothing',
     )
     const missing = Object.assign(new Error('spawnSync powershell.exe ENOENT'), { code: 'ENOENT' })
     expect(failure('PowerShell', { status: null, signal: null, error: missing, out: '' }, 3)).toBe(
@@ -180,8 +184,8 @@ describe('a question to Windows that is not answered (#404)', () => {
     expect(askedTwice(twice.ask, 'question').why).toBe('PowerShell ended with exit code 1 (twice)')
     const unlike = answers(ran('first'), ran('second'))
     expect(askedTwice(unlike.ask, 'question').why).toBe('second; asked once before, first')
-    const slow = answers(ran('PowerShell did not answer within 30 seconds and was ended', true))
-    expect(askedTwice(slow.ask, 'question').why).toMatch(/did not answer/)
+    const slow = answers(ran('PowerShell was ended at its limit of 30 seconds, after 30.0 seconds', true))
+    expect(askedTwice(slow.ask, 'question').why).toMatch(/at its limit/)
     expect(slow.asked).toHaveLength(1)
   })
 
