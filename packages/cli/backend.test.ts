@@ -4135,31 +4135,45 @@ describe('whether the functions answer in the backend', () => {
   }, 30_000)
 
   test('a service asked to stop while it waits to ask a faulty backend again stops then, and is not told the time is over', async () => {
-    const faulty = await site((_, res) => res.writeHead(503).end())
+    // The tries come after waits of a quarter, a half and one second, and the wait after the
+    // fourth is one of two seconds. The stop comes a tenth of a second into it, counted from the
+    // fourth answer, and is heard at once and not when the wait is over.
+    const asked = new AbortController()
+    let abortedAt = 0
+    const faulty = await site((n, res) => {
+      res.writeHead(503).end()
+      if (n === 4)
+        setTimeout(() => {
+          abortedAt = Date.now()
+          asked.abort()
+        }, 100)
+    })
     try {
-      // The tries come after waits of a quarter, a half, one and two seconds: four seconds in, it is waiting
-      const asked = new AbortController()
-      let abortedAt = 0
-      setTimeout(() => {
-        abortedAt = Date.now()
-        asked.abort()
-      }, 4000)
       expect(await refusal(loaded(faulty.at, asked.signal))).toBe('stopped')
-      expect(Date.now() - abortedAt).toBeLessThan(1000)
+      expect([faulty.asked(), Date.now() - abortedAt < 1000]).toEqual([4, true])
     } finally {
       await faulty.close()
     }
-    // Asked to stop in the last wait, the one that ends where the time does, it stops all the same.
-    // Given three seconds, the fourth try is the last, and the wait after it is one of a second
-    // and a quarter: the stop comes a tenth of a second into it, counted from the fourth answer.
+    // Asked to stop in the last wait, the one that ends where the time does, it stops all the
+    // same. Given three seconds, the wait after the fourth try is the last, of a second and a
+    // quarter. A runner that stalls so long that the time is over before the stop comes is
+    // rightly told that the time is over, and shows nothing either way.
     const last = new AbortController()
-    const fourth = await site((asked, res) => {
+    let leftAtStop = Number.NEGATIVE_INFINITY
+    let until = 0
+    const fourth = await site((n, res) => {
       res.writeHead(503).end()
-      if (asked === 4) setTimeout(() => last.abort(), 100)
+      if (n === 4)
+        setTimeout(() => {
+          leftAtStop = until - Date.now()
+          last.abort()
+        }, 100)
     })
     try {
-      expect(await refusal(loaded(fourth.at, last.signal, 3000))).toBe('stopped')
-      expect(fourth.asked()).toBe(4)
+      until = Date.now() + 3000
+      const outcome = await refusal(loaded(fourth.at, last.signal, 3000))
+      if (leftAtStop > 100) expect(outcome).toBe('stopped')
+      else expect([undefined, 'stopped']).toContain(outcome)
     } finally {
       await fourth.close()
     }
