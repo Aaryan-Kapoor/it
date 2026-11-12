@@ -4,10 +4,13 @@ import os from 'node:os'
 import path from 'node:path'
 // Keeping It to a person's tailnet: which addresses are a tailnet's, which of this machine's
 // are, what its name there is, and that the addresses another device is given are those alone.
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { reachable } from './src/serve/network'
 import {
+  daemonDown,
+  forgetFunnel,
   forgetTailnetName,
+  funnelNow,
   funnelPorts,
   funnelSaid,
   inspectFunnel,
@@ -215,12 +218,16 @@ test('Funnel inspection only asks the stand-in Tailscale for status and preserve
   }
 })
 
-test('An unknown Funnel check qualifies the whole network sentence', () => {
+test('A Funnel warning is said beside what is said of the network, and never instead of it', () => {
   const said = 'The network is off, so It answers this machine only.'
-  expect(funnelSaid('unknown', said)).toContain(said)
-  expect(funnelSaid('unknown', said)).toContain('It could not check Tailscale Funnel.')
+  expect(funnelSaid('unknown', said)).toBe(
+    `It could not check Tailscale Funnel. Check Tailscale before relying on the network setting to keep It private.\n${said}`,
+  )
+  expect(funnelSaid('public', said)).toBe(
+    `Tailscale Funnel makes It public, even with the network off. Turn off the Funnel in Tailscale to keep It private.\n${said}`,
+  )
   expect(funnelSaid('off', said)).toBe(said)
-  expect(funnelSaid('public', said)).not.toContain('answers this machine only')
+  expect(funnelSaid(undefined, said)).toBe(said)
 })
 
 describe('which Funnel forwards reach It', () => {
@@ -468,4 +475,114 @@ describe('finding Tailscale on each system', () => {
       expect(await tailscaleDaemon({ platform: 'win32', env: process.env })).toBe(false)
     },
   )
+})
+
+describe('a Tailscale that is there and not running', () => {
+  test('is known by what its command says, on each system, where it looked for the daemon and found none', () => {
+    for (const said of [
+      "failed to connect to local tailscaled; it doesn't appear to be running (sudo systemctl start tailscaled ?)",
+      "failed to connect to local tailscaled; it doesn't appear to be running",
+      'failed to connect to local Tailscale service; is Tailscale running?',
+      'failed to connect to local tailscaled process; is the Tailscale service running?',
+      "failed to connect to local tailscaled process; it doesn't appear to be running",
+    ])
+      expect(daemonDown(said), said).toBe(true)
+    for (const said of [
+      'failed to connect to local tailscaled (which appears to be running as /usr/sbin/tailscaled, pid 812). Got error: connect: permission denied',
+      'Access denied: serve config denied',
+      '',
+      'is Tailscale running?',
+    ])
+      expect(daemonDown(said), said).toBe(false)
+  })
+
+  test.skipIf(process.platform === 'win32')('makes the Funnel off, and a daemon that runs and cannot be reached leaves it unknown', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'it-ts-'))
+    try {
+      const system: System = { platform: 'linux', env: { PATH: root } }
+      const command = path.join(root, 'tailscale')
+      const says = (out: string, err: string, code: number) =>
+        writeFileSync(command, `#!/bin/sh\nprintf '%s' '${out}'\nprintf '%s\\n' "${err}" >&2\nexit ${code}\n`, { mode: 0o700 })
+      says('', "failed to connect to local tailscaled; it doesn't appear to be running (sudo systemctl start tailscaled ?)", 1)
+      expect(await inspectFunnel([5130, 5131], system)).toEqual([])
+      says('', 'failed to connect to local Tailscale service; is Tailscale running?', 1)
+      expect(await inspectFunnel([5130, 5131], system)).toEqual([])
+      says('', 'failed to connect to local tailscaled (which appears to be running as tailscaled, pid 9). Got error: refused', 1)
+      expect(await inspectFunnel([5130, 5131], system)).toBeUndefined()
+      // Nothing set up: Tailscale prints nothing, or null
+      says('', '', 0)
+      expect(await inspectFunnel([5130, 5131], system)).toEqual([])
+      says('null', '', 0)
+      expect(await inspectFunnel([5130, 5131], system)).toEqual([])
+      says('[]', '', 0)
+      expect(await inspectFunnel([5130, 5131], system)).toBeUndefined()
+      // A command that does not answer in time is not taken for a stopped daemon, whatever it said first
+      writeFileSync(command, `#!/bin/sh\necho "is Tailscale running?" >&2\nexec sleep 5\n`, { mode: 0o700 })
+      expect(await inspectFunnel([5130, 5131], system, 300)).toBeUndefined()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('the service’s view of a Funnel', () => {
+  afterEach(forgetFunnel)
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  test('says nothing until Tailscale has first answered, and then what it answered', async () => {
+    let answer: (found: number[] | undefined) => void = () => {}
+    const asked: number[][] = []
+    const inspect = (ports: number[]) => {
+      asked.push(ports)
+      return new Promise<number[] | undefined>((resolve) => {
+        answer = resolve
+      })
+    }
+    expect(funnelNow([5130, 5131], inspect)).toBeUndefined()
+    expect(funnelNow([5130, 5131], inspect)).toBeUndefined()
+    // One inspection at a time
+    expect(asked).toHaveLength(1)
+    answer([])
+    await settle()
+    expect(funnelNow([5130, 5131], inspect)).toBe('off')
+    forgetFunnel()
+    funnelNow([5130, 5131], inspect)
+    answer(undefined)
+    await settle()
+    expect(funnelNow([5130, 5131], inspect)).toBe('unknown')
+    forgetFunnel()
+    funnelNow([5130, 5131], inspect)
+    answer([443])
+    await settle()
+    expect(funnelNow([5130, 5131], inspect)).toBe('public')
+  })
+
+  test('asks less often while the answer stays the same, up to thirty seconds apart, and every five seconds again once it changes', async () => {
+    const start = Date.now()
+    let now = start
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      let found: number[] = []
+      const times: number[] = []
+      const inspect = async () => {
+        times.push(now - start)
+        return found
+      }
+      // Looked at every second, as the service looks
+      for (let second = 0; second <= 120; second++) {
+        now = start + second * 1000
+        if (second === 100) found = [443]
+        funnelNow([5130, 5131], inspect)
+        await settle()
+      }
+      const gaps = times.slice(1).map((at, i) => at - times[i]!)
+      expect(gaps.slice(0, 4)).toEqual([6000, 11_000, 21_000, 31_000])
+      // Changed at a hundred seconds: heard at the next asking, and asked five seconds after that
+      const heard = times.findIndex((at) => at >= 100_000)
+      expect(times[heard + 1]! - times[heard]!).toBe(6000)
+      expect(funnelNow([5130, 5131], inspect)).toBe('public')
+    } finally {
+      clock.mockRestore()
+    }
+  })
 })

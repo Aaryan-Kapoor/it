@@ -5387,7 +5387,8 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       enrolled: true,
       machine: { id: 'machine-1', name: 'the desk' },
       site: SITE,
-      network: { on: false, funnel: 'unknown', addresses: [] },
+      // Nothing was asked of Tailscale on a machine that only joined, so nothing is said of a Funnel
+      network: { on: false, addresses: [] },
       connector: { running: false },
       background: expect.objectContaining({ registered: false }),
       harnesses: [],

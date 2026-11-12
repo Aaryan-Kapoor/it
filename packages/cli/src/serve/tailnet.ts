@@ -302,19 +302,32 @@ export async function tailscaleDaemon(system: System = thisSystem()): Promise<bo
 }
 
 /**
- * Read-only inspection. Never changes the person's Tailscale configuration. The public Funnel
- * listeners that reach It, none where Tailscale is shown not to be on this machine at all, and
- * nothing where it is there and cannot be asked, or what it says cannot be read with certainty.
+ * Whether what Tailscale's command printed, failing, says that its daemon is not running. The
+ * command looks through the system's processes for the daemon before it says so, and says that
+ * it found one, and which, where it could not connect to one that runs.
  */
-export async function inspectFunnel(ports: number[], system: System = thisSystem()): Promise<number[] | undefined> {
+export const daemonDown = (said: string): boolean =>
+  /failed to connect to local (?:tailscaled|tailscale)\b/i.test(said) &&
+  /doesn't appear to be running|is tailscale running\?|is the tailscale service running\?/i.test(said) &&
+  !/appears to be running as/i.test(said)
+
+/**
+ * Read-only inspection. Never changes the person's Tailscale configuration. The public Funnel
+ * listeners that reach It, and none where Tailscale is shown not to be on this machine at all, or
+ * its command says its daemon is not running, since no Funnel is up without the daemon. Nothing
+ * where Tailscale is there and cannot be asked, or what it says cannot be read with certainty.
+ */
+export async function inspectFunnel(ports: number[], system: System = thisSystem(), timeout = 2000): Promise<number[] | undefined> {
   const command = tailscaleCommand(system)
   if (!command) return (await tailscaleDaemon(system).catch(() => true)) ? undefined : []
   return new Promise<number[] | undefined>((resolve) => {
-    execFile(command, ['serve', 'status', '--json'], { encoding: 'utf8', timeout: 2000, windowsHide: true }, (error, stdout) => {
-      if (error) return resolve(undefined)
+    execFile(command, ['serve', 'status', '--json'], { encoding: 'utf8', timeout, windowsHide: true }, (error, stdout, stderr) => {
+      if (error) return resolve(!error.killed && daemonDown(`${stderr}\n${stdout}`) ? [] : undefined)
       try {
-        const status: unknown = JSON.parse(stdout)
-        if (!status || typeof status !== 'object' || Array.isArray(status)) return resolve(undefined)
+        // Tailscale prints nothing, or `null`, where nothing is served
+        const status: unknown = stdout.trim() ? JSON.parse(stdout) : null
+        if (status === null) return resolve([])
+        if (typeof status !== 'object' || Array.isArray(status)) return resolve(undefined)
         resolve(funnelPorts(status, ports))
       } catch {
         resolve(undefined)
@@ -322,23 +335,46 @@ export async function inspectFunnel(ports: number[], system: System = thisSystem
     })
   }).catch(() => undefined)
 }
-let inspection: { key: string; at: number; value?: number[]; pending: boolean } | undefined
-/** Refresh without blocking the service, with at most one inspection in flight. */
-export function publicFunnel(ports: number[]): number[] | undefined {
+
+/** How a Funnel stands for It: none reaches it (`off`), one does (`public`), or It could not tell (`unknown`). */
+export type Funnel = 'off' | 'public' | 'unknown'
+const funnelOf = (found: number[] | undefined): Funnel => (found === undefined ? 'unknown' : found.length ? 'public' : 'off')
+
+/** How long the service waits between asking Tailscale, at first, and at most while the answer stays the same. */
+const FUNNEL_EVERY_MS = 5000
+const FUNNEL_AT_MOST_MS = 30_000
+let inspection: { key: string; at: number; every: number; value?: Funnel; pending: boolean } | undefined
+/**
+ * How a Funnel stands for It's ports, as the service last heard, without waiting for Tailscale,
+ * with at most one inspection in flight. Nothing until the first inspection has answered, so that
+ * nothing is said of a Funnel before Tailscale has been heard. Tailscale is asked again five
+ * seconds after it answered, and while the answer stays the same, after twice as long each time,
+ * up to thirty seconds.
+ */
+export function funnelNow(ports: number[], inspect: (ports: number[]) => Promise<number[] | undefined> = inspectFunnel): Funnel | undefined {
   const key = ports.join(',')
-  if (!inspection || (!inspection.pending && (inspection.key !== key || Date.now() - inspection.at > 5000))) {
-    const next = { key, at: Date.now(), value: inspection?.key === key ? inspection.value : undefined, pending: true }
+  const known = inspection?.key === key ? inspection : undefined
+  if (!inspection || (!inspection.pending && (!known || Date.now() - inspection.at > inspection.every))) {
+    const next = { key, at: Date.now(), every: known?.every ?? FUNNEL_EVERY_MS, value: known?.value, pending: true }
     inspection = next
-    void inspectFunnel(ports).then((value) => {
-      next.value = value
-      next.at = Date.now()
-      next.pending = false
-    })
+    void inspect(ports)
+      .catch(() => undefined)
+      .then((found) => {
+        const value = funnelOf(found)
+        next.every = value === next.value ? Math.min(next.every * 2, FUNNEL_AT_MOST_MS) : FUNNEL_EVERY_MS
+        next.value = value
+        next.at = Date.now()
+        next.pending = false
+      })
   }
   return inspection.key === key ? inspection.value : undefined
 }
+/** Forgets what the service last heard of a Funnel. For tests. */
+export const forgetFunnel = () => {
+  inspection = undefined
+}
 
-export function funnelWarning(funnel: 'off' | 'public' | 'unknown' | undefined): string | undefined {
+export function funnelWarning(funnel: Funnel | undefined): string | undefined {
   return funnel === 'public'
     ? 'Tailscale Funnel makes It public, even with the network off. Turn off the Funnel in Tailscale to keep It private.'
     : funnel === 'unknown'
@@ -346,8 +382,8 @@ export function funnelWarning(funnel: 'off' | 'public' | 'unknown' | undefined):
       : undefined
 }
 
-/** An unknown proxy policy qualifies the listener's report without dropping it. */
-export function funnelSaid(funnel: 'off' | 'public' | 'unknown' | undefined, said: string): string {
+/** The warning of a Funnel, where there is one to give, and then what was to be said, which it never replaces. */
+export function funnelSaid(funnel: Funnel | undefined, said: string): string {
   const warning = funnelWarning(funnel)
-  return funnel === 'unknown' ? `${warning}\n${said}` : (warning ?? said)
+  return warning ? `${warning}\n${said}` : said
 }
