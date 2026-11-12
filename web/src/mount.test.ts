@@ -2433,6 +2433,72 @@ describe('what records or takes a photo for a page, when the page changes hands 
       expect(tracks.map((t) => t.stopped)).toEqual([true, false])
     })
 
+    test('the live camera ends at the second load of the frame after the channel’s hello, though no document answered for either', async () => {
+      const { heard, ask, page } = await shownFor(FIRST, ['camera'])
+      await ask(openLive)
+      await page.loads(false)
+      expect(states(heard)).toEqual([])
+      // Another document loads before the asking about the first has given up, and nothing answers
+      await page.loads(false)
+      expect(states(heard)).toMatchObject([{ state: 'ended', why: 'replaced' }])
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+      await picture()
+      expect(frames(heard)).toEqual([])
+    })
+
+    test('a camera opened over a channel asked for again after the frame loaded sees one more load at most, whatever the next documents answer', async () => {
+      const { page } = await shownFor(FIRST, ['camera'])
+      await page.loads()
+      // The same document, or another, says hello under a new name, and opens the camera over the channel it is given
+      await page.fromFrame({ type: 'it:hello', doc: 'doc-1-again' })
+      const next = page.ports()[1]!
+      const later: any[] = []
+      next.onmessage = (m) => later.push(m.data)
+      next.postMessage(openLive)
+      await act(() => tick(60))
+      expect(resultOf(later, 'c1')).toMatchObject({ ok: true })
+      // The load after that hello may be the document's own
+      await page.loads()
+      expect(states(later)).toEqual([])
+      // The next is not, whatever it answers
+      await page.loads()
+      expect(states(later)).toMatchObject([{ state: 'ended', why: 'replaced' }])
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+    })
+
+    test('a camera asked for after the frame has loaded is let go of at the next load, even where the channel is not yet known to be that document’s', async () => {
+      const { heard, ask, page } = await shownFor(FIRST, ['camera'])
+      await page.loads(false)
+      await ask(openLive)
+      expect(resultOf(heard, 'c1')).toMatchObject({ ok: true })
+      await page.loads()
+      expect(states(heard)).toMatchObject([{ state: 'ended', why: 'replaced' }])
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+    })
+
+    test('a camera the browser gives after the frame has loaded more documents than it may see is closed again at once, and the page is told why', async () => {
+      const { heard, ask, page } = await shownFor(FIRST, ['camera'])
+      await page.loads()
+      letThrough = () => {}
+      await ask(openLive)
+      // The channel is in another window's hands, and two more documents load, the first of them answering as the page
+      await page.loads()
+      letThrough()
+      await arrived(() => tracks.length === 1 && tracks[0]!.stopped)
+      expect(frames(heard)).toEqual([])
+    })
+
+    test('a hello from another document ends the live camera even when the page has asked too much to be given a channel just then', async () => {
+      const { heard, ask, page } = await shownFor(FIRST, ['camera'])
+      await ask(openLive)
+      // Everything the page may ask of the site at once, used up
+      for (let n = 0; n < 30; n++) await page.fromFrame({ type: 'it:fullscreen', requestId: `f${n}`, on: true })
+      await page.fromFrame({ type: 'it:hello', doc: 'doc-2' })
+      expect(page.ports()).toHaveLength(1)
+      expect(states(heard)).toMatchObject([{ state: 'ended', why: 'replaced' }])
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+    })
+
     test('a document the page has left does not have the camera opened live for it, however late the browser gives the camera', async () => {
       const { heard, ask, page } = await shownFor(FIRST, ['camera'])
       letThrough = () => {}

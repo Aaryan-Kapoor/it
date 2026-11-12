@@ -739,11 +739,26 @@ export async function openCamera(video: true | MediaTrackConstraints, page: Came
   view.muted = true
   view.playsInline = true
   view.srcObject = stream
+  // Asked whether the page may still have it as soon as the browser gives it, and while it starts
+  // to play, which nothing else watches yet: a camera the page may no longer have is closed then
+  let starting: ReturnType<typeof setInterval> | undefined
   try {
-    await view.play()
+    await new Promise<void>((resolve, reject) => {
+      const check = () => {
+        const not = page.still()
+        if (not) reject(Object.assign(new Error('The camera was let go of as it opened.'), { why: not }))
+        return !not
+      }
+      if (!check()) return
+      starting = setInterval(check, LIVE_CAMERA.checkEveryMs / 4)
+      view.play().then(resolve, reject)
+    })
   } catch (err) {
     for (const t of stream.getTracks()) t.stop()
+    view.srcObject = null
     throw err
+  } finally {
+    clearInterval(starting)
   }
   /** The pictures sent that the page has not said it drew, and how many are being made. */
   const sent = new Set<number>()
