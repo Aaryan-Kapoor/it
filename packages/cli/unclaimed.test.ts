@@ -45,6 +45,10 @@ describe('a command that names no conversation', () => {
     expect(inUnloadedOpenCode(undefined, () => ['codex', 'opencode'])).toBe(false)
     expect(inUnloadedOpenCode({ session: opencode, unsettled: [] }, () => ['opencode'])).toBe(false)
   })
+
+  test.runIf(process.platform === 'win32')('is never taken for OpenCode’s on Windows, where the processes above a command are not looked up', () => {
+    expect(inUnloadedOpenCode(undefined)).toBe(false)
+  })
 })
 
 describe('a page made in an OpenCode that had not loaded the add-on', () => {
