@@ -245,6 +245,24 @@ describe('what setup says of the conversation it ran in, where it has just conne
     expect(CODEX_RESTART_OR_T3).toContain('In a T3 Code thread there’s nothing to approve')
   })
 
+  test('in a Pi conversation that has not loaded the add-on: to type /reload in it, whether or not Pi was connected before', () => {
+    const inPi = { ...facts, session: { harness: 'pi', id: 'p' }, claude: undefined }
+    expect(setupLine(inPi)).toBe(PI_RELOAD)
+    expect(PI_RELOAD).toContain('Type /reload in this chat')
+    // The connector's answer does not change it: Pi has no thread of T3 Code
+    expect(setupLine({ ...inPi, route: route({ thread: 'none' }) })).toBe(PI_RELOAD)
+    // Nothing where the add-on runs in it, where that cannot be told, or where Pi is not connected
+    expect(setupLine({ ...inPi, addonHere: true })).toBeUndefined()
+    expect(setupLine({ ...inPi, addonHere: undefined })).toBeUndefined()
+    expect(setupLine({ ...inPi, connected: false })).toBeUndefined()
+  })
+
+  test('in a Hermes or an OpenCode conversation: nothing of its own, since neither lets It tell whether the add-on is loaded there, so the app’s own note is what is passed on', () => {
+    for (const harness of ['hermes', 'opencode']) {
+      for (const addonHere of [undefined, false]) expect(setupLine({ ...facts, session: { harness, id: 's' }, addonHere })).toBeUndefined()
+    }
+  })
+
   test('nothing where the conversation’s app is not connected, where nothing is left to do in it, or where no conversation is known', () => {
     expect(setupLine({ ...facts, connected: false })).toBeUndefined()
     expect(setupLine({ ...facts, addonHere: true })).toBeUndefined()

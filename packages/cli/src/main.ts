@@ -75,7 +75,6 @@ import {
   basePort,
   call,
   changeWhole,
-  claudeAddonHere,
   closedToNetwork,
   direct,
   doorRefusal,
@@ -893,7 +892,7 @@ async function lineHere(connected: (harness: string) => boolean): Promise<string
   if (!session || !connected(session.harness)) return undefined
   const facts = {
     session,
-    addonHere: session.harness === 'claude-code' ? claudeAddonHere() : undefined,
+    addonHere: addonHere(session.harness),
     claude: claudeRunning(),
     connected: true,
     codexPending: session.harness === 'codex' && codexHooksPending(),
@@ -979,7 +978,7 @@ const TOUR_RULE_ONE = '1. **Never block.**'
  * in the background, which an app without one runs in front and never hears from again: so
  * here the rule is another, in the place of the first, and not a second word against it.
  */
-const TOUR_RULE_ONE_WAITING = `1. **Wait for each thing they do.** This conversation was most likely open before It's add-on was installed, and then what the person does on a page does not arrive here by itself. What each \`it tour show\` prints says so under \`arrives\`. Where \`arrives.byItself\` is \`true\`, as it is in a thread of T3 Code, what they do arrives as a message that begins \`[It]\`: after each page and each answer, end your turn, and do not wait. Otherwise, after every page you show and every answer you give, run \`it wait --timeout 100\` and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Where it is refused because your harness does not tell \`it\` which conversation this is, add \`--id\` and the id of the page that is on the screen. Do not use \`--follow\`, and do not put the command in the background: it has to end for you to be shown what it printed. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing. During the tour, say nothing else of what \`arrives.next\` says. Where it gives words for the person to type /reload-plugins or to start a new conversation, you told them those words with the pairing link, as setup said to: do not say them again during the tour. If you did not, say them once, word for word, after the ending.`
+const TOUR_RULE_ONE_WAITING = `1. **Wait for each thing they do.** This conversation was most likely open before It's add-on was installed, and then what the person does on a page does not arrive here by itself. What each \`it tour show\` prints says so under \`arrives\`. Where \`arrives.byItself\` is \`true\`, as it is in a thread of T3 Code, what they do arrives as a message that begins \`[It]\`: after each page and each answer, end your turn, and do not wait. Otherwise, after every page you show and every answer you give, run \`it wait --timeout 100\` and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Where it is refused because your harness does not tell \`it\` which conversation this is, add \`--id\` and the id of the page that is on the screen. Do not use \`--follow\`, and do not put the command in the background: it has to end for you to be shown what it printed. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing. During the tour, say nothing else of what \`arrives.next\` says. Where it gives words for the person to type /reload-plugins, to type /reload in Pi, or to start a new conversation, you told them those words with the pairing link, as setup said to: do not say them again during the tour. If you did not, say them once, word for word, after the ending.`
 /** The tour as an agent that waited for the button is given it. */
 function tourForOneThatWaited(guide: string): string {
   const lines = guide.split('\n')
@@ -1025,8 +1024,8 @@ const CODEX_RESTART_SETUP = `${CODEX_RESTART} Once Codex is back, say “Give me
  * What an agent that asked for a pairing link is told to do with it: give it to the person at
  * once, in a message, before it runs anything else. An agent installing It was seen to print the
  * link and go straight on to waiting for the tour, and the person was told nothing, the link
- * included, until the waiting was over. In a Claude Code conversation that has not loaded the
- * add-on, where Claude Code's add-on is connected on this machine, the same message carries the
+ * included, until the waiting was over. In a Claude Code or Pi conversation that has not loaded
+ * the add-on, where that app's add-on is connected on this machine, the same message carries the
  * words the person is to type to load it.
  */
 async function linkToTell(): Promise<{ tell?: string }> {
@@ -2562,8 +2561,8 @@ async function settingUp(a: Args, joined: boolean) {
       )
     }
     // What is left to do in the conversation this ran in, where setup connected its app: in
-    // Claude Code that has not loaded the add-on, /reload-plugins; in Codex, starting it again;
-    // in a thread of T3 Code, what is so there. It takes the place of the app's own note, and
+    // Claude Code that has not loaded the add-on, /reload-plugins; in Pi that has not, /reload;
+    // in Codex, starting it again; in a thread of T3 Code, what is so there. It takes the place of the app's own note, and
     // with the other apps' notes is said last of all, to the agent, with the words it is to tell
     // the person, since the agent is the one that reads it and the person sees only what it says
     const here = await lineHere(

@@ -324,14 +324,16 @@ export function claudeReloadLine(e: NodeJS.ProcessEnv = process.env): string | u
 /**
  * What the person is told, word for word, of the conversation setup ran in, once setup has put
  * in the add-on of the app it runs in: in Claude Code, that a conversation which has not loaded
- * the add-on loads it with `/reload-plugins`; in Codex, that Codex is to be started again so
- * that it runs It's hooks. In a thread of T3 Code, what is so there instead: what the person does
- * reaches the thread through T3 Code, and nothing is asked for that T3 Code would never show.
- * Nothing where nothing is left to do in this conversation.
+ * the add-on loads it with `/reload-plugins`; in Pi, that one which has not loaded it loads it
+ * with `/reload`; in Codex, that Codex is to be started again so that it runs It's hooks. In a
+ * thread of T3 Code, what is so there instead: what the person does reaches the thread through
+ * T3 Code, and nothing is asked for that T3 Code would never show. Nothing where nothing is left
+ * to do in this conversation, and nothing in Hermes or OpenCode, which do not let It tell whether
+ * the conversation has loaded the add-on: there the app's own note is what the person is told.
  */
 export function setupLine(f: {
   session: { harness: string; id: string } | undefined
-  /** Whether It's add-on runs in that conversation, where that can be told (`claudeAddonHere`). */
+  /** Whether It's add-on runs in that conversation, where that can be told (`addonHere`). */
   addonHere: boolean | undefined
   claude?: string
   /** What the connector answered at `/route` for the conversation, or null. */
@@ -347,6 +349,8 @@ export function setupLine(f: {
   const held = f.route?.thread === 'held'
   if (f.session.harness === 'claude-code' && f.addonHere === false) return held ? t3ClaudeLine(f.claude) : reloadLine(f.claude)
   if (f.session.harness === 'codex' && f.codexPending) return held ? T3_CODEX : heldNowhere(f.route, f.t3) ? CODEX_RESTART : CODEX_RESTART_OR_T3
+  // Pi has no thread of T3 Code to take what the person does there another way
+  if (f.session.harness === 'pi' && f.addonHere === false) return PI_RELOAD
   return undefined
 }
 
