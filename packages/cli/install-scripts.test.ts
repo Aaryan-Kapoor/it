@@ -97,7 +97,7 @@ const script = (name: string) => readFileSync(path.join(__dirname, '../../instal
 test('the Windows script puts the folder on the PATH of the PowerShell it runs in, where the account’s PATH has it, and after asking whether it was there already', () => {
   const ps1 = script('install.ps1')
   const asked = ps1.indexOf("-contains $dir) { $onPath = '1' }")
-  const put = ps1.indexOf(`if ($accountHas -and $onPath -eq '0') { try { $env:Path = "$dir;$env:Path" } catch {} }`)
+  const put = ps1.indexOf(`if ($accountHas -and $onPath -eq '0') { try { $env:Path = "$dir;$env:Path"; if ($windowKeeps) { $onPath = '1' } } catch {} }`)
   expect(asked).toBeGreaterThan(-1)
   expect(put).toBeGreaterThan(asked)
   // Told to leave the PATH alone, it leaves this one alone too: only what the registry was read for sets it

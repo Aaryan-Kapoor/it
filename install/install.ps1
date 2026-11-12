@@ -56,6 +56,18 @@
   $then = $false
   # Whether a command typed as `it` in this window is found, which the setup says where it is not
   $onPath = '0'
+  # Whether the window this was run from goes on with this PowerShell's own PATH once the script
+  # ends: so it does where the script was piped into a PowerShell open in it, or run there by
+  # name, and not where a PowerShell was started to run only this, with -File, -Command or
+  # -EncodedCommand or with the script's own name, as cmd.exe starts one. A window that goes on
+  # without this PowerShell keeps the PATH it had.
+  $windowKeeps = $true
+  try {
+    $started = @([Environment]::GetCommandLineArgs() | Select-Object -Skip 1)
+    $only = @($started | Where-Object { $_ -match '^[-/](f|fi|fil|file|c|co|com|comm|comma|comman|command|cwa|commandwithargs|e|ec|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)$' -or ($PSCommandPath -and [IO.Path]::GetFileName($_) -eq [IO.Path]::GetFileName($PSCommandPath)) }).Count -gt 0
+    $stays = @($started | Where-Object { $_ -match '^[-/]noe(x|xi|xit)?$' }).Count -gt 0
+    if ($only -and -not $stays) { $windowKeeps = $false }
+  } catch {}
   # The release this script belongs to. In the repository it names none. The copy published
   # with a release has that release's tag written here when the release is built, so that the
   # checksums and every file they vouch for come from the one release this script came from,
@@ -427,10 +439,15 @@ public static bool LacksSse42() {
               # To every window, that a setting has changed, and which: not waiting on one that has hung
               $told = $user32::SendMessageTimeout([IntPtr]0xffff, 0x1a, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$answer) -ne [IntPtr]::Zero
             } catch {}
+            # The window this was run from is given the folder below, where it goes on with this PowerShell's PATH
             if ($led) {
-              if ($told) { Write-Done 'On your PATH from the next terminal' }
+              if ($windowKeeps -and $told) { Write-Done 'On your PATH, in this window and in every terminal from now on' }
+              elseif ($windowKeeps) { Write-Mind 'On your PATH in this window, and in other terminals once you have signed out of Windows and in again' }
+              elseif ($told) { Write-Done 'On your PATH from the next terminal' }
               else { Write-Mind 'On your PATH once you have signed out of Windows and in again' }
             }
+            elseif ($windowKeeps -and $told) { Write-Host "Added $dir to your PATH. ``it`` works in this window now, and in every terminal opened from now on." }
+            elseif ($windowKeeps) { Write-Host "Added $dir to your PATH. ``it`` works in this window now, and in a new terminal once you have signed out of Windows and in again." }
             elseif ($told) { Write-Host "Added $dir to your PATH. Open a new terminal to use it." }
             else { Write-Host "Added $dir to your PATH. Sign out of Windows and in again to use it in a new terminal." }
           }
@@ -449,7 +466,8 @@ public static bool LacksSse42() {
     # Pester, the test framework that comes with Windows, and what that says is about a Describe
     # block and names neither It nor the PATH. This reaches no other program that is running:
     # an app that was open before the install runs its commands with the PATH it started with.
-    if ($accountHas -and $onPath -eq '0') { try { $env:Path = "$dir;$env:Path" } catch {} }
+    # Where the window goes on with this PowerShell's PATH, `it` typed there next is found, and the setup says nothing of a new terminal
+    if ($accountHas -and $onPath -eq '0') { try { $env:Path = "$dir;$env:Path"; if ($windowKeeps) { $onPath = '1' } } catch {} }
     # The program's path as PowerShell reads it back exactly, whatever characters are in it. A
     # command printed for a person to copy must be the command that was meant, and between single
     # quotes nothing is read as more than itself but the quote, which is written twice.
