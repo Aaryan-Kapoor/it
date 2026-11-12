@@ -118,9 +118,11 @@ describe('an agent app that has It’s add-on turned off', () => {
     ]
     await shown()
     const claude = row('Claude Code')
-    expect(claude.querySelector('.turn-on')?.textContent).toBe(
-      'It could not be turned back on: Claude Code refused to turn It’s add-on back on. Run `claude plugin enable it-bridge@it` in a terminal on that machine to see why. Try again',
+    expect(claude.querySelector('.turn-on-why')?.textContent).toBe(
+      'It could not be turned back on: Claude Code refused to turn It’s add-on back on. Run claude plugin enable it-bridge@it in a terminal on that machine to see why.',
     )
+    // The command to run there is shown as code
+    expect(claude.querySelector('.turn-on-why code')?.textContent).toBe('claude plugin enable it-bridge@it')
     expect(claude.querySelector('.turn-on')?.getAttribute('data-tone')).toBe('bad')
     expect(buttons(claude, 'Try again')).toHaveLength(1)
   })

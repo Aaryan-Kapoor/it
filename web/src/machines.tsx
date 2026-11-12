@@ -292,6 +292,22 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
   )
 }
 
+/** A sentence from a machine, with what it puts in backticks, a command to run there, shown as code. */
+const withCode = (said: string) => {
+  const parts = said.split('`')
+  // Where the backticks do not pair up, the sentence is shown as it is
+  if (parts.length % 2 === 0) return said
+  // Every other part is between backticks, and each is known by where it begins in the sentence
+  let at = 0
+  let inside = true
+  return parts.map((part) => {
+    const from = at
+    at += part.length + 1
+    inside = !inside
+    return inside ? <code key={from}>{part}</code> : part
+  })
+}
+
 /**
  * Turn back on, beside an app that has It's add-on turned off on a machine: the machine turns it
  * on with the app's own command, and says here whether that worked and, where it did not, why.
@@ -321,8 +337,10 @@ function TurnBackOn({ m, h, online, act }: { m: Machine; h: Harness; online: boo
     )
   return (
     <span className="row-detail turn-on" data-tone={failed || cutShort ? 'bad' : undefined}>
-      {failed && `It could not be turned back on: ${(asked?.why ?? 'it is not known why').replace(/\.$/, '')}. `}
-      {cutShort && `${m.name} did not say whether it turned It’s add-on back on. `}
+      {failed && (
+        <span className="turn-on-why">{withCode(`It could not be turned back on: ${(asked?.why ?? 'it is not known why').replace(/\.$/, '')}.`)}</span>
+      )}
+      {cutShort && <span className="turn-on-why">{m.name} did not say whether it turned It’s add-on back on.</span>}
       <button
         type="button"
         className="link"
