@@ -426,6 +426,17 @@ describe('finding Tailscale on each system', () => {
       // A plain file where the socket would be is no daemon
       place('/run/tailscale/tailscaled.sock', '')
       expect(await inspectFunnel([5130, 5131], linux())).toEqual([])
+      // A socket's folder kept from this user may hold a daemon's socket, and is taken for one.
+      // Root is kept from no folder, so this is seen only by another user
+      if (process.getuid?.() !== 0) {
+        chmodSync(`${root}/run/tailscale`, 0o000)
+        try {
+          expect(await tailscaleDaemon(linux())).toBe(true)
+          expect(await inspectFunnel([5130, 5131], linux())).toBeUndefined()
+        } finally {
+          chmodSync(`${root}/run/tailscale`, 0o755)
+        }
+      }
 
       let running: string[] | undefined = ['/sbin/launchd', '/usr/libexec/logd']
       const mac = (): System => ({ platform: 'darwin', env: { PATH: path.join(root, 'nothing') }, root, processes: async () => running })

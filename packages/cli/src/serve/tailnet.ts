@@ -298,11 +298,17 @@ const macProcesses = () =>
 /** Tailscale's own programs on macOS: its app, the network extension of the App Store's app and of the standalone one, and the open-source daemon. */
 const TAILSCALE_PROCESS = /(?:^|\/)(?:Tailscale|IPNExtension|io\.tailscale\.ipn\.[\w.-]+|tailscaled)$/
 
+/**
+ * Whether a daemon's socket may be at a path: not where nothing is there, or something that is no
+ * socket is, and taken for one wherever the system will not say, as where its folder is kept from
+ * this user. Only a path shown to be empty shows that no daemon listens there.
+ */
 const isSocket = (file: string) => {
   try {
     return statSync(file).isSocket()
-  } catch {
-    return false
+  } catch (err) {
+    const code = (err as { code?: unknown }).code
+    return code !== 'ENOENT' && code !== 'ENOTDIR'
   }
 }
 
