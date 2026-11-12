@@ -542,6 +542,8 @@ export interface Opened {
  */
 export async function openCamera(video: true | MediaTrackConstraints, audio: false | true | MediaTrackConstraints, page: CameraFor): Promise<Opened> {
   const stream = await getDevice({ video, audio })
+  // Closed again at once, while it is made ready, where the page may not have it any more
+  const readying = whileReadying(stream, page.still)
   // The camera's picture, in a video element that is never shown: what each picture is taken from
   const view = document.createElement('video')
   view.muted = true
@@ -552,7 +554,9 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
   /** The microphone's sound on its way to the page, where the camera was opened with sound. */
   let sound: Relay | null = null
   try {
+    if (readying.why()) throw endedWhileOpening(readying.why()!)
     await within(view.play(), DEVICE_WAIT.playMs, NO_PICTURE, () => {})
+    if (readying.why()) throw endedWhileOpening(readying.why()!)
     if (audio)
       sound = await relaySound(stream, {
         still: () => (over ? 'not_shown' : page.still()),
@@ -561,9 +565,17 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
         end: (why) => end(why),
       })
   } catch (err) {
+    readying.done()
     for (const t of stream.getTracks()) t.stop()
     view.srcObject = null
-    throw err
+    throw readying.why() ? endedWhileOpening(readying.why()!) : err
+  }
+  readying.done()
+  const ended = readying.why()
+  if (ended) {
+    sound?.close()
+    view.srcObject = null
+    throw endedWhileOpening(ended)
   }
   // Gone while it was being opened, when nothing was listening for that yet: it is not opened
   if (wentAway(stream)) {
@@ -728,6 +740,42 @@ const soon = (doing: Promise<unknown>): Promise<unknown> => {
 const WENT_AWAY = 'The microphone or the camera went away while it was being opened.'
 /** Whether a device of this stream has gone away, which nothing was listening for while it was being opened. */
 const wentAway = (stream: MediaStream): boolean => stream.getTracks().some((t) => t.readyState === 'ended')
+/** How often a device that was just opened is asked about while it is made ready, which takes a few seconds at most. */
+const READYING_CHECK_MS = 100
+/**
+ * What a page is told where the device was closed again while it was being made ready, by why: the
+ * words mount.tsx tells it where the same is found once the device is ready, so that a page is
+ * told the same whenever it is found.
+ */
+const ENDED_WHILE_OPENING: Partial<Record<Why, string>> = {
+  not_shown: 'The page was closed.',
+  taken_over:
+    'Another conversation took this page over, so It stopped what it was doing for it. The person is asked again for the conversation that has it now.',
+  taken_back: 'The person took back what they had allowed this page.',
+}
+const endedWhileOpening = (why: Why): Error => new Error(ENDED_WHILE_OPENING[why] ?? 'The page was closed.')
+/**
+ * Watches a device the browser has just given while it is made ready, before anything is listed
+ * for It's bar: whether the page may still have it, as soon as it is given and every
+ * `READYING_CHECK_MS` after. Where the page may not, the device is stopped there and then, and not
+ * once it is ready. `why` says why it was stopped, if it was, and `done` ends the watching.
+ */
+function whileReadying(stream: MediaStream, still: () => Why | null): { why: () => Why | null; done: () => void } {
+  let why = still()
+  const stop = () => {
+    for (const t of stream.getTracks()) t.stop()
+  }
+  if (why) stop()
+  const timer = why
+    ? undefined
+    : setInterval(() => {
+        why = still()
+        if (!why) return
+        clearInterval(timer)
+        stop()
+      }, READYING_CHECK_MS)
+  return { why: () => why, done: () => clearInterval(timer) }
+}
 /** Sound on its way to a page, as whatever opened the microphone holds it. */
 interface Relay {
   sampleRate: number
@@ -874,6 +922,8 @@ export interface Hearing {
  */
 export async function openMicrophone(audio: true | MediaTrackConstraints, page: MicrophoneFor): Promise<Hearing> {
   const stream = await getDevice({ audio, video: false })
+  // Closed again at once, while its sound is made ready, where the page may not have it any more
+  const readying = whileReadying(stream, page.still)
   let state: 'live' | 'paused' = 'live'
   let over = false
   let usedAt = Date.now()
@@ -882,6 +932,7 @@ export async function openMicrophone(audio: true | MediaTrackConstraints, page: 
     if (close()) page.told('ended', why)
   }
   try {
+    if (readying.why()) throw endedWhileOpening(readying.why()!)
     sound = await relaySound(stream, {
       still: () => (over ? 'not_shown' : page.still()),
       waiting: () => state === 'paused',
@@ -889,8 +940,15 @@ export async function openMicrophone(audio: true | MediaTrackConstraints, page: 
       end: (why) => end(why),
     })
   } catch (err) {
+    readying.done()
     for (const t of stream.getTracks()) t.stop()
-    throw err
+    throw readying.why() ? endedWhileOpening(readying.why()!) : err
+  }
+  readying.done()
+  const ended = readying.why()
+  if (ended) {
+    sound.close()
+    throw endedWhileOpening(ended)
   }
   // Gone while its sound was being made ready, when nothing was listening for that yet: it is not opened
   if (wentAway(stream)) {

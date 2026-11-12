@@ -1576,6 +1576,57 @@ describe('how long the browser is given to hand over the device', () => {
     await vi.advanceTimersByTimeAsync(DEVICE_WAIT.answerMs)
   })
 
+  test('a microphone whose page may not have it any more while its sound is made ready is stopped there and then, and not when it is ready', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    allow('person-1', grant('page-1', ['mic']))
+    const device = standInCamera()
+    const made = standInSound({ gathers: 'never' })
+    let refuse: 'taken_back' | null = null
+    const opening = outcome(openMicrophone(true, { ...page(['mic']), still: () => refuse }))
+    await vi.advanceTimersByTimeAsync(300)
+    expect(device.tracks.map((t) => t.stopped)).toEqual([false])
+    refuse = 'taken_back'
+    await vi.advanceTimersByTimeAsync(100)
+    // Stopped while what gathers its sound is still loading
+    expect(device.tracks.map((t) => t.stopped)).toEqual([true])
+    await vi.advanceTimersByTimeAsync(LIVE_MICROPHONE.startMs)
+    expect(await opening).toBe('The person took back what they had allowed this page.')
+    expect(made.contexts[0]!.state).toBe('closed')
+    expect(microphoneFor('page-1')).toBeUndefined()
+  })
+
+  test('a camera with sound whose page is taken over while its picture begins is stopped there and then, the camera and the microphone both', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    allow('person-1', grant('page-1', ['mic', 'camera']))
+    const device = standInCamera()
+    const made = standInSound()
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockReturnValue(new Promise<void>(() => {}))
+    let refuse: 'taken_over' | null = null
+    const opening = outcome(openCamera(true, true, { ...page(['mic', 'camera']), still: () => refuse }))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(device.tracks.map((t) => t.stopped)).toEqual([false, false])
+    refuse = 'taken_over'
+    await vi.advanceTimersByTimeAsync(100)
+    expect(device.tracks.map((t) => t.stopped)).toEqual([true, true])
+    await vi.advanceTimersByTimeAsync(DEVICE_WAIT.playMs)
+    expect(await opening).toMatch(/^Another conversation took this page over/)
+    // Its sound was never begun
+    expect(made.contexts).toHaveLength(0)
+    expect(cameraFor('page-1')).toBeUndefined()
+  })
+
+  test('a device the browser gives for a page that was closed meanwhile is stopped as it comes, and nothing is made ready for it', async () => {
+    allow('person-1', grant('page-1', ['mic', 'camera']))
+    const device = standInCamera()
+    const made = standInSound()
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play')
+    await expect(openCamera(true, true, { ...page(['mic', 'camera']), still: () => 'not_shown' })).rejects.toThrow('The page was closed.')
+    await expect(openMicrophone(true, { ...page(['mic']), still: () => 'not_shown' })).rejects.toThrow('The page was closed.')
+    expect(device.tracks.map((t) => t.stopped)).toEqual([true, true, true])
+    expect(play).not.toHaveBeenCalled()
+    expect(made.contexts).toHaveLength(0)
+  })
+
   test('a camera that gives no picture within five seconds of opening is let go of, and is never listed for It’s bar', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     expect(DEVICE_WAIT.playMs).toBe(5_000)
