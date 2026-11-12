@@ -29,11 +29,19 @@ import { LIMITS, UPLOAD } from '@it/protocol'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
 import { type Browser, type BrowserType, chromium, firefox } from 'playwright'
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
-import { type Asked, type ContentSettings, createContent, pagePolicy } from './src/index'
+import { type Asked, type ContentSettings, createContent as openContent, pagePolicy } from './src/index'
 import { limit } from './src/limits'
 import { createLog } from './src/log'
 
-type Content = ReturnType<typeof createContent>
+type Content = ReturnType<typeof openContent>
+/** Every service a test opened, so that each is closed before the folder they keep their files in is removed. */
+const opened: Content[] = []
+/** Opens a service as the program does, and keeps it in the list of those to close at the end. */
+function createContent(settings: ContentSettings): Content {
+  const content = openContent(settings)
+  opened.push(content)
+  return content
+}
 
 // The service opens every file and makes every folder through this, so that a test can make
 // the disk fail under it, or do something of its own at the moment one is opened or made
@@ -343,11 +351,17 @@ beforeAll(async () => {
   root = mkdtempSync(path.join(os.tmpdir(), 'it-content-test-'))
 })
 
-afterAll(() => {
+afterAll(async () => {
   keys?.close()
-  rmSync(root, { recursive: true, force: true })
+  // Windows removes no file that a program still holds open, and a service holds its records
+  // open until it is closed. A group whose own hooks stopped early, as when one of them ran out
+  // of time, may have left its service open, so every service is closed here, whether or not
+  // it was closed already. Windows may still hold a file for a moment after it is let go, so
+  // the folder is removed with a few tries.
+  for (const content of opened) await content.close()
+  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   vi.restoreAllMocks()
-})
+}, 60_000)
 
 describe('tickets', () => {
   ownService()
@@ -3346,11 +3360,12 @@ describe.each(BROWSERS)('a page as %s shows it', (_name, type) => {
   const HOST = 'pages.invalid'
   const OWN = `http://${HOST}:${PAGES}`
   let browser: Browser
-  // A browser is slow to start on a machine that is busy
+  // A browser is slow to start on a machine that is busy, and Firefox can be slow to close on
+  // Windows, longer than the ten seconds a hook is given unless it says otherwise
   beforeAll(async () => {
     if (installed(type)) browser = await type.launch({ timeout: 0 })
   }, 300_000)
-  afterAll(() => browser?.close())
+  afterAll(() => browser?.close(), 120_000)
 
   test.skipIf(!installed(type))(
     'a page that takes its addresses from another site still keeps its showing at its own, and that site is asked for nothing that holds the showing’s token',

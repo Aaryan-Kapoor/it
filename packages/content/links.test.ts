@@ -59,6 +59,19 @@ describe.each(BROWSERS)('a link or a form a page follows, in %s', (_name, type) 
     // Another site, at another port: another origin
     away = other.origin
     browser = await type.launch({ timeout: 0 })
+    // The first page a browser shows, and the first window it opens, can take Firefox on Windows
+    // most of the time a test is given, so one of each is shown here, where there is time for it
+    pages.set('/warm.html', page(`<a id="go" href="${away}/warm" target="_blank">go</a>`))
+    const context = await browser.newContext()
+    try {
+      const tab = await context.newPage()
+      await tab.goto(`${home}/warm.html`, { timeout: 0 })
+      const [popup] = await Promise.all([context.waitForEvent('page', { timeout: 0 }), tab.click('#go', { timeout: 0 })])
+      await popup.waitForLoadState('load', { timeout: 0 })
+    } finally {
+      await context.close()
+      pages.delete('/warm.html')
+    }
   }, 300_000)
   afterAll(async () => {
     try {
