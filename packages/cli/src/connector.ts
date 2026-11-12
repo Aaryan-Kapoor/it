@@ -4588,9 +4588,14 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   // for an app the person connected here whose add-on this machine finds turned off, and with
   // nothing from the site but which app. What became of it goes back to the site in a sentence.
   const turningNow = new Set<string>()
+  // The apps this connector has begun to turn on. One that It has down as being turned on, and
+  // that this connector never began, was begun by a connector that stopped before it was done,
+  // and is done again: it changes nothing where the add-on is on by now.
+  const begunHere = new Set<string>()
   const turnOnAsked = async (harness: string) => {
     if (turningNow.has(harness)) return
     turningNow.add(harness)
+    begunHere.add(harness)
     try {
       await call('mutation', api.machines.turningOn, { harness, state: 'working' }).catch(() => {})
       const answer =
@@ -4689,7 +4694,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       turnOn?: { harness: string; state: string }[]
     }) => {
       if (me.upgrade?.state === 'asked') void upgradeAsked(me.upgrade.version)
-      for (const t of me.turnOn ?? []) if (t.state === 'asked') void turnOnAsked(t.harness)
+      for (const t of me.turnOn ?? []) if (t.state === 'asked' || (t.state === 'working' && !begunHere.has(t.harness))) void turnOnAsked(t.harness)
       // A conversation the person asked to have stopped is stopped. One that It has down as
       // running and that is not, which a connector that died leaves behind, is said to be over.
       for (const r of me.runs ?? []) {
