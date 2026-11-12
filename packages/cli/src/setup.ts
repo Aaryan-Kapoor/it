@@ -632,6 +632,12 @@ interface Adapter {
    */
   enable?(at: Place): Promise<Ran>
   /**
+   * For an add-on whose files this program copies in: whether the file the harness loads it from
+   * is the one this program put there, unchanged since. A file of that name the person changed,
+   * or put there, is theirs, and is not turned on for them.
+   */
+  owned?(at: Place, was: Installation | undefined): boolean
+  /**
    * Whether our add-on is in the harness at all, switched on or not. Null when the harness
    * could not be asked: that is not the same as the add-on being gone.
    */
@@ -1541,6 +1547,17 @@ function copied(id: Harness, c: Copied): Adapter {
       return c.on ? c.on(at) : true
     },
     ...(c.off ? { off: async (at: Place, was?: Installation) => ours(at, was) && (await c.off!(at)) } : {}),
+    owned(at, was) {
+      const main = path.join(at.dir!, ...c.main.split('/'))
+      const now = lookAt(at.dir!, main)
+      return (
+        now.is === 'file' &&
+        matchesPut(
+          was?.files?.find((f) => f.path === main),
+          now.sha256,
+        )
+      )
+    },
     ...(c.enable
       ? {
           async enable(at: Place) {
@@ -2053,15 +2070,28 @@ async function look(id: Harness): Promise<Seen | HarnessStatus | null> {
     }
   if (other) return { ...seen, status: { id, version, addon: 'not_connected' } }
   if (!(await adapter.installed(at, was))) {
-    // Turned off in the app, where the add-on is this folder's: on record and not half put in,
-    // or with no record here and saying that it came from this folder. One that is half put in
-    // is put in again whole, as asked, and one that is nobody's is replaced.
-    const mine = was ? was.version !== 'installing' : from !== null && real(from) === thisHome()
+    // Turned off in the app, where this folder has the add-on on record there and not half put
+    // in. One that is half put in is put in again whole, as asked. One with no record here is
+    // not shown to be this folder's, and is not turned on either: it is put in again, which
+    // refuses where what is under It's name is not this folder's.
+    const mine = was !== undefined && was.version !== 'installing'
     if (mine && (await adapter.off?.(at, was))) return { ...seen, status: { id, version, addon: 'disabled', detail: offDetail(id, adapter) } }
     return { ...seen, status: { id, version, addon: 'not_connected' } }
   }
   const todo = adapter.pending?.()
   return { ...seen, status: todo ? { id, version, addon: 'needs_approval', detail: todo } : { id, version, addon: 'connected' } }
+}
+/**
+ * Why It's add-on in an app may not be turned on, where it may not: what is in the app under
+ * its name could not be shown to be this folder's, which is asked afresh just before, as it is
+ * before anything is put in. An installation that is on record is not proof enough: the plugin
+ * or the marketplace under It's name may have been replaced since by one that is not It's.
+ */
+async function mayEnable(adapter: Adapter, at: Place, was: Installation | undefined): Promise<string | undefined> {
+  if (adapter.preflight) return adapter.preflight(at, was)
+  if (adapter.owned && !adapter.owned(at, was))
+    return 'The file the app loads It’s add-on from is not the one It put there, so It did not turn it on. Run `it setup` on that machine to put the add-on in again.'
+  return undefined
 }
 /** What a person is told of an add-on that its app has turned off, and how it is turned on again. */
 const offDetail = (id: Harness, adapter: Pick<Adapter, 'enable'>): string =>
@@ -2215,6 +2245,11 @@ export async function connect(
     return before
   }
   if (before.addon === 'disabled' && turnOn && adapter.enable) {
+    const refused = await mayEnable(adapter, at, was)
+    if (refused) {
+      say(`${label}: ${forLog ? 'its add-on could not be shown to be this It’s, so it was not turned back on' : refused}`)
+      return { ...before, detail: refused }
+    }
     say(`turning It’s add-on in ${label} back on`)
     const on = await adapter.enable(at)
     if (!on.ok) {
@@ -2572,6 +2607,13 @@ async function turnOnNow(id: Harness): Promise<TurnedOn> {
           ? 'Pi has no command that turns It’s extension back on. Run `pi config` in a terminal on that machine and turn it back on there.'
           : `${label} has no command that turns It’s add-on back on. Turn it back on in ${label} on that machine.`,
       code: 'no_command',
+    }
+  const refused = await mayEnable(seen.adapter, seen.at, seen.was)
+  if (refused)
+    return {
+      ok: false,
+      why: `What ${label} has under It’s name could not be shown to be this It’s add-on, so nothing was changed. Run \`it setup\` in a terminal on that machine, which says why.`,
+      code: 'not_ours',
     }
   const r = await seen.adapter.enable(seen.at)
   if (r.ok) return { ok: true }

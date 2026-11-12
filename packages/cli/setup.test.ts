@@ -3896,6 +3896,48 @@ describe('an add-on that its app has turned off', () => {
     })
   })
 
+  /** What stands under It's name in each app is replaced by something that is not this It folder's. */
+  const REPLACED = [
+    {
+      label: 'Claude Code, whose plugin has no note of which It folder put it there',
+      id: 'claude-code' as const,
+      bin: 'claude',
+      replace: () => rmSync(path.join(folderOf('claude'), 'plugins/cache/it/it-bridge', claudeVersion(), 'it-home.json')),
+    },
+    {
+      label: 'Codex, whose marketplace named it is another',
+      id: 'codex' as const,
+      bin: 'codex',
+      replace: () => {
+        const other = path.join(tmp, 'another-marketplace')
+        cpSync(kept.codex!.get(folderOf('codex'))!.from!, other, { recursive: true })
+        kept.codex!.get(folderOf('codex'))!.from = other
+      },
+    },
+    {
+      label: 'OpenClaw, whose plugin has no note of which It folder put it there',
+      id: 'openclaw' as const,
+      bin: 'openclaw',
+      replace: () => rmSync(path.join(folderOf('openclaw'), 'extensions/it-bridge/it-home.json')),
+    },
+    {
+      label: 'Hermes Agent, whose plugin file is not the one It put there',
+      id: 'hermes' as const,
+      bin: 'hermes',
+      replace: () => put(path.join(folderOf('hermes'), 'plugins/it-bridge/__init__.py'), '# not the add-on It put here\n'),
+    },
+  ]
+
+  test.each(REPLACED)('in $label is not turned on, from the site or by setup, and the person is told to run it setup', async ({ id, bin, replace }) => {
+    await connect(id, () => {})
+    turnOff(bin)
+    replace()
+    ran = []
+    expect(await turnBackOn(id)).toMatchObject({ ok: false, code: 'not_ours', why: expect.stringContaining('Run `it setup` in a terminal on that machine') })
+    await reconcile([id], () => {}, false, [id])
+    expect(changing(bin).filter((said) => /\b(?:enable|add)\b/.test(said))).toEqual([])
+  })
+
   test.each(OFF)('in $label is not turned on for an app that does not have it off, and says why', async ({ id, bin }) => {
     ran = []
     expect(await turnBackOn(id)).toMatchObject({ ok: false, code: 'not_disabled' })
