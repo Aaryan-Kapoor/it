@@ -131,7 +131,7 @@ import { HTTPS_NAME, noteHttps, noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
 import { serve } from './serve/index'
 import { onTheInternet, reachable } from './serve/network'
-import { funnelPorts, funnelSaid, funnelWarning, inspectFunnel, servedAs, tailnetAddresses, tailnetName } from './serve/tailnet'
+import { funnelPorts, funnelSaid, funnelWarning, inspectFunnel, servedAs, tailnetAddresses, tailnetName, tailscaleCommand } from './serve/tailnet'
 import * as service from './service'
 import {
   type AddonOutcome,
@@ -2894,7 +2894,7 @@ async function network(a: Args) {
 /** Tailscale's own command, as it is run here: what it printed, and whether it did what it was asked. */
 type Ran = { ok: boolean; out: string; err: string }
 const tailscaleRun = (args: string[]): Ran => {
-  const ran = spawnSync('tailscale', args, { encoding: 'utf8', timeout: 60_000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  const ran = spawnSync(tailscaleCommand() ?? 'tailscale', args, { encoding: 'utf8', timeout: 60_000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
   return { ok: ran.status === 0, out: ran.stdout ?? '', err: `${ran.stderr ?? ''}${ran.error ? ` ${ran.error.message}` : ''}`.trim() }
 }
 /** What is said where Tailscale could not be asked or would not do it, with its own words where it said any. */
@@ -2968,7 +2968,14 @@ async function httpsCommand(a: Args) {
     } catch {
       throw new Problem('Tailscale returned an unreadable Serve status. HTTPS was not enabled.', 'tailscale')
     }
-    if (funnelPorts(served, [config.port, contentPort(config.port)]).length)
+    const exposed = funnelPorts(served, [config.port, contentPort(config.port)])
+    if (exposed === undefined)
+      throw new Problem(
+        'A Tailscale Funnel forwards somewhere that may be It, and It cannot tell whether it is. HTTPS was not enabled.',
+        'funnel_unconfirmed',
+        '`tailscale funnel status` says where each Funnel forwards. Turn off any that may reach It, then run `it https on` again.',
+      )
+    if (exposed.length)
       throw new Problem(
         'Tailscale Funnel already makes It public. HTTPS was not enabled.',
         'funnel_public',
