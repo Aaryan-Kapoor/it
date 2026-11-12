@@ -1,4 +1,4 @@
-import { ALIVE, HARNESSES, LIMITS, newer, noWakeHere, QUOTA, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
+import { ALIVE, HARNESSES, LIMITS, newer, noWakeHere, QUOTA, TURN_ON_MS, TURNS_ON, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
@@ -22,6 +22,7 @@ const view = (m: Doc<'machines'>) => ({
   off: m.offAt !== undefined,
   latest: m.latest ?? null,
   upgrade: m.upgrade ?? null,
+  turnOn: m.turnOn ?? [],
   harnesses: m.harnesses ?? [],
   wanted: m.wanted ?? [],
   reopens: m.reopens ?? false,
@@ -203,6 +204,53 @@ export const upgrading = mutation({
       await ctx.db.patch(machine._id, {
         upgrade: { at: machine.upgrade.at, state, ...(why ? { why: why.slice(0, 300) } : {}), version: (version ?? machine.upgrade.version)?.slice(0, 40) },
       })
+    return null
+  },
+})
+
+/**
+ * The person asks, from a browser of their own, for a machine to turn It's add-on back on in an
+ * agent app that has it turned off there. The add-on is never turned on again by itself, since
+ * the person may have turned it off on purpose, so this is the one way the site has of turning it
+ * on. Nothing in the asking but the app's name reaches the machine: its connector runs that
+ * app's own command for turning It's add-on on, with nothing from the site on its command line,
+ * and only where it finds the app connected there and the add-on turned off. So the most that
+ * someone in the person's browser can do with this is have a machine turn on It's own add-on in
+ * an app the person connected there. Answered by the machine with `turningOn`.
+ */
+export const turnOn = mutation({
+  args: { machineId: v.id('machines'), harness: v.string() },
+  handler: async (ctx, { machineId, harness }) => {
+    const { user } = await requireOwner(ctx)
+    const m = await ownMachine(ctx, user._id, machineId)
+    if (m.revoked) fail('not_found', 'No such machine.')
+    if (!(TURNS_ON as readonly string[]).includes(harness)) fail('invalid', 'It cannot turn its add-on back on in that agent app from here.')
+    if (!(m.wanted ?? []).includes(harness)) fail('invalid', 'Connect that agent app on this machine first.')
+    if (!(m.harnesses ?? []).some((h) => h.id === harness && h.addon === 'disabled'))
+      fail('conflict', 'That machine does not say that the app has It’s add-on turned off.')
+    const now = m.turnOn ?? []
+    const was = now.find((t) => t.harness === harness)
+    // Asked for again while it is asked for or at work, it is the same asking
+    if (was && (was.state === 'asked' || was.state === 'working') && Date.now() - was.at < TURN_ON_MS) return null
+    await ctx.db.patch(m._id, {
+      turnOn: [...now.filter((t) => t.harness !== harness), { harness, at: Date.now(), state: 'asked' as const }].slice(-HARNESSES.length),
+    })
+    log('machine.turn_on_asked', { userId: user._id, machineId: m._id, harness })
+    return null
+  },
+})
+
+/** The machine says how far turning an add-on back on has got. Only an app that it was asked to turn on for is spoken of. */
+export const turningOn = mutation({
+  args: { harness: v.string(), state: v.union(v.literal('working'), v.literal('failed'), v.literal('done')), why: v.optional(v.string()) },
+  handler: async (ctx, { harness, state, why }) => {
+    const { machine } = await requireMachine(ctx)
+    const now = machine.turnOn ?? []
+    const was = now.find((t) => t.harness === harness)
+    if (!was) return null
+    await ctx.db.patch(machine._id, {
+      turnOn: now.map((t) => (t === was ? { harness: t.harness, at: Date.now(), state, ...(state === 'failed' && why ? { why: why.slice(0, 300) } : {}) } : t)),
+    })
     return null
   },
 })
@@ -479,8 +527,13 @@ export const report = mutation({
     // say, as the plainer report does not, and only where it comes from the same version
     const can = reopens === undefined ? (moved ? undefined : machine.reopens) : reopens || undefined
     const first = firstWord(machine, on, can)
+    // Turning an add-on back on is over, done or not, once the machine no longer has it turned off: nothing is left to say of it
+    const turns = (machine.turnOn ?? []).filter(
+      (t) => t.state === 'asked' || t.state === 'working' || clean.some((h) => h.id === t.harness && h.addon === 'disabled'),
+    )
     const same =
       JSON.stringify(machine.harnesses ?? []) === JSON.stringify(clean) &&
+      turns.length === (machine.turnOn ?? []).length &&
       machine.connectorVersion === connectorVersion &&
       machine.latest === knows &&
       machine.system === on &&
@@ -499,6 +552,7 @@ export const report = mutation({
         system: on,
         paused: held,
         reopens: can,
+        turnOn: turns.length ? turns : undefined,
         ...(first ?? {}),
         // An upgrade that was asked for on the site is over once the machine runs another version:
         // it is kept as done, with the version, for the site to say what is left to do there

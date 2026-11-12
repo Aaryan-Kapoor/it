@@ -260,6 +260,22 @@ export default defineSchema({
         version: v.optional(v.string()),
       }),
     ),
+    /**
+     * Turning It's add-on back on in an agent app that has it turned off, as the person asked
+     * on the site, one entry for each app, and how far it has got: asked, being done by the
+     * machine, done, or failed with why in a sentence. An entry that is asked for or at work
+     * and has said nothing more for `TURN_ON_MS` was cut short.
+     */
+    turnOn: v.optional(
+      v.array(
+        v.object({
+          harness: v.string(),
+          at: v.number(),
+          state: v.union(v.literal('asked'), v.literal('working'), v.literal('failed'), v.literal('done')),
+          why: v.optional(v.string()),
+        }),
+      ),
+    ),
     /** When its connector said it was stopping, if it has and has not been heard from since: the machine is off from then, and not only once it has been quiet for a while. */
     offAt: v.optional(v.number()),
     /** What the connector found installed, and what the person asked to be connected. */

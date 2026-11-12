@@ -331,7 +331,7 @@ export const carryOn = mutation({
 
 type Connection = {
   harness: string
-  state: 'disconnected' | 'connecting' | 'needs_approval' | 'error' | 'unavailable' | 'too_old' | 'connected' | 'unknown'
+  state: 'disconnected' | 'connecting' | 'needs_approval' | 'disabled' | 'error' | 'unavailable' | 'too_old' | 'connected' | 'unknown'
   queue: boolean
 }
 
@@ -347,6 +347,8 @@ function connection(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): Conne
       state = 'connecting'
       break
     case 'needs_approval':
+    // Turned off in the app on that machine: not connecting, and not to be waited for
+    case 'disabled':
     case 'error':
     case 'unavailable':
     case 'too_old':
