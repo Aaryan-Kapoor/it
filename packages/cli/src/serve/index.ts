@@ -18,7 +18,7 @@ import { makeContent, startDoor } from './door'
 import { KEEP_MS, keepItsFolder } from './kept'
 import { onTheInternet, reachable } from './network'
 import { recoverStartup } from './startup'
-import { publicFunnel, tailnetAddresses, tailnetName } from './tailnet'
+import { funnelNow, tailnetAddresses, tailnetName } from './tailnet'
 import { watchTask } from './task'
 
 /**
@@ -253,12 +253,12 @@ export const standsAs = (
 ) => {
   const onTailnet = tailnetAddresses().length > 0
   const internet = door.network && door.tailnet !== true && door.internet === true
-  const found = publicFunnel([port, contentPort(port)])
-  const funnel: 'off' | 'public' | 'unknown' = found === undefined ? 'unknown' : found.length ? 'public' : 'off'
+  // Nothing is said of a Funnel until Tailscale has first been heard
+  const funnel = funnelNow([port, contentPort(port)])
   // The door answers to that name kept to the tailnet, and open to every network on a machine that is on one
   const name = door.network && (door.tailnet === true || onTailnet) ? named() : undefined
   return {
-    funnel,
+    ...(funnel ? { funnel } : {}),
     on: door.network,
     wanted,
     addresses: door.network ? reachable(port, undefined, door.tailnet === true, tailnetName, internet) : [],

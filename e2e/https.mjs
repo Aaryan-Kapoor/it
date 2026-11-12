@@ -95,6 +95,7 @@ const standIns = []
 let browser
 let fixture
 let slug
+let cameraSlug
 const before = { taken: said(TAKEN), dropped: said(DROPPED) }
 let wrote = false
 try {
@@ -177,7 +178,11 @@ try {
   writeFileSync(path.join(fixture, 'index.html'), `<!doctype html><meta charset="utf-8"><title>Over https</title><p id="over-https">${SHOWN}</p>`)
   const made = await it(at.home, ['create', `Over https ${PRIVATE_MARK}page`, '--id', `over-https-${Date.now().toString(36)}`, '--dir', fixture])
   slug = made.id
-  browser = await chromium.launch({ args: [`--host-resolver-rules=MAP ${NAME} 127.0.0.1`] })
+  // A camera and a microphone of the browser's own making, and a browser that lets the site use
+  // them as a person who allows it would: It's own question still stands between a page and them
+  browser = await chromium.launch({
+    args: [`--host-resolver-rules=MAP ${NAME} 127.0.0.1`, '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
+  })
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
   const tab = await context.newPage()
   // The address `it site` prints pairs the owner's browser, and is opened here at the https place
@@ -204,11 +209,53 @@ try {
     return (await frame.locator('#over-https').innerText({ timeout: 2000 })) === SHOWN
   }, 30_000)
   check('a page shows there, in a frame at the pages’ own https address', shown, got)
+
+  // What a person does from a phone on their tailnet: a page asks for the camera live, which a
+  // browser gives a site only at a secure address, and It asks in its bar before the page has it
+  const camera = await it(at.home, [
+    'create',
+    `Camera over https ${PRIVATE_MARK}page`,
+    '--id',
+    `camera-over-https-${Date.now().toString(36)}`,
+    '--dir',
+    path.join(import.meta.dirname, 'fixtures', 'recorder'),
+  ])
+  cameraSlug = camera.id
+  await tab.goto(`${origin}/p/${cameraSlug}`)
+  const inPage = tab.frameLocator('.mount iframe')
+  await inPage.locator('#live').click({ timeout: 30_000 })
+  const question = tab.locator('.media-ask')
+  const cameraAsked = await question.waitFor({ timeout: 15_000 }).then(
+    () => question.textContent(),
+    () => '',
+  )
+  if (cameraAsked) await question.getByRole('button', { name: 'Allow', exact: true }).click()
+  const liveSaid = await inPage
+    .locator('#out')
+    .filter({ hasText: /^(live|refused)/ })
+    .waitFor({ timeout: 15_000 })
+    .then(
+      () => inPage.locator('#out').textContent(),
+      () => 'the page said nothing',
+    )
+  const pictures = await until(async () => {
+    const seen = await inPage
+      .locator('#view')
+      .evaluate((v) => ({ width: v.videoWidth, pictures: Number(document.getElementById('frames').textContent) }))
+      .catch(() => undefined)
+    return seen && seen.width > 0 && seen.pictures > 5 ? seen : undefined
+  }, 20_000)
+  check(
+    'over https, a page asks for the camera live, It asks the person in its bar, and once allowed the page is given the camera’s pictures',
+    /see the camera’s picture live/.test(cameraAsked ?? '') && liveSaid === 'live' && pictures !== undefined,
+    JSON.stringify({ asked: Boolean(cameraAsked), liveSaid, pictures }),
+  )
 } catch (err) {
   check(`the run finished (${err.message})`, false, err.stack)
 } finally {
   await browser?.close().catch(() => {})
   if (slug) await it(at.home, ['delete', slug]).catch(() => {})
+  if (cameraSlug) await it(at.home, ['delete', cameraSlug]).catch(() => {})
   if (fixture) rmSync(fixture, { recursive: true, force: true })
   // The settings are left as they were found, and the door as it was opened before
   if (wrote) {

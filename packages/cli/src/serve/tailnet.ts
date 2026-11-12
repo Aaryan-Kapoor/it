@@ -6,7 +6,9 @@
 // A device's addresses on a tailnet are known by their ranges, which Tailscale gives out of and
 // nothing else on a network does: 100.64.0.0/10 under IPv4, and fd7a:115c:a1e0::/48 under IPv6.
 import { execFile, execFileSync } from 'node:child_process'
+import { accessSync, constants, statSync } from 'node:fs'
 import os from 'node:os'
+import path from 'node:path'
 
 type Listed = Pick<os.NetworkInterfaceInfo, 'address' | 'family' | 'internal'>
 type Interfaces = NodeJS.Dict<Listed[]>
@@ -44,7 +46,12 @@ let asked: { at: number; name: string | undefined } | undefined
  */
 export function tailnetName(
   ask: () => string = () =>
-    execFileSync('tailscale', ['status', '--json', '--peers=false'], { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }),
+    execFileSync(tailscaleCommand() ?? 'tailscale', ['status', '--json', '--peers=false'], {
+      encoding: 'utf8',
+      timeout: 2000,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }),
 ): string | undefined {
   if (asked && Date.now() - asked.at < 60_000) return asked.name
   let name: string | undefined
@@ -77,41 +84,288 @@ export function servedAs(status: unknown, name: string, at: number, to: number):
   return its ? 'its' : 'other'
 }
 
-/** Public Funnel listeners that forward to one of It's ports, regardless of their external port. */
-export function funnelPorts(status: unknown, ports: number[]): number[] {
-  const s = status as {
-    AllowFunnel?: Record<string, unknown>
-    Web?: Record<string, { Handlers?: Record<string, { Proxy?: unknown }> }>
-    TCP?: Record<string, { TCPForward?: unknown }>
-    Foreground?: Record<string, unknown>
-  } | null
-  const found = Object.entries(s?.AllowFunnel ?? {})
-    .filter(([host, allowed]) => {
-      if (allowed !== true) return false
-      const at = host.slice(host.lastIndexOf(':') + 1)
-      const targets = [...Object.values(s?.Web?.[host]?.Handlers ?? {}).map((handler) => handler.Proxy), s?.TCP?.[at]?.TCPForward]
-      return targets.some((target) => {
-        if (typeof target !== 'string') return false
-        try {
-          const url = new URL(target.includes('://') ? target : `tcp://${target}`)
-          return ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) && ports.includes(Number(url.port || (url.protocol === 'https:' ? 443 : 80)))
-        } catch {
-          return false
-        }
-      })
-    })
-    .map(([host]) => Number(host.slice(host.lastIndexOf(':') + 1)))
-  return [...new Set([...found, ...Object.values(s?.Foreground ?? {}).flatMap((entry) => funnelPorts(entry, ports))])]
+/**
+ * What a forward reaches: this machine (`here`), another machine (`elsewhere`), or a place It
+ * cannot be sure of (`unsure`), such as a name that the system looks up.
+ */
+type Reach = 'here' | 'elsewhere' | 'unsure'
+
+/** This machine as a forward can name it: each address it has, written as `canonical` writes one, and its own names. */
+export type Here = { addresses: Set<string>; names: Set<string> }
+
+/**
+ * A host as the WHATWG URL parser writes it: an IPv4 address in four decimal parts, whatever
+ * form it was given in, an IPv6 one in brackets, compressed and in lower case, with no zone,
+ * and a name in lower case without a final dot. Nothing for a host that is none of these.
+ */
+function canonical(host: string): string | undefined {
+  const h = host.toLowerCase().replace(/^(\[[^\]%]*)%[^\]]*\]$/, '$1]')
+  if (!/^(?:\[[0-9a-f:.]+\]|[a-z0-9._-]+)$/.test(h)) return undefined
+  try {
+    const written = new URL(`http://${h}/`).hostname.replace(/\.$/, '')
+    // An IPv4 address written as IPv6 is read as the IPv4 address it is
+    const mapped = /^\[::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})\]$/.exec(written)
+    if (!mapped) return written || undefined
+    const [high, low] = [Number.parseInt(mapped[1]!, 16), Number.parseInt(mapped[2]!, 16)]
+    return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`
+  } catch {
+    return undefined
+  }
 }
 
-/** Read-only inspection. Never changes the person's Tailscale configuration. */
-export async function inspectFunnel(ports: number[]): Promise<number[] | undefined> {
+/**
+ * Names that are this machine wherever they are looked up: `localhost` and every name under it,
+ * and the names Linux distributions give loopback in `/etc/hosts`.
+ */
+const LOOPBACK_NAME = /^(?:(?:[a-z0-9_-]+\.)*localhost|localhost\.localdomain|ip6-localhost|ip6-loopback)$/
+
+/**
+ * This machine's own addresses, each of every interface whether or not the door listens there,
+ * and its own names: its host name, that name under `.local`, and the names Tailscale serves at.
+ * A forward to any of them reaches It whenever the network is on, which the site can turn on at
+ * any moment, so it counts whatever the network setting.
+ */
+export function thisMachine(interfaces: Interfaces = os.networkInterfaces(), host = os.hostname()): Here {
+  const addresses = new Set<string>()
+  for (const listed of Object.values(interfaces))
+    for (const a of listed ?? []) {
+      const written = canonical(a.address.includes(':') ? `[${a.address}]` : a.address)
+      if (written) addresses.add(written)
+    }
+  const name = host.toLowerCase().replace(/\.$/, '')
+  return { addresses, names: new Set(name ? [name, ...(name.includes('.') ? [] : [`${name}.local`])] : []) }
+}
+
+function reach(host: string, here: Here): Reach {
+  const written = canonical(host)
+  if (!written) return 'unsure'
+  // Every address of 127.0.0.0/8 is loopback, and an unspecified address is taken for this machine when it is dialled
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(written)) return written.startsWith('127.') || written === '0.0.0.0' || here.addresses.has(written) ? 'here' : 'elsewhere'
+  if (written.startsWith('[')) return written === '[::1]' || written === '[::]' || here.addresses.has(written) ? 'here' : 'elsewhere'
+  return LOOPBACK_NAME.test(written) || here.names.has(written) ? 'here' : 'unsure'
+}
+
+/**
+ * Where a forward of Tailscale's goes, in each form its target parser takes and its status
+ * writes: a bare port, which is 127.0.0.1's; `host:port`; or a URL with or without a path, whose
+ * port is its scheme's where it names none. A Unix socket is no port of It's (`socket`), and a
+ * target that cannot be read gives nothing.
+ */
+function forwardOf(target: unknown, fallback: 'http' | 'tcp'): { host: string; port: number } | 'socket' | undefined {
+  if (typeof target !== 'string') return undefined
+  const t = target.trim()
+  if (/^\d+$/.test(t)) return { host: '127.0.0.1', port: Number(t) }
+  if (/^unix:/i.test(t)) return 'socket'
+  const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(t)
+  const kind = scheme ? scheme[1]!.toLowerCase() : fallback
+  const authority = (scheme ? t.slice(scheme[0].length) : t).split(/[/?#]/)[0]!
+  const parts = /^(\[[^\]]*\]|[^:[\]]+)(?::(\d*))?$/.exec(authority.slice(authority.lastIndexOf('@') + 1))
+  if (!parts) return undefined
+  const port = parts[2] ? Number(parts[2]) : kind === 'http' ? 80 : kind === 'https' || kind === 'https+insecure' ? 443 : undefined
+  return port !== undefined && port > 0 && port <= 65535 ? { host: parts[1]!, port } : undefined
+}
+
+type ServeStatus = {
+  AllowFunnel?: Record<string, unknown>
+  Web?: Record<string, { Handlers?: Record<string, Record<string, unknown> | null> } | null>
+  TCP?: Record<string, { TCPForward?: unknown } | null>
+  Foreground?: Record<string, unknown>
+} | null
+
+/**
+ * The public Funnel listeners whose forward reaches one of It's ports (`ports`) on this machine,
+ * whatever port they listen on: a proxy of a path, for http or https, or a TCP forward, with or
+ * without TLS ended first, in the saved settings or in a `tailscale funnel` still running in the
+ * foreground. A forward reaches It where it goes to one of It's ports at loopback, at an
+ * unspecified address, or at this machine's own addresses or names (`here`). Nothing where no
+ * listener is shown to reach It and a forward at one of It's ports, or one that cannot be read,
+ * could: a name the system looks up, or a target in a form It does not know.
+ */
+export function funnelPorts(status: unknown, ports: number[], here: Here = thisMachine()): number[] | undefined {
+  const configs: ServeStatus[] = []
+  const gather = (s: unknown) => {
+    if (!s || typeof s !== 'object') return
+    configs.push(s as ServeStatus)
+    for (const entry of Object.values((s as ServeStatus)?.Foreground ?? {})) gather(entry)
+  }
+  gather(status)
+  // The names Tailscale serves at are this machine's
+  const names = new Set(here.names)
+  for (const s of configs)
+    for (const host of [...Object.keys(s?.AllowFunnel ?? {}), ...Object.keys(s?.Web ?? {})])
+      names.add(host.slice(0, host.lastIndexOf(':')).toLowerCase().replace(/\.$/, ''))
+  const known: Here = { addresses: here.addresses, names }
+  const found = new Set<number>()
+  let unsure = false
+  for (const s of configs)
+    for (const [host, allowed] of Object.entries(s?.AllowFunnel ?? {})) {
+      if (allowed !== true) continue
+      const at = Number(host.slice(host.lastIndexOf(':') + 1))
+      const handlers = Object.values(s?.Web?.[host]?.Handlers ?? {})
+      // A handler that serves files or words, or sends the browser elsewhere, forwards nothing
+      const proxies = handlers.filter((handler) => !handler || typeof handler !== 'object' || 'Proxy' in handler).map((handler) => handler?.Proxy)
+      const forwards = [...proxies.map((target) => forwardOf(target, 'http'))]
+      const tcp = s?.TCP?.[String(at)]
+      if (tcp && typeof tcp === 'object' && 'TCPForward' in tcp) forwards.push(forwardOf(tcp.TCPForward, 'tcp'))
+      for (const forward of forwards) {
+        if (forward === 'socket') continue
+        const reached = forward ? (ports.includes(forward.port) ? reach(forward.host, known) : 'elsewhere') : 'unsure'
+        if (reached === 'here' && Number.isInteger(at) && at > 0) found.add(at)
+        else if (reached !== 'elsewhere') unsure = true
+      }
+    }
+  return found.size ? [...found] : unsure ? undefined : []
+}
+
+/**
+ * The system It looks for Tailscale on: which one it is, its environment, and a folder that the
+ * usual places are under, which is the root of the disk but in tests. `service` says whether
+ * Windows has the Tailscale service, where the system is Windows.
+ */
+export type System = {
+  platform: NodeJS.Platform
+  env: NodeJS.ProcessEnv
+  root?: string
+  service?: () => Promise<boolean>
+  processes?: () => Promise<string[] | undefined>
+}
+const thisSystem = (): System => ({ platform: process.platform, env: process.env })
+
+/** The places Tailscale's installers put its command on each system, where they are not on PATH. */
+export function tailscalePlaces(system: System): string[] {
+  if (system.platform === 'win32') {
+    const programs = Object.entries(system.env).find(([key]) => key.toLowerCase() === 'programfiles')?.[1] || 'C:\\Program Files'
+    return [path.win32.join(programs, 'Tailscale', 'tailscale.exe')]
+  }
+  if (system.platform === 'darwin') return ['/Applications/Tailscale.app/Contents/MacOS/Tailscale', '/opt/homebrew/bin/tailscale', '/usr/local/bin/tailscale']
+  return ['/usr/bin/tailscale', '/usr/sbin/tailscale', '/usr/local/bin/tailscale']
+}
+
+const isFile = (file: string) => {
+  try {
+    return statSync(file).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Tailscale's command on this machine: the first on PATH, and where PATH has none, the first in
+ * the places its installers use. A service is often started with a shorter PATH than a person's
+ * terminal has, and macOS starts one with none of the places Tailscale's app or Homebrew use.
+ */
+export function tailscaleCommand(system: System = thisSystem()): string | undefined {
+  const windows = system.platform === 'win32'
+  const join = windows ? path.win32.join : path.posix.join
+  const listed = Object.entries(system.env).find(([key]) => (windows ? key.toLowerCase() === 'path' : key === 'PATH'))?.[1] ?? ''
+  const onPath = listed
+    .split(windows ? ';' : ':')
+    .filter((dir) => dir && (windows ? path.win32.isAbsolute(dir) : dir.startsWith('/')))
+    .map((dir) => join(dir, windows ? 'tailscale.exe' : 'tailscale'))
+  const usual = tailscalePlaces(system).map((place) => `${system.root ?? ''}${place}`)
+  return [...onPath, ...usual].find((file) => {
+    if (!isFile(file)) return false
+    if (windows) return true
+    try {
+      accessSync(file, constants.X_OK)
+      return true
+    } catch {
+      return false
+    }
+  })
+}
+
+/**
+ * Whether Windows's Tailscale service may be running, as `sc.exe` says: not where no such service
+ * is installed, or where it says the service is stopped, and taken for running where it cannot say.
+ */
+const windowsService = (env: NodeJS.ProcessEnv) => () =>
+  new Promise<boolean>((resolve) => {
+    const windir = Object.entries(env).find(([key]) => key.toLowerCase() === 'systemroot')?.[1] || 'C:\\Windows'
+    execFile(path.win32.join(windir, 'System32', 'sc.exe'), ['query', 'Tailscale'], { encoding: 'utf8', timeout: 2000, windowsHide: true }, (error, stdout) => {
+      // 1060: no such service is installed
+      if (error) return resolve((error as { code?: unknown }).code !== 1060)
+      resolve(!/STATE\s*:\s*1\s+STOPPED/i.test(stdout))
+    })
+  })
+
+/** The names of the programs running on macOS, as `ps` lists them for anyone. Nothing where it cannot say. */
+const macProcesses = () =>
+  new Promise<string[] | undefined>((resolve) => {
+    execFile('/bin/ps', ['-A', '-o', 'comm='], { encoding: 'utf8', timeout: 2000 }, (error, stdout) => resolve(error ? undefined : stdout.split('\n')))
+  })
+
+/** Tailscale's own programs on macOS: its app, the network extension of the App Store's app and of the standalone one, and the open-source daemon. */
+const TAILSCALE_PROCESS = /(?:^|\/)(?:Tailscale|IPNExtension|io\.tailscale\.ipn\.[\w.-]+|tailscaled)$/
+
+/**
+ * Whether a daemon's socket may be at a path: not where nothing is there, or something that is no
+ * socket is, and taken for one wherever the system will not say, as where its folder is kept from
+ * this user. Only a path shown to be empty shows that no daemon listens there.
+ */
+const isSocket = (file: string) => {
+  try {
+    return statSync(file).isSocket()
+  } catch (err) {
+    const code = (err as { code?: unknown }).code
+    return code !== 'ENOENT' && code !== 'ENOTDIR'
+  }
+}
+
+/**
+ * Whether Tailscale's daemon may be running on this machine, as the system shows it whatever
+ * Tailscale's command says: its socket on Linux, from its packages or its snap, which it takes
+ * away when it stops; its programs or the open-source daemon's socket on macOS, where `ps` lists
+ * every user's programs; and the Tailscale service on Windows, unless that is stopped. Taken for
+ * running wherever the system cannot say. A Funnel set up already keeps serving while the daemon
+ * runs, whether or not It can find the command, or the command can reach the daemon.
+ */
+export async function tailscaleDaemon(system: System = thisSystem()): Promise<boolean> {
+  const root = system.root ?? ''
+  if (system.platform === 'win32') return (system.service ?? windowsService(system.env))()
+  if (system.platform === 'darwin') {
+    if (isSocket(`${root}/var/run/tailscaled.socket`)) return true
+    const running = await (system.processes ?? macProcesses)()
+    return running === undefined || running.some((name) => TAILSCALE_PROCESS.test(name.trim()))
+  }
+  return ['/var/run/tailscale/tailscaled.sock', '/run/tailscale/tailscaled.sock', '/var/snap/tailscale/common/socket/tailscaled.sock'].some((socket) =>
+    isSocket(`${root}${socket}`),
+  )
+}
+
+/**
+ * Whether what Tailscale's command printed, failing, says that its daemon is not running. The
+ * command looks through the system's processes for the daemon before it says so, and says that
+ * it found one, and which, where it could not connect to one that runs.
+ */
+export const daemonDown = (said: string): boolean =>
+  /failed to connect to local (?:tailscaled|tailscale)\b/i.test(said) &&
+  /doesn't appear to be running|is tailscale running\?|is the tailscale service running\?/i.test(said) &&
+  !/appears to be running as/i.test(said)
+
+/**
+ * Read-only inspection. Never changes the person's Tailscale configuration. The public Funnel
+ * listeners that reach It, and none where the system shows that Tailscale's daemon is not
+ * running, with no command to ask or a command that says so too, since no Funnel is up without
+ * the daemon. Tailscale's command looks for the daemon among the processes it can see, which a
+ * system may keep from a user, so what it says is never enough alone. Nothing where Tailscale
+ * may be running and cannot be asked, or what it says cannot be read with certainty.
+ */
+export async function inspectFunnel(ports: number[], system: System = thisSystem(), timeout = 2000): Promise<number[] | undefined> {
+  const command = tailscaleCommand(system)
+  const running = () => tailscaleDaemon(system).catch(() => true)
+  if (!command) return (await running()) ? undefined : []
   return new Promise<number[] | undefined>((resolve) => {
-    execFile('tailscale', ['serve', 'status', '--json'], { encoding: 'utf8', timeout: 2000, windowsHide: true }, (error, stdout) => {
-      if (error) return resolve(error.code === 'ENOENT' ? [] : undefined)
+    execFile(command, ['serve', 'status', '--json'], { encoding: 'utf8', timeout, windowsHide: true }, (error, stdout, stderr) => {
+      if (error) {
+        if (error.killed || !daemonDown(`${stderr}\n${stdout}`)) return resolve(undefined)
+        return void running().then((may) => resolve(may ? undefined : []))
+      }
       try {
-        const status: unknown = JSON.parse(stdout)
-        if (!status || typeof status !== 'object' || Array.isArray(status)) return resolve(undefined)
+        // Tailscale prints nothing, or `null`, where nothing is served
+        const status: unknown = stdout.trim() ? JSON.parse(stdout) : null
+        if (status === null) return resolve([])
+        if (typeof status !== 'object' || Array.isArray(status)) return resolve(undefined)
         resolve(funnelPorts(status, ports))
       } catch {
         resolve(undefined)
@@ -119,23 +373,46 @@ export async function inspectFunnel(ports: number[]): Promise<number[] | undefin
     })
   }).catch(() => undefined)
 }
-let inspection: { key: string; at: number; value?: number[]; pending: boolean } | undefined
-/** Refresh without blocking the service, with at most one inspection in flight. */
-export function publicFunnel(ports: number[]): number[] | undefined {
+
+/** How a Funnel stands for It: none reaches it (`off`), one does (`public`), or It could not tell (`unknown`). */
+export type Funnel = 'off' | 'public' | 'unknown'
+const funnelOf = (found: number[] | undefined): Funnel => (found === undefined ? 'unknown' : found.length ? 'public' : 'off')
+
+/** How long the service waits between asking Tailscale, at first, and at most while the answer stays the same. */
+const FUNNEL_EVERY_MS = 5000
+const FUNNEL_AT_MOST_MS = 30_000
+let inspection: { key: string; at: number; every: number; value?: Funnel; pending: boolean } | undefined
+/**
+ * How a Funnel stands for It's ports, as the service last heard, without waiting for Tailscale,
+ * with at most one inspection in flight. Nothing until the first inspection has answered, so that
+ * nothing is said of a Funnel before Tailscale has been heard. Tailscale is asked again five
+ * seconds after it answered, and while the answer stays the same, after twice as long each time,
+ * up to thirty seconds.
+ */
+export function funnelNow(ports: number[], inspect: (ports: number[]) => Promise<number[] | undefined> = inspectFunnel): Funnel | undefined {
   const key = ports.join(',')
-  if (!inspection || (!inspection.pending && (inspection.key !== key || Date.now() - inspection.at > 5000))) {
-    const next = { key, at: Date.now(), value: inspection?.key === key ? inspection.value : undefined, pending: true }
+  const known = inspection?.key === key ? inspection : undefined
+  if (!inspection || (!inspection.pending && (!known || Date.now() - inspection.at > inspection.every))) {
+    const next = { key, at: Date.now(), every: known?.every ?? FUNNEL_EVERY_MS, value: known?.value, pending: true }
     inspection = next
-    void inspectFunnel(ports).then((value) => {
-      next.value = value
-      next.at = Date.now()
-      next.pending = false
-    })
+    void inspect(ports)
+      .catch(() => undefined)
+      .then((found) => {
+        const value = funnelOf(found)
+        next.every = value === next.value ? Math.min(next.every * 2, FUNNEL_AT_MOST_MS) : FUNNEL_EVERY_MS
+        next.value = value
+        next.at = Date.now()
+        next.pending = false
+      })
   }
   return inspection.key === key ? inspection.value : undefined
 }
+/** Forgets what the service last heard of a Funnel. For tests. */
+export const forgetFunnel = () => {
+  inspection = undefined
+}
 
-export function funnelWarning(funnel: 'off' | 'public' | 'unknown' | undefined): string | undefined {
+export function funnelWarning(funnel: Funnel | undefined): string | undefined {
   return funnel === 'public'
     ? 'Tailscale Funnel makes It public, even with the network off. Turn off the Funnel in Tailscale to keep It private.'
     : funnel === 'unknown'
@@ -143,8 +420,8 @@ export function funnelWarning(funnel: 'off' | 'public' | 'unknown' | undefined):
       : undefined
 }
 
-/** An unknown proxy policy qualifies the listener's report without dropping it. */
-export function funnelSaid(funnel: 'off' | 'public' | 'unknown' | undefined, said: string): string {
+/** The warning of a Funnel, where there is one to give, and then what was to be said, which it never replaces. */
+export function funnelSaid(funnel: Funnel | undefined, said: string): string {
   const warning = funnelWarning(funnel)
-  return funnel === 'unknown' ? `${warning}\n${said}` : (warning ?? said)
+  return warning ? `${warning}\n${said}` : said
 }

@@ -61,6 +61,7 @@ import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
 import * as flow from './flow'
 import { hook } from './hooks'
+import { tailscaleRefused, tailscaleRun, turnHttpsOn } from './https'
 import { checkInstallationFolder, checkInstallationRecord, legacyInstallation, markedInstallation, markInstallation } from './installation'
 import { withInstallerLock } from './installer-lock'
 import {
@@ -131,7 +132,7 @@ import { HTTPS_NAME, noteHttps, noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
 import { serve } from './serve/index'
 import { onTheInternet, reachable } from './serve/network'
-import { funnelPorts, funnelSaid, funnelWarning, inspectFunnel, servedAs, tailnetAddresses, tailnetName } from './serve/tailnet'
+import { funnelSaid, funnelWarning, inspectFunnel, servedAs, tailnetAddresses, tailnetName } from './serve/tailnet'
 import * as service from './service'
 import {
   type AddonOutcome,
@@ -2221,11 +2222,12 @@ async function settingUpLed(a: Args, begunAlready = false) {
       for (const said of left) for (const [i, row] of said.split('\n').entries()) flow.line(`${i === 0 ? flow.yellow('!') : ' '} ${row}`)
       flow.line()
     }
-    // The terminal the install script ran in has no `it` on its PATH yet, so a command given
-    // there is given with its whole path: typed as `it`, it would not be found
+    // A terminal the install script ran in that has no `it` on its PATH yet is given a command
+    // with its whole path: typed as `it`, it would not be found. One whose PATH the script gave
+    // the folder to, as the Windows script does for the PowerShell it was piped into, finds `it`
     // In PowerShell a program named by its path in quotation marks is run with `&` before it, and a quotation mark inside is written twice
     const byPath = process.platform === 'win32' ? `& '${process.execPath.replace(/'/g, "''")}'` : `'${process.execPath.replace(/'/g, `'\\''`)}'`
-    const it = process.env.IT_INSTALL_FLOW ? byPath : 'it'
+    const it = process.env.IT_INSTALL_FLOW && process.env.IT_INSTALL_ON_PATH !== '1' ? byPath : 'it'
     if (!stays) {
       flow.line(`${flow.bold('It is set up, and it is not running.')} Nothing starts it by itself on this machine, so two things are yours to do:`)
       flow.line()
@@ -2592,14 +2594,12 @@ function networkNow(): { on: boolean; addresses: string[]; tailnet?: true; inter
     const on = config?.network ?? false
     const tailnet = on && config?.tailnet === true
     const internet = on && !tailnet && config?.internet === true
-    const funnel = 'unknown' as const
     // Kept to the tailnet, the door answers at this machine's addresses there and at no other:
     // an address on the home network would be one that nothing opens. On for the network the
     // machine is on, it answers at none of the internet's addresses either. The tailnet's address
     // over https comes first where It answers there, whether or not the network is on
     return {
       on,
-      funnel,
       addresses: [
         ...(config?.https ? [`https://${config.https}:${httpsPort(config.port)}`] : []),
         ...(on && config ? reachable(config.port, undefined, tailnet, tailnetName, internet) : []),
@@ -2624,10 +2624,10 @@ async function networkAsItStands(running: boolean, inspect = true): Promise<Retu
     const local = inspect && !elsewhere() ? readConfig() : null
     if (local) {
       const found = await inspectFunnel([local.port, contentPort(local.port)])
-      asked.funnel = found === undefined ? 'unknown' : found.length ? 'public' : undefined
+      if (found === undefined || found.length) asked.funnel = found === undefined ? 'unknown' : 'public'
     }
   } catch {
-    asked.funnel = 'unknown'
+    // Settings that cannot be read leave nothing to inspect, and nothing is said of a Funnel that was not looked for
   }
   if (!asked.on || !running || elsewhere()) return asked
   try {
@@ -2891,27 +2891,6 @@ async function network(a: Args) {
 
 // ---------- https on the tailnet ----------
 
-/** Tailscale's own command, as it is run here: what it printed, and whether it did what it was asked. */
-type Ran = { ok: boolean; out: string; err: string }
-const tailscaleRun = (args: string[]): Ran => {
-  const ran = spawnSync('tailscale', args, { encoding: 'utf8', timeout: 60_000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
-  return { ok: ran.status === 0, out: ran.stdout ?? '', err: `${ran.stderr ?? ''}${ran.error ? ` ${ran.error.message}` : ''}`.trim() }
-}
-/** What is said where Tailscale could not be asked or would not do it, with its own words where it said any. */
-function tailscaleRefused(what: string, ran: Ran): Problem {
-  const said = ran.err || ran.out
-  const operator = /access denied|permission|operator/i.test(said)
-  const enable = /not enabled|https?:\/\/login\.tailscale\.com\S*/i.exec(said)
-  return new Problem(
-    `Tailscale on this machine would not ${what}.${said ? ` It said: ${said.split('\n').slice(0, 3).join(' ').trim()}` : ''}`,
-    'tailscale',
-    operator
-      ? 'Let your user run `tailscale serve` with `sudo tailscale set --operator=$USER`, and run this again.'
-      : enable
-        ? 'Turn on MagicDNS and HTTPS certificates for your tailnet in Tailscale’s admin console (DNS), as the address it gave says, and run this again.'
-        : 'Check that Tailscale is running and signed in here, and that your tailnet has MagicDNS and HTTPS certificates turned on.',
-  )
-}
 /** Asks It over https at its name on the tailnet, as another device would, which also has Tailscale fetch that name's certificate the first time. Whether it answered. */
 function answersOverHttps(address: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -2959,40 +2938,11 @@ async function httpsCommand(a: Args) {
         'no_name',
         'Turn on MagicDNS for your tailnet in Tailscale’s admin console, and run this again.',
       )
-    const status = tailscaleRun(['serve', 'status', '--json'])
-    if (!status.ok) throw tailscaleRefused('say what it serves', status)
-    let served: unknown = {}
-    try {
-      served = JSON.parse(status.out)
-      if (!served || typeof served !== 'object' || Array.isArray(served)) throw new Error('Invalid Serve status')
-    } catch {
-      throw new Problem('Tailscale returned an unreadable Serve status. HTTPS was not enabled.', 'tailscale')
-    }
-    if (funnelPorts(served, [config.port, contentPort(config.port)]).length)
-      throw new Problem(
-        'Tailscale Funnel already makes It public. HTTPS was not enabled.',
-        'funnel_public',
-        'Turn off the Funnel for It in Tailscale, then run `it https on` again.',
-      )
-    const taken = ports.filter(({ port, at }) => servedAs(served, name, at, port) === 'other').map(({ at }) => at)
-    if (taken.length)
-      throw new Problem(
-        `Tailscale on this machine already serves something else on port ${taken.join(' and ')}, which It would answer https at.`,
-        'port_taken',
-        `\`tailscale serve status\` says what. Take it away there, or run It on other ports with IT_PORT, and run this again.`,
-      )
-    for (const { port, at } of ports) {
-      if (servedAs(served, name, at, port) === 'its') continue
-      const ran = tailscaleRun(['serve', '--bg', `--https=${at}`, `http://127.0.0.1:${port}`])
-      if (!ran.ok) throw tailscaleRefused(`serve https on port ${at}`, ran)
-    }
-    const verified = await inspectFunnel([config.port, contentPort(config.port)])
-    if (verified === undefined || verified.length)
-      throw new Problem('It could not confirm that Tailscale keeps HTTPS private. Check Tailscale Funnel before using It.', 'funnel_unconfirmed')
+    await turnHttpsOn(name, ports, tailscaleRun())
     noteHttps(name)
   } else if (to === 'off') {
     const name = config.https ?? tailnetName()
-    const status = tailscaleRun(['serve', 'status', '--json'])
+    const status = tailscaleRun()(['serve', 'status', '--json'])
     let served: unknown = {}
     try {
       served = status.ok && status.out.trim() ? JSON.parse(status.out) : {}
@@ -3000,7 +2950,7 @@ async function httpsCommand(a: Args) {
     // Only what It set up is taken away: whatever else Tailscale serves here is another program's
     for (const { port, at } of ports) {
       if (!name || servedAs(served, name, at, port) !== 'its') continue
-      const ran = tailscaleRun(['serve', `--https=${at}`, 'off'])
+      const ran = tailscaleRun()(['serve', `--https=${at}`, 'off'])
       if (!ran.ok) throw tailscaleRefused(`stop serving https on port ${at}`, ran)
     }
     noteHttps(undefined)
@@ -3152,22 +3102,20 @@ async function status(a: Args) {
         : undefined,
     // Said as it is on this machine, unless It has just said otherwise, which the first line then says
     refused ? undefined : enrolled ? `This machine is enrolled${name ? ` as “${name}”` : ''}.` : running ? undefined : 'This machine is not enrolled.',
-    here && network.funnel === 'unknown' ? funnelWarning(network.funnel) : undefined,
+    here ? funnelWarning(network.funnel) : undefined,
     !here
       ? undefined
-      : network.funnel === 'public'
-        ? funnelWarning(network.funnel)
-        : network.unable
-          ? 'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'
-          : !network.on
-            ? 'The network is off, so It answers this machine only. `it network tailscale` lets your own devices reach it over your tailnet, and `it network on` lets anyone on this network reach it.'
-            : first === undefined
-              ? 'The network is on, and this machine has no address on a network just now.'
-              : network.tailnet
-                ? `The network is on, for your tailnet only. Your devices on it open the site at ${first}.${others.length ? ` This machine’s other addresses there are ${others.join(' and ')}.` : ''}`
-                : network.internet
-                  ? `The network is on, for every address this machine has, the internet’s included. Whoever can reach one opens the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`
-                  : `The network is on, for anyone on this network. Devices on it open the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`,
+      : network.unable
+        ? 'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'
+        : !network.on
+          ? 'The network is off, so It answers this machine only. `it network tailscale` lets your own devices reach it over your tailnet, and `it network on` lets anyone on this network reach it.'
+          : first === undefined
+            ? 'The network is on, and this machine has no address on a network just now.'
+            : network.tailnet
+              ? `The network is on, for your tailnet only. Your devices on it open the site at ${first}.${others.length ? ` This machine’s other addresses there are ${others.join(' and ')}.` : ''}`
+              : network.internet
+                ? `The network is on, for every address this machine has, the internet’s included. Whoever can reach one opens the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`
+                : `The network is on, for anyone on this network. Devices on it open the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`,
     ...appsSaid(stands.harnesses),
     ...(stands.harnesses.some((h) => 'proxied' in h) ? [PROXIED] : []),
     reload,
