@@ -2284,6 +2284,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       if (cutOff.delete(key)) keepCutOff()
     } else {
       cutOff.add(key)
+      // Nothing of the run is left, as this look has made sure: where a clear of it had already
+      // written down that something may still be running, and was cut short before it let go of
+      // the run's note, that word no longer holds
+      mayRun.delete(key)
       keepCutOff()
       if (!cutOffKept) return false
     }

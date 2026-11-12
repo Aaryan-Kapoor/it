@@ -2681,6 +2681,31 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect((await local<Held>('/runs'))?.held).toEqual([])
   }, 90_000)
 
+  test('a clear that was cut short after its word was written, and whose run a later look then found nothing of, has the turn told that nothing is still running', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\nexit 0\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    // The connector before wrote down that the run was let go of, and stopped before it could let go of the note of the run
+    await start('socket', {}, (home) => {
+      noteConversation({ harness: 'codex', id: 'thread-1' }, folder)
+      writeFileSync(
+        path.join(home, 'runs.json'),
+        JSON.stringify({ 'codex:thread-1': { pid: 2 ** 22 + 7, since: 'tick 1', told: SINCE_TOLD, run: 'the-held-run', unsure: true } }),
+      )
+      writeFileSync(path.join(home, 'cut-off.json'), JSON.stringify([{ key: 'codex:thread-1', left: 'unknown' }]))
+    })
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0, 40_000)
+    // Nothing of the run was there to be found, so it is not said that something may still be running
+    const given = readFileSync(path.join(bin, 'given'), 'utf8')
+    expect(given).toContain(`${WAS_CUT_OFF} ${LEFT_ENDED}`)
+    expect(given).not.toContain(LEFT_MAY_RUN)
+  }, 90_000)
+
   test('where the note of which conversations were running cannot be read, it is kept aside and no conversation is reopened until a person has taken it away', async () => {
     const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
