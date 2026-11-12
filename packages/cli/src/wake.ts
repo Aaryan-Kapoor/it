@@ -70,18 +70,20 @@ export const WAS_CUT_OFF =
  * What is said straight after `WAS_CUT_OFF`, of what the turn that was cut off had started and
  * left running. A turn that is cut off has what it left ended before its conversation is
  * reopened again (see `carryOn` and `endTree`), and an agent that is not told so takes a server
- * that turn started to be up still, or a command it was in the middle of to have finished.
+ * that turn started to be up still, or a command it was in the middle of to have finished. It
+ * says only what It found: something the turn started outside its process group and its marks,
+ * such as a container, is not seen.
  */
 export const LEFT_ENDED =
-  'Nothing that turn had started is still running: It ended whatever it had left running when it was cut off. So a command it was in the middle of did not finish, and a server or anything else it had started and left running is not there any more. Start again what is still needed.'
+  'It ended everything it found that that turn had left running. So a command it was in the middle of did not finish, and a server or anything else it had started is most likely not there any more. Check, and start again what is still needed.'
 
 /**
  * What is said in its place where It could not tell what was left of the turn, and the person
- * let its conversation be reopened all the same, with `it runs clear`: nothing was ended, and
- * what the turn started may be running beside whatever this one starts.
+ * let its conversation be reopened all the same, with `it runs clear`: some of what the turn
+ * started may have been ended and some may be running beside whatever this one starts.
  */
 export const LEFT_MAY_RUN =
-  'It could not tell whether what that turn had started was still running, and ended none of it, so a command or a server that turn started may still be running. Look for it before you start the same thing again, so that it does not run twice.'
+  'It could not make sure that everything that turn had started was ended: some of it may have been, and some of it may still be running. Look for each thing it started before you start it again. Start again what is not running, and do not start a second copy of what is.'
 
 /**
  * What a conversation is told, the next time it is reopened, when the person stopped its last
