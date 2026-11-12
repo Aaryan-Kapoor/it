@@ -3801,7 +3801,13 @@ describe('an add-on that its app has turned off', () => {
   const OFF = [
     { id: 'claude-code' as const, bin: 'claude', enable: `plugin enable ${ID} --scope user`, label: 'Claude Code', person: `claude plugin enable ${ID}` },
     { id: 'codex' as const, bin: 'codex', enable: `plugin add ${ID}`, label: 'Codex', person: `codex plugin add ${ID}` },
-    { id: 'openclaw' as const, bin: 'openclaw', enable: 'plugins enable it-bridge --accept-capabilities', label: 'OpenClaw', person: 'openclaw plugins enable it-bridge' },
+    {
+      id: 'openclaw' as const,
+      bin: 'openclaw',
+      enable: 'plugins enable it-bridge --accept-capabilities',
+      label: 'OpenClaw',
+      person: 'openclaw plugins enable it-bridge',
+    },
     { id: 'hermes' as const, bin: 'hermes', enable: 'plugins enable it-bridge', label: 'Hermes Agent', person: 'hermes plugins enable it-bridge' },
   ]
   /** The app turns It's add-on off, as the person does in it. */
@@ -3862,21 +3868,32 @@ describe('an add-on that its app has turned off', () => {
     expect(changing(bin)).toEqual([])
   })
 
-  test.each(OFF)('in $label, where the app refuses to turn it on, says so in a plain sentence with the command to run', async ({ id, bin, enable, label, person }) => {
-    await connect(id, () => {})
-    turnOff(bin)
-    failing.push(`${bin} ${enable}`)
-    const answer = await turnBackOn(id)
-    expect(answer).toEqual({ ok: false, code: 'refused', why: `${label} refused to turn It’s add-on back on. Run \`${person}\` in a terminal on that machine to see why.` })
-    expect(await statusOf(id)).toMatchObject({ addon: 'disabled' })
-  })
+  test.each(OFF)(
+    'in $label, where the app refuses to turn it on, says so in a plain sentence with the command to run',
+    async ({ id, bin, enable, label, person }) => {
+      await connect(id, () => {})
+      turnOff(bin)
+      failing.push(`${bin} ${enable}`)
+      const answer = await turnBackOn(id)
+      expect(answer).toEqual({
+        ok: false,
+        code: 'refused',
+        why: `${label} refused to turn It’s add-on back on. Run \`${person}\` in a terminal on that machine to see why.`,
+      })
+      expect(await statusOf(id)).toMatchObject({ addon: 'disabled' })
+    },
+  )
 
   test.each(OFF)('in $label, where the app answers and keeps it off, says that it is still off', async ({ id, bin, enable, label }) => {
     await connect(id, () => {})
     turnOff(bin)
     replies.set(`${bin} ${enable}`, '')
     const answer = await turnBackOn(id)
-    expect(answer).toMatchObject({ ok: false, code: 'still_off', why: expect.stringContaining(`${label} still has It’s add-on turned off after being asked to turn it on.`) })
+    expect(answer).toMatchObject({
+      ok: false,
+      code: 'still_off',
+      why: expect.stringContaining(`${label} still has It’s add-on turned off after being asked to turn it on.`),
+    })
   })
 
   test.each(OFF)('in $label is not turned on for an app that does not have it off, and says why', async ({ id, bin }) => {

@@ -4594,7 +4594,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     try {
       await call('mutation', api.machines.turningOn, { harness, state: 'working' }).catch(() => {})
       const answer =
-        (TURNS_ON as readonly string[]).includes(harness) && chosen(harness) && enrolledHere()
+        (TURNS_ON as readonly string[]).includes(harness) && chosen(harness)
           ? await turnBackOn(harness as (typeof TURNS_ON)[number])
           : { ok: false as const, why: 'That agent app is not connected on this machine, so nothing was changed.', code: 'not_chosen' }
       const label = KNOWN[harness as keyof typeof KNOWN]?.label ?? 'an agent app'

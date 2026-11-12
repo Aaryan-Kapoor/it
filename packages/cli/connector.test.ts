@@ -21,6 +21,9 @@ import * as wake from './src/wake'
 const stand = vi.hoisted(() => ({
   /** What the add-ons were brought to each time the connector had them made to match what is wanted: the apps wanted then. */
   reconciled: [] as string[][],
+  /** The apps whose add-on the connector had turned back on, and what turning one on answers where a test says. */
+  turnedOn: [] as string[],
+  turnOnAnswer: null as null | { ok: false; why: string; code: string },
   /** What the connector watches the backend for, by the name of the function, and how to tell it something new. */
   watching: new Map<string, (value: any) => void>(),
   /** What it last asked to be told of, for each function it watches. */
@@ -226,6 +229,12 @@ vi.mock('./src/setup', async (original) => {
     claudeFolders: () => stand.claudeFolders,
     detectAll: async () => stand.found,
     newerProgramSeen: () => false,
+    turnBackOn: async (id: string) => {
+      stand.turnedOn.push(id)
+      if (stand.turnOnAnswer) return stand.turnOnAnswer
+      stand.found = stand.found.map((h) => (h.id === id && h.addon === 'disabled' ? { ...h, addon: 'connected' } : h))
+      return { ok: true }
+    },
     reconcile: async (chosen: readonly string[] | (() => readonly string[])) => {
       stand.reconciled.push([...(typeof chosen === 'function' ? chosen() : chosen)])
       return []
@@ -436,6 +445,8 @@ afterEach(async () => {
   stand.calls.length = 0
   stand.recorded.length = 0
   stand.reconciled.length = 0
+  stand.turnedOn.length = 0
+  stand.turnOnAnswer = null
   stand.claudeFolders.length = 0
   stand.claudeScans = 0
   stand.claudeKept = []
@@ -5709,6 +5720,60 @@ describe.skipIf(process.platform === 'win32')('a conversation held in a thread o
     noOtherWay()
   }, 30_000)
 
+  /** The person has chosen Claude Code and Codex, and each app has It's add-on turned off. */
+  const OFF = {
+    wanted: ['claude-code', 'codex'],
+    found: [
+      { id: 'claude-code', version: '2.1.322', addon: 'disabled' },
+      { id: 'codex', version: '0.167.0', addon: 'disabled' },
+    ],
+  }
+
+  test('a Claude Code conversation goes to its thread through T3 Code while Claude Code has It’s add-on turned off', async () => {
+    withT3Code()
+    await start('socket', OFF, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    expect(listened()).toEqual([`claude-code:${CLAUDE}`])
+    backend(click(1))
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+    await until(() => called('delivery:handedOff').includes('click-1'))
+    noOtherWay()
+  })
+
+  test('a Codex conversation goes to its thread through T3 Code while Codex has It’s add-on turned off, and never into Codex’s queue', async () => {
+    withT3Code()
+    await start('socket', OFF, noted({ 'codex:thread-1': 't3-thread-a' }))
+    expect(listened()).toEqual(['codex:thread-1'])
+    // Codex's queue is the app's own command, which an add-on turned off does not let It use
+    expect(asked().queues).not.toContain('codex')
+    backend(click(1, { harness: 'codex', id: 'thread-1' }))
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-a')
+    noOtherWay()
+  })
+
+  test('a conversation T3 Code is first found to hold while its app has It’s add-on turned off goes to that thread, and is not reopened outside it', async () => {
+    withT3Code()
+    stand.t3.threads.set(CLAUDE, 't3-thread-c')
+    await start('socket', OFF)
+    // As a click comes once `it create` has found the thread, which is noted then
+    stand.watching.get('machines:me')!({ wanted: OFF.wanted, wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
+    stand.watching.get('delivery:inboxPage')!({ clicks: [click(1)], after: [] })
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+    noOtherWay()
+  })
+
+  test('an app the person has not chosen is not handed a click through T3 Code, whatever its add-on', async () => {
+    withT3Code()
+    await start('socket', { ...OFF, wanted: ['codex'] }, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    expect(listened()).toEqual([])
+    stand.watching.get('delivery:inboxPage')!({ clicks: [click(1)], after: [] })
+    await pause(2500)
+    expect(stand.t3.sent).toEqual([])
+    expect(called('delivery:claim')).toEqual([])
+  })
+
   test('nothing is asked for a conversation of an app the person has not chosen, and its click is left where it is', async () => {
     withT3Code()
     await start('socket', { ...BOTH, wanted: ['codex'] }, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
@@ -7256,5 +7321,63 @@ describe('how what is done on a conversation’s pages would reach it, as the co
       writeFileSync(path.join(home, 't3-threads.json'), 'not a note'),
     )
     expect(await way('claude-code', claude)).toMatchObject({ thread: 'unknown' })
+  })
+})
+
+describe('an agent app that has It’s add-on turned off', () => {
+  const OFF = [{ id: 'claude-code', version: '2.1.322', addon: 'disabled' }]
+  const me = (over: Record<string, unknown>) => stand.watching.get('machines:me')!({ wanted: ['claude-code'], ...over })
+  const turning = () => stand.calls.filter((c) => c.name === 'machines:turningOn').map((c) => c.args)
+
+  test('is said in the log by a code, once, and not with every look', async () => {
+    await start('socket', { wanted: ['claude-code'], found: OFF })
+    await until(() => said.some((line) => line.includes('addon_disabled')))
+    // Each change of what is wanted has the machine looked at again
+    me({ wanted: ['claude-code', 'codex'] })
+    me({ wanted: ['claude-code'] })
+    await pause(300)
+    const lines = said.filter((line) => line.includes('addon_disabled'))
+    expect(lines).toEqual([
+      'Claude Code: addon_disabled: the app has It’s add-on turned off, so none of its conversations is handed a click but through T3 Code; It turns it on again only when the person asks, under Machines or with it setup',
+    ])
+  })
+
+  test('is turned back on when the person asks on the site, which is told how it went once the machine has been looked at again', async () => {
+    await start('socket', { wanted: ['claude-code'], found: OFF })
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+    await until(() => turning().some((t) => t.state === 'done'))
+    expect(stand.turnedOn).toEqual(['claude-code'])
+    expect(turning()).toEqual([
+      { harness: 'claude-code', state: 'working' },
+      { harness: 'claude-code', state: 'done' },
+    ])
+    // The site had the app as it is now before it was told this was over
+    const reported = stand.calls.findIndex((c) => c.name === 'machines:report' && c.args.harnesses.some((h: { addon: string }) => h.addon === 'connected'))
+    expect(reported).toBeGreaterThan(-1)
+    expect(reported).toBeLessThan(stand.calls.findIndex((c) => c.name === 'machines:turningOn' && c.args.state === 'done'))
+    expect(said).toContain('Claude Code: It’s add-on was turned back on, as asked on the site')
+    // The same asking, heard again while it is at work or after, is not done twice
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'working' }] })
+    await pause(200)
+    expect(stand.turnedOn).toEqual(['claude-code'])
+  })
+
+  test('that the machine could not turn back on says why to the site, and only a code in the log', async () => {
+    const why = 'Claude Code refused to turn It’s add-on back on. Run `claude plugin enable it-bridge@it` in a terminal on that machine to see why.'
+    stand.turnOnAnswer = { ok: false, why, code: 'refused' }
+    await start('socket', { wanted: ['claude-code'], found: OFF })
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+    await until(() => turning().some((t) => t.state === 'failed'))
+    expect(turning().at(-1)).toEqual({ harness: 'claude-code', state: 'failed', why })
+    expect(said).toContain('Claude Code: turn_on_failed: refused')
+    expect(said.join('\n')).not.toContain('claude plugin enable')
+  })
+
+  test('is not turned on for an app the person has not chosen on this machine', async () => {
+    await start('socket', { wanted: ['codex'], found: OFF })
+    stand.watching.get('machines:me')!({ wanted: ['codex'], turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+    await until(() => turning().some((t) => t.state === 'failed'))
+    expect(stand.turnedOn).toEqual([])
+    expect(turning().at(-1)).toMatchObject({ harness: 'claude-code', state: 'failed', why: expect.stringContaining('not connected on this machine') })
   })
 })
