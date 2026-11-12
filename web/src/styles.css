@@ -3294,6 +3294,13 @@ form.row-main {
   font-size: 12px;
   color: var(--fg-muted);
 }
+/* Turn back on, under an app that has It's add-on turned off, and why it could not be where it was not */
+.turn-on[data-tone="bad"] {
+  color: var(--danger);
+}
+.turn-on button.link {
+  font-size: 12px;
+}
 .switch-row {
   flex-direction: row;
   align-items: center;

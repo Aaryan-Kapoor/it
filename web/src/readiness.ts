@@ -3,7 +3,7 @@ import { newer } from '@it/protocol'
 /** The owning app's reported state, without exposing the rest of its machine's inventory. */
 export interface PageConnection {
   harness: string
-  state: 'disconnected' | 'connecting' | 'needs_approval' | 'error' | 'unavailable' | 'too_old' | 'connected' | 'unknown'
+  state: 'disconnected' | 'connecting' | 'needs_approval' | 'disabled' | 'error' | 'unavailable' | 'too_old' | 'connected' | 'unknown'
   queue: boolean
 }
 
@@ -18,7 +18,7 @@ export function reportedConnection(
   const state: PageConnection['state'] =
     found?.addon === 'not_connected'
       ? 'connecting'
-      : found && ['connected', 'needs_approval', 'error', 'unavailable', 'too_old'].includes(found.addon)
+      : found && ['connected', 'needs_approval', 'disabled', 'error', 'unavailable', 'too_old'].includes(found.addon)
         ? (found.addon as PageConnection['state'])
         : 'unknown'
   // This is the first supported Codex version whose open conversations can be checked.
