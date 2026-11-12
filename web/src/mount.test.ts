@@ -2199,6 +2199,31 @@ describe('what records or takes a photo for a page, when the page changes hands 
     expect(resultOf(later, 'r3')).toMatchObject({ ok: true })
   })
 
+  test('a camera for a photo the browser gives a document that has gone, after the next document’s photo camera opened, leaves that one as it is', async () => {
+    const { ask } = await shownFor(FIRST, ['camera'])
+    const { shootingNow } = await import('./media')
+    letThrough = () => {}
+    await ask({ type: 'it:photo', requestId: 'p1' })
+    const first = letThrough as unknown as () => void
+    letThrough = null
+    const page = framed()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-2' })
+    page.ports().at(-1)!.postMessage({ type: 'it:photo', requestId: 'p2' })
+    await arrived(() => shootingNow() !== null)
+    const second = shootingNow()
+    await act(async () => {
+      first()
+      await tick(60)
+    })
+    // The first document's camera is closed, and the second's is the one shown
+    expect(tracks.map((t) => t.stopped)).toEqual([false, true])
+    expect(shootingNow()).toBe(second)
+    // And it closes when its own document goes
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-3' })
+    await arrived(() => shootingNow() === null)
+    expect(tracks.map((t) => t.stopped)).toEqual([true, true])
+  })
+
   test('a page that changes hands while the browser is asked what it will ask is given nothing of what the browser then gives', async () => {
     let held: { go: () => void } | null = null
     browserWillAskAbout(['microphone'], (s) => (held = s as never))

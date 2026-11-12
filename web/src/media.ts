@@ -616,14 +616,25 @@ export async function shoot(
 ): Promise<{ photo: Promise<Blob | null>; cancel: () => void }> {
   if (shooting || live.length || cameras.length) throw new Error('The camera is in use on this screen just now.')
   const stream = await navigator.mediaDevices.getUserMedia({ video: facing ? { facingMode: facing } : true, audio: false })
+  // Asked again once the browser has given it: what the camera was begun for meanwhile, as a photo
+  // the page's next document asked for, keeps the camera, and this one is closed
+  if (shooting || live.length || cameras.length) {
+    for (const t of stream.getTracks()) t.stop()
+    throw new Error('The camera is in use on this screen just now.')
+  }
   let given: (photo: Blob | null) => void = () => {}
   const photo = new Promise<Blob | null>((resolve) => {
     given = resolve
   })
+  let over = false
+  /** Closes this photo's camera, whatever is shown now: only the view, where it is still this one's, is left to its own. */
   const close = (made: Blob | null) => {
-    if (shooting !== mine) return
-    shooting = null
-    changed()
+    if (over) return
+    over = true
+    if (shooting === mine) {
+      shooting = null
+      changed()
+    }
     for (const t of stream.getTracks()) t.stop()
     given(made)
   }
