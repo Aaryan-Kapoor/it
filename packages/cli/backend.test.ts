@@ -43,6 +43,8 @@ import {
   asAdmin,
   program as fetched,
   fetchProgram,
+  HEALTH_MS,
+  loaded,
   nothingLeft,
   programsHere,
   type Running,
@@ -231,13 +233,22 @@ function failingOnce(words: string): string {
  * What stands between a command and where it asks, as a network between two machines does:
  * every request that comes to one port is passed on to another and its answer passed back.
  * `lost` is shown each request with its answer, and an answer it says is lost never arrives:
- * the connection is ended with nothing sent on it.
+ * the connection is ended with nothing sent on it. `slow` says how long a request to a path
+ * waits before it is passed on, and one that waits forever is never answered.
  */
-async function between(from: number, to: number, lost: (path: string, body: string, answer: string) => boolean = () => false) {
+async function between(
+  from: number,
+  to: number,
+  lost: (path: string, body: string, answer: string) => boolean = () => false,
+  slow: (path: string) => number = () => 0,
+) {
   const server = http.createServer((req, res) => {
     const pieces: Buffer[] = []
     req.on('data', (piece: Buffer) => pieces.push(piece))
-    req.on('end', () => {
+    req.on('end', async () => {
+      const wait = slow(req.url ?? '')
+      if (wait === Number.POSITIVE_INFINITY) return
+      if (wait > 0) await pause(wait)
       const body = Buffer.concat(pieces)
       const passed = http.request(
         { host: '127.0.0.1', port: to, method: req.method, path: req.url, headers: { ...req.headers, host: `127.0.0.1:${to}`, connection: 'close' } },
@@ -4051,4 +4062,164 @@ describe('the backend program, as it is started', () => {
     },
     300_000,
   )
+})
+
+// Whether It's functions answer in the backend decides whether they are loaded into it again.
+// A backend just started on a slow or busy machine may be many seconds over its first answer,
+// and is waited for, while one that answers that it has no functions is taken at its word.
+describe('whether the functions answer in the backend', () => {
+  /** A stand-in for the backend's second port, which answers each request to it as `answer` says, and counts them. */
+  const site = async (answer: (asked: number, res: http.ServerResponse) => void) => {
+    let asked = 0
+    const server = http.createServer((_req, res) => answer(++asked, res))
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const at = `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`
+    return {
+      at,
+      asked: () => asked,
+      close: () =>
+        new Promise<void>((resolve) => {
+          server.close(() => resolve())
+          server.closeAllConnections()
+        }),
+    }
+  }
+  const health = (res: http.ServerResponse) => res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true,"it":true}')
+
+  test('a backend that is slow over its first answer, slower than a few seconds, is taken to have them', async () => {
+    const slow = await site((_, res) => void setTimeout(() => health(res), 7000))
+    try {
+      expect(await loaded(slow.at)).toBe(true)
+    } finally {
+      await slow.close()
+    }
+  }, 60_000)
+
+  test('a backend that answers with a fault of its own, or will not take the connection, is asked again', async () => {
+    const faulty = await site((asked, res) => (asked < 3 ? res.writeHead(503).end() : health(res)))
+    try {
+      expect(await loaded(faulty.at)).toBe(true)
+      expect(faulty.asked()).toBe(3)
+    } finally {
+      await faulty.close()
+    }
+    // Where nothing listens, nothing answers until the time is over
+    const began = Date.now()
+    expect(await loaded(faulty.at, undefined, 2000)).toBe(false)
+    expect(Date.now() - began).toBeGreaterThanOrEqual(1900)
+  }, 60_000)
+
+  test('a backend that answers that it has none is taken at its word, and asked once', async () => {
+    const none = await site((_, res) => res.writeHead(404).end('This Convex deployment does not have HTTP actions enabled.'))
+    try {
+      // Asked again, it would be asked until the time is over
+      expect(await loaded(none.at)).toBe(false)
+      expect(none.asked()).toBe(1)
+    } finally {
+      await none.close()
+    }
+  })
+
+  test('a backend that never answers is taken to have none once the time is over, and a service asked to stop meanwhile stops', async () => {
+    const silent = await site(() => {})
+    try {
+      const began = Date.now()
+      expect(await loaded(silent.at, undefined, 3000)).toBe(false)
+      expect(Date.now() - began).toBeGreaterThanOrEqual(2900)
+      const asked = new AbortController()
+      setTimeout(() => asked.abort(), 500)
+      expect(await refusal(loaded(silent.at, asked.signal))).toBe('stopped')
+    } finally {
+      await silent.close()
+    }
+  }, 30_000)
+
+  test('a service asked to stop while it waits to ask a faulty backend again stops then, and is not told the time is over', async () => {
+    // The tries come after waits of a quarter, a half and one second, and the wait after the
+    // fourth is one of two seconds. The stop comes a tenth of a second into it, counted from the
+    // fourth answer, and is heard at once and not when the wait is over.
+    const asked = new AbortController()
+    let abortedAt = 0
+    const faulty = await site((n, res) => {
+      res.writeHead(503).end()
+      if (n === 4)
+        setTimeout(() => {
+          abortedAt = Date.now()
+          asked.abort()
+        }, 100)
+    })
+    try {
+      expect(await refusal(loaded(faulty.at, asked.signal))).toBe('stopped')
+      expect([faulty.asked(), Date.now() - abortedAt < 1000]).toEqual([4, true])
+    } finally {
+      await faulty.close()
+    }
+    // Asked to stop in the last wait, the one that ends where the time does, it stops all the
+    // same. Given three seconds, the wait after the fourth try is the last, of a second and a
+    // quarter. A runner that stalls so long that the time is over before the stop comes is
+    // rightly told that the time is over, and shows nothing either way.
+    const last = new AbortController()
+    let leftAtStop = Number.NEGATIVE_INFINITY
+    let until = 0
+    const fourth = await site((n, res) => {
+      res.writeHead(503).end()
+      if (n === 4)
+        setTimeout(() => {
+          leftAtStop = until - Date.now()
+          last.abort()
+        }, 100)
+    })
+    try {
+      until = Date.now() + 3000
+      const outcome = await refusal(loaded(fourth.at, last.signal, 3000))
+      if (leftAtStop > 100) expect(outcome).toBe('stopped')
+      else expect([undefined, 'stopped']).toContain(outcome)
+    } finally {
+      await fourth.close()
+    }
+  }, 30_000)
+
+  // The real program, whose second port is reached through something in between that holds back
+  // the answers of `/health` as the test says. The program listens there at another port.
+  describe.skipIf(!program || windows)('as the backend is started again', () => {
+    const behind = async (slow: number) => {
+      const config = makeConfig()
+      await (await start(config)).stop()
+      const other = await ports.next()
+      process.env.IT_BACKEND_BIN = standIn(
+        `for a do shift; if [ "$prev" = --site-proxy-port ]; then set -- "$@" ${other}; else set -- "$@" "$a"; fi; prev=$a; done`,
+      )
+      const site = new URL(backendAt(config.port).site).port
+      const held = await between(Number(site), other, undefined, (asked) => (asked.startsWith('/health') ? slow : 0))
+      said = []
+      return { config, held }
+    }
+
+    test('loads nothing where the first answer is slower than a few seconds', async () => {
+      const { held } = await behind(7000)
+      try {
+        const began = Date.now()
+        const again = await start(readConfig()!)
+        expect(said).toEqual([expect.stringMatching(/^backend: started/)])
+        expect(Date.now() - began).toBeGreaterThanOrEqual(7000)
+        await again.stop()
+      } finally {
+        await held.close()
+      }
+    }, 180_000)
+
+    test('loads them again, as it always did, where no answer comes', async () => {
+      const { config, held } = await behind(Number.POSITIVE_INFINITY)
+      try {
+        const began = Date.now()
+        const again = await start(readConfig()!)
+        expect(said).toEqual([expect.stringMatching(/^backend: started/), `backend: functions loaded (${FUNCTIONS_HASH.slice(0, 12)})`])
+        expect(Date.now() - began).toBeGreaterThanOrEqual(HEALTH_MS)
+        expect(note()).toMatchObject({ functions: FUNCTIONS_HASH, port: config.port })
+        await again.stop()
+      } finally {
+        await held.close()
+      }
+    }, 180_000)
+  })
 })

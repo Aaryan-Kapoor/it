@@ -32,6 +32,7 @@ export const ROOT_FILES = [
   'aliases.json',
   't3-threads.json',
   't3-asked.json',
+  'opencode-unclaimed.json',
   'runs.json',
   'runs.json.unreadable',
   'cut-off.json',

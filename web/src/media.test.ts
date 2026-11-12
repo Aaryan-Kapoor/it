@@ -683,6 +683,28 @@ describe('the camera, live to a page', () => {
     return { device, sound: sound!, given, pieces, told, live, refuse: (why: 'taken_over' | 'taken_back' = 'taken_over') => (refuse = why) }
   }
 
+  test('a camera the page may no longer have by the time the browser gives it, or while it starts to play, is closed then, and says why', async () => {
+    allow('person-1', grant('page-1', ['camera']))
+    const device = standInCamera()
+    const asOpened = { ...camera, id: 'cam-1', grant: grantFor('person-1', 'page-1', OWNER, ['camera'])!, picture: () => {}, sound: () => {}, told: vi.fn() }
+    // Already not the page's as the browser gives it
+    await expect(openCamera(true, false, { ...asOpened, still: () => 'replaced' })).rejects.toMatchObject({ why: 'replaced' })
+    expect(device.tracks.map((t) => t.stopped)).toEqual([true])
+    // And while it starts to play, which here never ends
+    vi.mocked(HTMLMediaElement.prototype.play).mockReturnValue(new Promise(() => {}))
+    let not: 'replaced' | null = null
+    const opening = openCamera(true, false, { ...asOpened, still: () => not })
+    const settled = vi.fn()
+    opening.then(settled, settled)
+    await settle()
+    expect(settled).not.toHaveBeenCalled()
+    expect(device.tracks.map((t) => t.stopped)).toEqual([true, false])
+    not = 'replaced'
+    await expect(opening).rejects.toMatchObject({ why: 'replaced' })
+    expect(device.tracks.map((t) => t.stopped)).toEqual([true, true])
+    expect(cameraFor('page-1')).toBeUndefined()
+  })
+
   test('sends a page no more than two pictures it has not drawn, passes over the camera’s pictures in between, and sends again once it says it drew one', async () => {
     const { device, given, live } = await opened()
     expect(LIVE_CAMERA.atOnce).toBe(2)

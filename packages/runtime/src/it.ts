@@ -1547,6 +1547,7 @@ const CAMERA_ENDED: Record<string, string> = {
   person: 'The person stopped the camera in It’s bar.',
   taken_back: 'The person took back what they had allowed this page.',
   not_shown: 'The page was closed while the camera was live.',
+  replaced: 'The page loaded another document while the camera was live.',
   device: 'The camera stopped giving pictures.',
   taken_over: 'Another conversation took this page over.',
 }
@@ -1698,6 +1699,7 @@ const MICROPHONE_ENDED: Record<string, string> = {
   person: 'The person stopped the microphone in It’s bar.',
   taken_back: 'The person took back what they had allowed this page.',
   not_shown: 'The page was closed while the microphone was live.',
+  replaced: 'The page loaded another document while the microphone was live.',
   device: 'The microphone stopped giving sound.',
   taken_over: 'Another conversation took this page over.',
 }

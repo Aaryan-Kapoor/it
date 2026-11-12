@@ -84,6 +84,7 @@ describe('a command that the system keeps from the network', () => {
         execFile(process.execPath, [bundle, ...args], { env }, (error, out, err) => resolve({ code: (error as { code?: number } | null)?.code ?? 0, out, err }))
       })
     const kept = await run(['status', '--json'], true)
+    expect(kept.out.trim(), kept.err).not.toBe('')
     const stands = JSON.parse(kept.out) as { blocked?: boolean; running: boolean | null; hint: string; connector: { running: boolean | null } }
     // Whether It is running cannot be seen from there: said first, and as not known, so that no agent reads it as stopped
     expect(Object.keys(stands).slice(0, 2)).toEqual(['blocked', 'hint'])

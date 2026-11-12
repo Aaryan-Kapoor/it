@@ -285,10 +285,11 @@ export function askPerson(about: Omit<Asking, 'answer'>): { answer: Promise<bool
 
 /**
  * Why a camera or a microphone live to a page ended without the page asking, in the words the
- * page is told (protocol's `it:camera-state`). `taken_over`: another conversation took the page
- * over, and the person allowed the one that had it.
+ * page is told (protocol's `it:camera-state` and `it:microphone-state`). `taken_over`: another
+ * conversation took the page over, and the person allowed the one that had it. `replaced`: the
+ * document that opened it is no longer the one in the page's frame.
  */
-export type Why = 'person' | 'taken_back' | 'not_shown' | 'device' | 'taken_over'
+export type Why = 'person' | 'taken_back' | 'not_shown' | 'replaced' | 'device' | 'taken_over'
 
 /**
  * Why this browser cannot open the microphone or the camera for any page, in words for the page
@@ -415,14 +416,25 @@ export async function shoot(
 ): Promise<{ photo: Promise<Blob | null>; cancel: () => void }> {
   if (shooting || cameras.length) throw new Error('The camera is in use on this screen just now.')
   const stream = await getDevice({ video: facing ? { facingMode: facing } : true, audio: false })
+  // Asked again once the browser has given it: what the camera was begun for meanwhile, as a photo
+  // the page's next document asked for, keeps the camera, and this one is closed
+  if (shooting || cameras.length) {
+    for (const t of stream.getTracks()) t.stop()
+    throw new Error('The camera is in use on this screen just now.')
+  }
   let given: (photo: Blob | null) => void = () => {}
   const photo = new Promise<Blob | null>((resolve) => {
     given = resolve
   })
+  let over = false
+  /** Closes this photo's camera, whatever is shown now: only the view, where it is still this one's, is left to its own. */
   const close = (made: Blob | null) => {
-    if (shooting !== mine) return
-    shooting = null
-    changed()
+    if (over) return
+    over = true
+    if (shooting === mine) {
+      shooting = null
+      changed()
+    }
     for (const t of stream.getTracks()) t.stop()
     given(made)
   }
@@ -518,6 +530,11 @@ export interface CameraFor {
   sound: (chunk: number, sampleRate: number, samples: Float32Array) => void
   /** The camera paused, went on, or ended without the page asking. */
   told: (state: 'live' | 'paused' | 'ended', why?: Why) => void
+  /**
+   * Given a way to stop the camera while it is made ready, before anything else holds it, and
+   * given nothing once it is ready or has failed. Stopped so, its tracks stop at once.
+   */
+  starting?: (stop: (() => void) | null) => void
 }
 /** The live camera, as the frame that opened it holds it. */
 export interface Opened {
@@ -543,7 +560,7 @@ export interface Opened {
 export async function openCamera(video: true | MediaTrackConstraints, audio: false | true | MediaTrackConstraints, page: CameraFor): Promise<Opened> {
   const stream = await getDevice({ video, audio })
   // Closed again at once, while it is made ready, where the page may not have it any more
-  const readying = whileReadying(stream, page.still)
+  const readying = whileReadying(stream, page)
   // The camera's picture, in a video element that is never shown: what each picture is taken from
   const view = document.createElement('video')
   view.muted = true
@@ -555,15 +572,17 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
   let sound: Relay | null = null
   try {
     if (readying.why()) throw endedWhileOpening(readying.why()!)
-    await within(view.play(), DEVICE_WAIT.playMs, NO_PICTURE, () => {})
-    if (readying.why()) throw endedWhileOpening(readying.why()!)
+    await readying.during(within(view.play(), DEVICE_WAIT.playMs, NO_PICTURE, () => {}))
     if (audio)
-      sound = await relaySound(stream, {
-        still: () => (over ? 'not_shown' : page.still()),
-        waiting: () => state === 'paused',
-        sound: page.sound,
-        end: (why) => end(why),
-      })
+      sound = await readying.during(
+        relaySound(stream, {
+          still: () => (over ? 'not_shown' : page.still()),
+          waiting: () => state === 'paused',
+          sound: page.sound,
+          end: (why) => end(why),
+        }),
+        (late) => late.close(),
+      )
   } catch (err) {
     readying.done()
     for (const t of stream.getTracks()) t.stop()
@@ -571,12 +590,6 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
     throw readying.why() ? endedWhileOpening(readying.why()!) : err
   }
   readying.done()
-  const ended = readying.why()
-  if (ended) {
-    sound?.close()
-    view.srcObject = null
-    throw endedWhileOpening(ended)
-  }
   // Gone while it was being opened, when nothing was listening for that yet: it is not opened
   if (wentAway(stream)) {
     sound?.close()
@@ -745,36 +758,69 @@ const READYING_CHECK_MS = 100
 /**
  * What a page is told where the device was closed again while it was being made ready, by why: the
  * words mount.tsx tells it where the same is found once the device is ready, so that a page is
- * told the same whenever it is found.
+ * told the same whenever it is found. The error carries the reason as `why` as well.
  */
 const ENDED_WHILE_OPENING: Partial<Record<Why, string>> = {
   not_shown: 'The page was closed.',
+  replaced: 'The page loaded another document, which asks for itself.',
   taken_over:
     'Another conversation took this page over, so It stopped what it was doing for it. The person is asked again for the conversation that has it now.',
   taken_back: 'The person took back what they had allowed this page.',
 }
-const endedWhileOpening = (why: Why): Error => new Error(ENDED_WHILE_OPENING[why] ?? 'The page was closed.')
+const endedWhileOpening = (why: Why): Error => Object.assign(new Error(ENDED_WHILE_OPENING[why] ?? 'The page was closed.'), { why })
 /**
  * Watches a device the browser has just given while it is made ready, before anything is listed
  * for It's bar: whether the page may still have it, as soon as it is given and every
- * `READYING_CHECK_MS` after. Where the page may not, the device is stopped there and then, and not
- * once it is ready. `why` says why it was stopped, if it was, and `done` ends the watching.
+ * `READYING_CHECK_MS` after, and gives `starting` a way to stop it at once, as mount does when the
+ * page's frame loads another document. Where the page may not have it, the device is stopped there
+ * and then, and not once it is ready. `during` waits for one step of the making ready and no
+ * longer than the device is the page's, handing what the step gives later to `late`; `why` says
+ * why it was stopped, if it was, and `done` ends the watching.
  */
-function whileReadying(stream: MediaStream, still: () => Why | null): { why: () => Why | null; done: () => void } {
-  let why = still()
-  const stop = () => {
+function whileReadying(
+  stream: MediaStream,
+  page: { still: () => Why | null; starting?: (stop: (() => void) | null) => void },
+): { why: () => Why | null; during: <T>(doing: Promise<T>, late?: (value: T) => void) => Promise<T>; done: () => void } {
+  let why: Why | null = null
+  let lost: (err: Error) => void = () => {}
+  const gone = new Promise<never>((_, reject) => {
+    lost = reject
+  })
+  gone.catch(() => {})
+  let timer: ReturnType<typeof setInterval> | undefined
+  const stop = (because: Why) => {
+    if (why) return
+    why = because
+    clearInterval(timer)
     for (const t of stream.getTracks()) t.stop()
+    lost(endedWhileOpening(because))
   }
-  if (why) stop()
-  const timer = why
-    ? undefined
-    : setInterval(() => {
-        why = still()
-        if (!why) return
-        clearInterval(timer)
-        stop()
-      }, READYING_CHECK_MS)
-  return { why: () => why, done: () => clearInterval(timer) }
+  const check = () => {
+    const not = page.still()
+    if (not) stop(not)
+  }
+  check()
+  if (!why) {
+    timer = setInterval(check, READYING_CHECK_MS)
+    page.starting?.(() => stop('replaced'))
+  }
+  return {
+    why: () => why,
+    during: (doing, late = () => {}) => {
+      // What the step gives once the device was stopped is the step's to close: no one waits for it then
+      doing.then(
+        (value) => {
+          if (why) late(value)
+        },
+        () => {},
+      )
+      return Promise.race([doing, gone])
+    },
+    done: () => {
+      clearInterval(timer)
+      page.starting?.(null)
+    },
+  }
 }
 /** Sound on its way to a page, as whatever opened the microphone holds it. */
 interface Relay {
@@ -901,6 +947,11 @@ export interface MicrophoneFor {
   sound: (chunk: number, sampleRate: number, samples: Float32Array) => void
   /** The microphone paused, went on, or ended without the page asking. */
   told: (state: 'live' | 'paused' | 'ended', why?: Why) => void
+  /**
+   * Given a way to stop the microphone while its sound is made ready, before anything else holds
+   * it, and given nothing once it is ready or has failed. Stopped so, its track stops at once.
+   */
+  starting?: (stop: (() => void) | null) => void
 }
 /** The live microphone, as the frame that opened it holds it. */
 export interface Hearing {
@@ -923,7 +974,7 @@ export interface Hearing {
 export async function openMicrophone(audio: true | MediaTrackConstraints, page: MicrophoneFor): Promise<Hearing> {
   const stream = await getDevice({ audio, video: false })
   // Closed again at once, while its sound is made ready, where the page may not have it any more
-  const readying = whileReadying(stream, page.still)
+  const readying = whileReadying(stream, page)
   let state: 'live' | 'paused' = 'live'
   let over = false
   let usedAt = Date.now()
@@ -933,23 +984,21 @@ export async function openMicrophone(audio: true | MediaTrackConstraints, page: 
   }
   try {
     if (readying.why()) throw endedWhileOpening(readying.why()!)
-    sound = await relaySound(stream, {
-      still: () => (over ? 'not_shown' : page.still()),
-      waiting: () => state === 'paused',
-      sound: page.sound,
-      end: (why) => end(why),
-    })
+    sound = await readying.during(
+      relaySound(stream, {
+        still: () => (over ? 'not_shown' : page.still()),
+        waiting: () => state === 'paused',
+        sound: page.sound,
+        end: (why) => end(why),
+      }),
+      (late) => late.close(),
+    )
   } catch (err) {
     readying.done()
     for (const t of stream.getTracks()) t.stop()
     throw readying.why() ? endedWhileOpening(readying.why()!) : err
   }
   readying.done()
-  const ended = readying.why()
-  if (ended) {
-    sound.close()
-    throw endedWhileOpening(ended)
-  }
   // Gone while its sound was being made ready, when nothing was listening for that yet: it is not opened
   if (wentAway(stream)) {
     sound.close()

@@ -3325,6 +3325,136 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
       (await mediaQuestion.count()) === 0,
     JSON.stringify({ liveTakenOver, callEnded, row: await liveRow.count() }),
   )
+  // The camera live to a page is held to the document that opened it. In a tab of its own, the run
+  // notes the name the page's document said hello with, and the page's file elsewhere.txt, which
+  // It's script is not in, answers It's asking which document it is with that name, where the run
+  // says it does. The run counts each time It asks it.
+  const camTab = await page.context().newPage()
+  let saidHello = ''
+  let answersAsThePage = true
+  let askedWho = 0
+  await camTab.exposeBinding('itSaidHello', (_source, doc) => {
+    saidHello = String(doc)
+  })
+  await camTab.exposeBinding('itAskedWho', () => {
+    askedWho++
+    return answersAsThePage ? saidHello : ''
+  })
+  await camTab.addInitScript(() => {
+    if (window === window.top) {
+      window.addEventListener(
+        'message',
+        (e) => {
+          if (e.data?.type === 'it:hello' && typeof e.data.doc === 'string') window.itSaidHello(e.data.doc)
+        },
+        true,
+      )
+      return
+    }
+    if (!location.pathname.endsWith('/elsewhere.txt')) return
+    window.addEventListener('message', async (e) => {
+      if (e.data?.type !== 'it:who') return
+      const doc = await window.itAskedWho()
+      if (doc) window.parent.postMessage({ type: 'it:here', nonce: e.data.nonce, doc }, '*')
+    })
+  })
+  const anotherFrame = () => camTab.frameLocator('.mount iframe')
+  const anotherChip = camTab.locator('.page-nav .media-cam')
+  const anotherSaid = () => anotherFrame().locator('#out')
+  /** How many pictures the page in that tab has been given. */
+  const anotherPictures = async () =>
+    Number(
+      (await anotherFrame()
+        .locator('#frames')
+        .textContent()
+        .catch(() => '')) || 0,
+    )
+  /** The camera page in that tab with its camera live, allowed in the bar where the person is asked, and given its pictures. */
+  const liveThere = async ({ asked }) => {
+    await anotherFrame().locator('#live').click()
+    if (asked) {
+      const question = camTab.locator('.media-ask')
+      if (
+        await question.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        )
+      )
+        await question.getByRole('button', { name: 'Allow', exact: true }).click()
+    }
+    await anotherSaid()
+      .filter({ hasText: /^(live|refused)/ })
+      .waitFor({ timeout: 15_000 })
+      .catch(() => {})
+    return {
+      said: await anotherSaid().textContent(),
+      pictures: await until(async () => ((n) => (n > 5 ? n : undefined))(await anotherPictures()), 20_000, 250),
+      chip: await anotherChip.count(),
+    }
+  }
+  /** Whether the camera's chip leaves It's bar within that long. It is asked often, so that its going is seen as soon as it happens. */
+  const chipGoneWithin = (ms) => until(async () => (await anotherChip.count()) === 0, ms, 50)
+  await camTab.goto(`${APP}/p/${camSlug}`)
+  await pageIn(camTab, { id: camSlug })
+  const replacedOpen = await liveThere({ asked: true })
+  const whoAskedBefore = askedWho
+  await anotherFrame().locator('#elsewhere').click()
+  const replacedEnded = Boolean(await chipGoneWithin(1500))
+  // Still ended once It's asking a document that answers nothing would have given up, five seconds after the load
+  await camTab.waitForTimeout(6000)
+  const replaced = {
+    ...replacedOpen,
+    endedAtOnce: replacedEnded,
+    chipAfterwards: await anotherChip.count(),
+    askedWho: askedWho - whoAskedBefore,
+    heardHello: saidHello !== '',
+  }
+  check(
+    'the camera live to a page ends as soon as its frame loads another document, even one that would answer It with the name the page’s document said, and It does not ask that document which one it is',
+    replaced.said === 'live' &&
+      !!replaced.pictures &&
+      replaced.chip === 1 &&
+      replaced.endedAtOnce &&
+      replaced.chipAfterwards === 0 &&
+      replaced.askedWho === 0 &&
+      replaced.heardHello,
+    JSON.stringify(replaced),
+  )
+  // A document that answers nothing ends it at once too, and not when It's asking gives up
+  answersAsThePage = false
+  await camTab.goto(`${APP}/p/${camSlug}`)
+  await pageIn(camTab, { id: camSlug })
+  const quietOpen = await liveThere({ asked: false })
+  await anotherFrame().locator('#elsewhere').click()
+  const quiet = { ...quietOpen, endedAtOnce: Boolean(await chipGoneWithin(1500)), asked: await camTab.locator('.media-ask').count() }
+  check(
+    'the camera live to a page ends at once when its frame loads a document that answers nothing, without waiting for It’s asking to give up',
+    quiet.said === 'live' && !!quiet.pictures && quiet.chip === 1 && quiet.endedAtOnce,
+    JSON.stringify(quiet),
+  )
+  // A page that loads its frame again is a new document: its camera ends, and it is shown the camera again when it asks, with nothing asked of the person
+  await camTab.goto(`${APP}/p/${camSlug}`)
+  await pageIn(camTab, { id: camSlug })
+  const beforeReload = await liveThere({ asked: false })
+  await anotherFrame().locator('#again').click()
+  const reloadEnded = Boolean(await chipGoneWithin(10_000))
+  await anotherFrame().locator('#live').waitFor({ timeout: 15_000 })
+  const picturesAfterTheLoad = await anotherPictures()
+  const afterReload = await liveThere({ asked: false })
+  const reloaded = { beforeReload, reloadEnded, picturesAfterTheLoad, afterReload, asked: await camTab.locator('.media-ask').count() }
+  check(
+    'a page that loads its frame again has its live camera end, and is shown the camera live again when the new document asks, with nothing asked of the person',
+    beforeReload.said === 'live' &&
+      !!beforeReload.pictures &&
+      reloadEnded &&
+      picturesAfterTheLoad === 0 &&
+      afterReload.said === 'live' &&
+      !!afterReload.pictures &&
+      afterReload.chip === 1 &&
+      reloaded.asked === 0,
+    JSON.stringify(reloaded),
+  )
+  await camTab.close()
   await page.goto(`${APP}/p/${slug}`)
   await pageIn(page, { id: slug })
   for (const gone of [recSlug, camSlug]) await it(A, ['delete', gone])
@@ -4961,6 +5091,22 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
       `off: ${offFromTheSite}`,
     )
   }
+  // A machine with no Tailscale Funnel on It's ports, as every machine without Tailscale is, is
+  // warned of none: not on the site, once the service has heard from Tailscale or found it
+  // absent, and not by `it network` or `it status`
+  await page.goto(`${APP}/displays`)
+  const shownWays = (await until(async () => (await page.locator('.net-way input').count()) === 3, 20_000, 300)) === true
+  await new Promise((resolve) => setTimeout(resolve, 3000))
+  const funnelSaid = {
+    banner: await page.locator('.net-exposure').count(),
+    network: (await it(A, ['network'])).funnel,
+    status: (await it(A, ['status'])).network?.funnel,
+  }
+  check(
+    'with no Tailscale Funnel on It’s ports, the site, `it network` and `it status` warn of none',
+    shownWays && funnelSaid.banner === 0 && funnelSaid.network === undefined && funnelSaid.status === undefined,
+    JSON.stringify({ shownWays, ...funnelSaid }),
+  )
   // The owner's browser and the screen on this machine were open while the door was closed and opened: both carry on
   await page.goto(`${APP}/`)
   check(

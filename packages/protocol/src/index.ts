@@ -1200,10 +1200,16 @@ export type SiteToPage =
   /**
    * The live camera paused, went on, or ended without the page asking: paused while the screen
    * does not show It, and ended when the person stopped it in It's bar or took back what they had
-   * allowed, when another conversation took the page over, when the page is no longer shown, and
-   * when the camera went away.
+   * allowed, when another conversation took the page over, when the page is no longer shown, when
+   * the document that opened it is no longer the one in the frame (`replaced`), and when the
+   * camera went away.
    */
-  | { type: 'it:camera-state'; camera: string; state: 'live' | 'paused' | 'ended'; why?: 'person' | 'taken_back' | 'not_shown' | 'device' | 'taken_over' }
+  | {
+      type: 'it:camera-state'
+      camera: string
+      state: 'live' | 'paused' | 'ended'
+      why?: 'person' | 'taken_back' | 'not_shown' | 'replaced' | 'device' | 'taken_over'
+    }
   /**
    * One piece of the live microphone's sound, numbered in the order it was heard: its samples, of
    * one channel, each from -1 to 1, as a `Float32Array`, and how many there are in a second. Of a
@@ -1217,7 +1223,7 @@ export type SiteToPage =
       type: 'it:microphone-state'
       microphone: string
       state: 'live' | 'paused' | 'ended'
-      why?: 'person' | 'taken_back' | 'not_shown' | 'device' | 'taken_over'
+      why?: 'person' | 'taken_back' | 'not_shown' | 'replaced' | 'device' | 'taken_over'
     }
   /**
    * Whether It is fullscreen, and whether this browser can make it so: sent once the channel is

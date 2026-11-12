@@ -2406,6 +2406,15 @@ describe('the camera, live in a page', () => {
     expect(port.sent.filter((m) => m.type === 'it:camera-stop')).toEqual([])
   })
 
+  test('is told in words when the document that opened it is no longer the one in the frame', async () => {
+    const { p, asked, cam, tracks } = await opened()
+    const told: unknown[][] = []
+    cam.onchange = (state: string, why?: string) => told.push([state, why])
+    p.fromSite({ type: 'it:camera-state', camera: asked.camera, state: 'ended', why: 'replaced' })
+    expect(told).toEqual([['ended', 'The page loaded another document while the camera was live.']])
+    expect(tracks[0]!.stopped).toBe(true)
+  })
+
   test('stop closes the camera at the site and ends the stream, and resolves where the site had closed it already', async () => {
     const { p, port, asked, cam, tracks } = await opened()
     const stopping = cam.stop()

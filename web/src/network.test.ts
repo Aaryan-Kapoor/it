@@ -788,6 +788,36 @@ describe('the network as a switch', () => {
     expect(asked).toEqual([{ to: 'on' }])
   })
 
+  test('No Funnel warning is shown when Tailscale is absent', async () => {
+    watched['network:get'] = stands({ on: false, funnel: 'off' })
+    await panel()
+    expect(host.querySelector('.net-exposure')).toBeNull()
+    expect(host.textContent).not.toContain('could not check Tailscale')
+    expect(ways()[0]!.checked).toBe(true)
+  })
+
+  test('A persistent Funnel warning leaves the applied network switch state available', async () => {
+    watched['network:get'] = stands({ on: true, funnel: 'unknown', addresses: [LAN] })
+    await panel()
+    expect(ways()[1]!.checked).toBe(true)
+    expect(host.querySelector('.net-way[data-on] input')).toBe(ways()[1])
+    expect(host.querySelector('.net-said')).toBeNull()
+    expect(host.querySelector('.net-exposure')?.getAttribute('role')).toBe('status')
+  })
+
+  test('Funnel warnings remain visible with networking off', async () => {
+    watched['network:get'] = stands({ on: false, funnel: 'public' })
+    await panel()
+    expect(host.textContent).toContain('Tailscale Funnel makes It public, even with the network off.')
+    expect(host.textContent).toContain('These settings do not turn it off.')
+  })
+
+  test('An unsuccessful Funnel inspection warns before privacy is assumed', async () => {
+    watched['network:get'] = stands({ on: false, funnel: 'unknown' })
+    await panel()
+    expect(host.textContent).toContain('It could not check Tailscale Funnel.')
+  })
+
   test('where It answers the internet too, which only the command turns on, that is said above the three, none of them is shown chosen, and choosing one asks for it', async () => {
     watched['network:get'] = stands({ on: true, internet: true, addresses: [LAN], exposed: 'has a public address (203.0.113.7)' })
     await panel()

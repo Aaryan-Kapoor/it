@@ -74,6 +74,7 @@ interface Stands {
   /** Whether the machine It runs on is on a tailnet. Null while its service has not said, as one of an earlier It never does. */
   canTailnet?: boolean | null
   /** Whether It answers every address the machine has, the internet's included, which only `it network internet` on that machine turns on. */
+  funnel?: 'off' | 'public' | 'unknown'
   internet?: boolean
   /** Why the internet reaches that machine, in words that finish "This machine …", where it does. */
   exposed?: string | null
@@ -185,6 +186,7 @@ export function useNetwork() {
     offered: said !== undefined && said.canTailnet !== null && said.canTailnet !== undefined,
     canTailnet: said?.canTailnet === true,
     exposed: said?.exposed ?? null,
+    funnel: said?.funnel,
     /** Whether It answers the internet too, which the command on the machine It runs on turned on. */
     internet: said?.on === true && said.internet === true,
     // The backend says the address over https whether or not the network is on, and the network's only while it is
@@ -244,6 +246,17 @@ export function NetworkSwitch() {
   const shown = net.turning ?? net.way
   return (
     <div className="net">
+      {net.funnel === 'public' && (
+        <p className="net-exposure panel-said error" role="status">
+          Tailscale Funnel makes It public, even with the network off. Turn off the Funnel in Tailscale to keep It private. These settings do not turn it off.
+        </p>
+      )}
+      {net.funnel === 'unknown' && (
+        <p className="net-exposure panel-said error" role="status">
+          It could not check Tailscale Funnel. A Funnel can make It public, even with the network off. Check Tailscale on the machine It runs on before relying
+          on these settings to keep It private.
+        </p>
+      )}
       {net.internet && net.turning === null && (
         <p className="net-said error" role="status">
           It answers the internet too, over plain http, because <code>it network internet</code> was run on the machine It runs on

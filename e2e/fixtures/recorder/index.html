@@ -15,6 +15,8 @@
     <button id="call" onclick="live({ audio: true })">Camera with sound</button>
     <button id="close" onclick="closeCamera()">Close the camera</button>
     <button id="old" onclick="old()">Record as before</button>
+    <button id="elsewhere" onclick="elsewhere()">Another document</button>
+    <button id="again" onclick="location.reload()">Load again</button>
     <p id="out"></p>
     <video id="view" autoplay muted playsinline width="320"></video>
     <p>Pictures: <span id="frames">0</span></p>
@@ -131,6 +133,10 @@
       async function closeCamera() {
         await cam.stop()
         out.textContent = `camera stopped ${cam.state}`
+      }
+      // The page takes its frame to another of its files, a document It's script is not in
+      function elsewhere() {
+        location.href = 'elsewhere.txt'
       }
       // A page written for an It that recorded for a page is told what to do instead
       async function old() {

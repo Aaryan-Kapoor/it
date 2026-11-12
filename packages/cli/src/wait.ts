@@ -3,6 +3,7 @@ import { type Args, text } from './args'
 import { local } from './connector'
 import { api, call, end, handed, live, Problem, sessionAsked, sessionNote, translate, written } from './lib'
 import { failure } from './output'
+import { claimUnclaimed } from './unclaimed'
 import * as usage from './usage'
 
 const say = (line: string): void => written(process.stderr, `${line}\n`)
@@ -86,6 +87,9 @@ export async function wait(a: Args, counted: (code?: string) => void) {
   // waiting would include other conversations' clicks, which are theirs to hear.
   const asked = sessionAsked()
   const me = asked?.session
+  // A page this conversation made before OpenCode had loaded It's add-on named no conversation,
+  // and is this conversation's from the first time it waits on it by its id
+  await claimUnclaimed(slug, me)
   if (!slug && !me) throw new Problem('Say which page to wait on.', 'invalid', 'it wait --id <id>')
   // Whose pages are waited on was a choice among the apps that had marked this command. It is said apart from what is printed, which is the person's actions only.
   const unsure = slug ? undefined : sessionNote(asked, 'This waits for actions on the pages of', 'name the page with --id.')

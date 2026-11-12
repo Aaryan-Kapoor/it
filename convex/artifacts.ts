@@ -265,24 +265,39 @@ export const remove = mutation({
  * its person is the one they are talking to, also where another conversation made the page
  * the day before: what they then do on it must come to the one in front of them, and not to
  * one that is closed. Asked by the conversation that has it already, nothing changes.
+ *
+ * With `unowned`, the page is given only while no conversation has it, and that is told in the
+ * same transaction that gives it: a page that a conversation made before OpenCode had loaded
+ * It's add-on goes to the OpenCode conversation that next names it, and never away from one
+ * that showed it or took it in the moment between. Such a page stays a tour's where it is one:
+ * the tour that made it carries on in that conversation.
  */
 export const take = mutation({
-  args: { ...ref, session, agent: v.optional(v.string()) },
-  handler: async (ctx, { session: mine, agent, ...which }) => {
+  args: { ...ref, session, agent: v.optional(v.string()), unowned: v.optional(v.boolean()) },
+  handler: async (ctx, { session: mine, agent, unowned, ...which }) => {
     const { user, machine } = await requireMachine(ctx)
     const a = await resolve(ctx, user._id, which)
-    return takePage(ctx, a, machine, mine, agent)
+    if (unowned && a.session) return { took: false }
+    return takePage(ctx, a, machine, mine, agent, unowned === true)
   },
 })
 
 /** Changes the owner inside the transaction that validated the requested operation. */
-export async function takePage(ctx: MutationCtx, a: Doc<'artifacts'>, machine: Doc<'machines'>, mine: { harness: string; id: string }, agent?: string) {
+export async function takePage(
+  ctx: MutationCtx,
+  a: Doc<'artifacts'>,
+  machine: Doc<'machines'>,
+  mine: { harness: string; id: string },
+  agent?: string,
+  /** Whether a page that is a tour's stays one: where it had no conversation, and is given to its first. */
+  keepTour = false,
+) {
   // A conversation is named here in as many characters as publishing takes one in. A longer
   // name is kept whole on the page and cut short where the machine says the conversation is
   // running, so the page would never be seen to run and could not be stopped; and it is read
   // with every page of the person's, each time they are listed.
   if (mine.harness.length > 40 || mine.id.length > 200) fail('invalid', 'That is not a session.')
-  if (a.tour !== null) await ctx.db.patch(a._id, { tour: null })
+  if (a.tour !== null && !keepTour) await ctx.db.patch(a._id, { tour: null })
   if (a.machineId === machine._id && a.session?.harness === mine.harness && a.session?.id === mine.id) return { took: false }
   await rateLimit(ctx, 'take', a.userId)
   await handTo(ctx, a, machine, mine, agent?.slice(0, 60) ?? a.agent)
