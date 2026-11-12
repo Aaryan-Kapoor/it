@@ -54,6 +54,7 @@ import {
   refresh,
   shim,
   stampFile,
+  turnBackOn,
   unpack,
 } from './src/setup'
 
@@ -154,6 +155,14 @@ function standIn(bin: string, words: string[], env: NodeJS.ProcessEnv): string {
       has.on = true
       return ''
     }
+    // As Claude Code 2.1.322 answers: it refuses to turn on a plugin that is on already
+    if (said === `plugin enable ${ID} --scope user`) {
+      if (has.on === undefined) throw new Error(`Plugin "${ID}" is not installed`)
+      if (has.on) throw new Error(`Plugin "${ID}" is already enabled at user scope`)
+      has.on = true
+      return '✔ Successfully enabled plugin: it-bridge (scope: user)'
+    }
+    // And updating a plugin leaves it on or off as it was
     if (said === `plugin update ${ID} --scope user`) {
       if (!has.from || has.on === undefined) throw new Error('not installed')
       if (offered() === has.version) return 'already at the latest version'
@@ -171,19 +180,26 @@ function standIn(bin: string, words: string[], env: NodeJS.ProcessEnv): string {
         name: 'it-bridge',
         marketplaceName: 'it',
         enabled: Boolean(has.on),
-        installed: Boolean(has.on),
+        installed: has.on !== undefined,
         source: { source: 'local', path: path.join(has.from ?? '', 'plugins/it-bridge') },
       }
-      return JSON.stringify({ installed: has.from && has.on ? [entry] : [], available: has.from && !has.on ? [entry] : [] })
+      const there = has.from && has.on !== undefined
+      return JSON.stringify({ installed: there ? [entry] : [], available: has.from && !there ? [entry] : [] })
     }
     if (said === 'plugin list --marketplace it') {
       if (!has.from) return 'No plugins found in marketplace `it`.'
       const source = path.join(has.from, 'plugins/it-bridge')
-      const row = has.on ? `${ID}  installed, enabled  0.1.0    ${source}` : `${ID}  not installed           ${source}`
+      // As Codex 0.167 lists one turned off in its settings (`enabled = false` under `[plugins."it-bridge@it"]`)
+      const row =
+        has.on === true
+          ? `${ID}  installed, enabled  0.1.0    ${source}`
+          : has.on === false
+            ? `${ID}  installed, disabled  0.1.0    ${source}`
+            : `${ID}  not installed           ${source}`
       return `Marketplace \`it\`\n${path.join(has.from, '.agents/plugins/marketplace.json')}\n\nPLUGIN        STATUS              VERSION  SOURCE\n${row}`
     }
     if (said === `plugin remove ${ID}`) {
-      if (!has.on) throw new Error('not installed')
+      if (has.on === undefined) throw new Error('not installed')
       has.on = undefined
       return ''
     }
@@ -206,7 +222,15 @@ function standIn(bin: string, words: string[], env: NodeJS.ProcessEnv): string {
   if (bin === 'pi') {
     // Pi knows a package by the folder it was installed from, and loads it from there
     has.packages ??= new Set()
-    if (said === 'list') return [...has.packages].join('\n')
+    // As Pi lists them: each by the source its settings name, ` (filtered)` after one whose
+    // settings choose which of its resources load, and the folder it loads from under it
+    if (said === 'list') {
+      if (!has.packages.size) return 'No packages installed.'
+      const settings = JSON.parse(existsSync(path.join(folder, 'settings.json')) ? read(path.join(folder, 'settings.json')) : '{}') as { packages?: unknown[] }
+      const filtered = (dir: string) =>
+        (settings.packages ?? []).some((p) => typeof p === 'object' && p !== null && path.resolve(folder, (p as { source: string }).source) === dir)
+      return ['User packages:', ...[...has.packages].flatMap((dir) => [`  ${dir}${filtered(dir) ? ' (filtered)' : ''}`, `    ${dir}`])].join('\n')
+    }
     if (words.length === 2 && words[0] === 'install') {
       has.packages.add(words[1]!)
       return ''
@@ -3421,9 +3445,9 @@ describe('what a person is told about an app', () => {
     standIn('hermes', ['plugins', 'disable', 'it-bridge'], process.env)
     const status = await connect('hermes', () => {})
     expect(status).toMatchObject({
-      addon: 'not_connected',
+      addon: 'disabled',
       detail:
-        'It’s add-on is switched off inside Hermes Agent. Switch it on there, or untick Hermes Agent here and tick it again to have the add-on installed afresh.',
+        'It’s add-on is turned off in Hermes Agent, so nothing done on a page reaches Hermes Agent by itself. Turn it back on under Machines on the site, or by running `it setup` on this machine.',
     })
     expect(commands('hermes').filter((said) => said === 'plugins enable it-bridge').length).toBe(1)
   })
@@ -3769,5 +3793,148 @@ describe('Claude’s desktop app, which keeps a Claude Code of its own', () => {
     mkdirSync(path.join(file, '.config', 'Claude'), { recursive: true })
     writeFileSync(path.join(file, '.config', 'Claude', 'claude-code'), '')
     expect(claudeDesktopHere('linux', {}, file)).toBe(false)
+  })
+})
+
+describe('an add-on that its app has turned off', () => {
+  /** The apps that list It's add-on as turned off, and the command of theirs that turns it on again. */
+  const OFF = [
+    { id: 'claude-code' as const, bin: 'claude', enable: `plugin enable ${ID} --scope user`, label: 'Claude Code', person: `claude plugin enable ${ID}` },
+    { id: 'codex' as const, bin: 'codex', enable: `plugin add ${ID}`, label: 'Codex', person: `codex plugin add ${ID}` },
+    { id: 'openclaw' as const, bin: 'openclaw', enable: 'plugins enable it-bridge --accept-capabilities', label: 'OpenClaw', person: 'openclaw plugins enable it-bridge' },
+    { id: 'hermes' as const, bin: 'hermes', enable: 'plugins enable it-bridge', label: 'Hermes Agent', person: 'hermes plugins enable it-bridge' },
+  ]
+  /** The app turns It's add-on off, as the person does in it. */
+  const turnOff = (bin: string) => {
+    const folder = folderOf(bin)
+    kept[bin]!.get(bin === 'openclaw' ? realpathSync.native(folder) : folder)!.on = false
+  }
+  const changing = (bin: string) => commands(bin).filter((command) => /\b(?:uninstall|remove|add|install|enable|update|disable)\b/.test(command))
+
+  test.each(OFF)('in $label is reported as turned off, and the repair leaves it so, pass after pass, without a word', async ({ id, bin, label }) => {
+    await connect(id, () => {})
+    turnOff(bin)
+    expect(await statusOf(id)).toMatchObject({ addon: 'disabled', detail: expect.stringContaining(`It’s add-on is turned off in ${label}`) })
+    ran = []
+    const output = lines()
+    for (let pass = 0; pass < 3; pass++) await reconcile([id], output.say, true)
+    expect(changing(bin)).toEqual([])
+    expect(output.said).toEqual([])
+    expect(await statusOf(id)).toMatchObject({ addon: 'disabled' })
+  })
+
+  test('in Claude Code, after an update that left it turned off, is said once in the log by its code and not updated again', async () => {
+    await connect('claude-code', () => {})
+    turnOff('claude')
+    // As an install that stopped half way leaves the note, which has the next repair put the add-on in again
+    const note = JSON.parse(read(stampFile('claude-code')))
+    note.installs[0].version = 'installing'
+    writeFileSync(stampFile('claude-code'), JSON.stringify(note))
+    ran = []
+    const output = lines()
+    const first = await reconcile(['claude-code'], output.say, true)
+    expect(commands('claude')).toContain(`plugin update ${ID} --scope user`)
+    expect(first).toMatchObject([{ id: 'claude-code', did: 'installed' }])
+    expect(output.said.filter((line) => line.includes('addon_disabled'))).toEqual([
+      'Claude Code: addon_disabled: the add-on was brought up to date and the app keeps it turned off',
+    ])
+    // What the log says names no folder and no file
+    expect(output.said.join('\n')).not.toContain(tmp)
+    expect(await statusOf('claude-code')).toMatchObject({ addon: 'disabled' })
+    ran = []
+    output.said.length = 0
+    await reconcile(['claude-code'], output.say, true)
+    await reconcile(['claude-code'], output.say, true)
+    expect(changing('claude')).toEqual([])
+    expect(output.said).toEqual([])
+  })
+
+  test.each(OFF)('in $label is turned back on with the app’s own command when the person asks, and nothing else is run', async ({ id, bin, enable }) => {
+    await connect(id, () => {})
+    turnOff(bin)
+    ran = []
+    expect(await turnBackOn(id)).toEqual({ ok: true })
+    expect(changing(bin)).toEqual([enable])
+    expect((await statusOf(id))?.addon).toMatch(/^(connected|needs_approval)$/)
+    // Asked again once it is on, nothing is run
+    ran = []
+    expect(await turnBackOn(id)).toEqual({ ok: true })
+    expect(changing(bin)).toEqual([])
+  })
+
+  test.each(OFF)('in $label, where the app refuses to turn it on, says so in a plain sentence with the command to run', async ({ id, bin, enable, label, person }) => {
+    await connect(id, () => {})
+    turnOff(bin)
+    failing.push(`${bin} ${enable}`)
+    const answer = await turnBackOn(id)
+    expect(answer).toEqual({ ok: false, code: 'refused', why: `${label} refused to turn It’s add-on back on. Run \`${person}\` in a terminal on that machine to see why.` })
+    expect(await statusOf(id)).toMatchObject({ addon: 'disabled' })
+  })
+
+  test.each(OFF)('in $label, where the app answers and keeps it off, says that it is still off', async ({ id, bin, enable, label }) => {
+    await connect(id, () => {})
+    turnOff(bin)
+    replies.set(`${bin} ${enable}`, '')
+    const answer = await turnBackOn(id)
+    expect(answer).toMatchObject({ ok: false, code: 'still_off', why: expect.stringContaining(`${label} still has It’s add-on turned off after being asked to turn it on.`) })
+  })
+
+  test.each(OFF)('in $label is not turned on for an app that does not have it off, and says why', async ({ id, bin }) => {
+    ran = []
+    expect(await turnBackOn(id)).toMatchObject({ ok: false, code: 'not_disabled' })
+    expect(changing(bin)).toEqual([])
+  })
+
+  test.each(OFF)('in $label is turned on again by a setup that a person runs, and by no other', async ({ id, bin, enable }) => {
+    await connect(id, () => {})
+    turnOff(bin)
+    ran = []
+    // Setup run where nobody asked, as an upgrade runs it
+    await reconcile([id], () => {}, false, [])
+    expect(changing(bin)).toEqual([])
+    await reconcile([id], () => {}, false, [id])
+    expect(changing(bin)[0]).toBe(enable)
+    expect((await statusOf(id))?.addon).toMatch(/^(connected|needs_approval)$/)
+  })
+
+  describe('in Pi, whose settings filter a package’s extensions', () => {
+    const agent = () => path.join(person, '.pi', 'agent')
+    const settle = (packages: unknown[]) => put(path.join(agent(), 'settings.json'), JSON.stringify({ packages }))
+    const ours = () => [...kept.pi!.get(agent())!.packages!][0]!
+    beforeEach(async () => {
+      vi.stubEnv('PI_CODING_AGENT_DIR', agent())
+      await connect('pi', () => {})
+    })
+
+    test.each([
+      { said: 'no extensions', extensions: [] },
+      { said: 'its extension taken out by name', extensions: ['-extensions/it.js'] },
+      { said: 'its extension left out by a pattern', extensions: ['!**/it.js'] },
+      { said: 'only another extension', extensions: ['extensions/other.js'] },
+    ])('is reported as turned off where they load $said', async ({ extensions }) => {
+      settle([{ source: ours(), extensions }])
+      expect(await statusOf('pi')).toMatchObject({ addon: 'disabled', detail: expect.stringContaining('Run `pi config`') })
+    })
+
+    test('reads a source its settings give from Pi’s own folder', async () => {
+      settle([{ source: path.relative(agent(), ours()), extensions: [] }])
+      expect((await statusOf('pi'))?.addon).toBe('disabled')
+    })
+
+    test.each([
+      { said: 'its extension by a pattern', extensions: ['extensions/*.js'] },
+      { said: 'its extension again after leaving everything out', extensions: ['!extensions/**', '+extensions/it.js'] },
+      { said: 'every extension', extensions: undefined },
+    ])('is connected where they load $said', async ({ extensions }) => {
+      settle([{ source: ours(), ...(extensions ? { extensions } : {}), skills: [] }])
+      expect((await statusOf('pi'))?.addon).toBe('connected')
+    })
+
+    test('is not turned on from the site, since Pi has no command for it, and the person is told how', async () => {
+      settle([{ source: ours(), extensions: [] }])
+      ran = []
+      expect(await turnBackOn('pi')).toMatchObject({ ok: false, code: 'no_command', why: expect.stringContaining('Run `pi config` in a terminal') })
+      expect(commands('pi').filter((said) => said !== 'list' && said !== '--version')).toEqual([])
+    })
   })
 })

@@ -275,6 +275,7 @@ function appsSaid(found: LoadedStatus[], advise = true, withCodex = true): strin
     const app = KNOWN[h.id].label
     if (inApp(h)) return h.runtime ? `${app}: ${h.runtime.detail}` : `${app}'s add-on is installed. Its loaded code has not been verified.`
     if (h.addon === 'needs_approval') return `${app} is connected, and one thing is left for you to do: ${h.detail}`
+    if (h.addon === 'disabled') return h.detail ?? `${app} has It’s add-on turned off.`
     return `${app} is not connected${h.detail && h.addon !== 'not_connected' ? `: ${h.detail}` : '.'}`
   })
   // Said each time it is asked for as long as it is so: the first thing a Codex user would otherwise learn of it is a page that never appears
@@ -2084,7 +2085,8 @@ async function settingUpLed(a: Args, begunAlready = false) {
     // Asked only where an app is chosen: with none, reopening comes on for none
     const wokenBefore = wanted.length ? await wokenNow() : null
     let woken = await chosen(wanted).catch(() => null)
-    const outcomes = await reconcile(wanted, quiet)
+    // A person is leading this setup, so an app they chose that has It's add-on turned off is turned on again: that is them asking
+    const outcomes = await reconcile(wanted, quiet, false, wanted)
     woken ??= await chosen(wanted)
     const after = await detectAll()
     await call('mutation', api.machines.inventory, { harnesses: after })
@@ -2453,7 +2455,11 @@ async function settingUp(a: Args, joined: boolean) {
     // Asked only where an app is chosen: with none, reopening comes on for none
     const wokenBefore = wanted.length ? await wokenNow() : null
     let woken = await chosen(wanted).catch(() => null)
-    const outcomes = await reconcile(wanted, say)
+    // An app the person chose that has It's add-on turned off is turned on again only where a
+    // person runs this at a terminal: never from an agent's conversation, nor where nobody is
+    // there to have asked, as when an upgrade runs setup by itself
+    const byPerson = sessionAsked() === undefined && process.stdin.isTTY === true
+    const outcomes = await reconcile(wanted, say, false, byPerson ? wanted : [])
     woken ??= await chosen(wanted)
     const after = await detectAll()
     // The site is told what was found, and no more than that. Whether this machine can hear a

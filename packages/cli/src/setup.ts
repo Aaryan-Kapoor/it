@@ -37,7 +37,12 @@ import { harnessEnv, home, inHome, Problem, readJson, rename, VERSION, writePriv
 import { checkHardLinks, keepOriginal, putAbsent, removeOriginal, removeOwnOriginals, restoreAbsent, withoutFileWait } from './preserve'
 import { alone as oneAtATime } from './serve/backend'
 
-export type AddonState = 'connected' | 'not_connected' | 'needs_approval' | 'too_old' | 'unavailable' | 'error'
+/**
+ * How It's add-on in an app stands. `disabled`: It's add-on is in the app, and the app has it
+ * turned off, which the person may have done on purpose. It is not turned on again but by the
+ * person: with Turn back on on the site, or by running `it setup` themselves.
+ */
+export type AddonState = 'connected' | 'not_connected' | 'needs_approval' | 'disabled' | 'too_old' | 'unavailable' | 'error'
 export interface HarnessStatus {
   id: Harness
   version?: string
@@ -95,6 +100,8 @@ interface Ran {
   ok: boolean
   out: string
   err: string
+  /** Why a command that did not succeed failed, in a word that holds nothing of what it printed: it took too long, it could not be started, or it ran and refused. */
+  failed?: 'timeout' | 'missing' | 'refused'
 }
 /**
  * On Windows a harness is usually a .cmd file, which only a shell can start. Every word is then
@@ -133,7 +140,13 @@ function run(bin: string, args: string[], timeoutMs = 60_000, env: NodeJS.Proces
         windowsHide: true,
         maxBuffer: 8 * 1024 * 1024,
       },
-      (err, out, stderr) => resolve({ ok: !err, out: String(out).trim(), err: String(stderr).trim() || (err ? err.message : '') }),
+      (err, out, stderr) =>
+        resolve({
+          ok: !err,
+          out: String(out).trim(),
+          err: String(stderr).trim() || (err ? err.message : ''),
+          ...(err ? { failed: err.killed ? 'timeout' : (err as { code?: unknown }).code === 'ENOENT' ? 'missing' : 'refused' } : {}),
+        }),
     ),
   )
   pass?.set(key, result)
@@ -608,6 +621,17 @@ interface Adapter {
   /** Whether our add-on is installed in the harness right now, and switched on. `was` is what this program noted when it installed one there. */
   installed(at: Place, was?: Installation): Promise<boolean>
   /**
+   * Whether our add-on is in the harness and the harness has it turned off. Only what the
+   * harness says counts: one that could not be asked is not taken to have it off.
+   */
+  off?(at: Place, was?: Installation): Promise<boolean>
+  /**
+   * Turns our add-on on again with the harness's own command, and answers whether the harness
+   * then has it on. Run only where the person asked for it. Not there for a harness that has no
+   * command for it.
+   */
+  enable?(at: Place): Promise<Ran>
+  /**
    * Whether our add-on is in the harness at all, switched on or not. Null when the harness
    * could not be asked: that is not the same as the add-on being gone.
    */
@@ -682,6 +706,90 @@ async function claudeHas(at: Place): Promise<{ enabled?: boolean; installPath?: 
     return (JSON.parse(r.out) as { id: string; enabled?: boolean; installPath?: unknown; version?: unknown; readFromFolder?: unknown }[]).find(
       (p) => p.id === `${PLUGIN}@${MARKET}`,
     )
+  } catch {
+    return null
+  }
+}
+/**
+ * Whether Pi lists the package in this It folder. Pi lists each package by the source its
+ * settings name, with ` (filtered)` after it where the settings choose which of its resources
+ * load, and under it the folder it is loaded from.
+ */
+const piListed = (list: string): boolean => {
+  const ours = path.resolve(addonDir('pi'))
+  return list.split('\n').some((line) => {
+    const said = line.trim().replace(/ \(filtered\)$/, '')
+    return said === ours || (path.isAbsolute(said) && path.resolve(said) === ours)
+  })
+}
+/** The add-on's one extension, as a filter in Pi's settings names it, from the package's own folder. */
+const PI_EXTENSION = 'extensions/it.js'
+/**
+ * Whether Pi's settings filter the add-on's extension out of the package in this It folder, as
+ * `pi config` does when the person turns it off: an empty list of extensions, or patterns that
+ * leave it out, read as Pi reads them (`applyPatterns` and the autoload delta in Pi's package
+ * manager). Asked only where Pi lists the package as filtered. Settings that cannot be read,
+ * and a pattern that is not one of the simple forms read here, leave it on.
+ */
+function piOff(list: string, at: Place): boolean {
+  if (!list.split('\n').some((line) => line.trim().endsWith(' (filtered)'))) return false
+  const said = at.env.PI_CODING_AGENT_DIR
+  const agent = path.resolve(said ? said.replace(/^~(?=$|[\\/])/, os.homedir()) : path.join(os.homedir(), '.pi', 'agent'))
+  const packages = readJson<{ packages?: unknown }>(path.join(agent, 'settings.json'))?.packages
+  if (!Array.isArray(packages)) return false
+  const root = path.resolve(addonDir('pi'))
+  const entry = packages.find((p): p is { source: string; extensions?: unknown; autoload?: unknown } => {
+    if (!p || typeof p !== 'object' || typeof (p as { source?: unknown }).source !== 'string') return false
+    const source = (p as { source: string }).source.replace(/^~(?=$|[\\/])/, os.homedir())
+    return path.resolve(agent, source) === root
+  })
+  if (!entry) return false
+  const patterns = entry.extensions
+  if (patterns === undefined) return entry.autoload === false
+  if (!Array.isArray(patterns) || !patterns.every((x) => typeof x === 'string')) return false
+  return !piLoads(patterns as string[], entry.autoload === false, path.join(root, ...PI_EXTENSION.split('/')))
+}
+/** Whether Pi loads the extension at `file` under these patterns from its settings. */
+function piLoads(patterns: string[], delta: boolean, file: string): boolean {
+  const forms = [PI_EXTENSION, path.basename(file), file.split(path.sep).join('/')]
+  const strip = (p: string) => p.replace(/\\/g, '/').replace(/^\.\//, '')
+  // The forms of glob a filter is written in: `**/` and `**` for any folders, `*` and `?` within one name
+  const glob = (p: string) => {
+    const source = strip(p)
+      .split(/(\*\*\/|\*\*|\*|\?)/)
+      .map((part) =>
+        part === '**/' ? '(?:.*/)?' : part === '**' ? '.*' : part === '*' ? '[^/]*' : part === '?' ? '[^/]' : part.replace(/[.+^$(){}|[\]\\]/g, '\\$&'),
+      )
+      .join('')
+    return new RegExp(`^${source}$`)
+  }
+  const matches = (p: string) => forms.some((f) => glob(p).test(f))
+  const exactly = (p: string) => forms.some((f) => f === strip(p))
+  if (delta) {
+    // Each pattern that names it says on or off, and the last one says it
+    let loads = false
+    for (const p of patterns) {
+      const sign = /^[+!-]/.test(p) ? p[0] : ''
+      const target = sign ? p.slice(1) : p
+      if (sign === '+' || sign === '-' ? exactly(target) : matches(target)) loads = sign !== '-' && sign !== '!'
+    }
+    return loads
+  }
+  if (!patterns.length) return false
+  const plain = patterns.filter((p) => !/^[+!-]/.test(p))
+  let loads = plain.length === 0 || plain.some(matches)
+  if (patterns.some((p) => p.startsWith('!') && matches(p.slice(1)))) loads = false
+  if (patterns.some((p) => p.startsWith('+') && exactly(p.slice(1)))) loads = true
+  if (patterns.some((p) => p.startsWith('-') && exactly(p.slice(1)))) loads = false
+  return loads
+}
+/** What Hermes lists as the status of our plugin. Null where Hermes could not be asked, and nothing where it lists none. */
+async function hermesStatus(env: NodeJS.ProcessEnv): Promise<string | undefined | null> {
+  const r = await run('hermes', ['plugins', 'list', '--json', '--no-bundled'], 30_000, env)
+  if (!r.ok) return null
+  try {
+    const status = (JSON.parse(r.out) as { name?: string; status?: unknown }[]).find((p) => p.name === PLUGIN)?.status
+    return typeof status === 'string' ? status : undefined
   } catch {
     return null
   }
@@ -893,6 +1001,14 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
     profile: ['CLAUDE_CONFIG_DIR'],
     preflight: (at, was) => marketplacePreflight('claude-code', at, was),
     installed: async (at) => Boolean((await claudeHas(at))?.enabled),
+    // Listed, and said to be off: the person turned it off, or Claude Code's settings no longer name it among the plugins it loads
+    off: async (at) => (await claudeHas(at))?.enabled === false,
+    async enable(at) {
+      const r = await run('claude', ['plugin', 'enable', `${PLUGIN}@${MARKET}`, '--scope', 'user'], 60_000, envAt(this.profile, at))
+      // Claude Code refuses to turn on what is on already: what it says it has afterwards is what counts
+      if ((await claudeHas(at))?.enabled === true) return { ok: true, out: r.out, err: '' }
+      return { ok: false, out: '', err: r.ok ? 'Claude Code still has It’s plugin turned off.' : r.err || r.out, failed: r.failed }
+    },
     async present(at) {
       const ours = await claudeHas(at)
       return ours === null ? null : ours !== undefined
@@ -948,6 +1064,15 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
     profile: ['CODEX_HOME'],
     preflight: (at, was) => marketplacePreflight('codex', at, was),
     installed: async (at) => /^installed, enabled/.test((await codexHas(at)) ?? ''),
+    off: async (at) => /^installed, disabled/.test((await codexHas(at)) ?? ''),
+    // Codex has no command of its own that only turns a plugin on. Its command for adding one
+    // turns it on as it adds it, from the marketplace in this It folder, and keeps the approval
+    // of its hooks, which Codex ties to the plugin's contents and not to whether it is on.
+    async enable(at) {
+      const r = await run('codex', ['plugin', 'add', `${PLUGIN}@${MARKET}`], 60_000, envAt(this.profile, at))
+      if (/^installed, enabled/.test((await codexHas(at)) ?? '')) return { ok: true, out: r.out, err: '' }
+      return { ok: false, out: '', err: r.ok ? 'Codex still has It’s plugin turned off.' : r.err || r.out, failed: r.failed }
+    },
     async present(at) {
       const ours = await codexHas(at)
       // Codex lists what a marketplace offers as well as what is installed from it. An add-on
@@ -1216,6 +1341,10 @@ interface Copied {
   own: readonly string[]
   /** The harness's own word on whether the add-on is switched on, where it has one. */
   on?(at: Place): Promise<boolean>
+  /** The harness's own word that it has the add-on and has it switched off, where it has one. */
+  off?(at: Place): Promise<boolean>
+  /** The harness's own command for switching it on again. */
+  enable?(at: Place): Promise<Ran>
   /** What the harness is told once the files are in. */
   after?(at: Place): Promise<Ran>
   /** What the harness is told before they are taken out. */
@@ -1399,15 +1528,28 @@ function takeFolders(root: string, own: readonly string[]): void {
  */
 function copied(id: Harness, c: Copied): Adapter {
   const all = (at: Place) => Object.keys(ADDONS[id]?.files ?? {}).map((rel) => ({ rel, to: path.join(at.dir!, ...c.goes(rel).split('/')) }))
+  // The file the add-on is loaded from is there, and this program has a note of putting it there: a file of that name which it has no note of is not our add-on
+  const ours = (at: Place, was: Installation | undefined) => {
+    const main = path.join(at.dir!, ...c.main.split('/'))
+    return Boolean(was && (!was.files || was.files.some((f) => f.path === main)) && there(main))
+  }
   return {
     profile: c.profile,
     folder: c.folder,
     async installed(at, was) {
-      const main = path.join(at.dir!, ...c.main.split('/'))
-      // A file of that name which this program has no note of putting there is not our add-on
-      if (!was || (was.files && !was.files.some((f) => f.path === main)) || !there(main)) return false
+      if (!ours(at, was)) return false
       return c.on ? c.on(at) : true
     },
+    ...(c.off ? { off: async (at: Place, was?: Installation) => ours(at, was) && (await c.off!(at)) } : {}),
+    ...(c.enable
+      ? {
+          async enable(at: Place) {
+            const r = await c.enable!(at)
+            if (c.on && (await c.on(at))) return { ok: true, out: r.out, err: '' }
+            return { ok: false, out: '', err: r.ok ? 'The app still has It’s add-on turned off.' : r.err || r.out, failed: r.failed }
+          },
+        }
+      : {}),
     async present(at, was) {
       // Whatever is still where this program put a file, changed since or not. A note that
       // holds no list of what was written is taken to be of the files an add-on always has.
@@ -1484,11 +1626,17 @@ Object.assign(ADAPTERS, {
     profile: ['PI_CODING_AGENT_DIR'],
     async installed(at) {
       const r = await run('pi', ['list'], 60_000, envAt(this.profile, at))
-      return r.ok && r.out.split('\n').some((line) => line.trim() === path.resolve(addonDir('pi')))
+      return r.ok && piListed(r.out) && !piOff(r.out, at)
+    },
+    // Pi has no command that turns a package's extension on or off: `pi config` does it, in a
+    // terminal, by a filter in Pi's settings, and the package is then listed as filtered
+    async off(at) {
+      const r = await run('pi', ['list'], 60_000, envAt(this.profile, at))
+      return r.ok && piListed(r.out) && piOff(r.out, at)
     },
     async present(at) {
       const r = await run('pi', ['list'], 60_000, envAt(this.profile, at))
-      return r.ok ? r.out.split('\n').some((line) => line.trim() === path.resolve(addonDir('pi'))) : null
+      return r.ok ? piListed(r.out) : null
     },
     install(dir, at) {
       return run('pi', ['install', dir], 60_000, envAt(this.profile, at))
@@ -1532,6 +1680,13 @@ Object.assign(ADAPTERS, {
       const ours = await openclawHas(at)
       return ours?.enabled === true && ours.status !== 'error'
     },
+    off: async (at) => (await openclawHas(at))?.enabled === false,
+    async enable(at) {
+      // Asked for by the person, which is what accepting the plugin's capabilities on their behalf rests on, as when it was installed
+      const r = await run('openclaw', ['plugins', 'enable', PLUGIN, '--accept-capabilities'], 180_000, envAt(this.profile, at))
+      if ((await openclawHas(at))?.enabled === true) return { ok: true, out: r.out, err: '' }
+      return { ok: false, out: '', err: r.ok ? 'OpenClaw still has It’s plugin turned off.' : r.err || r.out, failed: r.failed }
+    },
     async present(at) {
       const ours = await openclawHas(at)
       return ours === null ? null : ours !== undefined
@@ -1566,13 +1721,15 @@ Object.assign(ADAPTERS, {
     main: `plugins/${PLUGIN}/__init__.py`,
     own: [`plugins/${PLUGIN}`, 'skills/it'],
     async on(at) {
-      const r = await run('hermes', ['plugins', 'list', '--json', '--no-bundled'], 30_000, envAt(this.profile, at))
-      if (!r.ok) return false
-      try {
-        return (JSON.parse(r.out) as { name?: string; status?: string }[]).some((p) => p.name === PLUGIN && p.status === 'enabled')
-      } catch {
-        return false
-      }
+      return (await hermesStatus(envAt(this.profile, at))) === 'enabled'
+    },
+    // Listed with any other word than enabled: Hermes loads it only once it is enabled
+    async off(at) {
+      const status = await hermesStatus(envAt(this.profile, at))
+      return status !== null && status !== undefined && status !== 'enabled'
+    },
+    enable(at) {
+      return run('hermes', ['plugins', 'enable', PLUGIN], 60_000, envAt(this.profile, at))
     },
     after(at) {
       return run('hermes', ['plugins', 'enable', PLUGIN], 60_000, envAt(this.profile, at))
@@ -1894,10 +2051,25 @@ async function look(id: Harness): Promise<Seen | HarnessStatus | null> {
         detail: `${KNOWN[id].label} has It’s add-on from another It folder on this machine. It stays with that folder until it is disconnected there.`,
       },
     }
-  if (other || !(await adapter.installed(at, was))) return { ...seen, status: { id, version, addon: 'not_connected' } }
+  if (other) return { ...seen, status: { id, version, addon: 'not_connected' } }
+  if (!(await adapter.installed(at, was))) {
+    // Turned off in the app, where the add-on is this folder's: on record and not half put in,
+    // or with no record here and saying that it came from this folder. One that is half put in
+    // is put in again whole, as asked, and one that is nobody's is replaced.
+    const mine = was ? was.version !== 'installing' : from !== null && real(from) === thisHome()
+    if (mine && (await adapter.off?.(at, was))) return { ...seen, status: { id, version, addon: 'disabled', detail: offDetail(id, adapter) } }
+    return { ...seen, status: { id, version, addon: 'not_connected' } }
+  }
   const todo = adapter.pending?.()
   return { ...seen, status: todo ? { id, version, addon: 'needs_approval', detail: todo } : { id, version, addon: 'connected' } }
 }
+/** What a person is told of an add-on that its app has turned off, and how it is turned on again. */
+const offDetail = (id: Harness, adapter: Pick<Adapter, 'enable'>): string =>
+  adapter.enable
+    ? `It’s add-on is turned off in ${KNOWN[id].label}, so nothing done on a page reaches ${KNOWN[id].label} by itself. Turn it back on under Machines on the site, or by running \`it setup\` on this machine.`
+    : id === 'pi'
+      ? 'It’s extension is turned off in Pi’s settings, so nothing done on a page reaches Pi by itself. Run `pi config` in a terminal on this machine and turn it back on there.'
+      : `It’s add-on is turned off in ${KNOWN[id].label}, so nothing done on a page reaches ${KNOWN[id].label} by itself. Turn it back on in ${KNOWN[id].label}.`
 const statusOf = async (id: Harness): Promise<HarnessStatus | null> => {
   const seen = await look(id)
   return seen && 'status' in seen ? seen.status : seen
@@ -1943,6 +2115,9 @@ export async function whatToDo(
   installedBy?: string,
   version = VERSION,
 ): Promise<'nothing' | 'leave switched off' | 'install' | 'leave to the newer program'> {
+  // Turned off in the app: theirs to decide whatever this program carries, since putting it in
+  // again turns it on in some apps (Codex, OpenClaw and Hermes) and in others leaves it off
+  if (addon === 'disabled') return 'leave switched off'
   // Connected at a version this program does not carry, and put there by a newer It: a newer
   // copy of the program did that, while this one (a connector that has been running since
   // before the upgrade) went on. Putting this one's older add-on back over it would undo the
@@ -1967,6 +2142,11 @@ export async function connect(
   forLog = false,
   /** Told what became of the add-on, where something was tried: see `AddonOutcome`. */
   told: (outcome: AddonOutcome) => void = () => {},
+  /**
+   * Whether an add-on that the app has turned off is turned on again first. Only where the
+   * person asked: by running `it setup` themselves. Nothing else turns it on.
+   */
+  turnOn = false,
 ): Promise<HarnessStatus> {
   const label = KNOWN[id].label
   const seen = await look(id)
@@ -2034,6 +2214,20 @@ export async function connect(
     )
     return before
   }
+  if (before.addon === 'disabled' && turnOn && adapter.enable) {
+    say(`turning It’s add-on in ${label} back on`)
+    const on = await adapter.enable(at)
+    if (!on.ok) {
+      const why = forLog ? 'refused' : (on.err || on.out).split('\n').slice(-3).join(' ').slice(0, 200)
+      say(`${label}: It’s add-on could not be turned back on${why ? ` (${why})` : ''}`)
+      return {
+        ...before,
+        detail: `${label} did not turn It’s add-on back on${forLog || !why ? '' : `: ${why.replace(/\.$/, '')}`}. ${before.detail ?? ''}`.trim(),
+      }
+    }
+    // Looked at afresh, and brought up to date where it is behind, as any add-on that is on
+    return connect(id, say, forLog, told)
+  }
   // Copied files from an unrecorded installation are kept aside when replaced.
   let doing = other ? 'install' : await whatToDo(before.addon, was?.version, ADDONS[id]!.version, () => adapter.present(at, was), was?.at, undefined, was?.by)
   // A person who runs setup with this program has chosen this program, whichever of the two is
@@ -2059,6 +2253,7 @@ export async function connect(
     newer = true
     return before
   }
+  if (doing === 'leave switched off' && before.addon === 'disabled') return before
   if (doing === 'leave switched off')
     return {
       ...before,
@@ -2122,7 +2317,12 @@ export async function connect(
   // install says it has, as Codex has when its rules changed. One whose build is not known, as
   // after an install that did not finish, is taken to have another
   told({ id, did: 'installed', ...(was?.version !== 'installing' && was?.build === ADDONS[id]!.build && !r.restart ? {} : { restart: true }) })
-  return (await statusOf(id)) ?? before
+  const now = await statusOf(id)
+  // Put in, and the app has it turned off: Claude Code keeps a plugin it updates as it was. Said
+  // here, once, and not put in again: from now on it is left as the person has it.
+  if (now?.addon === 'disabled')
+    say(forLog ? `${label}: addon_disabled: the add-on was brought up to date and the app keeps it turned off` : `${label}: ${now.detail}`)
+  return now ?? before
 }
 
 /** False when the add-on could not be removed, or it could not be told whether it was: it is then tried again later. */
@@ -2312,9 +2512,78 @@ let reconciling: Promise<void> = Promise.resolve()
  * `forLog` is how the connector calls it: what went wrong is then said as a fixed word, never
  * in the words of a harness's own installer or of an error, which can hold a path or a name.
  */
-export function reconcile(chosen: readonly string[] | (() => readonly string[]), say: (line: string) => void, forLog = false): Promise<AddonOutcome[]> {
-  if (forLog) return withoutFileWait(() => reconcileWithFiles(chosen, say, forLog))
-  return reconcileWithFiles(chosen, say, forLog)
+export function reconcile(
+  chosen: readonly string[] | (() => readonly string[]),
+  say: (line: string) => void,
+  forLog = false,
+  /** The apps whose add-on is turned on again where the app has it turned off: the ones a person running `it setup` chose. */
+  turnOn: readonly string[] = [],
+): Promise<AddonOutcome[]> {
+  if (forLog) return withoutFileWait(() => reconcileWithFiles(chosen, say, forLog, turnOn))
+  return reconcileWithFiles(chosen, say, forLog, turnOn)
+}
+
+/** The command a person runs to turn It's add-on in an app back on, which says why where it cannot. */
+const ENABLE_COMMAND: Partial<Record<Harness, string>> = {
+  'claude-code': `claude plugin enable ${PLUGIN}@${MARKET}`,
+  codex: `codex plugin add ${PLUGIN}@${MARKET}`,
+  openclaw: `openclaw plugins enable ${PLUGIN}`,
+  hermes: `hermes plugins enable ${PLUGIN}`,
+}
+
+/**
+ * Turns It's add-on in an app back on, where the app has it turned off, with the app's own
+ * command: what the connector does when the person presses Turn back on on the site. Nothing is
+ * put in, and nothing is changed but whether the app has the add-on on. Answers with why not in
+ * a sentence for the person, which holds nothing the app printed, and in a word for the log.
+ */
+export async function turnBackOn(id: Harness): Promise<TurnedOn> {
+  const label = KNOWN[id].label
+  let answer: TurnedOn | undefined
+  try {
+    await inTurn(async () => {
+      answer = await turnOnNow(id)
+    })
+  } catch (err) {
+    return {
+      ok: false,
+      why: `${label}’s add-on could not be turned back on, because another change to the add-ons on that machine was still under way. Try again in a moment.`,
+      code: coded(err),
+    }
+  }
+  return answer ?? { ok: false, why: `${label}’s add-on could not be looked at, so nothing was changed.`, code: 'error' }
+}
+type TurnedOn = { ok: true } | { ok: false; why: string; code: string }
+/** The work of `turnBackOn`, with the add-ons this program's alone to change. */
+async function turnOnNow(id: Harness): Promise<TurnedOn> {
+  const label = KNOWN[id].label
+  const seen = await look(id)
+  if (!seen) return { ok: false, why: `${label} was not found on that machine, so nothing was changed.`, code: 'not_found' }
+  const status = 'status' in seen ? seen.status : seen
+  if (status.addon === 'connected' || status.addon === 'needs_approval') return { ok: true }
+  if (status.addon !== 'disabled' || !('status' in seen))
+    return { ok: false, why: `${label} does not have It’s add-on turned off on that machine, so nothing was changed.`, code: 'not_disabled' }
+  const command = ENABLE_COMMAND[id]
+  if (!seen.adapter.enable || !command)
+    return {
+      ok: false,
+      why:
+        id === 'pi'
+          ? 'Pi has no command that turns It’s extension back on. Run `pi config` in a terminal on that machine and turn it back on there.'
+          : `${label} has no command that turns It’s add-on back on. Turn it back on in ${label} on that machine.`,
+      code: 'no_command',
+    }
+  const r = await seen.adapter.enable(seen.at)
+  if (r.ok) return { ok: true }
+  const how =
+    r.failed === 'timeout'
+      ? `${label} did not answer in time`
+      : r.failed === 'missing'
+        ? `${label}’s command could not be started`
+        : r.failed === 'refused'
+          ? `${label} refused to turn It’s add-on back on`
+          : `${label} still has It’s add-on turned off after being asked to turn it on`
+  return { ok: false, why: `${how}. Run \`${command}\` in a terminal on that machine to see why.`, code: r.failed ?? 'still_off' }
 }
 
 /**
@@ -2349,7 +2618,12 @@ function inTurn(work: (told: (outcome: AddonOutcome) => void) => Promise<void>):
   return run.then(() => outcomes)
 }
 
-function reconcileWithFiles(chosen: readonly string[] | (() => readonly string[]), say: (line: string) => void, forLog: boolean): Promise<AddonOutcome[]> {
+function reconcileWithFiles(
+  chosen: readonly string[] | (() => readonly string[]),
+  say: (line: string) => void,
+  forLog: boolean,
+  turnOn: readonly string[],
+): Promise<AddonOutcome[]> {
   return inTurn(async (told) => {
     // Whoever follows a choice that can change gives a way to ask for it, and it is asked
     // for here, once the add-ons are this run's alone to change: a run that waited its turn
@@ -2362,7 +2636,7 @@ function reconcileWithFiles(chosen: readonly string[] | (() => readonly string[]
         // An add-on that is held back is never installed, and one that was installed before
         // it was held back can still be taken out
         if (wanted.includes(id) && supported(id)) {
-          const s = await connect(id, say, forLog, told)
+          const s = await connect(id, say, forLog, told, turnOn.includes(id))
           if (s.addon === 'error') say(forLog ? `${KNOWN[id].label}: its add-on could not be installed` : `${KNOWN[id].label}: ${s.detail}`)
         } else await disconnect(id, say, {}, forLog)
       } catch (err) {
