@@ -317,6 +317,8 @@ vi.mock('./src/lib', async (original) => {
       if (name === 'delivery:lost') return []
       if (name === 'delivery:giveBackBatch') return { back: [], done: true }
       if (name === 'delivery:handedOff') return { already: false }
+      // It takes a machine's word that it is at work on turning an add-on back on, as it does where it was asked
+      if (name === 'machines:turningOn') return true
       return null
     },
   }
@@ -7375,7 +7377,7 @@ describe('an agent app that has It’s add-on turned off', () => {
 
   test('is not turned on where It does not take the machine’s word that it is at work on the asking, or could not be told', async () => {
     await start('socket', { wanted: ['claude-code'], found: OFF })
-    for (const answer of [false, new Error('no connection')]) {
+    for (const answer of [false, null, new Error('no connection')]) {
       stand.answer = (name) => {
         if (name !== 'machines:turningOn') return undefined
         if (answer instanceof Error) throw answer
