@@ -167,6 +167,11 @@ export interface Facts {
    * `route` is then what the connector says of OpenCode, asked of no conversation in particular.
    */
   unloadedOpenCode?: boolean
+  /**
+   * Whether the page was made before OpenCode had loaded It's add-on and is still no
+   * conversation's, because It gave no answer when this conversation asked for it.
+   */
+  unclaimedLeft?: boolean
 }
 
 /**
@@ -219,6 +224,11 @@ function arrivesAsIs(f: Facts): Arrives {
   })
   const unknown = (why: string): Arrives => ({ byItself: 'unknown', next: `${why} ${waitFor(f.slug)}` })
   const not = (why: string): Arrives => ({ byItself: false, next: `${why} ${waitFor(f.slug)}` })
+  // Whatever this conversation's add-on does, a page that is no conversation's is not brought here by it
+  if (f.unclaimedLeft)
+    return not(
+      `Nothing the person does on this page arrives here by itself: it was made before OpenCode had loaded It’s add-on, so it belongs to no conversation, and It gave no answer just now when this conversation asked for it. Waiting on it by its id asks again.`,
+    )
   // A command that OpenCode ran and that names no conversation. Starting OpenCode again helps
   // only where its add-on is connected here and no OpenCode that has loaded it is heard from: an
   // OpenCode that is heard from may be this one, with a conversation its add-on could not name.

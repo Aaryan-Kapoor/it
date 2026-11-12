@@ -840,7 +840,7 @@ function anothers(slug: string, theirs: Made | null): Problem {
  * where the command cannot tell which conversation it runs in: a person's or a script's, or an
  * agent app's that does not say, which the skill tells to wait.
  */
-async function arrivalHere(slug?: string, tour = false): Promise<Arrives | undefined> {
+async function arrivalHere(slug?: string, tour = false, unclaimedLeft = false): Promise<Arrives | undefined> {
   const asked = sessionAsked()
   const session = asked?.session
   // A command that OpenCode ran and that names no conversation is told what to do about that. The
@@ -866,6 +866,7 @@ async function arrivalHere(slug?: string, tour = false): Promise<Arrives | undef
     tour,
     codexPending: session.harness === 'codex' && codexHooksPending(),
     t3: t3Here(),
+    unclaimedLeft,
   })
 }
 
@@ -902,13 +903,13 @@ async function lineHere(connected: (harness: string) => boolean): Promise<string
 }
 
 async function published(
-  done: { slug: string; version: number; url: string; note?: string; urlNote?: string },
+  done: { slug: string; version: number; url: string; note?: string; urlNote?: string; unclaimedLeft?: boolean },
   a: Args,
   fresh = false,
   tour = false,
   updated = false,
 ): Promise<void> {
-  const arrival = await arrivalHere(done.slug, tour)
+  const arrival = await arrivalHere(done.slug, tour, done.unclaimedLeft)
   const result = {
     id: done.slug,
     version: done.version,

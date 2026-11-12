@@ -125,6 +125,15 @@ describe('whether what the person does arrives by itself', () => {
     ).toBe(true)
   })
 
+  test('a page made before OpenCode loaded the add-on that It gave no answer for is not said to arrive by itself, where the conversation listens', () => {
+    const session = { harness: 'opencode', id: 'ses_1' }
+    expect(arrives({ session, addonHere: undefined, route: route({ listening: true }), slug: 'ping' }).byItself).toBe(true)
+    const left = arrives({ session, addonHere: undefined, route: route({ listening: true }), slug: 'ping', unclaimedLeft: true })
+    expect(left.byItself).toBe(false)
+    expect(left.next).toContain('belongs to no conversation')
+    expect(left.next).toContain(`\`${it()} wait --id ping --timeout 100\``)
+  })
+
   test('is said to be unknown, with the agent told to wait, wherever It cannot tell', () => {
     for (const said of [
       // No conversation is known

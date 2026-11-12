@@ -5,7 +5,9 @@
 // the OpenCode conversation that next names it, with `it update` or `it wait --id`, is given it,
 // with what is waiting on it.
 
+import { randomBytes } from 'node:crypto'
 import { agentAppsAbove } from './ancestry'
+import { claimLock } from './legacy-lock'
 import { type Asking, api, call, inHome, Problem, readJson, writePrivate } from './lib'
 
 /** Where those pages are noted: in It's folder on this machine, and nowhere else. */
@@ -34,27 +36,50 @@ export function inUnloadedOpenCode(asked: Asking | undefined, above: () => reado
   return asked === undefined && above()[0] === 'opencode'
 }
 
-/** Notes that this page was made in such an OpenCode. A note that cannot be kept keeps nothing from being published. */
-export function noteUnclaimed(slug: string, page: string, now = Date.now()): void {
+/**
+ * Changes the notes under a lock, reading them again once it is held, so that two commands at
+ * once each keep the other's change. One that cannot have the lock in three seconds changes
+ * nothing: a page not noted is a page as it was before any was, and is never given this way.
+ */
+async function change(how: (all: Notes) => Notes | undefined): Promise<void> {
   try {
-    const all = Object.entries({ ...notes(), [slug]: { at: now, page } })
-      .sort(([, a], [, b]) => a.at - b.at)
-      .slice(-MOST)
-    writePrivate(unclaimedFile(), Object.fromEntries(all))
+    const until = performance.now() + 3000
+    while (performance.now() < until) {
+      const release = claimLock(`${unclaimedFile()}.lock`, 10_000, randomBytes(8).toString('hex'))
+      if (release) {
+        try {
+          const changed = how(notes())
+          if (changed) writePrivate(unclaimedFile(), changed)
+          return
+        } finally {
+          release()
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5 + Math.random() * 20))
+    }
   } catch {}
 }
+
+/** Notes that this page was made in such an OpenCode. A note that cannot be kept keeps nothing from being published. */
+export const noteUnclaimed = (slug: string, page: string, now = Date.now()): Promise<void> =>
+  change((all) =>
+    Object.fromEntries(
+      Object.entries({ ...all, [slug]: { at: now, page } })
+        .sort(([, a], [, b]) => a.at - b.at)
+        .slice(-MOST),
+    ),
+  )
 
 /** Whether this page is noted as made in such an OpenCode, and given to no conversation since. */
 export const unclaimed = (slug: string): boolean => Object.hasOwn(notes(), slug)
 
-function forget(slug: string): void {
-  try {
-    const all = notes()
-    if (!Object.hasOwn(all, slug)) return
+/** Takes away the note of this page, where it is still the note of that same page. */
+const forget = (slug: string, page: string): Promise<void> =>
+  change((all) => {
+    if (all[slug]?.page !== page) return undefined
     delete all[slug]
-    writePrivate(unclaimedFile(), all)
-  } catch {}
-}
+    return all
+  })
 
 /** What It is asked: to give a page to a conversation only while no conversation has it. The tests give their own. */
 export type Take = (page: string, session: { harness: string; id: string }) => Promise<{ took?: boolean } | null>
@@ -62,32 +87,35 @@ const takeUnowned: Take = (page, session) => call('mutation', api.artifacts.take
 
 /**
  * Gives a page that was made in an OpenCode without the add-on to the OpenCode conversation
- * that now names it, and answers whether it did. Only a page noted here, and only while no
- * conversation has it, which It tells in the same step that gives it: one that another
+ * that now names it, and answers whether it did: `took`, `not`, or `unanswered` where It gave no
+ * answer and the page may well still be no conversation's. Only a page noted here, and only while
+ * no conversation has it, which It tells in the same step that gives it: one that another
  * conversation has taken, by showing it or with --take, stays that conversation's, however
  * close together the two are, and the note goes. So does the note of a page that is gone. A
- * conversation of another app is given nothing this way. Whatever else goes wrong, nothing is
- * given, the note is kept for the next time, and the command carries on.
+ * conversation of another app is given nothing this way. Where It gives no answer, the note is
+ * kept and the command carries on: the page was given or it was not, and asking again the next
+ * time gives it to this conversation or leaves it where it is.
  */
 export async function claimUnclaimed(
   slug: string | undefined,
   session: { harness: string; id: string } | undefined,
   take: Take = takeUnowned,
-): Promise<boolean> {
+): Promise<'took' | 'not' | 'unanswered'> {
   try {
-    if (!slug || session?.harness !== 'opencode') return false
+    if (!slug || session?.harness !== 'opencode') return 'not'
     const note = notes()[slug]
-    if (!note) return false
+    if (!note) return 'not'
     let answer: { took?: boolean } | null
     try {
       answer = await take(note.page, session)
     } catch (err) {
-      if (err instanceof Problem && err.code === 'not_found') forget(slug)
-      return false
+      if (!(err instanceof Problem && err.code === 'not_found')) return 'unanswered'
+      await forget(slug, note.page)
+      return 'not'
     }
-    forget(slug)
-    return answer?.took === true
+    await forget(slug, note.page)
+    return answer?.took === true ? 'took' : 'not'
   } catch {
-    return false
+    return 'unanswered'
   }
 }
