@@ -1411,6 +1411,30 @@ describe('publishing', () => {
     expect(await code(theirs.as.mutation(api.artifacts.take, { slug: 'board', session: today }))).toBe('not_found')
   })
 
+  test('a page is given to a conversation only while no conversation has it, where that is asked, with what was waiting on it', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice', 'laptop')
+    const first = { harness: 'opencode', id: 'ses_first' }
+    const second = { harness: 'opencode', id: 'ses_second' }
+    // Made in no conversation, as by an OpenCode that has not loaded It's add-on
+    const p = await publish(laptop, 'ping')
+    const { actionId } = await alice.browser.mutation(api.actions.submit, {
+      artifactId: p.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-0001'),
+    })
+    const owner = async () => (await alice.browser.query(api.artifacts.get, { slug: 'ping' })).session
+    expect(await owner()).toBeNull()
+    expect(await laptop.as.mutation(api.artifacts.take, { artifactId: p.artifactId, session: first, agent: 'opencode', unowned: true })).toEqual({ took: true })
+    expect(await owner()).toEqual(first)
+    await settle(t)
+    expect((await inbox(laptop, [first])).map((c) => c.id)).toEqual([actionId])
+    // Once a conversation has it, it is given to no other this way, and nothing changes
+    expect(await laptop.as.mutation(api.artifacts.take, { artifactId: p.artifactId, session: second, unowned: true })).toEqual({ took: false })
+    expect(await owner()).toEqual(first)
+  })
+
   test('a conversation that carries on as another hands every page it has on this machine to that one, with what was waiting on them, and none it has elsewhere', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

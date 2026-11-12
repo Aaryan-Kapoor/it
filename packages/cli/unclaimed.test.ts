@@ -1,10 +1,11 @@
 // A page made by an OpenCode that had not loaded It's add-on names no conversation. It is noted
 // on this machine, and the OpenCode conversation that next names it is given it.
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { type Backend, claimUnclaimed, inUnloadedOpenCode, noteUnclaimed, unclaimed, unclaimedFile } from './src/unclaimed'
+import { Problem } from './src/lib'
+import { claimUnclaimed, inUnloadedOpenCode, noteUnclaimed, type Take, unclaimed, unclaimedFile } from './src/unclaimed'
 
 const opencode = { harness: 'opencode', id: 'ses_0123456789abcdef' }
 let home: string
@@ -21,17 +22,22 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true })
 })
 
-/** An It that says who has each page, and keeps what it was asked to give to whom. */
-function fake(owners: Record<string, { harness: string; id: string } | null>) {
-  const taken: [string, { harness: string; id: string }][] = []
-  const ask: Backend = {
-    owner: async (slug) => (slug in owners ? { session: owners[slug] } : null),
-    take: async (slug, session) => {
-      taken.push([slug, session])
-      owners[slug] = session
-    },
+type Session = { harness: string; id: string }
+/**
+ * An It that keeps who has each page, by It's own record of the page, and gives a page only
+ * while no conversation has it, in one step, as the backend's `artifacts.take` with `unowned`
+ * does. It keeps what it gave to whom.
+ */
+function fake(owners: Record<string, Session | null>) {
+  const taken: [string, Session][] = []
+  const take: Take = async (page, session) => {
+    if (!(page in owners)) throw new Problem('No such page.', 'not_found')
+    if (owners[page]) return { took: false }
+    owners[page] = session
+    taken.push([page, session])
+    return { took: true }
   }
-  return { ask, taken }
+  return { take, taken, owners }
 }
 
 describe('a command that names no conversation', () => {
@@ -53,57 +59,92 @@ describe('a command that names no conversation', () => {
 
 describe('a page made in an OpenCode that had not loaded the add-on', () => {
   test('is given to the OpenCode conversation that next names it, once', async () => {
-    noteUnclaimed('ping')
+    noteUnclaimed('ping', 'page-1')
     expect(unclaimed('ping')).toBe(true)
-    const { ask, taken } = fake({ ping: null })
-    expect(await claimUnclaimed('ping', opencode, ask)).toBe(true)
-    expect(taken).toEqual([['ping', opencode]])
+    const { take, taken } = fake({ 'page-1': null })
+    expect(await claimUnclaimed('ping', opencode, take)).toBe(true)
+    expect(taken).toEqual([['page-1', opencode]])
     expect(unclaimed('ping')).toBe(false)
     // Another conversation that names it afterwards is given nothing
-    expect(await claimUnclaimed('ping', { harness: 'opencode', id: 'ses_other' }, ask)).toBe(false)
+    expect(await claimUnclaimed('ping', { harness: 'opencode', id: 'ses_other' }, take)).toBe(false)
     expect(taken).toHaveLength(1)
   })
 
   test('stays with a conversation that took it meanwhile, and the note goes', async () => {
-    noteUnclaimed('ping')
-    const { ask, taken } = fake({ ping: { harness: 'opencode', id: 'ses_shown_it' } })
-    expect(await claimUnclaimed('ping', opencode, ask)).toBe(false)
+    noteUnclaimed('ping', 'page-1')
+    const { take, taken } = fake({ 'page-1': { harness: 'opencode', id: 'ses_shown_it' } })
+    expect(await claimUnclaimed('ping', opencode, take)).toBe(false)
+    expect(taken).toEqual([])
+    expect(unclaimed('ping')).toBe(false)
+  })
+
+  test('is given to one conversation alone where two name it at once', async () => {
+    noteUnclaimed('ping', 'page-1')
+    const { take, taken, owners } = fake({ 'page-1': null })
+    const other = { harness: 'opencode', id: 'ses_other' }
+    const both = await Promise.all([claimUnclaimed('ping', opencode, take), claimUnclaimed('ping', other, take)])
+    expect(both.filter(Boolean)).toHaveLength(1)
+    expect(taken).toHaveLength(1)
+    expect(owners['page-1']).toEqual(taken[0]![1])
+  })
+
+  test('is not taken from a conversation that showed it in the moment before It was asked', async () => {
+    noteUnclaimed('ping', 'page-1')
+    const { take: give, owners } = fake({ 'page-1': null })
+    const shown = { harness: 'opencode', id: 'ses_shown_it' }
+    // Another conversation shows the page just as this one names it
+    const take: Take = async (page, session) => {
+      owners[page] = shown
+      return give(page, session)
+    }
+    expect(await claimUnclaimed('ping', opencode, take)).toBe(false)
+    expect(owners['page-1']).toEqual(shown)
+  })
+
+  test('a page deleted and made again under the same id is not taken for it, and the note goes', async () => {
+    noteUnclaimed('ping', 'page-1')
+    const { take, taken } = fake({ 'page-2': null })
+    expect(await claimUnclaimed('ping', opencode, take)).toBe(false)
     expect(taken).toEqual([])
     expect(unclaimed('ping')).toBe(false)
   })
 
   test('is given to no conversation of another app, and to no command without a conversation', async () => {
-    noteUnclaimed('ping')
-    const { ask, taken } = fake({ ping: null })
-    expect(await claimUnclaimed('ping', { harness: 'claude-code', id: 'c1' }, ask)).toBe(false)
-    expect(await claimUnclaimed('ping', undefined, ask)).toBe(false)
-    expect(await claimUnclaimed(undefined, opencode, ask)).toBe(false)
+    noteUnclaimed('ping', 'page-1')
+    const { take, taken } = fake({ 'page-1': null })
+    expect(await claimUnclaimed('ping', { harness: 'claude-code', id: 'c1' }, take)).toBe(false)
+    expect(await claimUnclaimed('ping', undefined, take)).toBe(false)
+    expect(await claimUnclaimed(undefined, opencode, take)).toBe(false)
     expect(taken).toEqual([])
     expect(unclaimed('ping')).toBe(true)
   })
 
   test('a page that was never noted is never given this way, whoever has it', async () => {
-    const { ask, taken } = fake({ board: null })
-    expect(await claimUnclaimed('board', opencode, ask)).toBe(false)
+    const { take, taken } = fake({ 'page-1': null })
+    expect(await claimUnclaimed('board', opencode, take)).toBe(false)
     expect(taken).toEqual([])
   })
 
   test('where It cannot be asked, nothing is given and the note is kept for the next time', async () => {
-    noteUnclaimed('ping')
-    const ask: Backend = {
-      owner: async () => {
-        throw new Error('offline')
-      },
-      take: async () => {
-        throw new Error('never asked')
-      },
+    noteUnclaimed('ping', 'page-1')
+    const take: Take = async () => {
+      throw new Problem('It is not running.', 'offline')
     }
-    expect(await claimUnclaimed('ping', opencode, ask)).toBe(false)
+    expect(await claimUnclaimed('ping', opencode, take)).toBe(false)
     expect(unclaimed('ping')).toBe(true)
   })
 
+  test('a note that is not as It writes it is no note', async () => {
+    writeFileSync(unclaimedFile(), JSON.stringify({ ping: { at: 1 }, board: 'yes' }))
+    expect(unclaimed('ping')).toBe(false)
+    expect(unclaimed('board')).toBe(false)
+    const { take, taken } = fake({ 'page-1': null })
+    expect(await claimUnclaimed('ping', opencode, take)).toBe(false)
+    expect(taken).toEqual([])
+  })
+
   test('only the pages noted last are remembered', () => {
-    for (let i = 0; i < 60; i++) noteUnclaimed(`page-${i}`, i)
+    for (let i = 0; i < 60; i++) noteUnclaimed(`page-${i}`, `record-${i}`, i)
     const kept = Object.keys(JSON.parse(readFileSync(unclaimedFile(), 'utf8')))
     expect(kept).toHaveLength(50)
     expect(unclaimed('page-0')).toBe(false)

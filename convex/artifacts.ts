@@ -265,12 +265,18 @@ export const remove = mutation({
  * its person is the one they are talking to, also where another conversation made the page
  * the day before: what they then do on it must come to the one in front of them, and not to
  * one that is closed. Asked by the conversation that has it already, nothing changes.
+ *
+ * With `unowned`, the page is given only while no conversation has it, and that is told in the
+ * same transaction that gives it: a page that a conversation made before OpenCode had loaded
+ * It's add-on goes to the OpenCode conversation that next names it, and never away from one
+ * that showed it or took it in the moment between.
  */
 export const take = mutation({
-  args: { ...ref, session, agent: v.optional(v.string()) },
-  handler: async (ctx, { session: mine, agent, ...which }) => {
+  args: { ...ref, session, agent: v.optional(v.string()), unowned: v.optional(v.boolean()) },
+  handler: async (ctx, { session: mine, agent, unowned, ...which }) => {
     const { user, machine } = await requireMachine(ctx)
     const a = await resolve(ctx, user._id, which)
+    if (unowned && a.session) return { took: false }
     return takePage(ctx, a, machine, mine, agent)
   },
 })

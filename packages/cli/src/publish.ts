@@ -713,7 +713,7 @@ export async function publish(input: {
       // publishes without it is told so by the connector, should it not be able to be reopened
       if (session) await noteConversation(session, undefined, undefined, addonHere(session.harness))
       // Made by an OpenCode that has not loaded It's add-on: noted, so that its conversation can be given it later
-      else if (inUnloadedOpenCode(asked)) noteUnclaimed(done.slug)
+      else if (inUnloadedOpenCode(asked)) noteUnclaimed(done.slug, begun.artifactId)
       // Counted: which agent app, new or not, how large and of how many files in a few bands, and
       // four things that are each so or not: whether it was given a state to start with, whether it
       // sends anything back, whether it carries a picture, and whether it was brought up at once.
