@@ -94,7 +94,8 @@
             recorder.onstop = done
             recorder.stop()
           })
-          const type = recorder.mimeType.split(';')[0]
+          // The type of what was recorded, which Firefox no longer says in recorder.mimeType once it has stopped
+          const type = (recorded[0]?.type ?? '').split(';')[0]
           const file = new File(recorded, `take.${/ogg/.test(type) ? 'ogg' : /mp4/.test(type) ? 'm4a' : 'webm'}`, { type })
           const r = await It.action('take', { take: file, note: 'e2e-private-take one' })
           out.textContent = `accepted ${r.id}`

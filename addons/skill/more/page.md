@@ -57,7 +57,11 @@ talk.onclick = async () => {
   const parts = []
   const recorder = new MediaRecorder(mic.stream)
   recorder.ondataavailable = (e) => parts.push(e.data)
-  recorder.onstop = () => It.action('take', { take: new File(parts, 'take.webm', { type: recorder.mimeType.split(';')[0] }) })
+  recorder.onstop = () => {
+    const type = (parts[0]?.type ?? '').split(';')[0] // audio/webm, audio/ogg in Firefox, audio/mp4 in Safari
+    const name = `take.${type.endsWith('ogg') ? 'ogg' : type.endsWith('mp4') ? 'm4a' : 'webm'}`
+    It.action('take', { take: new File(parts, name, { type }) })
+  }
   recorder.start(1000) // and recorder.stop() when the user is done, then mic.stop()
 }
 ```
@@ -65,7 +69,7 @@ talk.onclick = async () => {
 - **Call it from a click or a key in the page.** A browser starts sound for a page only once the user has done something in it. Called at any other time, `It.microphone` rejects with a sentence that says so, and the user is asked nothing.
 - **The page never gets the microphone itself.** It sends the page the sound in pieces of a fiftieth of a second, of one channel, at `mic.sampleRate` samples a second, which is usually 48,000, and `mic.stream` is made in the page from them, about 60 milliseconds behind the microphone. `mic.onsound` is given each piece, for a meter or for captions made from the samples. A page that falls behind is sent less sound and never a backlog, so return from `onsound` quickly.
 - **Settings are the page's to say.** `It.microphone({ echoCancellation: false, noiseSuppression: false, autoGainControl: false })` turns off what a browser does to a voice, as for music. It takes nothing else, and no page can name a device.
-- **A recording is a file like any other.** Record `mic.stream` as above, and send the file with `It.action`: it is held to the same limits as any file, 1 GB at most, and the agent saves what arrives with `it save <id> take.webm`. Safari records `audio/mp4`, so name the file by `recorder.mimeType`.
+- **A recording is a file like any other.** Record `mic.stream` as above, and send the file with `It.action`: it is held to the same limits as any file, 1 GB at most, and the agent saves what arrives with `it save <id> <file>`. Each browser records its own kind, `audio/webm`, `audio/ogg` in Firefox or `audio/mp4` in Safari, so name the file by the type of what was recorded, `parts[0].type`, as above. Do not read `recorder.mimeType` once it has stopped: Firefox empties it then.
 - **Do not play `mic.stream` on the same screen.** Put in an `<audio>` there, the user hears themselves late, and the microphone hears it again. It is for a meter, a recorder, or a call to somewhere else.
 - **One of each at a time.** The microphone and the camera can be live together, each with its own Stop in It's bar: open one, wait for it, then open the other. A second `It.microphone()` is refused until the first is stopped.
 
