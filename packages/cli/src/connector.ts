@@ -4597,7 +4597,12 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     turningNow.add(harness)
     begunHere.add(harness)
     try {
-      await call('mutation', api.machines.turningOn, { harness, state: 'working' }).catch(() => {})
+      // Only an asking that It has taken this machine's word for is acted on: one It no longer has, or that could not be told, waits for It to say again
+      const claimed = await call('mutation', api.machines.turningOn, { harness, state: 'working' }).catch(() => undefined)
+      if (claimed === false || claimed === undefined) {
+        begunHere.delete(harness)
+        return
+      }
       const answer =
         (TURNS_ON as readonly string[]).includes(harness) && chosen(harness)
           ? await turnBackOn(harness as (typeof TURNS_ON)[number])

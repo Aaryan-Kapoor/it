@@ -2,7 +2,7 @@
 // The backend's own tests: who may do what, and that what is stored is what was meant.
 // They run against an in-memory copy of the backend; the service that runs it, with its content
 // service, is stood in for by a stub that records what the backend asked of it.
-import { ALIVE, BackendClock, describeClick, LEASE_MS, LIMITS, PUBLICATION, QUOTA, STORAGE, STORE_KEY } from '@it/protocol'
+import { ALIVE, BackendClock, describeClick, LEASE_MS, LIMITS, PUBLICATION, QUOTA, STORAGE, STORE_KEY, TURN_ON_AGAIN_MS } from '@it/protocol'
 import { type FunctionReturnType, getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
@@ -4888,7 +4888,7 @@ describe('displays and machines', () => {
     expect(await code(ask('claude-code'))).toBe('ok')
     expect((await onSite()).turnOn).toMatchObject([{ harness: 'claude-code', state: 'asked' }])
     expect((await desk.as.query(api.machines.me, {})).turnOn).toEqual([{ harness: 'claude-code', at: expect.any(Number), state: 'asked' }])
-    await desk.as.mutation(api.machines.turningOn, { harness: 'claude-code', state: 'working' })
+    expect(await desk.as.mutation(api.machines.turningOn, { harness: 'claude-code', state: 'working' })).toBe(true)
     // Asked again while it is at work, it is the same asking
     expect(await code(ask('claude-code'))).toBe('ok')
     expect((await onSite()).turnOn).toMatchObject([{ harness: 'claude-code', state: 'working' }])
@@ -4897,10 +4897,15 @@ describe('displays and machines', () => {
     expect((await onSite()).turnOn).toMatchObject([{ harness: 'claude-code', state: 'failed', why: 'y'.repeat(300) }])
     await report('disabled')
     expect((await onSite()).turnOn).toMatchObject([{ state: 'failed' }])
+    // Not again at once, so that nobody keeps the machine running the app's command over and over
+    expect(await code(ask('claude-code'))).toBe('rate_limited')
+    // Nor can the machine take up again what failed as if it were asked
+    expect(await desk.as.mutation(api.machines.turningOn, { harness: 'claude-code', state: 'working' })).toBe(false)
+    await vi.advanceTimersByTimeAsync(TURN_ON_AGAIN_MS)
     expect(await code(ask('claude-code'))).toBe('ok')
     expect((await onSite()).turnOn).toMatchObject([{ harness: 'claude-code', state: 'asked' }])
     // A machine speaks only of what it was asked
-    await desk.as.mutation(api.machines.turningOn, { harness: 'codex', state: 'done' })
+    expect(await desk.as.mutation(api.machines.turningOn, { harness: 'codex', state: 'done' })).toBe(false)
     expect((await onSite()).turnOn).toHaveLength(1)
     // Done, and the machine reports the app with It's add-on on: there is nothing left to say of it
     await desk.as.mutation(api.machines.turningOn, { harness: 'claude-code', state: 'done' })

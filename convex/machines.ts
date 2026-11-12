@@ -1,4 +1,4 @@
-import { ALIVE, HARNESSES, LIMITS, newer, noWakeHere, QUOTA, TURN_ON_MS, TURNS_ON, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
+import { ALIVE, HARNESSES, LIMITS, newer, noWakeHere, QUOTA, TURN_ON_AGAIN_MS, TURN_ON_MS, TURNS_ON, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
@@ -232,6 +232,8 @@ export const turnOn = mutation({
     const was = now.find((t) => t.harness === harness)
     // Asked for again while it is asked for or at work, it is the same asking
     if (was && (was.state === 'asked' || was.state === 'working') && Date.now() - was.at < TURN_ON_MS) return null
+    // And not again at once after it failed, so that nobody can keep a machine running the app's command over and over
+    if (was?.state === 'failed' && Date.now() - was.at < TURN_ON_AGAIN_MS) fail('rate_limited', 'Wait a few seconds before trying again.')
     await ctx.db.patch(m._id, {
       turnOn: [...now.filter((t) => t.harness !== harness), { harness, at: Date.now(), state: 'asked' as const }].slice(-HARNESSES.length),
     })
@@ -240,18 +242,23 @@ export const turnOn = mutation({
   },
 })
 
-/** The machine says how far turning an add-on back on has got. Only an app that it was asked to turn on for is spoken of. */
+/**
+ * The machine says how far turning an add-on back on has got. Only an app that it was asked to
+ * turn on for is spoken of. Answers whether it was: a machine runs the app's command only once
+ * It has taken its word that it is at work on an asking It has.
+ */
 export const turningOn = mutation({
   args: { harness: v.string(), state: v.union(v.literal('working'), v.literal('failed'), v.literal('done')), why: v.optional(v.string()) },
   handler: async (ctx, { harness, state, why }) => {
     const { machine } = await requireMachine(ctx)
     const now = machine.turnOn ?? []
     const was = now.find((t) => t.harness === harness)
-    if (!was) return null
+    // At work is said only of what was asked for, or of what a connector that stopped had begun
+    if (!was || (state === 'working' && was.state !== 'asked' && was.state !== 'working')) return false
     await ctx.db.patch(machine._id, {
       turnOn: now.map((t) => (t === was ? { harness: t.harness, at: Date.now(), state, ...(state === 'failed' && why ? { why: why.slice(0, 300) } : {}) } : t)),
     })
-    return null
+    return true
   },
 })
 

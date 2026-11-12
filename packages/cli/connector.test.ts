@@ -7373,6 +7373,28 @@ describe('an agent app that has It’s add-on turned off', () => {
     expect(stand.turnedOn).toEqual(['claude-code'])
   })
 
+  test('is not turned on where It does not take the machine’s word that it is at work on the asking, or could not be told', async () => {
+    await start('socket', { wanted: ['claude-code'], found: OFF })
+    for (const answer of [false, new Error('no connection')]) {
+      stand.answer = (name) => {
+        if (name !== 'machines:turningOn') return undefined
+        if (answer instanceof Error) throw answer
+        return answer
+      }
+      me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+      await until(() => turning().length > 0)
+      await pause(200)
+      expect(stand.turnedOn).toEqual([])
+      expect(turning()).toEqual([{ harness: 'claude-code', state: 'working' }])
+      stand.calls.length = 0
+    }
+    // Asked again once It answers, it is done
+    stand.answer = null
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+    await until(() => turning().some((t) => t.state === 'done'))
+    expect(stand.turnedOn).toEqual(['claude-code'])
+  })
+
   test('that the machine could not turn back on says why to the site, and only a code in the log', async () => {
     const why = 'Claude Code refused to turn It’s add-on back on. Run `claude plugin enable it-bridge@it` in a terminal on that machine to see why.'
     stand.turnOnAnswer = { ok: false, why, code: 'refused' }
