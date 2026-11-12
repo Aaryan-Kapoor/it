@@ -2061,7 +2061,10 @@ describe('what records or takes a photo for a page, when the page changes hands 
     })
     expect(liveFor('page1')).toBeUndefined()
     expect(tracks.every((t) => t.stopped)).toBe(true)
-    expect(resultOf(heard, 'r1')).toBeUndefined()
+    // Told so before its channel closed, and only that
+    expect(heard.filter((m) => m.type === 'it:result' && m.requestId === 'r1')).toEqual([
+      { type: 'it:result', requestId: 'r1', ok: false, error: 'The page loaded another document, which asks for itself.' },
+    ])
     // And the same for a photo camera
     const port = page.ports().at(-1)!
     letThrough = () => {}
@@ -2107,7 +2110,10 @@ describe('what records or takes a photo for a page, when the page changes hands 
     const page = framed()
     await page.fromFrame({ type: 'it:hello', doc: 'doc-2' })
     expect(currentQuestion()).toBeNull()
-    expect(resultOf(heard, 'r1')).toBeUndefined()
+    // Told so before its channel closed, and only that
+    expect(heard.filter((m) => m.type === 'it:result' && m.requestId === 'r1')).toEqual([
+      { type: 'it:result', requestId: 'r1', ok: false, error: 'The page loaded another document, which asks for itself.' },
+    ])
     const port = page.ports().at(-1)!
     const later: any[] = []
     port.onmessage = (m) => later.push(m.data)
@@ -2160,6 +2166,37 @@ describe('what records or takes a photo for a page, when the page changes hands 
     await page.loads()
     await arrived(() => shootingNow() === null)
     expect(tracks.every((t) => t.stopped)).toBe(true)
+  })
+
+  test('what a document that has gone was waiting on the browser for holds nothing back from the next document, and what it is given late does not take the place of what the next one began', async () => {
+    const { heard, ask } = await shownFor(FIRST, ['mic'])
+    const { liveFor } = await import('./media')
+    letThrough = () => {}
+    await ask({ type: 'it:record', requestId: 'r1', audio: true, video: false })
+    // The browser has not answered the first document; another takes its place and records
+    const first = letThrough as unknown as () => void
+    letThrough = null
+    const page = framed()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-2' })
+    expect(resultOf(heard, 'r1')).toMatchObject({ ok: false, error: 'The page loaded another document, which asks for itself.' })
+    const next = page.ports().at(-1)!
+    const later: any[] = []
+    next.onmessage = (m) => later.push(m.data)
+    next.postMessage({ type: 'it:record', requestId: 'r2', audio: true, video: false })
+    await act(() => tick(60))
+    expect(resultOf(later, 'r2')).toMatchObject({ ok: true })
+    const begun = liveFor('page1')
+    expect(begun).toBeDefined()
+    // The browser answers the first document at last: what it gives is closed, and the second document's recording goes on
+    await act(async () => {
+      first()
+      await tick(60)
+    })
+    expect(tracks.map((t) => t.stopped)).toEqual([false, true])
+    expect(liveFor('page1')).toBe(begun)
+    next.postMessage({ type: 'it:record-stop', requestId: 'r3', recording: resultOf(later, 'r2').recording.id, keep: true })
+    await act(() => tick(60))
+    expect(resultOf(later, 'r3')).toMatchObject({ ok: true })
   })
 
   test('a page that changes hands while the browser is asked what it will ask is given nothing of what the browser then gives', async () => {
@@ -2499,6 +2536,18 @@ describe('what records or takes a photo for a page, when the page changes hands 
       expect(tracks.map((t) => t.stopped)).toEqual([true])
     })
 
+    test('a camera still starting to play when the frame loads more documents than it may see is stopped at once, and the page is told why', async () => {
+      const { heard, ask, page } = await shownFor(FIRST, ['camera'])
+      await page.loads()
+      vi.mocked(HTMLMediaElement.prototype.play).mockReturnValue(new Promise(() => {}))
+      await ask(openLive)
+      expect(tracks.map((t) => t.stopped)).toEqual([false])
+      await page.loads()
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+      await arrived(() => !!resultOf(heard, 'c1'))
+      expect(resultOf(heard, 'c1')).toMatchObject({ ok: false, error: 'The page loaded another document, which asks for itself.' })
+    })
+
     test('a document the page has left does not have the camera opened live for it, however late the browser gives the camera', async () => {
       const { heard, ask, page } = await shownFor(FIRST, ['camera'])
       letThrough = () => {}
@@ -2512,7 +2561,10 @@ describe('what records or takes a photo for a page, when the page changes hands 
       expect(cameraFor('page1')).toBeUndefined()
       expect(tracks.every((t) => t.stopped)).toBe(true)
       // The document that asked is gone, and is answered nothing
-      expect(resultOf(heard, 'c1')).toBeUndefined()
+      // Told so before its channel closed, and only that
+      expect(heard.filter((m) => m.type === 'it:result' && m.requestId === 'c1')).toEqual([
+        { type: 'it:result', requestId: 'c1', ok: false, error: 'The page loaded another document, which asks for itself.' },
+      ])
       await picture()
       expect(frames(heard)).toEqual([])
     })

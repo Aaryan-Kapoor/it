@@ -715,6 +715,11 @@ export interface CameraFor {
   picture: (frame: number, picture: ImageBitmap) => void
   /** The camera paused, went on, or ended without the page asking. */
   told: (state: 'live' | 'paused' | 'ended', why?: CameraWhy) => void
+  /**
+   * Given a way to stop the camera while it starts to play, before anything else holds it, and
+   * given nothing once it has started or failed. Stopped so, its tracks stop at once.
+   */
+  starting?: (stop: (() => void) | null) => void
 }
 /** The live camera, as the frame that opened it holds it. */
 export interface Opened {
@@ -742,23 +747,35 @@ export async function openCamera(video: true | MediaTrackConstraints, page: Came
   // Asked whether the page may still have it as soon as the browser gives it, and while it starts
   // to play, which nothing else watches yet: a camera the page may no longer have is closed then
   let starting: ReturnType<typeof setInterval> | undefined
+  const letGo = (why: CameraWhy) => Object.assign(new Error('The camera was let go of as it opened.'), { why })
+  const stopTracks = () => {
+    for (const t of stream.getTracks()) t.stop()
+    view.srcObject = null
+  }
   try {
     await new Promise<void>((resolve, reject) => {
       const check = () => {
         const not = page.still()
-        if (not) reject(Object.assign(new Error('The camera was let go of as it opened.'), { why: not }))
+        if (not) {
+          stopTracks()
+          reject(letGo(not))
+        }
         return !not
       }
       if (!check()) return
+      page.starting?.(() => {
+        stopTracks()
+        reject(letGo('replaced'))
+      })
       starting = setInterval(check, LIVE_CAMERA.checkEveryMs / 4)
       view.play().then(resolve, reject)
     })
   } catch (err) {
-    for (const t of stream.getTracks()) t.stop()
-    view.srcObject = null
+    stopTracks()
     throw err
   } finally {
     clearInterval(starting)
+    page.starting?.(null)
   }
   /** The pictures sent that the page has not said it drew, and how many are being made. */
   const sent = new Set<number>()

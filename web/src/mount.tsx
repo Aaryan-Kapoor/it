@@ -314,8 +314,16 @@ export function Mount({
     let recording: Begun | null = null
     let question: { cancel: () => void } | null = null
     let photo: { cancel: () => void } | null = null
-    /** A recording or a photo is being begun: the person or the browser is being asked, and nothing is under way yet to say so. */
-    let beginning = false
+    /**
+     * What is being begun, a recording, a photo or the live camera, while the person or the browser
+     * is asked and nothing is under way yet to say so. Each beginning is its own, so that one let go
+     * of when its document went does not hold back what the next document asks for.
+     */
+    let beginning: object | null = null
+    /** Stops the live camera that is starting to play, before anything else holds it, and what it may see of the frame's loads. */
+    let starting: { stop: () => void; loads: number } | null = null
+    /** The requests for the microphone and the camera that have not been answered yet, each with its channel and the page's id for it. */
+    const unanswered = new Map<object, { from: MessagePort; requestId: string }>()
     /** A question taken away because the document that asked is gone: its going is not the person's no. */
     let letGo: unknown = null
     /** Which document the frame shows now, counted from the first: one that loads in its place is another, and what the one before began or asked for is not its. */
@@ -531,17 +539,18 @@ export function Mount({
       }
       // Taken at once, before anything is waited for: a second asking that arrives while the
       // person or the browser is asked about the first is refused, and is not begun beside it
-      beginning = true
+      const mine = {}
+      beginning = mine
       // And It's bar is seen, which asks and says what is under way
       inSight()
       try {
         if (message.type === 'it:camera') return await openLive(from, message)
-        return message.type === 'it:photo' ? await takePhoto(message) : await beginRecording(from, message)
+        return message.type === 'it:photo' ? await takePhoto(message, mine) : await beginRecording(from, message)
       } finally {
-        beginning = false
+        if (beginning === mine) beginning = null
       }
     }
-    const takePhoto = async (message: Extract<PageToSite, { type: 'it:photo' }>) => {
+    const takePhoto = async (message: Extract<PageToSite, { type: 'it:photo' }>, mine: object) => {
       const facing = message.facing === 'user' || message.facing === 'environment' ? message.facing : undefined
       const { held, got: taking } = await withDevice(['camera'], (h) =>
         shoot({ page: artifactId, title: titled.current, user, owner: h.owner, grant: h.grant }, facing),
@@ -558,7 +567,7 @@ export function Mount({
       photoBy = owner
       photoLoads = held.loads
       // Nothing more is being begun: what is open now is the person's to finish
-      beginning = false
+      if (beginning === mine) beginning = null
       inSight()
       const made = await taking.photo
       photo = null
@@ -587,24 +596,25 @@ export function Mount({
         }
         if (live && port.current === from) toPage(from, { type: 'it:recording', recording: id, state, ...(why ? { why } : {}), ...(file ? { file } : {}) })
       }
-      recording = (
+      const begun = (
         await withDevice(kindsOf(spec), (h) => {
           held = h
           return begin(spec, { id, user, page: artifactId, owner: h.owner, grant: h.grant, title: titled.current, told: tell })
         })
       ).got
       // The page was closed, taken over, or what it was allowed taken back while the browser was
-      // asked: nothing is recorded for a page that is gone, that another conversation has now, or that may not
+      // asked: nothing is recorded for a page that is gone, that another conversation has now, or
+      // that may not, and what the next document has begun since is left as it is
       const cannot = mayNotGoOn(kindsOf(spec), held)
       if (cannot) {
-        void recording.stop(false)
-        recording = null
+        void begun.stop(false)
         throw new Error(cannot)
       }
+      recording = begun
       recordingBy = held
       recordingKinds = kindsOf(spec)
       inSight()
-      return { recording: { id, mimeType: recording.mimeType } }
+      return { recording: { id, mimeType: begun.mimeType } }
     }
     const openLive = async (from: MessagePort, message: Extract<PageToSite, { type: 'it:camera' }>) => {
       const video = cameraVideoOf(message.video)
@@ -613,6 +623,8 @@ export function Mount({
       if (!id) throw new Error('A live camera needs an id to be named by.')
       /** The camera this opens, once it is open: what the end it is told of is compared with. */
       let mine: Opened | null = null
+      /** What stops this camera while it starts. */
+      let startedBy: (() => void) | null = null
       // Allowed as a photo or a recording is, and It's bar says which page the browser asks about, where it asks
       const { held, got: opened } = await withDevice(['camera'], (h) =>
         openCamera(video, {
@@ -626,6 +638,12 @@ export function Mount({
           // the conversation the person allowed, and what it was allowed under stands: asked as each
           // picture goes, and every second besides, and not only when the camera was opened
           still: () => whyNotOn(from, ['camera'], h),
+          // Its own, and never another camera's that began since
+          starting: (stop) => {
+            if (stop) starting = { stop, loads: h.loads }
+            else if (starting?.stop === startedBy) starting = null
+            startedBy = stop ?? startedBy
+          },
           picture: (frame, picture) => from.postMessage({ type: 'it:camera-frame', camera: id, frame, picture } satisfies SiteToPage, [picture]),
           told: (state, why) => {
             if (state === 'ended' && camera !== null && camera === mine) camera = null
@@ -809,13 +827,18 @@ export function Mount({
         message.type === 'it:camera-stop'
       ) {
         const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 100) : ''
+        // Answered once: here, or by `documentGone` before it closes the channel
+        const asked = {}
+        unanswered.set(asked, { from, requestId })
         try {
           // Stopping is never refused for asking too often: a page that cannot stop would go on recording
           if (message.type !== 'it:record-stop' && message.type !== 'it:camera-stop' && !allowed())
             throw new Error('This page is sending too much at once. Try again in a moment.')
-          toPage(from, { type: 'it:result', requestId, ok: true, ...(await onMedia(from, message)) })
+          const result = await onMedia(from, message)
+          if (unanswered.delete(asked)) toPage(from, { type: 'it:result', requestId, ok: true, ...result })
         } catch (err) {
-          toPage(from, { type: 'it:result', requestId, ok: false, error: err instanceof Error ? err.message.slice(0, 500) : 'It could not record.' })
+          if (unanswered.delete(asked))
+            toPage(from, { type: 'it:result', requestId, ok: false, error: err instanceof Error ? err.message.slice(0, 500) : 'It could not record.' })
         }
         return
       }
@@ -961,6 +984,15 @@ export function Mount({
       endRecordingReplaced()
       camera?.end('replaced')
       camera = null
+      starting?.stop()
+      // What it asked for and was not answered yet is answered now, while the channel can still carry it
+      for (const [asked, { from, requestId }] of unanswered)
+        if (from === was) {
+          unanswered.delete(asked)
+          toPage(from, { type: 'it:result', requestId, ok: false, error: SAID.replaced })
+        }
+      // And what it is beginning holds nothing back from the next document
+      beginning = null
       was?.close()
       port.current = null
       onItsLoad = false
@@ -1124,6 +1156,7 @@ export function Mount({
       if (photo && loads > photoLoads) photo.cancel()
       if (recording && loads > recordingBy.loads) endRecordingReplaced()
       if (camera && loads > cameraBy.loads) camera.end('replaced')
+      if (starting && loads > starting.loads) starting.stop()
       if (port.current && (onItsLoad || asking?.afterHello)) {
         clearTimeout(asking?.timer)
         asking = null
