@@ -44,6 +44,12 @@ const HERE = {
 
 afterEach(forgetTailnetName)
 
+/**
+ * Where the tests that listen on a stand-in daemon's socket make their folder: a short path, since
+ * macOS takes a socket's path only up to 104 bytes, and its own folder for temporary files is long.
+ */
+const SHORT = process.platform === 'win32' ? path.join(os.tmpdir(), 'it-ts-') : '/tmp/it-ts-'
+
 describe('a tailnet’s addresses', () => {
   test('are the two ranges a tailnet gives out of, however one is written, and nothing beside them', () => {
     for (const address of [
@@ -352,7 +358,7 @@ describe('finding Tailscale on each system', () => {
     let root = ''
     const sockets: net.Server[] = []
     beforeEach(() => {
-      root = mkdtempSync(path.join(os.tmpdir(), 'it-ts-'))
+      root = mkdtempSync(SHORT)
     })
     afterEach(async () => {
       await Promise.all(sockets.splice(0).map((server) => new Promise((done) => server.close(done))))
@@ -370,7 +376,7 @@ describe('finding Tailscale on each system', () => {
       mkdirSync(path.dirname(at), { recursive: true })
       const server = net.createServer()
       sockets.push(server)
-      await new Promise<void>((done) => server.listen(at, done))
+      await new Promise<void>((done, failed) => server.once('error', failed).listen(at, done))
     }
     const linux = (): System => ({ platform: 'linux', env: { PATH: path.join(root, 'nothing') }, root })
     const FUNNEL = `#!/bin/sh\nprintf '%s' '{"AllowFunnel":{"studio.ts.net:443":true},"TCP":{"443":{"TCPForward":"[::ffff:127.0.0.1]:5130","TerminateTLS":"studio.ts.net"}}}'\n`
@@ -520,7 +526,7 @@ describe('a Tailscale that is there and not running', () => {
   })
 
   test.skipIf(process.platform === 'win32')('makes the Funnel off, and a daemon that runs and cannot be reached leaves it unknown', async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), 'it-ts-'))
+    const root = mkdtempSync(SHORT)
     try {
       const system: System = { platform: 'linux', env: { PATH: root }, root }
       const command = path.join(root, 'tailscale')
@@ -538,7 +544,7 @@ describe('a Tailscale that is there and not running', () => {
       const socket = path.join(root, 'run', 'tailscale', 'tailscaled.sock')
       mkdirSync(path.dirname(socket), { recursive: true })
       const daemon = net.createServer()
-      await new Promise<void>((done) => daemon.listen(socket, done))
+      await new Promise<void>((done, failed) => daemon.once('error', failed).listen(socket, done))
       try {
         says('', "failed to connect to local tailscaled; it doesn't appear to be running (sudo systemctl start tailscaled ?)", 1)
         expect(await inspectFunnel([5130, 5131], system)).toBeUndefined()
