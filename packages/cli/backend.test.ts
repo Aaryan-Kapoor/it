@@ -4146,12 +4146,22 @@ describe('whether the functions answer in the backend', () => {
       }, 4000)
       expect(await refusal(loaded(faulty.at, asked.signal))).toBe('stopped')
       expect(Date.now() - abortedAt).toBeLessThan(1000)
-      // Asked to stop in the last wait, the one that ends where the time does, it stops all the same
-      const last = new AbortController()
-      setTimeout(() => last.abort(), 900)
-      expect(await refusal(loaded(faulty.at, last.signal, 1000))).toBe('stopped')
     } finally {
       await faulty.close()
+    }
+    // Asked to stop in the last wait, the one that ends where the time does, it stops all the same.
+    // Given three seconds, the fourth try is the last, and the wait after it is one of a second
+    // and a quarter: the stop comes a tenth of a second into it, counted from the fourth answer.
+    const last = new AbortController()
+    const fourth = await site((asked, res) => {
+      res.writeHead(503).end()
+      if (asked === 4) setTimeout(() => last.abort(), 100)
+    })
+    try {
+      expect(await refusal(loaded(fourth.at, last.signal, 3000))).toBe('stopped')
+      expect(fourth.asked()).toBe(4)
+    } finally {
+      await fourth.close()
     }
   }, 30_000)
 
