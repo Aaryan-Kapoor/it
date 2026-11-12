@@ -202,6 +202,14 @@ Where the page says that the new version is in place and has not been heard from
 
 On a Windows machine that joined an It, a background service that finds another It already running this machine's connector waits for it to stop, and says so in its log when it begins and then every half hour. It looks again after half a minute, and less often after that, down to once every five minutes. Once the other has stopped, the service ends and its launcher starts it again a few seconds later, so that it takes over as the program installed now and not as whatever program it was started as, which after an update is the one the update moved aside. The other may be an `it serve` you started in a terminal, or a launcher left running when its task was replaced.
 
+## A bare `it` on Windows that speaks of a Describe block
+
+In Windows PowerShell, `it` typed where It's folder is not on the PATH does not run It. Windows comes with Pester, a test framework that has a command of its own called `It`, and PowerShell reads names without regard to capitals, so it runs that one, which answers "The It command may only be used inside a Describe block." Nothing is wrong with It when you see this, and nothing was run.
+
+It happens in a terminal or an app that was open before It was installed, because a program keeps the PATH it started with. The install script puts the folder on the PATH of the PowerShell it runs in, so the window you installed from is not one of them, unless Pester's command had already been used in it. Open a new terminal, or start the app again, and `it` is It. Until then, the program's whole path runs It anywhere: `& "$env:USERPROFILE\.it\bin\it.exe" status`. Typed as `it.exe`, the name is never taken for Pester's command, and where the folder is not on the PATH PowerShell says plainly that there is no such command.
+
+An agent in an app that was open before the install is in the same place, since the app runs each of its commands with the PATH it started with. Setup names the program by its whole path in the commands it gives an agent on Windows for that reason, and the skill tells agents to run `it.exe` there. An agent that reports the Describe-block error ran a bare `it`: tell it to use the whole path, or start its app again.
+
 ## The Windows command is missing after an interrupted update
 
 If an install or update was stopped while it was replacing `it.exe`, run the install command again. That restores the command without removing your pages or settings. Do not choose a program from the files named `it.old.*.exe` yourself.
