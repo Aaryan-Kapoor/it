@@ -10,6 +10,8 @@
     <button id="stop" onclick="stop()">Stop and send</button>
     <button id="photo" onclick="photo()">Photo</button>
     <button id="live" onclick="live()">Live camera</button>
+    <button id="elsewhere" onclick="elsewhere()">Another document</button>
+    <button id="again" onclick="location.reload()">Load again</button>
     <p id="out"></p>
     <video id="view" autoplay muted playsinline width="320"></video>
     <p>Pictures: <span id="frames">0</span></p>
@@ -51,6 +53,10 @@
         } catch (e) {
           out.textContent = `refused: ${e.message}`
         }
+      }
+      // The page takes its frame to another of its files, a document It's script is not in
+      function elsewhere() {
+        location.href = 'elsewhere.txt'
       }
       async function stop() {
         try {

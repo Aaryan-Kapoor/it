@@ -915,6 +915,8 @@ describe('turning it off', () => {
   })
   test('a sender that cannot make the file that says it is deciding does not send', async () => {
     told()
+    // The send must go whatever the disk's speed, so the time the step of deciding takes is the test's
+    vi.useFakeTimers({ toFake: ['performance'] })
     const deciding = path.join(home, 'telemetry-sending')
     // Something that can be neither written nor removed stands where the file would be
     mkdirSync(deciding)
@@ -1532,6 +1534,8 @@ describe('sending', () => {
   })
   test('what a connector had taken and was stopped before sending is sent by the next one', async () => {
     told()
+    // The send must go whatever the disk's speed, so the time the step of deciding takes is the test's
+    vi.useFakeTimers({ toFake: ['performance'] })
     published()
     // Taken by a connector that was then killed
     writeFileSync(`${spool()}.taken`, readFileSync(spool()))
@@ -1548,6 +1552,8 @@ describe('sending', () => {
   })
   test('batches hold twenty at most, each event once, and go without waiting when one is full', async () => {
     told()
+    // The send must go whatever the disk's speed, so the time the step of deciding takes is the test's
+    vi.useFakeTimers({ toFake: ['performance'] })
     const posts: string[] = []
     const sender = noting(posts, () => 5_000)
     for (let i = 0; i < 45; i++) published()
@@ -1702,6 +1708,8 @@ describe('sending', () => {
   })
   test('stopping does not wait for a send that is under way', async () => {
     told()
+    // The send must go whatever the disk's speed, so the time the step of deciding takes is the test's
+    vi.useFakeTimers({ toFake: ['performance'] })
     let given: AbortSignal | undefined
     const sender = usage.startSender({
       // An address that never answers: the send ends only when it is given up
@@ -1723,6 +1731,8 @@ describe('sending', () => {
   })
   test('an answer whose end never comes is not waited for: the connection is closed once it is known whether the batch was taken', async () => {
     told()
+    // The send must go whatever the disk's speed, so the time the step of deciding takes is the test's
+    vi.useFakeTimers({ toFake: ['performance'] })
     let closed = () => {}
     const gone = new Promise<string>((resolve) => {
       closed = () => resolve('closed')
@@ -1811,6 +1821,8 @@ describe('sending', () => {
   })
   test('a line in the file that is not an event It would have written lately, under this id, is not sent', async () => {
     told()
+    // The send must go whatever the disk's speed, so the time the step of deciding takes is the test's
+    vi.useFakeTimers({ toFake: ['performance'] })
     const good = aLine()
     const other = () => ({ ...good, id: randomUUID() })
     writeFileSync(
@@ -1878,6 +1890,8 @@ describe('sending', () => {
   })
   test('an hour that is a few days old is still sent, and so is one the clock is just coming to', async () => {
     told()
+    // The send must go whatever the disk's speed, so the time the step of deciding takes is the test's
+    vi.useFakeTimers({ toFake: ['performance'] })
     const good = aLine()
     const hours = [hourOf(Date.now() - 6 * 86_400_000), hourOf(Date.now() + 3_500_000)]
     writeFileSync(spool(), hours.map((at) => `${JSON.stringify({ ...good, id: randomUUID(), at })}\n`).join(''))
@@ -2266,6 +2280,8 @@ describe('what cannot be trusted', () => {
   })
   test('a folder left where a taken file would be keeps nothing else from being read or removed', async () => {
     told()
+    // The send must go whatever the disk's speed, so the time the step of deciding takes is the test's
+    vi.useFakeTimers({ toFake: ['performance'] })
     const good = JSON.stringify(aLine())
     // One that cannot be removed, since it is not empty
     const stuck = `${spool()}.taken`

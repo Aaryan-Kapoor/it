@@ -14,6 +14,7 @@ import {
   itForAgent,
   loadAddon,
   notLoadedHere,
+  OPENCODE_RESTART,
   onWindows,
   PI_RELOAD,
   piNotLoadedHere,
@@ -87,6 +88,50 @@ describe('whether what the person does arrives by itself', () => {
     const incompatible = arrives({ session: claude, addonHere: true, route: route({ runtime: 'incompatible' }) })
     expect(incompatible.byItself).toBe(false)
     expect(incompatible.next).toContain(`\`${it()} status\``)
+  })
+
+  test('in an OpenCode that has not loaded It’s add-on, the agent is told to have the person start OpenCode again, and how the page becomes the conversation’s', () => {
+    const facts = { session: undefined, addonHere: undefined, unloadedOpenCode: true }
+    for (const runtime of ['inactive', 'unverified'] as const) {
+      const said = arrives({ ...facts, route: route({ runtime }), slug: 'ping' })
+      expect(said.byItself).toBe(false)
+      expect(said.next).toContain(`word for word: “${OPENCODE_RESTART}”`)
+      expect(said.next).toContain(`\`${it()} update ping\` or \`${it()} wait --id ping\``)
+      expect(said.next).toContain(`\`${it()} wait --id ping --timeout 100\``)
+    }
+    expect(OPENCODE_RESTART).toMatch(/^Quit OpenCode and start it again/)
+    // In the tour it is said once, after the ending
+    expect(arrives({ ...facts, route: route(), tour: true }).next).toContain('after the tour’s ending')
+  })
+
+  test('a command OpenCode ran that names no conversation is not told to start OpenCode again where that would not help', () => {
+    const facts = { session: undefined, addonHere: undefined, unloadedOpenCode: true, slug: 'ping' }
+    // The add-on is not connected on this machine at all
+    const unconnected = arrives({ ...facts, route: route({ connected: false }) })
+    expect(unconnected.byItself).toBe(false)
+    expect(unconnected.next).toContain('It’s add-on for OpenCode is not connected on this machine')
+    // The add-on OpenCode has loaded cannot take clicks
+    const incompatible = arrives({ ...facts, route: route({ runtime: 'incompatible' }) })
+    expect(incompatible.byItself).toBe(false)
+    expect(incompatible.next).toContain(`\`${it()} status\``)
+    // An OpenCode that has loaded the add-on is heard from, which may be this one; or the connector could not be asked
+    const heard = arrives({ ...facts, route: route({ runtime: 'active' }) })
+    const unasked = arrives({ ...facts, route: null })
+    for (const said of [unconnected, incompatible, heard, unasked]) expect(said.next).not.toContain(OPENCODE_RESTART)
+    for (const said of [heard, unasked]) expect(said.byItself).toBe('unknown')
+    // A conversation that is named is never told any of this
+    expect(
+      arrives({ session: { harness: 'opencode', id: 'ses_1' }, addonHere: undefined, route: route({ listening: true }), unloadedOpenCode: true }).byItself,
+    ).toBe(true)
+  })
+
+  test('a page made before OpenCode loaded the add-on that It gave no answer for is not said to arrive by itself, where the conversation listens', () => {
+    const session = { harness: 'opencode', id: 'ses_1' }
+    expect(arrives({ session, addonHere: undefined, route: route({ listening: true }), slug: 'ping' }).byItself).toBe(true)
+    const left = arrives({ session, addonHere: undefined, route: route({ listening: true }), slug: 'ping', unclaimedLeft: true })
+    expect(left.byItself).toBe(false)
+    expect(left.next).toContain('belongs to no conversation')
+    expect(left.next).toContain(`\`${it()} wait --id ping --timeout 100\``)
   })
 
   test('is said to be unknown, with the agent told to wait, wherever It cannot tell', () => {
@@ -198,6 +243,24 @@ describe('what setup says of the conversation it ran in, where it has just conne
     // T3 Code is not on this machine: no thread can hold it, whatever the connector could say
     expect(setupLine({ ...codexFacts, t3: false, route: null })).toBe(CODEX_RESTART)
     expect(CODEX_RESTART_OR_T3).toContain('In a T3 Code thread there’s nothing to approve')
+  })
+
+  test('in a Pi conversation that has not loaded the add-on: to type /reload in it, whether or not Pi was connected before', () => {
+    const inPi = { ...facts, session: { harness: 'pi', id: 'p' }, claude: undefined }
+    expect(setupLine(inPi)).toBe(PI_RELOAD)
+    expect(PI_RELOAD).toContain('Type /reload in this chat')
+    // The connector's answer does not change it: Pi has no thread of T3 Code
+    expect(setupLine({ ...inPi, route: route({ thread: 'none' }) })).toBe(PI_RELOAD)
+    // Nothing where the add-on runs in it, where that cannot be told, or where Pi is not connected
+    expect(setupLine({ ...inPi, addonHere: true })).toBeUndefined()
+    expect(setupLine({ ...inPi, addonHere: undefined })).toBeUndefined()
+    expect(setupLine({ ...inPi, connected: false })).toBeUndefined()
+  })
+
+  test('in a Hermes or an OpenCode conversation: nothing of its own, since neither lets It tell whether the add-on is loaded there, so the app’s own note is what is passed on', () => {
+    for (const harness of ['hermes', 'opencode']) {
+      for (const addonHere of [undefined, false]) expect(setupLine({ ...facts, session: { harness, id: 's' }, addonHere })).toBeUndefined()
+    }
   })
 
   test('nothing where the conversation’s app is not connected, where nothing is left to do in it, or where no conversation is known', () => {

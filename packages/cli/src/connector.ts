@@ -98,6 +98,7 @@ import {
   claudeModeOf,
   claudeWroteAt,
   codexHolder,
+  codexInterruptedAt,
   endTree,
   fromAnotherStart,
   LEFT_ENDED,
@@ -601,6 +602,15 @@ export const OPEN_WITHOUT_ADDON =
  */
 export const PI_OPEN_WITHOUT_ADDON =
   'its conversation is open without It’s add-on, as when it was open before It was installed, so It did not start a second copy of it: type /reload in it, or open it again if you closed it, and what you did reaches it'
+/**
+ * What the page says of a click for a Codex conversation that is open and whose last turn the
+ * person interrupted. Codex keeps what is put in its queue from then until their next message
+ * there, so the click is not put in it and said to be with the agent: it waits here, and is
+ * handed to the turn that message begins. Shown after "Couldn't wake Codex:", well within the
+ * 300 characters the backend keeps.
+ */
+export const CODEX_INTERRUPTED =
+  'its last turn in that conversation was interrupted, and Codex starts nothing by itself after that: send it a message there, and what you did reaches it'
 /** What the page says after why a Pi conversation could not be reopened, where it has not loaded It's add-on either (`notLoadedToo`). */
 export const PI_NOT_LOADED =
   'Its conversation has not loaded It’s add-on either, as when it was open before It was installed: if it is still open, type /reload in it, and what you did reaches it'
@@ -2836,7 +2846,12 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
               if (t?.reason === reason && t.via === via) Object.assign(t, { asking: false, said: true })
             }
             const first = some[0]!.session!
-            if (reason !== null)
+            if (reason === CODEX_INTERRUPTED)
+              seldom(
+                `interrupted:${keyOf(first.harness, first.id)}`,
+                `a codex conversation (${short(keyOf(first.harness, first.id))}) is open and its last turn was interrupted, so Codex would keep a click in its queue until the next message there; its page says to send one`,
+              )
+            else if (reason !== null)
               seldom(
                 `shut:${keyOf(first.harness, first.id)}`,
                 `${a(first.harness)} conversation (${short(keyOf(first.harness, first.id))}) is open without It’s add-on, so it is not reopened; its page says to type ${reloadIn(first.harness)} in it`,
@@ -2936,6 +2951,19 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     const holder = codexHold(key)
     return holder === null ? null : holder === 'elsewhere'
   }
+  /**
+   * Whether a Codex conversation's last turn was interrupted, as Codex's own file of it says
+   * (`codexInterruptedAt`), and no turn has begun since. A hook that said a turn began after the
+   * interruption counts as well as the file: Codex may not have written of that turn yet.
+   */
+  const codexInterrupted = (key: string): boolean => {
+    const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: threadOf(key) }), harnessEnv())
+    if (typeof env === 'string') return false
+    const at = codexInterruptedAt(threadOf(key), env.CODEX_HOME)
+    if (at === null) return false
+    const s = sessions.get(key)
+    return !(s?.busy === true && s.busyAt > at)
+  }
   const codexPut = (thread: string, text: string) => {
     const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: thread }), harnessEnv())
     return typeof env === 'string' ? Promise.resolve(env) : codexQueue(thread, text, env)
@@ -2991,6 +3019,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // Codex's queue is for a conversation some Codex has open. One that was closed while this
       // click stood in line is not given it: the click is looked at afresh on the next pass.
       if (!reopening && !t3 && codexOpen(key) !== true) return
+      // Nor one whose last turn the person interrupted while this click stood in line: Codex
+      // would keep it until their next message there, and the click is looked at afresh on the
+      // next pass, which has the page say what brings it on
+      if (!reopening && !t3 && codexInterrupted(key)) return
       // Only if it is still for this conversation on this machine: the page may have changed
       // hands while the click stood in line here
       // The hold is counted from before it was asked for: It starts counting when it gives it,
@@ -3005,7 +3037,14 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // And looked at once more, now that the claim is answered: a waiter that began while it
       // was being asked for cannot take what this machine holds, so it is given back to it. It
       // is given back as well when Codex was disconnected in that time.
-      if (closing || unfitting || awaited(click, Date.now()) || !connected(harness) || (reopening && !wakes(harness, click.at))) {
+      if (
+        closing ||
+        unfitting ||
+        awaited(click, Date.now()) ||
+        !connected(harness) ||
+        (reopening && !wakes(harness, click.at)) ||
+        (!reopening && !t3 && codexInterrupted(key))
+      ) {
         journal('released', click.id)
         await release(click.id).catch(() => {})
         return
@@ -3710,6 +3749,19 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
                 // Asked last, since it tells the page: only of a click that would otherwise be reopened for
                 !keptShut(click, openThisPass),
             })
+        // A Codex that has the conversation open, and whose last turn the person interrupted,
+        // keeps what its queue is given until their next message there, and no hook of that
+        // turn is still to come. Put in the queue, the click would be said to be with the
+        // agent while nothing ran. It waits here instead, its page says what brings it on, and
+        // it is as new to the turn that message begins as one made then, so that turn's hooks
+        // hand it over. A conversation held in a thread of T3 Code goes to its thread as ever.
+        if (codex && (forAddOn || way === 'queue') && !t3Only(key) && codexInterrupted(key)) {
+          tellHeld(click, CODEX_INTERRUPTED)
+          hookSeen.delete(click.id)
+          hookSeen.set(click.id, { tag: tag(click), at: performance.now() })
+          continue
+        }
+        if (click.heldBack === CODEX_INTERRUPTED) tellHeld(click, null)
         if (forAddOn) {
           // Route 1: the add-on will ask for it, or the running turn's next hook will
           const asked = steady()

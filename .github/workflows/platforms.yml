@@ -125,6 +125,11 @@ jobs:
           node e2e/ready.mjs 300
       - name: The whole product, in a browser
         run: node e2e/run.mjs --quick
+      # As in the main workflow: the door's own listener, asked as Tailscale asks it with
+      # `it https on`, through a stand-in for Tailscale's server
+      - name: Over https, as Tailscale hands a request to the door
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
+        run: node e2e/https.mjs
       - name: Stop It, and set aside what was written
         id: stop
         if: always() && steps.stack.outcome != 'skipped'

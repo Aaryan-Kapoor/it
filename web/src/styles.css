@@ -3004,6 +3004,15 @@ span.card-fallback {
   line-height: 1.5;
   color: var(--fg-muted);
 }
+/* A Tailscale Funnel that makes It public, or may: a banner of its own above the ways, in the colour of danger, whatever the network setting */
+.panel-said.net-exposure {
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--fg);
+  background: color-mix(in oklab, var(--danger) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--danger) 45%, transparent);
+}
 
 .page-frame-unavailable {
   flex: 1;

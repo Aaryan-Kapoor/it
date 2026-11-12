@@ -725,6 +725,7 @@ export default defineSchema({
     internet: v.optional(v.boolean()),
     /** Why the internet reaches the machine It runs on, in words that finish "This machine …", where it does. */
     exposed: v.optional(v.string()),
+    funnel: v.optional(v.union(v.literal('off'), v.literal('public'), v.literal('unknown'))),
     /**
      * The machine's name on its tailnet, such as `studio.tail1234.ts.net`, while the door is open
      * to the network and answers to that name: kept to the tailnet, or open to every network on
