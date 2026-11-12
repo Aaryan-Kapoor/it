@@ -342,7 +342,8 @@ export function teller(
  * to each, and which are owed the word that a turn of theirs was cut off or stopped. The first
  * is written by the command that publishes or brings up a page, once It has accepted that, and
  * by the connector as Codex's hooks say where a conversation is held; the rest by the connector
- * alone.
+ * alone. With them goes the note of the pages made in an OpenCode that had not loaded It's
+ * add-on, which the command that publishes writes and which names no conversation.
  *
  * The note of the turns It has reopened that are running now (`runs.json`) is not among them.
  * It is what keeps a conversation from being reopened a second time while a process of its
@@ -350,7 +351,9 @@ export function teller(
  */
 const NOTES = [
   conversationsFile,
-  ...['heard.json', 'aliases.json', 't3-threads.json', 't3-asked.json', 'cut-off.json', 'stopped.json', 'journal.jsonl'].map((name) => () => inHome(name)),
+  ...['heard.json', 'aliases.json', 't3-threads.json', 't3-asked.json', 'opencode-unclaimed.json', 'cut-off.json', 'stopped.json', 'journal.jsonl'].map(
+    (name) => () => inHome(name),
+  ),
 ]
 /** Removes those notes. Whether there was any of them to remove. */
 function removeNotes(): boolean {
