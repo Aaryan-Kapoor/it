@@ -2266,6 +2266,8 @@ describe('what cannot be trusted', () => {
   })
   test('a folder left where a taken file would be keeps nothing else from being read or removed', async () => {
     told()
+    // The send must go whatever the disk's speed, so the time the step of deciding takes is the test's
+    vi.useFakeTimers({ toFake: ['performance'] })
     const good = JSON.stringify(aLine())
     // One that cannot be removed, since it is not empty
     const stuck = `${spool()}.taken`
