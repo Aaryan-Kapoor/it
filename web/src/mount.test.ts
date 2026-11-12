@@ -2543,11 +2543,16 @@ describe('what records or takes a photo for a page, when the page changes hands 
       await page.loads()
       letThrough = () => {}
       await ask(openLive)
-      // The channel is in another window's hands, and two more documents load, the first of them answering as the page
+      // The channel is in another window's hands, and another document loads, answering as the page
       await page.loads()
       letThrough()
       await arrived(() => tracks.length === 1 && tracks[0]!.stopped)
+      await act(() => tick(60))
       expect(frames(heard)).toEqual([])
+      // Told once, before its channel closed
+      expect(heard.filter((m) => m.type === 'it:result' && m.requestId === 'c1')).toEqual([
+        { type: 'it:result', requestId: 'c1', ok: false, error: 'The page loaded another document, which asks for itself.' },
+      ])
     })
 
     test('a hello from another document ends the live camera even when the page has asked too much to be given a channel just then', async () => {
