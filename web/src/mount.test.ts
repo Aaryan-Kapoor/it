@@ -2558,8 +2558,12 @@ describe('what records or takes a photo for a page, when the page changes hands 
     test('a hello from another document ends the live camera even when the page has asked too much to be given a channel just then', async () => {
       const { heard, ask, page } = await shownFor(FIRST, ['camera'])
       await ask(openLive)
-      // Everything the page may ask of the site at once, used up
-      for (let n = 0; n < 30; n++) await page.fromFrame({ type: 'it:fullscreen', requestId: `f${n}`, on: true })
+      // Everything the page may ask of the site at once, used up, with the clock held so that none of it comes back meanwhile
+      vi.useFakeTimers({ toFake: ['Date'] })
+      const port = page.ports()[0]!
+      for (let n = 0; n < 30; n++) port.postMessage({ ...openLive, requestId: `again-${n}` })
+      await act(() => tick(60))
+      expect(heard.filter((m) => m.type === 'it:result' && m.requestId.startsWith('again-') && /too much at once/.test(m.error)).length).toBeGreaterThan(0)
       await page.fromFrame({ type: 'it:hello', doc: 'doc-2' })
       expect(page.ports()).toHaveLength(1)
       expect(states(heard)).toMatchObject([{ state: 'ended', why: 'replaced' }])
