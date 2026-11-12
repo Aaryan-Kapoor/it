@@ -115,8 +115,25 @@ export async function turnHttpsOn(
       `\`tailscale serve status\` says what. Take it away there, or run It on other ports with IT_PORT, and run this again.`,
     )
   const made: number[] = []
-  /** Takes away the entries made just now. The ports it could not take away, if any. */
-  const undo = () => made.filter((at) => !run(['serve', `--https=${at}`, 'off']).ok)
+  /**
+   * Takes away the entries made just now, each only where Tailscale still serves it as It set it
+   * up: one that another program has changed since is that program's, and is left as it is. The
+   * ports where Tailscale may still serve It, if any: every one made, where what Tailscale serves
+   * cannot be read again.
+   */
+  const undo = () => {
+    if (!made.length) return []
+    let now: unknown
+    try {
+      now = servedNow(run)
+    } catch {
+      return [...made]
+    }
+    return made.filter((at) => {
+      const port = ports.find((p) => p.at === at)!.port
+      return servedAs(now, name, at, port) === 'its' && !run(['serve', `--https=${at}`, 'off']).ok
+    })
+  }
   const leftAt = (left: number[]) =>
     new Problem(
       `It could not take away what it had just set up, so Tailscale may still serve https for It on port ${both(left)}. https is not turned on in It’s settings.`,

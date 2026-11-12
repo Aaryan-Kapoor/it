@@ -21,22 +21,37 @@ describe.skipIf(process.platform === 'win32')('it https on, against a stand-in T
   beforeEach(() => {
     dir = mkdtempSync(path.join(os.tmpdir(), 'it-https-'))
     system = { platform: 'linux', env: { PATH: dir }, root: dir }
-    // `status` is what it says it serves; `status.2` what it says from the second time it is
-    // asked; `slow.2`, that it takes three seconds to say it the second time; `fail-bg.<port>`
-    // and `fail-off.<port>`, that it refuses to serve on that port, or to stop serving there
+    // It serves what it was told to with `serve --bg`, which it keeps in `made`, and takes away
+    // what it was told to with `serve --https=<port> off`; `status` is what it says it serves
+    // where it was told to serve nothing; `status.<n>`, what it says the nth time it is asked;
+    // `slow.<n>`, that it takes three seconds to say it the nth time; `fail-bg.<port>` and
+    // `fail-off.<port>`, that it refuses to serve on that port, or to stop serving there
     writeFileSync(
       path.join(dir, 'tailscale'),
       `#!/bin/sh
 cd '${dir}'
 printf '%s\\n' "$*" >> calls
+touch made
 if [ "$1 $2" = "serve status" ]; then
   n=$(($(cat asked 2>/dev/null || echo 0) + 1)); echo $n > asked
   [ -f slow.$n ] && sleep 3
-  if [ $n -ge 2 ] && [ -f status.2 ]; then cat status.2; else cat status; fi
+  if [ -f status.$n ]; then cat status.$n; exit 0; fi
+  if [ -s made ]; then
+    tcp=''; web=''
+    while read at port; do
+      tcp="$tcp\${tcp:+,}\\"$at\\":{\\"HTTPS\\":true}"
+      web="$web\${web:+,}\\"${NAME}:$at\\":{\\"Handlers\\":{\\"/\\":{\\"Proxy\\":\\"http://127.0.0.1:$port\\"}}}"
+    done < made
+    printf '{"TCP":{%s},"Web":{%s}}' "$tcp" "$web"
+  else cat status; fi
   exit 0
 fi
-if [ "$2" = "--bg" ]; then port=\${3#--https=}; [ -f fail-bg.$port ] && { echo "refused" >&2; exit 1; }; exit 0; fi
-port=\${2#--https=}; [ -f fail-off.$port ] && { echo "refused" >&2; exit 1; }
+if [ "$2" = "--bg" ]; then
+  at=\${3#--https=}; [ -f fail-bg.$at ] && { echo "refused" >&2; exit 1; }
+  echo "$at \${4##*:}" >> made; exit 0
+fi
+at=\${2#--https=}; [ -f fail-off.$at ] && { echo "refused" >&2; exit 1; }
+grep -v "^$at " made > made.next; mv made.next made
 exit 0
 `,
       { mode: 0o700 },
@@ -61,8 +76,7 @@ exit 0
   test('with nothing served, empty or null, it sets up its two entries and confirms that no Funnel reaches It', async () => {
     for (const nothing of ['', 'null', '{}']) {
       said('status', nothing)
-      rmSync(path.join(dir, 'calls'), { force: true })
-      rmSync(path.join(dir, 'asked'), { force: true })
+      for (const file of ['calls', 'asked', 'made']) rmSync(path.join(dir, file), { force: true })
       await on()
       expect(calls()).toEqual(['serve status --json', ...BOTH, 'serve status --json'])
     }
@@ -101,12 +115,15 @@ exit 0
     }
   })
 
+  const UNDONE = ['serve status --json', 'serve --https=5132 off', 'serve --https=5133 off']
+
   test('where Tailscale is slow to confirm afterwards, the two entries just made are taken away, and nothing else', async () => {
     said('slow.2', '')
     const problem = await refused()
     expect(problem.code).toBe('funnel_unconfirmed')
     expect(problem.message).toContain('took away what it had just set up')
-    expect(calls()).toEqual(['serve status --json', ...BOTH, 'serve status --json', 'serve --https=5132 off', 'serve --https=5133 off'])
+    expect(calls()).toEqual(['serve status --json', ...BOTH, 'serve status --json', ...UNDONE])
+    expect(readFileSync(path.join(dir, 'made'), 'utf8')).toBe('')
   })
 
   test('where a Funnel reaches It afterwards, or what Tailscale says cannot be read, the entries are taken away too', async () => {
@@ -119,30 +136,55 @@ exit 0
       }),
     )
     expect((await refused()).code).toBe('funnel_public')
-    expect(calls().slice(-2)).toEqual(['serve --https=5132 off', 'serve --https=5133 off'])
-    rmSync(path.join(dir, 'calls'))
-    rmSync(path.join(dir, 'asked'))
+    expect(calls().slice(-3)).toEqual(UNDONE)
+    for (const file of ['calls', 'asked', 'made']) rmSync(path.join(dir, file), { force: true })
     said('status.2', 'garbage')
     expect((await refused()).code).toBe('funnel_unconfirmed')
-    expect(calls().slice(-2)).toEqual(['serve --https=5132 off', 'serve --https=5133 off'])
+    expect(calls().slice(-3)).toEqual(UNDONE)
   })
 
   test('an entry that was It’s already is kept, and only the one made now is taken away', async () => {
-    said('status', JSON.stringify({ TCP: { '5132': { HTTPS: true } }, Web: { [`${NAME}:5132`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:5130' } } } } }))
+    said('made', '5132 5130\n')
     said('status.2', 'garbage')
     await refused()
-    expect(calls()).toEqual(['serve status --json', BOTH[1], 'serve status --json', 'serve --https=5133 off'])
+    expect(calls()).toEqual(['serve status --json', BOTH[1], 'serve status --json', 'serve status --json', 'serve --https=5133 off'])
+    expect(readFileSync(path.join(dir, 'made'), 'utf8')).toBe('5132 5130\n')
   })
 
-  test('where the second entry is refused, the first is taken away, and where an entry cannot be taken away it says what Tailscale may still serve', async () => {
+  test('an entry another program changed while It was confirming is that program’s, and is left as it is', async () => {
+    said('status.2', 'garbage')
+    said(
+      'status.3',
+      JSON.stringify({
+        TCP: { '5132': { HTTPS: true }, '5133': { HTTPS: true } },
+        Web: {
+          [`${NAME}:5132`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:9000' } } },
+          [`${NAME}:5133`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:5131' } } },
+        },
+      }),
+    )
+    expect((await refused()).code).toBe('funnel_unconfirmed')
+    expect(calls().slice(-2)).toEqual(['serve status --json', 'serve --https=5133 off'])
+  })
+
+  test('where what Tailscale serves cannot be read again, nothing is taken away, and it says what Tailscale may still serve', async () => {
+    said('slow.2', '')
+    said('status.3', 'garbage')
+    const left = await refused()
+    expect(left.code).toBe('tailscale')
+    expect(left.message).toBe(
+      'It could not take away what it had just set up, so Tailscale may still serve https for It on port 5132 and 5133. https is not turned on in It’s settings.',
+    )
+    expect(calls().filter((call) => call.endsWith(' off'))).toEqual([])
+  })
+
+  test('where the second entry is refused, the first is taken away, and where an entry cannot be taken away it says so', async () => {
     said('fail-bg.5133', '')
     const problem = await refused()
     expect(problem.code).toBe('tailscale')
     expect(problem.message).toContain('would not serve https on port 5133')
-    expect(calls()).toEqual(['serve status --json', ...BOTH, 'serve --https=5132 off'])
-    rmSync(path.join(dir, 'fail-bg.5133'))
-    rmSync(path.join(dir, 'calls'))
-    rmSync(path.join(dir, 'asked'))
+    expect(calls()).toEqual(['serve status --json', ...BOTH, 'serve status --json', 'serve --https=5132 off'])
+    for (const file of ['fail-bg.5133', 'calls', 'asked', 'made']) rmSync(path.join(dir, file), { force: true })
     said('slow.2', '')
     said('fail-off.5133', '')
     const left = await refused()

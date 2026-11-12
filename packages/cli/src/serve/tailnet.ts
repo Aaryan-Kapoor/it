@@ -6,7 +6,7 @@
 // A device's addresses on a tailnet are known by their ranges, which Tailscale gives out of and
 // nothing else on a network does: 100.64.0.0/10 under IPv4, and fd7a:115c:a1e0::/48 under IPv6.
 import { execFile, execFileSync } from 'node:child_process'
-import { accessSync, constants, existsSync, statSync } from 'node:fs'
+import { accessSync, constants, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -222,7 +222,13 @@ export function funnelPorts(status: unknown, ports: number[], here: Here = thisM
  * usual places are under, which is the root of the disk but in tests. `service` says whether
  * Windows has the Tailscale service, where the system is Windows.
  */
-export type System = { platform: NodeJS.Platform; env: NodeJS.ProcessEnv; root?: string; service?: () => Promise<boolean> }
+export type System = {
+  platform: NodeJS.Platform
+  env: NodeJS.ProcessEnv
+  root?: string
+  service?: () => Promise<boolean>
+  processes?: () => Promise<string[] | undefined>
+}
 const thisSystem = (): System => ({ platform: process.platform, env: process.env })
 
 /** The places Tailscale's installers put its command on each system, where they are not on PATH. */
@@ -269,15 +275,28 @@ export function tailscaleCommand(system: System = thisSystem()): string | undefi
   })
 }
 
-/** Whether Windows has a service named Tailscale, as `sc.exe` says. Taken for there where `sc.exe` cannot say. */
+/**
+ * Whether Windows's Tailscale service may be running, as `sc.exe` says: not where no such service
+ * is installed, or where it says the service is stopped, and taken for running where it cannot say.
+ */
 const windowsService = (env: NodeJS.ProcessEnv) => () =>
   new Promise<boolean>((resolve) => {
     const windir = Object.entries(env).find(([key]) => key.toLowerCase() === 'systemroot')?.[1] || 'C:\\Windows'
-    execFile(path.win32.join(windir, 'System32', 'sc.exe'), ['query', 'Tailscale'], { timeout: 2000, windowsHide: true }, (error) => {
+    execFile(path.win32.join(windir, 'System32', 'sc.exe'), ['query', 'Tailscale'], { encoding: 'utf8', timeout: 2000, windowsHide: true }, (error, stdout) => {
       // 1060: no such service is installed
-      resolve(!(error && (error as { code?: unknown }).code === 1060))
+      if (error) return resolve((error as { code?: unknown }).code !== 1060)
+      resolve(!/STATE\s*:\s*1\s+STOPPED/i.test(stdout))
     })
   })
+
+/** The names of the programs running on macOS, as `ps` lists them for anyone. Nothing where it cannot say. */
+const macProcesses = () =>
+  new Promise<string[] | undefined>((resolve) => {
+    execFile('/bin/ps', ['-A', '-o', 'comm='], { encoding: 'utf8', timeout: 2000 }, (error, stdout) => resolve(error ? undefined : stdout.split('\n')))
+  })
+
+/** Tailscale's own programs on macOS: its app, the network extension of the App Store's app and of the standalone one, and the open-source daemon. */
+const TAILSCALE_PROCESS = /(?:^|\/)(?:Tailscale|IPNExtension|io\.tailscale\.ipn\.[\w.-]+|tailscaled)$/
 
 const isSocket = (file: string) => {
   try {
@@ -288,15 +307,21 @@ const isSocket = (file: string) => {
 }
 
 /**
- * Whether Tailscale's daemon is on this machine though its command was not found: its socket on
- * Linux, from its packages or its snap; the app, or the open-source daemon's socket, on macOS;
- * and the Tailscale service on Windows. A Funnel set up already keeps serving while the daemon
- * runs, whether or not It can find the command to ask it.
+ * Whether Tailscale's daemon may be running on this machine, as the system shows it whatever
+ * Tailscale's command says: its socket on Linux, from its packages or its snap, which it takes
+ * away when it stops; its programs or the open-source daemon's socket on macOS, where `ps` lists
+ * every user's programs; and the Tailscale service on Windows, unless that is stopped. Taken for
+ * running wherever the system cannot say. A Funnel set up already keeps serving while the daemon
+ * runs, whether or not It can find the command, or the command can reach the daemon.
  */
 export async function tailscaleDaemon(system: System = thisSystem()): Promise<boolean> {
   const root = system.root ?? ''
   if (system.platform === 'win32') return (system.service ?? windowsService(system.env))()
-  if (system.platform === 'darwin') return existsSync(`${root}/Applications/Tailscale.app`) || isSocket(`${root}/var/run/tailscaled.socket`)
+  if (system.platform === 'darwin') {
+    if (isSocket(`${root}/var/run/tailscaled.socket`)) return true
+    const running = await (system.processes ?? macProcesses)()
+    return running === undefined || running.some((name) => TAILSCALE_PROCESS.test(name.trim()))
+  }
   return ['/var/run/tailscale/tailscaled.sock', '/run/tailscale/tailscaled.sock', '/var/snap/tailscale/common/socket/tailscaled.sock'].some((socket) =>
     isSocket(`${root}${socket}`),
   )
@@ -314,16 +339,22 @@ export const daemonDown = (said: string): boolean =>
 
 /**
  * Read-only inspection. Never changes the person's Tailscale configuration. The public Funnel
- * listeners that reach It, and none where Tailscale is shown not to be on this machine at all, or
- * its command says its daemon is not running, since no Funnel is up without the daemon. Nothing
- * where Tailscale is there and cannot be asked, or what it says cannot be read with certainty.
+ * listeners that reach It, and none where the system shows that Tailscale's daemon is not
+ * running, with no command to ask or a command that says so too, since no Funnel is up without
+ * the daemon. Tailscale's command looks for the daemon among the processes it can see, which a
+ * system may keep from a user, so what it says is never enough alone. Nothing where Tailscale
+ * may be running and cannot be asked, or what it says cannot be read with certainty.
  */
 export async function inspectFunnel(ports: number[], system: System = thisSystem(), timeout = 2000): Promise<number[] | undefined> {
   const command = tailscaleCommand(system)
-  if (!command) return (await tailscaleDaemon(system).catch(() => true)) ? undefined : []
+  const running = () => tailscaleDaemon(system).catch(() => true)
+  if (!command) return (await running()) ? undefined : []
   return new Promise<number[] | undefined>((resolve) => {
     execFile(command, ['serve', 'status', '--json'], { encoding: 'utf8', timeout, windowsHide: true }, (error, stdout, stderr) => {
-      if (error) return resolve(!error.killed && daemonDown(`${stderr}\n${stdout}`) ? [] : undefined)
+      if (error) {
+        if (error.killed || !daemonDown(`${stderr}\n${stdout}`)) return resolve(undefined)
+        return void running().then((may) => resolve(may ? undefined : []))
+      }
       try {
         // Tailscale prints nothing, or `null`, where nothing is served
         const status: unknown = stdout.trim() ? JSON.parse(stdout) : null

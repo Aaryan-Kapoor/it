@@ -207,7 +207,7 @@ On a Windows machine that joined an It, a background service that finds another 
 Tailscale Funnel opens a port of the machine to the whole internet, and It warns of one that forwards to It's ports on the network page, in `it network` and in `it status`, beside what they say of the network. [Network and privacy](network-and-privacy.md#tailscale-funnel) says which Funnels It sees.
 
 - **"Tailscale Funnel makes It public, even with the network off."** A Funnel forwards from the internet to It, and It's network setting does not close it. `tailscale funnel status` lists each Funnel and where it forwards. Turn off the one on It's ports with the command for its kind, such as `tailscale funnel --https=443 off`, using the port the status names. It never changes a Funnel itself.
-- **"It could not check Tailscale Funnel."** Tailscale is on the machine, and its command could not be run, did not answer within a moment, or said something It cannot read. Check that `tailscale funnel status` works for the user It runs as. Where Tailscale's command says its daemon is not running, It takes that for no Funnel, and says nothing.
+- **"It could not check Tailscale Funnel."** Tailscale is on the machine, and its command could not be run, did not answer within a moment, or said something It cannot read. Check that `tailscale funnel status` works for the user It runs as. Where Tailscale's command says its daemon is not running, and the system shows no daemon either, It takes that for no Funnel, and says nothing. Where the command says so and the daemon's socket or service is there, as when the system keeps the daemon's process from your user, It cannot tell, and says so.
 
 `it https on` refuses before it changes anything in Tailscale where a Funnel stands in the way:
 
@@ -217,8 +217,8 @@ Tailscale Funnel opens a port of the machine to the whole internet, and It warns
 
 Once it has set its two entries up, `it https on` asks Tailscale once more:
 
-- **`funnel_unconfirmed`: "It could not confirm that no Tailscale Funnel makes It public, so it took away what it had just set up in Tailscale and did not turn https on."** Tailscale did not answer in time, or answered in a form It cannot read. It took away the two entries it had just made, and nothing else, so things are as they were. Run `it https on` again once `tailscale funnel status` answers.
-- **`tailscale`: "It could not take away what it had just set up, so Tailscale may still serve https for It on port …"** Tailscale would not take away the entries It had just made. It's settings do not say https is on. Run `it https on` again once Tailscale answers, which finishes setting it up, or `it https off`, which takes the entries away.
+- **`funnel_unconfirmed`: "It could not confirm that no Tailscale Funnel makes It public, so it took away what it had just set up in Tailscale and did not turn https on."** Tailscale did not answer in time, or answered in a form It cannot read. It took away the two entries it had just made, where Tailscale still served them as It had set them up, and nothing else. An entry another program changed in the meantime is left as that program has it. Run `it https on` again once `tailscale funnel status` answers.
+- **`tailscale`: "It could not take away what it had just set up, so Tailscale may still serve https for It on port …"** Tailscale would not take away the entries It had just made, or would not say what it serves, so It could not tell that they were still its own and left them. It's settings do not say https is on. Run `it https on` again once Tailscale answers, which finishes setting it up, or `it https off`, which takes the entries away.
 
 ## A bare `it` on Windows that speaks of a Describe block
 

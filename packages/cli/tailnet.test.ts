@@ -427,12 +427,24 @@ describe('finding Tailscale on each system', () => {
       place('/run/tailscale/tailscaled.sock', '')
       expect(await inspectFunnel([5130, 5131], linux())).toEqual([])
 
-      const mac = (): System => ({ platform: 'darwin', env: { PATH: path.join(root, 'nothing') }, root })
+      let running: string[] | undefined = ['/sbin/launchd', '/usr/libexec/logd']
+      const mac = (): System => ({ platform: 'darwin', env: { PATH: path.join(root, 'nothing') }, root, processes: async () => running })
       expect(await inspectFunnel([5130, 5131], mac())).toEqual([])
       await listen('/var/run/tailscaled.socket')
       expect(await inspectFunnel([5130, 5131], mac())).toBeUndefined()
       await new Promise((done) => sockets.pop()!.close(done))
-      mkdirSync(`${root}/Applications/Tailscale.app`, { recursive: true })
+      // Tailscale's app, the network extension of either of its apps, or the open-source daemon, running
+      for (const program of [
+        '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
+        '/Applications/Tailscale.app/Contents/PlugIns/IPNExtension.appex/Contents/MacOS/IPNExtension',
+        '/Library/SystemExtensions/AB/io.tailscale.ipn.macsys.network-extension.systemextension/Contents/MacOS/io.tailscale.ipn.macsys.network-extension',
+        '/opt/homebrew/bin/tailscaled',
+      ]) {
+        running = ['/sbin/launchd', program]
+        expect(await inspectFunnel([5130, 5131], mac()), program).toBeUndefined()
+      }
+      // And where the programs running cannot be listed, Tailscale is taken to be running
+      running = undefined
       expect(await inspectFunnel([5130, 5131], mac())).toBeUndefined()
 
       const windows = (service: boolean): System => ({
@@ -499,7 +511,7 @@ describe('a Tailscale that is there and not running', () => {
   test.skipIf(process.platform === 'win32')('makes the Funnel off, and a daemon that runs and cannot be reached leaves it unknown', async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'it-ts-'))
     try {
-      const system: System = { platform: 'linux', env: { PATH: root } }
+      const system: System = { platform: 'linux', env: { PATH: root }, root }
       const command = path.join(root, 'tailscale')
       const says = (out: string, err: string, code: number) =>
         writeFileSync(command, `#!/bin/sh\nprintf '%s' '${out}'\nprintf '%s\\n' "${err}" >&2\nexit ${code}\n`, { mode: 0o700 })
@@ -509,6 +521,26 @@ describe('a Tailscale that is there and not running', () => {
       expect(await inspectFunnel([5130, 5131], system)).toEqual([])
       says('', 'failed to connect to local tailscaled (which appears to be running as tailscaled, pid 9). Got error: refused', 1)
       expect(await inspectFunnel([5130, 5131], system)).toBeUndefined()
+      // The command says the daemon is not running, and the system shows its socket: a daemon the
+      // command could not see among the processes, as a system that hides other users' processes
+      // has it, still runs the Funnels it was given
+      const socket = path.join(root, 'run', 'tailscale', 'tailscaled.sock')
+      mkdirSync(path.dirname(socket), { recursive: true })
+      const daemon = net.createServer()
+      await new Promise<void>((done) => daemon.listen(socket, done))
+      try {
+        says('', "failed to connect to local tailscaled; it doesn't appear to be running (sudo systemctl start tailscaled ?)", 1)
+        expect(await inspectFunnel([5130, 5131], system)).toBeUndefined()
+        // On Windows, where the service is not stopped; and on macOS, where Tailscale's programs run
+        const windows: System = { platform: 'win32', env: { Path: root }, root: `${root}/`, service: async () => true }
+        writeFileSync(`${root}/C:\\Program Files\\Tailscale\\tailscale.exe`, readFileSync(command), { mode: 0o700 })
+        says('', 'failed to connect to local tailscaled process; is the Tailscale service running?', 1)
+        writeFileSync(`${root}/C:\\Program Files\\Tailscale\\tailscale.exe`, readFileSync(command), { mode: 0o700 })
+        expect(await inspectFunnel([5130, 5131], windows)).toBeUndefined()
+        expect(await inspectFunnel([5130, 5131], { ...windows, service: async () => false })).toEqual([])
+      } finally {
+        await new Promise((done) => daemon.close(done))
+      }
       // Nothing set up: Tailscale prints nothing, or null
       says('', '', 0)
       expect(await inspectFunnel([5130, 5131], system)).toEqual([])
