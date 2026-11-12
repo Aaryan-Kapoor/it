@@ -41,7 +41,7 @@ import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { BOOLEAN } from './src/args'
-import { itForAgent, reloadLine, t3ClaudeLine } from './src/arrives'
+import { CODEX_RESTART, itForAgent, reloadLine, T3_CODEX, t3ClaudeLine } from './src/arrives'
 import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
 import { VERSION } from './src/lib'
 import { aloneAt } from './src/serve/backend'
@@ -8019,5 +8019,98 @@ else if (said === 'plugin install it-bridge@it --scope user') {
     expect(held.tell).toBe(`Tell the person this in your next message, word for word: “${t3ClaudeLine('2.1.321')}”`)
     expect(held.next).toContain(`tells them this, word for word: “${t3ClaudeLine('2.1.321')}”`)
     expect(inThread.err).not.toContain(reloadLine('2.1.321'))
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('what setup says last, from inside the Codex conversation that installed It', () => {
+  /** A stand-in for Codex's own command: it keeps a marketplace and its one plugin, and answers what setup asks of it. */
+  function codexStandIn(m: { home: string; bin: string }) {
+    const kept = path.join(m.home, 'codex-kept.json')
+    writeFileSync(
+      path.join(m.bin, 'codex'),
+      `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path')
+const kept = ${JSON.stringify(kept)}
+const has = fs.existsSync(kept) ? JSON.parse(fs.readFileSync(kept, 'utf8')) : {}
+const said = process.argv.slice(2).join(' ')
+const keep = () => fs.writeFileSync(kept, JSON.stringify(has))
+const plugin = () => path.join(has.from, 'plugins/it-bridge')
+if (said === '--version') console.log('codex-cli 0.167.0')
+else if (said === 'plugin marketplace list --json') console.log(JSON.stringify({ marketplaces: has.from ? [{ name: 'it', root: has.from }] : [] }))
+else if (said === 'plugin list --marketplace it --json')
+  console.log(JSON.stringify({ installed: has.on ? [{ pluginId: 'it-bridge@it', enabled: true, source: { source: 'local', path: plugin() } }] : [], available: [] }))
+else if (said === 'plugin list --marketplace it') console.log(has.on ? 'it-bridge@it  installed, enabled  0.1.0  ' + plugin() : has.from ? 'it-bridge@it  not installed' : '')
+else if (said.startsWith('plugin marketplace add ')) { has.from = process.argv[5]; keep() }
+else if (said === 'plugin add it-bridge@it') { has.on = true; keep() }
+else { console.error('the stand-in does not know ' + said); process.exit(2) }
+`,
+    )
+    chmodSync(path.join(m.bin, 'codex'), 0o755)
+  }
+
+  test('it tells the person to quit Codex and start it again now, and why, and the agent to end its turn and leave the tour until Codex is back', async () => {
+    // A machine joining an It on another computer, which is set up as a first setup is and needs no backend program of its own
+    const joining = async (env: Record<string, string>, answer = (_url: string) => '{"ok":true}') => {
+      const m = machine(false)
+      codexStandIn(m)
+      const answers = http.createServer((req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end(answer(req.url ?? '')))
+      const socket = path.join(m.it, 'connector.sock')
+      await new Promise<void>((r) => answers.listen(socket, r))
+      writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'ef'.repeat(24), pid: process.pid, version: 'x', startedAt: 0 }))
+      const b = await backend(m, (asked) => (asked.path === 'machines:me' ? { id: 'machine-2', name: 'the laptop', wanted: [] } : null))
+      try {
+        const ran = await run(m, ['login', '--url', b.url, '--code', 'Ab3dEf6hIj9kLm2nOp5q', '--name', 'the laptop', '--only', 'codex', '--no-service'], {
+          CODEX_HOME: path.join(m.home, 'codex'),
+          ...env,
+        })
+        return { ran, m }
+      } finally {
+        await new Promise((r) => answers.close(r))
+        await b.close()
+      }
+    }
+    // What setup says of Codex to whoever reads its sentences, as the program has it
+    const note =
+      'Codex: Start Codex again, and choose "Trust all and continue" when it says the hooks need review. Until then a Codex that is already open may ask before every `it` command, runs none of It’s hooks, and gets a click only as a new message once it is idle.'
+
+    // Inside the Codex conversation that ran setup, which read its rules and its hooks before either was there
+    const { ran, m } = await joining({ CODEX_THREAD_ID: 'thread-1' })
+    const said = printed(ran)
+    expect(said.harnesses).toMatchObject([{ id: 'codex', addon: 'needs_approval' }])
+    // The rule that lets `it` out of the sandbox is written, and Codex reads it only as it starts
+    expect(existsSync(path.join(m.home, 'codex', 'rules', 'it.rules'))).toBe(true)
+    const line = `${CODEX_RESTART} Once Codex is back, say “Give me the It tour.”`
+    expect(line).toMatch(/^Quit Codex and start it again now, /)
+    expect(line).toContain('Until then, Codex may ask you to approve every `it` command I run, and It’s hooks don’t run.')
+    expect(line).toContain('`codex resume --last` brings this chat back')
+    // The words are the last thing it prints, addressed to the agent, and in the step that comes next
+    expect(Object.keys(said).pop()).toBe('tell')
+    expect(said.tell).toBe(`Tell the person this in your next message, word for word: “${line}”`)
+    expect(said.next).toContain(`tells them this, word for word: “${line}”`)
+    expect(ran.err.trimEnd().endsWith(`Tell them this in your next message, word for word:\n\n  ${line}`)).toBe(true)
+    // Starting Codex again ends the agent's turn, so the tour is left until it is back, and is not run in this turn
+    expect(said.next).toContain('Then end your turn, and do not run `it tour --wait` yet: Codex has to be started again first, which ends this turn anyway.')
+    expect(said.next).not.toContain('in the same turn, run `it tour --wait`')
+    // And what it says in sentences for the person says to start Codex again, and why
+    expect(ran.err).toContain(note)
+
+    // Run by an agent in another app, or by a script, the note is passed on as it stands, and nobody is told to end a turn
+    const outside = await joining({})
+    expect(printed(outside.ran).harnesses).toMatchObject([{ id: 'codex', addon: 'needs_approval' }])
+    expect(printed(outside.ran).next).toBe(AFTER_SETUP_TELLING(`this, word for word: “${note}”`))
+    expect(printed(outside.ran).tell).toBe(`Tell the person this in your next message, word for word: “${note}”`)
+    expect(outside.ran.err).toContain(note)
+    expect(outside.ran.err).not.toContain('Quit Codex')
+
+    // In a thread of T3 Code, which the connector says holds the conversation, Codex never asks: nothing is to be approved or started again
+    const inThread = await joining({ CODEX_THREAD_ID: 'thread-1' }, (url) =>
+      url.startsWith('/route?harness=codex&session=thread-1')
+        ? JSON.stringify({ connected: true, listening: false, runtime: 'inactive', thread: 'held' })
+        : '{"ok":true}',
+    )
+    const held = printed(inThread.ran)
+    expect(held.tell).toBe(`Tell the person this in your next message, word for word: “${T3_CODEX}”`)
+    expect(held.next).toContain(`tells them this, word for word: “${T3_CODEX}” Then, only once that message is written and in the same turn`)
+    expect(held.next).not.toContain('Quit Codex')
   })
 })
