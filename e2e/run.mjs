@@ -4840,6 +4840,22 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
       `off: ${offFromTheSite}`,
     )
   }
+  // A machine with no Tailscale Funnel on It's ports, as every machine without Tailscale is, is
+  // warned of none: not on the site, once the service has heard from Tailscale or found it
+  // absent, and not by `it network` or `it status`
+  await page.goto(`${APP}/displays`)
+  const shownWays = (await until(async () => (await page.locator('.net-way input').count()) === 3, 20_000, 300)) === true
+  await new Promise((resolve) => setTimeout(resolve, 3000))
+  const funnelSaid = {
+    banner: await page.locator('.net-exposure').count(),
+    network: (await it(A, ['network'])).funnel,
+    status: (await it(A, ['status'])).network?.funnel,
+  }
+  check(
+    'with no Tailscale Funnel on It’s ports, the site, `it network` and `it status` warn of none',
+    shownWays && funnelSaid.banner === 0 && funnelSaid.network === undefined && funnelSaid.status === undefined,
+    JSON.stringify({ shownWays, ...funnelSaid }),
+  )
   // The owner's browser and the screen on this machine were open while the door was closed and opened: both carry on
   await page.goto(`${APP}/`)
   check(
