@@ -202,6 +202,24 @@ Where the page says that the new version is in place and has not been heard from
 
 On a Windows machine that joined an It, a background service that finds another It already running this machine's connector waits for it to stop, and says so in its log when it begins and then every half hour. It looks again after half a minute, and less often after that, down to once every five minutes. Once the other has stopped, the service ends and its launcher starts it again a few seconds later, so that it takes over as the program installed now and not as whatever program it was started as, which after an update is the one the update moved aside. The other may be an `it serve` you started in a terminal, or a launcher left running when its task was replaced.
 
+## A warning about Tailscale Funnel
+
+Tailscale Funnel opens a port of the machine to the whole internet, and It warns of one that forwards to It's ports on the network page, in `it network` and in `it status`, beside what they say of the network. [Network and privacy](network-and-privacy.md#tailscale-funnel) says which Funnels It sees.
+
+- **"Tailscale Funnel makes It public, even with the network off."** A Funnel forwards from the internet to It, and It's network setting does not close it. `tailscale funnel status` lists each Funnel and where it forwards. Turn off the one on It's ports with the command for its kind, such as `tailscale funnel --https=443 off`, using the port the status names. It never changes a Funnel itself.
+- **"It could not check Tailscale Funnel."** Tailscale is on the machine, and its command could not be run, did not answer within a moment, or said something It cannot read. Check that `tailscale funnel status` works for the user It runs as. Where Tailscale's command says its daemon is not running, It takes that for no Funnel, and says nothing.
+
+`it https on` refuses before it changes anything in Tailscale where a Funnel stands in the way:
+
+- **`funnel_public`: "Tailscale Funnel makes It public on port …, so https was not turned on."** The message names the port, and its hint the `tailscale funnel` command that turns that Funnel off. Run it yourself, or stop the `tailscale funnel` command that keeps a Funnel up in the foreground, and run `it https on` again.
+- **`funnel_unconfirmed`: "A Tailscale Funnel forwards to a place that may be It, and It cannot tell whether it is."** A Funnel forwards to one of It's ports at a name that the system looks up, or in a form It cannot read. `tailscale funnel status` says where. Turn it off if it may reach It, or have it forward to another port.
+- **`tailscale`: "Tailscale said what it serves in a form It cannot read."** `tailscale serve status --json` printed something It could not read as Tailscale's settings. `tailscale serve status` shows what Tailscale serves, and a newer It may read it.
+
+Once it has set its two entries up, `it https on` asks Tailscale once more:
+
+- **`funnel_unconfirmed`: "It could not confirm that no Tailscale Funnel makes It public, so it took away what it had just set up in Tailscale and did not turn https on."** Tailscale did not answer in time, or answered in a form It cannot read. It took away the two entries it had just made, and nothing else, so things are as they were. Run `it https on` again once `tailscale funnel status` answers.
+- **`tailscale`: "It could not take away what it had just set up, so Tailscale may still serve https for It on port …"** Tailscale would not take away the entries It had just made. It's settings do not say https is on. Run `it https on` again once Tailscale answers, which finishes setting it up, or `it https off`, which takes the entries away.
+
 ## A bare `it` on Windows that speaks of a Describe block
 
 In Windows PowerShell, `it` typed where It's folder is not on the PATH does not run It. Windows comes with Pester, a test framework that has a command of its own called `It`, and PowerShell reads names without regard to capitals, so it runs that one, which answers "The It command may only be used inside a Describe block." Nothing is wrong with It when you see this, and nothing was run.
