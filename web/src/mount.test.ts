@@ -2072,6 +2072,39 @@ describe('what is open or asked for a page, when the page changes hands or is ta
     expect(sound(heard)).toHaveLength(1)
   })
 
+  test('the live microphone ends at once when the next document to load answers nothing, without waiting for the asking to give up', async () => {
+    const { heard, ask, page } = await shownFor(FIRST, ['mic'])
+    await page.loads()
+    await ask(openMic)
+    await page.loads(false)
+    expect(micStates(heard)).toEqual([{ type: 'it:microphone-state', microphone: 'mic-a', state: 'ended', why: 'replaced' }])
+    expect(tracks.map((t) => t.stopped)).toEqual([true])
+  })
+
+  test('a hello from another document ends the live microphone, and the page is told why before its channel closes', async () => {
+    const { heard, ask, page } = await shownFor(FIRST, ['mic'])
+    await ask(openMic)
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-2' })
+    expect(micStates(heard)).toEqual([{ type: 'it:microphone-state', microphone: 'mic-a', state: 'ended', why: 'replaced' }])
+    expect(tracks.map((t) => t.stopped)).toEqual([true])
+  })
+
+  test('a microphone whose sound is still being made ready when the frame loads more documents than it may see is stopped at once, and the page is told why', async () => {
+    const { heard, ask, page } = await shownFor(FIRST, ['mic'])
+    await page.loads()
+    // What gathers the sound never finishes loading
+    const made = sounds.length
+    vi.spyOn(AudioContext.prototype as any, 'resume').mockReturnValue(new Promise(() => {}))
+    await ask(openMic)
+    expect(sounds.length).toBe(made + 1)
+    expect(tracks.map((t) => t.stopped)).toEqual([false])
+    await page.loads()
+    expect(tracks.map((t) => t.stopped)).toEqual([true])
+    await arrived(() => !!resultOf(heard, 'm1'))
+    expect(resultOf(heard, 'm1')).toMatchObject({ ok: false, error: 'The page loaded another document, which asks for itself.' })
+    expect(micStates(heard)).toEqual([])
+  })
+
   test('a camera open for a photo closes when the next document to load in the frame answers as the page', async () => {
     const { ask, page } = await shownFor(FIRST, ['camera'])
     const { shootingNow } = await import('./media')
@@ -2968,6 +3001,20 @@ describe('what is open or asked for a page, when the page changes hands or is ta
     // Opened with sound, the microphone is opened with the camera, and its sound comes under the camera's own name
     describe('opened with sound', () => {
       const withSound = { ...openLive, audio: { noiseSuppression: false } }
+
+      test('a camera with sound whose sound is still being made ready when the frame loads more documents than it may see is stopped at once, both tracks', async () => {
+        const { heard, ask, page } = await shownFor(FIRST, ['mic', 'camera'])
+        await page.loads()
+        // Its picture has begun, and the browser has not started its sound
+        vi.spyOn(AudioContext.prototype as any, 'resume').mockReturnValue(new Promise(() => {}))
+        await ask(withSound)
+        expect(tracks.map((t) => t.stopped)).toEqual([false, false])
+        await page.loads()
+        expect(tracks.map((t) => t.stopped)).toEqual([true, true])
+        await arrived(() => !!resultOf(heard, 'c1'))
+        expect(resultOf(heard, 'c1')).toMatchObject({ ok: false, error: 'The page loaded another document, which asks for itself.' })
+        expect(states(heard)).toEqual([])
+      })
 
       test('a page allowed neither is asked about both in one question, the browser is asked for both at once, and the page is given pictures and sound under the one name', async () => {
         const { heard, ask, page } = await shownFor(FIRST, [])

@@ -2138,6 +2138,16 @@ describe('the microphone, live in a page', () => {
     expect(said).toEqual([['[It] a microphone’s onsound handler threw']])
   })
 
+  test('is told in words when the document that opened it is no longer the one in the frame', async () => {
+    const { p, asked, mic, tracks, made } = await opened()
+    const told: unknown[][] = []
+    mic.onchange = (state: string, why?: string) => told.push([state, why])
+    p.fromSite({ type: 'it:microphone-state', microphone: asked.microphone, state: 'ended', why: 'replaced' })
+    expect(told).toEqual([['ended', 'The page loaded another document while the microphone was live.']])
+    expect(tracks[0]!.stopped).toBe(true)
+    expect(made[0]!.state).toBe('closed')
+  })
+
   test('is told when it pauses, goes on and ends, with why in words, and once ended its stream is stopped, what made its sound is closed, and nothing more is played', async () => {
     const { p, port, asked, mic, tracks, made, played, heard, taken } = await opened()
     const told: unknown[][] = []

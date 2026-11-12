@@ -1649,6 +1649,67 @@ describe('how long the browser is given to hand over the device', () => {
     expect(made.contexts).toHaveLength(0)
   })
 
+  test('a microphone the page may no longer have by the time the browser gives it is closed then, says why, and has nothing made ready for it', async () => {
+    allow('person-1', grant('page-1', ['mic']))
+    const device = standInCamera()
+    const made = standInSound()
+    await expect(openMicrophone(true, { ...page(['mic']), still: () => 'replaced' })).rejects.toMatchObject({
+      why: 'replaced',
+      message: 'The page loaded another document, which asks for itself.',
+    })
+    expect(device.tracks.map((t) => t.stopped)).toEqual([true])
+    expect(made.contexts).toHaveLength(0)
+    expect(microphoneFor('page-1')).toBeUndefined()
+  })
+
+  test('a microphone whose sound is being made ready is given a way to be stopped at once, which stops it there and then and says it was replaced', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    allow('person-1', grant('page-1', ['mic']))
+    const device = standInCamera()
+    const made = standInSound({ gathers: 'never' })
+    const stops: ((() => void) | null)[] = []
+    const opening = openMicrophone(true, { ...page(['mic']), starting: (stop) => stops.push(stop) })
+    const said = opening.then(
+      () => null,
+      (err: Error & { why?: string }) => ({ message: err.message, why: err.why }),
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stops).toHaveLength(1)
+    expect(device.tracks.map((t) => t.stopped)).toEqual([false])
+    // The page's frame loads another document while what gathers the sound is still loading
+    stops[0]!()
+    expect(device.tracks.map((t) => t.stopped)).toEqual([true])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(await said).toEqual({ message: 'The page loaded another document, which asks for itself.', why: 'replaced' })
+    // And it is given nothing once it is no longer being made ready
+    expect(stops).toEqual([stops[0], null])
+    expect(microphoneFor('page-1')).toBeUndefined()
+    // What was being made ready for it is closed when that ends
+    await vi.advanceTimersByTimeAsync(LIVE_MICROPHONE.startMs)
+    expect(made.contexts[0]!.state).toBe('closed')
+  })
+
+  test('a camera with sound is given the same way to be stopped while its sound is made ready, after its picture began, and stops both there and then', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    allow('person-1', grant('page-1', ['mic', 'camera']))
+    const device = standInCamera()
+    const made = standInSound({ gathers: 'never' })
+    const stops: ((() => void) | null)[] = []
+    const opening = outcome(openCamera(true, true, { ...page(['mic', 'camera']), starting: (stop) => stops.push(stop) }))
+    await vi.advanceTimersByTimeAsync(0)
+    // Its picture has begun, and its sound is being made ready: the way to stop it is still its own
+    expect(made.contexts).toHaveLength(1)
+    expect(stops).toHaveLength(1)
+    expect(device.tracks.map((t) => t.stopped)).toEqual([false, false])
+    stops[0]!()
+    expect(device.tracks.map((t) => t.stopped)).toEqual([true, true])
+    expect(await opening).toBe('The page loaded another document, which asks for itself.')
+    expect(stops).toEqual([stops[0], null])
+    expect(cameraFor('page-1')).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(LIVE_MICROPHONE.startMs)
+    expect(made.contexts[0]!.state).toBe('closed')
+  })
+
   test('a camera that gives no picture within five seconds of opening is let go of, and is never listed for It’s bar', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     expect(DEVICE_WAIT.playMs).toBe(5_000)
