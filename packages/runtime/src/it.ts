@@ -1395,6 +1395,7 @@ const ENDED: Record<string, string> = {
   person: 'The person discarded the recording in It’s bar, and what was recorded was thrown away.',
   taken_back: 'The person took back what they had allowed this page, and what was recorded was thrown away.',
   not_shown: 'The page was closed while it recorded, and what was recorded was thrown away.',
+  replaced: 'The page loaded another document while it recorded, and what was recorded was thrown away.',
   device: 'The microphone or the camera stopped giving anything.',
   too_long: 'The recording ran as long as one may.',
   taken_over: 'Another conversation took this page over, and what was recorded was thrown away.',
@@ -1537,6 +1538,7 @@ const CAMERA_ENDED: Record<string, string> = {
   person: 'The person stopped the camera in It’s bar.',
   taken_back: 'The person took back what they had allowed this page.',
   not_shown: 'The page was closed while the camera was live.',
+  replaced: 'The page loaded another document while the camera was live.',
   device: 'The camera stopped giving pictures.',
   taken_over: 'Another conversation took this page over.',
 }
