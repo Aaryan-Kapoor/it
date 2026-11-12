@@ -1,6 +1,6 @@
 // What `it create`, `it update`, `it tour show` and `it status` say to an agent of whether what
 // the person does on its pages arrives in its conversation by itself, and what to do about it.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
@@ -349,5 +349,43 @@ describe('a Pi conversation that has not loaded It’s add-on', () => {
     }
     // Heard from under its id while not running here: another copy of the conversation has the add-on, as before
     expect(arrives({ session: pi, addonHere: false, route: route({ listening: true }) }).next).toContain('in another copy of it')
+  })
+})
+
+describe('what the docs say of a Codex that was open while It was set up', () => {
+  const doc = (name: string) => readFileSync(new URL(`../../docs/${name}`, import.meta.url), 'utf8')
+  /** The paragraph of a doc that begins with these words, as one line. */
+  const under = (text: string, start: string) => text.split('\n').find((line) => line.startsWith(start)) ?? ''
+
+  test('troubleshooting has a section for a Codex that asks before every `it` command, which says to start it again, and why', () => {
+    const text = doc('troubleshooting.md')
+    const at = text.indexOf('## Codex asks before every `it` command\n')
+    expect(at).toBeGreaterThan(-1)
+    const section = text.slice(at, text.indexOf('\n## ', at + 1))
+    // What ends the asking, in the words setup gives, and what brings the conversation back
+    expect(section).toContain('Quit Codex and start it again')
+    expect(section).toContain('"Trust all and continue"')
+    expect(CODEX_RESTART).toContain('“Trust all and continue”')
+    expect(section).toContain('`codex resume --last`')
+    expect(CODEX_RESTART).toContain('`codex resume --last`')
+    // Why: Codex reads the rule and asks about the hooks only as it starts
+    expect(section).toMatch(/only as it starts/)
+    // What goes on asking afterwards, so that nobody takes it for the same fault
+    expect(section).toContain('`it save`')
+    // A thread of T3 Code has nothing to approve, as setup says there
+    expect(section).toContain('In a thread of T3 Code there is nothing to approve')
+    expect(section).toContain('(add-ons.md#codex)')
+  })
+
+  test('the Codex section of the add-ons page says the same of the conversation that installed It, and no longer that T3 Code’s asking is unknown', () => {
+    const text = doc('add-ons.md')
+    const said = under(text, '**A Codex that was open while It was set up.**')
+    expect(said).toContain('asks you to approve every `it` command')
+    expect(said).toContain("runs none of It's hooks")
+    expect(said).toContain('Quit Codex and start it again')
+    expect(said).toContain('`codex resume --last`')
+    expect(said).toContain('leave the tour until Codex is back')
+    expect(text).toContain('In T3 Code, Codex never asks, and nothing needs approving there')
+    expect(text).not.toContain('How the desktop app and T3 Code ask')
   })
 })
