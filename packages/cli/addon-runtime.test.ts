@@ -143,3 +143,16 @@ test('an app with no such setting that says it lacks consent is told what any ap
   expect(said).toMatchObject({ state: 'incompatible' })
   expect(said?.detail).toMatch(/missing a delivery API the add-on needs/)
 })
+
+test('a Hermes that lacks something besides being allowed is told what it lacks, since allowing it would not be enough', () => {
+  const seen = new AddonRuntimes()
+  const said = seen.hear(
+    'hermes',
+    'gateway',
+    { api: ADDON_API, version: ADDONS.hermes!.build, delivery: false, idle: false, missing: ['consent', 'submit'] },
+    0,
+  )
+  expect(said).toMatchObject({ state: 'incompatible' })
+  expect(said?.detail).toMatch(/missing a delivery API to submit a message/)
+  expect(said?.detail).not.toMatch(/allow_gateway_injection/)
+})

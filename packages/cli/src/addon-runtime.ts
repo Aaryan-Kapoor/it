@@ -104,8 +104,10 @@ export class AddonRuntimes {
           .map((m) => names[m])
           .join(', ')
       : ''
-    // The app has everything the add-on needs and refuses what it hands over, until the person allows it
-    const notAllowed = Array.isArray(v.missing) && v.missing.includes('consent') && Object.hasOwn(NOT_ALLOWED, harness)
+    // The app has everything the add-on needs and refuses what it hands over, until the person
+    // allows it. Where it lacks something else as well, allowing it would not be enough, so the
+    // person is told what is missing, as for any app that cannot deliver.
+    const notAllowed = Array.isArray(v.missing) && v.missing.length === 1 && v.missing[0] === 'consent' && Object.hasOwn(NOT_ALLOWED, harness)
     // Only what the running code cannot do with this connector keeps clicks from it: another
     // delivery API, or an app that lacks what the add-on needs to hand a click over. An add-on of
     // an earlier build that speaks this API works as one of this build does, and is said to be
