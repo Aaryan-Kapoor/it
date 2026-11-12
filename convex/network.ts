@@ -82,10 +82,19 @@ const NOT_LINKABLE: Record<Unlinked, string> = {
  */
 const httpsAt = (row: Doc<'network'> | null): string | undefined => (row?.https ? `https://${row.https}:${httpsPort(basePort())}` : undefined)
 
-async function said(ctx: QueryCtx): Promise<{ on: boolean; wanted: boolean; addresses: string[]; tailnet?: boolean; internet?: boolean; https?: string }> {
+async function said(ctx: QueryCtx): Promise<{
+  on: boolean
+  wanted: boolean
+  addresses: string[]
+  tailnet?: boolean
+  internet?: boolean
+  https?: string
+  funnel?: 'off' | 'public' | 'unknown'
+}> {
   const row = await ctx.db.query('network').first()
   const secure = httpsAt(row)
   return {
+    funnel: row?.funnel,
     on: row?.on ?? false,
     wanted: row?.wanted ?? false,
     // The address over https first: there a browser lets a page It records for use the microphone
@@ -119,12 +128,13 @@ export const report = internalMutation({
     canTailnet: v.optional(v.boolean()),
     internet: v.optional(v.boolean()),
     exposed: v.optional(v.string()),
+    funnel: v.optional(v.union(v.literal('off'), v.literal('public'), v.literal('unknown'))),
     // The machine's name on the tailnet, where the door answers to it: a link an agent gives can be at it
     tailnetName: v.optional(v.string()),
     // The same name, where It answers there over https through Tailscale, whether or not the network is on
     https: v.optional(v.string()),
   },
-  handler: async (ctx, { on, wanted, addresses, background, usage, tailnet, canTailnet, internet, exposed, tailnetName, https }) => {
+  handler: async (ctx, { on, wanted, addresses, background, usage, tailnet, canTailnet, internet, exposed, funnel, tailnetName, https }) => {
     const kept = on ? [...new Set(addresses.filter((a) => a.length <= 300 && ADDRESS.test(a)))].slice(0, MOST) : []
     const why = exposed?.slice(0, 300)
     const named = on && tailnetName !== undefined && tailnetName.length <= 253 && TAILNET_NAME.test(tailnetName) ? tailnetName : undefined
@@ -139,6 +149,7 @@ export const report = internalMutation({
       row.tailnet === tailnet &&
       row.canTailnet === canTailnet &&
       row.internet === internet &&
+      row.funnel === funnel &&
       row.exposed === why &&
       row.tailnetName === named &&
       row.https === secure &&
@@ -158,6 +169,7 @@ export const report = internalMutation({
       canTailnet,
       internet,
       exposed: why,
+      funnel,
       tailnetName: named,
       https: secure,
     }
@@ -277,6 +289,7 @@ export const get = query({
       // Whether It answers the internet too, which only the command on that machine turns on
       internet: on && row?.internet === true,
       exposed: row?.exposed ?? null,
+      funnel: row?.funnel,
       asked: row?.asked ?? null,
       answered: row?.answered ?? null,
       // Where the links agents give are to be, and each place they can be at as the network stands, by its address

@@ -1210,14 +1210,15 @@ export type SiteToPage =
    * A recording was paused, went on, or ended without the page asking: paused while the screen
    * does not show It, and ended when the person stopped it in It's bar or took back what they
    * had allowed, when another conversation took the page over, when the page is no longer shown,
-   * when the device went away, or when it ran as long or grew as large as one may. Where it ended
-   * and what was recorded is the page's to have, it comes with it.
+   * when the document that began it is no longer the one in the frame (`replaced`), when the
+   * device went away, or when it ran as long or grew as large as one may. Where it ended and what
+   * was recorded is the page's to have, it comes with it.
    */
   | {
       type: 'it:recording'
       recording: string
       state: 'recording' | 'paused' | 'ended'
-      why?: 'person' | 'taken_back' | 'not_shown' | 'device' | 'too_long' | 'taken_over' | 'too_large'
+      why?: 'person' | 'taken_back' | 'not_shown' | 'replaced' | 'device' | 'too_long' | 'taken_over' | 'too_large'
       file?: Blob
     }
   /**
@@ -1229,10 +1230,16 @@ export type SiteToPage =
   /**
    * The live camera paused, went on, or ended without the page asking: paused while the screen
    * does not show It, and ended when the person stopped it in It's bar or took back what they had
-   * allowed, when another conversation took the page over, when the page is no longer shown, and
-   * when the camera went away.
+   * allowed, when another conversation took the page over, when the page is no longer shown, when
+   * the document that opened it is no longer the one in the frame (`replaced`), and when the
+   * camera went away.
    */
-  | { type: 'it:camera-state'; camera: string; state: 'live' | 'paused' | 'ended'; why?: 'person' | 'taken_back' | 'not_shown' | 'device' | 'taken_over' }
+  | {
+      type: 'it:camera-state'
+      camera: string
+      state: 'live' | 'paused' | 'ended'
+      why?: 'person' | 'taken_back' | 'not_shown' | 'replaced' | 'device' | 'taken_over'
+    }
   /**
    * Whether It is fullscreen, and whether this browser can make it so: sent once the channel is
    * made, and again whenever either changes. A site that sends it takes `it:fullscreen` from

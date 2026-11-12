@@ -325,6 +325,7 @@ vi.mock('./src/lib', async (original) => {
 })
 
 import {
+  CODEX_INTERRUPTED,
   type ConnectorInfo,
   infoFile,
   local,
@@ -2942,6 +2943,100 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     // being known. Kept for the hook of a turn that is not running, that came a minute later.
     await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'), 5000)
     expect(stand.codex).toEqual([])
+  })
+
+  /** What Codex's own file of a conversation says of its turns: one line for each word, the last of them written now. */
+  const codexKept = (n: number, ...marks: string[]) => {
+    const day = path.join(process.env.CODEX_HOME!, 'sessions', '2026', '11', '10')
+    mkdirSync(day, { recursive: true })
+    const lines = marks.map((type, i) =>
+      JSON.stringify({
+        timestamp: new Date(Date.now() + 5 - (marks.length - 1 - i)).toISOString(),
+        type: 'event_msg',
+        payload: { type, ...(type === 'turn_aborted' ? { reason: 'interrupted' } : {}) },
+      }),
+    )
+    writeFileSync(path.join(day, `rollout-2026-11-10T10-00-00-thread-${n}.jsonl`), `${lines.join('\n')}\n`)
+  }
+  const holdsBack = () => stand.calls.filter((c) => c.name === 'delivery:holdBack').map((c) => c.args)
+
+  test('a click for an open Codex conversation whose last turn was interrupted is not put in Codex’s queue, and its page says what brings it on', async () => {
+    await start()
+    // No hook was ever heard from the conversation, as where the person has not approved them: Codex's own file says the turn was interrupted
+    codexKept(8, 'task_started', 'turn_aborted')
+    offered(click(8))
+    await until(() => holdsBack().length === 1)
+    expect(holdsBack()).toEqual([{ ids: ['click-8'], why: CODEX_INTERRUPTED }])
+    expect(CODEX_INTERRUPTED).toContain('send it a message there')
+    expect(CODEX_INTERRUPTED.length).toBeLessThanOrEqual(300)
+    await until(() => said.some((line) => line.includes('its last turn was interrupted')))
+    // Looked at again, it is still not Codex's, nor anybody's: nothing says that the agent has it
+    offered({ ...click(8), heldBack: CODEX_INTERRUPTED })
+    await settled()
+    expect(stand.codex).toEqual([])
+    expect(called('delivery:claim')).toEqual([])
+    expect(called('delivery:handedOff')).toEqual([])
+    expect(holdsBack().length).toBe(1)
+    // The person's next message begins a turn, which Codex writes down: its queue takes the click behind that turn, and the page is told it waits no more
+    codexKept(8, 'task_started', 'turn_aborted', 'task_started')
+    offered({ ...click(8), heldBack: CODEX_INTERRUPTED })
+    await until(() => stand.codex.length === 1)
+    expect(holdsBack()[1]).toEqual({ ids: ['click-8'], why: null })
+  })
+
+  test('one made in a Codex turn that a hook said was running, and that was interrupted since, waits for the next turn and is handed to its hook', async () => {
+    await start()
+    await turn(8, true)
+    // The person presses Esc: no hook says so, and Codex's own file does
+    codexKept(8, 'task_started', 'turn_aborted')
+    offered(click(8))
+    await until(() => holdsBack().length === 1)
+    expect(holdsBack()).toEqual([{ ids: ['click-8'], why: CODEX_INTERRUPTED }])
+    await settled()
+    // Not claimed for a hook of the turn that is over, which would keep it a minute and then give it to the queue
+    expect(called('delivery:claim')).toEqual([])
+    expect(stand.codex).toEqual([])
+    // Their next message there begins a turn, as its first hook says before Codex has written of it
+    await new Promise((r) => setTimeout(r, 30))
+    await turn(8, true)
+    offered({ ...click(8), heldBack: CODEX_INTERRUPTED })
+    await until(() => called('delivery:claim').includes('click-8'))
+    expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-8'))?.clicks.map((c) => c.id)).toEqual(['click-8'])
+    expect(stand.codex).toEqual([])
+  })
+
+  test('a click that stood in line for Codex’s queue while the person interrupted the turn is not put in it, and its page says what brings it on', async () => {
+    await start()
+    codexKept(8, 'task_started', 'task_complete')
+    // The first click is with Codex's command, and the second stands in line behind it
+    offered(click(8))
+    await until(() => stand.codex.length === 1)
+    const second = { ...click(9), session: { harness: 'codex', id: 'thread-8' } }
+    offered(click(8), second)
+    await settled()
+    expect(stand.codex.length).toBe(1)
+    // The person presses Esc before the second has its turn in line
+    codexKept(8, 'task_started', 'task_complete', 'task_started', 'turn_aborted')
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-8'))
+    offered(second)
+    await until(() => holdsBack().length === 1)
+    expect(holdsBack()).toEqual([{ ids: ['click-9'], why: CODEX_INTERRUPTED }])
+    await settled()
+    expect(stand.codex.length).toBe(1)
+    expect(called('delivery:handedOff')).not.toContain('click-9')
+  })
+
+  test('a Codex turn that ended by itself, or one that is running, still has its click put in Codex’s queue or kept for its hook', async () => {
+    await start()
+    codexKept(8, 'task_started', 'turn_aborted', 'task_started', 'task_complete')
+    offered(click(8))
+    await until(() => stand.codex.length === 1)
+    await turn(6, true)
+    codexKept(6, 'turn_aborted', 'task_started')
+    offered(click(8), click(6))
+    await until(() => called('delivery:claim').includes('click-6'))
+    expect(holdsBack()).toEqual([])
   })
 
   test('more than one answer can carry is given to a waiter over several askings, each click once and none lost', async () => {

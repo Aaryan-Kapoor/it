@@ -107,6 +107,14 @@ export const t3ClaudeLine = (running: string | undefined): string =>
  */
 export const PI_RELOAD = 'Type /reload in this chat, so that what you do on It’s pages reaches me.'
 
+/**
+ * What the person is told, in so many words, where a command runs in an OpenCode that has not
+ * loaded It's add-on, as the OpenCode that was open when the add-on was installed has not:
+ * OpenCode 1 reads its plugins only as it starts, and only the add-on says which conversation a
+ * command runs in. A saved conversation listens from its first message after it is opened.
+ */
+export const OPENCODE_RESTART = 'Quit OpenCode and start it again, then open this chat and send me a message, so that what you do on It’s pages reaches me.'
+
 /** How an agent is told to pass on what the person is to be told: in its next message, and word for word. */
 export const tellWordForWord = (line: string): string => `Tell the person this in your next message, word for word: “${line}”`
 
@@ -154,6 +162,16 @@ export interface Facts {
   codexPending?: boolean
   /** Whether T3 Code is on this machine (`t3Here`). */
   t3?: boolean
+  /**
+   * Whether the command names no conversation and was run by OpenCode (`inUnloadedOpenCode`).
+   * `route` is then what the connector says of OpenCode, asked of no conversation in particular.
+   */
+  unloadedOpenCode?: boolean
+  /**
+   * Whether the page was made before OpenCode had loaded It's add-on and is still no
+   * conversation's, because It gave no answer when this conversation asked for it.
+   */
+  unclaimedLeft?: boolean
 }
 
 /**
@@ -206,6 +224,33 @@ function arrivesAsIs(f: Facts): Arrives {
   })
   const unknown = (why: string): Arrives => ({ byItself: 'unknown', next: `${why} ${waitFor(f.slug)}` })
   const not = (why: string): Arrives => ({ byItself: false, next: `${why} ${waitFor(f.slug)}` })
+  // Whatever this conversation's add-on does, a page that is no conversation's is not brought here by it
+  if (f.unclaimedLeft)
+    return not(
+      `Nothing the person does on this page arrives here by itself: it was made before OpenCode had loaded It’s add-on, so it belongs to no conversation, and It gave no answer just now when this conversation asked for it. Waiting on it by its id asks again.`,
+    )
+  // A command that OpenCode ran and that names no conversation. Starting OpenCode again helps
+  // only where its add-on is connected here and no OpenCode that has loaded it is heard from: an
+  // OpenCode that is heard from may be this one, with a conversation its add-on could not name.
+  if (!f.session && f.unloadedOpenCode && f.route) {
+    if (!f.route.connected) return not('It’s add-on for OpenCode is not connected on this machine, so nothing the person does arrives here by itself.')
+    if (f.route.runtime === 'incompatible')
+      return not(
+        `The add-on that OpenCode has loaded cannot take clicks from this It, so nothing the person does arrives here by itself. \`${itForAgent()} status\` says what to do about it.`,
+      )
+    if (f.route.runtime !== 'active') {
+      // Said as Claude Code's and Pi's are: word for word, and once
+      const tell = f.tour
+        ? `Unless you told the person this with the pairing link, tell them this once, word for word, after the tour’s ending: “${OPENCODE_RESTART}”`
+        : `Unless you have told the person already in this conversation, tell them this in your next message, word for word: “${OPENCODE_RESTART}”`
+      const claim = f.slug
+        ? ` Once OpenCode has been started again, \`${itForAgent()} update ${f.slug}\` or \`${itForAgent()} wait --id ${f.slug}\`, run in this conversation, makes this page this conversation’s, and what was done on it meanwhile comes here.`
+        : ''
+      return not(
+        `Nothing the person does on ${on} arrives here by itself yet: this OpenCode has not loaded It’s add-on, which OpenCode reads only as it starts, so It cannot tell which conversation this command runs in, and a page made now belongs to none. ${tell}${claim} Until then, wait for it.`,
+      )
+    }
+  }
   if (!f.session)
     return unknown('It cannot tell which conversation this command runs in, so it cannot tell whether what the person does arrives here by itself.')
   if (!f.route)
@@ -279,14 +324,16 @@ export function claudeReloadLine(e: NodeJS.ProcessEnv = process.env): string | u
 /**
  * What the person is told, word for word, of the conversation setup ran in, once setup has put
  * in the add-on of the app it runs in: in Claude Code, that a conversation which has not loaded
- * the add-on loads it with `/reload-plugins`; in Codex, that Codex is to be started again so
- * that it runs It's hooks. In a thread of T3 Code, what is so there instead: what the person does
- * reaches the thread through T3 Code, and nothing is asked for that T3 Code would never show.
- * Nothing where nothing is left to do in this conversation.
+ * the add-on loads it with `/reload-plugins`; in Pi, that one which has not loaded it loads it
+ * with `/reload`; in Codex, that Codex is to be started again so that it runs It's hooks. In a
+ * thread of T3 Code, what is so there instead: what the person does reaches the thread through
+ * T3 Code, and nothing is asked for that T3 Code would never show. Nothing where nothing is left
+ * to do in this conversation, and nothing in Hermes or OpenCode, which do not let It tell whether
+ * the conversation has loaded the add-on: there the app's own note is what the person is told.
  */
 export function setupLine(f: {
   session: { harness: string; id: string } | undefined
-  /** Whether It's add-on runs in that conversation, where that can be told (`claudeAddonHere`). */
+  /** Whether It's add-on runs in that conversation, where that can be told (`addonHere`). */
   addonHere: boolean | undefined
   claude?: string
   /** What the connector answered at `/route` for the conversation, or null. */
@@ -302,6 +349,8 @@ export function setupLine(f: {
   const held = f.route?.thread === 'held'
   if (f.session.harness === 'claude-code' && f.addonHere === false) return held ? t3ClaudeLine(f.claude) : reloadLine(f.claude)
   if (f.session.harness === 'codex' && f.codexPending) return held ? T3_CODEX : heldNowhere(f.route, f.t3) ? CODEX_RESTART : CODEX_RESTART_OR_T3
+  // Pi has no thread of T3 Code to take what the person does there another way
+  if (f.session.harness === 'pi' && f.addonHere === false) return PI_RELOAD
   return undefined
 }
 
