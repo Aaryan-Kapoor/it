@@ -5387,7 +5387,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       enrolled: true,
       machine: { id: 'machine-1', name: 'the desk' },
       site: SITE,
-      network: { on: false, addresses: [] },
+      network: { on: false, funnel: 'unknown', addresses: [] },
       connector: { running: false },
       background: expect.objectContaining({ registered: false }),
       harnesses: [],
@@ -5759,6 +5759,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
             '',
           ],
         ])
+        expect(stopped.shown).not.toContain('Tailscale Funnel')
         expect(stopped.shown).not.toMatch(/harness|[{}"]/)
         // Asked for JSON, it prints what it prints to a program
         const asked = await atTerminal(m, ['status', '--json'], {}, runtime)

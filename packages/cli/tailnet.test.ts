@@ -1,8 +1,11 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 // Keeping It to a person's tailnet: which addresses are a tailnet's, which of this machine's
 // are, what its name there is, and that the addresses another device is given are those alone.
 import { afterEach, describe, expect, test } from 'vitest'
 import { reachable } from './src/serve/network'
-import { forgetTailnetName, inTailnet, isLoopback, servedAs, tailnetAddresses, tailnetName } from './src/serve/tailnet'
+import { forgetTailnetName, funnelPorts, funnelSaid, inspectFunnel, inTailnet, isLoopback, servedAs, tailnetAddresses, tailnetName } from './src/serve/tailnet'
 
 const HERE = {
   lo: [
@@ -148,4 +151,70 @@ describe('what Tailscale serves on It’s ports', () => {
     // Served at another of the machine's names, it is not what It set up
     expect(servedAs(status, 'other.tail1234.ts.net', 4702, 4700)).toBe('other')
   })
+})
+
+test('Funnel detection follows public proxies to It even on another listener', () => {
+  const status = {
+    AllowFunnel: { 'studio.ts.net:443': true, 'studio.ts.net:8443': false },
+    Web: { 'studio.ts.net:443': { Handlers: { '/': { Proxy: 'http://127.0.0.1:5130' } } } },
+  }
+  expect(funnelPorts(status, [5130, 5131])).toEqual([443])
+  expect(funnelPorts(status, [5140, 5141])).toEqual([])
+  expect(funnelPorts(null, [5130])).toEqual([])
+})
+
+test('Foreground Funnels and URL paths still expose It', () => {
+  for (const path of ['/', '/pair']) {
+    const config = {
+      AllowFunnel: { 'studio.ts.net:443': true },
+      Web: { 'studio.ts.net:443': { Handlers: { '/': { Proxy: `http://127.0.0.1:5130${path}` } } } },
+    }
+    expect(funnelPorts({ Foreground: { session: config } }, [5130])).toEqual([443])
+    expect(funnelPorts({ ...config, Foreground: { session: config } }, [5130])).toEqual([443])
+  }
+})
+
+test('Funnel inspection only asks the stand-in Tailscale for status and preserves failures', async () => {
+  if (process.platform === 'win32') return
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'it-funnel-'))
+  const original = process.env.PATH
+  try {
+    process.env.PATH = `${dir}:${original}`
+    const log = path.join(dir, 'calls')
+    const command = path.join(dir, 'tailscale')
+    writeFileSync(
+      command,
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nprintf '%s' '{"AllowFunnel":{"studio.ts.net:443":true},"Web":{"studio.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:5130/pair"}}}}}'\n`,
+      { mode: 0o700 },
+    )
+    expect(await inspectFunnel([5130, 5131])).toEqual([443])
+    expect(readFileSync(log, 'utf8')).toBe('serve status --json\n')
+    writeFileSync(command, '#!/bin/sh\necho invalid-json\n', { mode: 0o700 })
+    expect(await inspectFunnel([5130])).toBeUndefined()
+    writeFileSync(command, '#!/bin/sh\nexit 1\n', { mode: 0o700 })
+    expect(await inspectFunnel([5130])).toBeUndefined()
+  } finally {
+    process.env.PATH = original
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('An unknown Funnel check qualifies the whole network sentence', () => {
+  const said = 'The network is off, so It answers this machine only.'
+  expect(funnelSaid('unknown', said)).toContain(said)
+  expect(funnelSaid('unknown', said)).toContain('It could not check Tailscale Funnel.')
+  expect(funnelSaid('off', said)).toBe(said)
+  expect(funnelSaid('public', said)).not.toContain('answers this machine only')
+})
+
+test('A missing Tailscale command means no Funnel is configured through it', async () => {
+  const original = process.env.PATH
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'it-no-tailscale-'))
+  try {
+    process.env.PATH = dir
+    expect(await inspectFunnel([5130, 5131])).toEqual([])
+  } finally {
+    process.env.PATH = original
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

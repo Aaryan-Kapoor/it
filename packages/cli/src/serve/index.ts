@@ -18,7 +18,7 @@ import { makeContent, startDoor } from './door'
 import { KEEP_MS, keepItsFolder } from './kept'
 import { onTheInternet, reachable } from './network'
 import { recoverStartup } from './startup'
-import { tailnetAddresses, tailnetName } from './tailnet'
+import { publicFunnel, tailnetAddresses, tailnetName } from './tailnet'
 import { watchTask } from './task'
 
 /**
@@ -253,9 +253,12 @@ export const standsAs = (
 ) => {
   const onTailnet = tailnetAddresses().length > 0
   const internet = door.network && door.tailnet !== true && door.internet === true
+  const found = publicFunnel([port, contentPort(port)])
+  const funnel: 'off' | 'public' | 'unknown' = found === undefined ? 'unknown' : found.length ? 'public' : 'off'
   // The door answers to that name kept to the tailnet, and open to every network on a machine that is on one
   const name = door.network && (door.tailnet === true || onTailnet) ? named() : undefined
   return {
+    funnel,
     on: door.network,
     wanted,
     addresses: door.network ? reachable(port, undefined, door.tailnet === true, tailnetName, internet) : [],
@@ -272,7 +275,7 @@ export const standsAs = (
     ...(door.https ? { https: door.https } : {}),
   }
 }
-type Stands = ReturnType<typeof standsAs>
+type Stands = Omit<ReturnType<typeof standsAs>, 'funnel'> & { funnel?: 'off' | 'public' | 'unknown' }
 /** What the owner may ask of the network on the site: off, on for the network this machine is on, or on for the tailnet alone. Answering the internet too is asked only of the command. */
 type Way = 'off' | 'on' | 'tailscale'
 /**
