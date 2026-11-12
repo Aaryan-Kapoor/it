@@ -323,6 +323,8 @@ jobs:
           "./$PROGRAM" --version
           "./$PROGRAM" --help > /dev/null
       # install.sh on macOS and install.ps1 on Windows, neither of which the build machine can run
+      # On Windows it also lets the script put the folder on the account's PATH, and checks that
+      # a bare `it` then runs It and not the `It` command of Pester, which Windows comes with
       - name: The install script for this system installs it
         run: node e2e/install.mjs "$RUNNER_TEMP/it-programs"
       - name: The native service recovers and waits for a slow stop

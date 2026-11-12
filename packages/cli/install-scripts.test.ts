@@ -91,6 +91,21 @@ test.each(['installer', 'uninstall'])(
 
 const script = (name: string) => readFileSync(path.join(__dirname, '../../install', name), 'utf8')
 
+// Until It's folder is on a PATH, Windows PowerShell answers a bare `it` with the `It` command of
+// Pester, the test framework that comes with Windows. e2e/install.mjs runs this on Windows; here
+// it is only held that the script still does it, on a machine that cannot run the script
+test('the Windows script puts the folder on the PATH of the PowerShell it runs in, where the account’s PATH has it, and after asking whether it was there already', () => {
+  const ps1 = script('install.ps1')
+  const asked = ps1.indexOf("-contains $dir) { $onPath = '1' }")
+  const put = ps1.indexOf(`if ($accountHas -and $onPath -eq '0') { try { $env:Path = "$dir;$env:Path" } catch {} }`)
+  expect(asked).toBeGreaterThan(-1)
+  expect(put).toBeGreaterThan(asked)
+  // Told to leave the PATH alone, it leaves this one alone too: only what the registry was read for sets it
+  expect(ps1.match(/\$accountHas = \$true/g)).toHaveLength(1)
+  expect(ps1.indexOf('$accountHas = $true')).toBeGreaterThan(ps1.indexOf('if (-not $env:IT_INSTALL_NO_PATH) {'))
+  expect(ps1.indexOf('$accountHas = $true')).toBeLessThan(put)
+})
+
 test("both install scripts download from It's releases on GitHub, the place the program looks for a newer It, and the lines that run them are fetched from there too", () => {
   expect(INSTALL.releases).toBe('https://github.com/Aaryan-Kapoor/it/releases')
   expect(INSTALL.sh).toBe(`curl -fsSL ${INSTALL.releases}/latest/download/install.sh | sh`)
