@@ -4862,7 +4862,13 @@ describe('displays and machines', () => {
     const onSite = async () => (await alice.browser.query(api.machines.list, {})).find((m) => m.id === desk.id)!
     const ask = (harness: string, as = alice.browser, machineId = desk.id) => as.mutation(api.machines.turnOn, { machineId: machineId as never, harness })
     const report = (addon: string) =>
-      desk.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: [{ id: 'claude-code', version: '2.1.287', addon }, { id: 'pi', version: '0.82.0', addon: 'disabled' }] })
+      desk.as.mutation(api.machines.report, {
+        connectorVersion: '0.1.0',
+        harnesses: [
+          { id: 'claude-code', version: '2.1.287', addon },
+          { id: 'pi', version: '0.82.0', addon: 'disabled' },
+        ],
+      })
     await desk.as.mutation(api.machines.choose, { harnesses: ['claude-code', 'pi'] })
     // On, nothing is turned on
     await report('connected')
