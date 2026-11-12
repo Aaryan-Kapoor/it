@@ -4112,9 +4112,9 @@ describe('whether the functions answer in the backend', () => {
   test('a backend that answers that it has none is taken at its word, and asked once', async () => {
     const none = await site((_, res) => res.writeHead(404).end('This Convex deployment does not have HTTP actions enabled.'))
     try {
-      const began = Date.now()
+      // Asked again, it would be asked until the time is over
       expect(await loaded(none.at)).toBe(false)
-      expect([none.asked(), Date.now() - began < 2000]).toEqual([1, true])
+      expect(none.asked()).toBe(1)
     } finally {
       await none.close()
     }
@@ -4131,6 +4131,27 @@ describe('whether the functions answer in the backend', () => {
       expect(await refusal(loaded(silent.at, asked.signal))).toBe('stopped')
     } finally {
       await silent.close()
+    }
+  }, 30_000)
+
+  test('a service asked to stop while it waits to ask a faulty backend again stops then, and is not told the time is over', async () => {
+    const faulty = await site((_, res) => res.writeHead(503).end())
+    try {
+      // The tries come after waits of a quarter, a half, one and two seconds: four seconds in, it is waiting
+      const asked = new AbortController()
+      let abortedAt = 0
+      setTimeout(() => {
+        abortedAt = Date.now()
+        asked.abort()
+      }, 4000)
+      expect(await refusal(loaded(faulty.at, asked.signal))).toBe('stopped')
+      expect(Date.now() - abortedAt).toBeLessThan(1000)
+      // Asked to stop in the last wait, the one that ends where the time does, it stops all the same
+      const last = new AbortController()
+      setTimeout(() => last.abort(), 900)
+      expect(await refusal(loaded(faulty.at, last.signal, 1000))).toBe('stopped')
+    } finally {
+      await faulty.close()
     }
   }, 30_000)
 

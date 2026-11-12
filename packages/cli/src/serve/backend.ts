@@ -2288,12 +2288,22 @@ export const HEALTH_MS = 30_000
 export async function loaded(site: string, signal?: AbortSignal, forMs = HEALTH_MS): Promise<boolean> {
   const until = Date.now() + forMs
   for (let wait = 250; ; wait = Math.min(wait * 2, 2000)) {
+    if (signal?.aborted) throw stopped()
     const left = until - Date.now()
     if (left <= 0) return false
     const answer = await direct(`${site}/health`, { signal: within(left, signal) }).catch(() => null)
     if (signal?.aborted) throw stopped()
     if (answer && answer.status < 500) return answer.ok
-    await new Promise((resolve) => setTimeout(resolve, Math.min(wait, Math.max(0, until - Date.now()))))
+    // The wait before the next try ends early where the service is asked to stop
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', done)
+        resolve()
+      }
+      const timer = setTimeout(done, Math.min(wait, Math.max(0, until - Date.now())))
+      signal?.addEventListener('abort', done, { once: true })
+    })
   }
 }
 
