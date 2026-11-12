@@ -163,6 +163,7 @@ import {
 import { printEnv } from './shell-env'
 import { zshDirectory } from './shell-profile'
 import { GUIDE, NAMES, END as TOUR_END, STEPS as TOUR_STEPS, tourPage } from './tour'
+import { inUnloadedOpenCode } from './unclaimed'
 import { finishInstallationRemoval, installationFile, removeInstallationFiles, stepOutOf, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
 import { addonsSaid, afterUpgrade, RELOAD_OPEN, restartLine } from './upgraded'
@@ -840,8 +841,21 @@ function anothers(slug: string, theirs: Made | null): Problem {
  * where the command cannot tell which conversation it runs in: a person's or a script's, or an
  * agent app's that does not say, which the skill tells to wait.
  */
-async function arrivalHere(slug?: string, tour = false): Promise<Arrives | undefined> {
-  const session = sessionAsked()?.session
+async function arrivalHere(slug?: string, tour = false, unclaimedLeft = false): Promise<Arrives | undefined> {
+  const asked = sessionAsked()
+  const session = asked?.session
+  // A command that OpenCode ran and that names no conversation is told what to do about that. The
+  // connector is asked of OpenCode alone, under a name no conversation has: whether its add-on
+  // is connected here, and whether an OpenCode that has loaded it is heard from.
+  if (!session && inUnloadedOpenCode(asked))
+    return arrives({
+      session: undefined,
+      addonHere: undefined,
+      route: await routeOf({ harness: 'opencode', id: 'unnamed' }),
+      slug,
+      tour,
+      unloadedOpenCode: true,
+    })
   if (!session) return undefined
   const route = await routeOf(session)
   return arrives({
@@ -853,6 +867,7 @@ async function arrivalHere(slug?: string, tour = false): Promise<Arrives | undef
     tour,
     codexPending: session.harness === 'codex' && codexHooksPending(),
     t3: t3Here(),
+    unclaimedLeft,
   })
 }
 
@@ -889,13 +904,13 @@ async function lineHere(connected: (harness: string) => boolean): Promise<string
 }
 
 async function published(
-  done: { slug: string; version: number; url: string; note?: string; urlNote?: string },
+  done: { slug: string; version: number; url: string; note?: string; urlNote?: string; unclaimedLeft?: boolean },
   a: Args,
   fresh = false,
   tour = false,
   updated = false,
 ): Promise<void> {
-  const arrival = await arrivalHere(done.slug, tour)
+  const arrival = await arrivalHere(done.slug, tour, done.unclaimedLeft)
   const result = {
     id: done.slug,
     version: done.version,

@@ -1411,6 +1411,30 @@ describe('publishing', () => {
     expect(await code(theirs.as.mutation(api.artifacts.take, { slug: 'board', session: today }))).toBe('not_found')
   })
 
+  test('a page is given to a conversation only while no conversation has it, where that is asked, with what was waiting on it', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice', 'laptop')
+    const first = { harness: 'opencode', id: 'ses_first' }
+    const second = { harness: 'opencode', id: 'ses_second' }
+    // Made in no conversation, as by an OpenCode that has not loaded It's add-on
+    const p = await publish(laptop, 'ping')
+    const { actionId } = await alice.browser.mutation(api.actions.submit, {
+      artifactId: p.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-0001'),
+    })
+    const owner = async () => (await alice.browser.query(api.artifacts.get, { slug: 'ping' })).session
+    expect(await owner()).toBeNull()
+    expect(await laptop.as.mutation(api.artifacts.take, { artifactId: p.artifactId, session: first, agent: 'opencode', unowned: true })).toEqual({ took: true })
+    expect(await owner()).toEqual(first)
+    await settle(t)
+    expect((await inbox(laptop, [first])).map((c) => c.id)).toEqual([actionId])
+    // Once a conversation has it, it is given to no other this way, and nothing changes
+    expect(await laptop.as.mutation(api.artifacts.take, { artifactId: p.artifactId, session: second, unowned: true })).toEqual({ took: false })
+    expect(await owner()).toEqual(first)
+  })
+
   test('a conversation that carries on as another hands every page it has on this machine to that one, with what was waiting on them, and none it has elsewhere', async () => {
     const t = backend()
     const alice = await person(t, 'alice')
@@ -1854,6 +1878,20 @@ describe('tour page ownership', () => {
     await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
     expect((await m.as.mutation(api.tour.clear, {})).kept).toEqual(['tour-chess'])
     await expect(start(m, 'chess')).rejects.toThrow('tour does not own')
+  })
+
+  test('a tour page that no conversation has stays the tour’s when it is given to its first conversation', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-unowned')
+    const mine = { harness: 'opencode', id: 'ses_after_restart' }
+    // Made by an OpenCode that had not loaded It's add-on, so in no conversation
+    const made = await publish(m, 'tour-chess', { tour: 'chess', state: '{"reply":"","note":""}' })
+    expect(await m.as.mutation(api.artifacts.take, { artifactId: made.artifactId, session: mine, unowned: true })).toEqual({ took: true })
+    expect((await t.run((ctx) => ctx.db.get(made.artifactId)))!.tour).not.toBeNull()
+    // The tour carries on with it in that conversation
+    const pending = await start(m, 'chess')
+    await finish(m, pending)
+    expect((await m.as.query(api.artifacts.get, { slug: 'tour-chess' })).session).toEqual(mine)
   })
 
   test('reusing an id after deletion never gives the replacement an old tour mark', async () => {
