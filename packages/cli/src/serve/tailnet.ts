@@ -49,6 +49,7 @@ export function tailnetName(
     execFileSync(tailscaleCommand() ?? 'tailscale', ['status', '--json', '--peers=false'], {
       encoding: 'utf8',
       timeout: 2000,
+      windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],
     }),
 ): string | undefined {
