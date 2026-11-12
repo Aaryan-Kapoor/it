@@ -2994,6 +2994,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // Codex's queue is for a conversation some Codex has open. One that was closed while this
       // click stood in line is not given it: the click is looked at afresh on the next pass.
       if (!reopening && !t3 && codexOpen(key) !== true) return
+      // Nor one whose last turn the person interrupted while this click stood in line: Codex
+      // would keep it until their next message there, and the click is looked at afresh on the
+      // next pass, which has the page say what brings it on
+      if (!reopening && !t3 && codexInterrupted(key)) return
       // Only if it is still for this conversation on this machine: the page may have changed
       // hands while the click stood in line here
       // The hold is counted from before it was asked for: It starts counting when it gives it,
@@ -3008,7 +3012,14 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // And looked at once more, now that the claim is answered: a waiter that began while it
       // was being asked for cannot take what this machine holds, so it is given back to it. It
       // is given back as well when Codex was disconnected in that time.
-      if (closing || unfitting || awaited(click, Date.now()) || !connected(harness) || (reopening && !wakes(harness, click.at))) {
+      if (
+        closing ||
+        unfitting ||
+        awaited(click, Date.now()) ||
+        !connected(harness) ||
+        (reopening && !wakes(harness, click.at)) ||
+        (!reopening && !t3 && codexInterrupted(key))
+      ) {
         journal('released', click.id)
         await release(click.id).catch(() => {})
         return

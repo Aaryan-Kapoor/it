@@ -2992,6 +2992,28 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(stand.codex).toEqual([])
   })
 
+  test('a click that stood in line for Codex’s queue while the person interrupted the turn is not put in it, and its page says what brings it on', async () => {
+    await start()
+    codexKept(8, 'task_started', 'task_complete')
+    // The first click is with Codex's command, and the second stands in line behind it
+    offered(click(8))
+    await until(() => stand.codex.length === 1)
+    const second = { ...click(9), session: { harness: 'codex', id: 'thread-8' } }
+    offered(click(8), second)
+    await settled()
+    expect(stand.codex.length).toBe(1)
+    // The person presses Esc before the second has its turn in line
+    codexKept(8, 'task_started', 'task_complete', 'task_started', 'turn_aborted')
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-8'))
+    offered(second)
+    await until(() => holdsBack().length === 1)
+    expect(holdsBack()).toEqual([{ ids: ['click-9'], why: CODEX_INTERRUPTED }])
+    await settled()
+    expect(stand.codex.length).toBe(1)
+    expect(called('delivery:handedOff')).not.toContain('click-9')
+  })
+
   test('a Codex turn that ended by itself, or one that is running, still has its click put in Codex’s queue or kept for its hook', async () => {
     await start()
     codexKept(8, 'task_started', 'turn_aborted', 'task_started', 'task_complete')
