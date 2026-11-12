@@ -16,6 +16,7 @@ import {
   cameraFor,
   cameraVideoOf,
   cannotOpen,
+  DEVICE_WAIT,
   forgetGrants,
   grantFor,
   grantsOf,
@@ -28,6 +29,7 @@ import {
   openMicrophone,
   ownerOf,
   shoot,
+  shootingNow,
   takeBack,
   usedNow,
 } from './media'
@@ -1471,6 +1473,122 @@ describe('the microphone, live to a page', () => {
       expect(made!.contexts[0]!.state).toBe('closed')
       expect(microphoneFor('page-1')).toBeUndefined()
     })
+  })
+})
+
+describe('how long the browser is given to hand over the device', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    giveBack()
+  })
+  /** The stand-in camera and microphone, with a browser that gives them only when the test says so, as one whose own question is still open. */
+  const slowBrowser = () => {
+    const device = standInCamera()
+    const asking = navigator.mediaDevices.getUserMedia as (asked: MediaStreamConstraints) => Promise<MediaStream>
+    let give: () => void = () => {}
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: (asked: MediaStreamConstraints) =>
+          new Promise<MediaStream>((resolve) => {
+            give = () => resolve(asking(asked))
+          }),
+      },
+    })
+    return { device, give: () => give() }
+  }
+  const page = (kinds: ('mic' | 'camera')[]) => ({
+    id: 'live-1',
+    user: 'person-1',
+    page: 'page-1',
+    owner: OWNER,
+    title: 'Page page-1',
+    grant: grantFor('person-1', 'page-1', OWNER, kinds)!,
+    still: () => null,
+    picture: () => {},
+    sound: () => {},
+    told: () => {},
+  })
+  const outcome = (opening: Promise<unknown>) =>
+    opening.then(
+      () => 'opened',
+      (err: Error) => err.message,
+    )
+  const NO_ANSWER = 'The browser did not give It the microphone or the camera in time. Ask again from something the person does on the page.'
+
+  test('a browser that does not answer for the microphone within a minute leaves the page waiting no longer, and a microphone it gives after that is let go of at once', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    expect(DEVICE_WAIT.answerMs).toBe(60_000)
+    allow('person-1', grant('page-1', ['mic']))
+    const { device, give } = slowBrowser()
+    standInSound()
+    const opening = outcome(openMicrophone(true, page(['mic'])))
+    await vi.advanceTimersByTimeAsync(DEVICE_WAIT.answerMs - 1)
+    let settled = false
+    void opening.then(() => (settled = true))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await opening).toBe(NO_ANSWER)
+    // The person answers the browser's own question after all
+    give()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(device.tracks.map((t) => [t.kind, t.stopped])).toEqual([['audio', true]])
+    expect(microphoneFor('page-1')).toBeUndefined()
+  })
+
+  test('the same for a camera, with sound or without, and for a photo', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    allow('person-1', grant('page-1', ['mic', 'camera']))
+    const { device, give } = slowBrowser()
+    standInSound()
+    const opening = outcome(openCamera(true, true, page(['mic', 'camera'])))
+    await vi.advanceTimersByTimeAsync(DEVICE_WAIT.answerMs)
+    expect(await opening).toBe(NO_ANSWER)
+    give()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(device.tracks.map((t) => [t.kind, t.stopped])).toEqual([
+      ['audio', true],
+      ['video', true],
+    ])
+    expect(cameraFor('page-1')).toBeUndefined()
+
+    const photo = outcome(shoot({ page: 'page-1', title: 'Page page-1', user: 'person-1', owner: OWNER, grant: page(['camera']).grant }, undefined))
+    await vi.advanceTimersByTimeAsync(DEVICE_WAIT.answerMs)
+    expect(await photo).toBe(NO_ANSWER)
+    give()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(device.tracks.slice(2).map((t) => [t.kind, t.stopped])).toEqual([['video', true]])
+    // And the camera is free for the next
+    expect(shootingNow()).toBeNull()
+  })
+
+  test('a browser that refuses within the minute is told as it refused, and not as one that did not answer', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    allow('person-1', grant('page-1', ['mic']))
+    standInCamera()
+    const refusal = Object.assign(new Error('Permission denied'), { name: 'NotAllowedError' })
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: () => Promise.reject(refusal) } })
+    await expect(openMicrophone(true, page(['mic']))).rejects.toBe(refusal)
+    // And nothing is refused again when the minute is up
+    await vi.advanceTimersByTimeAsync(DEVICE_WAIT.answerMs)
+  })
+
+  test('a camera that gives no picture within five seconds of opening is let go of, and is never listed for It’s bar', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    expect(DEVICE_WAIT.playMs).toBe(5_000)
+    allow('person-1', grant('page-1', ['camera']))
+    const device = standInCamera()
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockReturnValue(new Promise<void>(() => {}))
+    const opening = outcome(openCamera(true, false, page(['camera'])))
+    await vi.advanceTimersByTimeAsync(DEVICE_WAIT.playMs - 1)
+    expect(device.tracks.map((t) => t.stopped)).toEqual([false])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await opening).toBe('The camera gave It no picture in time. Ask again from something the person does on the page.')
+    expect(device.tracks.map((t) => t.stopped)).toEqual([true])
+    expect(cameraFor('page-1')).toBeUndefined()
   })
 })
 

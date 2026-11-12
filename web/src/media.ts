@@ -302,6 +302,44 @@ export function cannotOpen(): string | null {
   return null
 }
 
+/**
+ * How long the browser is given to hand over the microphone or the camera. `answerMs` is for its
+ * answer to `getUserMedia`, which takes in the person answering the browser's own question, the
+ * first time on a screen; `playMs` is for the camera's picture to begin once the camera is open. A
+ * browser that never answers, as one whose question was put aside, would otherwise leave the page
+ * waiting for ever. A device the browser gives after that is let go of as it comes.
+ */
+export const DEVICE_WAIT = { answerMs: 60_000, playMs: 5_000 } as const
+const NO_ANSWER = 'The browser did not give It the microphone or the camera in time. Ask again from something the person does on the page.'
+const NO_PICTURE = 'The camera gave It no picture in time. Ask again from something the person does on the page.'
+/** What is being done, for `ms` at most, after which it is refused with `said`. What it gives after that is handed to `late`. */
+function within<T>(doing: Promise<T>, ms: number, said: string, late: (value: T) => void): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let over = false
+    const timer = setTimeout(() => {
+      over = true
+      reject(new Error(said))
+    }, ms)
+    doing.then(
+      (value) => {
+        if (over) return late(value)
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (err) => {
+        if (over) return
+        clearTimeout(timer)
+        reject(err)
+      },
+    )
+  })
+}
+/** Asks the browser for the device, for `answerMs` at most. One it gives after that is stopped as it comes, and given to no page. */
+const getDevice = (constraints: MediaStreamConstraints): Promise<MediaStream> =>
+  within(navigator.mediaDevices.getUserMedia(constraints), DEVICE_WAIT.answerMs, NO_ANSWER, (stream) => {
+    for (const t of stream.getTracks()) t.stop()
+  })
+
 // ---------- what a page may ask of the device ----------
 
 const SWITCHES: Record<'audio' | 'video', string[]> = { audio: ['echoCancellation', 'noiseSuppression', 'autoGainControl'], video: [] }
@@ -376,7 +414,7 @@ export async function shoot(
   facing: 'user' | 'environment' | undefined,
 ): Promise<{ photo: Promise<Blob | null>; cancel: () => void }> {
   if (shooting || cameras.length) throw new Error('The camera is in use on this screen just now.')
-  const stream = await navigator.mediaDevices.getUserMedia({ video: facing ? { facingMode: facing } : true, audio: false })
+  const stream = await getDevice({ video: facing ? { facingMode: facing } : true, audio: false })
   let given: (photo: Blob | null) => void = () => {}
   const photo = new Promise<Blob | null>((resolve) => {
     given = resolve
@@ -503,7 +541,7 @@ export interface Opened {
  * where it would not give the camera.
  */
 export async function openCamera(video: true | MediaTrackConstraints, audio: false | true | MediaTrackConstraints, page: CameraFor): Promise<Opened> {
-  const stream = await navigator.mediaDevices.getUserMedia({ video, audio })
+  const stream = await getDevice({ video, audio })
   // The camera's picture, in a video element that is never shown: what each picture is taken from
   const view = document.createElement('video')
   view.muted = true
@@ -514,7 +552,7 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
   /** The microphone's sound on its way to the page, where the camera was opened with sound. */
   let sound: Relay | null = null
   try {
-    await view.play()
+    await within(view.play(), DEVICE_WAIT.playMs, NO_PICTURE, () => {})
     if (audio)
       sound = await relaySound(stream, {
         still: () => (over ? 'not_shown' : page.still()),
@@ -835,7 +873,7 @@ export interface Hearing {
  * the microphone, or with why its sound cannot be passed on.
  */
 export async function openMicrophone(audio: true | MediaTrackConstraints, page: MicrophoneFor): Promise<Hearing> {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio, video: false })
+  const stream = await getDevice({ audio, video: false })
   let state: 'live' | 'paused' = 'live'
   let over = false
   let usedAt = Date.now()
