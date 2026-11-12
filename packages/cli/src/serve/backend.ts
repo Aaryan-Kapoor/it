@@ -2271,12 +2271,29 @@ async function load(config: ServiceConfig, say: (line: string) => void, signal?:
   await ask('update_environment_variables', { changes: settings(config) }, { authorization: `Convex ${config.adminKey}` })
 }
 
-/** Whether It's functions answer in the backend, as they do once they have been loaded. */
-async function loaded(site: string): Promise<boolean> {
-  try {
-    return (await direct(`${site}/health`, { signal: AbortSignal.timeout(5000) })).ok
-  } catch {
-    return false
+/**
+ * How long the backend is given to say whether It's functions answer in it. A backend that has
+ * just been started on a slow or busy machine may take many seconds over its first answer
+ * there, and one taken for silent has the functions loaded into it all over again.
+ */
+export const HEALTH_MS = 30_000
+
+/**
+ * Whether It's functions answer in the backend, as they do once they have been loaded. A good
+ * answer says they do, and any other answer that the backend gives says they do not: one with
+ * no functions answers at once that it has none. A backend that is silent, that will not take
+ * the connection or that answers with a fault of its own is asked again a little later, and is
+ * waited for until `forMs` is over, when it is taken to have none either.
+ */
+export async function loaded(site: string, signal?: AbortSignal, forMs = HEALTH_MS): Promise<boolean> {
+  const until = Date.now() + forMs
+  for (let wait = 250; ; wait = Math.min(wait * 2, 2000)) {
+    const left = until - Date.now()
+    if (left <= 0) return false
+    const answer = await direct(`${site}/health`, { signal: within(left, signal) }).catch(() => null)
+    if (signal?.aborted) throw stopped()
+    if (answer && answer.status < 500) return answer.ok
+    await new Promise((resolve) => setTimeout(resolve, Math.min(wait, Math.max(0, until - Date.now()))))
   }
 }
 
@@ -2399,14 +2416,14 @@ export async function startBackend(config: ServiceConfig, say: (line: string) =>
       say(line)
     }
     if (!copied) {
-      if (!(await loaded(at.site)))
+      if (!(await loaded(at.site, signal)))
         throw new Problem(
           `It could not keep a copy of its database in ${backendFolder()} before loading other functions into it, so they were not loaded.`,
           'copy_failed',
           toCopy(),
         )
       goOn('no_copy', 'backend: for want of a copy, other functions were not loaded, and the ones already loaded go on serving (copy_failed)')
-    } else if (note.load !== wanted || note.unsettled !== undefined || !(await loaded(at.site))) {
+    } else if (note.load !== wanted || note.unsettled !== undefined || !(await loaded(at.site, signal))) {
       // Noted before the first function is in: from here on the database may come to hold
       // what a person made. Where an earlier loading never came to an end that was learned,
       // what is in the database is not known, whatever was last noted as loaded: these go in.
@@ -2422,7 +2439,7 @@ export async function startBackend(config: ServiceConfig, say: (line: string) =>
       } catch (err) {
         // Refused, the functions the database already had are the ones it still has. Where
         // those answer, the person keeps everything they had, on them.
-        if (!(err instanceof Problem && err.code === 'functions_refused') || !(await loaded(at.site))) throw err
+        if (!(err instanceof Problem && err.code === 'functions_refused') || !(await loaded(at.site, signal))) throw err
         goOn('refused', 'backend: the functions of this version were refused, and the ones already loaded go on serving (functions_kept)')
       }
     } else if (note.behind || note.functionsOf !== VERSION) {
