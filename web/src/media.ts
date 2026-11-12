@@ -286,8 +286,9 @@ export function askPerson(about: Omit<Asking, 'answer'>): { answer: Promise<bool
  * Why a recording ended without the page asking, in the words the page is told (protocol's
  * `it:recording`). `taken_over`: another conversation took the page over, and the person allowed
  * the one that had it. `too_large`: it reached the most a file an action carries may be.
+ * `replaced`: the document that began it is no longer the one in the page's frame.
  */
-export type Why = 'person' | 'taken_back' | 'not_shown' | 'device' | 'too_long' | 'taken_over' | 'too_large'
+export type Why = 'person' | 'taken_back' | 'not_shown' | 'replaced' | 'device' | 'too_long' | 'taken_over' | 'too_large'
 /** A recording under way, as It's bar shows it. */
 export interface Live {
   id: string
