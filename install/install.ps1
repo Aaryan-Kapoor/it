@@ -63,11 +63,19 @@
   # without this PowerShell keeps the PATH it had.
   $windowKeeps = $true
   try {
-    $started = @([Environment]::GetCommandLineArgs() | Select-Object -Skip 1)
-    $only = @($started | Where-Object { $_ -match '^[-/](f|fi|fil|file|c|co|com|comm|comma|comman|command|cwa|commandwithargs|e|ec|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)$' -or ($PSCommandPath -and [IO.Path]::GetFileName($_) -eq [IO.Path]::GetFileName($PSCommandPath)) }).Count -gt 0
-    $stays = @($started | Where-Object { $_ -match '^[-/]noe(x|xi|xit)?$' }).Count -gt 0
+    $only = $false
+    $stays = $false
+    foreach ($word in @([Environment]::GetCommandLineArgs() | Select-Object -Skip 1)) {
+      if ($word -match '^[-/](f|fi|fil|file|c|co|com|comm|comma|comman|command|cwa|commandwithargs|e|ec|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)$') { $only = $true }
+      elseif ($word -match '^[-/]noe(x|xi|xit)?$') { $stays = $true }
+      # A word that is no path, such as the text given to -Command, is not the script's name
+      elseif ($PSCommandPath) { try { if ([IO.Path]::GetFileName($word) -eq [IO.Path]::GetFileName($PSCommandPath)) { $only = $true } } catch {} }
+    }
     if ($only -and -not $stays) { $windowKeeps = $false }
-  } catch {}
+  } catch {
+    # Where the command line cannot be read, nothing is promised of this window
+    $windowKeeps = $false
+  }
   # The release this script belongs to. In the repository it names none. The copy published
   # with a release has that release's tag written here when the release is built, so that the
   # checksums and every file they vouch for come from the one release this script came from,

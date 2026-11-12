@@ -106,6 +106,44 @@ test('the Windows script puts the folder on the PATH of the PowerShell it runs i
   expect(ps1.indexOf('$accountHas = $true')).toBeLessThan(put)
 })
 
+/** The part of the Windows script that works out whether the window it was run from keeps its PATH, ending with what it found. */
+const windowKeepsBlock = () => {
+  const ps1 = script('install.ps1')
+  const start = ps1.indexOf('  $windowKeeps = $true')
+  const end = ps1.indexOf('  # The release this script belongs to.', start)
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+  return `${ps1.slice(start, end)}\nWrite-Output "keeps:$windowKeeps"`
+}
+
+test('the Windows script says the window it was run from keeps the PATH only where that window goes on with its PowerShell', () => {
+  const block = windowKeepsBlock()
+  // Whichever way it is started, it reads the command line word by word, and a word that cannot be a path is left alone
+  expect(block).toContain('foreach ($word in @([Environment]::GetCommandLineArgs() | Select-Object -Skip 1))')
+  expect(block).toContain('$windowKeeps = $false\n  }')
+})
+
+test.runIf(windows)(
+  'on Windows itself, a PowerShell started to run only the script, by -Command with a pipe in it, by -EncodedCommand or by -File, is one whose window does not keep its PATH',
+  () => {
+    const block = windowKeepsBlock()
+    const keeps = (args: string[]) =>
+      /keeps:(True|False)/.exec(execFileSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...args], { encoding: 'utf8', timeout: 60_000 }))?.[1]
+    expect(keeps(['-EncodedCommand', Buffer.from(`& { ${block} }`, 'utf16le').toString('base64')])).toBe('False')
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'it-keeps-'))
+    try {
+      const file = path.join(dir, 'install.ps1')
+      writeFileSync(file, `& {\n${block}\n}\n`)
+      expect(keeps(['-File', file])).toBe('False')
+      // Run from a file, so that the script has a path to compare words with, by text given to
+      // -Command that holds a pipe, which is no character a path may have
+      expect(keeps(['-Command', `& '${file.replaceAll("'", "''")}' | Out-Host`])).toBe('False')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  },
+)
+
 test("both install scripts download from It's releases on GitHub, the place the program looks for a newer It, and the lines that run them are fetched from there too", () => {
   expect(INSTALL.releases).toBe('https://github.com/Aaryan-Kapoor/it/releases')
   expect(INSTALL.sh).toBe(`curl -fsSL ${INSTALL.releases}/latest/download/install.sh | sh`)
