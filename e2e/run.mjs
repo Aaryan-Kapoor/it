@@ -3454,6 +3454,27 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
       reloaded.asked === 0,
     JSON.stringify(reloaded),
   )
+  // The microphone live to a page is held to the document that opened it in the same way
+  await camTab.goto(`${APP}/p/${camSlug}`)
+  await pageIn(camTab, { id: camSlug })
+  const micChipThere = camTab.locator('.page-nav .media-mic')
+  await anotherFrame().locator('#mic').click()
+  // Asked in the bar where this page is not allowed the microphone yet on this screen
+  const micQuestion = camTab.locator('.media-ask')
+  await until(async () => (await micQuestion.count()) > 0 || /^(hearing|refused)/.test((await anotherSaid().textContent()) ?? ''), 15_000, 100)
+  if ((await micQuestion.count()) > 0) await micQuestion.getByRole('button', { name: 'Allow', exact: true }).click()
+  await anotherSaid()
+    .filter({ hasText: /^(hearing|refused)/ })
+    .waitFor({ timeout: 15_000 })
+    .catch(() => {})
+  const micOpenThere = { said: await anotherSaid().textContent(), chip: await micChipThere.count() }
+  await anotherFrame().locator('#elsewhere').click()
+  const micReplaced = { ...micOpenThere, endedAtOnce: Boolean(await until(async () => (await micChipThere.count()) === 0, 1500, 50)) }
+  check(
+    'the microphone live to a page ends as soon as its frame loads another document',
+    /^hearing \d+$/.test(micReplaced.said ?? '') && micReplaced.chip === 1 && micReplaced.endedAtOnce,
+    JSON.stringify(micReplaced),
+  )
   await camTab.close()
   await page.goto(`${APP}/p/${slug}`)
   await pageIn(page, { id: slug })
