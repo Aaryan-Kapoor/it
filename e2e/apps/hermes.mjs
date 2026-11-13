@@ -267,7 +267,8 @@ try {
   const site = await it('site', '--no-open')
   const pairing = site.json?.url
   must('`it site` gives an address that pairs a browser', typeof pairing === 'string', site.err)
-  browser = await chromium.launch()
+  // The browser is given the run's surroundings too, and not those of whoever runs this
+  browser = await chromium.launch({ env: base })
   const tab = await (await browser.newContext()).newPage()
   await tab.goto(pairing)
   await tab.locator('header.bar').waitFor({ timeout: 30_000 })
@@ -495,7 +496,14 @@ try {
 } finally {
   // The terminal is closed as a person closes it. Hermes's background gateway outlives it, so it
   // is stopped by the process id Hermes notes for it, and only where Hermes says it is its gateway.
-  if (terminal && terminal.exitCode === null) terminal.stdin.end()
+  // terminal.py closes Hermes itself once its input ends (Ctrl-D, a hang-up, then a kill, ten
+  // seconds apart), and is waited for before it is asked to stop: stopped at once, it would
+  // leave a Hermes that is slow to close running
+  if (terminal && terminal.exitCode === null && terminal.signalCode === null) {
+    const closed = new Promise((resolve) => terminal.once('close', resolve))
+    terminal.stdin.end()
+    await Promise.race([closed, sleep(40_000)])
+  }
   await stopped(terminal, 20_000)
   try {
     const noted = JSON.parse(readFileSync(path.join(HERMES_HOME, 'gateway.pid'), 'utf8'))
