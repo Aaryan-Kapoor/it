@@ -2098,8 +2098,10 @@ describe('what is open or asked for a page, when the page changes hands or is ta
     await ask(openMic)
     expect(sounds.length).toBe(made + 1)
     expect(tracks.map((t) => t.stopped)).toEqual([false])
-    await page.loads()
+    // Stopped as the load is heard, and not at the next look every tenth of a second
+    const loading = page.loads()
     expect(tracks.map((t) => t.stopped)).toEqual([true])
+    await loading
     await arrived(() => !!resultOf(heard, 'm1'))
     expect(resultOf(heard, 'm1')).toMatchObject({ ok: false, error: 'The page loaded another document, which asks for itself.' })
     expect(micStates(heard)).toEqual([])
@@ -3009,8 +3011,10 @@ describe('what is open or asked for a page, when the page changes hands or is ta
         vi.spyOn(AudioContext.prototype as any, 'resume').mockReturnValue(new Promise(() => {}))
         await ask(withSound)
         expect(tracks.map((t) => t.stopped)).toEqual([false, false])
-        await page.loads()
+        // Stopped as the load is heard, and not at the next look every tenth of a second
+        const loading = page.loads()
         expect(tracks.map((t) => t.stopped)).toEqual([true, true])
+        await loading
         await arrived(() => !!resultOf(heard, 'c1'))
         expect(resultOf(heard, 'c1')).toMatchObject({ ok: false, error: 'The page loaded another document, which asks for itself.' })
         expect(states(heard)).toEqual([])
