@@ -7,7 +7,8 @@ name: Pi, the real program
 # a new turn: Pi is pointed through its own models.json at a stand-in for a model's API on the
 # runner, with a made-up key, which answers by script with `it create --open`, then waits for
 # the click to arrive as a new request whose newest message from the user begins [It], and
-# answers it with `it patch`, which the page in a real browser shows.
+# answers it with `it patch`, which the page in a real browser shows. And that a click on the page
+# of a closed conversation reopens it through Pi's own command, Auto-wake's way.
 #
 # Each job installs Pi from its official package: the oldest version that `it setup` installs
 # into, as packages/cli/src/setup.ts says, and the newest that npm has when the job runs.

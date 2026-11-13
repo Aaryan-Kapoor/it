@@ -19,6 +19,10 @@
 // newest message from the user is the click, beginning `[It]` and ending `[action <id>]`. The
 // stand-in answers that with `it patch`, and the page shows the change.
 //
+// Last, Pi is closed and the button clicked again: Auto-wake reopens the conversation with Pi's
+// own `pi --print --session <id>`, the stand-in is sent the click with the conversation's whole
+// history, its `it patch` is run, and the reopened Pi ends by itself.
+//
 //   node e2e/apps/pi.mjs --version <version | oldest | newest>   installs that Pi from npm first
 //   node e2e/apps/pi.mjs --pi <path to a pi program>              runs the Pi that is there
 //
@@ -250,6 +254,7 @@ try {
     '<h1>Pi check</h1><button id=go onclick="It.action(&quot;approve&quot;,{n:1})">Approve</button><p id=said></p>' +
     '<script>It.onState(function(s){document.getElementById("said").textContent=s.answer||""})</script>'
   const answer = 'approved through Pi'
+  const reopened = 'answered by a Pi that It reopened'
   let actionId = null
   model = await standInModel({
     port: base + 50,
@@ -263,7 +268,10 @@ try {
       // The click: answer it on the page
       if (n === 2) return { call: { name: tool.name, arguments: { [tool.param]: `it patch ${slug} '${JSON.stringify({ answer })}'` } } }
       if (n === 3) return { text: 'Done.' }
-      throw new Error(`no answer is scripted for a request after the fourth, and Pi sent one: ${newestFromUser(request)?.slice(0, 200)}`)
+      // The click on a page whose conversation is closed, in the conversation Auto-wake reopened
+      if (n === 4) return { call: { name: tool.name, arguments: { [tool.param]: `it patch ${slug} '${JSON.stringify({ answer: reopened })}'` } } }
+      if (n === 5) return { text: 'Done again.' }
+      throw new Error(`no answer is scripted for a request after the sixth, and Pi sent one: ${newestFromUser(request)?.slice(0, 200)}`)
     },
   })
   writeFileSync(
@@ -370,8 +378,42 @@ try {
     .catch(() => false)
   check('and the page in the browser shows it', onPage)
   await host.until((r) => r.type === 'agent_end', 30_000, host.records.indexOf(settled) + 1)
-  check('the stand-in had an answer for every request Pi sent', model.faults.length === 0, model.faults)
   await host.close()
+  check('Pi shuts the conversation down when its input is closed', host.ended(), host.ended())
+
+  // ---------- A click on a page whose conversation is closed ----------
+  // Auto-wake, which is on for an app from the moment it is connected, reopens the conversation
+  // with Pi's own command, `pi --print --session <id>`, and hands it the click
+  const quiet = model.requests.length
+  await frame.locator('#go').click()
+  const woke = await model.until(quiet + 1, 90_000)
+  const fifth = model.requests[quiet]?.body
+  const again = newestFromUser(fifth)
+  // The click as an add-on hands it over, and after it what It tells a conversation it reopened
+  const againId = /^\[It\][^\n]*\[action ([^\]\s]+)\]\s*(\n|$)/.exec(again ?? '')?.[1]
+  check(
+    'a click on the page of a closed conversation reopens it in the real Pi: the stand-in is sent the click, a line beginning [It] and ending [action <id>]',
+    woke && againId && againId !== actionId,
+    again ?? `no request from Pi within ninety seconds of the click; It says: ${JSON.stringify((await it(['read', slug])).recentActions?.[0])}`,
+  )
+  check(
+    'in the conversation that made the page, with all it held',
+    (fifth?.messages ?? []).some((m) => m.role === 'user' && textOf(m) === typed) &&
+      (fifth?.messages ?? []).some((m) => m.role === 'user' && textOf(m) === click),
+    (fifth?.messages ?? []).map((m) => m.role),
+  )
+  const reopenedOnPage = await frame
+    .locator('#said', { hasText: reopened })
+    .waitFor({ timeout: 60_000 })
+    .then(() => true)
+    .catch(() => false)
+  check('and the reopened Pi answers on the page', reopenedOnPage, (await it(['read', slug])).state)
+  const wokeWith = (await it(['read', slug])).recentActions?.find((a) => a.id === againId)
+  check('It records that it reopened the conversation for that click', wokeWith?.delivery === 'handed_off' && wokeWith?.route === 'queue', wokeWith)
+  const over = await untilTrue(async () => ((await it(['status'])).machine?.runs?.length === 0 ? true : null), 60_000)
+  check('and the reopened Pi ends by itself once it has answered', over, (await it(['status'])).machine?.runs)
+
+  check('the stand-in had an answer for every request Pi sent', model.faults.length === 0, model.faults)
   await browser.close().catch(() => {})
   browser = null
 
