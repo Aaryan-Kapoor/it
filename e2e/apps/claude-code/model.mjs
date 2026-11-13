@@ -31,9 +31,16 @@ export function readTurn(body, headers) {
   const blocks = Array.isArray(last?.content) ? last.content : []
   const results = blocks.filter((b) => b?.type === 'tool_result')
   // The text of the newest user message, without what Claude Code puts beside it of its own
-  // (reminders inside <system-reminder> tags), which is no part of what was submitted
-  const own = blocks.length ? blocks.filter((b) => b?.type === 'text' && !/^\s*<system-reminder>/.test(b.text)) : []
-  const text = (blocks.length ? textOf(own) : textOf(last?.content)).trim()
+  // (reminders inside <system-reminder> tags), which is no part of what was submitted. Only the
+  // reminders themselves are taken out: any other text in the same block stays.
+  const own = (blocks.length ? blocks.filter((b) => b?.type === 'text').map((b) => b.text) : [textOf(last?.content)])
+    .map((t) =>
+      String(t ?? '')
+        .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
+        .trim(),
+    )
+    .filter(Boolean)
+  const text = own.join('\n').trim()
   let session = headers['x-claude-code-session-id'] ?? null
   if (!session) {
     // Older versions say it only inside the request's metadata
