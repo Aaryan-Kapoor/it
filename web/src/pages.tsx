@@ -1,6 +1,6 @@
 // The person's pages: the grid of all of them, and one of them shown.
 
-import { ALIVE, LIMITS, NOUN, TAKES, WAKE_BACK_MS } from '@it/protocol'
+import { ALIVE, CODEX_INTERRUPTED, LIMITS, NOUN, TAKES, WAKE_BACK_MS } from '@it/protocol'
 import { useAction, useConvex, useMutation, useQuery } from 'convex/react'
 import { Component, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
@@ -1334,13 +1334,17 @@ function ActionStatus({
   // Its machine will not start its conversation for it, and says why, with what to do: as for a
   // Claude Code conversation that is open without It's add-on, which a reopening would run a
   // second copy of. Said for as long as it waits there, since the reason is kept with the click
-  // itself. (Backends from before they kept one say none)
-  if (last.delivery === 'pending' && last.heldBack)
+  // itself. (Backends from before they kept one say none) A Codex conversation whose last turn
+  // the person interrupted is open, and nothing failed: Codex takes it with their next message
+  // there, so it is said to be waiting, and not to be something It could not wake
+  if (last.delivery === 'pending' && last.heldBack) {
+    const interrupted = last.heldBack === CODEX_INTERRUPTED
     return (
-      <span className="status" data-tone="bad">
-        {`Couldn’t wake ${agent ?? 'your agent'}${waiting > 1 ? ` (${waiting})` : ''}: ${last.heldBack}`}
+      <span className="status" data-tone={interrupted ? 'wait' : 'bad'}>
+        {`${interrupted ? `Not handed to ${agent ?? 'your agent'} yet` : `Couldn’t wake ${agent ?? 'your agent'}`}${waiting > 1 ? ` (${waiting})` : ''}: ${last.heldBack}`}
       </span>
     )
+  }
   // Set aside by its machine after tries that came to nothing. Nothing tries it again until its
   // conversation is heard from, and it is deleted a month after it was done if that never
   // happens, so both are said: left as "Waiting", it looked as if It were still at it.

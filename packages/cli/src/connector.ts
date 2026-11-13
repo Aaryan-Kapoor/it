@@ -18,6 +18,7 @@ import {
   ALIVE,
   briefClick,
   type Click,
+  CODEX_INTERRUPTED,
   describeClick,
   LEASE_MS,
   LISTENING_MOST,
@@ -606,15 +607,8 @@ export const OPEN_WITHOUT_ADDON =
  */
 export const PI_OPEN_WITHOUT_ADDON =
   'its conversation is open without It’s add-on, as when it was open before It was installed, so It did not start a second copy of it: type /reload in it, or open it again if you closed it, and what you did reaches it'
-/**
- * What the page says of a click for a Codex conversation that is open and whose last turn the
- * person interrupted. Codex keeps what is put in its queue from then until their next message
- * there, so the click is not put in it and said to be with the agent: it waits here, and is
- * handed to the turn that message begins. Shown after "Couldn't wake Codex:", well within the
- * 300 characters the backend keeps.
- */
-export const CODEX_INTERRUPTED =
-  'its last turn in that conversation was interrupted, and Codex starts nothing by itself after that: send it a message there, and what you did reaches it'
+/** What the page says of a click for a Codex conversation that is open and whose last turn the person interrupted (`CODEX_INTERRUPTED` in the protocol). */
+export { CODEX_INTERRUPTED }
 /** What the page says after why a Pi conversation could not be reopened, where it has not loaded It's add-on either (`notLoadedToo`). */
 export const PI_NOT_LOADED =
   'Its conversation has not loaded It’s add-on either, as when it was open before It was installed: if it is still open, type /reload in it, and what you did reaches it'

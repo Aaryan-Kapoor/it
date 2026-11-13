@@ -73,6 +73,13 @@ export const TAKES = {
   displayLock: 'displays.lock',
   /** Conversations needing the reload notice: the site subscribes only where this query is named. */
   reloadReport: 'artifacts.notLoaded',
+  /**
+   * A page given to a conversation only while no conversation has it (`unowned` on
+   * `artifacts.take`), as a page made before OpenCode had loaded It's add-on is. An older It
+   * refuses the argument, and keeps to itself why, so a command that is refused asks whether
+   * It names this, and says that the It this machine joined needs updating where it does not.
+   */
+  takeUnowned: 'artifacts.take.unowned',
   /** Machine reports of conversation turns, sent only when advertised by the backend. */
   turnReports: 'turns.say',
   /** Machine reports of open conversations missing the add-on. */
@@ -429,6 +436,16 @@ export const TURNS_ON: readonly Harness[] = ['claude-code', 'codex', 'openclaw',
 export const TURN_ON_MS = 5 * 60_000
 /** How long after turning an add-on back on failed it may be asked for again, so that a machine is never kept running an app's command over and over. */
 export const TURN_ON_AGAIN_MS = 15_000
+/**
+ * Why a machine holds back a click for a Codex conversation that is open and whose last turn the
+ * person interrupted, kept with the click (`delivery.holdBack`) and said on its page. Codex keeps
+ * what is put in its queue from then until their next message there, so the click is not put in
+ * it and said to be with the agent: it waits, and is handed to the turn that message begins. The
+ * site says it after "Not handed to Codex yet:", since nothing has failed and Codex is open, and
+ * it is well within the 300 characters the backend keeps.
+ */
+export const CODEX_INTERRUPTED =
+  'its last turn in that conversation was interrupted, and Codex starts nothing by itself after that: send it a message there, and what you did reaches it'
 /** What a person is told where they would switch reopening on for a machine It does not reopen conversations on. */
 export const noWakeHere = (system: string | null | undefined): string =>
   system === 'win32'
