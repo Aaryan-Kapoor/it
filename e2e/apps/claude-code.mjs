@@ -22,7 +22,7 @@
 // shows the change. Then Claude Code is closed and the button pressed again: It's service
 // reopens the conversation with Claude Code's own command (Auto-wake), and the reopened turn,
 // asked of the same stand-in, changes the page again. `--setup-only` stops before the loop.
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync } from 'node:fs'
 import http from 'node:http'
@@ -70,6 +70,10 @@ const folders = Object.fromEntries(
 )
 for (const folder of Object.values(folders)) mkdirSync(folder, { recursive: true })
 let cleaning = null
+/** Once the run has begun to clean up, it starts nothing more: whatever it would start, it stops here. */
+const notStopping = () => {
+  if (cleaning) throw new Stop('the run is stopping')
+}
 // Asked to stop, the run stops what it started before it ends
 for (const signal of ['SIGINT', 'SIGTERM'])
   process.once(signal, () => {
@@ -177,12 +181,6 @@ const alive = (pid) => {
     return err.code === 'EPERM'
   }
 }
-/** Waits up to `ms` for every one of these processes to have gone; says whether they all have. */
-async function gone(pids, ms) {
-  const end = Date.now() + ms
-  while (pids.some(alive) && Date.now() < end) await sleep(250)
-  return !pids.some(alive)
-}
 /** Whether something on this machine answers 200 at a port and path. */
 const answers = (port, p, host) =>
   new Promise((resolve) => {
@@ -199,6 +197,8 @@ let serviceFault = null
 let conversation
 let conversationFault = null
 let browser
+/** The browser while it starts, so that cleaning up can wait for it and close it. */
+let launching = null
 let model
 const serviceLog = path.join(scratch, 'service.log')
 const debugFile = path.join(scratch, 'claude-debug.txt')
@@ -254,6 +254,7 @@ try {
   // The service has It's own folder on its PATH, as a service started from a shell that the install
   // script has put it on has, and as Auto-wake's note to a reopened conversation says it is. The
   // conversation this run starts itself is not given it: the add-on puts it there.
+  notStopping()
   service = spawn(process.execPath, [CLI, 'serve'], {
     env: { ...base, PATH: `${PATH}${path.delimiter}${path.join(folders.it, 'bin')}` },
     cwd: folders.work,
@@ -299,7 +300,10 @@ try {
     const site = await it('site', '--no-open')
     const pairing = site.json?.url
     must('`it site` gives an address that pairs a browser', typeof pairing === 'string', site.err)
-    browser = await chromium.launch({ env: browserEnv })
+    notStopping()
+    launching = chromium.launch({ env: browserEnv })
+    browser = await launching
+    notStopping()
     const tab = await (await browser.newContext()).newPage()
     await tab.goto(pairing)
     await tab.locator('header.bar').waitFor({ timeout: 30_000 })
@@ -309,6 +313,7 @@ try {
     // a conversation allows.
     // The conversation's id is chosen here, so that It can be asked about it before anything is said in it
     const session = randomUUID()
+    notStopping()
     conversation = spawn(
       CLAUDE,
       [
@@ -531,34 +536,51 @@ process.exit(failed.length ? 1 : 0)
 function cleanUp() {
   cleaning ??= (async () => {
     await stopped(conversation)
-    await browser?.close().catch(() => {})
-    // The service is asked to stop, and stops its connector and its backend, and is waited for.
-    // The backend runs in a process group of its own, so it is followed by the process ids the
-    // service wrote down for it. A reopened conversation ends by itself once its turn ends, which
-    // the run has waited for wherever it got that far.
+    // A browser that was still starting when the run was asked to stop is waited for, and closed
+    await (browser ?? (await launching?.catch(() => null)))?.close().catch(() => {})
+    // The service is asked to stop, and stops its connector, the conversations it reopened and
+    // its backend, and is waited for. A service that stopped cleanly when asked has stopped what
+    // it started. One that did not, or that ended by itself before, may have left its backend or
+    // a reopened conversation running, each in a process group of its own: the run's folder is
+    // then kept, since they may still be using it.
+    let clean = !service || serviceFault !== null
     if (service && service.exitCode === null && service.signalCode === null && !serviceFault) {
       const exited = new Promise((r) => service.once('exit', (code, signal) => r({ code, signal })))
       service.kill('SIGTERM')
       const how = await Promise.race([exited, sleep(90_000).then(() => null)])
-      check('It’s service stops when it is asked to', how?.code === 0, JSON.stringify(how ?? 'still running after ninety seconds'))
+      clean = check('It’s service stops when it is asked to', how?.code === 0, JSON.stringify(how ?? 'still running after ninety seconds'))
       if (!how) {
         service.kill('SIGKILL')
         await Promise.race([exited, sleep(10_000)])
       }
     }
+    // The backend is followed by the process ids the service wrote down for it, and a process is
+    // taken for it only while its command line names this run's It folder, so that an id the
+    // system has given to another program since is left alone
     const backends = existsSync(serviceLog) ? [...readFileSync(serviceLog, 'utf8').matchAll(/backend: started \(pid (\d+)\)/g)].map((m) => Number(m[1])) : []
-    let left = !(await gone(backends, 30_000))
-    if (left) {
-      check('It’s backend program stopped with the service', false, `still running: ${backends.filter(alive).join(', ')}`)
-      for (const pid of backends.filter(alive)) process.kill(pid, 'SIGKILL')
-      left = !(await gone(backends, 10_000))
+    const ours = (pid) => alive(pid) && (spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).stdout ?? '').includes(folders.it)
+    const stillOurs = async (ms) => {
+      const end = Date.now() + ms
+      while (backends.some(ours) && Date.now() < end) await sleep(250)
+      return backends.filter(ours)
+    }
+    let left = await stillOurs(30_000)
+    if (left.length) {
+      check('It’s backend program stopped with the service', false, `still running: ${left.join(', ')}`)
+      for (const pid of left) process.kill(pid, 'SIGKILL')
+      left = await stillOurs(10_000)
     }
     await model?.close()
     report()
     // Kept where something that used it may still be running, and said so
-    if (left || (service && service.exitCode === null && service.signalCode === null))
+    if (left.length || !clean || (service && service.exitCode === null && service.signalCode === null))
       console.log(`\nSomething the run started may still be running, so its folder is kept: ${scratch}`)
-    else rmSync(scratch, { recursive: true, force: true })
+    else
+      try {
+        rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+      } catch (err) {
+        console.log(`\nThe run’s folder could not be removed (${err.code}): ${scratch}`)
+      }
   })()
   return cleaning
 }
