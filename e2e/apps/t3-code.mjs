@@ -330,7 +330,9 @@ function runningFrom(folder) {
   const within = (file) => plain(file).startsWith(plain(folder))
   if (windows) {
     try {
-      const script = "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath } | ForEach-Object { '{0}|{1}' -f $_.ProcessId, $_.ExecutablePath }"
+      // Written out as UTF-8, which is how it is read, whatever the console's code page
+      const script =
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath } | ForEach-Object { '{0}|{1}' -f $_.ProcessId, $_.ExecutablePath }"
       return execFileSync(
         path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
         ['-NoProfile', '-NonInteractive', '-Command', script],
@@ -360,7 +362,11 @@ function runningFrom(folder) {
 }
 /** Whether a process is the run's own T3 Code's program, by the program it runs, and may be ended. */
 const t3Program = (pid) => (runningFrom(realpathSync(t3Home)) ?? []).includes(pid)
-/** The processes of the run's that are still running, or null where that could not be asked. */
+/**
+ * The processes of the run's that are still running, or null where that could not be asked: those
+ * of the programs installed in its folders. The Node processes the run starts itself (T3 Code's
+ * launcher, It's service) are not among them, and are stopped and waited for by their own handles.
+ */
 const leftOver = () => runningFrom(realpathSync(top))
 /** The note T3 Code keeps of its running server, in the run's folder. */
 const noted = () => {
@@ -402,7 +408,7 @@ function cleanUp() {
     const still = leftOver()
     stillUp = still === null || still.length > 0 || (typeof program === 'number' && alive(program) && t3Program(program))
     check(
-      'nothing the run started is left running',
+      'no program the run installed or started is left running',
       !stillUp,
       still === null ? 'the system could not be asked which processes run the run’s programs' : still.length ? `still running: ${still.join(', ')}` : '',
     )
