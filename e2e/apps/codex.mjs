@@ -491,9 +491,15 @@ trust_level = "trusted"
   tui = terminal()
   const asked = await tui.until(/Hooksneedreview.*Trustallandcontinue/, 60_000)
   check('Codex’s terminal says It’s hooks need review as it starts', asked, tui.plain().slice(-1500))
-  // The second choice. The terminal is asked to move down one and choose, as a person does
-  tui.type('\x1b[B')
-  await sleep(500)
+  // The second choice, as a person makes it: down one, and Enter once the terminal shows it chosen.
+  // A key pressed before the question takes keys is lost, so Down is pressed again until it shows
+  let onTrust = false
+  for (let tries = 0; tries < 10 && !onTrust; tries++) {
+    const from = tui.mark()
+    tui.type('\x1b[B')
+    onTrust = await tui.until(/›2\.Trustallandcontinue/, 1500, from)
+  }
+  check('Codex’s terminal shows “Trust all and continue” chosen', onTrust, tui.plain().slice(-1500))
   tui.type('\r')
   const ready = await tui.until(/AskCodextodoanything|Implement\{feature\}|Explainthiscodebase/, 30_000, tui.mark())
   hooks = await itsHooks().catch((e) => e)
