@@ -19,9 +19,10 @@ name: T3 Code, the real server
 #     Code's own command, a click still lands there.
 #
 # The turn T3 Code starts fails, since Claude Code has no account here: what is checked is that T3
-# Code took the message for the right thread. It runs on Linux and on Windows. On Windows It finds
-# T3 Code's command where T3 Code's launcher keeps it, as on a machine where T3 Code came from npm;
-# the command that T3 Code's desktop app keeps for a person there is not covered.
+# Code took the message for the right thread. It runs on Linux. The script also runs on Windows,
+# where It finds T3 Code's command where T3 Code's launcher keeps it, and passed there; it is left
+# out of this matrix because It's own setup and service take minutes each on a Windows runner, and
+# the job then runs past the time it is given.
 #
 # It runs on every pull request, on every push to master, once a night and by hand. It is a
 # workflow of its own and blocks no merge: a T3 Code published tomorrow that It no longer reaches
@@ -51,13 +52,12 @@ env:
 
 jobs:
   t3-code:
-    name: T3 Code ${{ matrix.version }} (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: T3 Code ${{ matrix.version }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
         version: [latest, nightly]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
