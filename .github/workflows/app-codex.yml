@@ -78,8 +78,26 @@ jobs:
             echo "No Codex version could be read for ${{ matrix.which }}: '$version'"
             exit 1
           fi
+          # Codex's npm package fetches its program for this system as an
+          # optional package, which npm skips without failing where it cannot
+          # have it. In the minutes after a release that package can be listed
+          # and not yet be served, so the install is tried again until the
+          # program runs and says this version, for up to five minutes.
           folder="$RUNNER_TEMP/codex-$version"
-          npm install --prefix "$folder" --no-save --no-audit --no-fund "@openai/codex@$version"
+          asked="$RUNNER_TEMP/codex-version-home"
+          mkdir -p "$asked"
+          for n in 1 2 3 4 5 6; do
+            rm -rf "$folder"
+            npm install --prefix "$folder" --prefer-online --no-save --no-audit --no-fund "@openai/codex@$version"
+            said=$(HOME="$asked" CODEX_HOME="$asked" "$folder/node_modules/.bin/codex" --version 2>/dev/null || true)
+            case "$said" in *" $version"*) break ;; esac
+            said=""
+            [ "$n" = 6 ] || { echo "Codex $version does not run here yet; trying again in a minute"; sleep 60; }
+          done
+          if [ -z "$said" ]; then
+            echo "Codex $version was installed from npm and does not run on this system: its program for linux-x64 was not there."
+            exit 1
+          fi
           echo "CODEX_VERSION=$version" >> "$GITHUB_ENV"
           echo "IT_E2E_CODEX=$folder/node_modules/.bin/codex" >> "$GITHUB_ENV"
           echo "Codex $version"
@@ -105,6 +123,8 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: codex-${{ matrix.which }}-logs
-          path: ${{ runner.temp }}/codex-logs
+          path: |
+            ${{ runner.temp }}/codex-logs
+            ${{ runner.temp }}/codex-tests.json
           retention-days: 7
           if-no-files-found: ignore
