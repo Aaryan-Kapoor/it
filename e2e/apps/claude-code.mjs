@@ -372,7 +372,18 @@ try {
       turn.session === session && JSON.stringify(turn.messages).includes(`--id ${PAGE}`),
       JSON.stringify({ session, asked: turn.session }),
     )
-    check('It records that the add-on handed the click over', action?.delivery === 'handed_off' && action?.route === 'addon', JSON.stringify(action))
+    // The add-on tells the connector once Claude Code has taken the prompt, which may be just after the model is asked
+    const handed = await until(
+      () => it('read', PAGE),
+      (r) => r.json?.recentActions?.find((a) => a.id === action?.id)?.delivery === 'handed_off',
+      15_000,
+    )
+    const recorded = handed.json?.recentActions?.find((a) => a.id === action?.id)
+    check(
+      'It records that the add-on handed the click over',
+      recorded?.delivery === 'handed_off' && recorded?.route === 'addon',
+      JSON.stringify(recorded ?? handed.err),
+    )
     check('and the turn ends', await untilFinished(2, 60_000), JSON.stringify(finished()))
     const state = await until(
       () => it('state', PAGE),
