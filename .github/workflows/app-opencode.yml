@@ -1,0 +1,78 @@
+name: OpenCode
+
+# What this proves: that the real OpenCode, installed from its official npm package, loads It's
+# add-on, and that a click on a page comes back into the OpenCode conversation that made it as a
+# new turn. It runs e2e/apps/opencode.mjs at three versions of OpenCode: the oldest that
+# `it setup` installs into (KNOWN in packages/cli/src/setup.ts), the newest OpenCode 1, and the
+# newest published. Each one runs the real `it setup --only opencode`, sees OpenCode itself load
+# the add-on and `it status` agree, sees a plugin that OpenCode refuses be said by `it status`
+# and not called connected, and then drives one conversation through a stand-in for the model
+# on the runner, which a real browser's click on a page has to reach as a turn. Last, with
+# OpenCode stopped, a click has to reopen the closed conversation through It's Auto-wake and the
+# real `opencode run --session`. No account, no key and no real model are used: the model's key
+# is made up.
+#
+# When it runs: on every pull request, on every push to master, once a night, and by hand. It
+# is a workflow of its own, apart from it.yml, so that it never blocks a merge. When OpenCode
+# publishes a version that breaks It's add-on, the nightly run goes red: that is its purpose.
+#
+# Every action is pinned to a commit, no job keeps the checkout's credentials, the token each
+# job is given can only read, and no job is given a secret.
+on:
+  pull_request:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_VERSION: 24
+
+jobs:
+  opencode:
+    name: OpenCode (${{ matrix.which }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - which: oldest It accepts
+            package: oldest
+          - which: newest 1.x
+            package: opencode-ai@1
+          - which: newest published
+            package: '@opencode/cli@latest'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # The Node bundle, with the add-ons, the site and the backend's functions inside it
+      - run: npm run generate
+      - name: Install the browser
+        # Fetching a browser fails on a runner now and then, before anything of It has run: it is tried three times
+        run: for n in 1 2 3; do npx playwright install --with-deps chromium && exit 0; sleep 20; done; exit 1
+      # OpenCode is installed from npm into the run's own folder, beside a home folder, XDG
+      # folders and an It that are the run's own, and all of it is removed at the end
+      - name: OpenCode loads It's add-on, and a click comes back as a turn
+        env:
+          PACKAGE: ${{ matrix.package }}
+          IT_OC_ROOT: ${{ runner.temp }}
+        run: node e2e/apps/opencode.mjs --package "$PACKAGE"
