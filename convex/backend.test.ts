@@ -4239,6 +4239,7 @@ describe('displays and machines', () => {
         'delivery.holdBack',
         'displays.lock',
         'artifacts.notLoaded',
+        'artifacts.take.unowned',
         'turns.say',
         'machines.notLoaded',
       ],

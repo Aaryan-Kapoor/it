@@ -3,6 +3,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { TAKES } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { Problem } from './src/lib'
 import { claimUnclaimed, inUnloadedOpenCode, noteUnclaimed, type Take, unclaimed, unclaimedFile } from './src/unclaimed'
@@ -130,14 +131,32 @@ describe('a page made in an OpenCode that had not loaded the add-on', () => {
     const take: Take = async () => {
       throw new Problem('It is not running.', 'offline')
     }
-    expect(await claimUnclaimed('ping', opencode, take)).toBe('unanswered')
+    // Nor can its door be asked what it takes
+    const unasked = async () => undefined
+    expect(await claimUnclaimed('ping', opencode, take, unasked)).toBe('unanswered')
     expect(unclaimed('ping')).toBe(true)
-    // As where an It of an earlier build does not know what it is asked: it never gives the page unasked
+    // An It that refuses for a reason it keeps to itself, and names at its door that it takes this
+    expect(await claimUnclaimed('ping', opencode, take, async () => true)).toBe('unanswered')
+    expect(unclaimed('ping')).toBe(true)
+  })
+
+  test('where the It this machine joined is older and refuses what it is asked, that is said, and the note is kept for once it is updated', async () => {
+    await noteUnclaimed('ping', 'page-1')
+    // As an It of an earlier version refuses a call with an argument it does not know, keeping why to itself
     const older: Take = async () => {
-      throw new Problem('ArgumentValidationError: Object contains extra field `unowned`', 'invalid')
+      throw new Problem('[Request ID: 0123456789abcdef] Server Error', 'error')
     }
-    expect(await claimUnclaimed('ping', opencode, older)).toBe('unanswered')
+    const asked: string[] = []
+    const takes = async (form: string) => {
+      asked.push(form)
+      return false
+    }
+    expect(await claimUnclaimed('ping', opencode, older, takes)).toBe('older')
+    expect(asked).toEqual([TAKES.takeUnowned])
     expect(unclaimed('ping')).toBe(true)
+    // Updated, it gives the page
+    expect(await claimUnclaimed('ping', opencode, fake({ 'page-1': null }).take, takes)).toBe('took')
+    expect(unclaimed('ping')).toBe(false)
   })
 
   test('a note that is not as It writes it is no note', async () => {

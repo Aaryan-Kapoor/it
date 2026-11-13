@@ -169,9 +169,10 @@ export interface Facts {
   unloadedOpenCode?: boolean
   /**
    * Whether the page was made before OpenCode had loaded It's add-on and is still no
-   * conversation's, because It gave no answer when this conversation asked for it.
+   * conversation's, because It gave no answer when this conversation asked for it
+   * (`unanswered`), or because the It this machine joined is older and refused (`older`).
    */
-  unclaimedLeft?: boolean
+  unclaimedLeft?: 'unanswered' | 'older'
 }
 
 /**
@@ -225,6 +226,10 @@ function arrivesAsIs(f: Facts): Arrives {
   const unknown = (why: string): Arrives => ({ byItself: 'unknown', next: `${why} ${waitFor(f.slug)}` })
   const not = (why: string): Arrives => ({ byItself: false, next: `${why} ${waitFor(f.slug)}` })
   // Whatever this conversation's add-on does, a page that is no conversation's is not brought here by it
+  if (f.unclaimedLeft === 'older')
+    return not(
+      `Nothing the person does on this page arrives here by itself: it was made before OpenCode had loaded It’s add-on, so it belongs to no conversation, and the It this machine joined is older than this one and cannot give it to this conversation. Tell the person that It needs updating on the computer this machine joined; once it is, waiting on the page by its id gives it to this conversation.`,
+    )
   if (f.unclaimedLeft)
     return not(
       `Nothing the person does on this page arrives here by itself: it was made before OpenCode had loaded It’s add-on, so it belongs to no conversation, and It gave no answer just now when this conversation asked for it. Waiting on it by its id asks again.`,
