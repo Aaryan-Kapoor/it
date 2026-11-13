@@ -13,10 +13,12 @@
 // T3 Code's own program as T3 Code's launcher keeps it, is issued a session by T3 Code's own
 // command, and lists and reads threads in version 2 of T3 Code's protocol, which the real server
 // is asked whether it still speaks. A thread is made with T3 Code's own command, in a project made
-// with T3 Code's own command, for Claude Code. T3 Code is given, as the `claude` it runs, a
-// stand-in that writes down how it was started and ends at once, as Claude Code does here with no
-// account: T3 Code names the conversation's id on that command line (`--session-id`), so the run
-// learns the id from T3 Code itself and not from It. It's code must find the thread by that id,
+// with T3 Code's own command, for Claude Code. The run reads the conversation's id from T3 Code's
+// own account of the thread, and not through It's code. Outside Windows T3 Code is also given, as
+// the `claude` it runs, a script that writes down how T3 Code started it and then becomes the real
+// Claude Code, which has no account here, so the run sees T3 Code hand that very id to Claude Code
+// (`--session-id`). On Windows that script would have to be one that cmd.exe reads, and T3 Code
+// runs the real Claude Code's own program instead. It's code must find the thread by that id,
 // say that it runs that conversation now, and say that no thread holds another. Asked through a
 // stand-in that passes everything on to the real server but asks it in the next version of the
 // protocol, It must take the real server's refusal for not knowing, never for no thread, and
@@ -34,9 +36,11 @@
 // It's documentation promises. What `arrives` says in that case is reported and not held to,
 // since it says otherwise today (see the run's report).
 //
-// The turn T3 Code starts for the click fails, since the `claude` it runs is a stand-in that ends
-// at once; that is expected, and what is checked is that T3 Code took the message for the right
-// thread. A whole loop with the real Claude Code inside T3 Code and a stand-in model is not
+// The turn T3 Code starts for each message fails, since Claude Code has no account here; that is
+// expected, and what is checked is that T3 Code took the message for the right thread. On Windows
+// It finds T3 Code's command by the version T3 Code noted, where T3 Code's launcher keeps it, as
+// it does on a machine where T3 Code was installed from npm; the command T3 Code's desktop app
+// keeps in T3 Code's folder is not covered. A whole loop with the real Claude Code inside T3 Code and a stand-in model is not
 // attempted here.
 //
 //   node e2e/apps/t3-code.mjs --version <version | latest | nightly>   installs that T3 Code from npm
@@ -63,10 +67,7 @@ if (!argv.includes('--version') || !asked) {
   console.error('usage: node e2e/apps/t3-code.mjs --version <version | latest | nightly>')
   process.exit(2)
 }
-if (process.platform === 'win32') {
-  console.error('This run is written for Linux and macOS: on Windows It finds T3 Code’s command another way, which it does not cover yet.')
-  process.exit(2)
-}
+const windows = process.platform === 'win32'
 
 const results = []
 const notes = []
@@ -90,12 +91,12 @@ const at = (...p) => path.join(top, ...p)
 const home = at('home')
 const t3Home = at('t3')
 const itHome = at('it')
-const itBin = at('it-bin')
 const t3Bin = at('t3-bin')
 const work = at('work')
 const logs = at('logs')
-for (const f of [home, t3Home, itBin, t3Bin, work, logs, at('build')]) mkdirSync(f, { recursive: true })
-if (path.join(itHome, 'connector.sock').length > 100) {
+for (const f of [home, t3Home, t3Bin, work, logs, at('build')]) mkdirSync(f, { recursive: true })
+// On Windows the connector listens on a port, and elsewhere at a socket in It's folder
+if (!windows && path.join(itHome, 'connector.sock').length > 100) {
   console.error(`It's folder would be ${itHome}, and the socket in it too long a path for the system. Name a shorter folder in IT_T3_ROOT.`)
   rmSync(top, { recursive: true, force: true })
   process.exit(2)
@@ -114,15 +115,33 @@ const ownT3 = (env) => {
 // for a model, no setting of theirs and no folder of theirs is seen: a home of the run's own, and a
 // PATH of the run's own folders, the Node that runs this, and the system's own programs. Not the
 // PATH this was started with, which may hold a person's own `t3` or `claude`.
-const systemPath = ['/usr/bin', '/bin', '/usr/sbin', '/sbin']
+const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
+const systemPath = windows
+  ? [path.join(systemRoot, 'System32'), systemRoot, path.join(systemRoot, 'System32', 'Wbem'), path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0')]
+  : ['/usr/bin', '/bin', '/usr/sbin', '/sbin']
+const temporary = process.env.RUNNER_TEMP ?? os.tmpdir()
 const common = {
   LANG: 'C.UTF-8',
   HOME: home,
+  // What Windows' own programs need, and a person's folders there that are the run's own
+  ...(windows
+    ? {
+        SystemRoot: systemRoot,
+        windir: systemRoot,
+        ComSpec: path.join(systemRoot, 'System32', 'cmd.exe'),
+        PATHEXT: process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD',
+        USERPROFILE: home,
+        APPDATA: path.join(home, 'AppData', 'Roaming'),
+        LOCALAPPDATA: path.join(home, 'AppData', 'Local'),
+        TEMP: temporary,
+        TMP: temporary,
+      }
+    : {}),
   XDG_CONFIG_HOME: path.join(home, '.config'),
   XDG_DATA_HOME: path.join(home, '.local', 'share'),
   XDG_STATE_HOME: path.join(home, '.local', 'state'),
   XDG_CACHE_HOME: path.join(home, '.cache'),
-  TMPDIR: process.env.RUNNER_TEMP ?? os.tmpdir(),
+  TMPDIR: temporary,
   // An empty folder for T3 Code, the run's own
   T3CODE_HOME: t3Home,
   // Claude Code fetches no newer Claude Code, and asks the internet for nothing it can do without
@@ -130,17 +149,26 @@ const common = {
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
   ...Object.fromEntries(['CI'].filter((k) => process.env[k]).map((k) => [k, process.env[k]])),
 }
-/** T3 Code: its own program and launcher, and the stand-in it runs as `claude`. */
+// The real Claude Code, as npm installs it into the run's folder: the folder of the commands npm
+// makes for it, and its own program
+const claudeCommands = at('claude-install', 'node_modules', '.bin')
+const claudeProgram = at('claude-install', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe')
+/**
+ * T3 Code: its launcher is run by the Node that runs this, and the `claude` it runs is the script
+ * that writes down how T3 Code started it before it becomes the real Claude Code. On Windows,
+ * where that script would have to be one that cmd.exe reads, it is the real Claude Code's own
+ * program, and the run learns the conversation from T3 Code's own account of the thread alone.
+ */
 const t3Env = {
   ...common,
-  PATH: [t3Bin, path.dirname(process.execPath), ...systemPath].join(path.delimiter),
+  PATH: [...(windows ? [path.dirname(claudeProgram)] : [t3Bin]), path.dirname(process.execPath), ...systemPath].join(path.delimiter),
   // On this machine alone
   T3CODE_LAN: 'false',
 }
 /** It, and the real Claude Code that `it setup` connects. */
 const itEnv = {
   ...common,
-  PATH: [itBin, path.dirname(process.execPath), ...systemPath].join(path.delimiter),
+  PATH: [claudeCommands, path.dirname(process.execPath), ...systemPath].join(path.delimiter),
   CLAUDE_CONFIG_DIR: at('claude-config'),
   IT_HOME: itHome,
   IT_PORT: String(base),
@@ -172,7 +200,9 @@ function ran(program, args, { env = itEnv, cwd = work, ms = 120_000, input } = {
     })
   })
 }
-const t3 = (args, options) => ran('t3', [...args, '--base-dir', t3Home], { env: t3Env, ...options })
+/** T3 Code's launcher from its package, run by this Node: on Windows npm's command for it is one that cmd.exe reads. */
+const launcher = at('t3-install', 'node_modules', 't3', 'bin', 't3.mjs')
+const t3 = (args, options) => ran(process.execPath, [launcher, ...args, '--base-dir', t3Home], { env: t3Env, ...options })
 const t3Json = async (args, options) => {
   const r = await t3([...args, '--json'], options)
   try {
@@ -214,13 +244,14 @@ function npmEnv() {
     npm_config_update_notifier: 'false',
   }
 }
-const npm = (args, cwd) => execFileSync('npm', args, { cwd, env: npmEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })
-/** Installs a package from npm into a folder of the run's own, and links its programs into `bin`. */
-function install(spec, folder, programs, bin) {
+// On Windows npm is a command that cmd.exe reads; nothing it is given here has a space in it
+const npm = (args, cwd) =>
+  execFileSync(windows ? 'npm.cmd' : 'npm', args, { cwd, env: npmEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], shell: windows })
+/** Installs a package from npm into a folder of the run's own. */
+function install(spec, folder) {
   mkdirSync(folder, { recursive: true })
   writeFileSync(path.join(folder, 'package.json'), '{"private":true}\n')
   npm(['install', '--no-audit', '--no-fund', spec], folder)
-  for (const p of programs) execFileSync('ln', ['-sf', path.join(folder, 'node_modules', '.bin', p), path.join(bin, p)])
 }
 
 let server = null
@@ -228,10 +259,15 @@ let serve = null
 let browser = null
 let other = null
 
-/** Stops one program the run started, and waits for it: asked first, and ended where it does not stop. */
-async function stopProgram(child, ms = 60_000) {
+/**
+ * Stops one program the run started, and waits for it: asked first, and ended where it does not
+ * stop. On Windows, where there is no signal to ask with, It's service is asked by a file in It's
+ * folder (`service.stop`), as It itself asks it there.
+ */
+async function stopProgram(child, ms = 60_000, { it: isIt = false } = {}) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return true
-  child.kill('SIGTERM')
+  if (windows && isIt) writeFileSync(path.join(itHome, 'service.stop'), '')
+  else child.kill('SIGTERM')
   const end = Date.now() + ms
   while (child.exitCode === null && child.signalCode === null && Date.now() < end) await sleep(250)
   if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
@@ -241,6 +277,19 @@ const alive = (pid) => {
   try {
     process.kill(pid, 0)
     return true
+  } catch {
+    return false
+  }
+}
+/**
+ * Whether a process is the run's own T3 Code's program, and may be ended. On Linux the system names
+ * its program; elsewhere it does not here, and the number is the one T3 Code noted moments ago in
+ * the run's own folder, of the server the run started.
+ */
+const t3Program = (pid) => {
+  if (process.platform !== 'linux') return true
+  try {
+    return realpathSync(`/proc/${pid}/exe`).startsWith(realpathSync(t3Home))
   } catch {
     return false
   }
@@ -261,7 +310,7 @@ function cleanUp() {
     await other?.close().catch(() => {})
     let stillUp = false
     if (serve && serve.exitCode === null && serve.signalCode === null) {
-      stillUp = !(await stopProgram(serve, 90_000))
+      stillUp = !(await stopProgram(serve, 90_000, { it: true }))
       check('It stops when it is asked to', !stillUp, stillUp ? `It (process ${serve.pid}) is still running on ${itHome}` : '')
     }
     // T3 Code's launcher passes the signal on to T3 Code's own program, which is waited for too
@@ -270,14 +319,9 @@ function cleanUp() {
     if (typeof program === 'number') {
       const end = Date.now() + 30_000
       while (alive(program) && Date.now() < end) await sleep(250)
-      if (alive(program)) {
-        // Only the very program T3 Code noted, and only where it is the run's own T3 Code's
-        let ours = false
-        try {
-          ours = realpathSync(`/proc/${program}/exe`).startsWith(realpathSync(t3Home))
-        } catch {}
-        if (ours) process.kill(program, 'SIGKILL')
-      }
+      // Only the very program T3 Code noted, and only where it is the run's own T3 Code's
+      if (alive(program) && t3Program(program)) process.kill(program, 'SIGKILL')
+      await sleep(1000)
       stillUp ||= alive(program)
     }
     if (results.some((r) => !r.ok)) {
@@ -288,8 +332,13 @@ function cleanUp() {
         if (existsSync(file)) console.log(`\nThe end of what ${name} wrote:\n${readFileSync(file, 'utf8').slice(-3000)}`)
     }
     if (stillUp) console.log(`\nSomething the run started is still running, so its folders are kept in ${top}. Stop it, then remove them.`)
-    else if (!keep) rmSync(top, { recursive: true, force: true })
-    else console.log(`\nThe run's folders are kept in ${top}`)
+    else if (!keep) {
+      try {
+        rmSync(top, { recursive: true, force: true, maxRetries: 5 })
+      } catch (err) {
+        check('the run’s folders are removed', false, `${top}: ${err.message}`)
+      }
+    } else console.log(`\nThe run's folders are kept in ${top}`)
   })()
   return cleaning
 }
@@ -325,30 +374,32 @@ const conversationIn = (args) => {
 try {
   // ---------- T3 Code, from its package ----------
   const want = asked === 'latest' || asked === 'nightly' ? npm(['view', `t3@${asked}`, 'version'], top).trim() : asked
-  install(`t3@${want}`, at('t3-install'), ['t3'], t3Bin)
+  install(`t3@${want}`, at('t3-install'))
   // The real Claude Code, from its package: It's side connects it with `it setup`, and T3 Code runs
   // it for its threads, each with a folder of its own for Claude Code's settings and no account
   const claudeVersion = npm(['view', '@anthropic-ai/claude-code', 'version'], top).trim()
-  install(`@anthropic-ai/claude-code@${claudeVersion}`, at('claude-install'), ['claude'], itBin)
-  // What T3 Code runs as `claude`: a script that writes down how T3 Code started it, each word
-  // ended by a NUL and each start by a word of its own, and then becomes the real Claude Code
-  writeFileSync(
-    path.join(t3Bin, 'claude'),
-    [
-      '#!/bin/sh',
-      `{ for word in "$@"; do printf '%s\\0' "$word"; done; printf '\\036\\0'; } >> '${at('claude-calls')}'`,
-      `exec '${path.join(at('claude-install'), 'node_modules', '.bin', 'claude')}' "$@"`,
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  )
+  install(`@anthropic-ai/claude-code@${claudeVersion}`, at('claude-install'))
+  // What T3 Code runs as `claude` outside Windows: a script that writes down how T3 Code started
+  // it, each word ended by a NUL and each start by a word of its own, and then becomes the real
+  // Claude Code
+  if (!windows)
+    writeFileSync(
+      path.join(t3Bin, 'claude'),
+      [
+        '#!/bin/sh',
+        `{ for word in "$@"; do printf '%s\\0' "$word"; done; printf '\\036\\0'; } >> '${at('claude-calls')}'`,
+        `exec '${claudeProgram}' "$@"`,
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    )
   // The launcher fetches T3 Code's own program, by version, into T3 Code's folder, the first time it runs
   const version = await t3(['--version'], { ms: 300_000 })
   const said = /\bv?(\d+\.\d+\.\d+\S*)/.exec(version.out)?.[1]
   console.log(`\nT3 Code ${said ?? '?'} (asked for ${asked}, which is ${want}), It ${(await it(['--version']).catch(() => ({}))).version ?? '?'}\n`)
   if (!check('T3 Code installed from its package runs, and is the version asked for', version.code === 0 && said === want, version))
     throw new Error('T3 Code did not install')
-  const program = path.join(t3Home, 'runtime', 'versions', want, 't3')
+  const program = path.join(t3Home, 'runtime', 'versions', want, windows ? 't3.exe' : 't3')
   check(
     'and its launcher keeps T3 Code’s own program where It looks for it, by version and marked as installed whole',
     existsSync(program) && existsSync(path.join(t3Home, 'runtime', 'versions', want, '.install-complete')),
@@ -356,7 +407,7 @@ try {
 
   // ---------- T3 Code's server, in the run's own folder ----------
   ownT3(t3Env)
-  server = spawn('t3', ['serve', '--base-dir', t3Home, '--port', String(t3Port), '--host', '127.0.0.1', '--no-browser', work], {
+  server = spawn(process.execPath, [launcher, 'serve', '--base-dir', t3Home, '--port', String(t3Port), '--host', '127.0.0.1', '--no-browser', work], {
     cwd: work,
     env: t3Env,
     stdio: ['ignore', openSync(path.join(logs, 't3.log'), 'w'), openSync(path.join(logs, 't3.log'), 'a')],
@@ -382,7 +433,9 @@ try {
   const found = own.t3Server(t3Home)
   check('It finds the server from the note T3 Code keeps', found?.origin === up.origin && found?.home === t3Home, found)
   check(
-    'and T3 Code’s own command: the program T3 Code runs as its server, as the system names it, which is the one its launcher keeps',
+    process.platform === 'linux'
+      ? 'and T3 Code’s own command: the program T3 Code runs as its server, as the system names it, which is the one its launcher keeps'
+      : 'and T3 Code’s own command: the program its launcher keeps, by the version T3 Code noted',
     found?.command?.length === 1 && realpathSync(found.command[0]) === realpathSync(program),
     found?.command,
   )
@@ -390,7 +443,7 @@ try {
   check('which It also finds by the version T3 Code noted, where the system does not say', kept?.command?.length === 1 && kept.command[0] === program, kept)
 
   // Which versions of T3 Code's protocol the real server speaks, as it answers for its threads
-  const token = (await t3Json(['auth', 'session', 'issue', '--scope', 'orchestration:read', '--ttl', '5m', '--label', 'It run'])).token
+  const token = (await t3Json(['auth', 'session', 'issue', '--scope', 'orchestration:read', '--ttl', '1h', '--label', 'It run'])).token
   const speaks = []
   for (let v = 1; v <= 6; v++) {
     const answer = await fetch(`${up.origin}/api/orchestration/shell`, {
@@ -409,6 +462,22 @@ try {
   )
     throw new Error('T3 Code does not speak the protocol It speaks')
 
+  /**
+   * The Claude Code conversation that T3 Code's own account of a thread says it holds, read here
+   * and not by It's code: the id T3 Code gave the program, as the thread's snapshot names it.
+   */
+  const conversationOf = async (id) => {
+    const answer = await fetch(`${up.origin}/api/orchestration/threads/${encodeURIComponent(id)}/bounded`, {
+      headers: { authorization: `Bearer ${token}`, 'x-t3-orchestration-protocol': '2' },
+      signal: AbortSignal.timeout(10_000),
+    })
+    const snapshot = answer.ok ? await answer.json() : null
+    const own = (snapshot?.projection?.providerThreads ?? []).find(
+      (p) => p?.appThreadId === id && p.driver === 'claudeAgent' && p.nativeThreadRef?.strength === 'strong',
+    )
+    return typeof own?.nativeThreadRef?.nativeId === 'string' ? own.nativeThreadRef.nativeId : null
+  }
+
   const nobody = { harness: 'claude-code', ids: ['00000000-0000-4000-8000-000000000000'], cwd: work }
   const none = await own.t3RunsNow(found, nobody, AbortSignal.timeout(30_000))
   check(
@@ -425,11 +494,19 @@ try {
   const started = await t3Json(['thread', 'start', '--provider', 'claudeAgent', '--model', model, '--title', 'It run', work, 'Make me a page with one button.'])
   const thread = started.threadId
   check('and a thread in it for Claude Code, with a message', typeof thread === 'string' && thread.length > 0, started)
-  // T3 Code starts its `claude` for the thread, naming the conversation
-  const first = await untilTrue(async () => claudeCalls().map(conversationIn).find(Boolean), 60_000)
-  if (!check('T3 Code starts Claude Code for the thread, and names the conversation it is to be', first?.how === 'session-id' && first.id, claudeCalls()))
-    throw new Error('T3 Code named no conversation for Claude Code')
-  const conversation = first.id
+  // T3 Code names the conversation in its account of the thread, and outside Windows the run also
+  // sees it hand that very id to the `claude` it starts for the thread
+  const conversation = await untilTrue(() => conversationOf(thread), 60_000)
+  if (windows) check('T3 Code’s own account of the thread names the Claude Code conversation it holds', conversation, conversation)
+  else {
+    const first = await untilTrue(async () => claudeCalls().map(conversationIn).find(Boolean), 60_000)
+    check(
+      'T3 Code starts Claude Code for the thread, and names the conversation it is to be, which is the one its own account of the thread names',
+      conversation && first?.how === 'session-id' && first.id === conversation,
+      { first, conversation, calls: claudeCalls() },
+    )
+  }
+  if (!conversation) throw new Error('T3 Code named no conversation for Claude Code')
   const settled = await untilTrue(async () => {
     const shown = await t3Json(['thread', 'show', thread, '--messages', '5'])
     return shown.thread?.activeRunId === null && shown.thread.status !== 'running' ? shown : null
@@ -443,13 +520,11 @@ try {
   // meets it first: the click must not go there
   const other2 = await t3Json(['thread', 'start', '--provider', 'claudeAgent', '--model', model, '--title', 'It run, beside', work, 'Something else.'])
   const beside = other2.threadId
-  const besideConversation = (
-    await untilTrue(async () => {
-      const ids = claudeCalls().map(conversationIn).filter(Boolean)
-      return ids.find((c) => c.id !== conversation)
-    }, 60_000)
-  )?.id
-  check('and another thread beside it, for another conversation', beside && beside !== thread && besideConversation, { beside, besideConversation })
+  const besideConversation = await untilTrue(() => conversationOf(beside), 60_000)
+  check('and another thread beside it, for another conversation', beside && beside !== thread && besideConversation && besideConversation !== conversation, {
+    beside,
+    besideConversation,
+  })
   await untilTrue(async () => (await t3Json(['thread', 'show', beside])).thread?.activeRunId === null, 60_000)
 
   const of = { harness: 'claude-code', ids: [conversation], cwd: work }
@@ -577,7 +652,7 @@ try {
   // ---------- With It's add-on turned off in Claude Code ----------
   // It's documentation says a conversation a thread holds still gets its clicks there, since the
   // way to the thread asks nothing of the add-on
-  const disabled = await ran('claude', ['plugin', 'disable', 'it-bridge@it'], { env: itEnv, ms: 60_000 })
+  const disabled = await ran(claudeProgram, ['plugin', 'disable', 'it-bridge@it'], { env: itEnv, ms: 60_000 })
   const off = await untilTrue(async () => {
     const s = await it(['status'])
     const h = s.harnesses?.find((x) => x.id === 'claude-code')
@@ -586,7 +661,7 @@ try {
   check('Claude Code’s own command turns It’s add-on off, and `it status` says so', disabled.code === 0 && off, { disabled, off })
   // The connector looks again at what is installed when it starts, when the apps chosen change, and
   // every half hour: It is started again, so that its connector has seen the add-on turned off
-  const stopped = await stopProgram(serve, 90_000)
+  const stopped = await stopProgram(serve, 90_000, { it: true })
   if (!check('It stops when it is asked to, and starts again', stopped && (await startIt()), readFileSync(path.join(logs, 'serve.log'), 'utf8').slice(-1500)))
     throw new Error('It did not start again')
   const offArrives = (await it(['status'], { extra: inThread })).arrives
