@@ -123,9 +123,10 @@ interface Held {
   /** Which of the documents the frame has shown asked for it: what one asked for is not the next one's. */
   doc: number
   /**
-   * The most loads of the page's frame it may see, counted from the first as the site counts them.
-   * Asked for before any document had loaded since the channel's hello, it may see one, which can be
-   * the load of the document that asked; asked for after that, none. Nothing the page says moves it.
+   * How many loads of the page's frame the site had seen when it was asked for, counted from the
+   * first: it may see none after that. A document's own load can reach the site before its hello or
+   * after it, and also before or after what it asks for, so no load that comes after the asking can
+   * be told from the next document's, and every one ends it. Nothing the page says moves it.
    */
   loads: number
 }
@@ -324,9 +325,8 @@ export function Mount({
     let letGo: unknown = null
     /** Which document the frame shows now, counted from the first: one that loads in its place is another, and what the one before began or asked for is not its. */
     let docs = 0
-    /** How many times a document has loaded in the frame, as the browser tells the site, and how many had when the channel in use was made. */
+    /** How many times a document has loaded in the frame, as the browser tells the site. */
     let loads = 0
-    let loadsAtHello = 0
     // Each thing done for the page is held to the conversation the page had when it was asked for:
     // what the person allowed is that one's, and no other's. Each keeps its own, so that something
     // asked for later, under another conversation, cannot stand in for what an earlier one began with.
@@ -430,7 +430,7 @@ export function Mount({
       const cannot = cannotOpen()
       if (cannot) throw new Error(cannot)
       const doc = docs
-      const most = loads === loadsAtHello ? loads + 1 : loads
+      const most = loads
       // Nothing is begun for a page the screen does not show, where It's bar, which says what is live, cannot be seen
       if (document.visibilityState === 'hidden')
         throw new Error('It uses the microphone and the camera for a page only while this screen shows it. Ask again once the page is in front.')
@@ -978,9 +978,15 @@ export function Mount({
     // next document to load in the frame is another one, whatever it answers. So the channel, and
     // everything begun over it, ends then without asking: a page cannot keep the camera, the
     // microphone or its players by having the next document answer with the name the first one said.
+    //
+    // A document says hello before it has loaded, but the two reach the site separately, and on a
+    // slower machine its load can come first. So a load that no document has answered for since
+    // may be the load of the next document to say hello, and that document is taken to have loaded.
     let asking: { nonce: string; timer: ReturnType<typeof setTimeout>; afterHello: boolean } | null = null
-    /** The document the channel was made for has loaded, and answered for that load: the next load is another document. */
+    /** The document the channel was made for has loaded, or may have: the next load is another document. */
     let onItsLoad = false
+    /** A document has loaded in the frame that has not answered as the one on the channel: it may be the next one to say hello. */
+    let unclaimed = false
     /**
      * The document the channel was made for is gone. Its channel is closed, so that whatever holds
      * the other end now is heard no more, and everything it began here ends with it: its players
@@ -1106,7 +1112,10 @@ export function Mount({
         const said = e.data as { nonce?: unknown; doc?: unknown }
         if (asking && said.nonce === asking.nonce && typeof said.doc === 'string' && said.doc === answered && port.current) {
           clearTimeout(asking.timer)
-          if (asking.afterHello) onItsLoad = true
+          if (asking.afterHello) {
+            onItsLoad = true
+            unclaimed = false
+          }
           asking = null
           embeds?.release()
         }
@@ -1136,7 +1145,9 @@ export function Mount({
         documentGone()
         const channel = new MessageChannel()
         port.current = channel.port1
-        loadsAtHello = loads
+        // Its load may have reached the site before its hello did
+        onItsLoad = unclaimed
+        unclaimed = false
         channel.port1.onmessage = (m) => void fromPage(channel.port1, m.data as PageToSite)
         // Sent to whatever document the page has put in its frame. The channel is for this one
         // showing, and gives a document there nothing the page did not already have.
@@ -1147,8 +1158,7 @@ export function Mount({
         const whole = liveState.whole()
         if (whole) toPage(channel.port1, whole)
         // A document that says hello while the frame is being asked is there to be asked again, as
-        // the one this channel is for. The load that began the asking came before its hello, so its
-        // answer does not say that its own load is behind it
+        // the one this channel is for. Whether its own load is behind it was settled just now
         if (asking) askWho(false)
         // And whether It is fullscreen, which also tells the page that the site takes its asking for it
         toPage(channel.port1, fullscreenSaid())
@@ -1164,6 +1174,7 @@ export function Mount({
      */
     const frameLoaded = () => {
       loads += 1
+      unclaimed = true
       if (question && loads > questionLoads) {
         letGo = question
         question.cancel()
@@ -1177,6 +1188,9 @@ export function Mount({
         asking = null
         embeds?.release()
         documentGone()
+        // A document of It's that the site took to have loaded when it had not, and which loads only
+        // now, asks for a channel again when it hears this; any other document lets it go by
+        frame.current?.contentWindow?.postMessage({ type: 'it:gone' }, '*')
       } else askWho(true)
     }
     const shown = frame.current
