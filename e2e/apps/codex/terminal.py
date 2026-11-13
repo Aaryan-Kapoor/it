@@ -6,7 +6,8 @@
 #
 #   python3 terminal.py <columns> <rows> <program> [arguments...]
 #
-# It ends when the program does, with the program's own exit status.
+# It ends when the program does, with the program's own exit status, or 128 and the signal's
+# number where a signal ended it.
 import fcntl
 import os
 import pty
@@ -31,6 +32,7 @@ ANSWERS = [
     (b'\x1b[0c', b'\x1b[?62;22c'),
     (b'\x1b[?u', b'\x1b[?0u'),
 ]
+LONGEST = max(len(asked) for asked, _ in ANSWERS)
 
 
 def stop(*_):
@@ -58,12 +60,18 @@ while True:
         if not chunk:
             break
         os.write(sys.stdout.fileno(), chunk)
-        # A question may be cut between two reads, so the end of the last one is kept with it
-        seen = seen[-16:] + chunk
-        for asked, answer in ANSWERS:
-            if asked in seen:
-                os.write(fd, answer)
-        seen = seen if not any(asked in seen for asked, _ in ANSWERS) else b''
+        # Every question is answered once, in the order it was asked. One may be cut between two
+        # reads, so what follows the last question answered is kept, as far back as the longest
+        # question goes, and read again with the next chunk.
+        seen += chunk
+        while True:
+            found = [(seen.find(asked), asked, answer) for asked, answer in ANSWERS if asked in seen]
+            if not found:
+                break
+            at, asked, answer = min(found, key=lambda f: f[0])
+            os.write(fd, answer)
+            seen = seen[at + len(asked):]
+        seen = seen[-LONGEST:]
     if given in ready:
         typed = os.read(given, 65536)
         if typed:
@@ -71,4 +79,6 @@ while True:
         else:
             watching = [fd]
 _, status = os.waitpid(pid, 0)
-sys.exit(os.waitstatus_to_exitcode(status) if hasattr(os, 'waitstatus_to_exitcode') else 0)
+# A program ended by a signal is said to have ended as a shell says it: 128 and the signal
+code = os.waitstatus_to_exitcode(status)
+sys.exit(128 - code if code < 0 else code)
