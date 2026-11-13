@@ -12,6 +12,15 @@ import http from 'node:http'
 /** The text of a message as Codex sends it, its parts joined. */
 export const textOf = (item) => (typeof item?.content === 'string' ? item.content : (item?.content ?? []).map((part) => part.text ?? '').join(''))
 
+/** The word Codex gives for what started a turn, from the turn's metadata, or null. */
+function triggerOf(metadata) {
+  try {
+    return JSON.parse(metadata?.['x-codex-turn-metadata'] ?? 'null')?.turn_trigger ?? null
+  } catch {
+    return null
+  }
+}
+
 /**
  * What a request from Codex is, for a script to go by: the conversation it is in, the newest
  * message from the person and where it stands in the input, the item the input ends with, and
@@ -30,6 +39,10 @@ export function readRequest(body) {
   const tools = (body.tools ?? []).map((t) => t.name).filter(Boolean)
   return {
     thread: body.client_metadata?.thread_id ?? null,
+    // What started the turn, as Codex says in the metadata it sends with each request: `exec` for
+    // a `codex exec` run, which is how It reopens a conversation, and another word for a turn
+    // started in its terminal or from its queue. Null where Codex says nothing of it.
+    trigger: triggerOf(body.client_metadata),
     newest: at >= 0 ? textOf(input[at]) : '',
     // What came after the person's newest message: what a hook added, the calls Codex made and
     // what they gave back

@@ -37,7 +37,7 @@
 // person takes there; where Codex shows no such question (its desktop app, T3 Code) nothing here
 // stands for what a person does.
 import { spawn } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -197,7 +197,13 @@ async function appServer() {
       reject(new Error('Codex’s app server ended'))
     }
   })
-  await request('initialize', { clientInfo: { name: 'it-ci', title: 'It CI', version: '0' }, capabilities: { experimentalApi: true } })
+  try {
+    await request('initialize', { clientInfo: { name: 'it-ci', title: 'It CI', version: '0' }, capabilities: { experimentalApi: true } })
+  } catch (err) {
+    // An app server that will not begin is stopped here, since nobody is given a way to close it
+    await stopped(child, 5000)
+    throw err
+  }
   child.stdin.write(`${JSON.stringify({ method: 'initialized', params: {} })}\n`)
   return {
     request,
@@ -254,30 +260,64 @@ function terminal() {
 }
 
 /**
- * Stops Codex's shared background server, and its updater, that a Codex of this run started:
- * by Codex's own command first, and then each by the process id Codex wrote down for it, only
- * where that process is still a Codex program run from this run's folder.
+ * The processes this run started, found by what they were given: every program the run starts
+ * is given its CODEX_HOME and IT_HOME, which are folders made for this run alone, and Codex and
+ * It hand them on to what they start in turn. `which` picks one of the two. Only processes of
+ * the same user can be read, which is all this run starts.
  */
-async function stopCodexServer() {
-  await codex(['app-server', 'daemon', 'stop'], { ms: 30_000 })
-  for (const name of ['daemon.pid', 'daemon-updater.pid']) {
-    let pid
+function ours(which = 'IT_HOME') {
+  const mark = `${which}=${which === 'IT_HOME' ? itHome : codexHome}\0`
+  const found = []
+  let pids = []
+  try {
+    pids = readdirSync('/proc').filter((name) => /^\d+$/.test(name))
+  } catch {
+    return found
+  }
+  for (const pid of pids.map(Number)) {
+    if (pid === process.pid) continue
     try {
-      pid = JSON.parse(readFileSync(path.join(codexHome, 'app-server-daemon', name), 'utf8')).pid
-    } catch {
-      continue
-    }
-    let cmdline = ''
+      if (!`${readFileSync(`/proc/${pid}/environ`, 'latin1')}\0`.includes(mark)) continue
+      found.push({ pid, command: readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean) })
+    } catch {}
+  }
+  return found
+}
+/** Asks each process to stop, waits up to `ms` for all of them, ends those left outright, and says which were. */
+async function ended(list, ms = 10_000) {
+  const alive = (pid) => {
     try {
-      cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf8')
+      process.kill(pid, 0)
+      return true
     } catch {
-      continue
+      return false
     }
-    if (!cmdline.startsWith(codexHome) && !cmdline.startsWith(program)) continue
+  }
+  for (const { pid } of list) {
     try {
       process.kill(pid, 'SIGTERM')
     } catch {}
   }
+  for (const end = Date.now() + ms; Date.now() < end && list.some(({ pid }) => alive(pid)); ) await sleep(200)
+  const left = list.filter(({ pid }) => alive(pid))
+  for (const { pid } of left) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {}
+  }
+  return left
+}
+/** Codex's own servers of this run: its shared background server and the updater beside it. */
+const codexServers = () => ours('CODEX_HOME').filter(({ command }) => command.includes('app-server'))
+/**
+ * Stops Codex's shared background server, and its updater, by Codex's own command first and
+ * then each by its process id, waited for. Resolves with what was still running after Codex's
+ * command, and what had to be ended outright.
+ */
+async function stopCodexServer() {
+  await codex(['app-server', 'daemon', 'stop'], { ms: 30_000 })
+  const after = codexServers()
+  return { after, forced: await ended(after) }
 }
 
 // The run's slug and the prompt the person types. The stand-in model goes by them.
@@ -303,9 +343,9 @@ const model = await standInModel({
       const action = clickOf(asked)
       // A click: the page is answered once, by a patch that names the click it answers
       if (action && asked.outputs === 0) return { run: `it patch ${slug} '${JSON.stringify({ answered: action })}'` }
-      return { say: 'Done.' }
+      return { say: 'Answered on the page.' }
     }
-    if (asked.newest.trim() === PROMPT) return asked.outputs === 0 ? { run: created } : { say: 'The page is up. I will wait for you to use it.' }
+    if (asked.newest.trim() === PROMPT) return asked.outputs === 0 ? { run: created } : { say: 'The page is up, and I will wait for you to use it.' }
     return { say: 'OK' }
   },
 })
@@ -476,9 +516,9 @@ trust_level = "trusted"
   check('and comes up on the paired browser by itself', shown, tab.url())
   const frame = tab.frameLocator('.mount iframe')
   await frame.locator('#go').waitFor({ timeout: 30_000 })
-  // Codex is idle again once the stand-in has ended the turn
-  await model.until((r) => r.newest.trim() === PROMPT && r.outputs > 0 && r.answered.say, 30_000)
-  await sleep(3000)
+  // Codex is idle again once its terminal shows the words the stand-in ended the turn with
+  check('Codex’s terminal shows the stand-in’s answer, and the turn is over', await tui.until(/Thepageisup,andIwillwait/, 60_000), tui.plain().slice(-1500))
+  await sleep(2000)
   const before = model.seen.length
   await frame.locator('#go').click()
   const clicked = await model.until((r) => r.n > before && r.newest.startsWith('[It]'), 90_000)
@@ -495,7 +535,12 @@ trust_level = "trusted"
     JSON.stringify({ since: clicked?.since, action }),
   )
   check('in the same conversation that made the page', clicked?.thread === thread, JSON.stringify({ clicked: clicked?.thread, thread }))
-  check('handed to that conversation through Codex’s own queue', action?.delivery === 'handed_off' && action?.route === 'queue', JSON.stringify(action))
+  // Codex says what started each turn, in the metadata it sends the model with it
+  check(
+    'handed to that conversation through Codex’s own queue, as It records and as Codex says it started the turn',
+    action?.delivery === 'handed_off' && action?.route === 'queue' && clicked?.trigger === 'queue',
+    JSON.stringify({ action, trigger: clicked?.trigger }),
+  )
   const patched = await model.until((r) => r.n > before && r.newest === clicked?.newest && r.outputs > 0, 60_000)
   const state = (await it(['state', slug])).json
   check(
@@ -508,14 +553,20 @@ trust_level = "trusted"
   // 3. A click on a page whose conversation is closed. Codex's terminal is left as a person
   // leaves it, and its background server, which keeps a conversation open after the terminal
   // is gone, is stopped: then no Codex has the conversation open
-  await model.until((r) => r.n > before && r.newest === clicked?.newest && r.answered.say, 30_000)
+  check('and Codex’s terminal shows the turn the click started, to its end', await tui.until(/Answeredonthepage/, 60_000), tui.plain().slice(-1500))
   await sleep(2000)
   tui.type('\x03')
   await sleep(500)
   tui.type('\x03')
   await stopped(tui.child, 15_000)
-  await stopCodexServer()
-  await sleep(3000)
+  const stopping = await stopCodexServer()
+  const anyCodex = ours('CODEX_HOME').filter(({ command }) => /(^|\/)codex$/.test(command[0] ?? ''))
+  check(
+    'Codex’s terminal is left and its background server stopped, so that no Codex has the conversation open',
+    tui.child.exitCode !== null && stopping.forced.length === 0 && anyCodex.length === 0,
+    JSON.stringify({ terminal: tui.child.exitCode, afterStop: stopping.after, forced: stopping.forced, anyCodex }),
+  )
+  await sleep(2000)
   const beforeWake = model.seen.length
   await frame.locator('#go').click()
   const woken = await model.until((r) => r.n > beforeWake && r.newest.startsWith('[It]'), 120_000)
@@ -527,6 +578,13 @@ trust_level = "trusted"
     JSON.stringify({ woken: woken?.newest, second }),
   )
   check('in the same conversation', woken?.thread === thread, JSON.stringify({ woken: woken?.thread, thread }))
+  // The click's turn in the open conversation came from Codex's queue, and this one from a
+  // `codex exec` run, which nothing but It's reopening started
+  check(
+    'and Codex says a `codex exec` run started that turn',
+    woken?.trigger === 'exec' && clicked?.trigger === 'queue',
+    JSON.stringify({ woken: woken?.trigger, clicked: clicked?.trigger, first: first?.trigger }),
+  )
   check('It records the click as handed to that conversation', second?.delivery === 'handed_off', JSON.stringify(second))
   const wokePatched = await model.until((r) => r.n > beforeWake && r.newest === woken?.newest && r.outputs > 0, 90_000)
   const after = (await it(['state', slug])).json
@@ -540,6 +598,11 @@ trust_level = "trusted"
   await browser?.close().catch(() => {})
   await stopped(serve, 60_000)
   await model.close()
+  // Everything the run started has been asked to stop and waited for. Anything still running
+  // that was given this run's It folder is a fault: it is said, and ended
+  const left = ours()
+  check('nothing the run started is left running', left.length === 0, JSON.stringify(left))
+  await ended(left)
   writeFileSync(path.join(logs, 'model.json'), JSON.stringify({ seen: model.seen, others: model.others }, null, 1))
   if (tui) writeFileSync(path.join(logs, 'terminal.txt'), tui.plain())
   // What the run wrote down is copied where IT_E2E_CODEX_LOGS says, for CI to keep: what setup
