@@ -577,8 +577,10 @@ trust_level = "trusted"
   const stopping = await stopCodexServer()
   const anyCodex = ours('CODEX_HOME').filter(({ command }) => /(^|\/)codex$/.test(command[0] ?? ''))
   check(
-    'Codex’s terminal is left and its background server stopped, so that no Codex has the conversation open',
-    tui.child.exitCode !== null && stopping.forced.length === 0 && anyCodex.length === 0,
+    // Codex's own `app-server daemon stop` is what stops the server, the process that listens.
+    // It leaves the updater beside it running, which the run then ends itself
+    'Codex’s terminal is left and Codex’s own command stops its background server, so that no Codex has the conversation open',
+    tui.child.exitCode !== null && !stopping.after.some(({ command }) => command.includes('--listen')) && stopping.forced.length === 0 && anyCodex.length === 0,
     JSON.stringify({ terminal: tui.child.exitCode, afterStop: stopping.after, forced: stopping.forced, anyCodex }),
   )
   await sleep(2000)
