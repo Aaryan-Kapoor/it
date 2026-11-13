@@ -1,28 +1,104 @@
 name: The install from GitHub
 
-# What a person's machine does when they follow It's page: the one line for their system, run
-# against the latest release on GitHub as it is published. Nothing here is built from this
-# repository. What is installed is whatever is published, on each of the five systems
-# a program is published for.
+# What a person's machine does with a release of It as it is published on GitHub, on each of
+# the five systems a program is published for. Nothing of It is built from this repository:
+# what is installed and upgraded is whatever the release holds.
 #
-# Run by hand and by nothing else: it says how the published release stands, which no commit
-# changes, so it is asked for after a release is made.
+# The first job installs a release on a machine that never had It, with the one line from It's
+# page and the install script's own IT_VERSION, sets it up, and publishes a page. The second
+# installs an earlier release the same way, sets it up, publishes a page and pairs a browser,
+# then upgrades to the release under test with `it upgrade`, as a person is told to, and holds
+# the version, the page, the pairing and the background service to having come through.
 #
-# Like the main workflow: the token can only read, and no job is given a secret. No action is
-# used at all.
+# It runs by itself whenever a release is published, a pre-release too, against that release.
+# It can also be run by hand, with a release's tag (the release marked Latest where none is
+# given) and the tag of the release to upgrade from (Latest, where none is given). A run on a
+# release's own event uses the workflow and the helpers in `e2e/` as they are at that tag.
+#
+# Like the main workflow: every action is pinned to a commit, no job keeps the checkout's
+# credentials, the token can only read, and no job is given a secret.
 on:
+  release:
+    types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: The release to install and to upgrade to, by its tag (such as v0.1.40). Empty means the release marked Latest.
+        required: false
+        default: ''
+      from:
+        description: The release to upgrade from, by its tag. Empty means the release marked Latest.
+        required: false
+        default: ''
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag || github.event.release.tag_name || 'latest' }}-${{ inputs.from || 'latest' }}
+  cancel-in-progress: false
 
 defaults:
   run:
     shell: bash
 
+env:
+  NODE_VERSION: 24
+
 jobs:
+  # Which releases this run is about, settled once for every job. On a release's own event its
+  # files may still be on their way up as the run begins, so the run waits for every file the
+  # release's checksums name to be there, for a quarter of an hour at most.
+  releases:
+    name: Which releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.which.outputs.tag }}
+      from: ${{ steps.which.outputs.from }}
+      latest: ${{ steps.which.outputs.latest }}
+      upgrade: ${{ steps.which.outputs.upgrade }}
+    steps:
+      - name: The release under test, and the one to upgrade from
+        id: which
+        env:
+          GIVEN_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          GIVEN_FROM: ${{ inputs.from }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          releases=https://github.com/Aaryan-Kapoor/it/releases
+          latest=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$releases/latest")
+          latest=${latest##*/}
+          tag=${GIVEN_TAG:-$latest}
+          from=${GIVEN_FROM:-$latest}
+          for t in "$latest" "$tag" "$from"; do
+            [[ "$t" =~ ^v[0-9A-Za-z._-]+$ ]] || { echo "::error::\"$t\" is not a release's tag."; exit 1; }
+          done
+          echo "The release marked Latest is $latest. This run tests $tag, and the upgrade to it from $from."
+          # Every file a release's checksums name is there to be downloaded
+          whole() {
+            local sums
+            sums=$(curl -fsSL "$releases/download/$1/SHA256SUMS") || return 1
+            for f in $(echo "$sums" | awk '{ sub(/^\*/, "", $2); print $2 }'); do curl -fsSLI -o /dev/null "$releases/download/$1/$f" || return 1; done
+            for f in it-linux-x64 it-linux-arm64 it-darwin-x64 it-darwin-arm64 it-windows-x64.exe install.sh install.ps1 latest.json; do echo "$sums" | grep -Eq " \*?$f\$" || return 1; done
+          }
+          for t in "$tag" "$from"; do
+            tries=1
+            [ "$EVENT" = release ] && tries=30
+            for n in $(seq 1 "$tries"); do whole "$t" && break; [ "$n" = "$tries" ] && { echo "::error::The release $t does not have every file its checksums name, or no checksums at all."; exit 1; }; sleep 30; done
+          done
+          upgrade=yes
+          older=$(printf '%s\n%s\n' "${from#v}" "${tag#v}" | sort -V | head -1)
+          if [ "$from" = "$tag" ] || [ "$older" != "${from#v}" ]; then
+            upgrade=no
+            echo "::notice::No upgrade is checked: $from is not older than $tag. Run this workflow by hand with an earlier release as from."
+          fi
+          { echo "tag=$tag"; echo "from=$from"; echo "latest=$latest"; echo "upgrade=$upgrade"; } >> "$GITHUB_OUTPUT"
+
   install:
     name: Installed from GitHub (${{ matrix.os }})
+    needs: releases
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     # What the It installed here reports goes to an address on the runner where nothing listens:
@@ -30,6 +106,7 @@ jobs:
     # the background service as well, which is what sends.
     env:
       IT_TELEMETRY_URL: http://127.0.0.1:9/usage
+      TAG: ${{ needs.releases.outputs.tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -45,16 +122,19 @@ jobs:
           - os: windows-latest
             program: it-windows-x64.exe
     steps:
+      # The release's own script, which is the one at the address on It's page once the release
+      # is Latest, told the release by IT_VERSION as a person can tell it
       - name: The one line from the page, on macOS and Linux
         if: runner.os != 'Windows'
         run: |
-          curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.sh | sh
+          curl -fsSL "https://github.com/Aaryan-Kapoor/it/releases/download/$TAG/install.sh" | IT_VERSION="$TAG" sh
       # In the PowerShell that Windows comes with, which is the one a person has
       - name: The one line from the page, on Windows
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          irm https://github.com/Aaryan-Kapoor/it/releases/latest/download/install.ps1 | iex
+          $env:IT_VERSION = $env:TAG
+          irm "https://github.com/Aaryan-Kapoor/it/releases/download/$env:TAG/install.ps1" | iex
       - name: Where it was put
         run: |
           if [ "$RUNNER_OS" = Windows ]; then echo "IT=$HOME/.it/bin/it.exe" >> "$GITHUB_ENV"; else echo "IT=$HOME/.it/bin/it" >> "$GITHUB_ENV"; fi
@@ -64,16 +144,17 @@ jobs:
         run: |
           set -euo pipefail
           sum() { if command -v sha256sum > /dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
-          published=$(curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/latest/download/SHA256SUMS | awk -v p="$PROGRAM" '$2 == p || $2 == "*" p { print $1 }')
+          published=$(curl -fsSL "https://github.com/Aaryan-Kapoor/it/releases/download/$TAG/SHA256SUMS" | awk -v p="$PROGRAM" '$2 == p || $2 == "*" p { print $1 }')
           installed=$(sum "$IT")
           echo "published $published"
           echo "installed $installed"
           [ -n "$published" ] && [ "$published" = "$installed" ]
           "$IT" --version
-          # The version the release says is the latest is the one that was installed
-          latest=$(curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/latest/download/latest.json)
-          echo "latest.json says $latest"
-          "$IT" --version | tr -d ' \n' | grep -F "$(echo "$latest" | tr -d ' \n{}')"
+          # The version the release says it is, is the one that was installed
+          release=$(curl -fsSL "https://github.com/Aaryan-Kapoor/it/releases/download/$TAG/latest.json")
+          echo "latest.json says $release"
+          "$IT" --version | tr -d ' \n' | grep -F "$(echo "$release" | tr -d ' \n{}')"
+          "$IT" --version | tr -d ' \n' | grep -F "\"version\":\"${TAG#v}\""
       - name: Its license and notices are beside it
         run: |
           set -euo pipefail
@@ -93,6 +174,10 @@ jobs:
           [ "$(curl -s -o /dev/null -w '%{http_code}' "$site/")" = 200 ]
           # A pairing link is given, as an agent gives one to the person it installed It for
           "$IT" site --no-open --json | grep -q '"url": "http://localhost:[0-9]*/pair#'
+      # It refuses to write a page where that would leave less than 2 GB free on the disk it keeps
+      # its files on, so how much room the runner has is said before a page is published
+      - name: Room on the disk It keeps its files on
+        run: df -k "$HOME/.it"
       - name: A page can be published, and is listed as live
         run: |
           set -euo pipefail
@@ -104,5 +189,178 @@ jobs:
         if: always()
         run: |
           [ -x "$IT" ] || exit 0
+          "$IT" uninstall --yes --json
+          [ ! -e "$HOME/.it/service.json" ]
+
+  upgrade:
+    name: Upgraded from ${{ needs.releases.outputs.from }} (${{ matrix.os }})
+    needs: releases
+    if: needs.releases.outputs.upgrade == 'yes'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      IT_TELEMETRY_URL: http://127.0.0.1:9/usage
+      TAG: ${{ needs.releases.outputs.tag }}
+      FROM: ${{ needs.releases.outputs.from }}
+      LATEST: ${{ needs.releases.outputs.latest }}
+      BEFORE_SAYS: Hello from before the upgrade
+      AFTER_SAYS: Hello from after the upgrade
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            program: it-linux-x64
+          - os: ubuntu-24.04-arm
+            program: it-linux-arm64
+          - os: macos-latest
+            program: it-darwin-arm64
+          - os: macos-15-intel
+            program: it-darwin-x64
+          - os: windows-latest
+            program: it-windows-x64.exe
+    steps:
+      # The helpers in e2e/ and the browser they drive. Nothing of It is built from the checkout
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Install the browser
+        # Fetching a browser fails on a runner now and then, before anything of It has run: it is tried three times
+        run: for n in 1 2 3; do npx playwright install --with-deps chromium && exit 0; sleep 20; done; exit 1
+      - name: The earlier release, with the one line from the page, on macOS and Linux
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL "https://github.com/Aaryan-Kapoor/it/releases/download/$FROM/install.sh" | IT_VERSION="$FROM" sh
+      - name: The earlier release, with the one line from the page, on Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:IT_VERSION = $env:FROM
+          irm "https://github.com/Aaryan-Kapoor/it/releases/download/$env:FROM/install.ps1" | iex
+      - name: Where it was put, and that it is the earlier release
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = Windows ]; then IT="$HOME/.it/bin/it.exe"; else IT="$HOME/.it/bin/it"; fi
+          echo "IT=$IT" >> "$GITHUB_ENV"
+          # Where the browser that is paired keeps everything, its cookies with it, from before
+          # the upgrade to after it
+          echo "PROFILE=$RUNNER_TEMP/browser" >> "$GITHUB_ENV"
+          "$IT" --version
+          "$IT" --version | tr -d ' \n' | grep -F "\"version\":\"${FROM#v}\""
+      - name: Set it up, with the system keeping it running
+        run: |
+          set -euo pipefail
+          "$IT" setup --none --json
+          for _ in $(seq 1 60); do "$IT" status --json | grep -q '"running": true' && break; sleep 2; done
+          "$IT" status --json | grep -q '"running": true'
+          "$IT" service status --json
+      - name: Room on the disk It keeps its files on
+        run: df -k "$HOME/.it"
+      # Where this fails, the rest is still checked, and the job fails at its end with this named
+      - name: A page can be published with the earlier release
+        id: before
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          printf '<!doctype html><title>Before</title><h1>%s</h1>\n' "$BEFORE_SAYS" > "$RUNNER_TEMP/before.html"
+          "$IT" create Before --id before --file "$RUNNER_TEMP/before.html" --json
+          "$IT" read before | grep -q '"status": "live"'
+      - name: A browser is paired with the earlier release, and shows the page
+        env:
+          PUBLISHED: ${{ steps.before.outcome }}
+        run: |
+          set -euo pipefail
+          page=()
+          [ "$PUBLISHED" = success ] && page=(--page before --says "$BEFORE_SAYS")
+          node e2e/upgrade.mjs pair --it "$IT" --profile "$PROFILE" ${page[@]+"${page[@]}"}
+      - name: What runs before the upgrade
+        run: |
+          set -euo pipefail
+          node -e '
+            const s = JSON.parse(require("node:child_process").execFileSync(process.argv[1], ["status", "--json"], { encoding: "utf8" }))
+            console.log(`It ${s.version}: the service runs as ${s.connector?.version} (process ${s.connector?.pid}), and the database was last run on by ${s.database?.it}.`)
+            require("node:fs").appendFileSync(process.env.GITHUB_ENV, `PID_BEFORE=${s.connector?.pid}\n`)
+          ' "$IT"
+      # `it upgrade` puts in place whichever release is marked Latest. A pre-release is never
+      # that, so where the release under test is not Latest, `it upgrade` is pointed at a
+      # stand-in that names it the newest and passes on its files from GitHub as they are
+      # (e2e/releases.mjs). Where it is Latest, `it upgrade` asks GitHub as a person's does.
+      - name: Upgrade with `it upgrade`
+        run: |
+          set -euo pipefail
+          if [ "$TAG" != "$LATEST" ]; then
+            nohup node e2e/releases.mjs --newest "$TAG" --port 4790 > "$RUNNER_TEMP/releases.log" 2>&1 &
+            for _ in $(seq 1 30); do curl -fs -o /dev/null "http://127.0.0.1:4790/latest/download/latest.json" && break; sleep 1; done
+            export IT_INSTALL_BASE=http://127.0.0.1:4790
+          fi
+          "$IT" upgrade --check --json
+          "$IT" upgrade --json | tee "$RUNNER_TEMP/upgraded.json"
+          [ ! -f "$RUNNER_TEMP/releases.log" ] || cat "$RUNNER_TEMP/releases.log"
+          node -e '
+            const u = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
+            const want = process.env.TAG.replace(/^v/, "")
+            if (u.upgraded !== true || u.to !== want) throw new Error(`it upgrade did not put ${want} in place`)
+            if (u.started !== "again") throw new Error(`the service was not started again as the new version (${u.started}${u.why ? ": " + u.why : ""})`)
+          ' "$RUNNER_TEMP/upgraded.json"
+      - name: The program and the running service are the new version
+        run: |
+          set -euo pipefail
+          "$IT" --version | tr -d ' \n' | grep -F "\"version\":\"${TAG#v}\""
+          for _ in $(seq 1 90); do
+            "$IT" status --json > "$RUNNER_TEMP/status.json" 2> /dev/null || true
+            node -e '
+              const s = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
+              const want = process.env.TAG.replace(/^v/, "")
+              process.exit(s.running === true && s.connector?.version === want && s.database?.it === want && s.database?.functionsOf === want ? 0 : 1)
+            ' "$RUNNER_TEMP/status.json" 2> /dev/null && break
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/status.json"
+          node -e '
+            const s = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))
+            const want = process.env.TAG.replace(/^v/, "")
+            if (s.running !== true) throw new Error("It is not running after the upgrade")
+            if (s.connector?.version !== want) throw new Error(`the service runs as ${s.connector?.version}, not ${want}`)
+            if (s.database?.it !== want || s.database?.functionsOf !== want) throw new Error(`the database was last run on by ${s.database?.it}, with the functions of ${s.database?.functionsOf}, not ${want}`)
+            if (String(s.connector?.pid) === process.env.PID_BEFORE) throw new Error("the service is the process that ran before the upgrade")
+            console.log(`The service runs as ${want}, in a new process, on the same database.`)
+          ' "$RUNNER_TEMP/status.json"
+          "$IT" service status --json | tee "$RUNNER_TEMP/service.json"
+          grep -q '"registered": true' "$RUNNER_TEMP/service.json"
+      - name: The page published before is still there and live
+        if: steps.before.outcome == 'success'
+        run: |
+          set -euo pipefail
+          "$IT" list --json | grep -q '"id": "before"'
+          "$IT" read before | grep -q '"status": "live"'
+      - name: The browser paired before is still paired, and shows the page
+        env:
+          PUBLISHED: ${{ steps.before.outcome }}
+        run: |
+          set -euo pipefail
+          page=()
+          [ "$PUBLISHED" = success ] && page=(--page before --says "$BEFORE_SAYS")
+          node e2e/upgrade.mjs still --it "$IT" --profile "$PROFILE" ${page[@]+"${page[@]}"}
+      - name: A page can be published with the new version, and the same browser shows it
+        run: |
+          set -euo pipefail
+          printf '<!doctype html><title>After</title><h1>%s</h1>\n' "$AFTER_SAYS" > "$RUNNER_TEMP/after.html"
+          "$IT" create After --id after --file "$RUNNER_TEMP/after.html" --json
+          "$IT" read after | grep -q '"status": "live"'
+          node e2e/upgrade.mjs still --it "$IT" --profile "$PROFILE" --page after --says "$AFTER_SAYS"
+      - name: The earlier release could publish a page
+        if: steps.before.outcome != 'success'
+        run: |
+          echo "::error::It $FROM, as published, refused to publish a page on this system before the upgrade. The upgrade itself was checked without that page."
+          exit 1
+      - name: Take it off again
+        if: always()
+        run: |
+          [ -n "${IT:-}" ] && [ -x "$IT" ] || exit 0
           "$IT" uninstall --yes --json
           [ ! -e "$HOME/.it/service.json" ]
