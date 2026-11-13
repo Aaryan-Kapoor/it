@@ -148,9 +148,16 @@ mkdirSync(path.join(base, 'tmp'), { recursive: true })
 process.env.TMPDIR = path.join(base, 'tmp')
 
 /** Runs a program to its end. Resolves with its exit code and what it printed. */
-function run(cmd, args, { cwd = WORK, ms = 120_000, input } = {}) {
+/** Set once the run has been told to stop: from then on nothing of the run's own starts but its cleanup. */
+let stoppedBy = null
+/** The programs `run` is waiting on, which the cleanup ends where it comes first. */
+const inFlight = new Set()
+function run(cmd, args, { cwd = WORK, ms = 120_000, input, cleanup = false } = {}) {
+  if (stoppedBy && !cleanup) return Promise.resolve({ code: -1, out: '', err: `not started: the run was stopped by ${stoppedBy}` })
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { cwd, env: env(), stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] })
+    inFlight.add(child)
+    child.on('exit', () => inFlight.delete(child))
     let out = ''
     let err = ''
     child.stdout.on('data', (d) => (out += d))
@@ -179,6 +186,7 @@ const it = (args, opts) => run(IT_COMMAND[0], [...IT_COMMAND.slice(1), ...args],
 /** The programs that go on running behind the run, each stopped by its own process id at the end. */
 const running = new Map()
 function start(name, cmd, args, { cwd = WORK, log } = {}) {
+  if (stoppedBy) throw new Error(`${name} was not started: the run was stopped by ${stoppedBy}`)
   const child = spawn(cmd, args, { cwd, env: env(), stdio: ['ignore', 'pipe', 'pipe'] })
   let said = ''
   const keep = (d) => {
@@ -250,11 +258,30 @@ async function ocPlugins() {
   return (got.body?.plugin ?? []).map((p) => ({ path: String(p).replace(/^file:\/\//, '') }))
 }
 /** Whether OpenCode holds a piece of text among the messages of the conversation with this id. */
-async function storedIn(id, text) {
-  if (!id) return false
-  const route = major >= 2 ? `/api/session/${id}/message` : `/session/${id}/message?directory=${encodeURIComponent(WORK)}`
+/**
+ * Whether OpenCode holds a click, as a message on the person's side, in the conversation with
+ * this id: one that begins `[It]` and names the action, and, where `ends`, ends with its name as
+ * a live click does. OpenCode 2 lists a conversation's messages each with its `type` and `text`;
+ * OpenCode 1 lists each with its `info.role` and its parts.
+ */
+async function storedIn(id, action, { ends = false } = {}) {
+  if (!id || !action) return false
+  const route = major >= 2 ? `/api/session/${id}/message?limit=200` : `/session/${id}/message?directory=${encodeURIComponent(WORK)}`
   const got = await ocApi(route)
-  return got.status === 200 && JSON.stringify(got.body ?? null).includes(text)
+  if (got.status !== 200) return false
+  const users =
+    major >= 2
+      ? (got.body?.data ?? []).filter((m) => m?.type === 'user').map((m) => (typeof m.text === 'string' ? m.text : ''))
+      : (Array.isArray(got.body) ? got.body : [])
+          .filter((m) => m?.info?.role === 'user')
+          .map((m) =>
+            (m.parts ?? [])
+              .filter((part) => part?.type === 'text')
+              .map((part) => part.text ?? '')
+              .join(''),
+          )
+  const name = `[action ${action}]`
+  return users.some((t) => t.trim().startsWith('[It]') && (ends ? t.trim().endsWith(name) : t.includes(name)))
 }
 const itsPlugin = (plugins) => plugins.find((p) => p.path === PLUGIN)
 const ocApi = async (route, init = {}) => {
@@ -333,13 +360,18 @@ let failed = false
 let cleaning = null
 /** Stops everything the run started, removes its folder, says how the run went, and ends it. Run once, however the run ends. */
 function cleanUp(signal) {
+  // A signal that comes while the cleanup is under way is still a run that did not pass
+  if (signal) stoppedBy ??= signal
   cleaning ??= (async () => {
-    if (signal) check(`the run went to its end, and was not stopped by ${signal}`, false)
+    // What the run was waiting on when it was told to stop is ended first, before its folder goes
+    for (const child of inFlight) child.kill('SIGTERM')
+    await until(() => inFlight.size === 0, 5000, 100)
+    for (const child of inFlight) child.kill('SIGKILL')
     await browser?.close().catch(() => {})
     const ocStopped = await stop('opencode')
     // Auto-wake's `opencode run` of OpenCode 2 starts OpenCode's background service, which goes
     // on running by design; it is asked to stop with OpenCode's own command
-    if (major >= 2 && opencodeBin) await run(opencodeBin, ['service', 'stop'], { ms: 30_000 })
+    if (major >= 2 && opencodeBin) await run(opencodeBin, ['service', 'stop'], { ms: 30_000, cleanup: true })
     const itStopped = await stop('it', 90_000)
     for (const name of [...running.keys()]) await stop(name)
     await model?.close().catch(() => {})
@@ -359,6 +391,7 @@ function cleanUp(signal) {
     }
     if (KEEP) console.log(`\nKept: ${base}`)
     else rmSync(base, { recursive: true, force: true, maxRetries: 5 })
+    if (stoppedBy) check(`the run went to its end, and was not stopped by ${stoppedBy}`, false)
     const bad = results.filter((r) => !r.ok)
     console.log(
       `\n${results.length - bad.length} of ${results.length} checks passed with OpenCode ${version || '(unknown)'}, in ${Math.round((Date.now() - started) / 1000)} s`,
@@ -662,7 +695,7 @@ async function part2() {
   check(`the message names the page (${PAGE})`, said.includes(PAGE), said.slice(0, 500))
   check(
     'OpenCode keeps the click in the conversation the first turn made, by its id',
-    await until(() => storedIn(sessionId, `[action ${clicked}]`), 20_000, 500),
+    await until(() => storedIn(sessionId, clicked, { ends: true }), 20_000, 500),
     `conversation ${sessionId}, action ${clicked}`,
   )
   // Auto-wake could have answered the click by reopening the conversation in another OpenCode
@@ -719,7 +752,7 @@ async function part3() {
   await startOpenCode()
   check(
     'OpenCode keeps that click in the same conversation, by its id',
-    await until(() => storedIn(sessionId, `[action ${second}]`), 20_000, 500),
+    await until(() => storedIn(sessionId, second), 20_000, 500),
     `conversation ${sessionId}, action ${second}`,
   )
   // A conversation It reopens is written down as handed over by way of the queue, which for an
