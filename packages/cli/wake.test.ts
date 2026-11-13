@@ -45,6 +45,7 @@ import {
   jobName,
   KEPT_NOT,
   keeper,
+  LEFT_ENDED,
   lastWords,
   listsProcesses,
   mayWake,
@@ -669,6 +670,11 @@ describe('what a conversation is told when it is reopened after a turn of it was
     expect(WAS_CUT_OFF).not.toMatch(/restarted|once before/)
     expect(WAS_CUT_OFF).toContain('go by the action ids')
     expect(WAS_CUT_OFF).toContain('do not do twice what was already done')
+  })
+
+  test('says that what the turn had left running was ended, as far as It could find it, in a sentence that reads plainly', () => {
+    expect(LEFT_ENDED).toMatch(/^It ended everything that turn had left running that It could find\. /)
+    expect(LEFT_ENDED).not.toContain('that that')
   })
 })
 

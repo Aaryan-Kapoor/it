@@ -75,7 +75,7 @@ export const WAS_CUT_OFF =
  * such as a container, is not seen.
  */
 export const LEFT_ENDED =
-  'It ended everything it found that that turn had left running. So a command it was in the middle of did not finish, and a server or anything else it had started is most likely not there any more. Check, and start again what is still needed.'
+  'It ended everything that turn had left running that It could find. So a command it was in the middle of did not finish, and a server or anything else it had started is most likely not there any more. Check, and start again what is still needed.'
 
 /**
  * What is said in its place where It could not tell what was left of the turn, and the person
