@@ -56,7 +56,9 @@ const asked = (...args) => {
   try {
     said = execFileSync(program, [...args, '--json'], { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] })
   } catch (err) {
-    throw new Error(`\`it ${args.join(' ')}\` failed (${err?.status ?? err?.signal ?? err?.code ?? 'no exit code'})`)
+    throw new Error(
+      `\`it ${args.join(' ')}\` failed (${err?.code === 'ETIMEDOUT' ? 'it took more than a minute' : (err?.status ?? err?.signal ?? err?.code ?? 'no exit code')})`,
+    )
   }
   try {
     return JSON.parse(said)
@@ -65,7 +67,7 @@ const asked = (...args) => {
   }
 }
 const site = asked('status').site
-if (typeof site !== 'string' || !/^http:\/\/localhost:\d+$/.test(site)) throw new Error(`\`it status\` named no site on this machine (${JSON.stringify(site)})`)
+if (typeof site !== 'string' || !/^http:\/\/localhost:\d+$/.test(site)) throw new Error('`it status` named no site on this machine')
 
 const browser = await chromium.launchPersistentContext(profile, { headless: true })
 try {
