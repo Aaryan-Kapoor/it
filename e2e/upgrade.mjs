@@ -33,6 +33,21 @@ if (!['pair', 'still'].includes(what) || !program || !profile || (pageId && !say
   process.exit(2)
 }
 
+/**
+ * What may be printed of an error: its message alone, with any pairing address's code taken out.
+ * Playwright puts the whole address it was going to in its errors, and a failed command its
+ * output, so nothing of an error is printed but this.
+ */
+const clean = (text) => String(text).replace(/\/pair#[^\s'"`)]*/g, '/pair#(the code)')
+process.on('uncaughtException', (err) => {
+  console.error(`The check failed: ${clean(err?.message ?? err)}`)
+  process.exit(1)
+})
+process.on('unhandledRejection', (err) => {
+  console.error(`The check failed: ${clean(err?.message ?? err)}`)
+  process.exit(1)
+})
+
 /** What the installed `it` answers, as JSON. */
 const asked = (...args) => JSON.parse(execFileSync(program, [...args, '--json'], { encoding: 'utf8', timeout: 60_000 }))
 const site = asked('status').site
@@ -59,7 +74,9 @@ try {
   if (what === 'pair') {
     const address = asked('site', '--no-open').url
     if (typeof address !== 'string' || !address.startsWith(`${site}/pair#`)) throw new Error('`it site --no-open` gave no pairing address for this site')
-    await tab.goto(address)
+    await tab.goto(address).catch(() => {
+      throw new Error('the browser could not open the address `it site --no-open` printed')
+    })
     if (!(await paired(30_000))) throw new Error('the address `it site --no-open` printed did not pair the browser within 30 seconds')
     console.log(`The browser was paired with the It at ${site}.`)
   } else {
