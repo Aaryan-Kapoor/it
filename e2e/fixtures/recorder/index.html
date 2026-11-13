@@ -40,7 +40,11 @@
       /** Listens to a stream all the while, and says the loudest it has been: sound that comes and goes is not missed between two looks. */
       function listen(stream) {
         clearInterval(listening)
+        // What an earlier stream measured is not shown as this one's
         inStream = 0
+        put('stream', inStream.toFixed(4))
+        put('tracks', stream.getAudioTracks().length)
+        put('track', stream.getAudioTracks()[0]?.readyState ?? 'none')
         const context = new AudioContext()
         const meter = context.createAnalyser()
         context.createMediaStreamSource(stream).connect(meter)
