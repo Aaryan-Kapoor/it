@@ -431,6 +431,12 @@ export function Mount({
       if (cannot) throw new Error(cannot)
       const doc = docs
       const most = loads
+      // While the frame is being asked which document it holds, the channel may be held by a document
+      // that is no longer there, or by a window it handed the channel to. What came over it is looked
+      // at once the frame has answered, and refused where the document went meanwhile.
+      while (asking) await new Promise<void>((answered) => untilAnswered.push(answered))
+      if (!live) throw new Error('The page was closed.')
+      if (doc !== docs || loads > most) throw new Error(SAID.replaced)
       // Nothing is begun for a page the screen does not show, where It's bar, which says what is live, cannot be seen
       if (document.visibilityState === 'hidden')
         throw new Error('It uses the microphone and the camera for a page only while this screen shows it. Ask again once the page is in front.')
@@ -447,8 +453,8 @@ export function Mount({
         throw new Error('It asks the person only while the page is in front, in the window they are using. Ask again from something they do on the page.')
       // What this call wants beyond what the page is allowed already, which stays as it is
       const had = grantsOf(user).find((g) => g.page === artifactId && g.owner === owner)
-      const asking = kinds.filter((k) => !had?.kinds.includes(k))
-      const asked = askPerson({ page: artifactId, title: titled.current, agent: by?.agent ?? null, machine: by?.machine ?? null, kinds: asking })
+      const lacking = kinds.filter((k) => !had?.kinds.includes(k))
+      const asked = askPerson({ page: artifactId, title: titled.current, agent: by?.agent ?? null, machine: by?.machine ?? null, kinds: lacking })
       question = asked
       questionBy = owner
       questionLoads = most
@@ -463,7 +469,7 @@ export function Mount({
         throw new Error(`The person did not allow this page to use ${kindsSaid(kinds)} on this screen.`)
       }
       if (doc !== docs) throw new Error(SAID.replaced)
-      allow(user, { page: artifactId, title: titled.current, agent: by?.agent ?? null, machine: by?.machine ?? null, owner, kinds: asking })
+      allow(user, { page: artifactId, title: titled.current, agent: by?.agent ?? null, machine: by?.machine ?? null, owner, kinds: lacking })
       const grant = grantFor(user, artifactId, owner, kinds)
       if (!grant) throw new Error(TAKEN_BACK)
       return { owner, grant, doc, loads: most }
@@ -987,6 +993,14 @@ export function Mount({
     let onItsLoad = false
     /** A document has loaded in the frame that has not answered as the one on the channel: it may be the next one to say hello. */
     let unclaimed = false
+    /** What the page asked of the microphone and the camera while the frame was being asked, waiting for the asking to end. */
+    const untilAnswered: (() => void)[] = []
+    /** The frame is no longer being asked, whether it answered or the document is taken to be gone. */
+    const doneAsking = () => {
+      clearTimeout(asking?.timer)
+      asking = null
+      for (const go of untilAnswered.splice(0)) go()
+    }
     /**
      * The document the channel was made for is gone. Its channel is closed, so that whatever holds
      * the other end now is heard no more, and everything it began here ends with it: its players
@@ -1035,7 +1049,7 @@ export function Mount({
         nonce,
         afterHello,
         timer: setTimeout(() => {
-          asking = null
+          doneAsking()
           documentGone()
           embeds?.release()
           // A document of It's that was only slow to answer asks for a channel again when it hears this
@@ -1111,12 +1125,11 @@ export function Mount({
       if (type === 'it:here') {
         const said = e.data as { nonce?: unknown; doc?: unknown }
         if (asking && said.nonce === asking.nonce && typeof said.doc === 'string' && said.doc === answered && port.current) {
-          clearTimeout(asking.timer)
           if (asking.afterHello) {
             onItsLoad = true
             unclaimed = false
           }
-          asking = null
+          doneAsking()
           embeds?.release()
         }
         return
@@ -1184,8 +1197,7 @@ export function Mount({
       if (microphone && loads > microphoneBy.loads) microphone.end('replaced')
       if (starting && loads > starting.loads) starting.stop()
       if (port.current && (onItsLoad || asking?.afterHello)) {
-        clearTimeout(asking?.timer)
-        asking = null
+        doneAsking()
         embeds?.release()
         documentGone()
         // A document of It's that the site took to have loaded when it had not, and which loads only
@@ -1241,7 +1253,7 @@ export function Mount({
       microphone?.end('not_shown')
       microphone = null
       shown?.removeEventListener('load', frameLoaded)
-      clearTimeout(asking?.timer)
+      doneAsking()
       unhost?.()
       embeds?.dispose()
       port.current?.close()
