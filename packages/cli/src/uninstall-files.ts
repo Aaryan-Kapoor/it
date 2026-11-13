@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { lstatSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, unlinkSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { INSTALLATION_FILE } from './installation'
 import { withInstallerLock } from './installer-lock'
-import { claimLeft } from './legacy-lock'
+import { claimLeft, claimLock } from './legacy-lock'
 import { Problem, RUN_ONCE, WINDOWS_CLEANUP, windowsDeletionCommand } from './lib'
 import { aloneAt, holderRuns, startOf } from './serve/backend'
 
@@ -57,6 +58,8 @@ export const ROOT_LOCKS = ['connector.lock', 'setup.lock', 'enrol.lock']
  * (`claimLock`). A command that was killed leaves its lock, and the claims beside it, behind.
  */
 export const NOTE_LOCKS = ['conversations.json.lock', 'opencode-unclaimed.json.lock']
+/** What follows such a lock's name in a claim made beside it, with a recovering command's mark or a left empty lock's, or in its record on its way to its name. */
+const NOTE_SUFFIX = /^(?:\.after\.(?:[0-9a-f]{16}|legacy-[0-9a-f]{64}))?(?:\.[0-9a-f]{16}\.tmp)?$/
 const LOCKS: Record<string, string[]> = {
   '': ROOT_LOCKS,
   addons: ['setup.lock'],
@@ -204,9 +207,19 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
       if (lockRecord(owner) && !holderRuns(owner)) remove(relative)
     }
   }
-  // Only where the command that took it has ended: one that is still at work keeps its lock
+  // Only where the command that took it has ended: one that is still at work keeps its lock. The
+  // lock is taken as a command that finds it left takes it, and then let go of, so that a command
+  // that takes it in the same moment is never the one whose lock is removed
+  for (const base of NOTE_LOCKS) {
+    const file = installationFile(folder, base)
+    if (!file) continue
+    try {
+      claimLock(file, 10_000, randomBytes(8).toString('hex'))?.()
+    } catch {}
+  }
+  // And a claim beside one, or a record on its way to its name, that such a command left
   for (const name of readdirSync(folder)) {
-    if (!NOTE_LOCKS.some((base) => name.startsWith(base) && LOCK_SUFFIX.test(name.slice(base.length)))) continue
+    if (NOTE_LOCKS.includes(name) || !NOTE_LOCKS.some((base) => name.startsWith(base) && NOTE_SUFFIX.test(name.slice(base.length)))) continue
     const file = installationFile(folder, name)
     if (file && claimLeft(file)) remove(name)
   }
