@@ -317,36 +317,34 @@ const alive = (pid) => {
   }
 }
 /**
- * Whether a process is the run's own T3 Code's program, and may be ended. On Linux the system names
- * its program; elsewhere it does not here, and the number is the one T3 Code noted moments ago in
- * the run's own folder, of the server the run started.
+ * The processes running a program that lives in a folder, each with that program: only programs
+ * this run installed live in its folders (T3 Code's own program, the real Claude Code, It's backend
+ * program), so a process is known to be the run's own by its program and nothing else. On Linux
+ * the system names each process's program; on Windows PowerShell is asked, with the folder handed
+ * to it in its surroundings and not written into what it runs. Null where that could not be asked,
+ * and an empty list on a system where neither is so.
  */
-const t3Program = (pid) => {
-  if (process.platform !== 'linux') return true
-  try {
-    return realpathSync(`/proc/${pid}/exe`).startsWith(realpathSync(t3Home))
-  } catch {
-    return false
-  }
-}
-/**
- * The processes still running that belong to the run: on Linux those whose program or working
- * folder is in the run's folder, and on Windows those whose program is there or whose command
- * names it. Never this process.
- */
-function leftOver() {
-  const mine = realpathSync(top)
+function runningFrom(folder) {
+  // Windows takes a folder's name in either case
+  const plain = (name) => (windows ? `${name}${path.sep}`.toLowerCase() : `${name}${path.sep}`)
+  const within = (file) => plain(file).startsWith(plain(folder))
   if (windows) {
     try {
-      const script = `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne ${process.pid} -and (($_.ExecutablePath -and $_.ExecutablePath.StartsWith('${mine}')) -or ($_.CommandLine -and $_.CommandLine.Contains('${mine}'))) } | ForEach-Object { $_.ProcessId }`
-      return execFileSync(path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-Command', script], {
-        encoding: 'utf8',
-      })
-        .split(/\s+/)
-        .filter(Boolean)
-        .map(Number)
+      const script = "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath } | ForEach-Object { '{0}|{1}' -f $_.ProcessId, $_.ExecutablePath }"
+      return execFileSync(
+        path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+        ['-NoProfile', '-NonInteractive', '-Command', script],
+        {
+          encoding: 'utf8',
+          env: { SystemRoot: systemRoot, PATH: path.join(systemRoot, 'System32') },
+        },
+      )
+        .split(/\r?\n/)
+        .map((line) => /^(\d+)\|(.+)$/.exec(line.trim()))
+        .filter((m) => m && Number(m[1]) !== process.pid && within(m[2]))
+        .map((m) => Number(m[1]))
     } catch {
-      return []
+      return null
     }
   }
   if (process.platform !== 'linux') return []
@@ -354,16 +352,16 @@ function leftOver() {
   for (const name of readdirSync('/proc')) {
     const pid = Number(name)
     if (!Number.isInteger(pid) || pid === process.pid) continue
-    for (const link of ['exe', 'cwd'])
-      try {
-        if (`${realpathSync(`/proc/${pid}/${link}`)}${path.sep}`.startsWith(`${mine}${path.sep}`)) {
-          found.push(pid)
-          break
-        }
-      } catch {}
+    try {
+      if (within(realpathSync(`/proc/${pid}/exe`))) found.push(pid)
+    } catch {}
   }
   return found
 }
+/** Whether a process is the run's own T3 Code's program, by the program it runs, and may be ended. */
+const t3Program = (pid) => (runningFrom(realpathSync(t3Home)) ?? []).includes(pid)
+/** The processes of the run's that are still running, or null where that could not be asked. */
+const leftOver = () => runningFrom(realpathSync(top))
 /** The note T3 Code keeps of its running server, in the run's folder. */
 const noted = () => {
   try {
@@ -395,15 +393,19 @@ function cleanUp() {
     }
     // Whatever of the run's is still running now, a program that T3 Code or It started among it,
     // is ended, and said; and the run fails where something cannot be ended
-    const left = leftOver()
+    const left = leftOver() ?? []
     if (left.length) {
       note(`${left.length} process${left.length === 1 ? '' : 'es'} of the run’s were still running once it had stopped what it started, and were ended`)
       for (const pid of left) endTree(pid)
       await sleep(2000)
     }
     const still = leftOver()
-    stillUp = still.length > 0 || (typeof program === 'number' && alive(program) && t3Program(program))
-    check('nothing the run started is left running', !stillUp, still.length ? `still running: ${still.join(', ')}` : '')
+    stillUp = still === null || still.length > 0 || (typeof program === 'number' && alive(program) && t3Program(program))
+    check(
+      'nothing the run started is left running',
+      !stillUp,
+      still === null ? 'the system could not be asked which processes run the run’s programs' : still.length ? `still running: ${still.join(', ')}` : '',
+    )
     if (results.some((r) => !r.ok)) {
       for (const [name, file] of [
         ['It, with its connector', path.join(logs, 'serve.log')],
