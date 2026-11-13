@@ -1,7 +1,7 @@
 // The machines where the person's agents run, and which agent apps (harnesses, in the code) on
 // each are connected. The site only records the choice; the connector on the machine does the
 // installing.
-import { ALIVE, HARNESSES, INSTALL, newer, noWakeHere, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
+import { ALIVE, HARNESSES, INSTALL, newer, noWakeHere, TURN_ON_MS, TURNS_ON, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
@@ -44,6 +44,8 @@ interface Machine {
   latest?: string | null
   /** An upgrade of this machine that was asked for here, and how far it has got. */
   upgrade?: { at: number; state: 'asked' | 'working' | 'restarting' | 'failed' | 'installed' | 'done'; why?: string; version?: string } | null
+  /** Turning It's add-on back on in an app that has it turned off, asked for here, and how far each has got. Missing from functions that do not say. */
+  turnOn?: { harness: string; at: number; state: 'asked' | 'working' | 'failed' | 'done'; why?: string }[]
   harnesses: Harness[]
   wanted: string[]
   wakes: { harness: string; since: number }[]
@@ -61,6 +63,17 @@ function standing(h: Harness, wanted: boolean, online: boolean): { word: string;
   if (h.addon === 'error') return { word: 'Could not connect', tone: 'bad', detail: h.detail }
   if (h.addon === 'needs_approval')
     return { word: 'Needs your approval', tone: 'wait', detail: h.detail ?? 'It is waiting for your approval inside the agent app.' }
+  // In the app, and turned off there, perhaps on purpose: not connecting, and never turned on again but by the person
+  if (wanted && h.addon === 'disabled')
+    return {
+      word: `Turned off in ${LABEL[h.id] ?? 'the app'}`,
+      tone: 'wait',
+      detail: (TURNS_ON as readonly string[]).includes(h.id)
+        ? `It’s add-on is turned off inside ${LABEL[h.id] ?? 'the app'} on this machine, so nothing you do on a page reaches it by itself, unless the conversation is in a T3 Code thread. It stays off until you turn it back on.`
+        : h.id === 'pi'
+          ? 'It’s extension is turned off in Pi’s settings on this machine, so nothing you do on a page reaches Pi by itself. Run pi config in a terminal there and turn It’s extension back on.'
+          : `It’s add-on is turned off inside ${LABEL[h.id] ?? 'the app'} on this machine. Turn it back on there.`,
+    }
   if (wanted && h.addon !== 'connected') return { word: online ? 'Connecting…' : 'Connects when online', tone: 'wait' }
   if (!wanted && h.addon === 'connected') return { word: online ? 'Disconnecting…' : 'Disconnects when online', tone: 'wait' }
   if (h.addon !== 'connected') return { word: 'Off' }
@@ -279,6 +292,68 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
   )
 }
 
+/** A sentence from a machine, with what it puts in backticks, a command to run there, shown as code. */
+const withCode = (said: string) => {
+  const parts = said.split('`')
+  // Where the backticks do not pair up, the sentence is shown as it is
+  if (parts.length % 2 === 0) return said
+  // Every other part is between backticks, and each is known by where it begins in the sentence
+  let at = 0
+  let inside = true
+  return parts.map((part) => {
+    const from = at
+    at += part.length + 1
+    inside = !inside
+    return inside ? <code key={from}>{part}</code> : part
+  })
+}
+
+/**
+ * Turn back on, beside an app that has It's add-on turned off on a machine: the machine turns it
+ * on with the app's own command, and says here whether that worked and, where it did not, why.
+ * It is never turned on by itself, since the person may have turned it off on purpose.
+ */
+function TurnBackOn({ m, h, online, act }: { m: Machine; h: Harness; online: boolean; act: (p: Promise<unknown>) => Promise<void> }) {
+  const turnOn = useMutation(api.machines.turnOn)
+  // By the backend's clock, which is the one the asking was timed by
+  const now = useNow(15_000)
+  const asked = m.turnOn?.find((t) => t.harness === h.id)
+  const label = LABEL[h.id] ?? 'the app'
+  const atWork = (asked?.state === 'asked' || asked?.state === 'working') && now - asked.at < TURN_ON_MS
+  if (atWork)
+    return (
+      <span className="row-detail row-sub" role="status">
+        Turning It’s add-on back on in {label}…
+      </span>
+    )
+  const cutShort = asked?.state === 'asked' || asked?.state === 'working'
+  const failed = asked?.state === 'failed'
+  // Done, and the machine has not yet said that the app has it on: it says so with its next report
+  if (asked?.state === 'done')
+    return (
+      <span className="row-detail row-sub" role="status">
+        Turned back on. Waiting for {m.name} to report it.
+      </span>
+    )
+  return (
+    <span className="row-detail turn-on" data-tone={failed || cutShort ? 'bad' : undefined}>
+      {failed && (
+        <span className="turn-on-why">{withCode(`It could not be turned back on: ${(asked?.why ?? 'it is not known why').replace(/\.$/, '')}.`)}</span>
+      )}
+      {cutShort && <span className="turn-on-why">{m.name} did not say whether it turned It’s add-on back on.</span>}
+      <button
+        type="button"
+        className="link"
+        disabled={!online}
+        title={online ? undefined : 'This machine is off'}
+        onClick={() => void act(turnOn({ machineId: m.id as Id<'machines'>, harness: h.id }))}
+      >
+        {failed || cutShort ? 'Try again' : 'Turn back on'}
+      </button>
+    </span>
+  )
+}
+
 /**
  * Why a machine that is there hands nothing done on a page to an agent for now, as its
  * connector told It: the two do not fit, or it has not yet been able to ask whether they do.
@@ -387,6 +462,7 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                 </span>
                 {/* Why, and what to do about it, in words that can be read without a pointer */}
                 {is.tone !== 'ok' && is.detail && <span className="row-detail">{is.detail}</span>}
+                {wanted && h.addon === 'disabled' && (TURNS_ON as readonly string[]).includes(h.id) && <TurnBackOn m={m} h={h} online={online} act={act} />}
                 {wakeable && (
                   <label
                     className="row-detail switch-row wake-row"

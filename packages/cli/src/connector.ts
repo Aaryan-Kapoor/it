@@ -27,6 +27,7 @@ import {
   QUEUES,
   RETENTION,
   TAKES,
+  TURNS_ON,
   WAKE_MOST,
   WAKES,
   wakesOn,
@@ -72,7 +73,7 @@ import { profileEnvironment, profileOf, readProfile } from './profiles'
 import { addonMarks, conversationFolder, conversationProfile, forgetAddonMark, noteConversation, publishedWithoutAddon } from './publish'
 import { alone, lockHeld } from './serve/backend'
 import * as service from './service'
-import { claudeFolders, detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
+import { claudeFolders, detectAll, type HarnessStatus, KNOWN, newerProgramSeen, reconcile, turnBackOn } from './setup'
 import {
   type T3,
   T3_HELD_MOST,
@@ -143,6 +144,8 @@ export interface ConnectorInfo {
 }
 
 const LIVE_MS = 5_000 // an add-on that asked this recently is listening
+/** How often the log says again that an app has It’s add-on turned off, while it stays so. */
+const OFF_SAID_MS = 6 * 3_600_000
 const KNOWN_MS = 90_000 // and one that asked this recently is still worth watching clicks for
 const HOLD_MS = 6_000 // how long a claimed click waits for an add-on that has stopped asking: one that is there asks every second
 const RENEW_MS = 10_000 // how often the lease on a held click is extended
@@ -697,6 +700,14 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    * that asks for its clicks has shown that it is there, and is answered once its app is chosen.
    */
   const connected = (harness: string) => chosen(harness) && found.some((h) => h.id === harness && (h.addon === 'connected' || h.addon === 'needs_approval'))
+  /**
+   * Whether a conversation of this app that a thread of T3 Code holds may be handed a click
+   * through T3 Code's own server: once the app is chosen, whatever its add-on is. That way runs
+   * no command of the app's and asks nothing of its add-on, so an add-on that the app has turned
+   * off, or that is not there yet, keeps nothing from a thread. Every other way is still
+   * `connected`'s.
+   */
+  const throughT3 = chosen
   // The agent apps the person has switched reopening on for on this machine, and since when, as
   // It says. Until It has said, none is.
   let wakesNow = new Map<string, number>()
@@ -1708,6 +1719,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       await recovery.removeMark(entry.id)
     }
     const who = `${a(agentOf(harness))} conversation (${short(threadOf(key))})`
+    // Its short line goes the way the mark says: to a thread of T3 Code once the app is chosen, as any click does, and into Codex's queue only while Codex is connected
+    const open = () => (current()?.fallback?.via === 't3' ? throughT3(harness) : connected(harness))
     const after = (ms: number, what: () => void) => {
       const timer = setTimeout(() => {
         markTimers.delete(timer)
@@ -1721,7 +1734,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // Not into an app the person has disconnected since: what the mark stood for stays as it is, for a hook of the app once it is connected again
       if (!chosen(harness)) return
       // Recovery and the current machine settings must have answered before a restored mark can send anything.
-      if (unfitting || givingBack !== 'done' || !connected(harness)) return after(MARK_ASKED_MS, line)
+      if (unfitting || givingBack !== 'done' || !open()) return after(MARK_ASKED_MS, line)
       const fallback = copy.fallback
       if (!fallback) return
       const keyNow = follow(where() ?? key)
@@ -1739,7 +1752,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       }
       // The disk may have taken time. A hook, disconnection or shutdown that arrived
       // meanwhile takes precedence over sending the fallback whose attempt was reserved.
-      if (closing || unfitting || recovery.stopped || !kept() || !chosen(harness) || !connected(harness)) return
+      if (closing || unfitting || recovery.stopped || !kept() || !chosen(harness) || !open()) return
       if (fallback.via === 'codex' && !codexOpen(follow(where() ?? key))) return
       void (
         fallback.via === 't3'
@@ -1772,7 +1785,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       if (current()?.retry?.nextAt === null) return
       after(ms, () => {
         if (!chosen(harness)) return
-        if (unfitting || givingBack !== 'done' || !connected(harness)) return wait()
+        if (unfitting || givingBack !== 'done' || !open()) return wait()
         unmarked.add(where() ?? key)
         say(`${who} was given a mark and none of its hooks said it had what the mark stood for; it is given the short line now, and from here on`)
         line()
@@ -2987,8 +3000,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // is done: so it is left where the waiter takes it.
       if (awaited(click, Date.now())) return
       // Nor is the app's command run once the app is not connected any more: the person may have
-      // disconnected it while the click stood in line
-      if (!connected(harness)) return
+      // disconnected it while the click stood in line. T3 Code's server, which runs no command of
+      // the app's, is asked only that the app is still chosen.
+      const stillFor = () => (t3 ? throughT3(harness) : connected(harness))
+      if (!stillFor()) return
       // Nor is a conversation reopened once the person has switched that off, or more often than it may be
       if ((reopening && !wakes(harness, click.at)) || (starting && !room(key, someoneThere(click, offered)))) return
       // Codex's queue is for a conversation some Codex has open. One that was closed while this
@@ -3016,7 +3031,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         closing ||
         unfitting ||
         awaited(click, Date.now()) ||
-        !connected(harness) ||
+        !stillFor() ||
         (reopening && !wakes(harness, click.at)) ||
         (!reopening && !t3 && codexInterrupted(key))
       ) {
@@ -3482,7 +3497,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     routing = true
     try {
       // Discovery outlives the click that started it, including a completed fallback delivery.
-      for (const [key, session] of t3Pending) if (connected(session.harness)) t3For(key, session)
+      for (const [key, session] of t3Pending) if (throughT3(session.harness)) t3For(key, session)
       await retireLostClaims()
       await recovery
         .pruneWaiters(Date.now(), (key, restored) => (!restored || sessions.has(follow(key))) && !turnRunning(follow(key), Date.now()))
@@ -3683,7 +3698,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         const session = click.session
         let thread: ReturnType<typeof t3For>
         const heldInT3 = (): boolean => {
-          thread = connected(session.harness) && !reopenedNow.has(key) ? t3For(key, session, click.id) : undefined
+          thread = throughT3(session.harness) && !reopenedNow.has(key) ? t3For(key, session, click.id) : undefined
           return thread !== undefined
         }
         const s = sessions.get(key)
@@ -4315,7 +4330,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     for (const h of found)
       record('app.seen', {
         agent: agentOf(h.id),
-        addon: h.addon,
+        // A published field, whose words do not change here: an add-on the app has turned off is counted as it was before It told the two apart
+        addon: h.addon === 'disabled' ? 'not_connected' : h.addon,
         version: /^\d{1,4}\.\d{1,4}\.\d{1,4}/.exec(h.version ?? '')?.[0] ?? 'unknown',
         wake: wakesOn(process.platform, true) && wakesNow.has(h.id),
       })
@@ -4415,7 +4431,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       const now = follow(key)
       for (const k of [key, now, ...(earlier.get(now) ?? [])]) {
         noted.add(k)
-        if (connected(k.slice(0, k.indexOf(':')))) ids.add(k)
+        if (throughT3(k.slice(0, k.indexOf(':')))) ids.add(k)
       }
     }
     // Counted whether or not they are here, so that what one is offered while here is still
@@ -4600,6 +4616,64 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       upgradingNow = false
     }
   }
+  /**
+   * An app that has It's add-on turned off, which the person may have done on purpose, is said
+   * in the log by a code, when it is first found so and then every few hours while it stays so,
+   * and not with every look: It does not turn the add-on on again, and the site says how to.
+   */
+  const offSaid = new Map<string, number>()
+  const sayOff = () => {
+    for (const h of found) {
+      if (h.addon !== 'disabled' || !chosen(h.id)) {
+        offSaid.delete(h.id)
+        continue
+      }
+      const at = offSaid.get(h.id)
+      if (at !== undefined && Date.now() - at < OFF_SAID_MS) continue
+      offSaid.set(h.id, Date.now())
+      say(
+        `${KNOWN[h.id].label}: addon_disabled: the app has It’s add-on turned off, so none of its conversations is handed a click but through T3 Code; It turns it on again only when the person asks, under Machines or with it setup`,
+      )
+    }
+  }
+  // Turning an add-on back on, as the person asked on the site: with the app's own command,
+  // for an app the person connected here whose add-on this machine finds turned off, and with
+  // nothing from the site but which app. What became of it goes back to the site in a sentence.
+  const turningNow = new Set<string>()
+  // The apps this connector has begun to turn on. One that It has down as being turned on, and
+  // that this connector never began, was begun by a connector that stopped before it was done,
+  // and is done again: it changes nothing where the add-on is on by now.
+  const begunHere = new Set<string>()
+  const turnOnAsked = async (harness: string) => {
+    if (turningNow.has(harness)) return
+    turningNow.add(harness)
+    begunHere.add(harness)
+    try {
+      // Only an asking that It answers it has taken this machine's word for is acted on: one It
+      // no longer has, or that could not be told, or an It that does not answer so, waits
+      const claimed = await call('mutation', api.machines.turningOn, { harness, state: 'working' }).catch(() => undefined)
+      if (claimed !== true) {
+        begunHere.delete(harness)
+        return
+      }
+      const answer =
+        (TURNS_ON as readonly string[]).includes(harness) && chosen(harness)
+          ? await turnBackOn(harness as (typeof TURNS_ON)[number])
+          : { ok: false as const, why: 'That agent app is not connected on this machine, so nothing was changed.', code: 'not_chosen' }
+      const label = KNOWN[harness as keyof typeof KNOWN]?.label ?? 'an agent app'
+      say(answer.ok ? `${label}: It’s add-on was turned back on, as asked on the site` : `${label}: turn_on_failed: ${answer.code}`)
+      // Looked at afresh, so that the site has the app as it is now before it is told this is over
+      if (!closing) {
+        found = await detectAll()
+        watch()
+        sayOff()
+        await report()
+      }
+      await call('mutation', api.machines.turningOn, answer.ok ? { harness, state: 'done' } : { harness, state: 'failed', why: answer.why }).catch(() => {})
+    } finally {
+      turningNow.delete(harness)
+    }
+  }
   // What is installed on the machine is looked at when the connector starts, when what is
   // wanted changes, when an add-on that was found waiting for the person's yes speaks, and
   // every half hour: each look runs every harness's own command. The report in between says
@@ -4623,6 +4697,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         makeWay()
         found = await detectAll()
         watch()
+        sayOff()
       } finally {
         looking = false
       }
@@ -4674,8 +4749,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       wakes?: { harness: string; since: number }[]
       runs?: { harness: string; sessionId: string; stop?: boolean; run?: string }[]
       upgrade?: { state: string; version?: string } | null
+      turnOn?: { harness: string; state: string }[]
     }) => {
       if (me.upgrade?.state === 'asked') void upgradeAsked(me.upgrade.version)
+      for (const t of me.turnOn ?? []) if (t.state === 'asked' || (t.state === 'working' && !begunHere.has(t.harness))) void turnOnAsked(t.harness)
       // A conversation the person asked to have stopped is stopped. One that It has down as
       // running and that is not, which a connector that died leaves behind, is said to be over.
       for (const r of me.runs ?? []) {

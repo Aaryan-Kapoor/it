@@ -1279,15 +1279,17 @@ function ActionStatus({
         ? readiness.queue
           ? `${app}'s hooks need approval. Its open conversation can still receive queued clicks. Open the app to review the hooks`
           : `${app}'s add-on needs approval. Open the app to review it`
-        : readiness.state === 'connecting'
-          ? `${app} is still connecting on ${machine ?? 'its machine'}. Check Machines if it does not finish`
-          : readiness.state === 'too_old'
-            ? `${app} needs an update before It can connect it. Check Machines`
-            : readiness.state === 'unavailable'
-              ? `${app}'s add-on is unavailable on ${machine ?? 'its machine'}. Check Machines`
-              : readiness.state === 'error'
-                ? `${app}'s add-on could not connect on ${machine ?? 'its machine'}. Check Machines`
-                : `It has not confirmed ${app}'s connection on ${machine ?? 'its machine'}. Check Machines`
+        : readiness.state === 'disabled'
+          ? `${app}'s It add-on is turned off on ${machine ?? 'its machine'}, so it does not get this by itself. Turn it back on under Machines`
+          : readiness.state === 'connecting'
+            ? `${app} is still connecting on ${machine ?? 'its machine'}. Check Machines if it does not finish`
+            : readiness.state === 'too_old'
+              ? `${app} needs an update before It can connect it. Check Machines`
+              : readiness.state === 'unavailable'
+                ? `${app}'s add-on is unavailable on ${machine ?? 'its machine'}. Check Machines`
+                : readiness.state === 'error'
+                  ? `${app}'s add-on could not connect on ${machine ?? 'its machine'}. Check Machines`
+                  : `It has not confirmed ${app}'s connection on ${machine ?? 'its machine'}. Check Machines`
     return (
       <span className="status" data-tone="wait">
         {prefix + reason}

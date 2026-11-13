@@ -3303,6 +3303,25 @@ form.row-main {
   font-size: 12px;
   color: var(--fg-muted);
 }
+/* Turn back on, under an app that has It's add-on turned off, and why it could not be where it was not */
+.turn-on[data-tone="bad"] {
+  color: var(--danger);
+}
+.turn-on-why {
+  display: block;
+  margin-bottom: 4px;
+}
+.turn-on-why code {
+  font-size: 11.5px;
+}
+/* Drawn as a button, since it is the one thing to do about the line above it */
+.turn-on button.link {
+  font-size: 12px;
+  color: var(--fg);
+  border: 1px solid var(--line);
+  padding: 4px 10px;
+  margin-top: 2px;
+}
 .switch-row {
   flex-direction: row;
   align-items: center;
