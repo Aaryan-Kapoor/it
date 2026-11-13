@@ -160,6 +160,8 @@ const env = {
   ),
 }
 
+/** The commands `ran` has started that have not ended, which a run asked to stop part way ends. */
+const commands = new Set()
 /** Runs a program to its end in the run's surroundings; resolves with its exit code and what it printed. */
 function ran(program, args, { cwd = work, ms = 120_000 } = {}) {
   return new Promise((resolve) => {
@@ -168,9 +170,11 @@ function ran(program, args, { cwd = work, ms = 120_000 } = {}) {
     let err = ''
     child.stdout.on('data', (d) => (out += d))
     child.stderr.on('data', (d) => (err += d))
+    commands.add(child)
     const timer = setTimeout(() => child.kill('SIGKILL'), ms)
     child.on('error', (e) => (err += e.message))
     child.on('close', (code) => {
+      commands.delete(child)
       clearTimeout(timer)
       resolve({ code, out, err })
     })
@@ -232,6 +236,11 @@ async function kept(started, stop) {
 }
 /** Stops every program the run started that is still running, and waits for each. Says whether It is still running. */
 async function stopEverything() {
+  // A command still running (an `it setup`, a `pi list`) is asked to end, and then made to
+  for (const c of commands) c.kill('SIGTERM')
+  for (const end = Date.now() + 10_000; commands.size && Date.now() < end; ) await sleep(100)
+  for (const c of commands) c.kill('SIGKILL')
+  for (const end = Date.now() + 5_000; commands.size && Date.now() < end; ) await sleep(100)
   for (const p of pis) await p.close().catch(() => {})
   await browser?.close().catch(() => {})
   await model?.close().catch(() => {})
@@ -253,8 +262,11 @@ let cleaning = null
 function cleanUp() {
   cleaning ??= (async () => {
     stopping = true
-    // Again once the run itself has stopped, for what it was starting when it was asked to stop
-    const stillUp = (await stopEverything()) || (await Promise.race([body, sleep(30_000)]).then(stopEverything))
+    // Again once the run itself has stopped, for what it was starting when it was asked to stop.
+    // With its commands ended, every wait left in the run is bounded well within two minutes. A
+    // browser still being launched when this program exits is ended by Playwright, which ends the
+    // browsers it launched when the program that launched them exits.
+    const stillUp = (await stopEverything()) || (await Promise.race([body, sleep(120_000)]).then(stopEverything))
     if (results.some((r) => !r.ok)) {
       for (const [name, file] of [
         ['It', path.join(logs, 'serve.log')],
