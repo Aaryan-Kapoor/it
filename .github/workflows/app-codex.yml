@@ -45,13 +45,16 @@ env:
 
 jobs:
   codex:
-    name: Codex ${{ matrix.which }} on Linux
-    runs-on: ubuntu-latest
+    name: Codex ${{ matrix.which }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         which: [oldest, newest]
+        # Windows is not here: the script runs Codex's terminal interface in a
+        # pseudo-terminal, which Python has on Linux and macOS alone
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -95,7 +98,7 @@ jobs:
             [ "$n" = 6 ] || { echo "Codex $version does not run here yet; trying again in a minute"; sleep 60; }
           done
           if [ -z "$said" ]; then
-            echo "Codex $version was installed from npm and does not run on this system: its program for linux-x64 was not there."
+            echo "Codex $version was installed from npm and does not run on this system: its program for this system was not there."
             exit 1
           fi
           echo "CODEX_VERSION=$version" >> "$GITHUB_ENV"
@@ -122,7 +125,7 @@ jobs:
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: codex-${{ matrix.which }}-logs
+          name: codex-${{ matrix.which }}-${{ matrix.os }}-logs
           path: |
             ${{ runner.temp }}/codex-logs
             ${{ runner.temp }}/codex-tests.json
