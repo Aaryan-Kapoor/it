@@ -765,7 +765,8 @@ describe('whether some Codex has a conversation open', () => {
       process.env.PATH = '/usr/bin:/bin'
       expect(openBy(lock)).toContain(process.pid)
     } finally {
-      process.env.PATH = PATH
+      if (PATH === undefined) delete process.env.PATH
+      else process.env.PATH = PATH
       closeSync(fd)
     }
   })
