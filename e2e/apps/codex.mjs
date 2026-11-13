@@ -36,7 +36,7 @@
 // macOS or Windows. The approval is chosen in Codex's own terminal interface, which is the step a
 // person takes there; where Codex shows no such question (its desktop app, T3 Code) nothing here
 // stands for what a person does.
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -84,7 +84,9 @@ mkdirSync(logs)
 // What every program the run starts is given, and nothing else of this process's surroundings:
 // the agent apps of whoever runs it, and their It, are not to be found from here.
 const env = {
-  PATH: [path.join(itHome, 'bin'), path.dirname(program), path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin'].join(path.delimiter),
+  PATH: [path.join(itHome, 'bin'), path.dirname(program), path.dirname(process.execPath), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'].join(
+    path.delimiter,
+  ),
   HOME: home,
   CODEX_HOME: codexHome,
   IT_HOME: itHome,
@@ -266,8 +268,21 @@ function terminal() {
  * the same user can be read, which is all this run starts.
  */
 function ours(which = 'IT_HOME') {
-  const mark = `${which}=${which === 'IT_HOME' ? itHome : codexHome}\0`
+  const folder = which === 'IT_HOME' ? itHome : codexHome
   const found = []
+  // A Mac has no /proc. Its `ps` shows each process's environment after its command, for the
+  // processes of the same user, and a folder of this run's names nothing else
+  if (process.platform === 'darwin') {
+    const listed = spawnSync('ps', ['-E', '-ww', '-o', 'pid=,command='], { encoding: 'utf8' }).stdout ?? ''
+    for (const line of listed.split('\n')) {
+      const m = /^\s*(\d+)\s+(.*)$/.exec(line)
+      if (!m || Number(m[1]) === process.pid) continue
+      if (!` ${m[2]} `.includes(` ${which}=${folder} `)) continue
+      found.push({ pid: Number(m[1]), command: m[2].split(' ') })
+    }
+    return found
+  }
+  const mark = `${which}=${folder}\0`
   let pids = []
   try {
     pids = readdirSync('/proc').filter((name) => /^\d+$/.test(name))
