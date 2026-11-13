@@ -5,7 +5,6 @@ import path from 'node:path'
 import ts from 'typescript'
 import { afterEach, describe, expect, test } from 'vitest'
 import { INSTALLATION_FILE, markInstallation } from './src/installation'
-import { claimLock } from './src/legacy-lock'
 import { RUN_ONCE, WINDOWS_CLEANUP, WINDOWS_PATH_MOST, windowsDeletionCommand } from './src/lib'
 import { deleteAtSignIn, NOTE_LOCKS, ROOT_FILES, ROOT_FOLDERS, ROOT_LOCKS, removeInstallationFiles, stepOutOf } from './src/uninstall-files'
 
@@ -55,19 +54,22 @@ test('uninstall removes the lock a killed command left beside a note of conversa
   expect(removeInstallationFiles(busy, false).sort()).toEqual(['conversations.json.lock', 'opencode-unclaimed.json.lock'])
 })
 
-test('uninstall takes a left note lock as a command recovering it does, so that a command that takes it first keeps it', () => {
+test('uninstall leaves the claims beside a note lock while a running command is recovering it further along their line', () => {
   const at = folder()
   markInstallation(at)
   const ended = spawnSync(process.execPath, ['-e', '']).pid!
   const lock = path.join(at, 'conversations.json.lock')
+  // The lock's holder ended, and so did the first command that set out to recover it. A running
+  // command has the next claim, and has yet to put its own record in the lock's place
   writeFileSync(lock, JSON.stringify({ pid: ended, holder: '0123456789abcdef' }))
-  // A running command recovers the left lock first, by the claim beside it, and holds it now
-  const release = claimLock(lock, 10_000, 'fedcba9876543210')
-  expect(release).toBeDefined()
-  expect(removeInstallationFiles(at, false)).toEqual(['conversations.json.lock'])
-  expect(JSON.parse(readFileSync(lock, 'utf8'))).toEqual({ pid: process.pid, holder: 'fedcba9876543210' })
-  release!()
-  expect(existsSync(lock)).toBe(false)
+  writeFileSync(`${lock}.after.0123456789abcdef`, JSON.stringify({ pid: ended, holder: 'aaaaaaaaaaaaaaaa' }))
+  writeFileSync(`${lock}.after.aaaaaaaaaaaaaaaa`, JSON.stringify({ pid: process.pid, holder: 'bbbbbbbbbbbbbbbb' }))
+  // Taken away, the first claim would let another command recover the lock beside the running one
+  expect(removeInstallationFiles(at, false).sort()).toEqual([
+    'conversations.json.lock',
+    'conversations.json.lock.after.0123456789abcdef',
+    'conversations.json.lock.after.aaaaaaaaaaaaaaaa',
+  ])
 })
 
 test('the protection page distinguishes whole subfolder removal from unknown top-level files', () => {

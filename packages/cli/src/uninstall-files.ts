@@ -217,9 +217,13 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
       claimLock(file, 10_000, randomBytes(8).toString('hex'))?.()
     } catch {}
   }
-  // And a claim beside one, or a record on its way to its name, that such a command left
+  // And a record on its way to its name that such a command left, which is under that command's
+  // own mark and no other's. A claim beside a lock is removed only once the lock itself is gone:
+  // while it is there, a command further along the line of claims may be recovering it, and
+  // another that found a claim before its own missing could recover it at the same moment
   for (const name of readdirSync(folder)) {
-    if (NOTE_LOCKS.includes(name) || !NOTE_LOCKS.some((base) => name.startsWith(base) && NOTE_SUFFIX.test(name.slice(base.length)))) continue
+    const base = NOTE_LOCKS.find((lock) => name !== lock && name.startsWith(lock) && NOTE_SUFFIX.test(name.slice(lock.length)))
+    if (!base || (!name.endsWith('.tmp') && lstatSync(path.join(folder, base), { throwIfNoEntry: false }))) continue
     const file = installationFile(folder, name)
     if (file && claimLeft(file)) remove(name)
   }
