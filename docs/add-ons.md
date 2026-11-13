@@ -41,7 +41,7 @@ It is turned back on when you ask for it. Beside the app on the Machines page, T
 |---|---|---|
 | Claude Code | `claude plugin list --json` lists the plugin with `"enabled": false` | `claude plugin enable it-bridge@it --scope user` |
 | Codex | `codex plugin list` lists the plugin as `installed, disabled` | `codex plugin add it-bridge@it`, which turns a plugin on as it adds it again from It's marketplace and keeps the approval of its hooks. Codex has no command that only turns one on |
-| OpenClaw | `openclaw plugins inspect it-bridge --json` says `"enabled": false` | `openclaw plugins enable it-bridge` |
+| OpenClaw | `openclaw plugins inspect it-bridge --json` says `"enabled": false` | `openclaw plugins enable it-bridge --accept-capabilities` |
 | Hermes Agent | `hermes plugins list --json` lists the plugin with any status other than `enabled` | `hermes plugins enable it-bridge` |
 | Pi | `pi list` lists It's package as filtered, and Pi's settings leave the add-on's extension out of it, as `pi config` does when you turn it off there | None: Pi turns an extension on and off only in `pi config`, so the Machines page says to run it, and has no Turn back on for Pi |
 | OpenCode | OpenCode loads every plugin in its plugins folder, and has no way to turn one off | None needed |
