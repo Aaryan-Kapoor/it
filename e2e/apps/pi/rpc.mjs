@@ -30,6 +30,8 @@ export function startPi(program, args, { cwd, env }) {
   // A Pi that ended takes no more commands, and a write to it is not to end this program
   child.stdin.on('error', () => {})
   let ended = null
+  // Whether Pi had to be made to end, having not ended when its input was closed
+  let forced = false
   child.on('close', (code, signal) => (ended = { code, signal }))
   child.on('error', (err) => (ended = { error: err.message }))
   const until = async (test, ms) => {
@@ -53,18 +55,28 @@ export function startPi(program, args, { cwd, env }) {
     },
     /** Waits for a record that `test` picks, from the `from`th record on. */
     until: (test, ms, from = 0) => until((r) => records.indexOf(r) >= from && test(r), ms),
-    /** Closes Pi's input, which asks it to shut down in order, and waits for it to end. */
+    /**
+     * Closes Pi's input, which asks it to shut down in order, and waits for it to end. Where it
+     * has not ended in `ms`, it is made to, and that is said in what is returned as `forced`.
+     */
     async close(ms = 20_000) {
       if (ended) return ended
       child.stdin.end()
       const end = Date.now() + ms
-      while (!ended && Date.now() < end) await new Promise((r) => setTimeout(r, 100))
-      if (!ended) {
-        child.kill('SIGTERM')
-        while (!ended && Date.now() < end + 5000) await new Promise((r) => setTimeout(r, 100))
+      const wait = async (until) => {
+        while (!ended && Date.now() < until) await new Promise((r) => setTimeout(r, 100))
       }
-      if (!ended) child.kill('SIGKILL')
-      return ended
+      await wait(end)
+      if (!ended) {
+        forced = true
+        child.kill('SIGTERM')
+        await wait(end + 5000)
+      }
+      if (!ended) {
+        child.kill('SIGKILL')
+        await wait(end + 10_000)
+      }
+      return ended ? { ...ended, forced } : { forced, gone: false }
     },
   }
 }

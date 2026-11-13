@@ -86,19 +86,39 @@ function oldest() {
   return found[1]
 }
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+/**
+ * What npm is run with: nothing of whoever runs this that says how npm is set up, a home, a
+ * settings file and a cache of the run's own, and npm's own registry, so that Pi comes from its
+ * official package and nothing is read from or written to anyone's own npm.
+ */
+function npmEnv() {
+  const given = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^npm_config_/i.test(k)))
+  const userconfig = at('npmrc')
+  writeFileSync(userconfig, '')
+  return {
+    ...given,
+    HOME: home,
+    USERPROFILE: home,
+    npm_config_userconfig: userconfig,
+    npm_config_cache: at('npm-cache'),
+    npm_config_registry: 'https://registry.npmjs.org/',
+    npm_config_update_notifier: 'false',
+  }
+}
 /** Installs Pi from its package into this run's folder, and gives the path of its program. */
 function install(version) {
   const want =
     version === 'oldest'
       ? oldest()
       : version === 'newest'
-        ? execFileSync(npm, ['view', PACKAGE, 'version'], { encoding: 'utf8', shell: process.platform === 'win32' }).trim()
+        ? execFileSync(npm, ['view', PACKAGE, 'version'], { encoding: 'utf8', env: npmEnv(), shell: process.platform === 'win32' }).trim()
         : version
   const into = at('pi-install')
   mkdirSync(into, { recursive: true })
   writeFileSync(path.join(into, 'package.json'), '{"private":true}\n')
   execFileSync(npm, ['install', '--no-audit', '--no-fund', '--ignore-scripts', `${PACKAGE}@${want}`], {
     cwd: into,
+    env: npmEnv(),
     stdio: ['ignore', 'ignore', 'inherit'],
     shell: process.platform === 'win32',
   })
@@ -187,6 +207,47 @@ let model = null
 let browser = null
 const pis = []
 const slug = `pi-check-${Date.now().toString(36)}`
+
+/**
+ * Stops everything the run started and waits for it, then removes the run's folders. Run once,
+ * at the end or when the run is itself asked to stop. Where It has not stopped, its folder is
+ * kept and said, since the service and its backend program may still be running on it.
+ */
+let cleaning = null
+function cleanUp() {
+  cleaning ??= (async () => {
+    for (const p of pis) await p.close().catch(() => {})
+    await browser?.close().catch(() => {})
+    await model?.close().catch(() => {})
+    let stillUp = false
+    if (serve && serve.exitCode === null && serve.signalCode === null) {
+      // The service is asked to stop, and waited for: it stops its backend program in its turn
+      serve.kill('SIGTERM')
+      const end = Date.now() + 90_000
+      while (serve.exitCode === null && serve.signalCode === null && Date.now() < end) await sleep(250)
+      stillUp = serve.exitCode === null && serve.signalCode === null
+      check('It stops when it is asked to', !stillUp, stillUp ? `It (process ${serve.pid}) is still running on ${itHome}` : '')
+    }
+    if (results.some((r) => !r.ok)) {
+      for (const [name, file] of [
+        ['It', path.join(logs, 'serve.log')],
+        ['the connector', path.join(itHome, 'logs', 'connector.log')],
+      ])
+        if (existsSync(file)) console.log(`\nThe end of what ${name} wrote:\n${readFileSync(file, 'utf8').slice(-3000)}`)
+      for (const [i, p] of pis.entries()) if (p.stderr()) console.log(`\nWhat Pi ${i + 1} wrote to its standard error:\n${p.stderr().slice(-2000)}`)
+    }
+    if (stillUp) console.log(`\nIt is still running, as process ${serve.pid}, so the run's folders are kept in ${top}. Stop it, then remove them.`)
+    else if (!process.env.IT_PI_KEEP) rmSync(top, { recursive: true, force: true })
+    else console.log(`\nThe run's folders are kept in ${top}`)
+  })()
+  return cleaning
+}
+// Asked to stop part way, the run stops what it started just as it does at its end
+for (const signal of ['SIGINT', 'SIGTERM'])
+  process.once(signal, () => {
+    check(`the run finished, and was not stopped part way by ${signal}`, false)
+    void cleanUp().finally(() => process.exit(1))
+  })
 
 try {
   // ---------- The program, and It set up for it ----------
@@ -378,8 +439,8 @@ try {
     .catch(() => false)
   check('and the page in the browser shows it', onPage)
   await host.until((r) => r.type === 'agent_end', 30_000, host.records.indexOf(settled) + 1)
-  await host.close()
-  check('Pi shuts the conversation down when its input is closed', host.ended(), host.ended())
+  const closed = await host.close()
+  check('Pi shuts the conversation down when its input is closed, and ends well', !closed.forced && closed.code === 0, closed)
 
   // ---------- A click on a page whose conversation is closed ----------
   // Auto-wake, which is on for an app from the moment it is connected, reopens the conversation
@@ -444,36 +505,20 @@ try {
 
   const none = await it(['setup', '--none', '--no-service'], { ms: 300_000 })
   list = await piList()
-  check('`it setup --none` takes the add-on out, and Pi itself no longer lists it', !listed(list.out), { list: list.out, setup: none.addons })
+  check('`it setup --none` takes the add-on out, and Pi itself no longer lists it', list.code === 0 && !listed(list.out), {
+    list: list.out,
+    setup: none.addons,
+  })
   await it(['setup', '--only', 'pi', '--no-service'], { ms: 300_000 })
   check('`it setup --only pi` puts it back', listed((await piList()).out) && (await piStatus())?.addon === 'connected', await piStatus())
   const removed = await ran('pi', ['remove', path.join(itHome, 'addons', 'pi')])
   list = await piList()
-  check('taken away with Pi’s own `pi remove`, Pi no longer lists it', removed.code === 0 && !listed(list.out), { removed, list: list.out })
+  check('taken away with Pi’s own `pi remove`, Pi no longer lists it', removed.code === 0 && list.code === 0 && !listed(list.out), { removed, list })
   check('and `it status` says Pi is no longer connected', (await piStatus())?.addon === 'not_connected', await piStatus())
 } catch (err) {
   check(`the run finished (${err.message})`, false, err.stack)
 } finally {
-  for (const p of pis) await p.close().catch(() => {})
-  await browser?.close().catch(() => {})
-  await model?.close().catch(() => {})
-  if (serve && serve.exitCode === null && serve.signalCode === null) {
-    // The service is asked to stop, and waited for: it stops its backend program in its turn
-    serve.kill('SIGTERM')
-    const end = Date.now() + 90_000
-    while (serve.exitCode === null && serve.signalCode === null && Date.now() < end) await sleep(250)
-    check('It stops when it is asked to', serve.exitCode !== null || serve.signalCode !== null)
-  }
-  if (results.some((r) => !r.ok)) {
-    for (const [name, file] of [
-      ['It', path.join(logs, 'serve.log')],
-      ['the connector', path.join(itHome, 'logs', 'connector.log')],
-    ])
-      if (existsSync(file)) console.log(`\nThe end of what ${name} wrote:\n${readFileSync(file, 'utf8').slice(-3000)}`)
-    for (const [i, p] of pis.entries()) if (p.stderr()) console.log(`\nWhat Pi ${i + 1} wrote to its standard error:\n${p.stderr().slice(-2000)}`)
-  }
-  if (!process.env.IT_PI_KEEP) rmSync(top, { recursive: true, force: true })
-  else console.log(`\nThe run's folders are kept in ${top}`)
+  await cleanUp()
 }
 const failed = results.filter((r) => !r.ok)
 console.log(`\n${results.length - failed.length} of ${results.length} passed in ${Math.round((Date.now() - began) / 1000)} seconds`)
