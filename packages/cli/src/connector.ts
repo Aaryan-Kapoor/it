@@ -27,6 +27,7 @@ import {
   QUEUES,
   RETENTION,
   TAKES,
+  TURN_ON_MS,
   TURNS_ON,
   WAKE_MOST,
   WAKES,
@@ -4692,8 +4693,22 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     begunHere.add(harness)
     try {
       // Only an asking that It answers it has taken this machine's word for is acted on: one It
-      // no longer has, or that could not be told, or an It that does not answer so, waits
-      const claimed = await call('mutation', api.machines.turningOn, { harness, state: 'working' }).catch(() => undefined)
+      // no longer has, or an It that does not answer so, waits. Nothing else has an asking taken
+      // up again until It takes it to have been cut short (`TURN_ON_MS`), so one whose answer did
+      // not come back is asked again a few times before then, after a short wait that grows. It
+      // takes the same word twice for one asking, and the app's command is run once, after the
+      // answer that does come back.
+      let claimed: unknown
+      const began = steady()
+      for (let wait = 1000; ; wait = Math.min(wait * 2, 30_000)) {
+        try {
+          claimed = await call('mutation', api.machines.turningOn, { harness, state: 'working' })
+          break
+        } catch {}
+        if (closing || steady() - began + wait > TURN_ON_MS - 60_000) break
+        await new Promise((resolve) => setTimeout(resolve, wait).unref())
+        if (closing) break
+      }
       if (claimed !== true) {
         begunHere.delete(harness)
         return

@@ -9,7 +9,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { MARK, PROTOCOL_VERSION, TAKES, WAKE_BACK_MS } from '@it/protocol'
+import { MARK, PROTOCOL_VERSION, TAKES, TURN_ON_MS, WAKE_BACK_MS } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS } from './src/addons.generated'
@@ -7630,14 +7630,10 @@ describe('an agent app that has It’s add-on turned off', () => {
     expect(stand.turnedOn).toEqual(['claude-code'])
   })
 
-  test('is not turned on where It does not take the machine’s word that it is at work on the asking, or could not be told', async () => {
+  test('is not turned on where It does not take the machine’s word that it is at work on the asking', async () => {
     await start('socket', { wanted: ['claude-code'], found: OFF })
-    for (const answer of [false, null, new Error('no connection')]) {
-      stand.answer = (name) => {
-        if (name !== 'machines:turningOn') return undefined
-        if (answer instanceof Error) throw answer
-        return answer
-      }
+    for (const answer of [false, null]) {
+      stand.answer = (name) => (name === 'machines:turningOn' ? answer : undefined)
       me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
       await until(() => turning().length > 0)
       await pause(200)
@@ -7650,6 +7646,48 @@ describe('an agent app that has It’s add-on turned off', () => {
     me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
     await until(() => turning().some((t) => t.state === 'done'))
     expect(stand.turnedOn).toEqual(['claude-code'])
+  })
+
+  test('whose first answer from It was lost on the way is asked again a moment later, and the app’s command is run once', async () => {
+    await start('socket', { wanted: ['claude-code'], found: OFF })
+    // It takes the machine's word, and its answer never arrives
+    let lost = 0
+    stand.answer = (name) => {
+      if (name !== 'machines:turningOn' || lost++ > 0) return undefined
+      throw new Error('no connection')
+    }
+    const asked = performance.now()
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+    await until(() => turning().some((t) => t.state === 'done'), 10_000)
+    // Not in five minutes, when It would take the asking to have been cut short, but in a moment
+    expect(performance.now() - asked).toBeLessThan(5000)
+    expect(turning()).toEqual([
+      { harness: 'claude-code', state: 'working' },
+      { harness: 'claude-code', state: 'working' },
+      { harness: 'claude-code', state: 'done' },
+    ])
+    // It still has it down as being turned on when its subscription says so, and that is not done again
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'working' }] })
+    await pause(1500)
+    expect(stand.turnedOn).toEqual(['claude-code'])
+  })
+
+  test('whose answers from It are all lost is asked again only while the asking is taken to be at work, and nothing is turned on', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    await start('socket', { wanted: ['claude-code'], found: OFF })
+    stand.answer = (name) => {
+      if (name === 'machines:turningOn') throw new Error('no connection')
+      return undefined
+    }
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+    await pass(TURN_ON_MS / 1000)
+    const asked = turning().length
+    // A few times, each after a longer wait, and not once a second
+    expect(asked).toBeGreaterThan(3)
+    expect(asked).toBeLessThan(15)
+    await pass(120)
+    expect(turning().length).toBe(asked)
+    expect(stand.turnedOn).toEqual([])
   })
 
   test('that the machine could not turn back on says why to the site, and only a code in the log', async () => {
