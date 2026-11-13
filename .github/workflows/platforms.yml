@@ -2,7 +2,9 @@ name: It on macOS and Windows
 
 # The whole product in a browser on the systems where the main workflow only starts the
 # program and runs its install script: a Mac of each kind, and Windows. It is the same suite
-# the main workflow runs on Linux against the standalone program, in its quick form.
+# the main workflow runs on Linux against the standalone program, in its quick form, and then
+# the check over https that it runs after it. Beside that, on those three and on Linux, setup
+# registers It with the system's own service manager and the system keeps it running.
 #
 # Run on every push to master, every night, and by hand, and never by a pull request: a fault
 # that only a Mac or Windows shows is found within a commit of master, and one that comes from
@@ -170,10 +172,11 @@ jobs:
           retention-days: 3
           if-no-files-found: warn
 
-  # It as the system keeps it running: a launchd agent on a Mac, a task of the Task Scheduler
-  # on Windows. Setup registers it, the system starts it again after it is ended from outside,
-  # a second setup leaves it running, and it is taken away again whole. The browser suite above
-  # starts It by hand and asks the system for none of this.
+  # It as the system keeps it running: a systemd unit of the person's own on Linux, a launchd
+  # agent on a Mac, a task of the Task Scheduler on Windows. Setup registers it, the system
+  # starts it again after it is ended from outside, a second setup leaves it running, and it is
+  # taken away again whole. The browser suite above starts It by hand and asks the system for
+  # none of this.
   service:
     name: The service, as the system keeps it (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -183,6 +186,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - os: ubuntu-latest
+            program: it-linux-x64
           - os: macos-latest
             program: it-darwin-arm64
           - os: macos-15-intel
@@ -196,6 +201,18 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
+      # A runner's steps run in no login of the runner's account, so systemd keeps no manager for
+      # that account until it is told the account stays: then it starts the same manager a
+      # person's login starts, and It's unit is registered with it as on a person's machine.
+      # Setup finds the account staying already, and so leaves that as it found it.
+      - name: Give the runner's account a systemd of its own, as a person's login does
+        if: runner.os == 'Linux'
+        run: |
+          sudo loginctl enable-linger "$USER"
+          runtime="/run/user/$(id -u)"
+          for _ in $(seq 1 30); do [ -S "$runtime/bus" ] && break; sleep 1; done
+          echo "XDG_RUNTIME_DIR=$runtime" >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR="$runtime" systemctl --user is-system-running || true
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: it-programs
