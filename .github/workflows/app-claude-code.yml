@@ -12,7 +12,9 @@ name: Claude Code, the real app
 #     ANTHROPIC_BASE_URL and a made-up key: the first turn runs `it create --open` for a page
 #     with one button, a paired browser presses it, and the job passes only when Claude Code then
 #     asks the model for a new turn of that conversation whose newest user message is It's
-#     wording for that click, which the stand-in answers with `it patch`, and the page shows it.
+#     wording for that click, which the stand-in answers with `it patch`, and the page shows it;
+#   - closes Claude Code and presses the button again: It's service reopens the conversation
+#     with Claude Code's own command (Auto-wake), and the reopened turn changes the page again.
 #
 # It runs on every pull request, on every push to master, once a night and by hand. It is a
 # workflow of its own and blocks no merge: when Claude Code publishes a version that It does

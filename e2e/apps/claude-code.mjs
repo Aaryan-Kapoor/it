@@ -19,7 +19,9 @@
 // page with one button, a browser paired as the owner's presses the button, and the stand-in must
 // then be asked for a new turn of the same conversation whose newest user message begins `[It]`
 // and ends `[action <id>]` for that click. It answers by running `it patch`, and the page's state
-// shows the change. `--setup-only` stops before the loop.
+// shows the change. Then Claude Code is closed and the button pressed again: It's service
+// reopens the conversation with Claude Code's own command (Auto-wake), and the reopened turn,
+// asked of the same stand-in, changes the page again. `--setup-only` stops before the loop.
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs'
@@ -68,7 +70,7 @@ for (const folder of Object.values(folders)) mkdirSync(folder, { recursive: true
 // The only PATH either program is given: Claude Code's own folder, the Node that runs It, and
 // the system's. No `it` is put on it: It's add-on puts It's own folder there for the commands a
 // conversation runs, and that is part of what is tested.
-const PATH = [path.dirname(CLAUDE), path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin'].join(path.delimiter)
+const PATH = [path.dirname(CLAUDE), path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(path.delimiter)
 /** What every program the run starts is given, and nothing more. */
 const base = {
   PATH,
@@ -163,7 +165,33 @@ const debugFile = path.join(scratch, 'claude-debug.txt')
 const events = []
 let claudeSaid = ''
 
+let sessionAtFirst = null
+const clickTurns = []
+
 try {
+  // The script the stand-in answers by. The person's message makes a page; the page's result
+  // ends that turn; a click on it, as a turn of its own, is answered by changing the page's
+  // state; and that result ends the turn. It is started first, so that It's service is given its
+  // address too, for the conversation it reopens.
+  model = await standInModel((turn) => {
+    const result = turn.results[0]
+    const resultText = result ? (typeof result.content === 'string' ? result.content : JSON.stringify(result.content)) : ''
+    if (!result && /^Make a page with one button/.test(turn.text)) {
+      sessionAtFirst = turn.session
+      return runs(
+        `it create "One button" --id ${PAGE} --state '{"pressed":"no"}' --open --html '<p>Pressed: <b id="seen" data-it-bind="pressed">no</b></p><button id="go">Press</button><script>document.getElementById("go").onclick = () => It.action("press")</script>'`,
+        'Making the page.',
+      )
+    }
+    if (!result && turn.text.startsWith('[It]')) {
+      clickTurns.push(turn)
+      return runs(`it patch ${PAGE} '{"pressed":"${clickTurns.length === 1 ? 'yes' : 'again'}"}'`, 'Marking the page as pressed.')
+    }
+    if (result) return words(result.is_error ? `The command failed: ${resultText.slice(0, 300)}` : 'Done.')
+    return words('Nothing to do.')
+  })
+  Object.assign(base, { ANTHROPIC_BASE_URL: model.url, ANTHROPIC_API_KEY: MADE_UP_KEY })
+
   const version = (await claude('--version')).out.trim()
   console.log(`Claude Code ${version}, installed from its package into ${prefix}\n`)
 
@@ -173,7 +201,14 @@ try {
   const connected = setup.json?.harnesses?.find((h) => h.id === 'claude-code')
   must('`it setup --only claude-code` connects Claude Code', setup.code === 0 && connected?.addon === 'connected', setup.out + setup.err)
 
-  service = spawn(process.execPath, [CLI, 'serve'], { env: base, cwd: folders.work, stdio: ['ignore', openSync(serviceLog, 'w'), openSync(serviceLog, 'a')] })
+  // The service has It's own folder on its PATH, as a service started from a shell that the install
+  // script has put it on has, and as Auto-wake's note to a reopened conversation says it is. The
+  // conversation this run starts itself is not given it: the add-on puts it there.
+  service = spawn(process.execPath, [CLI, 'serve'], {
+    env: { ...base, PATH: `${PATH}${path.delimiter}${path.join(folders.it, 'bin')}` },
+    cwd: folders.work,
+    stdio: ['ignore', openSync(serviceLog, 'w'), openSync(serviceLog, 'a')],
+  })
   const upBy = Date.now() + 240_000
   let up = false
   while (!up && Date.now() < upBy && service.exitCode === null) {
@@ -214,29 +249,6 @@ try {
     await tab.goto(pairing)
     await tab.locator('header.bar').waitFor({ timeout: 30_000 })
 
-    // The script the stand-in answers by. The person's message makes a page; the page's result
-    // ends that turn; a click on it, as a turn of its own, is answered by changing the page's
-    // state; and that result ends the turn.
-    let sessionAtFirst = null
-    const clickTurns = []
-    model = await standInModel((turn) => {
-      const result = turn.results[0]
-      const resultText = result ? (typeof result.content === 'string' ? result.content : JSON.stringify(result.content)) : ''
-      if (!result && /^Make a page with one button/.test(turn.text)) {
-        sessionAtFirst = turn.session
-        return runs(
-          `it create "One button" --id ${PAGE} --state '{"pressed":"no"}' --open --html '<p>Pressed: <b id="seen" data-it-bind="pressed">no</b></p><button id="go">Press</button><script>document.getElementById("go").onclick = () => It.action("press")</script>'`,
-          'Making the page.',
-        )
-      }
-      if (!result && turn.text.startsWith('[It]')) {
-        clickTurns.push(turn)
-        return runs(`it patch ${PAGE} '{"pressed":"yes"}'`, 'Marking the page as pressed.')
-      }
-      if (result) return words(result.is_error ? `The command failed: ${resultText.slice(0, 300)}` : 'Done.')
-      return words('Nothing to do.')
-    })
-
     // Claude Code as a host such as T3 Code runs it: one process, messages in and events out as
     // lines of JSON. It may run `it` and nothing else without asking, as It's own reopening of
     // a conversation allows.
@@ -260,7 +272,7 @@ try {
       ],
       {
         cwd: folders.work,
-        env: { ...base, ANTHROPIC_BASE_URL: model.url, ANTHROPIC_API_KEY: MADE_UP_KEY },
+        env: base,
         stdio: ['pipe', 'pipe', 'pipe'],
       },
     )
@@ -374,6 +386,64 @@ try {
       .then(() => true)
       .catch(() => false)
     check('and the page in the browser shows it', seen)
+
+    // ---------- a closed conversation, reopened ----------
+    // Claude Code is closed, and the page is pressed again. It's service, which was given the
+    // same stand-in for the model, reopens the conversation with Claude Code's own command: that
+    // is Auto-wake, which is on from when the app was connected.
+    await stopped(conversation)
+    const closed = await until(
+      () => it('status', asWhat),
+      (s) => s.json?.arrives && s.json.arrives.via !== 'addon',
+      30_000,
+    )
+    check(
+      'once Claude Code is closed, It no longer hears its add-on in that conversation',
+      closed.json?.arrives && closed.json.arrives.via !== 'addon',
+      JSON.stringify(closed.json?.arrives ?? closed.err),
+    )
+    await frame.locator('#go').click()
+    const wokenBy = Date.now() + 120_000
+    while (clickTurns.length < 2 && Date.now() < wokenBy) await sleep(250)
+    const second = (await it('read', PAGE)).json?.recentActions?.[0]
+    const woken = clickTurns[1]
+    must(
+      'a click on the page of the closed conversation reopens it through Claude Code’s own command, as a new turn asked of the model',
+      woken !== undefined,
+      JSON.stringify({ action: second, turns: model.turns.map((t) => t.text.slice(0, 120) || `(${t.results.length} results)`) }),
+    )
+    check(
+      'its newest user message is that click in It’s wording, `[It] … [action <id>]`, with It’s note on reopening after it',
+      second?.id &&
+        second.id !== action?.id &&
+        /^\[It\] [^\n]*\[action ([^\]]+)\]$/m.exec(woken.text)?.[1] === second.id &&
+        woken.text.startsWith('[It]') &&
+        /\n\n\[It\] It reopened this conversation/.test(woken.text),
+      JSON.stringify({ text: woken.text, action: second?.id }),
+    )
+    check(
+      'and it is the same conversation, carried on with the turns before it',
+      JSON.stringify(woken.messages).includes(`--id ${PAGE}`) && JSON.stringify(woken.messages).includes(`[action ${action?.id}]`),
+      JSON.stringify({ session, asked: woken.session }),
+    )
+    const again = await until(
+      () => it('state', PAGE),
+      (s) => s.json?.state?.pressed === 'again',
+      30_000,
+    )
+    check(
+      'the reopened conversation’s `it patch` changed the page’s state',
+      again.json?.state?.pressed === 'again',
+      `${again.out}${again.err}\nwhat the command gave the model: ${JSON.stringify(model.turns.slice(model.turns.indexOf(woken) + 1).flatMap((t) => t.results))}`,
+    )
+    check(
+      'and the page in the browser shows it',
+      await frame
+        .locator('#seen', { hasText: 'again' })
+        .waitFor({ timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false),
+    )
     if (model.faults.length) check('the stand-in for the model answered every request', false, model.faults.join('; '))
   }
 } catch (err) {
