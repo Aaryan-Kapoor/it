@@ -1,0 +1,71 @@
+name: Pi, the real program
+
+# What this proves, with the real Pi and no account anywhere (e2e/apps/pi.mjs): that `it setup`
+# puts It's add-on into Pi, that Pi itself lists it and loads it, that It says so, and that it
+# says so too when the add-on is turned off as `pi config` turns it off or taken away with Pi's
+# own `pi remove`. And that a click on a page comes back into the Pi conversation that made it as
+# a new turn: Pi is pointed through its own models.json at a stand-in for a model's API on the
+# runner, with a made-up key, which answers by script with `it create --open`, then waits for
+# the click to arrive as a new request whose newest message from the user begins [It], and
+# answers it with `it patch`, which the page in a real browser shows.
+#
+# Each job installs Pi from its official package: the oldest version that `it setup` installs
+# into, as packages/cli/src/setup.ts says, and the newest that npm has when the job runs.
+#
+# It runs on every pull request, on every push to master, every night and when asked for. It is
+# a workflow of its own and blocks no merge: a Pi published tomorrow that breaks It turns the
+# nightly run red, which is what it is for. Every action is pinned to a commit, no job keeps the
+# checkout's credentials, the token can only read, and no job is given a secret.
+on:
+  pull_request:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_VERSION: 24
+
+jobs:
+  pi:
+    name: Pi ${{ matrix.version }}, on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        version: [oldest, newest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run generate
+      - name: Install the browser the page is clicked in
+        # Fetching a browser fails on a runner now and then, before anything of It has run: it is tried three times
+        run: for n in 1 2 3; do npx playwright install --with-deps chromium && exit 0; sleep 20; done; exit 1
+      # Pi is installed from npm by the script itself, into a folder of the run's own, and runs
+      # with a home and a settings folder of the run's own
+      - name: It's add-on in the real Pi, and a click back into its conversation
+        timeout-minutes: 8
+        env:
+          IT_PI_ROOT: ${{ runner.temp }}
+          IT_PORT: 5800
+        run: node e2e/apps/pi.mjs --version ${{ matrix.version }}
