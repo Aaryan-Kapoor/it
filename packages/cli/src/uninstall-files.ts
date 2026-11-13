@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { INSTALLATION_FILE } from './installation'
 import { withInstallerLock } from './installer-lock'
+import { claimLeft } from './legacy-lock'
 import { Problem, RUN_ONCE, WINDOWS_CLEANUP, windowsDeletionCommand } from './lib'
 import { aloneAt, holderRuns, startOf } from './serve/backend'
 
@@ -51,6 +52,11 @@ export const ROOT_FILES = [
 export const ROOT_FOLDERS = ['backend', 'content', 'content-data', 'logs', 'publication-pending', 'addons', 'bin']
 const LOCK_SUFFIX = /^(?:\.after\.(?:[0-9a-f]{16}|unread-\d+-\d+))?(?:\.[0-9a-f]{16}\.tmp)?$/
 export const ROOT_LOCKS = ['connector.lock', 'setup.lock', 'enrol.lock']
+/**
+ * The locks a command takes beside a note of conversations while it changes the note
+ * (`claimLock`). A command that was killed leaves its lock, and the claims beside it, behind.
+ */
+export const NOTE_LOCKS = ['conversations.json.lock', 'opencode-unclaimed.json.lock']
 const LOCKS: Record<string, string[]> = {
   '': ROOT_LOCKS,
   addons: ['setup.lock'],
@@ -197,6 +203,12 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
       const owner = json(relative)
       if (lockRecord(owner) && !holderRuns(owner)) remove(relative)
     }
+  }
+  // Only where the command that took it has ended: one that is still at work keeps its lock
+  for (const name of readdirSync(folder)) {
+    if (!NOTE_LOCKS.some((base) => name.startsWith(base) && LOCK_SUFFIX.test(name.slice(base.length)))) continue
+    const file = installationFile(folder, name)
+    if (file && claimLeft(file)) remove(name)
   }
   for (const dir of ROOT_FOLDERS) {
     if (keepAddons && (dir === 'addons' || dir === 'bin')) continue

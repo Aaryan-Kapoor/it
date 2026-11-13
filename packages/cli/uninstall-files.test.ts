@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -5,7 +6,7 @@ import ts from 'typescript'
 import { afterEach, describe, expect, test } from 'vitest'
 import { INSTALLATION_FILE, markInstallation } from './src/installation'
 import { RUN_ONCE, WINDOWS_CLEANUP, WINDOWS_PATH_MOST, windowsDeletionCommand } from './src/lib'
-import { deleteAtSignIn, ROOT_FILES, ROOT_FOLDERS, ROOT_LOCKS, removeInstallationFiles, stepOutOf } from './src/uninstall-files'
+import { deleteAtSignIn, NOTE_LOCKS, ROOT_FILES, ROOT_FOLDERS, ROOT_LOCKS, removeInstallationFiles, stepOutOf } from './src/uninstall-files'
 
 const folders: string[] = []
 function folder() {
@@ -28,6 +29,24 @@ test('uninstall removes whole owned subfolders and keeps unknown entries only at
   writeFileSync(path.join(at, 'notes'), 'mine')
   expect(removeInstallationFiles(at, false)).toEqual(['notes'])
   expect(readFileSync(path.join(at, 'notes'), 'utf8')).toBe('mine')
+})
+
+test('uninstall removes the lock a killed command left beside a note of conversations, with its claims, and keeps one whose command still runs', () => {
+  const at = folder()
+  markInstallation(at)
+  // A command that took the lock and was killed before letting go of it: no process has its number now
+  const ended = spawnSync(process.execPath, ['-e', '']).pid!
+  const record = (pid: number) => JSON.stringify({ pid, holder: '0123456789abcdef' })
+  const left = NOTE_LOCKS.flatMap((lock) => [lock, `${lock}.after.0123456789abcdef`, `${lock}.fedcba9876543210.tmp`])
+  for (const name of left) writeFileSync(path.join(at, name), record(ended))
+  writeFileSync(path.join(at, 'opencode-unclaimed.json'), '{}')
+  expect(removeInstallationFiles(at, false)).toEqual([])
+  // One that a running command holds is its own, and so is one that is not as such a command writes it
+  const busy = folder()
+  markInstallation(busy)
+  writeFileSync(path.join(busy, 'conversations.json.lock'), record(process.pid))
+  writeFileSync(path.join(busy, 'opencode-unclaimed.json.lock'), 'not a lock record')
+  expect(removeInstallationFiles(busy, false).sort()).toEqual(['conversations.json.lock', 'opencode-unclaimed.json.lock'])
 })
 
 test('the protection page distinguishes whole subfolder removal from unknown top-level files', () => {
