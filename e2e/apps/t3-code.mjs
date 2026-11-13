@@ -408,7 +408,7 @@ function cleanUp() {
     const still = leftOver()
     stillUp = still === null || still.length > 0 || (typeof program === 'number' && alive(program) && t3Program(program))
     check(
-      'no program the run installed or started is left running',
+      'no program the run installed is left running',
       !stillUp,
       still === null ? 'the system could not be asked which processes run the run’s programs' : still.length ? `still running: ${still.join(', ')}` : '',
     )
