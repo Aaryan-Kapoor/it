@@ -4,24 +4,30 @@ name: It on macOS and Windows
 # program and runs its install script: a Mac of each kind, and Windows. It is the same suite
 # the main workflow runs on Linux against the standalone program, in its quick form.
 #
-# Run by hand, or by a push to a branch named `platforms`, and by nothing else: never by a
-# pull request or a push to master. Where minutes are paid for, a Mac's cost ten times a
-# Linux machine's, and these jobs are asked for when a release is near, not for every commit.
-# Nothing waits on it, and no job of the main workflow needs it.
+# Run on every push to master, every night, and by hand, and never by a pull request: a fault
+# that only a Mac or Windows shows is found within a commit of master, and one that comes from
+# outside the repository (a runner's image, a browser, a dependency) within a night. The
+# repository is public, so GitHub's Macs and Windows machines cost it nothing. Nothing waits on
+# this workflow, and no job of the main workflow needs it, so a pull request is never held up
+# by a Mac's queue. A newer push to master replaces a run of an older one that has not ended.
 #
 # Like the main workflow: every action is pinned to a commit, no job keeps the checkout's
 # credentials, the token can only read, and no job is given a secret.
 on:
   workflow_dispatch:
   push:
-    branches: [platforms]
+    branches: [master, platforms]
+  schedule:
+    - cron: '23 4 * * *'
 
 permissions:
   contents: read
 
+# A push replaces only the run of an earlier push to the same branch. The nightly run and a run
+# started by hand are left to finish, each in a group of its own.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 defaults:
   run:

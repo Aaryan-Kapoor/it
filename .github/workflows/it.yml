@@ -4,11 +4,17 @@ name: It
 # and the token each job is given can only read. No job is given a secret:
 # nothing here needs an account anywhere, so a pull request from a fork runs
 # exactly what a branch of this repository runs.
+#
+# It runs on every pull request and push to master, by hand, and every night on
+# master, so that a change from outside the repository (a runner's image, a
+# browser, a dependency, the newest Claude Code) shows itself without a commit.
 on:
   pull_request:
   push:
     branches: [master]
   workflow_dispatch:
+  schedule:
+    - cron: '7 4 * * *'
 
 permissions:
   contents: read
