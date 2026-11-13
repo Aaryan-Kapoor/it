@@ -2449,6 +2449,27 @@ describe('the camera, live in a page', () => {
     expect(told).toHaveLength(1)
   })
 
+  test('a camera the page opens again as it hears that the last one ended with its channel is asked for over the next channel, and is not refused', async () => {
+    const { p, cam } = await opened()
+    let again: Promise<unknown> | undefined
+    cam.onchange = () => {
+      again = p.It.camera()
+    }
+    p.w.dispatchEvent(Object.assign(new p.w.Event('message'), { origin: APP, source: p.w.parent, data: { type: 'it:gone' }, ports: [] }))
+    let refused: unknown = null
+    again!.catch((err) => {
+      refused = err
+    })
+    await new Promise((r) => setImmediate(r))
+    expect(refused).toBeNull()
+    // Asked for once, over the next channel, and opened there
+    const next = p.answer()
+    const asked = next.sent.filter((m) => m.type === 'it:camera')
+    expect(asked).toHaveLength(1)
+    p.fromSite({ type: 'it:result', requestId: asked[0].requestId, ok: true })
+    expect(await again).toMatchObject({ state: 'live' })
+  })
+
   test('stop closes the camera at the site and ends the stream, and resolves where the site had closed it already', async () => {
     const { p, port, asked, cam, tracks } = await opened()
     const stopping = cam.stop()

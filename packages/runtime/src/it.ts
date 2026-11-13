@@ -500,10 +500,6 @@ function lost(): void {
   port.close()
   port = null
   players.lost()
-  // The site ends whatever was live over a channel as it lets the channel go, and says so over the
-  // channel, which can come after this and is no longer listened to: it is said here instead
-  for (const held of [...cameras.values()]) held.heard('ended', 'replaced')
-  for (const held of [...hearing.values()]) held.told?.('ended', 'replaced')
   for (const [requestId, answer] of [...waiting]) {
     if (actionsOnTheirWay.has(requestId)) continue
     waiting.delete(requestId)
@@ -513,6 +509,12 @@ function lost(): void {
   unsent.unshift(...[...actionsOnTheirWay.values()].map((message) => ({ ...message, again: true }) as PageToSite))
   doc = id()
   hello()
+  // The site ends whatever was live over a channel as it lets the channel go, and says so over the
+  // channel, which can come after this and is no longer listened to: it is said here instead. Said
+  // last, so that what the page asks for as it hears it waits for the next channel, as anything
+  // asked for between channels does, and is not taken for something that was on its way
+  for (const held of [...cameras.values()]) held.heard('ended', 'replaced')
+  for (const held of [...hearing.values()]) held.told?.('ended', 'replaced')
 }
 
 // The site answers the hello with a port. Only the window that framed this one is listened to,
