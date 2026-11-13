@@ -71,9 +71,11 @@ const KEEP = process.env.IT_OC_KEEP === '1'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const started = Date.now()
 const results = []
+/** An address that pairs a browser carries its code after `/pair#`: a credential, which is taken out of all that is printed. */
+const unpaired = (text) => String(text).replace(/\/pair#[A-Za-z0-9_-]+/g, '/pair#[a code that pairs a browser]')
 function check(name, ok, detail = '') {
   results.push({ name, ok: Boolean(ok) })
-  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${!ok && detail ? `\n       ${String(detail).replace(/\n/g, '\n       ')}` : ''}`)
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${!ok && detail ? `\n       ${unpaired(detail).replace(/\n/g, '\n       ')}` : ''}`)
   return Boolean(ok)
 }
 const section = (title) => console.log(`\n${title} (${Math.round((Date.now() - started) / 1000)} s)`)
@@ -142,6 +144,8 @@ function env(extra = {}) {
   }
 }
 mkdirSync(path.join(base, 'tmp'), { recursive: true })
+// What this program itself puts in a temporary folder, the browser's profile among it, goes in the run's own
+process.env.TMPDIR = path.join(base, 'tmp')
 
 /** Runs a program to its end. Resolves with its exit code and what it printed. */
 function run(cmd, args, { cwd = WORK, ms = 120_000, input } = {}) {
@@ -245,6 +249,13 @@ async function ocPlugins() {
   const got = await ocApi(`/config?directory=${encodeURIComponent(WORK)}`)
   return (got.body?.plugin ?? []).map((p) => ({ path: String(p).replace(/^file:\/\//, '') }))
 }
+/** Whether OpenCode holds a piece of text among the messages of the conversation with this id. */
+async function storedIn(id, text) {
+  if (!id) return false
+  const route = major >= 2 ? `/api/session/${id}/message` : `/session/${id}/message?directory=${encodeURIComponent(WORK)}`
+  const got = await ocApi(route)
+  return got.status === 200 && JSON.stringify(got.body ?? null).includes(text)
+}
 const itsPlugin = (plugins) => plugins.find((p) => p.path === PLUGIN)
 const ocApi = async (route, init = {}) => {
   const res = await fetch(`${ocUrl}${route}`, {
@@ -299,6 +310,8 @@ const others = []
 /** The tab that shows the page, and the first turn's message, which part 3 goes on from. */
 let shownIn
 let conversation
+/** The id OpenCode gave the conversation the first turn made. */
+let sessionId
 /** Which of the stand-in's answers it gave, in order, for the checks to read. */
 const answered = []
 
@@ -317,6 +330,45 @@ const shellCall = (request, command, description) => {
 let model
 let browser
 let failed = false
+let cleaning = null
+/** Stops everything the run started, removes its folder, says how the run went, and ends it. Run once, however the run ends. */
+function cleanUp(signal) {
+  cleaning ??= (async () => {
+    if (signal) check(`the run went to its end, and was not stopped by ${signal}`, false)
+    await browser?.close().catch(() => {})
+    const ocStopped = await stop('opencode')
+    // Auto-wake's `opencode run` of OpenCode 2 starts OpenCode's background service, which goes
+    // on running by design; it is asked to stop with OpenCode's own command
+    if (major >= 2 && opencodeBin) await run(opencodeBin, ['service', 'stop'], { ms: 30_000 })
+    const itStopped = await stop('it', 90_000)
+    for (const name of [...running.keys()]) await stop(name)
+    await model?.close().catch(() => {})
+    if (!ocStopped) check('OpenCode stopped when it was asked to', false)
+    if (!itStopped) check('It stopped when it was asked to', false)
+    const left = leftRunning()
+    check('nothing the run started is left running', left.length === 0, left.join('\n'))
+    if (results.some((r) => !r.ok)) {
+      console.log('\nThe end of OpenCode’s log:')
+      console.log(
+        ocLog()
+          .split('\n')
+          .filter((l) => /level=(WARN|ERROR)|plugin|it-bridge/i.test(l))
+          .slice(-40)
+          .join('\n'),
+      )
+    }
+    if (KEEP) console.log(`\nKept: ${base}`)
+    else rmSync(base, { recursive: true, force: true, maxRetries: 5 })
+    const bad = results.filter((r) => !r.ok)
+    console.log(
+      `\n${results.length - bad.length} of ${results.length} checks passed with OpenCode ${version || '(unknown)'}, in ${Math.round((Date.now() - started) / 1000)} s`,
+    )
+    process.exit(bad.length || failed ? 1 : 0)
+  })()
+  return cleaning
+}
+// A run that is cancelled, or that runs out of time, still stops what it started and removes its folder
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => void cleanUp(signal))
 try {
   section('Installing OpenCode')
   await install()
@@ -405,7 +457,7 @@ try {
   else check('OpenCode’s own settings list It’s add-on among its plugins', listed, JSON.stringify(await ocPlugins()))
   check(
     'the add-on, running inside OpenCode, reports to It’s connector as the build setup put there',
-    active?.runtime?.version === build,
+    Boolean(build) && active?.runtime?.version === build,
     JSON.stringify(active ?? (await statusOfOpenCode()).oc),
   )
   check('`it status` calls OpenCode connected and its add-on active', active?.addon === 'connected', JSON.stringify(active))
@@ -478,37 +530,9 @@ try {
   }
 } catch (err) {
   failed = true
-  check('the run went to its end', false, err?.stack ?? err)
+  check('the run went to its end', false, unpaired(err?.stack ?? err))
 } finally {
-  await browser?.close().catch(() => {})
-  const ocStopped = await stop('opencode')
-  // Auto-wake's `opencode run` of OpenCode 2 starts OpenCode's background service, which goes
-  // on running by design; it is asked to stop with OpenCode's own command
-  if (major >= 2 && opencodeBin) await run(opencodeBin, ['service', 'stop'], { ms: 30_000 })
-  const itStopped = await stop('it', 90_000)
-  for (const name of [...running.keys()]) await stop(name)
-  await model?.close().catch(() => {})
-  if (!ocStopped) check('OpenCode stopped when it was asked to', false)
-  if (!itStopped) check('It stopped when it was asked to', false)
-  const left = leftRunning()
-  check('nothing the run started is left running', left.length === 0, left.join('\n'))
-  if (results.some((r) => !r.ok)) {
-    console.log('\nThe end of OpenCode’s log:')
-    console.log(
-      ocLog()
-        .split('\n')
-        .filter((l) => /level=(WARN|ERROR)|plugin|it-bridge/i.test(l))
-        .slice(-40)
-        .join('\n'),
-    )
-  }
-  if (KEEP) console.log(`\nKept: ${base}`)
-  else rmSync(base, { recursive: true, force: true, maxRetries: 5 })
-  const bad = results.filter((r) => !r.ok)
-  console.log(
-    `\n${results.length - bad.length} of ${results.length} checks passed with OpenCode ${version || '(unknown)'}, in ${Math.round((Date.now() - started) / 1000)} s`,
-  )
-  process.exit(bad.length || failed ? 1 : 0)
+  await cleanUp()
 }
 
 /**
@@ -576,7 +600,10 @@ function script(request) {
 
 async function part2() {
   const { chromium } = await import('playwright')
-  browser = await chromium.launch()
+  // Given what every other program of the run is given, so that it is found by the sweep at the
+  // end. Playwright would end the whole run on a signal, before it has stopped anything else, so
+  // the run's own handling of a signal closes the browser with the rest.
+  browser = await chromium.launch({ env: env(), handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false })
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
   const tab = await context.newPage()
   // The address `it site` prints pairs one browser as the owner's. It is a credential, and is
@@ -607,6 +634,8 @@ async function part2() {
   // `opencode run` of OpenCode 1 stays attached once the turn is over; the conversation is held
   // by the OpenCode it was attached to, so ending it ends nothing of the conversation
   await until(() => running.get('turn')?.exited, 5000)
+  sessionId = /"sessionID":"(ses_[A-Za-z0-9]+)"/.exec(turn.said())?.[1]
+  check('`opencode run` names the conversation it made', sessionId, turn.said().slice(-800))
   await stop('turn', 5000)
 
   conversation = first?.messages?.find((m) => m.role === 'user' && textOf(m).includes('(stand-in turn: page)'))
@@ -631,6 +660,11 @@ async function part2() {
     said.slice(0, 500),
   )
   check(`the message names the page (${PAGE})`, said.includes(PAGE), said.slice(0, 500))
+  check(
+    'OpenCode keeps the click in the conversation the first turn made, by its id',
+    await until(() => storedIn(sessionId, `[action ${clicked}]`), 20_000, 500),
+    `conversation ${sessionId}, action ${clicked}`,
+  )
   // Auto-wake could have answered the click by reopening the conversation in another OpenCode
   // of its own, which would have asked the stand-in in the same way. It says which way went.
   const handed = await until(
@@ -681,6 +715,13 @@ async function part3() {
     woken?.messages?.some((m) => m.role === 'user' && conversation && textOf(m) === textOf(conversation)),
   )
   const second = heard[before]
+  // OpenCode is started again to be asked which conversation holds the click
+  await startOpenCode()
+  check(
+    'OpenCode keeps that click in the same conversation, by its id',
+    await until(() => storedIn(sessionId, `[action ${second}]`), 20_000, 500),
+    `conversation ${sessionId}, action ${second}`,
+  )
   // A conversation It reopens is written down as handed over by way of the queue, which for an
   // app with no queue of its own, as OpenCode has none, is the reopening alone
   const handed = await until(
