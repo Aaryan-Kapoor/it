@@ -24,7 +24,7 @@
 // asked of the same stand-in, changes the page again. `--setup-only` stops before the loop.
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
@@ -63,9 +63,19 @@ const must = (name, ok, detail) => {
 
 const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-cc-'))
 const folders = Object.fromEntries(
-  Object.entries({ home: 'home', claude: 'claude', it: 'it', work: 'work', none: 'no-t3-code' }).map(([k, v]) => [k, path.join(scratch, v)]),
+  Object.entries({ home: 'home', claude: 'claude', it: 'it', work: 'work', none: 'no-t3-code', browser: 'browser' }).map(([k, v]) => [
+    k,
+    path.join(scratch, v),
+  ]),
 )
 for (const folder of Object.values(folders)) mkdirSync(folder, { recursive: true })
+let cleaning = null
+// Asked to stop, the run stops what it started before it ends
+for (const signal of ['SIGINT', 'SIGTERM'])
+  process.once(signal, () => {
+    check(`the run finished (it was stopped by ${signal})`, false)
+    cleanUp().finally(() => process.exit(1))
+  })
 
 // The only PATH either program is given: Claude Code's own folder, the Node that runs It, and
 // the system's. No `it` is put on it: It's add-on puts It's own folder there for the commands a
@@ -95,6 +105,15 @@ const base = {
   ...(process.env.IT_BACKEND_BIN ? { IT_BACKEND_BIN: process.env.IT_BACKEND_BIN } : {}),
 }
 
+/** The environment the browser is started with: nothing of this script's own, and a home of its own. */
+const browserEnv = {
+  PATH,
+  HOME: folders.browser,
+  XDG_CONFIG_HOME: path.join(folders.browser, 'config'),
+  XDG_CACHE_HOME: path.join(folders.browser, 'cache'),
+  ...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
+}
+
 /** Runs a program to its end, with `base` and anything more given. */
 function run(program, argv, more = {}, ms = 180_000) {
   return new Promise((resolve) => {
@@ -111,10 +130,10 @@ function run(program, argv, more = {}, ms = 180_000) {
     })
   })
 }
-/** The `it` command, which answers in JSON to a program. */
+/** The `it` command, which answers in JSON to a program. A last argument `{ env, ms }` adds to its environment and limits how long it may take. */
 async function it(...argv) {
-  const more = typeof argv.at(-1) === 'object' ? argv.pop() : {}
-  const r = await run(process.execPath, [CLI, ...argv], more)
+  const { env = {}, ms = 60_000 } = typeof argv.at(-1) === 'object' ? argv.pop() : {}
+  const r = await run(process.execPath, [CLI, ...argv], env, ms)
   let json = null
   try {
     json = JSON.parse(r.out)
@@ -131,19 +150,38 @@ async function listed() {
     return { found: null, said: r.out + r.err }
   }
 }
-const statusOf = async () => {
-  const r = await it('status')
+const statusOf = async (ms) => {
+  const r = await it('status', { ms })
   return { claudeCode: r.json?.harnesses?.find((h) => h.id === 'claude-code'), said: r.out + r.err }
 }
-/** Asks again until `ok` holds of what `ask` gives, or the time is up; gives the last answer. */
+/**
+ * Asks again until `ok` holds of what `ask` gives, or the time is up; gives the last answer. Each
+ * asking is given what is left of the time, at least two seconds, as the most it may take.
+ */
 async function until(ask, ok, ms) {
   const end = Date.now() + ms
-  let last = await ask()
+  const left = () => Math.max(2000, end - Date.now())
+  let last = await ask(left())
   while (!ok(last) && Date.now() < end) {
     await sleep(500)
-    last = await ask()
+    last = await ask(left())
   }
   return last
+}
+/** Whether a process is still there. */
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return err.code === 'EPERM'
+  }
+}
+/** Waits up to `ms` for every one of these processes to have gone; says whether they all have. */
+async function gone(pids, ms) {
+  const end = Date.now() + ms
+  while (pids.some(alive) && Date.now() < end) await sleep(250)
+  return !pids.some(alive)
 }
 /** Whether something on this machine answers 200 at a port and path. */
 const answers = (port, p, host) =>
@@ -157,7 +195,9 @@ const answers = (port, p, host) =>
   })
 
 let service
+let serviceFault = null
 let conversation
+let conversationFault = null
 let browser
 let model
 const serviceLog = path.join(scratch, 'service.log')
@@ -196,8 +236,18 @@ try {
   console.log(`Claude Code ${version}, installed from its package into ${prefix}\n`)
 
   // ---------- with no model ----------
+  // No `it` is to be found on the PATH the programs are given, or the commands a conversation
+  // runs could reach it without the add-on having put It's own there
+  const already = PATH.split(path.delimiter).filter((folder) => {
+    try {
+      return statSync(path.join(folder, 'it')).isFile()
+    } catch {
+      return false
+    }
+  })
+  must('no `it` is on the PATH the run gives its programs', already.length === 0, already.join(', '))
   // The first run on a fresh machine, connecting Claude Code and no other app
-  const setup = await it('setup', '--only', 'claude-code', '--no-service')
+  const setup = await it('setup', '--only', 'claude-code', '--no-service', { ms: 300_000 })
   const connected = setup.json?.harnesses?.find((h) => h.id === 'claude-code')
   must('`it setup --only claude-code` connects Claude Code', setup.code === 0 && connected?.addon === 'connected', setup.out + setup.err)
 
@@ -209,13 +259,18 @@ try {
     cwd: folders.work,
     stdio: ['ignore', openSync(serviceLog, 'w'), openSync(serviceLog, 'a')],
   })
+  service.on('error', (err) => (serviceFault = err))
   const upBy = Date.now() + 240_000
   let up = false
-  while (!up && Date.now() < upBy && service.exitCode === null) {
+  while (!up && Date.now() < upBy && service.exitCode === null && !serviceFault) {
     up = (await answers(PORT + 41, '/health')) && (await answers(PORT, '/', `localhost:${PORT}`))
     if (!up) await sleep(1000)
   }
-  must('It’s service starts, with its backend and its site', up, existsSync(serviceLog) ? readFileSync(serviceLog, 'utf8').slice(-2000) : '')
+  must(
+    'It’s service starts, with its backend and its site',
+    up,
+    serviceFault?.message ?? (existsSync(serviceLog) ? readFileSync(serviceLog, 'utf8').slice(-2000) : ''),
+  )
 
   let { found, said } = await listed()
   check('Claude Code itself lists It’s plugin, installed and turned on', found?.enabled === true, said)
@@ -244,7 +299,7 @@ try {
     const site = await it('site', '--no-open')
     const pairing = site.json?.url
     must('`it site` gives an address that pairs a browser', typeof pairing === 'string', site.err)
-    browser = await chromium.launch()
+    browser = await chromium.launch({ env: browserEnv })
     const tab = await (await browser.newContext()).newPage()
     await tab.goto(pairing)
     await tab.locator('header.bar').waitFor({ timeout: 30_000 })
@@ -288,10 +343,12 @@ try {
       }
     })
     conversation.stderr.on('data', (d) => (claudeSaid += d))
+    conversation.on('error', (err) => (conversationFault = err))
+    const ended = () => conversation.exitCode !== null || conversationFault !== null
     const finished = () => events.filter((e) => e.type === 'result')
     const untilFinished = async (n, ms) => {
       const end = Date.now() + ms
-      while (finished().length < n && Date.now() < end && conversation.exitCode === null) await sleep(200)
+      while (finished().length < n && Date.now() < end && !ended()) await sleep(200)
       return finished().length >= n
     }
 
@@ -302,7 +359,7 @@ try {
     // a person typing takes longer than that.
     const asWhat = { IT_HARNESS: 'claude-code', IT_SESSION: session }
     const heard = await until(
-      () => it('status', asWhat),
+      (ms) => it('status', { env: asWhat, ms }),
       (s) => s.json?.arrives?.byItself === true,
       60_000,
     )
@@ -310,7 +367,7 @@ try {
     must(
       'Claude Code loads It’s add-on, and It says that a click on that conversation’s page arrives by itself through it',
       heard.json?.arrives?.byItself === true && heard.json.arrives.via === 'addon' && /hooks module it-bridge@it loaded/.test(loaded()),
-      `${JSON.stringify(heard.json?.arrives ?? heard.err)}\n${loaded()
+      `${conversationFault?.message ?? ''}${JSON.stringify(heard.json?.arrives ?? heard.err)}\n${loaded()
         .split('\n')
         .filter((l) => l.includes('it-bridge'))
         .join('\n')}`,
@@ -354,7 +411,7 @@ try {
     // A click, as a person makes it, while the conversation is idle
     await frame.locator('#go').click()
     const clickBy = Date.now() + 90_000
-    while (!clickTurns.length && Date.now() < clickBy && conversation.exitCode === null) await sleep(200)
+    while (!clickTurns.length && Date.now() < clickBy && !ended()) await sleep(200)
     const action = (await it('read', PAGE)).json?.recentActions?.[0]
     const turn = clickTurns[0]
     must(
@@ -374,7 +431,7 @@ try {
     )
     // The add-on tells the connector once Claude Code has taken the prompt, which may be just after the model is asked
     const handed = await until(
-      () => it('read', PAGE),
+      (ms) => it('read', PAGE, { ms }),
       (r) => r.json?.recentActions?.find((a) => a.id === action?.id)?.delivery === 'handed_off',
       15_000,
     )
@@ -386,7 +443,7 @@ try {
     )
     check('and the turn ends', await untilFinished(2, 60_000), JSON.stringify(finished()))
     const state = await until(
-      () => it('state', PAGE),
+      (ms) => it('state', PAGE, { ms }),
       (s) => s.json?.state?.pressed === 'yes',
       15_000,
     )
@@ -404,7 +461,7 @@ try {
     // is Auto-wake, which is on from when the app was connected.
     await stopped(conversation)
     const closed = await until(
-      () => it('status', asWhat),
+      (ms) => it('status', { env: asWhat, ms }),
       (s) => s.json?.arrives && s.json.arrives.via !== 'addon',
       30_000,
     )
@@ -433,12 +490,12 @@ try {
       JSON.stringify({ text: woken.text, action: second?.id }),
     )
     check(
-      'and it is the same conversation, carried on with the turns before it',
-      JSON.stringify(woken.messages).includes(`--id ${PAGE}`) && JSON.stringify(woken.messages).includes(`[action ${action?.id}]`),
+      'and it is the same conversation, by Claude Code’s own id for it, carried on with the turns before it',
+      woken.session === session && JSON.stringify(woken.messages).includes(`--id ${PAGE}`) && JSON.stringify(woken.messages).includes(`[action ${action?.id}]`),
       JSON.stringify({ session, asked: woken.session }),
     )
     const again = await until(
-      () => it('state', PAGE),
+      (ms) => it('state', PAGE, { ms }),
       (s) => s.json?.state?.pressed === 'again',
       30_000,
     )
@@ -460,9 +517,54 @@ try {
 } catch (err) {
   if (!(err instanceof Stop)) check(`the run finished (${err.message})`, false, err.stack)
 } finally {
-  await Promise.all([stopped(conversation), stopped(service, 60_000)])
-  await browser?.close().catch(() => {})
-  await model?.close()
+  await cleanUp()
+}
+const failed = results.filter((r) => !r.ok)
+console.log(`\n${results.length - failed.length} of ${results.length} passed`)
+process.exit(failed.length ? 1 : 0)
+
+/**
+ * Stops everything the run started, waits for it, says what each part said where a check failed,
+ * and removes the run's folders: only once every program that used them has gone. Run once, from
+ * the end of the run or when the run is asked to stop.
+ */
+function cleanUp() {
+  cleaning ??= (async () => {
+    await stopped(conversation)
+    await browser?.close().catch(() => {})
+    // The service is asked to stop, and stops its connector and its backend, and is waited for.
+    // The backend runs in a process group of its own, so it is followed by the process ids the
+    // service wrote down for it. A reopened conversation ends by itself once its turn ends, which
+    // the run has waited for wherever it got that far.
+    if (service && service.exitCode === null && service.signalCode === null && !serviceFault) {
+      const exited = new Promise((r) => service.once('exit', (code, signal) => r({ code, signal })))
+      service.kill('SIGTERM')
+      const how = await Promise.race([exited, sleep(90_000).then(() => null)])
+      check('It’s service stops when it is asked to', how?.code === 0, JSON.stringify(how ?? 'still running after ninety seconds'))
+      if (!how) {
+        service.kill('SIGKILL')
+        await Promise.race([exited, sleep(10_000)])
+      }
+    }
+    const backends = existsSync(serviceLog) ? [...readFileSync(serviceLog, 'utf8').matchAll(/backend: started \(pid (\d+)\)/g)].map((m) => Number(m[1])) : []
+    let left = !(await gone(backends, 30_000))
+    if (left) {
+      check('It’s backend program stopped with the service', false, `still running: ${backends.filter(alive).join(', ')}`)
+      for (const pid of backends.filter(alive)) process.kill(pid, 'SIGKILL')
+      left = !(await gone(backends, 10_000))
+    }
+    await model?.close()
+    report()
+    // Kept where something that used it may still be running, and said so
+    if (left || (service && service.exitCode === null && service.signalCode === null))
+      console.log(`\nSomething the run started may still be running, so its folder is kept: ${scratch}`)
+    else rmSync(scratch, { recursive: true, force: true })
+  })()
+  return cleaning
+}
+
+/** What each part said, for whoever reads a failed run. */
+function report() {
   if (results.some((r) => !r.ok)) {
     // What each part said, for whoever reads a failed run. Nothing here holds a credential: It
     // writes none to its log, the address that pairs the browser is not printed, and the key is
@@ -486,8 +588,4 @@ try {
         `\n--- what the stand-in for the model was asked\n${model.turns.map((t) => JSON.stringify({ text: t.text.slice(0, 200), results: t.results.length, session: t.session })).join('\n')}\nasides: ${model.asides.join(', ')}`,
       )
   }
-  rmSync(scratch, { recursive: true, force: true })
 }
-const failed = results.filter((r) => !r.ok)
-console.log(`\n${results.length - failed.length} of ${results.length} passed`)
-process.exit(failed.length ? 1 : 0)
