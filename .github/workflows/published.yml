@@ -56,7 +56,6 @@ jobs:
     outputs:
       tag: ${{ steps.which.outputs.tag }}
       from: ${{ steps.which.outputs.from }}
-      latest: ${{ steps.which.outputs.latest }}
       upgrade: ${{ steps.which.outputs.upgrade }}
     steps:
       - name: The release under test, and the one to upgrade from
@@ -94,7 +93,7 @@ jobs:
             upgrade=no
             echo "::notice::No upgrade is checked: $from is not older than $tag. Run this workflow by hand with an earlier release as from."
           fi
-          { echo "tag=$tag"; echo "from=$from"; echo "latest=$latest"; echo "upgrade=$upgrade"; } >> "$GITHUB_OUTPUT"
+          { echo "tag=$tag"; echo "from=$from"; echo "upgrade=$upgrade"; } >> "$GITHUB_OUTPUT"
 
   install:
     name: Installed from GitHub (${{ matrix.os }})
@@ -202,7 +201,6 @@ jobs:
       IT_TELEMETRY_URL: http://127.0.0.1:9/usage
       TAG: ${{ needs.releases.outputs.tag }}
       FROM: ${{ needs.releases.outputs.from }}
-      LATEST: ${{ needs.releases.outputs.latest }}
       BEFORE_SAYS: Hello from before the upgrade
       AFTER_SAYS: Hello from after the upgrade
     strategy:
@@ -290,10 +288,14 @@ jobs:
       # that, so where the release under test is not Latest, `it upgrade` is pointed at a
       # stand-in that names it the newest and passes on its files from GitHub as they are
       # (e2e/releases.mjs). Where it is Latest, `it upgrade` asks GitHub as a person's does.
+      # Which it is, is asked of GitHub here, just before, as `it upgrade` asks it: a release
+      # made Latest since the run began is then not installed in place of the one under test.
       - name: Upgrade with `it upgrade`
         run: |
           set -euo pipefail
-          if [ "$TAG" != "$LATEST" ]; then
+          latest=$(curl -fsSL https://github.com/Aaryan-Kapoor/it/releases/latest/download/latest.json | tr -d ' \n')
+          echo "GitHub says the newest release is $latest"
+          if [ "$latest" != "{\"version\":\"${TAG#v}\"}" ]; then
             nohup node e2e/releases.mjs --newest "$TAG" --port 4790 > "$RUNNER_TEMP/releases.log" 2>&1 &
             for _ in $(seq 1 30); do curl -fs -o /dev/null "http://127.0.0.1:4790/latest/download/latest.json" && break; sleep 1; done
             export IT_INSTALL_BASE=http://127.0.0.1:4790
