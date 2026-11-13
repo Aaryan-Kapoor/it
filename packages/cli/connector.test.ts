@@ -344,7 +344,7 @@ import { claimLock } from './src/legacy-lock'
 import * as files from './src/lib'
 import { readJson } from './src/lib'
 import { alone, startOf } from './src/serve/backend'
-import { identity, SINCE_TOLD, WAS_CUT_OFF, WAS_STOPPED } from './src/wake'
+import { identity, LEFT_ENDED, LEFT_MAY_RUN, SINCE_TOLD, WAS_CUT_OFF, WAS_STOPPED } from './src/wake'
 
 // The real clock, kept from before any test puts a stand-in in its place
 const really = setTimeout
@@ -2349,6 +2349,97 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     45_000,
   )
 
+  test.skipIf(process.platform === 'win32')(
+    'a reopened agent that is killed with a command of its still running has that command ended, and the turn that tries its click again is told that nothing the turn before had started is running any more',
+    async () => {
+      const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(bin, folder)
+      // The first turn starts a command that outlasts it, and is killed while the command runs
+      writeFileSync(
+        path.join(bin, 'codex'),
+        `#!/bin/sh\nn=$(ls ${bin} | grep -c given)\ncat > ${bin}/given-$n\nif [ "$n" = 0 ]; then\n  sleep 120 &\n  echo $! > ${bin}/pid\n  kill -KILL $$\nfi\nexit 0\n`,
+        { mode: 0o755 },
+      )
+      process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+      try {
+        await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+        stand.closed.add('thread-1')
+        stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+        offered(click(1))
+        await until(() => said.some((line) => line.includes('Codex exited with SIGKILL')))
+        // What the killed turn left running was ended before it was answered for
+        const left = Number(readFileSync(path.join(bin, 'pid'), 'utf8'))
+        expect(identity([left]).has(left)).toBe(false)
+        expect(readJson(path.join(home, 'cut-off.json'))).toEqual(['codex:thread-1'])
+        // Tried again a few seconds on, the turn is told both that the one before was cut off and what became of what it had started
+        await until(() => existsSync(path.join(bin, 'given-1')) && readFileSync(path.join(bin, 'given-1'), 'utf8').length > 0, 30_000)
+        const given = readFileSync(path.join(bin, 'given-1'), 'utf8')
+        expect(given).toContain(`${WAS_CUT_OFF} ${LEFT_ENDED}`)
+        expect(given).not.toContain(LEFT_MAY_RUN)
+        await until(() => !existsSync(path.join(home, 'cut-off.json')))
+      } finally {
+        const pid = existsSync(path.join(bin, 'pid')) ? Number(readFileSync(path.join(bin, 'pid'), 'utf8')) : 0
+        if (pid && identity([pid]).has(pid)) process.kill(pid, 'SIGKILL')
+      }
+    },
+    45_000,
+  )
+
+  test('a turn whose run a person let go of, while It could not tell what was left of it, has the turn after it told that what it started may still be running', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\nexit 0\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    // Nothing can be told of what the run from before left
+    const ended = vi.spyOn(wake, 'endTree').mockImplementation(async () => 'unknown')
+    try {
+      await start('socket', {}, (home) => {
+        noteConversation({ harness: 'codex', id: 'thread-1' }, folder)
+        writeFileSync(
+          path.join(home, 'runs.json'),
+          JSON.stringify({ 'codex:thread-1': { pid: 2 ** 22 + 7, since: 'tick 1', told: SINCE_TOLD, run: 'the-held-run', unsure: true } }),
+        )
+      })
+      expect((await local<{ held: unknown[] }>('/runs'))!.held).toHaveLength(1)
+      // The person lets it go, and the word of that is written down with the word that the turn was cut off
+      expect(await local('/runs', { method: 'POST', body: { clear: true, of: ['codex:thread-1'] } })).toEqual({ cleared: 1 })
+      expect(readJson(path.join(home, 'cut-off.json'))).toEqual([{ key: 'codex:thread-1', left: 'unknown' }])
+      stand.closed.add('thread-1')
+      stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+      offered(click(1))
+      await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0, 40_000)
+      const given = readFileSync(path.join(bin, 'given'), 'utf8')
+      expect(given).toContain(`${WAS_CUT_OFF} ${LEFT_MAY_RUN}`)
+      expect(given).not.toContain(LEFT_ENDED)
+      await until(() => !existsSync(path.join(home, 'cut-off.json')))
+    } finally {
+      ended.mockRestore()
+    }
+  }, 90_000)
+
+  test('what a connector before wrote down of what a cut-off turn may have left running is read by the next one, and said to the conversation', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given-$IT_SESSION\nexit 0\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    await start('socket', {}, (home) => {
+      noteConversation({ harness: 'codex', id: 'thread-1' }, folder)
+      noteConversation({ harness: 'codex', id: 'thread-2' }, folder)
+      writeFileSync(path.join(home, 'cut-off.json'), JSON.stringify(['codex:thread-1', { key: 'codex:thread-2', left: 'unknown' }]))
+    })
+    stand.closed.add('thread-1')
+    stand.closed.add('thread-2')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1), click(2))
+    const told = (id: string) => path.join(bin, `given-${id}`)
+    await until(() => ['thread-1', 'thread-2'].every((id) => existsSync(told(id)) && readFileSync(told(id), 'utf8').length > 0), 40_000)
+    expect(readFileSync(told('thread-1'), 'utf8')).toContain(`${WAS_CUT_OFF} ${LEFT_ENDED}`)
+    expect(readFileSync(told('thread-2'), 'utf8')).toContain(`${WAS_CUT_OFF} ${LEFT_MAY_RUN}`)
+  }, 90_000)
+
   test('a held run whose agent may still be there is still said to be running, also where its note told a process’s start another way', async () => {
     await start('socket', {}, (home) => {
       // This very process, as a note from before told processes: whether it is the run's agent cannot be said
@@ -2598,7 +2689,35 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     offered(click(1))
     await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0, 40_000)
     expect(readFileSync(path.join(bin, 'given'), 'utf8')).toContain('was cut off before it ended')
+    // It was not let go of by the person after all, and It found nothing of it left: it is not said that something may still be running
+    expect(readFileSync(path.join(bin, 'given'), 'utf8')).toContain(LEFT_ENDED)
+    expect(readFileSync(path.join(bin, 'given'), 'utf8')).not.toContain(LEFT_MAY_RUN)
     expect((await local<Held>('/runs'))?.held).toEqual([])
+  }, 90_000)
+
+  test('a clear that was cut short after its word was written, and whose run a later look then found nothing of, has the turn told that nothing is still running', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\nexit 0\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    // The connector before wrote down that the run was let go of, and stopped before it could let go of the note of the run
+    await start('socket', {}, (home) => {
+      noteConversation({ harness: 'codex', id: 'thread-1' }, folder)
+      writeFileSync(
+        path.join(home, 'runs.json'),
+        JSON.stringify({ 'codex:thread-1': { pid: 2 ** 22 + 7, since: 'tick 1', told: SINCE_TOLD, run: 'the-held-run', unsure: true } }),
+      )
+      writeFileSync(path.join(home, 'cut-off.json'), JSON.stringify([{ key: 'codex:thread-1', left: 'unknown' }]))
+    })
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0, 40_000)
+    // Nothing of the run was there to be found, so it is not said that something may still be running
+    const given = readFileSync(path.join(bin, 'given'), 'utf8')
+    expect(given).toContain(`${WAS_CUT_OFF} ${LEFT_ENDED}`)
+    expect(given).not.toContain(LEFT_MAY_RUN)
   }, 90_000)
 
   test('where the note of which conversations were running cannot be read, it is kept aside and no conversation is reopened until a person has taken it away', async () => {

@@ -102,6 +102,8 @@ import {
   codexInterruptedAt,
   endTree,
   fromAnotherStart,
+  LEFT_ENDED,
+  LEFT_MAY_RUN,
   listsProcesses,
   mayWake,
   NO_PS,
@@ -2142,7 +2144,20 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    * stopped, as that connector wrote them down. Each is told so when it is reopened for the
    * same thing again, once.
    */
-  const cutOff = new Set<string>(readJson<string[]>(cutOffFile()) ?? [])
+  const cutOff = new Set<string>()
+  /**
+   * Those of them whose turn may have left something running: It could not tell what was left
+   * of the run, and the person let go of it with `it runs clear`. Every other turn that was cut
+   * off had what it left ended before its conversation could be reopened. In the file such a
+   * conversation is written as `{ key, left: 'unknown' }`, and every other by its key alone.
+   */
+  const mayRun = new Set<string>()
+  for (const noted of readJson<unknown[]>(cutOffFile()) ?? []) {
+    const key = typeof noted === 'string' ? noted : (noted as { key?: unknown } | null)?.key
+    if (typeof key !== 'string') continue
+    cutOff.add(key)
+    if (typeof noted !== 'string' && (noted as { left?: unknown }).left === 'unknown') mayRun.add(key)
+  }
   // Each is owed until its conversation has been told, which may be several starts of this
   // connector later: so the list is kept in its file for as long as anything is on it
   /** Whether the notes as they stand are on the disk: where they could not be written, a run's own note is kept in their place. */
@@ -2150,8 +2165,14 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   const keepCutOff = () => {
     try {
       while (cutOff.size > 200) cutOff.delete(cutOff.values().next().value!)
+      // What is said of a turn's leavings goes with the word that it was cut off
+      for (const key of mayRun) if (!cutOff.has(key)) mayRun.delete(key)
       if (over) return
-      if (cutOff.size) writePrivate(cutOffFile(), [...cutOff])
+      if (cutOff.size)
+        writePrivate(
+          cutOffFile(),
+          [...cutOff].map((key) => (mayRun.has(key) ? { key, left: 'unknown' } : key)),
+        )
       else rmSync(cutOffFile(), { force: true })
       cutOffKept = true
     } catch {
@@ -2286,6 +2307,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       if (cutOff.delete(key)) keepCutOff()
     } else {
       cutOff.add(key)
+      // Nothing of the run is left, as this look has made sure: where a clear of it had already
+      // written down that something may still be running, and was cut short before it let go of
+      // the run's note, that word no longer holds
+      mayRun.delete(key)
       keepCutOff()
       if (!cutOffKept) return false
     }
@@ -3196,6 +3221,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // Still not settled, it is reopened for nothing: said below, by `carry`, as why
       /** Whether this turn is told that the one before it was cut off: decided before it begins, since its own ending may make such a note anew. */
       const toldCutOff = cutOff.has(key)
+      /** What it is told became of what that turn had started: ended by It, or let go of by the person while It could not tell. */
+      const toldLeft = mayRun.has(key) ? LEFT_MAY_RUN : LEFT_ENDED
       const sent: { click: Offered; toWaiter: boolean; given?: Given; printed?: boolean } = { click, toWaiter: false }
       submitting.set(click.id, sent)
       // What is put into a conversation that is open, or into a thread: the mark alone, where a
@@ -3228,7 +3255,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           // not the same note every time.
           await carry(
             click.session!,
-            `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.has(key) ? `\n\n${WAS_STOPPED}` : ''}${toldCutOff ? `\n\n${WAS_CUT_OFF}` : ''}`,
+            `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.has(key) ? `\n\n${WAS_STOPPED}` : ''}${toldCutOff ? `\n\n${WAS_CUT_OFF} ${toldLeft}` : ''}`,
             // Still wanted at the moment it would start: the app connected, and reopening switched on for it
             () => connected(harness) && wakes(harness, click.at),
             [click, ...withIt].map((c) => c.id),
@@ -4046,18 +4073,33 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         const unreadToo = unread && (shown === null || body.unread === true)
         // Each is still owed the word that a turn of its was cut off, and that is written down
         // first: where it cannot be, nothing is let go of, and the person is told so
+        /** Those newly said to have been let go of, and to be said so no longer where they are not let go of after all: a run that stays held is still looked at, and may yet be ended. */
+        const letGo: string[] = []
+        const keptOn = () => {
+          for (const key of letGo) mayRun.delete(key)
+          if (letGo.length) keepCutOff()
+        }
         for (const key of keys) {
           if (unsettled.get(key)?.stopped || stoppedByPerson.has(key)) rememberStopped(key)
-          else cutOff.add(key)
+          else {
+            cutOff.add(key)
+            // Nothing of the run was ended, and whatever it started may be there still: its next turn is told that as well
+            if (!mayRun.has(key)) letGo.push(key)
+            mayRun.add(key)
+          }
         }
         keepCutOff()
-        if ((keys.length && !cutOffKept) || keys.some((key) => pendingStops.has(key))) return [200, { cleared: 0, unkept: true }]
+        if ((keys.length && !cutOffKept) || keys.some((key) => pendingStops.has(key))) {
+          keptOn()
+          return [200, { cleared: 0, unkept: true }]
+        }
         const clearing = keys.map((key) => [key, unsettled.get(key)!] as const)
         for (const key of keys) unsettled.delete(key)
         try {
           if (keys.length) keepRuns(true)
         } catch {
           for (const [key, run] of clearing) unsettled.set(key, run)
+          keptOn()
           return [200, { cleared: 0, unkept: true }]
         }
         // What was set aside meanwhile is tried again: for each conversation that was held,

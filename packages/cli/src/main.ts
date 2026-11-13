@@ -3603,7 +3603,9 @@ async function main(argv: string[]): Promise<void> {
             'See that the disk It’s folder is on is not full, then run this again.',
           )
         if (!forPerson(a)) return out({ cleared: done?.cleared ?? 0 })
-        return tell([`It reopens them again. Each is told, the next time, that a turn of its was cut off and to look before it does anything twice.`])
+        return tell([
+          `It reopens them again. Each is told, the next time, that a turn of its was cut off, that what the turn started may still be running, and to look before it does anything twice.`,
+        ])
       }
       if (!forPerson(a)) return out(now)
       return tell([
