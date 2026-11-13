@@ -418,6 +418,17 @@ export const wakesOn = (system: string | null | undefined, reopens?: boolean | n
  * start It again failed without a word), and may be asked for again.
  */
 export const UPGRADE_MS = 15 * 60_000
+/**
+ * The agent apps that can turn It's add-on back on with a command of their own, once they have
+ * it turned off: Turn back on on the site has a machine run that command. Pi turns a package's
+ * extension on and off with `pi config`, in a terminal, and has no such command. OpenCode loads
+ * every plugin in its folder, and has nothing turned off to turn on.
+ */
+export const TURNS_ON: readonly Harness[] = ['claude-code', 'codex', 'openclaw', 'hermes']
+/** How long turning an add-on back on that a person asked for on the site is taken to be at work. One that has said nothing by then was cut short, and may be asked for again. */
+export const TURN_ON_MS = 5 * 60_000
+/** How long after turning an add-on back on failed it may be asked for again, so that a machine is never kept running an app's command over and over. */
+export const TURN_ON_AGAIN_MS = 15_000
 /** What a person is told where they would switch reopening on for a machine It does not reopen conversations on. */
 export const noWakeHere = (system: string | null | undefined): string =>
   system === 'win32'

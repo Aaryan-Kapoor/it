@@ -21,6 +21,9 @@ import * as wake from './src/wake'
 const stand = vi.hoisted(() => ({
   /** What the add-ons were brought to each time the connector had them made to match what is wanted: the apps wanted then. */
   reconciled: [] as string[][],
+  /** The apps whose add-on the connector had turned back on, and what turning one on answers where a test says. */
+  turnedOn: [] as string[],
+  turnOnAnswer: null as null | { ok: false; why: string; code: string },
   /** What the connector watches the backend for, by the name of the function, and how to tell it something new. */
   watching: new Map<string, (value: any) => void>(),
   /** What it last asked to be told of, for each function it watches. */
@@ -226,6 +229,12 @@ vi.mock('./src/setup', async (original) => {
     claudeFolders: () => stand.claudeFolders,
     detectAll: async () => stand.found,
     newerProgramSeen: () => false,
+    turnBackOn: async (id: string) => {
+      stand.turnedOn.push(id)
+      if (stand.turnOnAnswer) return stand.turnOnAnswer
+      stand.found = stand.found.map((h) => (h.id === id && h.addon === 'disabled' ? { ...h, addon: 'connected' } : h))
+      return { ok: true }
+    },
     reconcile: async (chosen: readonly string[] | (() => readonly string[])) => {
       stand.reconciled.push([...(typeof chosen === 'function' ? chosen() : chosen)])
       return []
@@ -308,6 +317,8 @@ vi.mock('./src/lib', async (original) => {
       if (name === 'delivery:lost') return []
       if (name === 'delivery:giveBackBatch') return { back: [], done: true }
       if (name === 'delivery:handedOff') return { already: false }
+      // It takes a machine's word that it is at work on turning an add-on back on, as it does where it was asked
+      if (name === 'machines:turningOn') return true
       return null
     },
   }
@@ -333,7 +344,7 @@ import { claimLock } from './src/legacy-lock'
 import * as files from './src/lib'
 import { readJson } from './src/lib'
 import { alone, startOf } from './src/serve/backend'
-import { identity, SINCE_TOLD, WAS_CUT_OFF, WAS_STOPPED } from './src/wake'
+import { identity, LEFT_ENDED, LEFT_MAY_RUN, SINCE_TOLD, WAS_CUT_OFF, WAS_STOPPED } from './src/wake'
 
 // The real clock, kept from before any test puts a stand-in in its place
 const really = setTimeout
@@ -437,6 +448,8 @@ afterEach(async () => {
   stand.calls.length = 0
   stand.recorded.length = 0
   stand.reconciled.length = 0
+  stand.turnedOn.length = 0
+  stand.turnOnAnswer = null
   stand.claudeFolders.length = 0
   stand.claudeScans = 0
   stand.claudeKept = []
@@ -2336,6 +2349,97 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     45_000,
   )
 
+  test.skipIf(process.platform === 'win32')(
+    'a reopened agent that is killed with a command of its still running has that command ended, and the turn that tries its click again is told that nothing the turn before had started is running any more',
+    async () => {
+      const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(bin, folder)
+      // The first turn starts a command that outlasts it, and is killed while the command runs
+      writeFileSync(
+        path.join(bin, 'codex'),
+        `#!/bin/sh\nn=$(ls ${bin} | grep -c given)\ncat > ${bin}/given-$n\nif [ "$n" = 0 ]; then\n  sleep 120 &\n  echo $! > ${bin}/pid\n  kill -KILL $$\nfi\nexit 0\n`,
+        { mode: 0o755 },
+      )
+      process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+      try {
+        await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+        stand.closed.add('thread-1')
+        stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+        offered(click(1))
+        await until(() => said.some((line) => line.includes('Codex exited with SIGKILL')))
+        // What the killed turn left running was ended before it was answered for
+        const left = Number(readFileSync(path.join(bin, 'pid'), 'utf8'))
+        expect(identity([left]).has(left)).toBe(false)
+        expect(readJson(path.join(home, 'cut-off.json'))).toEqual(['codex:thread-1'])
+        // Tried again a few seconds on, the turn is told both that the one before was cut off and what became of what it had started
+        await until(() => existsSync(path.join(bin, 'given-1')) && readFileSync(path.join(bin, 'given-1'), 'utf8').length > 0, 30_000)
+        const given = readFileSync(path.join(bin, 'given-1'), 'utf8')
+        expect(given).toContain(`${WAS_CUT_OFF} ${LEFT_ENDED}`)
+        expect(given).not.toContain(LEFT_MAY_RUN)
+        await until(() => !existsSync(path.join(home, 'cut-off.json')))
+      } finally {
+        const pid = existsSync(path.join(bin, 'pid')) ? Number(readFileSync(path.join(bin, 'pid'), 'utf8')) : 0
+        if (pid && identity([pid]).has(pid)) process.kill(pid, 'SIGKILL')
+      }
+    },
+    45_000,
+  )
+
+  test('a turn whose run a person let go of, while It could not tell what was left of it, has the turn after it told that what it started may still be running', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\nexit 0\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    // Nothing can be told of what the run from before left
+    const ended = vi.spyOn(wake, 'endTree').mockImplementation(async () => 'unknown')
+    try {
+      await start('socket', {}, (home) => {
+        noteConversation({ harness: 'codex', id: 'thread-1' }, folder)
+        writeFileSync(
+          path.join(home, 'runs.json'),
+          JSON.stringify({ 'codex:thread-1': { pid: 2 ** 22 + 7, since: 'tick 1', told: SINCE_TOLD, run: 'the-held-run', unsure: true } }),
+        )
+      })
+      expect((await local<{ held: unknown[] }>('/runs'))!.held).toHaveLength(1)
+      // The person lets it go, and the word of that is written down with the word that the turn was cut off
+      expect(await local('/runs', { method: 'POST', body: { clear: true, of: ['codex:thread-1'] } })).toEqual({ cleared: 1 })
+      expect(readJson(path.join(home, 'cut-off.json'))).toEqual([{ key: 'codex:thread-1', left: 'unknown' }])
+      stand.closed.add('thread-1')
+      stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+      offered(click(1))
+      await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0, 40_000)
+      const given = readFileSync(path.join(bin, 'given'), 'utf8')
+      expect(given).toContain(`${WAS_CUT_OFF} ${LEFT_MAY_RUN}`)
+      expect(given).not.toContain(LEFT_ENDED)
+      await until(() => !existsSync(path.join(home, 'cut-off.json')))
+    } finally {
+      ended.mockRestore()
+    }
+  }, 90_000)
+
+  test('what a connector before wrote down of what a cut-off turn may have left running is read by the next one, and said to the conversation', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given-$IT_SESSION\nexit 0\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    await start('socket', {}, (home) => {
+      noteConversation({ harness: 'codex', id: 'thread-1' }, folder)
+      noteConversation({ harness: 'codex', id: 'thread-2' }, folder)
+      writeFileSync(path.join(home, 'cut-off.json'), JSON.stringify(['codex:thread-1', { key: 'codex:thread-2', left: 'unknown' }]))
+    })
+    stand.closed.add('thread-1')
+    stand.closed.add('thread-2')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1), click(2))
+    const told = (id: string) => path.join(bin, `given-${id}`)
+    await until(() => ['thread-1', 'thread-2'].every((id) => existsSync(told(id)) && readFileSync(told(id), 'utf8').length > 0), 40_000)
+    expect(readFileSync(told('thread-1'), 'utf8')).toContain(`${WAS_CUT_OFF} ${LEFT_ENDED}`)
+    expect(readFileSync(told('thread-2'), 'utf8')).toContain(`${WAS_CUT_OFF} ${LEFT_MAY_RUN}`)
+  }, 90_000)
+
   test('a held run whose agent may still be there is still said to be running, also where its note told a process’s start another way', async () => {
     await start('socket', {}, (home) => {
       // This very process, as a note from before told processes: whether it is the run's agent cannot be said
@@ -2585,7 +2689,35 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     offered(click(1))
     await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0, 40_000)
     expect(readFileSync(path.join(bin, 'given'), 'utf8')).toContain('was cut off before it ended')
+    // It was not let go of by the person after all, and It found nothing of it left: it is not said that something may still be running
+    expect(readFileSync(path.join(bin, 'given'), 'utf8')).toContain(LEFT_ENDED)
+    expect(readFileSync(path.join(bin, 'given'), 'utf8')).not.toContain(LEFT_MAY_RUN)
     expect((await local<Held>('/runs'))?.held).toEqual([])
+  }, 90_000)
+
+  test('a clear that was cut short after its word was written, and whose run a later look then found nothing of, has the turn told that nothing is still running', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\nexit 0\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    // The connector before wrote down that the run was let go of, and stopped before it could let go of the note of the run
+    await start('socket', {}, (home) => {
+      noteConversation({ harness: 'codex', id: 'thread-1' }, folder)
+      writeFileSync(
+        path.join(home, 'runs.json'),
+        JSON.stringify({ 'codex:thread-1': { pid: 2 ** 22 + 7, since: 'tick 1', told: SINCE_TOLD, run: 'the-held-run', unsure: true } }),
+      )
+      writeFileSync(path.join(home, 'cut-off.json'), JSON.stringify([{ key: 'codex:thread-1', left: 'unknown' }]))
+    })
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0, 40_000)
+    // Nothing of the run was there to be found, so it is not said that something may still be running
+    const given = readFileSync(path.join(bin, 'given'), 'utf8')
+    expect(given).toContain(`${WAS_CUT_OFF} ${LEFT_ENDED}`)
+    expect(given).not.toContain(LEFT_MAY_RUN)
   }, 90_000)
 
   test('where the note of which conversations were running cannot be read, it is kept aside and no conversation is reopened until a person has taken it away', async () => {
@@ -5804,6 +5936,60 @@ describe.skipIf(process.platform === 'win32')('a conversation held in a thread o
     noOtherWay()
   }, 30_000)
 
+  /** The person has chosen Claude Code and Codex, and each app has It's add-on turned off. */
+  const OFF = {
+    wanted: ['claude-code', 'codex'],
+    found: [
+      { id: 'claude-code', version: '2.1.322', addon: 'disabled' },
+      { id: 'codex', version: '0.167.0', addon: 'disabled' },
+    ],
+  }
+
+  test('a Claude Code conversation goes to its thread through T3 Code while Claude Code has It’s add-on turned off', async () => {
+    withT3Code()
+    await start('socket', OFF, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    expect(listened()).toEqual([`claude-code:${CLAUDE}`])
+    backend(click(1))
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+    await until(() => called('delivery:handedOff').includes('click-1'))
+    noOtherWay()
+  })
+
+  test('a Codex conversation goes to its thread through T3 Code while Codex has It’s add-on turned off, and never into Codex’s queue', async () => {
+    withT3Code()
+    await start('socket', OFF, noted({ 'codex:thread-1': 't3-thread-a' }))
+    expect(listened()).toEqual(['codex:thread-1'])
+    // Codex's queue is the app's own command, which an add-on turned off does not let It use
+    expect(asked().queues).not.toContain('codex')
+    backend(click(1, { harness: 'codex', id: 'thread-1' }))
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-a')
+    noOtherWay()
+  })
+
+  test('a conversation T3 Code is first found to hold while its app has It’s add-on turned off goes to that thread, and is not reopened outside it', async () => {
+    withT3Code()
+    stand.t3.threads.set(CLAUDE, 't3-thread-c')
+    await start('socket', OFF)
+    // As a click comes once `it create` has found the thread, which is noted then
+    stand.watching.get('machines:me')!({ wanted: OFF.wanted, wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
+    stand.watching.get('delivery:inboxPage')!({ clicks: [click(1)], after: [] })
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+    noOtherWay()
+  })
+
+  test('an app the person has not chosen is not handed a click through T3 Code, whatever its add-on', async () => {
+    withT3Code()
+    await start('socket', { ...OFF, wanted: ['codex'] }, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
+    expect(listened()).toEqual([])
+    stand.watching.get('delivery:inboxPage')!({ clicks: [click(1)], after: [] })
+    await pause(2500)
+    expect(stand.t3.sent).toEqual([])
+    expect(called('delivery:claim')).toEqual([])
+  })
+
   test('nothing is asked for a conversation of an app the person has not chosen, and its click is left where it is', async () => {
     withT3Code()
     await start('socket', { ...BOTH, wanted: ['codex'] }, noted({ [`claude-code:${CLAUDE}`]: 't3-thread-c' }))
@@ -7351,5 +7537,96 @@ describe('how what is done on a conversation’s pages would reach it, as the co
       writeFileSync(path.join(home, 't3-threads.json'), 'not a note'),
     )
     expect(await way('claude-code', claude)).toMatchObject({ thread: 'unknown' })
+  })
+})
+
+describe('an agent app that has It’s add-on turned off', () => {
+  const OFF = [{ id: 'claude-code', version: '2.1.322', addon: 'disabled' }]
+  const me = (over: Record<string, unknown>) => stand.watching.get('machines:me')!({ wanted: ['claude-code'], ...over })
+  const turning = () => stand.calls.filter((c) => c.name === 'machines:turningOn').map((c) => c.args)
+
+  test('is said in the log by a code, once, and not with every look', async () => {
+    await start('socket', { wanted: ['claude-code'], found: OFF })
+    await until(() => said.some((line) => line.includes('addon_disabled')))
+    // Each change of what is wanted has the machine looked at again
+    me({ wanted: ['claude-code', 'codex'] })
+    me({ wanted: ['claude-code'] })
+    await pause(300)
+    const lines = said.filter((line) => line.includes('addon_disabled'))
+    expect(lines).toEqual([
+      'Claude Code: addon_disabled: the app has It’s add-on turned off, so none of its conversations is handed a click but through T3 Code; It turns it on again only when the person asks, under Machines or with it setup',
+    ])
+  })
+
+  test('is turned back on when the person asks on the site, which is told how it went once the machine has been looked at again', async () => {
+    await start('socket', { wanted: ['claude-code'], found: OFF })
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+    await until(() => turning().some((t) => t.state === 'done'))
+    expect(stand.turnedOn).toEqual(['claude-code'])
+    expect(turning()).toEqual([
+      { harness: 'claude-code', state: 'working' },
+      { harness: 'claude-code', state: 'done' },
+    ])
+    // The site had the app as it is now before it was told this was over
+    const reported = stand.calls.findIndex((c) => c.name === 'machines:report' && c.args.harnesses.some((h: { addon: string }) => h.addon === 'connected'))
+    expect(reported).toBeGreaterThan(-1)
+    expect(reported).toBeLessThan(stand.calls.findIndex((c) => c.name === 'machines:turningOn' && c.args.state === 'done'))
+    expect(said).toContain('Claude Code: It’s add-on was turned back on, as asked on the site')
+    // The same asking, heard again while it is at work or after, is not done twice
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'working' }] })
+    await pause(200)
+    expect(stand.turnedOn).toEqual(['claude-code'])
+  })
+
+  test('that a connector which stopped had begun to turn back on is done by the connector that starts next', async () => {
+    await start('socket', { wanted: ['claude-code'], found: OFF })
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now() - 30_000, state: 'working' }] })
+    await until(() => turning().some((t) => t.state === 'done'))
+    expect(stand.turnedOn).toEqual(['claude-code'])
+    // What it says of its own work as it goes is not taken for another's
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'working' }] })
+    await pause(200)
+    expect(stand.turnedOn).toEqual(['claude-code'])
+  })
+
+  test('is not turned on where It does not take the machine’s word that it is at work on the asking, or could not be told', async () => {
+    await start('socket', { wanted: ['claude-code'], found: OFF })
+    for (const answer of [false, null, new Error('no connection')]) {
+      stand.answer = (name) => {
+        if (name !== 'machines:turningOn') return undefined
+        if (answer instanceof Error) throw answer
+        return answer
+      }
+      me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+      await until(() => turning().length > 0)
+      await pause(200)
+      expect(stand.turnedOn).toEqual([])
+      expect(turning()).toEqual([{ harness: 'claude-code', state: 'working' }])
+      stand.calls.length = 0
+    }
+    // Asked again once It answers, it is done
+    stand.answer = null
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+    await until(() => turning().some((t) => t.state === 'done'))
+    expect(stand.turnedOn).toEqual(['claude-code'])
+  })
+
+  test('that the machine could not turn back on says why to the site, and only a code in the log', async () => {
+    const why = 'Claude Code refused to turn It’s add-on back on. Run `claude plugin enable it-bridge@it` in a terminal on that machine to see why.'
+    stand.turnOnAnswer = { ok: false, why, code: 'refused' }
+    await start('socket', { wanted: ['claude-code'], found: OFF })
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+    await until(() => turning().some((t) => t.state === 'failed'))
+    expect(turning().at(-1)).toEqual({ harness: 'claude-code', state: 'failed', why })
+    expect(said).toContain('Claude Code: turn_on_failed: refused')
+    expect(said.join('\n')).not.toContain('claude plugin enable')
+  })
+
+  test('is not turned on for an app the person has not chosen on this machine', async () => {
+    await start('socket', { wanted: ['codex'], found: OFF })
+    stand.watching.get('machines:me')!({ wanted: ['codex'], turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+    await until(() => turning().some((t) => t.state === 'failed'))
+    expect(stand.turnedOn).toEqual([])
+    expect(turning().at(-1)).toMatchObject({ harness: 'claude-code', state: 'failed', why: expect.stringContaining('not connected on this machine') })
   })
 })

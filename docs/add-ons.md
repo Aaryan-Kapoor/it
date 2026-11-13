@@ -23,13 +23,32 @@ An add-on is how what you do on a page gets back into the conversation that made
 - **Where you started It yourself with `it serve` and it is running**, the add-ons are left as they are until you start It again as the new version, which `it upgrade` tells you to do. The `it serve` that is running is the older version, and one that found a newer It's add-on in an app would stop to make way for it, with nothing to start it again.
 - **The install command, run again at a terminal**, goes on into `it setup`, which brings them up to date. Run where there is no terminal, it only puts the program in place, and the add-ons are brought up to date when It next starts as the new version.
 
-The running service also brings the add-ons up to date when it starts, when the apps you chose change, and every half hour.
+The running service also brings the add-ons up to date when it starts, when the apps you chose change, and every half hour. An add-on that you have turned off inside its app is left as it is: [An add-on turned off in its app](#an-add-on-turned-off-in-its-app) says why.
 
 An add-on is brought up to date in place, and the one an app has is never taken out first. Claude Code and Codex are each told to read It's marketplace again and update the plugin, and an app whose update fails keeps the add-on it had, which still takes clicks. `it upgrade` says which add-on could not be brought up to date, and ends as a failure, and It tries again each time it starts and every half hour.
 
 An app that is running when its add-on is brought up to date goes on with the add-on it loaded, until it is restarted: Claude Code loads its add-on when a session starts. Such an add-on of an earlier build still takes clicks and counts as listening, as long as it speaks the same delivery API as the connector, which an earlier build of the same series does. Its line in `it status` says that it is an earlier build and that restarting the app loads the new one, its JSON says `"addon": "outdated"`, and the Machines page says "Restart to update the add-on". `it upgrade` names the apps whose add-on has new code, to be restarted, and the service's log says it once for each app it hears from with an earlier build. An update that changes only the skill is no new build, and asks for no restart. In T3 Code, a thread's Claude Code or Codex is started anew, with the new add-on, once T3 Code has let it go, which it does when the thread has been quiet a while and when T3 Code itself is started again.
 
 An add-on that cannot take clicks from this It is another thing: one that speaks another delivery API than the connector, one in an app that lacks something the add-on needs to hand a click over, or one that OpenCode refused to load, as [OpenCode](#opencode) says. Its clicks wait in the inbox, `it status` says `"addon": "incompatible"` for the app and says what to do, the Machines page says "Add-on needs attention", and Auto-wake waits for that app on the machine for as long as such an add-on is running there.
+
+## An add-on turned off in its app
+
+Most agent apps let you turn a plugin off without taking it out, and you may have turned It's off on purpose. So It never turns its add-on back on by itself: not when the service brings the add-ons up to date, not every half hour, and not after an upgrade. It tells you instead. `it status` says that the app has It's add-on turned off and how to turn it back on, and its JSON says `"addon": "disabled"` for the app. The Machines page shows the app on that machine as "Turned off in" the app, and a page whose click is waiting for that app says that its It add-on is turned off on that machine and that you turn it back on under Machines. The service's log says it by a code, `addon_disabled`, when it first finds it so and every few hours after that while it stays so.
+
+It is turned back on when you ask for it. Beside the app on the Machines page, Turn back on has that machine turn It's add-on on with the app's own command. The site then says that it is being turned back on, and once the machine has done it the app shows as connected again. Where the app would not, the site says why in a sentence and gives the command to run on that machine, which says more, and you can try again after a few seconds. Before it turns anything on, the machine checks again that what the app has under It's name is the add-on this It put there, as it does before it installs one: where that cannot be shown, as where the plugin or It's marketplace in the app has been replaced, nothing is turned on, and the site says to run `it setup` there, which says why. Running `it setup` yourself at a terminal turns it back on as well, for the apps you choose there; an `it setup` that an agent runs, or that runs with nobody at a terminal, as an upgrade runs it, does not.
+
+| Agent app | How It tells that its add-on is turned off | The app's own command that turns it back on |
+|---|---|---|
+| Claude Code | `claude plugin list --json` lists the plugin with `"enabled": false` | `claude plugin enable it-bridge@it --scope user` |
+| Codex | `codex plugin list` lists the plugin as `installed, disabled` | `codex plugin add it-bridge@it`, which turns a plugin on as it adds it again from It's marketplace and keeps the approval of its hooks. Codex has no command that only turns one on |
+| OpenClaw | `openclaw plugins inspect it-bridge --json` says `"enabled": false` | `openclaw plugins enable it-bridge` |
+| Hermes Agent | `hermes plugins list --json` lists the plugin with any status other than `enabled` | `hermes plugins enable it-bridge` |
+| Pi | `pi list` lists It's package as filtered, and Pi's settings leave the add-on's extension out of it, as `pi config` does when you turn it off there | None: Pi turns an extension on and off only in `pi config`, so the Machines page says to run it, and has no Turn back on for Pi |
+| OpenCode | OpenCode loads every plugin in its plugins folder, and has no way to turn one off | None needed |
+
+Codex's hooks waiting for your approval is another thing, which `it status` says as `"addon": "needs_approval"` and the Machines page as "Needs your approval". It is said only of an add-on that Codex has on: one that Codex has turned off is said to be turned off, whatever became of the approval of its hooks.
+
+While an app has It's add-on turned off, no click reaches a conversation of it by itself, with one exception: a Claude Code or Codex conversation that a thread of T3 Code holds still gets its clicks in the thread, since T3 Code's own server takes them there and the add-on plays no part in that. Its clicks never go into Codex's queue meanwhile, and its conversations are not reopened.
 
 ## The order a click tries
 
@@ -41,7 +60,7 @@ A click is stored before anything tries to deliver it, and then tries these rout
 4. **Reopening the conversation**, where Auto-wake is on for the agent app on that machine, as it is unless you have turned it off: [below](#a-conversation-that-has-been-closed) says how. It never reopens a conversation that T3 Code holds in a thread, nor a Claude Code or Codex conversation while T3 Code is running on the machine and has yet to say that none of its threads holds it. A Codex conversation that no Codex has open goes this way too, and nothing is put in its queue: a queued message would wait there until the conversation was opened and a turn of it had ended. So does one that It reopened itself, as soon as that run has ended: [below](#a-conversation-that-has-been-closed) says why.
 5. **The inbox.** Everything else waits, in view: the site shows it, and the agent takes it with `it wait`.
 
-None of these routes is tried for an agent app you have not connected. A click on a page it made waits in the inbox.
+None of these routes is tried for an agent app you have not connected. A click on a page it made waits in the inbox. For an app that has It's add-on turned off, only the thread in T3 Code is tried.
 
 An add-on that cannot deliver a click leaves it in the inbox, and the site does not say why in every such case.
 
