@@ -13,8 +13,8 @@ const above = (version) => (/^\d+$/.test(version) ? String(Number(version) + 1) 
 
 /**
  * Listens on `port` of this machine and passes everything on to `origin`, the real server, asked
- * in the version above the one It names. Resolves with its address, what it has passed on, and a
- * way to stop it.
+ * in the version above the one It names. Resolves with its address, what it has passed on with how the
+ * real server answered each, and a way to stop it.
  */
 export function otherProtocol(origin, port) {
   const target = new URL(origin)
@@ -23,12 +23,16 @@ export function otherProtocol(origin, port) {
     const headers = { ...req.headers, host: target.host }
     const given = req.headers['x-t3-orchestration-protocol']
     if (typeof given === 'string') headers['x-t3-orchestration-protocol'] = above(given)
-    asked.push({ method: req.method, path: req.url.split('?')[0], given: given ?? null, passed: headers['x-t3-orchestration-protocol'] ?? null })
+    // What was asked, and how the real server answered it: its status, or that it could not be reached
+    const one = { method: req.method, path: req.url.split('?')[0], given: given ?? null, passed: headers['x-t3-orchestration-protocol'] ?? null, status: null }
+    asked.push(one)
     const out = http.request({ host: target.hostname, port: target.port, method: req.method, path: req.url, headers }, (answer) => {
+      one.status = answer.statusCode ?? null
       res.writeHead(answer.statusCode ?? 502, answer.headers)
       answer.pipe(res)
     })
     out.on('error', () => {
+      one.status = 'unreachable'
       res.writeHead(502)
       res.end()
     })
@@ -40,13 +44,19 @@ export function otherProtocol(origin, port) {
     const url = new URL(req.url, origin)
     const given = url.searchParams.get('orchestrationProtocol')
     if (given !== null) url.searchParams.set('orchestrationProtocol', above(given))
-    asked.push({ method: 'socket', path: url.pathname, given, passed: url.searchParams.get('orchestrationProtocol') })
+    const one = { method: 'socket', path: url.pathname, given, passed: url.searchParams.get('orchestrationProtocol'), status: null }
+    asked.push(one)
     const upstream = net.connect(Number(target.port), target.hostname, () => {
       const lines = [`${req.method} ${url.pathname}${url.search} HTTP/1.1`]
       for (let i = 0; i < req.rawHeaders.length; i += 2)
         lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i].toLowerCase() === 'host' ? target.host : req.rawHeaders[i + 1]}`)
       upstream.write(`${lines.join('\r\n')}\r\n\r\n`)
       if (head?.length) upstream.write(head)
+      // How the real server answered the opening of the socket: the status of its first line
+      upstream.once('data', (chunk) => {
+        const status = /^HTTP\/1\.[01] (\d{3})/.exec(chunk.toString('latin1'))?.[1]
+        one.status = status ? Number(status) : 'unreadable'
+      })
       upstream.pipe(socket)
       socket.pipe(upstream)
     })
@@ -54,7 +64,10 @@ export function otherProtocol(origin, port) {
       upstream.destroy()
       socket.destroy()
     }
-    upstream.on('error', end)
+    upstream.on('error', () => {
+      one.status ??= 'unreachable'
+      end()
+    })
     socket.on('error', end)
   })
   return new Promise((resolve, reject) => {

@@ -30,18 +30,19 @@
 // and `it status` must say that what the person does arrives by itself, through the thread. A
 // paired browser clicks the page's button, and the run passes only where T3 Code's own command
 // then shows the click in that thread as a message from the person, in It's wording for a click,
-// and in no other thread, T3 Code starts its `claude` again for that same conversation to take it
-// up, and It records the click as handed over by way of T3 Code. With It's add-on then turned
-// off by Claude Code's own command, a second click must still reach the thread, which is what
-// It's documentation promises. What `arrives` says in that case is reported and not held to,
-// since it says otherwise today (see the run's report).
+// T3 Code begins a run of the thread for that message on that same conversation, and It records
+// the click as handed over by a queue, which is how the backend records T3 Code's way. With It's
+// add-on then turned off by Claude Code's own command, a second click must still reach the thread,
+// which is what It's documentation promises. What `arrives` says in that case is reported and not
+// held to, since it says otherwise today. At the end each click must be in that thread once, the
+// thread beside it must have none, and nothing the run started may be left running.
 //
 // The turn T3 Code starts for each message fails, since Claude Code has no account here; that is
 // expected, and what is checked is that T3 Code took the message for the right thread. On Windows
 // It finds T3 Code's command by the version T3 Code noted, where T3 Code's launcher keeps it, as
 // it does on a machine where T3 Code was installed from npm; the command T3 Code's desktop app
-// keeps in T3 Code's folder is not covered. A whole loop with the real Claude Code inside T3 Code and a stand-in model is not
-// attempted here.
+// keeps in T3 Code's folder is not covered. A whole loop with the real Claude Code inside T3 Code
+// and a stand-in model is not attempted here.
 //
 //   node e2e/apps/t3-code.mjs --version <version | latest | nightly>   installs that T3 Code from npm
 //
@@ -51,7 +52,7 @@
 // system holds to about a hundred characters. IT_BIN and IT_CLI name the It to run, as for the
 // other end-to-end scripts. IT_T3_KEEP keeps the run's folders.
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { COMMAND, sleep } from '../lib.mjs'
@@ -182,22 +183,50 @@ const playwrightBrowsers = process.env.PLAYWRIGHT_BROWSERS_PATH ?? path.join(os.
 for (const k of Object.keys(process.env)) delete process.env[k]
 Object.assign(process.env, t3Env, { PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsers })
 
-/** Runs a program to its end; resolves with its exit code and what it printed. */
+/**
+ * Ends a program the run started and everything it started in turn: outside Windows each is
+ * started in a process group of its own, which is ended whole, and on Windows the system's own
+ * `taskkill` ends the program's tree. Only programs the run itself started are given to this.
+ */
+function endTree(pid, signal = 'SIGKILL') {
+  if (typeof pid !== 'number') return
+  try {
+    if (windows) execFileSync(path.join(systemRoot, 'System32', 'taskkill.exe'), ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
+    else process.kill(-pid, signal)
+  } catch {
+    try {
+      process.kill(pid, signal)
+    } catch {}
+  }
+}
+/**
+ * Runs a program to its end; resolves with its exit code and what it printed. One that takes too
+ * long is ended with all it started, and one that has ended is not waited for longer because
+ * something it started still holds what it prints.
+ */
 function ran(program, args, { env = itEnv, cwd = work, ms = 120_000, input } = {}) {
   if (env === t3Env) ownT3(env)
   return new Promise((resolve) => {
-    const child = spawn(program, args, { cwd, env, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] })
+    const child = spawn(program, args, { cwd, env, detached: !windows, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] })
     let out = ''
     let err = ''
+    let done = false
+    const finish = (code) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve({ code, out, err })
+    }
     child.stdout.on('data', (d) => (out += d))
     child.stderr.on('data', (d) => (err += d))
     if (input !== undefined) child.stdin.end(input)
-    const timer = setTimeout(() => child.kill('SIGKILL'), ms)
-    child.on('error', (e) => (err += e.message))
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      resolve({ code, out, err })
+    const timer = setTimeout(() => endTree(child.pid), ms)
+    child.on('error', (e) => {
+      err += e.message
+      finish(null)
     })
+    child.on('exit', (code) => setTimeout(() => finish(code), 2000))
+    child.on('close', (code) => finish(code))
   })
 }
 /** T3 Code's launcher from its package, run by this Node: on Windows npm's command for it is one that cmd.exe reads. */
@@ -205,11 +234,13 @@ const launcher = at('t3-install', 'node_modules', 't3', 'bin', 't3.mjs')
 const t3 = (args, options) => ran(process.execPath, [launcher, ...args, '--base-dir', t3Home], { env: t3Env, ...options })
 const t3Json = async (args, options) => {
   const r = await t3([...args, '--json'], options)
+  let said
   try {
-    return JSON.parse(r.out)
-  } catch {
-    throw new Error(`t3 ${args.slice(0, 2).join(' ')} ended with ${r.code} and printed no JSON: ${(r.err || r.out).slice(-600)}`)
-  }
+    said = JSON.parse(r.out)
+  } catch {}
+  if (r.code !== 0 || said === undefined)
+    throw new Error(`t3 ${args.slice(0, 2).join(' ')} ended with ${r.code}${said === undefined ? ' and printed no JSON' : ''}: ${(r.err || r.out).slice(-600)}`)
+  return said
 }
 /** The run's It: what a command printed, as JSON where it is JSON. Throws where it failed. */
 async function it(args, { extra = {}, ...options } = {}) {
@@ -267,11 +298,15 @@ let other = null
 async function stopProgram(child, ms = 60_000, { it: isIt = false } = {}) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return true
   if (windows && isIt) writeFileSync(path.join(itHome, 'service.stop'), '')
-  else child.kill('SIGTERM')
+  // It is asked alone, and stops its backend program itself; T3 Code's launcher, its program and
+  // what that started are asked together, as a terminal would ask them
+  else if (isIt || windows) child.kill('SIGTERM')
+  else endTree(child.pid, 'SIGTERM')
   const end = Date.now() + ms
   while (child.exitCode === null && child.signalCode === null && Date.now() < end) await sleep(250)
-  if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
-  return child.exitCode !== null || child.signalCode !== null
+  const asked = child.exitCode !== null || child.signalCode !== null
+  if (!asked) endTree(child.pid)
+  return asked
 }
 const alive = (pid) => {
   try {
@@ -293,6 +328,41 @@ const t3Program = (pid) => {
   } catch {
     return false
   }
+}
+/**
+ * The processes still running that belong to the run: on Linux those whose program or working
+ * folder is in the run's folder, and on Windows those whose program is there or whose command
+ * names it. Never this process.
+ */
+function leftOver() {
+  const mine = realpathSync(top)
+  if (windows) {
+    try {
+      const script = `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne ${process.pid} -and (($_.ExecutablePath -and $_.ExecutablePath.StartsWith('${mine}')) -or ($_.CommandLine -and $_.CommandLine.Contains('${mine}'))) } | ForEach-Object { $_.ProcessId }`
+      return execFileSync(path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-Command', script], {
+        encoding: 'utf8',
+      })
+        .split(/\s+/)
+        .filter(Boolean)
+        .map(Number)
+    } catch {
+      return []
+    }
+  }
+  if (process.platform !== 'linux') return []
+  const found = []
+  for (const name of readdirSync('/proc')) {
+    const pid = Number(name)
+    if (!Number.isInteger(pid) || pid === process.pid) continue
+    for (const link of ['exe', 'cwd'])
+      try {
+        if (`${realpathSync(`/proc/${pid}/${link}`)}${path.sep}`.startsWith(`${mine}${path.sep}`)) {
+          found.push(pid)
+          break
+        }
+      } catch {}
+  }
+  return found
 }
 /** The note T3 Code keeps of its running server, in the run's folder. */
 const noted = () => {
@@ -320,10 +390,20 @@ function cleanUp() {
       const end = Date.now() + 30_000
       while (alive(program) && Date.now() < end) await sleep(250)
       // Only the very program T3 Code noted, and only where it is the run's own T3 Code's
-      if (alive(program) && t3Program(program)) process.kill(program, 'SIGKILL')
+      if (alive(program) && t3Program(program)) endTree(program)
       await sleep(1000)
-      stillUp ||= alive(program)
     }
+    // Whatever of the run's is still running now, a program that T3 Code or It started among it,
+    // is ended, and said; and the run fails where something cannot be ended
+    const left = leftOver()
+    if (left.length) {
+      note(`${left.length} process${left.length === 1 ? '' : 'es'} of the run’s were still running once it had stopped what it started, and were ended`)
+      for (const pid of left) endTree(pid)
+      await sleep(2000)
+    }
+    const still = leftOver()
+    stillUp = still.length > 0 || (typeof program === 'number' && alive(program) && t3Program(program))
+    check('nothing the run started is left running', !stillUp, still.length ? `still running: ${still.join(', ')}` : '')
     if (results.some((r) => !r.ok)) {
       for (const [name, file] of [
         ['It, with its connector', path.join(logs, 'serve.log')],
@@ -410,6 +490,7 @@ try {
   server = spawn(process.execPath, [launcher, 'serve', '--base-dir', t3Home, '--port', String(t3Port), '--host', '127.0.0.1', '--no-browser', work], {
     cwd: work,
     env: t3Env,
+    detached: !windows,
     stdio: ['ignore', openSync(path.join(logs, 't3.log'), 'w'), openSync(path.join(logs, 't3.log'), 'a')],
   })
   const up = await untilTrue(async () => {
@@ -466,15 +547,18 @@ try {
    * The Claude Code conversation that T3 Code's own account of a thread says it holds, read here
    * and not by It's code: the id T3 Code gave the program, as the thread's snapshot names it.
    */
-  const conversationOf = async (id) => {
+  const projectionOf = async (id) => {
     const answer = await fetch(`${up.origin}/api/orchestration/threads/${encodeURIComponent(id)}/bounded`, {
       headers: { authorization: `Bearer ${token}`, 'x-t3-orchestration-protocol': '2' },
       signal: AbortSignal.timeout(10_000),
     })
-    const snapshot = answer.ok ? await answer.json() : null
-    const own = (snapshot?.projection?.providerThreads ?? []).find(
-      (p) => p?.appThreadId === id && p.driver === 'claudeAgent' && p.nativeThreadRef?.strength === 'strong',
-    )
+    return answer.ok ? ((await answer.json())?.projection ?? null) : null
+  }
+  /** The provider thread of a thread that holds its Claude Code conversation, as T3 Code's snapshot says. */
+  const claudeOf = (projection, id) =>
+    (projection?.providerThreads ?? []).find((p) => p?.appThreadId === id && p.driver === 'claudeAgent' && p.nativeThreadRef?.strength === 'strong')
+  const conversationOf = async (id) => {
+    const own = claudeOf(await projectionOf(id), id)
     return typeof own?.nativeThreadRef?.nativeId === 'string' ? own.nativeThreadRef.nativeId : null
   }
 
@@ -547,26 +631,46 @@ try {
   check('and that no thread holds a conversation none of them has', result?.status === 'absent', result)
 
   // ---------- A T3 Code that speaks another version ----------
-  other = await otherProtocol(up.origin, base + 51)
-  const elsewhere = { ...found, origin: other.origin }
-  search = own.t3Search()
-  const unread = await own.t3ThreadOf(elsewhere, of, search, AbortSignal.timeout(30_000))
-  const unknown = await own.t3RunsNow(elsewhere, nobody, AbortSignal.timeout(30_000))
-  const before = (await t3Json(['thread', 'show', thread, '--messages', '20'])).messages?.length
-  const refused = await own.t3Send(elsewhere, thread, 'a message T3 Code should refuse')
-  const after = (await t3Json(['thread', 'show', thread, '--messages', '20'])).messages?.length
-  check(
-    'asked in a version T3 Code does not speak, It is refused by the real server and takes that for not knowing: never for no thread',
-    unread.status === 'incomplete' && !unread.progressed && unknown.status === 'unknown' && other.asked.some((a) => a.passed === '3'),
-    { unread, unknown, asked: other.asked.slice(0, 4) },
-  )
-  check('and puts no message to the thread, and says why in words of its own', typeof refused === 'string' && refused.length > 0 && after === before, {
-    refused,
-    before,
-    after,
-  })
-  await other.close()
-  other = null
+  // Made from the real server by asking it in the version above It's, which the server was seen
+  // above to refuse; one that speaks that version as well cannot stand for one that does not
+  if (speaks.includes(3)) note(`T3 Code ${want} speaks version 3 of its protocol as well, so a T3 Code that speaks only another version is not tried`)
+  else {
+    other = await otherProtocol(up.origin, base + 51)
+    const elsewhere = { ...found, origin: other.origin }
+    search = own.t3Search()
+    const unread = await own.t3ThreadOf(elsewhere, of, search, AbortSignal.timeout(30_000))
+    const unknown = await own.t3RunsNow(elsewhere, nobody, AbortSignal.timeout(30_000))
+    const before = (await t3Json(['thread', 'show', thread, '--messages', '50'])).messages
+    const refused = await own.t3Send(elsewhere, thread, 'a message T3 Code should refuse')
+    const after = (await t3Json(['thread', 'show', thread, '--messages', '50'])).messages
+    // Every read of threads was asked in the other version and refused by the real server itself,
+    // not by the stand-in for a server it could not reach. T3 Code still issues the ticket for its
+    // socket in that version, and refuses the socket that would carry the message
+    const answers = other.asked
+    const refusedNow = (a) => a.passed === '3' && typeof a.status === 'number' && a.status >= 400 && a.status < 500
+    const reads = answers.filter((a) => a.path.startsWith('/api/orchestration/'))
+    const refusedByT3 = reads.length > 0 && reads.every(refusedNow)
+    const sockets = answers.filter((a) => a.method === 'socket')
+    check(
+      'asked in a version T3 Code does not speak, It is refused by the real server and takes that for not knowing: never for no thread',
+      refusedByT3 && unread.status === 'incomplete' && !unread.progressed && unknown.status === 'unknown',
+      { unread, unknown, reads: reads.slice(0, 6) },
+    )
+    check(
+      'and puts no message to the thread, and says why in words of its own',
+      typeof refused === 'string' &&
+        refused.length > 0 &&
+        sockets.length > 0 &&
+        sockets.every(refusedNow) &&
+        Array.isArray(before) &&
+        before.length > 0 &&
+        Array.isArray(after) &&
+        after.length === before.length,
+      { refused, before: before?.length, after: after?.length, answers: answers.slice(-3) },
+    )
+    await other.close()
+    other = null
+  }
 
   // ---------- A whole It, and the real Claude Code for It's side ----------
   const setup = await it(['setup', '--only', 'claude-code', '--no-service'], { ms: 300_000 })
@@ -577,12 +681,14 @@ try {
     serve = spawn(COMMAND[0], [...COMMAND.slice(1), 'serve'], {
       cwd: work,
       env: itEnv,
+      detached: !windows,
       stdio: ['ignore', openSync(path.join(logs, 'serve.out.log'), 'a'), openSync(path.join(logs, 'serve.log'), 'a')],
     })
     return untilTrue(async () => {
       const s = await it(['status'])
       return s.running && s.connector?.ok ? s : null
-    }, 120_000)
+      // A Windows runner was seen to take more than two minutes the first time
+    }, 300_000)
   }
   if (!check('It runs, with its connector', await startIt(), readFileSync(path.join(logs, 'serve.log'), 'utf8').slice(-1500)))
     throw new Error('It did not start')
@@ -631,12 +737,27 @@ try {
     clicked && actionId && clicked.text.includes('approve'),
     clicked ?? `nothing in the thread a minute after the click; the connector said: ${connectorLog().slice(-800)}`,
   )
-  const besideShown = await t3Json(['thread', 'show', beside, '--messages', '20'])
-  check('and in no other thread', !besideShown.messages?.some((m) => m.text.startsWith('[It]')), besideShown.messages)
-  // T3 Code starts a turn of the thread for a message a person puts to it, which is what makes it
-  // a turn and not only a line kept in the thread
+  // T3 Code starts a turn of the thread for a message a person puts to it, which is what makes it a
+  // turn and not only a line kept in the thread: a run of its own, made for that message, on the
+  // provider thread of that same conversation, and begun
   const firstRun = settled.messages.find((m) => m.text === 'Make me a page with one button.')?.runId
-  check('T3 Code takes it up as a turn of its own in the thread', clicked?.runId && clicked.runId !== firstRun, { firstRun, clicked })
+  const run = await untilTrue(async () => {
+    const projection = await projectionOf(thread)
+    const message = projection?.messages?.find((m) => m.role === 'user' && m.text === clicked?.text)
+    const r = projection?.runs?.find((x) => x.id === clicked?.runId)
+    const provider = claudeOf(projection, thread)
+    return r?.startedAt && message ? { run: r, message: message.id, provider } : null
+  }, 30_000)
+  check(
+    'T3 Code takes it up as a turn of its own in the thread: a run for that message, on the same conversation, which T3 Code began',
+    typeof firstRun === 'string' &&
+      typeof clicked?.runId === 'string' &&
+      clicked.runId !== firstRun &&
+      run?.run.userMessageId === run?.message &&
+      run?.provider?.nativeThreadRef?.nativeId === conversation &&
+      run?.run.providerThreadId === run?.provider?.id,
+    { firstRun, clicked: clicked?.runId, run },
+  )
   const recorded = await untilTrue(async () => {
     const r = (await it(['read', slug])).recentActions?.find((a) => a.id === actionId)
     return r?.delivery === 'handed_off' ? r : null
@@ -677,6 +798,21 @@ try {
     'with It’s add-on turned off, a click still reaches the thread, as It’s documentation says',
     second && !second.text.endsWith(`[action ${actionId}]`),
     second ?? `nothing more in the thread a minute after the click; the connector said: ${connectorLog().slice(-800)}`,
+  )
+  // What reached the thread, a while after the last click was handed over: each click once, there,
+  // and nothing in the thread beside it
+  await sleep(5000)
+  const finalShown = await t3Json(['thread', 'show', thread, '--messages', '50'])
+  const besideShown = await t3Json(['thread', 'show', beside, '--messages', '50'])
+  const delivered = (finalShown.messages ?? []).filter((m) => m.text.startsWith('[It]'))
+  check(
+    'each click reached that thread once, and the thread beside it got none',
+    Array.isArray(besideShown.messages) &&
+      besideShown.messages.some((m) => m.text === 'Something else.') &&
+      !besideShown.messages.some((m) => m.text.startsWith('[It]')) &&
+      delivered.length === 2 &&
+      new Set(delivered.map((m) => m.text)).size === 2,
+    { delivered: delivered.map((m) => m.text.slice(-60)), beside: besideShown.messages?.map((m) => m.text.slice(0, 60)) },
   )
   if (second && offArrives?.byItself !== true)
     note(
