@@ -76,18 +76,26 @@ let port: MessagePort | null = null
 let channel = 0
 /**
  * What the site that framed the page says it does, as it hands over the channel: null until it
- * has. A site from before It recorded or opened links for a page, as 0.1.38 was, says neither,
- * and drops what it does not know, so a page that waited on its answer would wait for ever. A
- * site open on a screen since before It was updated is one, since nothing reloads it.
+ * has. A site from before It opened the microphone or the camera, or links, for a page, as
+ * 0.1.38 was, says none of it, and one from before it passed a page the microphone's sound, as
+ * 0.1.39 was, does not say that. Each drops what it does not know, so a page that waited on its
+ * answer would wait for ever. A site open on a screen since before It was updated is one, since
+ * nothing reloads it.
  */
-let siteDoes: { media: boolean; opens: boolean } | null = null
-/** What a page is told where the site that framed it does not record for a page. */
+let siteDoes: { media: boolean; sound: boolean; opens: boolean } | null = null
+/** What a page is told where the site that framed it does not do what it asked of the microphone or the camera. */
 const RELOAD_FOR_MEDIA = 'Reload It in this browser to use the microphone and camera: It was updated while it was open here.'
-/** What begins a recording, a photo or the live camera, which such a site would never answer: each is refused there instead. */
-const BEGINS_MEDIA: ReadonlySet<string> = new Set(['it:record', 'it:photo', 'it:camera'])
+/** What opens the microphone or the camera, which such a site would never answer: each is refused there instead. */
+const BEGINS_MEDIA: ReadonlySet<string> = new Set(['it:photo', 'it:camera', 'it:microphone'])
+/** Whether the site, having said what it does, does not take this: anything of the microphone or the camera, or the microphone's sound alone. */
+const siteCannot = (message: PageToSite): boolean =>
+  siteDoes !== null &&
+  BEGINS_MEDIA.has(message.type) &&
+  (!siteDoes.media ||
+    (!siteDoes.sound && (message.type === 'it:microphone' || (message.type === 'it:camera' && message.audio !== undefined && message.audio !== false))))
 /** Whether the site opens the mail, phone, messages and other links a page sends it. Until it has said, it is taken to, as a current site does. */
 const siteOpens = () => siteDoes?.opens !== false
-/** Answers a request that begins a recording, a photo or the live camera, which the site does not take, with what to do. */
+/** Answers a request for a photo, the live camera or the live microphone, which the site does not take, with what to do. */
 function refuseMedia(requestId: string): void {
   const answer = waiting.get(requestId)
   waiting.delete(requestId)
@@ -257,13 +265,13 @@ function send(message: PageToSite): void {
 function ask(message: PageToSite & { requestId: string }): Promise<Result> {
   return new Promise((answered) => {
     waiting.set(message.requestId, answered)
-    // A site that has said it does not record for a page is not asked: it would never answer
-    if (siteDoes && !siteDoes.media && BEGINS_MEDIA.has(message.type)) return refuseMedia(message.requestId)
+    // A site that has said it does not do this for a page is not asked: it would never answer
+    if (siteCannot(message)) return refuseMedia(message.requestId)
     if (message.type === 'it:action') actionsOnTheirWay.set(message.requestId, message)
     send(message)
   })
 }
-/** A request whose refusal the page is told of by a rejection: a recording or a photo, whose callers await what it gives. */
+/** A request whose refusal the page is told of by a rejection: a photo, or the opening of the camera or the microphone, whose callers await what it gives. */
 const done = (message: PageToSite & { requestId: string }): Promise<Extract<Result, { ok: true }>> =>
   ask(message).then((result) => (result.ok ? result : Promise.reject(new Error(result.error))))
 
@@ -308,8 +316,8 @@ function receive(message: SiteToPage): void {
     waiting.delete(message.requestId)
     actionsOnTheirWay.delete(message.requestId)
     answer(message)
-  } else if (message.type === 'it:recording') heard(message)
-  else if (message.type === 'it:camera-frame' || message.type === 'it:camera-state') seen(message)
+  } else if (message.type === 'it:camera-frame' || message.type === 'it:camera-state') seen(message)
+  else if (message.type === 'it:microphone-sound' || message.type === 'it:microphone-state') heard(message)
   else if (message.type === 'it:fullscreen') fullscreenSaid(message.on === true, message.enabled === true)
 }
 
@@ -518,11 +526,11 @@ window.addEventListener('message', (e) => {
   if (type !== 'it:port' || !e.ports[0] || port) return
   port = e.ports[0]
   channel = typeof e.data.v === 'number' ? e.data.v : 0
-  siteDoes = { media: e.data.media === true, opens: e.data.opens === true }
+  siteDoes = { media: e.data.media === true, sound: e.data.sound === true, opens: e.data.opens === true }
   port.onmessage = (m) => receive(m.data as SiteToPage)
   // What was asked before the site answered goes now, but for what it has said it does not take
   for (const m of unsent.splice(0)) {
-    if (!siteDoes.media && BEGINS_MEDIA.has(m.type) && 'requestId' in m) refuseMedia(m.requestId)
+    if (siteCannot(m) && 'requestId' in m) refuseMedia(m.requestId)
     else post(port, m)
   }
   players.hosted(e.data.embeds === true)
@@ -1384,153 +1392,154 @@ function commit(name: string, extra?: Record<string, unknown>, sending?: Sending
 }
 
 // The microphone and the camera. No browser gives either to a sandboxed document, which a page
-// is, so the site records for the page, and hands it what was recorded as a file. A page's call
+// is, so the site opens them for the page, and passes it what they give as it comes: the camera's
+// pictures and the microphone's sound, of which the page makes a stream of its own. A page's call
 // is its asking: It asks the person at the screen, once, in It's own bar, and the browser asks
-// too the first time. It's bar says that it is recording for as long as it is, and the person can
-// stop it there.
-
-type RecordingState = 'recording' | 'paused' | 'ended'
-/** Why a recording ended without the page asking, as the site says it. */
-const ENDED: Record<string, string> = {
-  person: 'The person discarded the recording in It’s bar, and what was recorded was thrown away.',
-  taken_back: 'The person took back what they had allowed this page, and what was recorded was thrown away.',
-  not_shown: 'The page was closed while it recorded, and what was recorded was thrown away.',
-  replaced: 'The page loaded another document while it recorded, and what was recorded was thrown away.',
-  device: 'The microphone or the camera stopped giving anything.',
-  too_long: 'The recording ran as long as one may.',
-  taken_over: 'Another conversation took this page over, and what was recorded was thrown away.',
-  too_large: 'The recording grew as large as a file sent with an action may be, 1 GB, and was stopped there. What was recorded is kept.',
-  // The same, where nothing could be kept: the recorder gave more than that in one piece
-  too_large_lost: 'The recording grew past what a file sent with an action may be, 1 GB, all at once, and nothing of it could be kept.',
-}
-interface Recording {
-  /** What kind of file the recording will be, such as `audio/webm;codecs=opus`, or `audio/mp4` in Safari. */
-  readonly mimeType: string
-  /** Recording, paused (while the screen does not show It), or ended. */
-  readonly state: RecordingState
-  /** Called each time the state changes without the page asking, with the reason where it ended. */
-  onchange: ((state: RecordingState, why?: string) => void) | null
-  /** Stops recording, and gives what was recorded, as a file to send with `It.action`. */
-  stop(): Promise<File>
-  /** Stops recording, and throws away what was recorded. */
-  cancel(): Promise<void>
-}
-const recordings = new Map<string, { state: RecordingState; why?: string; file?: File; changed: (state: RecordingState, why?: string) => void }>()
-let takes = 0
-/** A recording's bytes as a file named for its kind. */
-function taken(file: Blob, mimeType: string): File {
-  // The kind alone, without what it says of its codecs: a file's kind is kept as a kind and nothing more
-  const type = (file.type || mimeType).split(';')[0]!.trim()
-  const ending = /^audio\/mp4/.test(type) ? 'm4a' : /^video\/mp4/.test(type) ? 'mp4' : /ogg/.test(type) ? 'ogg' : /^image\/jpeg/.test(type) ? 'jpg' : 'webm'
-  return new File([file], `${type.startsWith('image/') ? 'photo' : 'recording'}-${++takes}.${ending}`, { type })
-}
-/** What the site said of a recording that the page did not ask about. */
-function heard(message: Extract<SiteToPage, { type: 'it:recording' }>): void {
-  const kept = recordings.get(message.recording)
-  if (!kept || kept.state === 'ended') return
-  kept.state = message.state
-  // Stopped at the most a file may be with nothing kept is said as that, not as a take that was kept
-  const why = message.why === 'too_large' && !(message.file instanceof Blob) ? 'too_large_lost' : message.why
-  if (message.state === 'ended') {
-    kept.why = why
-    if (message.file instanceof Blob) kept.file = taken(message.file, message.file.type)
-    // Nothing more is said of it: what was recorded stays with the recording the page holds, and goes when the page lets go of that
-    recordings.delete(message.recording)
-  }
-  kept.changed(message.state, why)
-}
+// too the first time. It's bar says what is live for as long as it is, and the person can stop it
+// there.
 
 /**
- * Begins recording from the microphone (`audio: true`) or the camera (`video: true`), or both.
- * Resolves once recording has begun. The first time on each screen the person is asked, in It's
- * bar, whether this page may, and the browser asks too the first time for It's site; a page the
- * person said no to is refused without being asked again in that showing. `audio` and `video` may instead be what is
- * asked of the device, such as `{ echoCancellation: false }` or `{ facingMode: 'environment',
- * width: 1280 }`, and `audioBitsPerSecond`, `videoBitsPerSecond` and `mimeType` are as for a
- * MediaRecorder.
+ * It does not record for a page. A page that hears the microphone or sees the camera live records
+ * the stream it holds itself, and one that calls for a recording is told so.
  */
-async function record(
-  options: {
-    audio?: boolean | Record<string, unknown>
-    video?: boolean | Record<string, unknown>
-    audioBitsPerSecond?: number
-    videoBitsPerSecond?: number
-    mimeType?: string
-  } = {},
-): Promise<Recording> {
-  // Sound alone where nothing is said
-  const audio = options.audio ?? !options.video
-  const video = options.video ?? false
-  if (!audio && !video) throw new Error('It.record needs audio, video or both.')
-  const said = await done({
-    type: 'it:record',
-    requestId: id(),
-    audio,
-    video,
-    ...(options.audioBitsPerSecond === undefined ? {} : { audioBitsPerSecond: options.audioBitsPerSecond }),
-    ...(options.videoBitsPerSecond === undefined ? {} : { videoBitsPerSecond: options.videoBitsPerSecond }),
-    ...(options.mimeType === undefined ? {} : { mimeType: options.mimeType }),
-  })
-  const begun = said.recording
-  if (!begun) throw new Error('The recording did not begin.')
-  const kept: { state: RecordingState; why?: string; file?: File; changed: (state: RecordingState, why?: string) => void } = {
-    state: 'recording',
-    changed: (state, why) => {
-      const call = recording.onchange
-      if (typeof call !== 'function') return
-      try {
-        call(state, why === undefined ? undefined : (ENDED[why] ?? why))
-      } catch {
-        console.error('[It] a recording’s onchange handler threw')
-      }
-    },
-  }
-  recordings.set(begun.id, kept)
-  /** What the page is told of a recording that ended by itself. */
-  const over = (): Promise<never> => Promise.reject(new Error(ENDED[kept.why ?? ''] ?? 'The recording has ended.'))
-  const end = async (keep: boolean): Promise<File | undefined> => {
-    if (kept.state === 'ended') {
-      if (kept.file && keep) return kept.file
-      if (!keep) return undefined
-      return over()
-    }
-    kept.state = 'ended'
-    recordings.delete(begun.id)
-    const answer = await done({ type: 'it:record-stop', requestId: id(), recording: begun.id, keep })
-    if (!keep) return undefined
-    if (!answer.file) throw new Error('Nothing was recorded.')
-    kept.file = taken(answer.file, begun.mimeType)
-    return kept.file
-  }
-  const recording: Recording = {
-    mimeType: begun.mimeType,
-    get state() {
-      return kept.state
-    },
-    onchange: null,
-    stop: () => end(true) as Promise<File>,
-    cancel: () => end(false).then(() => undefined),
-  }
-  return recording
+function record(): Promise<never> {
+  return Promise.reject(
+    new Error(
+      'It does not record for a page. Open the microphone with It.microphone(), or the camera with It.camera({ audio: true }), and record the stream it gives with a MediaRecorder of the page’s own.',
+    ),
+  )
 }
 
+let photos = 0
 /**
  * A photo from the camera. It shows the person its own view of the camera, they take the photo
  * there or close it, and the page is given the photo as a JPEG file, to send with `It.action`.
- * The person allows the camera for the page on each screen, as for `It.record`. `facing` is `user` for the camera that faces the person, and `environment`
+ * The person allows the camera for the page on each screen, as for `It.camera`. `facing` is `user` for the camera that faces the person, and `environment`
  * for the one on the back of a phone.
  */
 async function photo(options: { facing?: 'user' | 'environment' } = {}): Promise<File> {
   const said = await done({ type: 'it:photo', requestId: id(), ...(options.facing ? { facing: options.facing } : {}) })
   if (!said.file) throw new Error('No photo was taken.')
-  return taken(said.file, 'image/jpeg')
+  // The kind alone: a file's kind is kept as a kind and nothing more
+  const type = (said.file.type || 'image/jpeg').split(';')[0]!.trim()
+  return new File([said.file], `photo-${++photos}.jpg`, { type })
+}
+
+// Sound, live. The site sends the microphone's sound in small pieces, each a run of samples of
+// one channel, and the page plays each straight after the one before into a stream of its own:
+// for an audio element, a meter, a recorder, or a call the page makes itself with
+// RTCPeerConnection. A browser starts sound for a page only once the person has done something
+// in it, so what plays the pieces is made in the page's own call, which is to come from a click.
+// Each piece is said to be taken once it is, and the site sends more only then, so a page that
+// falls behind is sent less sound and never a pile of it.
+
+/**
+ * How the pieces are played. `slackS`: how far ahead of now the first piece, and the first after a
+ * gap, is played, so that the next has come by the time it is due. `behindS`: how near to now the
+ * next piece's moment may come before that counts as a gap. `aheadS`: how far ahead of now sound
+ * may be waiting to play before a piece is passed over, so that pieces that come in a rush do not
+ * leave the page hearing later and later. `startMs`: how long the browser is given to start sound.
+ */
+const SOUND = { slackS: 0.04, behindS: 0.01, aheadS: 0.2, startMs: 400, mostSamples: 16_384 } as const
+/** What plays the pieces of sound a page is sent into a stream the page holds. */
+interface Player {
+  readonly stream: MediaStream
+  /** Plays one piece after the last, or passes it over where too much is waiting already. */
+  play(samples: ArrayLike<number>, sampleRate: number): void
+  close(): void
+}
+/**
+ * Makes what plays the sound, and starts it. It is made and started in the turn of the page's own
+ * call, before anything is waited for, which is when a browser still counts the person's click.
+ * Rejects where this browser has no way to do it, and where it would not start, which it does not
+ * for a page nobody has clicked or typed in. `by` is the call it is for, as the page is told.
+ */
+async function playerFor(by: string): Promise<Player> {
+  const Context = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+  let context: AudioContext | null = null
+  try {
+    if (typeof Context === 'function') context = new Context()
+  } catch {}
+  if (!context || typeof context.createMediaStreamDestination !== 'function') {
+    void context?.close().catch(() => {})
+    throw new Error('This browser cannot make a stream of the microphone’s sound.')
+  }
+  const made = context
+  if (made.state !== 'running') {
+    // Asked to start now, within the person's click. Where the browser will not, it leaves this waiting, so it is given a moment and no longer
+    const started = made.resume().catch(() => {})
+    await Promise.race([started, new Promise((resolve) => setTimeout(resolve, SOUND.startMs))])
+  }
+  if (made.state !== 'running') {
+    void made.close().catch(() => {})
+    throw new Error(
+      `${by} was not called from a click or a key in the page, and a browser starts sound for a page only once the user has done something in it. Call it from something the user does on the page, such as a button.`,
+    )
+  }
+  const out = made.createMediaStreamDestination()
+  /** When the next piece is to play, by the clock of what plays them. */
+  let next = 0
+  let closed = false
+  return {
+    stream: out.stream,
+    play(samples, sampleRate) {
+      if (closed) return
+      const now = made.currentTime
+      // Nothing is waiting: this piece plays a moment from now, so that the next has come when it is due
+      if (next < now + SOUND.behindS) next = now + SOUND.slackS
+      // Too much is waiting: this piece is passed over, and the page does not fall further behind
+      else if (next - now > SOUND.aheadS) return
+      try {
+        const piece = made.createBuffer(1, samples.length, sampleRate)
+        piece.getChannelData(0).set(samples)
+        const source = made.createBufferSource()
+        source.buffer = piece
+        source.connect(out)
+        source.start(next)
+        next += piece.duration
+      } catch {
+        // A piece this browser cannot play, as at a rate it does not take, is passed over
+      }
+    },
+    close() {
+      if (closed) return
+      closed = true
+      for (const t of out.stream.getTracks()) t.stop()
+      void made.close().catch(() => {})
+    },
+  }
+}
+/** What takes the sound the site sends, by the id the page named its microphone, or its camera with sound, by: a piece is handed to it, and a microphone is told how it stands. */
+const hearing = new Map<
+  string,
+  { sound: (chunk: number, sampleRate: number, samples: Float32Array) => void; told?: (state: MicrophoneState, why?: string) => void }
+>()
+/** What the site sent of a live microphone, or of the sound of a camera opened with it. Sound for nothing the page holds is let go. */
+function heard(message: Extract<SiteToPage, { type: 'it:microphone-sound' | 'it:microphone-state' }>): void {
+  const held = hearing.get(message.microphone)
+  if (!held) return
+  if (message.type === 'it:microphone-state') held.told?.(message.state, message.why)
+  else {
+    const samples = message.samples as unknown as Float32Array | null
+    // Only a run of samples of a sensible length is played; whatever it is, it is said to be taken, so that the next comes
+    if (
+      Object.prototype.toString.call(samples) === '[object Float32Array]' &&
+      samples !== null &&
+      samples.length > 0 &&
+      samples.length <= SOUND.mostSamples &&
+      message.sampleRate > 0
+    )
+      held.sound(message.chunk, message.sampleRate, samples)
+    send({ type: 'it:microphone-heard', microphone: message.microphone, chunk: message.chunk })
+  }
 }
 
 // The camera, live. The site opens it and sends the page each picture it gives, and the page
 // draws each onto a canvas of its own, whose stream is the camera's picture as the page has it:
 // for a video element, or for a call the page makes itself with RTCPeerConnection. Each picture
 // is said to be drawn once it is, and the site sends the next only then, so a page that is slow
-// to draw is sent fewer pictures and never a pile of them.
+// to draw is sent fewer pictures and never a pile of them. Opened with sound, the microphone's
+// sound is played into the same stream, as a live microphone's is into its own.
 
 type CameraState = 'live' | 'paused' | 'ended'
 /** Why the live camera ended without the page asking, as the site says it. */
@@ -1543,7 +1552,7 @@ const CAMERA_ENDED: Record<string, string> = {
   taken_over: 'Another conversation took this page over.',
 }
 interface Camera {
-  /** The camera's picture, as a stream: for a video element's `srcObject`, or a track to send in a call. */
+  /** The camera's picture, as a stream: for a video element's `srcObject`, or a track to send in a call. Opened with sound, it has the microphone's sound as well. */
   readonly stream: MediaStream
   /** The size of the last picture, or 0 before the first. */
   readonly width: number
@@ -1569,19 +1578,32 @@ function seen(message: Extract<SiteToPage, { type: 'it:camera-frame' | 'it:camer
 
 /**
  * Opens the camera live, and gives its picture as a stream the page holds. Resolves once the
- * camera is open. The page asks for the camera when it is published, and the person allows it on
- * each screen, as for `It.record` and `It.photo`. `facing` is `user` for the camera that faces the
- * person and `environment` for the one on the back of a phone; `width`, `height` and `frameRate`
- * are what the camera is asked for, and it gives what it can.
+ * camera is open. The person allows the camera for the page on each screen, as for `It.photo`.
+ * `facing` is `user` for the camera that faces the person and `environment` for the one on the
+ * back of a phone; `width`, `height` and `frameRate` are what the camera is asked for, and it
+ * gives what it can. With `audio`, which is `true` or what is asked of the microphone, such as
+ * `{ echoCancellation: false }`, the stream has the microphone's sound too, the person allows
+ * both, and the call is to come from a click or a key in the page.
  */
 async function camera(
-  options: { facing?: 'user' | 'environment'; facingMode?: 'user' | 'environment'; width?: number; height?: number; frameRate?: number } = {},
+  options: {
+    facing?: 'user' | 'environment'
+    facingMode?: 'user' | 'environment'
+    width?: number
+    height?: number
+    frameRate?: number
+    audio?: boolean | Record<string, unknown>
+  } = {},
 ): Promise<Camera> {
   const canvas = document.createElement('canvas')
   const drawing = canvas.getContext('2d')
   if (!drawing || typeof canvas.captureStream !== 'function') throw new Error('This browser cannot make a stream of the camera’s pictures.')
+  const audio = options.audio === undefined || options.audio === null || options.audio === false ? undefined : options.audio
+  // What plays the microphone's sound is made first, and at once, while the browser still counts the click that called
+  const sound = audio === undefined ? null : await playerFor('It.camera with audio')
   // A frame of the stream each time a picture is drawn, as the camera gives them
   const stream = canvas.captureStream()
+  if (sound) for (const t of sound.stream.getAudioTracks()) stream.addTrack(t)
   const named = id()
   let state: CameraState = 'live'
   let why: string | undefined
@@ -1591,7 +1613,9 @@ async function camera(
   const over = () => {
     state = 'ended'
     cameras.delete(named)
+    hearing.delete(named)
     for (const t of stream.getTracks()) t.stop()
+    sound?.close()
   }
   // Made before the camera is asked for: a picture can come before the answer does
   const live: Camera = {
@@ -1647,6 +1671,8 @@ async function camera(
       }
     },
   })
+  // The camera's sound comes under the camera's own name
+  if (sound) hearing.set(named, { sound: (_chunk, sampleRate, samples) => sound.play(samples, sampleRate) })
   const facing = options.facing ?? options.facingMode
   const video = {
     ...(facing === 'user' || facing === 'environment' ? { facingMode: facing } : {}),
@@ -1655,13 +1681,123 @@ async function camera(
     ...(options.frameRate === undefined ? {} : { frameRate: options.frameRate }),
   }
   try {
-    await done({ type: 'it:camera', requestId: id(), camera: named, video })
+    await done({ type: 'it:camera', requestId: id(), camera: named, video, ...(audio === undefined ? {} : { audio }) })
   } catch (err) {
     over()
     throw err
   }
   // Ended by the site while it was being opened: said as that, and not as a camera that is live
   if (live.state === 'ended' && why) throw new Error(CAMERA_ENDED[why] ?? 'The camera has ended.')
+  return live
+}
+
+// The microphone, live: its sound as a stream the page holds, and each piece of it as it comes.
+
+type MicrophoneState = 'live' | 'paused' | 'ended'
+/** Why the live microphone ended without the page asking, as the site says it. */
+const MICROPHONE_ENDED: Record<string, string> = {
+  person: 'The person stopped the microphone in It’s bar.',
+  taken_back: 'The person took back what they had allowed this page.',
+  not_shown: 'The page was closed while the microphone was live.',
+  replaced: 'The page loaded another document while the microphone was live.',
+  device: 'The microphone stopped giving sound.',
+  taken_over: 'Another conversation took this page over.',
+}
+interface Microphone {
+  /** The microphone's sound, as a stream: for a meter, a recorder, or a track to send in a call. */
+  readonly stream: MediaStream
+  /** How many samples of the sound there are in a second. */
+  readonly sampleRate: number
+  /** Live, paused (while the screen does not show It), or ended. */
+  readonly state: MicrophoneState
+  /** Called with each piece of sound as it comes: its samples, of one channel, each from -1 to 1, and how many there are in a second. */
+  onsound: ((samples: Float32Array, sampleRate: number) => void) | null
+  /** Called each time the state changes without the page asking, with the reason where it ended. */
+  onchange: ((state: MicrophoneState, why?: string) => void) | null
+  /** Closes the microphone. */
+  stop(): Promise<void>
+}
+
+/**
+ * Opens the microphone live, and gives its sound as a stream the page holds. Resolves once the
+ * microphone is open. It is to be called from a click or a key in the page, which is when a
+ * browser lets a page start sound. The person allows the microphone for the page on each screen:
+ * It asks once, in its bar, and the browser asks too the first time. `echoCancellation`,
+ * `noiseSuppression` and `autoGainControl` are what the microphone is asked for.
+ */
+async function microphone(options: { echoCancellation?: boolean; noiseSuppression?: boolean; autoGainControl?: boolean } = {}): Promise<Microphone> {
+  // Made first, and at once, while the browser still counts the click that called
+  const sound = await playerFor('It.microphone')
+  const named = id()
+  let state: MicrophoneState = 'live'
+  let why: string | undefined
+  let sampleRate = 0
+  /** Lets go of the stream: whatever listens to it, and a call that sends it, hear it end. */
+  const over = () => {
+    state = 'ended'
+    hearing.delete(named)
+    sound.close()
+  }
+  // Made before the microphone is asked for: sound can come before the answer does
+  const live: Microphone = {
+    stream: sound.stream,
+    get sampleRate() {
+      return sampleRate
+    },
+    get state() {
+      return state
+    },
+    onsound: null,
+    onchange: null,
+    stop: async () => {
+      if (state === 'ended') return
+      over()
+      // Refused only where the site has closed it already, which is what was asked
+      await done({ type: 'it:microphone-stop', requestId: id(), microphone: named }).catch(() => {})
+    },
+  }
+  hearing.set(named, {
+    sound: (_chunk, rate, samples) => {
+      if (state === 'ended') return
+      sampleRate = rate
+      sound.play(samples, rate)
+      const call = live.onsound
+      if (typeof call !== 'function') return
+      try {
+        call(samples, rate)
+      } catch {
+        console.error('[It] a microphone’s onsound handler threw')
+      }
+    },
+    told: (now, said) => {
+      if (state === 'ended') return
+      if (now === 'ended') {
+        why = said
+        over()
+      } else state = now
+      const call = live.onchange
+      if (typeof call !== 'function') return
+      try {
+        call(now, said === undefined ? undefined : (MICROPHONE_ENDED[said] ?? said))
+      } catch {
+        console.error('[It] a microphone’s onchange handler threw')
+      }
+    },
+  })
+  const audio = {
+    ...(typeof options.echoCancellation === 'boolean' ? { echoCancellation: options.echoCancellation } : {}),
+    ...(typeof options.noiseSuppression === 'boolean' ? { noiseSuppression: options.noiseSuppression } : {}),
+    ...(typeof options.autoGainControl === 'boolean' ? { autoGainControl: options.autoGainControl } : {}),
+  }
+  try {
+    const said = await done({ type: 'it:microphone', requestId: id(), microphone: named, audio })
+    if (typeof said.sound?.sampleRate === 'number' && !sampleRate) sampleRate = said.sound.sampleRate
+  } catch (err) {
+    over()
+    throw err
+  }
+  // Ended by the site while it was being opened: said as that, and not as a microphone that is live
+  if (live.state === 'ended' && why) throw new Error(MICROPHONE_ENDED[why] ?? 'The microphone has ended.')
   return live
 }
 
@@ -2143,6 +2279,7 @@ const api = {
   record,
   photo,
   camera,
+  microphone,
   stage,
   commit,
   staged: () => ({ ...staged }),

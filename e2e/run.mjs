@@ -2911,9 +2911,9 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
 
   // ------------------------------------------------------------------
   section('The microphone and the camera')
-  // A page that records a voice-over, as a page for a demo's narration does. Its call for the
+  // A page that takes a voice-over, as a page for a demo's narration does. Its call for the
   // microphone is its asking: published with nothing said of it, the site asks the person in It's
-  // bar, and It records for the page
+  // bar, and It passes the page the microphone's sound live, which the page records for itself
   const recSlug = `${slug}-recorder`
   const recorderDir = path.join(root, 'e2e/fixtures/recorder')
   await it(A, ['create', marked('Recorder'), '--id', recSlug, '--dir', recorderDir])
@@ -2925,9 +2925,33 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
     await recOut(tab).filter({ hasText: shows }).waitFor({ timeout: 30_000 })
     return recOut(tab).textContent()
   }
+  /** What the page says of the sound it was given: how many pieces, how loud the loudest was, and how loud the stream it made of them has been. */
+  const soundHeard = () =>
+    page
+      .frameLocator('.mount iframe')
+      .locator('body')
+      .evaluate(() => {
+        const said = (id) => document.getElementById(id).textContent
+        return {
+          pieces: Number(said('pieces')),
+          rate: Number(said('rate')),
+          loudest: Number(said('loudest')),
+          inStream: Number(said('stream')),
+          tracks: Number(said('tracks')),
+          track: said('track'),
+        }
+      })
+  /**
+   * Waits until the page has been given more sound than it had, and the stream it made of it has
+   * carried some. A browser's own microphone for tests gives a tone that comes and goes, so the
+   * page listens all the while and says the loudest it heard, and no look falls between two tones.
+   */
+  const soundArrived = (after = 0) =>
+    until(async () => ((s) => (s.pieces > after + 50 && s.loudest > 0.01 && s.inStream > 0.01 ? s : undefined))(await soundHeard()), 20_000, 250)
+  const micRow = page.locator('.page-nav .media-mic')
   await page.goto(`${APP}/p/${recSlug}`)
   await pageIn(page, { id: recSlug })
-  await page.frameLocator('.mount iframe').locator('#record').click()
+  await page.frameLocator('.mount iframe').locator('#mic').click()
   const mediaQuestion = page.locator('.media-ask')
   await mediaQuestion.waitFor({ timeout: 15_000 })
   const questionSaid = await mediaQuestion.textContent()
@@ -2937,49 +2961,95 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
     questionSaid,
   )
   check(
-    'a page that asked is not given the microphone until the person allows it, in It’s own words that name the page, its agent and its machine',
+    'a page that asked is not given the microphone until the person allows it, in It’s own words that name the page, its agent and its machine, and say that it can hear the microphone live',
     questionSaid.includes(marked('Recorder')) &&
       questionSaid.includes('the microphone') &&
       questionSaid.includes(STACK_MACHINE) &&
-      (await recOut(page).textContent()) === '',
+      /hear the microphone live/.test(questionSaid) &&
+      (await recOut(page).textContent()) === '' &&
+      (await soundHeard()).pieces === 0,
     questionSaid,
   )
   await mediaQuestion.getByRole('button', { name: 'Allow', exact: true }).click()
-  const recSaid = await recOut(page)
-    .filter({ hasText: /^(recording|refused)/ })
+  const micSaid = await recOut(page)
+    .filter({ hasText: /^(hearing|refused)/ })
     .waitFor({ timeout: 15_000 })
     .then(() => recOut(page).textContent())
-  await page.waitForTimeout(2000)
-  // In the bar itself, with nothing over the page: a red dot, how long, and Stop
-  const recordingBar =
-    (await page
-      .locator('.page-nav .media-rec')
-      .getAttribute('aria-label')
-      .catch(() => '')) ?? ''
+  const micFirst = await soundArrived()
+  // In the bar itself, with nothing over the page: a red dot, that the microphone is live, and Stop
+  const micBar = { said: (await micRow.textContent().catch(() => '')) ?? '', label: (await micRow.getAttribute('aria-label').catch(() => '')) ?? '' }
   check(
-    'allowed, It records for the page, and It’s own bar says that it is recording',
-    /^recording audio\//.test(recSaid) && /^Recording the microphone for /.test(recordingBar) && (await page.locator('.media-rec-discard').count()) === 1,
-    JSON.stringify({ recSaid, recordingBar }),
+    'allowed, the page hears the microphone live: it is given its sound piece by piece, the stream it makes of them carries the sound on one live track, and It’s own bar says that the microphone is live',
+    /^hearing \d+$/.test(micSaid) &&
+      micFirst?.rate >= 8000 &&
+      micFirst.tracks === 1 &&
+      micFirst.track === 'live' &&
+      micBar.said === 'Mic liveStop' &&
+      /^The microphone is live to /.test(micBar.label) &&
+      (await page.locator('[role="dialog"], .modal-overlay').count()) === 0,
+    JSON.stringify({ micSaid, micFirst, micBar }),
   )
+  // The page records the stream itself, for a moment as a person would, and sends the take as a file
+  const recSaid = await recPressed(page, '#record', /^(recording|refused)/)
+  await page.waitForTimeout(2000)
   const recSent = await recPressed(page, '#stop', /^(accepted|refused)/)
   const recTake = await until(async () => (await it(A, ['actions', '--id', recSlug])).find((x) => x.action === 'take'), 30_000, 500)
   const recTakeAt = path.join(tmp, `take-${slug}.recording`)
   const recTakeSaved = recTake ? (await it(A, ['save', recTake.id, recTakeAt])).saved : null
   const recTakeBytes = existsSync(recTakeAt) ? readFileSync(recTakeAt) : Buffer.alloc(0)
-  // WebM begins with its own four bytes, and an MP4, as Safari records, says so in its first box
-  const isRecordingFile = recTakeBytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])) || recTakeBytes.subarray(4, 8).toString('latin1') === 'ftyp'
+  // WebM begins with its own four bytes, Ogg, as Firefox records sound, with its own four letters, and an MP4, as Safari records, says so in its first box
+  const isRecordingFile = (bytes) =>
+    bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])) ||
+    bytes.subarray(0, 4).toString('latin1') === 'OggS' ||
+    bytes.subarray(4, 8).toString('latin1') === 'ftyp'
   check(
-    'what was recorded reaches the agent as a file of the page’s action, and is saved as a recording',
-    /^accepted /.test(recSent) &&
-      (await page.locator('.media-rec').count()) === 0 &&
+    'what the page records of the stream, with a recorder of its own, reaches the agent as a file of the page’s action, and is saved as a recording, while the microphone stays live',
+    /^recording /.test(recSaid) &&
+      /^accepted /.test(recSent) &&
+      (await micRow.count()) === 1 &&
       /^audio\/(webm|mp4|ogg)$/.test(recTake?.files?.[0]?.type ?? '') &&
       recTake.files[0].bytes > 1000 &&
       recTakeSaved?.bytes === recTake.files[0].bytes &&
-      isRecordingFile,
-    JSON.stringify({ recSent, files: recTake?.files, saved: recTakeSaved, head: recTakeBytes.subarray(0, 8).toString('hex') }),
+      isRecordingFile(recTakeBytes),
+    JSON.stringify({ recSaid, recSent, files: recTake?.files, saved: recTakeSaved, head: recTakeBytes.subarray(0, 8).toString('hex') }),
   )
   if (recTake) await it(A, ['ack', recTake.id])
   rmSync(recTakeAt, { force: true })
+  // It records for no page: a page that asks it to is told what to do in its place, and the microphone stays as it is
+  const askedToRecord = await recPressed(page, '#old', /^(recording|refused)/)
+  check(
+    'a page that asks It to record for it is refused, in words that say to open the microphone or the camera and record the stream itself',
+    /^refused: It does not record for a page\. Open the microphone with It\.microphone\(\)/.test(askedToRecord) && (await micRow.count()) === 1,
+    askedToRecord,
+  )
+  // Stopped from It's bar, the microphone closes, and the page's stream ends with it
+  await micRow.getByRole('button', { name: 'Stop the microphone' }).click()
+  const micStopped = await recOut(page)
+    .filter({ hasText: /^microphone ended/ })
+    .waitFor({ timeout: 15_000 })
+    .then(
+      () => recOut(page).textContent(),
+      () => recOut(page).textContent(),
+    )
+  // Counted from when the page was told: what was on its way as Stop was pressed is the page's still
+  const piecesAtStop = (await soundHeard()).pieces
+  await page.waitForTimeout(1000)
+  const afterStop = await soundHeard()
+  check(
+    'Stop in It’s bar closes the microphone live to the page, the page is told the person stopped it, its stream ends, and no more sound is passed on',
+    micStopped === 'microphone ended: The person stopped the microphone in It’s bar.' &&
+      afterStop.track === 'ended' &&
+      afterStop.pieces === piecesAtStop &&
+      (await micRow.count()) === 0,
+    JSON.stringify({ micStopped, piecesAtStop, afterStop, row: await micRow.count() }),
+  )
+  // Opened again it is not asked about: what the person allowed stands until it is taken back
+  const micAgain = { said: await recPressed(page, '#mic', /^(hearing|refused)/), askedAgain: await mediaQuestion.count() }
+  check(
+    'the microphone opens live again without a second question, and the page is given sound again',
+    micAgain.askedAgain === 0 && /^hearing \d+$/.test(micAgain.said) && !!(await soundArrived(afterStop.pieces)),
+    JSON.stringify(micAgain),
+  )
   // Taken back under Settings, the page is asked about again, and has nothing where the person says no
   await page.goto(`${APP}/settings`)
   const mediaRow = page.locator('.row', { hasText: marked('Recorder') })
@@ -2990,57 +3060,61 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
   await mediaRow.getByRole('button', { name: 'Take back' }).click()
   await page.goto(`${APP}/p/${recSlug}`)
   await pageIn(page, { id: recSlug })
-  await page.frameLocator('.mount iframe').locator('#record').click()
+  await page.frameLocator('.mount iframe').locator('#mic').click()
   const mediaAskedAgain = await mediaQuestion.waitFor({ timeout: 15_000 }).then(
     () => true,
     () => false,
   )
   if (mediaAskedAgain) await mediaQuestion.getByRole('button', { name: 'Not now' }).click()
   const mediaSaidNo = await recOut(page)
-    .filter({ hasText: /^(recording|refused)/ })
+    .filter({ hasText: /^(hearing|refused)/ })
     .waitFor({ timeout: 15_000 })
     .then(() => recOut(page).textContent())
   check(
     'what was allowed is listed under Settings and taken back there, and the page is then asked about again, and refused where the person says no',
-    grantListed && mediaAskedAgain && /did not allow this page/.test(mediaSaidNo) && (await page.locator('.media-rec').count()) === 0,
+    grantListed && mediaAskedAgain && /did not allow this page/.test(mediaSaidNo) && (await micRow.count()) === 0 && (await soundHeard()).pieces === 0,
     JSON.stringify({ grantListed, mediaAskedAgain, mediaSaidNo }),
   )
   // What the person allowed was for the conversation that had the page. Another conversation
-  // opening it takes it over, and what was recording for the one before stops, and is thrown away
+  // opening it takes it over, and the microphone that was live for the one before closes
   const otherConversation = { extraEnv: { IT_HARNESS: 'claude-code', IT_SESSION: `${slug}-another-conversation` } }
   await page.goto(`${APP}/p/${recSlug}`)
   await pageIn(page, { id: recSlug })
-  await page.frameLocator('.mount iframe').locator('#record').click()
+  await page.frameLocator('.mount iframe').locator('#mic').click()
   await mediaQuestion.waitFor({ timeout: 15_000 })
   await mediaQuestion.getByRole('button', { name: 'Allow', exact: true }).click()
-  const recordingBefore = await recOut(page)
-    .filter({ hasText: /^(recording|refused)/ })
+  const hearingBefore = await recOut(page)
+    .filter({ hasText: /^(hearing|refused)/ })
     .waitFor({ timeout: 15_000 })
     .then(() => recOut(page).textContent())
+  await soundArrived()
   await it(A, ['open', recSlug], otherConversation)
-  const recordingAfter = await recOut(page)
-    .filter({ hasText: /^ended/ })
+  const hearingAfter = await recOut(page)
+    .filter({ hasText: /^microphone ended/ })
     .waitFor({ timeout: 30_000 })
     .then(
       () => recOut(page).textContent(),
       () => recOut(page).textContent(),
     )
+  const piecesAtTakeover = (await soundHeard()).pieces
   await page.waitForTimeout(1500)
-  const recTakenOver = {
-    recordingBefore,
-    recordingAfter,
-    barStillRecording: await page.locator('.media-rec').count(),
+  const micTakenOver = {
+    hearingBefore,
+    hearingAfter,
+    barStillLive: await micRow.count(),
     askedAnything: await page.locator('.media-ask').count(),
-    takesSent: (await it(A, ['actions', '--id', recSlug])).filter((x) => x.action === 'take').length,
+    piecesSince: (await soundHeard()).pieces - piecesAtTakeover,
+    track: (await soundHeard()).track,
   }
   check(
-    'a recording under way stops, and what was recorded is thrown away, when another conversation takes the page over, and nothing is asked for that one',
-    /^recording audio\//.test(recordingBefore) &&
-      /^ended: Another conversation took this page over/.test(recordingAfter) &&
-      recTakenOver.barStillRecording === 0 &&
-      recTakenOver.askedAnything === 0 &&
-      recTakenOver.takesSent === 0,
-    JSON.stringify(recTakenOver),
+    'the microphone live to a page closes when another conversation takes the page over, no more sound is passed on, and nothing is asked for that one',
+    /^hearing \d+$/.test(hearingBefore) &&
+      hearingAfter === 'microphone ended: Another conversation took this page over.' &&
+      micTakenOver.barStillLive === 0 &&
+      micTakenOver.askedAnything === 0 &&
+      micTakenOver.piecesSince === 0 &&
+      micTakenOver.track === 'ended',
+    JSON.stringify(micTakenOver),
   )
   // A camera open for a photo closes when what the page was allowed is taken back, from another tab of this browser
   const camSlug = `${recSlug}-camera`
@@ -3087,7 +3161,6 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
   )
   // The camera live to the page, for the conversation that has it now: the page is sent the
   // camera's pictures, and its own video element shows the stream it makes of them
-  // The camera's chip in It's bar, beside a recording's where sound is recorded alongside
   const liveRow = page.locator('.page-nav .media-cam')
   const liveView = page.frameLocator('.mount iframe').locator('#view')
   /** How big the page's own video element says its picture is, and how many pictures the page was given. */
@@ -3118,55 +3191,52 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
     /^refused: The camera is live to this page just now.*cam\.onframe or cam\.stream/.test(photoWhileLive) && (await cameraView.count()) === 0,
     photoWhileLive,
   )
-  // Sound is recorded beside the live camera, and the camera goes on giving the page pictures all the while
+  // The microphone opens live beside the live camera, and the camera goes on giving the page pictures all the while
   const picturesBeforeSound = (await liveShown()).pictures
-  await page.frameLocator('.mount iframe').locator('#record').click()
-  // Allowed the camera alone, the page is asked about the microphone in the bar first
+  await page.frameLocator('.mount iframe').locator('#mic').click()
+  // Allowed the camera alone, the page is asked about the microphone in the bar first, with the camera's chip still there
   const askedForTheMic = await mediaQuestion.waitFor({ timeout: 15_000 }).then(
-    () => mediaQuestion.textContent(),
-    () => '',
+    async () => ({ said: await mediaQuestion.textContent(), cameraChip: await liveRow.count() }),
+    () => ({ said: '', cameraChip: 0 }),
   )
-  if (askedForTheMic) await mediaQuestion.getByRole('button', { name: 'Allow', exact: true }).click()
-  const soundSaid = await recOut(page)
-    .filter({ hasText: /^(recording|refused)/ })
+  if (askedForTheMic.said) await mediaQuestion.getByRole('button', { name: 'Allow', exact: true }).click()
+  const besideSaid = await recOut(page)
+    .filter({ hasText: /^(hearing|refused)/ })
     .waitFor({ timeout: 15_000 })
     .then(() => recOut(page).textContent())
+  const besideSound = await soundArrived()
   // Both said in It's bar at once, each with its own Stop
-  const bothChips = { camera: await liveRow.count(), recording: await page.locator('.page-nav .media-rec').count() }
-  // Recorded for a moment before it is stopped, as a person would: a recorder stopped as soon as
-  // it began may have nothing yet to hand over, on a slower machine. The chip says how long. It is
-  // read at once, with no waiting for it, so that the wait below never runs past its own limit
-  const recordedFor = async () => {
-    const said = await page.evaluate(() => document.querySelector('.page-nav .media-rec')?.getAttribute('aria-label') ?? '').catch(() => '')
-    const time = /(\d+):(\d\d)$/.exec(said)
-    return time ? Number(time[1]) * 60 + Number(time[2]) : 0
-  }
-  if (/^recording audio\//.test(soundSaid)) await until(async () => (await recordedFor()) >= 1, 10_000, 100)
-  const soundSent = /^recording audio\//.test(soundSaid) ? await recPressed(page, '#stop', /^(accepted|refused)/) : soundSaid
-  const soundTake = await until(async () => (await it(A, ['actions', '--id', camSlug])).find((x) => x.action === 'take'), 30_000, 500)
+  const bothChips = { camera: (await liveRow.textContent().catch(() => '')) ?? '', microphone: (await micRow.textContent().catch(() => '')) ?? '' }
   const picturesAfterSound = await livePictures(picturesBeforeSound)
   check(
-    'sound is recorded beside the live camera, each with its own chip in It’s bar, and reaches the agent while the camera goes on',
-    /wants the mic/.test(askedForTheMic) &&
-      /^recording audio\//.test(soundSaid) &&
-      /^accepted /.test(soundSent) &&
-      /^audio\//.test(soundTake?.files?.[0]?.type ?? '') &&
+    'the microphone is live beside the live camera, asked about by itself, each with its own chip in It’s bar, and the camera goes on',
+    /wants the mic(?! and)/.test(askedForTheMic.said) &&
+      askedForTheMic.cameraChip === 1 &&
+      /^hearing \d+$/.test(besideSaid) &&
+      !!besideSound &&
       !!picturesAfterSound &&
-      bothChips.camera === 1 &&
-      bothChips.recording === 1 &&
-      (await liveRow.count()) === 1,
-    JSON.stringify({
-      askedForTheMic: /wants the mic/.test(askedForTheMic),
-      soundSaid,
-      bothChips,
-      soundSent,
-      files: soundTake?.files,
-      picturesBeforeSound,
-      picturesAfterSound,
-      rows: await liveRow.count(),
-    }),
+      bothChips.camera === 'Camera liveStop' &&
+      bothChips.microphone === 'Mic liveStop',
+    JSON.stringify({ askedForTheMic, besideSaid, besideSound, bothChips, picturesBeforeSound, picturesAfterSound }),
   )
-  if (soundTake) await it(A, ['ack', soundTake.id])
+  // Each chip's Stop closes its own: the microphone's leaves the camera live
+  await micRow.getByRole('button', { name: 'Stop the microphone' }).click()
+  const micStoppedBeside = await recOut(page)
+    .filter({ hasText: /^microphone ended/ })
+    .waitFor({ timeout: 15_000 })
+    .then(
+      () => recOut(page).textContent(),
+      () => recOut(page).textContent(),
+    )
+  const picturesAfterMicStop = await livePictures((await liveShown()).pictures)
+  check(
+    'Stop on the microphone’s chip closes the microphone alone, and the camera stays live beside it',
+    micStoppedBeside === 'microphone ended: The person stopped the microphone in It’s bar.' &&
+      (await micRow.count()) === 0 &&
+      (await liveRow.count()) === 1 &&
+      !!picturesAfterMicStop,
+    JSON.stringify({ micStoppedBeside, mic: await micRow.count(), camera: await liveRow.count(), picturesAfterMicStop }),
+  )
   // Stopped from It's bar, the camera closes, and the page's stream ends with it
   await liveRow.getByRole('button', { name: 'Stop the camera' }).click()
   const liveStopped = await recOut(page)
@@ -3182,10 +3252,61 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
     liveStopped === 'camera ended: The person stopped the camera in It’s bar.' && streamEnded === 'ended' && (await liveRow.count()) === 0,
     JSON.stringify({ liveStopped, streamEnded, row: await liveRow.count() }),
   )
-  // Opened again it is not asked about, and another conversation taking the page over closes it
+  // Opened with sound, the camera's one stream has the picture and the microphone's sound, for a
+  // call the page makes or a take it records itself. Allowed both already, it is not asked about
   const picturesBefore = (await liveShown()).pictures
-  await recPressed(page, '#live', /^(live|refused)/)
-  const liveAgain = { askedAgain: await mediaQuestion.count(), said: await recOut(page).textContent(), shown: await livePictures(picturesBefore) }
+  const piecesBeforeCall = (await soundHeard()).pieces
+  const callSaid = await recPressed(page, '#call', /^(live|refused)/)
+  const callAsked = await mediaQuestion.count()
+  const callPictures = await livePictures(picturesBefore)
+  // Its sound comes to what plays it and not to a microphone of the page's: the stream is what says it carries sound
+  const callSound = await until(async () => ((s) => (s.inStream > 0.01 && s.tracks === 1 ? s : undefined))(await soundHeard()), 20_000, 250)
+  const callBar = {
+    said: (await liveRow.textContent().catch(() => '')) ?? '',
+    label: (await liveRow.getAttribute('aria-label').catch(() => '')) ?? '',
+    microphoneChip: await micRow.count(),
+  }
+  check(
+    'a camera opened with sound gives the page one stream with the picture and the microphone’s sound, with nothing more asked, and It’s bar says both are live in one chip with one Stop',
+    callAsked === 0 &&
+      callSaid === 'live with sound, 1 sound tracks' &&
+      !!callPictures &&
+      !!callSound &&
+      callBar.said === 'Camera and mic liveStop' &&
+      /^The camera and the microphone are live to /.test(callBar.label) &&
+      callBar.microphoneChip === 0,
+    JSON.stringify({ callAsked, callSaid, callPictures, callSound, callBar, piecesBeforeCall }),
+  )
+  const micBesideCall = await recPressed(page, '#mic', /^(hearing|refused)/)
+  check(
+    'the microphone is not opened by itself while a camera opened with sound has it, and the page is told where its sound is',
+    /^refused: The microphone is live to this page already, with its camera, and its sound is in cam\.stream/.test(micBesideCall) &&
+      (await micRow.count()) === 0,
+    micBesideCall,
+  )
+  // The page records the camera's stream itself, picture and sound together, and sends the take
+  const callRecording = await recPressed(page, '#record', /^(recording|refused)/)
+  await page.waitForTimeout(2000)
+  const callSent = await recPressed(page, '#stop', /^(accepted|refused)/)
+  const callTake = await until(async () => (await it(A, ['actions', '--id', camSlug])).find((x) => x.action === 'take'), 30_000, 500)
+  const callTakeAt = path.join(tmp, `call-${slug}.recording`)
+  const callTakeSaved = callTake ? (await it(A, ['save', callTake.id, callTakeAt])).saved : null
+  const callTakeBytes = existsSync(callTakeAt) ? readFileSync(callTakeAt) : Buffer.alloc(0)
+  check(
+    'what the page records of the camera’s stream, picture and sound together, reaches the agent as a video file, while the camera stays live',
+    // A recorder may not name the kind of file it makes until its first piece: the file itself says what it is
+    /^recording/.test(callRecording) &&
+      /^accepted /.test(callSent) &&
+      /^video\/(webm|mp4)$/.test(callTake?.files?.[0]?.type ?? '') &&
+      callTake.files[0].bytes > 1000 &&
+      callTakeSaved?.bytes === callTake.files[0].bytes &&
+      isRecordingFile(callTakeBytes) &&
+      (await liveRow.count()) === 1,
+    JSON.stringify({ callRecording, callSent, files: callTake?.files, saved: callTakeSaved, head: callTakeBytes.subarray(0, 8).toString('hex') }),
+  )
+  if (callTake) await it(A, ['ack', callTake.id])
+  rmSync(callTakeAt, { force: true })
+  // Another conversation taking the page over closes the camera and the microphone it was opened with, together
   await it(A, ['open', camSlug], { extraEnv: { IT_HARNESS: 'claude-code', IT_SESSION: `${slug}-a-third-conversation` } })
   const liveTakenOver = await recOut(page)
     .filter({ hasText: /^camera ended/ })
@@ -3194,15 +3315,15 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
       () => recOut(page).textContent(),
       () => recOut(page).textContent(),
     )
+  const callEnded = await liveView.evaluate((v) => v.srcObject?.getTracks().map((t) => t.readyState))
   check(
-    'the camera opens live again without a second question, and closes when another conversation takes the page over',
-    liveAgain.askedAgain === 0 &&
-      liveAgain.said === 'live' &&
-      !!liveAgain.shown &&
-      liveTakenOver === 'camera ended: Another conversation took this page over.' &&
+    'a camera opened with sound closes, picture and sound together, when another conversation takes the page over, and nothing is asked for that one',
+    liveTakenOver === 'camera ended: Another conversation took this page over.' &&
+      callEnded?.length === 2 &&
+      callEnded.every((state) => state === 'ended') &&
       (await liveRow.count()) === 0 &&
       (await mediaQuestion.count()) === 0,
-    JSON.stringify({ ...liveAgain, liveTakenOver, row: await liveRow.count() }),
+    JSON.stringify({ liveTakenOver, callEnded, row: await liveRow.count() }),
   )
   // The camera live to a page is held to the document that opened it. In a tab of its own, the run
   // notes the name the page's document said hello with, and the page's file elsewhere.txt, which
@@ -3332,6 +3453,27 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
       afterReload.chip === 1 &&
       reloaded.asked === 0,
     JSON.stringify(reloaded),
+  )
+  // The microphone live to a page is held to the document that opened it in the same way
+  await camTab.goto(`${APP}/p/${camSlug}`)
+  await pageIn(camTab, { id: camSlug })
+  const micChipThere = camTab.locator('.page-nav .media-mic')
+  await anotherFrame().locator('#mic').click()
+  // Asked in the bar where this page is not allowed the microphone yet on this screen
+  const micQuestion = camTab.locator('.media-ask')
+  await until(async () => (await micQuestion.count()) > 0 || /^(hearing|refused)/.test((await anotherSaid().textContent()) ?? ''), 15_000, 100)
+  if ((await micQuestion.count()) > 0) await micQuestion.getByRole('button', { name: 'Allow', exact: true }).click()
+  await anotherSaid()
+    .filter({ hasText: /^(hearing|refused)/ })
+    .waitFor({ timeout: 15_000 })
+    .catch(() => {})
+  const micOpenThere = { said: await anotherSaid().textContent(), chip: await micChipThere.count() }
+  await anotherFrame().locator('#elsewhere').click()
+  const micReplaced = { ...micOpenThere, endedAtOnce: Boolean(await until(async () => (await micChipThere.count()) === 0, 1500, 50)) }
+  check(
+    'the microphone live to a page ends as soon as its frame loads another document',
+    /^hearing \d+$/.test(micReplaced.said ?? '') && micReplaced.chip === 1 && micReplaced.endedAtOnce,
+    JSON.stringify(micReplaced),
   )
   await camTab.close()
   await page.goto(`${APP}/p/${slug}`)

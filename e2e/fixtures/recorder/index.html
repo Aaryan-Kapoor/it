@@ -6,26 +6,105 @@
   </head>
   <body>
     <h1>Recorder e2e-private-page</h1>
+    <button id="mic" onclick="hear()">Microphone</button>
+    <button id="quiet" onclick="quiet()">Stop the microphone</button>
     <button id="record" onclick="record()">Record</button>
     <button id="stop" onclick="stop()">Stop and send</button>
     <button id="photo" onclick="photo()">Photo</button>
     <button id="live" onclick="live()">Live camera</button>
+    <button id="call" onclick="live({ audio: true })">Camera with sound</button>
+    <button id="close" onclick="closeCamera()">Close the camera</button>
+    <button id="old" onclick="old()">Record as before</button>
     <button id="elsewhere" onclick="elsewhere()">Another document</button>
     <button id="again" onclick="location.reload()">Load again</button>
     <p id="out"></p>
     <video id="view" autoplay muted playsinline width="320"></video>
     <p>Pictures: <span id="frames">0</span></p>
+    <p>Pieces of sound: <span id="pieces">0</span>, at <span id="rate">0</span> a second, loudest <span id="loudest">0</span></p>
+    <p>Loudest in the stream: <span id="stream">0</span>, with <span id="tracks">0</span> sound tracks, <span id="track">none</span></p>
     <script>
-      // What a page that records a voice-over does: It records for it, and the take goes to the agent as a file
+      // What a page that takes a voice-over does: It passes it the microphone's sound live, it
+      // records the stream it makes of that itself, and the take goes to the agent as a file
       const out = document.getElementById('out')
-      let take = null
-      async function record() {
-        // What the page said before is not taken for what It says of this recording
+      const put = (id, value) => (document.getElementById(id).textContent = String(value))
+      const loudness = (samples) => {
+        let sum = 0
+        for (const v of samples) sum += v * v
+        return Math.sqrt(sum / samples.length)
+      }
+      let mic = null
+      let pieces = 0
+      let loudest = 0
+      let inStream = 0
+      let listening = null
+      /** Listens to a stream all the while, and says the loudest it has been: sound that comes and goes is not missed between two looks. */
+      function listen(stream) {
+        clearInterval(listening)
+        // What an earlier stream measured is not shown as this one's
+        inStream = 0
+        put('stream', inStream.toFixed(4))
+        put('tracks', stream.getAudioTracks().length)
+        put('track', stream.getAudioTracks()[0]?.readyState ?? 'none')
+        const context = new AudioContext()
+        const meter = context.createAnalyser()
+        context.createMediaStreamSource(stream).connect(meter)
+        const samples = new Float32Array(meter.fftSize)
+        listening = setInterval(() => {
+          meter.getFloatTimeDomainData(samples)
+          inStream = Math.max(inStream, loudness(samples))
+          put('stream', inStream.toFixed(4))
+          put('tracks', stream.getAudioTracks().length)
+          put('track', stream.getAudioTracks()[0]?.readyState ?? 'none')
+        }, 37)
+      }
+      async function hear() {
+        // What the page said before is not taken for what the microphone says now
         out.textContent = ''
         try {
-          take = await It.record({ audio: true })
-          take.onchange = (state, why) => (out.textContent = `${state}${why ? `: ${why}` : ''}`)
-          out.textContent = `recording ${take.mimeType}`
+          mic = await It.microphone()
+          mic.onsound = (samples, rate) => {
+            loudest = Math.max(loudest, loudness(samples))
+            put('pieces', ++pieces)
+            put('rate', rate)
+            put('loudest', loudest.toFixed(4))
+          }
+          mic.onchange = (state, why) => (out.textContent = `microphone ${state}${why ? `: ${why}` : ''}`)
+          listen(mic.stream)
+          out.textContent = `hearing ${mic.sampleRate}`
+        } catch (e) {
+          out.textContent = `refused: ${e.message}`
+        }
+      }
+      async function quiet() {
+        await mic.stop()
+        out.textContent = `microphone stopped ${mic.state}`
+      }
+      // The page records the stream itself: of the microphone, or of the camera with its sound
+      let recorder = null
+      let recorded = []
+      function record() {
+        out.textContent = ''
+        try {
+          recorded = []
+          recorder = new MediaRecorder(cam && cam.state !== 'ended' ? cam.stream : mic.stream)
+          recorder.ondataavailable = (e) => e.data.size && recorded.push(e.data)
+          recorder.start(250)
+          out.textContent = `recording ${recorder.mimeType}`
+        } catch (e) {
+          out.textContent = `refused: ${e.message}`
+        }
+      }
+      async function stop() {
+        try {
+          await new Promise((done) => {
+            recorder.onstop = done
+            recorder.stop()
+          })
+          // The type of what was recorded, which Firefox no longer says in recorder.mimeType once it has stopped
+          const type = (recorded[0]?.type ?? '').split(';')[0]
+          const file = new File(recorded, `take.${/ogg/.test(type) ? 'ogg' : /mp4/.test(type) ? 'm4a' : 'webm'}`, { type })
+          const r = await It.action('take', { take: file, note: 'e2e-private-take one' })
+          out.textContent = `accepted ${r.id}`
         } catch (e) {
           out.textContent = `refused: ${e.message}`
         }
@@ -41,28 +120,33 @@
       // What a page that shows the camera live does: It sends it the camera's pictures, and it shows the stream it makes of them
       let cam = null
       let pictures = 0
-      async function live() {
+      async function live(options = {}) {
         // What the page said before is not taken for what the camera says now
         out.textContent = ''
         try {
-          cam = await It.camera()
+          cam = await It.camera(options)
           document.getElementById('view').srcObject = cam.stream
-          cam.onframe = () => (document.getElementById('frames').textContent = String(++pictures))
+          cam.onframe = () => put('frames', ++pictures)
           cam.onchange = (state, why) => (out.textContent = `camera ${state}${why ? `: ${why}` : ''}`)
-          out.textContent = 'live'
+          if (options.audio) listen(cam.stream)
+          out.textContent = options.audio ? `live with sound, ${cam.stream.getAudioTracks().length} sound tracks` : 'live'
         } catch (e) {
           out.textContent = `refused: ${e.message}`
         }
+      }
+      async function closeCamera() {
+        await cam.stop()
+        out.textContent = `camera stopped ${cam.state}`
       }
       // The page takes its frame to another of its files, a document It's script is not in
       function elsewhere() {
         location.href = 'elsewhere.txt'
       }
-      async function stop() {
+      // A page written for an It that recorded for a page is told what to do instead
+      async function old() {
         try {
-          const file = await take.stop()
-          const r = await It.action('take', { take: file, note: 'e2e-private-take one' })
-          out.textContent = `accepted ${r.id}`
+          await It.record({ audio: true })
+          out.textContent = 'recording'
         } catch (e) {
           out.textContent = `refused: ${e.message}`
         }

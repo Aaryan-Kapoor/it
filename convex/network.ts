@@ -97,7 +97,7 @@ async function said(ctx: QueryCtx): Promise<{
     funnel: row?.funnel,
     on: row?.on ?? false,
     wanted: row?.wanted ?? false,
-    // The address over https first: there a browser lets a page It records for use the microphone
+    // The address over https first: there a browser lets It open the microphone for a page
     addresses: [...(secure ? [secure] : []), ...(row?.on ? row.addresses : [])],
     ...(typeof row?.tailnet === 'boolean' ? { tailnet: row.on && row.tailnet } : {}),
     // Said only by a service that knows of answering the internet, as the tailnet is

@@ -608,34 +608,19 @@ export const SHRINK = {
 
 /**
  * What a page may ask to use of the screen it is shown on: the microphone, the camera, or both.
- * A page asks by calling for them (`It.record`, `It.photo`), and nothing else asks: the site
- * records for it only once the person at that screen has said yes to that page, in It's own bar,
- * and that bar says that it is recording all the while.
+ * A page asks by calling for them (`It.microphone`, `It.camera`, `It.photo`), and nothing else
+ * asks: the site opens one for it only once the person at that screen has said yes to that page,
+ * in It's own bar, and that bar says that it is live all the while.
  *
  * A page itself is never given the device. A sandboxed document has no origin of its own, and no
  * browser gives the microphone or the camera to one, so the site, whose origin the browser asks
- * the person about, records, and hands the page what it recorded as a file.
+ * the person about, opens it, and passes the page what it gives: the microphone's sound and the
+ * camera's pictures as they come, and a photo as a file.
  */
 export const MEDIA_KINDS = ['mic', 'camera'] as const
 export type MediaKind = (typeof MEDIA_KINDS)[number]
 /** Whether something is one of the kinds, as the backend and the command check what they are given. */
 export const isMediaKind = (kind: unknown): kind is MediaKind => (MEDIA_KINDS as readonly unknown[]).includes(kind)
-/** The kinds a recording asks for, by what it asks the browser for: sound is the microphone's, and pictures the camera's. */
-export const mediaFor = (asked: { audio: boolean; video: boolean }): MediaKind[] => [
-  ...(asked.audio ? ['mic' as const] : []),
-  ...(asked.video ? ['camera' as const] : []),
-]
-/** The bounds the site holds a recording to, whatever the page asks for. */
-export const RECORDING = {
-  /** Bits a second of sound, the least and the most a page may ask for, and what it is given when it asks for none. */
-  audioBits: { least: 16_000, most: 512_000, given: 128_000 },
-  /** Bits a second of pictures, likewise. */
-  videoBits: { least: 100_000, most: 8_000_000, given: 1_500_000 },
-  /** How long one recording may run, in milliseconds. It is stopped then, and given to the page. */
-  longestMs: 60 * 60_000,
-  /** How large one recording may grow, in bytes: the most a file an action carries may be. It is stopped before then, and given to the page. */
-  mostBytes: LIMITS.actionFileBytes,
-} as const
 
 /** What a person allows a page on a screen lasts until they take it back, or until it goes this long without being used: each use begins the time again. */
 export const MEDIA_GRANT = { unusedMs: 30 * 24 * 60 * 60_000 } as const
@@ -1128,28 +1113,33 @@ export type PageToSite =
    * while it is still handling the message.
    */
   | { type: 'it:open'; url: string }
-  /**
-   * Begin recording. This call is the page's asking: the person is asked in It's bar where the
-   * page is not allowed what it wants on this screen yet. What the browser is to be asked for is
-   * the page's to say, and the site takes no more of it than plain sizes and switches. Answered
-   * once recording has begun, with its id.
-   */
-  | { type: 'it:record'; requestId: string; audio: unknown; video: unknown; audioBitsPerSecond?: unknown; videoBitsPerSecond?: unknown; mimeType?: unknown }
-  /** End a recording. With `keep` the page is answered with what was recorded, as a file, and without it that is thrown away. */
-  | { type: 'it:record-stop'; requestId: string; recording: string; keep: boolean }
   /** A photo, which the person takes in It's own view of the camera. Answered with the photo as a file. */
   | { type: 'it:photo'; requestId: string; facing?: unknown }
   /**
-   * Open the camera live. This call is the page's asking, as `it:record` is. The site opens it
-   * and sends the page each picture it gives, as `it:camera-frame`, under the id the page names
-   * it by here. The site takes no more of `video` than plain sizes and which way the camera
-   * faces. Answered once the camera is open.
+   * Open the camera live. This call is the page's asking: the person is asked in It's bar where
+   * the page is not allowed what it wants on this screen yet. The site opens it and sends the
+   * page each picture it gives, as `it:camera-frame`, under the id the page names it by here. The
+   * site takes no more of `video` than plain sizes and which way the camera faces. With `audio`
+   * the microphone is opened with it, and its sound is sent as `it:microphone-sound` under the
+   * same id; the site takes no more of `audio` than plain switches. Answered once the camera is
+   * open, with the rate of its sound where it has any.
    */
-  | { type: 'it:camera'; requestId: string; camera: string; video: unknown }
+  | { type: 'it:camera'; requestId: string; camera: string; video: unknown; audio?: unknown }
   /** Close the live camera. */
   | { type: 'it:camera-stop'; requestId: string; camera: string }
   /** The page has drawn this picture of the live camera, and the site may send another in its place. */
   | { type: 'it:camera-drawn'; camera: string; frame: number }
+  /**
+   * Open the microphone live. This call is the page's asking, as `it:camera` is. The site opens
+   * it and sends the page its sound as it comes, as `it:microphone-sound`, under the id the page
+   * names it by here. The site takes no more of `audio` than plain switches. Answered once the
+   * microphone is open, with the rate of its sound.
+   */
+  | { type: 'it:microphone'; requestId: string; microphone: string; audio: unknown }
+  /** Close the live microphone. */
+  | { type: 'it:microphone-stop'; requestId: string; microphone: string }
+  /** The page has taken every piece of sound up to this one, of a live microphone or of a camera opened with sound, and the site may send more in their place. */
+  | { type: 'it:microphone-heard'; microphone: string; chunk: number }
   /**
    * The page asks It to go fullscreen, or to leave it, and is answered with an `it:result` on its
    * channel. It is posted on the window and not on the channel: Safari carries the click that
@@ -1187,6 +1177,12 @@ export interface CameraPicture {
   close(): void
 }
 
+/** A piece of the live microphone's sound, as a page is given it: a `Float32Array` of one channel's samples. */
+export interface Sound {
+  readonly length: number
+  readonly [sample: number]: number
+}
+
 export type SiteToPage =
   /** The page's whole state. */
   | { type: 'it:state'; state: unknown; revision: number }
@@ -1199,28 +1195,13 @@ export type SiteToPage =
       ok: true
       actionId?: string
       revision?: number
-      /** A recording that has begun: its id, and the kind of file it will be. */
-      recording?: { id: string; mimeType: string }
-      /** What was recorded, or the photo that was taken. */
+      /** The photo that was taken. */
       file?: Blob
+      /** Of a microphone that has opened, or a camera opened with sound: how many samples of its sound there are in a second. */
+      sound?: { sampleRate: number }
     }
   /** Refused, with why. `retryAfterMs` where it was refused for coming too fast, and is taken when it is sent again that much later. */
   | { type: 'it:result'; requestId: string; ok: false; error: string; retryAfterMs?: number }
-  /**
-   * A recording was paused, went on, or ended without the page asking: paused while the screen
-   * does not show It, and ended when the person stopped it in It's bar or took back what they
-   * had allowed, when another conversation took the page over, when the page is no longer shown,
-   * when the document that began it is no longer the one in the frame (`replaced`), when the
-   * device went away, or when it ran as long or grew as large as one may. Where it ended and what
-   * was recorded is the page's to have, it comes with it.
-   */
-  | {
-      type: 'it:recording'
-      recording: string
-      state: 'recording' | 'paused' | 'ended'
-      why?: 'person' | 'taken_back' | 'not_shown' | 'replaced' | 'device' | 'too_long' | 'taken_over' | 'too_large'
-      file?: Blob
-    }
   /**
    * One picture of the live camera, numbered in the order the camera gave it. The site sends a
    * few at a time and no more: the next goes once the page says it has drawn one
@@ -1237,6 +1218,21 @@ export type SiteToPage =
   | {
       type: 'it:camera-state'
       camera: string
+      state: 'live' | 'paused' | 'ended'
+      why?: 'person' | 'taken_back' | 'not_shown' | 'replaced' | 'device' | 'taken_over'
+    }
+  /**
+   * One piece of the live microphone's sound, numbered in the order it was heard: its samples, of
+   * one channel, each from -1 to 1, as a `Float32Array`, and how many there are in a second. Of a
+   * camera opened with sound it comes under the camera's id. The site sends a few pieces at a
+   * time and no more: more go once the page says it has taken them (`it:microphone-heard`), and
+   * what the microphone gives in between is passed over.
+   */
+  | { type: 'it:microphone-sound'; microphone: string; chunk: number; sampleRate: number; samples: Sound }
+  /** The live microphone paused, went on, or ended without the page asking, as `it:camera-state` says of the camera. */
+  | {
+      type: 'it:microphone-state'
+      microphone: string
       state: 'live' | 'paused' | 'ended'
       why?: 'person' | 'taken_back' | 'not_shown' | 'replaced' | 'device' | 'taken_over'
     }

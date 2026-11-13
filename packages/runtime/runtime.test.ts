@@ -66,10 +66,15 @@ function load(html = '', before: (w: any) => void = () => {}) {
     /**
      * The site answers the hello, as mount.tsx does: from the window that framed the page. A site
      * whose channel says no version (`null`) is one from before it said any. `says` is what the
-     * site says it does, as a current one says it: one from before It recorded or opened links for
-     * a page, as 0.1.38 was, says nothing of either (`{}`).
+     * site says it does, as a current one says it: one from before It opened the microphone, the
+     * camera or links for a page, as 0.1.38 was, says nothing of any (`{}`).
      */
-    answer(origin = APP, source: unknown = w.parent, v: number | null = CHANNEL_VERSION, says: Record<string, unknown> = { media: true, opens: true }) {
+    answer(
+      origin = APP,
+      source: unknown = w.parent,
+      v: number | null = CHANNEL_VERSION,
+      says: Record<string, unknown> = { media: true, sound: true, opens: true },
+    ) {
       // A port sends a copy of what it is given, and refuses what cannot be copied: the stand-in does as a real one does
       const port: Port = { sent: [], postMessage: (m) => port.sent.push(structuredClone(m)), onmessage: null, close: () => {} }
       page.port = port
@@ -447,7 +452,7 @@ describe('the script inside a page', () => {
     expect(p.It.store.get('a.b')).toBe('dotted')
     expect(p.It.store.get('missing')).toBeUndefined()
     void p.It.store.set('draft', { text: 'new' })
-    await p.advance(0)
+    await settled()
     expect(port.sent[0]).toMatchObject({ type: 'it:store', changes: [['draft', '{"text":"new"}']] })
     // A name that reaches into what every object has is neither read nor sent
     expect(p.It.store.get('constructor')).toBeUndefined()
@@ -1254,16 +1259,16 @@ describe('what the page keeps for itself', () => {
     const port = p.answer()
     p.fromSite({ type: 'it:state', state: {}, revision: 1 })
     const answers = [p.It.store.set('a', 1), p.It.store.set('b', 2), p.It.store.set('a', 3)]
-    await p.advance(0)
+    await settled()
     expect(writes(port)).toEqual([{ a: 3, b: 2 }])
     // Set while that one is on its way: held, and gathered
     void p.It.store.set('c', 4)
     void p.It.store.set('c', 5)
     void p.It.store.set('a', 6)
-    await p.advance(0)
+    await settled()
     expect(writes(port)).toHaveLength(1)
     p.fromSite({ type: 'it:result', requestId: port.sent[0].requestId, ok: true, revision: 2 })
-    await p.advance(0)
+    await settled()
     for (const answer of answers) await expect(answer).resolves.toEqual({ ok: true })
     // Answered at once, it is still sent no sooner than a moment after the one before
     expect(writes(port)).toHaveLength(1)
@@ -1276,7 +1281,7 @@ describe('what the page keeps for itself', () => {
     p.fromSite({ type: 'it:result', requestId: lastWrite(port).requestId, ok: true, revision: 3 })
     await p.advance(STORE_EVERY_MS * 2)
     void p.It.store.set('d', 7)
-    await p.advance(0)
+    await settled()
     expect(writes(port).at(-1)).toEqual({ d: 7 })
   })
 
@@ -1294,7 +1299,7 @@ describe('what the page keeps for itself', () => {
     expect(p.It.store.get('other')).toBeUndefined()
     expect(p.It.state).toEqual({ status: 'open', _page: { draft: 'new' } })
     expect(told).toEqual(['old'])
-    await p.advance(0)
+    await settled()
     // A state that does not have it yet, from someone else's change, is shown with it
     p.fromSite({ type: 'it:changed', revision: 2, state: { status: 'busy' }, kept: [] })
     expect(told).toEqual(['old', 'new'])
@@ -1302,7 +1307,7 @@ describe('what the page keeps for itself', () => {
     expect(p.It.state.status).toBe('busy')
     // Kept, at revision 3: shown as it is until the state of revision 3 arrives, which has it
     p.fromSite({ type: 'it:result', requestId: lastWrite(port).requestId, ok: true, revision: 3 })
-    await p.advance(0)
+    await settled()
     p.fromSite({ type: 'it:changed', revision: 2, kept: [['draft', 'stale']] })
     expect(p.It.store.get('draft')).toBe('new')
     p.fromSite({
@@ -1327,10 +1332,10 @@ describe('what the page keeps for itself', () => {
     p.fromSite({ type: 'it:state', state: {}, revision: 1 })
     const first = p.It.store.set('a', 1)
     const second = p.It.store.set('b', 1)
-    await p.advance(0)
+    await settled()
     void p.It.store.set('b', 2)
     p.fromSite({ type: 'it:result', requestId: lastWrite(port).requestId, ok: false, error: 'Too many requests.', retryAfterMs: 900 })
-    await p.advance(0)
+    await settled()
     // Still shown, still waiting, and not sent again before the wait is over
     expect(p.It.store.get('a')).toBe(1)
     expect(p.It.store.get('b')).toBe(2)
@@ -1350,7 +1355,7 @@ describe('what the page keeps for itself', () => {
     p.It.onState((s: any) => told.push(s._page?.draft))
     p.fromSite({ type: 'it:state', state: { _page: { draft: 'kept' } }, revision: 1 })
     const refused = p.It.store.set('draft', 'too much')
-    await p.advance(0)
+    await settled()
     expect(p.It.store.get('draft')).toBe('too much')
     p.fromSite({ type: 'it:result', requestId: lastWrite(port).requestId, ok: false, error: "A page's state is at most 512 KB." })
     await expect(refused).rejects.toThrow("A page's state is at most 512 KB.")
@@ -1369,7 +1374,7 @@ describe('what the page keeps for itself', () => {
     const value = { points: [1, 2] }
     const fine = p.It.store.set('fine', value)
     value.points.push(3)
-    await p.advance(0)
+    await settled()
     expect(writes(port)).toEqual([{ fine: { points: [1, 2] } }])
     expect(p.It.store.get('fine')).toEqual({ points: [1, 2] })
     p.fromSite({ type: 'it:result', requestId: lastWrite(port).requestId, ok: true, revision: 2 })
@@ -1380,7 +1385,7 @@ describe('what the page keeps for itself', () => {
     const p = load()
     void p.It.store.set('a', 1)
     void p.It.store.set('b', 2)
-    await p.advance(0)
+    await settled()
     expect(p.It.store.get('a')).toBe(1)
     const port = p.answer()
     expect(writes(port)).toEqual([{ a: 1, b: 2 }])
@@ -1392,7 +1397,7 @@ describe('what the page keeps for itself', () => {
     p.fromSite({ type: 'it:state', state: { _page: { b: 'was' } }, revision: 1 })
     const a = p.It.store.set('a', { n: 1 })
     const b = p.It.store.set('b', 'new')
-    await p.advance(0)
+    await settled()
     expect(port.sent.filter((m) => m.type === 'it:store').map((m) => [m.key, m.value])).toEqual([
       ['a', { n: 1 }],
       ['b', 'new'],
@@ -1957,14 +1962,364 @@ describe('the script itself', () => {
   })
 })
 
+// Sound, live: the site sends the microphone's sound in pieces, and the page's script plays each
+// into a stream the page holds. What a browser makes sound with is stood in for by one that
+// writes down what it was asked to play and when, and says whether it runs or was closed.
+/** What stands in for a browser's sound in a page: whether it starts by itself, when asked, or not at all, as in a page nobody has clicked in. */
+function soundIn(w: any, starts: 'at once' | 'when asked' | 'never' = 'when asked', under = 'AudioContext') {
+  /** Each piece it was asked to play: when, by its own clock, how many samples, at how many a second, and the first of them. */
+  const played: { at: number; samples: number; rate: number; first: number }[] = []
+  const tracks = [{ kind: 'audio', stopped: false, stop: () => (tracks[0]!.stopped = true) }]
+  const made: { state: string; currentTime: number }[] = []
+  w[under] = class {
+    state = starts === 'at once' ? 'running' : 'suspended'
+    /** Its own clock, in seconds, which the test moves. */
+    currentTime = 0
+    constructor() {
+      made.push(this)
+    }
+    // A browser that will not start sound leaves whoever asked waiting, and says nothing
+    resume() {
+      if (starts === 'never') return new Promise<void>(() => {})
+      this.state = 'running'
+      return Promise.resolve()
+    }
+    close() {
+      this.state = 'closed'
+      return Promise.resolve()
+    }
+    createMediaStreamDestination() {
+      return { stream: { getTracks: () => tracks, getAudioTracks: () => tracks } }
+    }
+    createBuffer(_channels: number, length: number, rate: number) {
+      // A rate no browser plays
+      if (rate < 3000) throw new Error('NotSupportedError')
+      const data = new Float32Array(length)
+      return { duration: length / rate, length, rate, getChannelData: () => data }
+    }
+    createBufferSource() {
+      const source = {
+        buffer: null as { length: number; rate: number; getChannelData: () => Float32Array } | null,
+        connect() {},
+        start(at: number) {
+          played.push({ at, samples: source.buffer!.length, rate: source.buffer!.rate, first: source.buffer!.getChannelData()[0]! })
+        },
+      }
+      return source
+    }
+  }
+  return { played, tracks, made }
+}
+/** Lets what waits on a promise go on, as a browser does between two things it is told. */
+const settled = () => new Promise((resolve) => setImmediate(resolve))
+/** A piece of sound as the site sends one: so many samples, each of them this loud. */
+const samplesOf = (count = 960, each = 0.25) => new Float32Array(count).fill(each)
+
+describe('the microphone, live in a page', () => {
+  /** The microphone opened, and the site's answer given. */
+  async function opened(starts: Parameters<typeof soundIn>[1] = 'when asked') {
+    const p = load()
+    const sound = soundIn(p.w, starts)
+    const opening = p.It.microphone({ echoCancellation: false })
+    const port = p.answer()
+    // What plays the sound is started before the site is asked anything
+    await settled()
+    const asked = port.sent[0]
+    p.fromSite({ type: 'it:result', requestId: asked.requestId, ok: true, sound: { sampleRate: 48_000 } })
+    const mic = await opening
+    const heard = (chunk: number, samples: unknown = samplesOf(), sampleRate = 48_000) =>
+      p.fromSite({ type: 'it:microphone-sound', microphone: asked.microphone, chunk, sampleRate, samples })
+    const taken = () => port.sent.filter((m) => m.type === 'it:microphone-heard').map((m) => m.chunk)
+    return { p, ...sound, port, asked, mic, heard, taken }
+  }
+
+  test('is asked for under an id the page names it by, with what was asked of the microphone, and gives the stream once it is open, with how many samples of sound there are in a second', async () => {
+    const { asked, mic, tracks, made } = await opened()
+    expect(asked).toMatchObject({ type: 'it:microphone', audio: { echoCancellation: false } })
+    expect(typeof asked.microphone).toBe('string')
+    expect(asked.microphone.length).toBeGreaterThan(8)
+    expect(mic.stream.getTracks()).toBe(tracks)
+    expect(mic.state).toBe('live')
+    expect(mic.sampleRate).toBe(48_000)
+    // One thing makes its sound, started as it was called
+    expect(made.map((m) => m.state)).toEqual(['running'])
+  })
+
+  test('asks the microphone for plain switches alone, whatever else the page gives it', async () => {
+    const p = load()
+    soundIn(p.w)
+    void p.It.microphone({ noiseSuppression: true, autoGainControl: 'yes', deviceId: 'the-one-in-the-next-room', sampleRate: 8000 })
+    const port = p.answer()
+    await settled()
+    expect(port.sent[0].audio).toEqual({ noiseSuppression: true })
+  })
+
+  test('plays each piece straight after the one before into the stream, hands it to onsound, and says it took it, a piece that came before the answer among them', async () => {
+    const p = load()
+    const { played } = soundIn(p.w)
+    const opening = p.It.microphone()
+    const port = p.answer()
+    await settled()
+    const named = port.sent[0].microphone
+    p.fromSite({ type: 'it:microphone-sound', microphone: named, chunk: 1, sampleRate: 48_000, samples: samplesOf(960, 0.5) })
+    // A moment from now, so that the next has come by the time it is due
+    expect(played).toEqual([{ at: 0.04, samples: 960, rate: 48_000, first: 0.5 }])
+    p.fromSite({ type: 'it:result', requestId: port.sent[0].requestId, ok: true, sound: { sampleRate: 48_000 } })
+    const mic = await opening
+    const given: unknown[][] = []
+    mic.onsound = (samples: Float32Array, rate: number) => given.push([samples.length, samples[0], rate])
+    p.fromSite({ type: 'it:microphone-sound', microphone: named, chunk: 2, sampleRate: 48_000, samples: samplesOf(960, 0.25) })
+    expect(played).toHaveLength(2)
+    expect(played[1]).toMatchObject({ samples: 960, first: 0.25 })
+    // With no gap between the two, and none of the second over the first
+    expect(played[1]!.at).toBeCloseTo(0.04 + 960 / 48_000, 10)
+    expect(given).toEqual([[960, 0.25, 48_000]])
+    expect(port.sent.filter((m) => m.type === 'it:microphone-heard')).toEqual([
+      { type: 'it:microphone-heard', microphone: named, chunk: 1 },
+      { type: 'it:microphone-heard', microphone: named, chunk: 2 },
+    ])
+  })
+
+  test('says how many samples there are in a second as the sound itself says it, where that is not what the site answered with', async () => {
+    const { mic, heard } = await opened()
+    heard(1, samplesOf(882), 44_100)
+    expect(mic.sampleRate).toBe(44_100)
+  })
+
+  test('a piece that comes after a gap is played a moment from now, and never at a moment that has passed', async () => {
+    const { played, made, heard } = await opened()
+    heard(1)
+    // Three seconds with nothing sent, as while the screen did not show It
+    made[0]!.currentTime = 3
+    heard(2)
+    expect(played.map((piece) => piece.at)).toEqual([0.04, 3.04])
+  })
+
+  test('pieces that come in a rush do not leave the page hearing later and later: past a fifth of a second waiting, a piece is passed over, and still said to be taken', async () => {
+    const { played, made, heard, taken } = await opened()
+    // A tenth of a second of sound to a piece, four of them at once
+    for (let chunk = 1; chunk <= 4; chunk++) heard(chunk, samplesOf(4800))
+    expect(played.map((piece) => Number(piece.at.toFixed(2)))).toEqual([0.04, 0.14])
+    expect(taken()).toEqual([1, 2, 3, 4])
+    // Once what was waiting has played, the next piece is
+    made[0]!.currentTime = 0.1
+    heard(5, samplesOf(4800))
+    expect(played.map((piece) => Number(piece.at.toFixed(2)))).toEqual([0.04, 0.14, 0.24])
+  })
+
+  test('what is sent as sound and is no run of samples, or is longer than any piece, is not played, and neither is a piece at a rate the browser cannot play; each is still said to be taken', async () => {
+    const { p, played, port, asked, heard, taken } = await opened()
+    heard(1, null)
+    heard(2, 'sound')
+    heard(3, samplesOf(0))
+    heard(4, samplesOf(16_385))
+    heard(5, samplesOf(), 0)
+    heard(6, samplesOf(), 1000)
+    expect(played).toEqual([])
+    expect(taken()).toEqual([1, 2, 3, 4, 5, 6])
+    heard(7, samplesOf(16_384))
+    expect(played).toHaveLength(1)
+    // Sound for a microphone the page does not hold is let go, and nothing is said of it
+    p.fromSite({ type: 'it:microphone-sound', microphone: 'another', chunk: 1, sampleRate: 48_000, samples: samplesOf() })
+    expect(played).toHaveLength(1)
+    expect(port.sent.filter((m) => m.type === 'it:microphone-heard' && m.microphone !== asked.microphone)).toEqual([])
+  })
+
+  test('a page’s onsound handler that throws still has the piece played and said taken, and the console says only that it threw', async () => {
+    const { p, played, mic, heard, taken } = await opened()
+    const said: unknown[][] = []
+    p.w.console.error = (...args: unknown[]) => said.push(args)
+    mic.onsound = () => {
+      throw new Error('e2e-private-secret')
+    }
+    heard(1)
+    expect(played).toHaveLength(1)
+    expect(taken()).toEqual([1])
+    expect(said).toEqual([['[It] a microphone’s onsound handler threw']])
+  })
+
+  test('is told in words when the document that opened it is no longer the one in the frame', async () => {
+    const { p, asked, mic, tracks, made } = await opened()
+    const told: unknown[][] = []
+    mic.onchange = (state: string, why?: string) => told.push([state, why])
+    p.fromSite({ type: 'it:microphone-state', microphone: asked.microphone, state: 'ended', why: 'replaced' })
+    expect(told).toEqual([['ended', 'The page loaded another document while the microphone was live.']])
+    expect(tracks[0]!.stopped).toBe(true)
+    expect(made[0]!.state).toBe('closed')
+  })
+
+  test('is told when it pauses, goes on and ends, with why in words, and once ended its stream is stopped, what made its sound is closed, and nothing more is played', async () => {
+    const { p, port, asked, mic, tracks, made, played, heard, taken } = await opened()
+    const told: unknown[][] = []
+    mic.onchange = (state: string, why?: string) => told.push([state, why])
+    p.fromSite({ type: 'it:microphone-state', microphone: asked.microphone, state: 'paused' })
+    expect(mic.state).toBe('paused')
+    p.fromSite({ type: 'it:microphone-state', microphone: asked.microphone, state: 'live' })
+    p.fromSite({ type: 'it:microphone-state', microphone: asked.microphone, state: 'ended', why: 'person' })
+    expect(told).toEqual([
+      ['paused', undefined],
+      ['live', undefined],
+      ['ended', 'The person stopped the microphone in It’s bar.'],
+    ])
+    expect(mic.state).toBe('ended')
+    expect(tracks[0]!.stopped).toBe(true)
+    expect(made[0]!.state).toBe('closed')
+    heard(1)
+    expect(played).toEqual([])
+    expect(taken()).toEqual([])
+    // Said again, it is not told again; and stopped after it ended, nothing more is asked of the site
+    p.fromSite({ type: 'it:microphone-state', microphone: asked.microphone, state: 'ended', why: 'device' })
+    expect(told).toHaveLength(3)
+    await mic.stop()
+    expect(port.sent.filter((m) => m.type === 'it:microphone-stop')).toEqual([])
+  })
+
+  test('each reason it ended for is said in words of its own', async () => {
+    const said: Record<string, string> = {}
+    for (const why of ['person', 'taken_back', 'not_shown', 'device', 'taken_over']) {
+      const { p, asked, mic } = await opened()
+      mic.onchange = (_state: string, words?: string) => (said[why] = words ?? '')
+      p.fromSite({ type: 'it:microphone-state', microphone: asked.microphone, state: 'ended', why })
+    }
+    expect(said).toEqual({
+      person: 'The person stopped the microphone in It’s bar.',
+      taken_back: 'The person took back what they had allowed this page.',
+      not_shown: 'The page was closed while the microphone was live.',
+      device: 'The microphone stopped giving sound.',
+      taken_over: 'Another conversation took this page over.',
+    })
+  })
+
+  test('a page’s onchange handler that throws changes nothing of what the microphone is, and the console says only that it threw', async () => {
+    const { p, asked, mic } = await opened()
+    const said: unknown[][] = []
+    p.w.console.error = (...args: unknown[]) => said.push(args)
+    mic.onchange = () => {
+      throw new Error('e2e-private-secret')
+    }
+    p.fromSite({ type: 'it:microphone-state', microphone: asked.microphone, state: 'paused' })
+    expect(mic.state).toBe('paused')
+    expect(said).toEqual([['[It] a microphone’s onchange handler threw']])
+  })
+
+  test('stop closes the microphone at the site and ends the stream, and resolves where the site had closed it already', async () => {
+    const { p, port, asked, mic, tracks, made } = await opened()
+    const stopping = mic.stop()
+    expect(mic.state).toBe('ended')
+    expect(tracks[0]!.stopped).toBe(true)
+    expect(made[0]!.state).toBe('closed')
+    const stop = port.sent.find((m) => m.type === 'it:microphone-stop')
+    expect(stop).toMatchObject({ microphone: asked.microphone })
+    p.fromSite({ type: 'it:result', requestId: stop.requestId, ok: false, error: 'That microphone is not open.' })
+    await expect(stopping).resolves.toBeUndefined()
+  })
+
+  test('refused, it rejects with the site’s own reason, and its stream is stopped and what made its sound closed', async () => {
+    const p = load()
+    const { tracks, made } = soundIn(p.w)
+    const opening = p.It.microphone()
+    const port = p.answer()
+    await settled()
+    p.fromSite({
+      type: 'it:result',
+      requestId: port.sent[0].requestId,
+      ok: false,
+      error: 'The person did not allow this page to use the microphone on this screen.',
+    })
+    await expect(opening).rejects.toThrow('The person did not allow this page to use the microphone on this screen.')
+    expect(tracks[0]!.stopped).toBe(true)
+    expect(made[0]!.state).toBe('closed')
+  })
+
+  test('ended by the site before its answer came, it rejects with why rather than giving a microphone that is over', async () => {
+    const p = load()
+    soundIn(p.w)
+    const opening = p.It.microphone()
+    const port = p.answer()
+    await settled()
+    p.fromSite({ type: 'it:microphone-state', microphone: port.sent[0].microphone, state: 'ended', why: 'device' })
+    p.fromSite({ type: 'it:result', requestId: port.sent[0].requestId, ok: true, sound: { sampleRate: 48_000 } })
+    await expect(opening).rejects.toThrow('The microphone stopped giving sound.')
+  })
+
+  test('in a page nobody has clicked or typed in, where the browser will not start sound, it is refused after a moment with a sentence that says to call it from a click, and the site is asked nothing', async () => {
+    const p = load()
+    const { made } = soundIn(p.w, 'never')
+    const port = p.answer()
+    let outcome = 'waiting'
+    p.It.microphone().then(
+      () => (outcome = 'opened'),
+      (err: Error) => (outcome = err.message),
+    )
+    await p.advance(399)
+    expect(outcome).toBe('waiting')
+    await p.advance(1)
+    expect(outcome).toBe(
+      'It.microphone was not called from a click or a key in the page, and a browser starts sound for a page only once the user has done something in it. Call it from something the user does on the page, such as a button.',
+    )
+    expect(port.sent).toEqual([])
+    // And what was made to play the sound is not left behind
+    expect(made[0]!.state).toBe('closed')
+  })
+
+  test('where the browser has sound running for the page already, nothing is waited for', async () => {
+    const { mic, made } = await opened('at once')
+    expect(mic.state).toBe('live')
+    expect(made.map((m) => m.state)).toEqual(['running'])
+  })
+
+  test('a browser that names what makes sound by its older name is used as any other', async () => {
+    const p = load()
+    const { played } = soundIn(p.w, 'when asked', 'webkitAudioContext')
+    const opening = p.It.microphone()
+    const port = p.answer()
+    await settled()
+    p.fromSite({ type: 'it:result', requestId: port.sent[0].requestId, ok: true, sound: { sampleRate: 44_100 } })
+    const mic = await opening
+    expect(mic.sampleRate).toBe(44_100)
+    p.fromSite({ type: 'it:microphone-sound', microphone: port.sent[0].microphone, chunk: 1, sampleRate: 44_100, samples: samplesOf(882) })
+    expect(played).toHaveLength(1)
+  })
+
+  test('a browser that cannot make a stream of sound is refused with a sentence that says so, and the site is asked nothing', async () => {
+    const p = load()
+    const port = p.answer()
+    await expect(p.It.microphone()).rejects.toThrow('This browser cannot make a stream of the microphone’s sound.')
+    // One that makes sound, and no stream of it, is told the same, and what it made is closed
+    const closed: string[] = []
+    p.w.AudioContext = class {
+      state = 'running'
+      close() {
+        closed.push('closed')
+        return Promise.resolve()
+      }
+    }
+    await expect(p.It.microphone()).rejects.toThrow('This browser cannot make a stream of the microphone’s sound.')
+    expect(closed).toEqual(['closed'])
+    expect(port.sent).toEqual([])
+  })
+})
+
+describe('recording, which a page does for itself', () => {
+  test('It.record is refused with what to do in its place, and the site is asked nothing', async () => {
+    const p = load()
+    const port = p.answer()
+    for (const asked of [undefined, { audio: true }, { video: true }])
+      await expect(p.It.record(asked)).rejects.toThrow(
+        'It does not record for a page. Open the microphone with It.microphone(), or the camera with It.camera({ audio: true }), and record the stream it gives with a MediaRecorder of the page’s own.',
+      )
+    expect(port.sent).toEqual([])
+  })
+})
+
 // The camera, live: the site sends pictures, and the page's script draws each into a canvas whose
 // stream the page holds. A canvas is stood in for by one that writes down what was drawn on it,
 // and its stream by tracks that say whether they were stopped.
 describe('the camera, live in a page', () => {
   function withCanvas() {
     const drawn: unknown[] = []
-    const tracks = [{ stopped: false, stop: () => (tracks[0]!.stopped = true) }]
-    const stream = { getTracks: () => tracks }
+    const tracks: { stopped: boolean; stop: () => void }[] = [{ stopped: false, stop: () => (tracks[0]!.stopped = true) }]
+    const stream = { getTracks: () => tracks, addTrack: (track: { stopped: boolean; stop: () => void }) => tracks.push(track) }
     const p = load('', (w) => {
       w.HTMLCanvasElement.prototype.getContext = () => ({ drawImage: (picture: unknown) => drawn.push(picture) })
       w.HTMLCanvasElement.prototype.captureStream = () => stream
@@ -2117,47 +2472,180 @@ describe('the camera, live in a page', () => {
   })
 })
 
-describe('the microphone and the camera, on a site that may not record for a page', () => {
-  /** What a page is told where the site that framed it does not record for a page. */
-  const RELOAD = 'Reload It in this browser to use the microphone and camera: It was updated while it was open here.'
-  /** A page whose browser can make a stream of a canvas, as the live camera needs. */
-  const page = () =>
-    load('', (w) => {
+describe('the camera, live in a page, opened with sound', () => {
+  function withCanvas(starts: Parameters<typeof soundIn>[1] = 'when asked') {
+    const tracks: { kind?: string; stopped: boolean; stop: () => void }[] = [{ kind: 'video', stopped: false, stop: () => (tracks[0]!.stopped = true) }]
+    const stream = { getTracks: () => tracks, addTrack: (track: (typeof tracks)[number]) => tracks.push(track) }
+    let streams = 0
+    const p = load('', (w) => {
       w.HTMLCanvasElement.prototype.getContext = () => ({ drawImage: () => {} })
-      w.HTMLCanvasElement.prototype.captureStream = () => ({ getTracks: () => [] })
+      w.HTMLCanvasElement.prototype.captureStream = () => {
+        streams++
+        return stream
+      }
     })
+    return { p, tracks, stream, sound: soundIn(p.w, starts), streams: () => streams }
+  }
+
+  test('asks for the camera with what was asked of the microphone, and its one stream has the camera’s picture and the microphone’s sound', async () => {
+    const c = withCanvas()
+    const opening = c.p.It.camera({ facing: 'user', audio: { echoCancellation: false } })
+    const port = c.p.answer()
+    await settled()
+    const asked = port.sent[0]
+    expect(asked).toMatchObject({ type: 'it:camera', video: { facingMode: 'user' }, audio: { echoCancellation: false } })
+    c.p.fromSite({ type: 'it:result', requestId: asked.requestId, ok: true, sound: { sampleRate: 48_000 } })
+    const cam = await opening
+    expect(cam.stream).toBe(c.stream)
+    expect(c.tracks.map((t) => t.kind)).toEqual(['video', 'audio'])
+    // Sound that comes under the camera's own name is played into the stream, and said to be taken
+    c.p.fromSite({ type: 'it:microphone-sound', microphone: asked.camera, chunk: 1, sampleRate: 48_000, samples: samplesOf() })
+    c.p.fromSite({ type: 'it:microphone-sound', microphone: asked.camera, chunk: 2, sampleRate: 48_000, samples: samplesOf() })
+    expect(c.sound.played.map((piece) => piece.samples)).toEqual([960, 960])
+    expect(port.sent.filter((m) => m.type === 'it:microphone-heard')).toEqual([
+      { type: 'it:microphone-heard', microphone: asked.camera, chunk: 1 },
+      { type: 'it:microphone-heard', microphone: asked.camera, chunk: 2 },
+    ])
+  })
+
+  test('audio: true asks for the microphone as it is, and with no audio, or audio: false, nothing is made to play sound and the site is asked for no microphone', async () => {
+    const c = withCanvas()
+    void c.p.It.camera({ audio: true })
+    const port = c.p.answer()
+    await settled()
+    expect(port.sent[0].audio).toBe(true)
+    void c.p.It.camera()
+    void c.p.It.camera({ audio: false })
+    await settled()
+    expect(port.sent.slice(1).map((m) => 'audio' in m)).toEqual([false, false])
+    expect(c.sound.made).toHaveLength(1)
+  })
+
+  test('when it ends, by the site or by the page, the picture and the sound end together, and no sound that comes after is played', async () => {
+    for (const how of ['the site', 'the page']) {
+      const c = withCanvas()
+      const opening = c.p.It.camera({ audio: true })
+      const port = c.p.answer()
+      await settled()
+      const asked = port.sent[0]
+      c.p.fromSite({ type: 'it:result', requestId: asked.requestId, ok: true, sound: { sampleRate: 48_000 } })
+      const cam = await opening
+      if (how === 'the site') c.p.fromSite({ type: 'it:camera-state', camera: asked.camera, state: 'ended', why: 'person' })
+      else void cam.stop()
+      expect(cam.state, how).toBe('ended')
+      expect(
+        c.tracks.map((t) => t.stopped),
+        how,
+      ).toEqual([true, true])
+      expect(c.sound.made[0]!.state, how).toBe('closed')
+      c.p.fromSite({ type: 'it:microphone-sound', microphone: asked.camera, chunk: 1, sampleRate: 48_000, samples: samplesOf() })
+      expect(c.sound.played, how).toEqual([])
+      expect(
+        port.sent.filter((m) => m.type === 'it:microphone-heard'),
+        how,
+      ).toEqual([])
+    }
+  })
+
+  test('refused by the site, what was made to play its sound is closed with its stream', async () => {
+    const c = withCanvas()
+    const opening = c.p.It.camera({ audio: true })
+    const port = c.p.answer()
+    await settled()
+    c.p.fromSite({
+      type: 'it:result',
+      requestId: port.sent[0].requestId,
+      ok: false,
+      error: 'The person did not allow this page to use the microphone and the camera on this screen.',
+    })
+    await expect(opening).rejects.toThrow('did not allow this page to use the microphone and the camera')
+    expect(c.tracks.map((t) => t.stopped)).toEqual([true, true])
+    expect(c.sound.made[0]!.state).toBe('closed')
+  })
+
+  test('in a page nobody has clicked or typed in it is refused with a sentence that says to call it from a click, the site is asked nothing, and no stream of the camera is made', async () => {
+    const c = withCanvas('never')
+    const port = c.p.answer()
+    let outcome = 'waiting'
+    c.p.It.camera({ audio: true }).then(
+      () => (outcome = 'opened'),
+      (err: Error) => (outcome = err.message),
+    )
+    await c.p.advance(400)
+    expect(outcome).toMatch(/^It\.camera with audio was not called from a click or a key in the page/)
+    expect(port.sent).toEqual([])
+    expect(c.streams()).toBe(0)
+    // With no sound, the same page opens the camera as it always could
+    void c.p.It.camera()
+    await settled()
+    expect(port.sent.map((m) => m.type)).toEqual(['it:camera'])
+  })
+})
+
+describe('the microphone and the camera, on a site that does not open them for a page', () => {
+  /** What a page is told where the site that framed it does not do what it asked of the microphone or the camera. */
+  const RELOAD = 'Reload It in this browser to use the microphone and camera: It was updated while it was open here.'
+  /** A page whose browser can make a stream of a canvas, as the live camera needs, and of sound, as the live microphone does. */
+  const page = () => {
+    const p = load('', (w) => {
+      w.HTMLCanvasElement.prototype.getContext = () => ({ drawImage: () => {} })
+      w.HTMLCanvasElement.prototype.captureStream = () => ({ getTracks: () => [], addTrack: () => {} })
+    })
+    soundIn(p.w, 'at once')
+    return p
+  }
   /** Settles at once, or fails: a promise that waits on a site that drops what it is sent never would. */
   const atOnce = <T>(p: Promise<T>) => Promise.race([p, new Promise<never>((_, no) => setTimeout(() => no(new Error('nothing was said in time')), 100))])
-  const askedOf = (port: { sent: any[] }) => port.sent.map((m) => m.type).filter((t: string) => /^it:(record|photo|camera)/.test(t))
+  const askedOf = (port: { sent: any[] }) => port.sent.map((m) => m.type).filter((t: string) => /^it:(record|photo|camera|microphone)/.test(t))
 
-  test('a site from before It recorded for a page, as 0.1.38 was, says nothing of it and drops what it is sent: It.record, It.photo and It.camera are refused at once, saying what to do, and the site is sent none of them', async () => {
+  test('a site from before It opened either for a page, as 0.1.38 was, says nothing of it and drops what it is sent: It.photo, It.camera and It.microphone are refused at once, saying what to do, and the site is sent none of them', async () => {
     const p = page()
-    // Asked before the site answered, as a page that records as soon as it opens does, and after
-    const early = p.It.record({ audio: true })
+    // Asked before the site answered, as a page that opens the camera as soon as it is shown does, and after
+    const early = p.It.photo()
+    const earlyMic = p.It.microphone()
     const port = p.answer(APP, p.w.parent, CHANNEL_VERSION, {})
     await expect(atOnce(early)).rejects.toThrow(RELOAD)
-    await expect(atOnce(p.It.record({ audio: true }))).rejects.toThrow(RELOAD)
+    await expect(atOnce(earlyMic)).rejects.toThrow(RELOAD)
     await expect(atOnce(p.It.photo())).rejects.toThrow(RELOAD)
     await expect(atOnce(p.It.camera())).rejects.toThrow(RELOAD)
+    await expect(atOnce(p.It.camera({ audio: true }))).rejects.toThrow(RELOAD)
+    await expect(atOnce(p.It.microphone())).rejects.toThrow(RELOAD)
     expect(askedOf(port)).toEqual([])
   })
 
-  test('a site that says it records for the page is asked as before, before it answered and after, and what it answers is what the page is told', async () => {
+  test('a site from before It passed a page the microphone’s sound, as 0.1.39 was, says so of the camera and not of sound: It.microphone and a camera with sound are refused at once, saying what to do, and a photo and a camera with no sound are asked for as before', async () => {
+    const p = page()
+    const early = p.It.microphone()
+    const earlyCall = p.It.camera({ audio: true })
+    const port = p.answer(APP, p.w.parent, CHANNEL_VERSION, { media: true, opens: true })
+    await expect(atOnce(early)).rejects.toThrow(RELOAD)
+    await expect(atOnce(earlyCall)).rejects.toThrow(RELOAD)
+    await expect(atOnce(p.It.microphone())).rejects.toThrow(RELOAD)
+    await expect(atOnce(p.It.camera({ audio: { echoCancellation: false } }))).rejects.toThrow(RELOAD)
+    expect(askedOf(port)).toEqual([])
+    void p.It.photo()
+    void p.It.camera()
+    void p.It.camera({ audio: false })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(askedOf(port)).toEqual(['it:photo', 'it:camera', 'it:camera'])
+  })
+
+  test('a site that says it does both is asked as before, before it answered and after, and what it answers is what the page is told', async () => {
     const p = page()
     const early = p.It.photo()
     const port = p.answer()
     const photo = port.sent.find((m) => m.type === 'it:photo')
     p.fromSite({ type: 'it:result', requestId: photo.requestId, ok: false, error: 'You did not allow this page to use the camera.' })
     await expect(atOnce(early)).rejects.toThrow('You did not allow this page to use the camera.')
-    const recording = p.It.record({ audio: true })
-    const record = port.sent.find((m) => m.type === 'it:record')
-    expect([record.audio, record.video]).toEqual([true, false])
-    p.fromSite({ type: 'it:result', requestId: record.requestId, ok: false, error: 'The page was not in front.' })
-    await expect(atOnce(recording)).rejects.toThrow('The page was not in front.')
+    const hearing = p.It.microphone()
+    await new Promise((r) => setTimeout(r, 0))
+    const microphone = port.sent.find((m) => m.type === 'it:microphone')
+    p.fromSite({ type: 'it:result', requestId: microphone.requestId, ok: false, error: 'The page was not in front.' })
+    await expect(atOnce(hearing)).rejects.toThrow('The page was not in front.')
     const opening = p.It.camera()
     const camera = port.sent.find((m) => m.type === 'it:camera')
     p.fromSite({ type: 'it:result', requestId: camera.requestId, ok: false, error: 'The camera is in use by another app.' })
     await expect(atOnce(opening)).rejects.toThrow('The camera is in use by another app.')
-    expect(askedOf(port)).toEqual(['it:photo', 'it:record', 'it:camera'])
+    expect(askedOf(port)).toEqual(['it:photo', 'it:microphone', 'it:camera'])
   })
 })

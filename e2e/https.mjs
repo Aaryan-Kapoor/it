@@ -250,6 +250,60 @@ try {
     /see the camera’s picture live/.test(cameraAsked ?? '') && liveSaid === 'live' && pictures !== undefined,
     JSON.stringify({ asked: Boolean(cameraAsked), liveSaid, pictures }),
   )
+
+  // And the microphone live, and the camera with sound, which a browser gives a site only at a secure address too
+  const pageSaid = () => inPage.locator('#out').textContent()
+  const saysWithin = (pattern) =>
+    inPage
+      .locator('#out')
+      .filter({ hasText: pattern })
+      .waitFor({ timeout: 15_000 })
+      .then(pageSaid, () => pageSaid())
+  const counted = (id) =>
+    inPage
+      .locator(`#${id}`)
+      .textContent()
+      .then(Number)
+      .catch(() => 0)
+  await inPage.locator('#close').click()
+  await saysWithin(/^camera stopped/)
+  await inPage.locator('#mic').click()
+  const micAsked = await question.waitFor({ timeout: 15_000 }).then(
+    () => question.textContent(),
+    () => '',
+  )
+  if (micAsked) await question.getByRole('button', { name: 'Allow', exact: true }).click()
+  const hearingSaid = await saysWithin(/^(hearing|refused)/)
+  const pieces = await until(async () => ((n) => (n > 25 ? n : undefined))(await counted('pieces')), 20_000)
+  check(
+    'over https, a page asks for the microphone live, It asks the person in its bar, and once allowed the page is given its sound',
+    /hear the microphone live/.test(micAsked ?? '') && /^hearing \d+$/.test(hearingSaid ?? '') && pieces !== undefined,
+    JSON.stringify({ asked: Boolean(micAsked), hearingSaid, pieces }),
+  )
+  await inPage.locator('#quiet').click()
+  await saysWithin(/^microphone stopped/)
+  await inPage.locator('#call').click()
+  const callSaid = await saysWithin(/^(live with sound|refused)/)
+  const inStream = await until(async () => ((n) => (n > 0.001 ? n : undefined))(await counted('stream')), 20_000)
+  check(
+    'over https, a camera opened with sound gives the page a stream with the camera’s picture and the microphone’s sound, with nothing more asked',
+    callSaid === 'live with sound, 1 sound tracks' && inStream !== undefined && (await question.count()) === 0,
+    JSON.stringify({ callSaid, inStream }),
+  )
+  await inPage.locator('#close').click()
+  await saysWithin(/^camera stopped/)
+  // The microphone ends as soon as the page's frame loads another document
+  const micChip = tab.locator('.page-nav .media-mic')
+  await inPage.locator('#mic').click()
+  const againSaid = await saysWithin(/^(hearing|refused)/)
+  const chipThere = await micChip.count()
+  await inPage.locator('#elsewhere').click()
+  const chipGone = await until(async () => (await micChip.count()) === 0 || undefined, 1500, 50)
+  check(
+    'over https, the microphone live to a page ends as soon as its frame loads another document',
+    /^hearing \d+$/.test(againSaid ?? '') && chipThere === 1 && chipGone === true,
+    JSON.stringify({ againSaid, chipThere, chipGone: Boolean(chipGone) }),
+  )
 } catch (err) {
   check(`the run finished (${err.message})`, false, err.stack)
 } finally {
