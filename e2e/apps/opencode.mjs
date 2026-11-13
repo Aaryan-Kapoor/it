@@ -148,6 +148,15 @@ mkdirSync(path.join(base, 'tmp'), { recursive: true })
 process.env.TMPDIR = path.join(base, 'tmp')
 
 /** Runs a program to its end. Resolves with its exit code and what it printed. */
+/** Ends a program `run` started, with everything in its process group. */
+function end(child, signal) {
+  try {
+    if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal)
+    else child.kill(signal)
+  } catch {
+    child.kill(signal)
+  }
+}
 /** Set once the run has been told to stop: from then on nothing of the run's own starts but its cleanup. */
 let stoppedBy = null
 /** The programs `run` is waiting on, which the cleanup ends where it comes first. */
@@ -155,7 +164,14 @@ const inFlight = new Set()
 function run(cmd, args, { cwd = WORK, ms = 120_000, input, cleanup = false } = {}) {
   if (stoppedBy && !cleanup) return Promise.resolve({ code: -1, out: '', err: `not started: the run was stopped by ${stoppedBy}` })
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd, env: env(), stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] })
+    // In a process group of its own where the system has them, so that ending it ends what it
+    // started as well, such as a script npm runs as it installs
+    const child = spawn(cmd, args, {
+      cwd,
+      env: env(),
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    })
     inFlight.add(child)
     child.on('exit', () => inFlight.delete(child))
     let out = ''
@@ -163,7 +179,7 @@ function run(cmd, args, { cwd = WORK, ms = 120_000, input, cleanup = false } = {
     child.stdout.on('data', (d) => (out += d))
     child.stderr.on('data', (d) => (err += d))
     if (input !== undefined) child.stdin.end(input)
-    const timer = setTimeout(() => child.kill('SIGKILL'), ms)
+    const timer = setTimeout(() => end(child, 'SIGKILL'), ms)
     child.on('error', (e) => {
       clearTimeout(timer)
       resolve({ code: -1, out, err: `${err}${e.message}` })
@@ -356,6 +372,8 @@ const shellCall = (request, command, description) => {
 
 let model
 let browser
+/** The browser's launch while it is under way. */
+let launching
 let failed = false
 let cleaning = null
 /** Stops everything the run started, removes its folder, says how the run went, and ends it. Run once, however the run ends. */
@@ -364,10 +382,12 @@ function cleanUp(signal) {
   if (signal) stoppedBy ??= signal
   cleaning ??= (async () => {
     // What the run was waiting on when it was told to stop is ended first, before its folder goes
-    for (const child of inFlight) child.kill('SIGTERM')
+    for (const child of inFlight) end(child, 'SIGTERM')
     await until(() => inFlight.size === 0, 5000, 100)
-    for (const child of inFlight) child.kill('SIGKILL')
-    await browser?.close().catch(() => {})
+    for (const child of inFlight) end(child, 'SIGKILL')
+    // A browser still being launched is waited for, so that it is closed too
+    const launched = await launching?.catch(() => undefined)
+    await (browser ?? launched)?.close().catch(() => {})
     const ocStopped = await stop('opencode')
     // Auto-wake's `opencode run` of OpenCode 2 starts OpenCode's background service, which goes
     // on running by design; it is asked to stop with OpenCode's own command
@@ -636,7 +656,9 @@ async function part2() {
   // Given what every other program of the run is given, so that it is found by the sweep at the
   // end. Playwright would end the whole run on a signal, before it has stopped anything else, so
   // the run's own handling of a signal closes the browser with the rest.
-  browser = await chromium.launch({ env: env(), handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false })
+  if (stoppedBy) throw new Error(`the browser was not started: the run was stopped by ${stoppedBy}`)
+  launching = chromium.launch({ env: env(), handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false })
+  browser = await launching
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
   const tab = await context.newPage()
   // The address `it site` prints pairs one browser as the owner's. It is a credential, and is
