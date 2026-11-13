@@ -7679,15 +7679,26 @@ describe('an agent app that has It’s add-on turned off', () => {
       if (name === 'machines:turningOn') throw new Error('no connection')
       return undefined
     }
-    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+    const at = Date.now()
+    me({ turnOn: [{ harness: 'claude-code', at, state: 'asked' }] })
     await pass(TURN_ON_MS / 1000)
     const asked = turning().length
     // A few times, each after a longer wait, and not once a second
     expect(asked).toBeGreaterThan(3)
     expect(asked).toBeLessThan(15)
-    await pass(120)
+    // Heard of again with each of It's reports, as asked still or as at work where a claim reached It, it is not begun again
+    for (let report = 0; report < 5; report++) {
+      me({ turnOn: [{ harness: 'claude-code', at, state: 'asked' }] })
+      me({ turnOn: [{ harness: 'claude-code', at: at + 1000, state: 'working' }] })
+      await pass(30)
+    }
     expect(turning().length).toBe(asked)
     expect(stand.turnedOn).toEqual([])
+    // Asked afresh by the person, once It answers again, it is done
+    stand.answer = null
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+    await pass(2)
+    expect(stand.turnedOn).toEqual(['claude-code'])
   })
 
   test('that the machine could not turn back on says why to the site, and only a code in the log', async () => {

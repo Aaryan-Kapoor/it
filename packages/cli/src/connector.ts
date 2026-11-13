@@ -4681,7 +4681,11 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   // that this connector never began, was begun by a connector that stopped before it was done,
   // and is done again: it changes nothing where the add-on is on by now.
   const begunHere = new Set<string>()
-  const turnOnAsked = async (harness: string) => {
+  // The askings this connector stopped claiming once no answer came back, each by when it was
+  // asked: heard of again, as It's every report has it heard of, one is not begun again. One the
+  // person makes afresh, once It takes this one to have been cut short, is another asking.
+  const gaveUp = new Map<string, number | undefined>()
+  const turnOnAsked = async (harness: string, at?: number) => {
     if (turningNow.has(harness)) return
     turningNow.add(harness)
     begunHere.add(harness)
@@ -4693,15 +4697,24 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // takes the same word twice for one asking, and the app's command is run once, after the
       // answer that does come back.
       let claimed: unknown
+      let answered = false
       const began = steady()
       for (let wait = 1000; ; wait = Math.min(wait * 2, 30_000)) {
         try {
           claimed = await call('mutation', api.machines.turningOn, { harness, state: 'working' })
+          answered = true
           break
         } catch {}
         if (closing || steady() - began + wait > TURN_ON_MS - 60_000) break
         await new Promise((resolve) => setTimeout(resolve, wait).unref())
         if (closing) break
+      }
+      // No answer came back at all: one of the claims may have reached It all the same, and It
+      // then has the asking down as at work, which this connector began and is not to begin again
+      if (!answered) {
+        if (gaveUp.size > 20) gaveUp.clear()
+        gaveUp.set(harness, at)
+        return
       }
       if (claimed !== true) {
         begunHere.delete(harness)
@@ -4800,10 +4813,13 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       wakes?: { harness: string; since: number }[]
       runs?: { harness: string; sessionId: string; stop?: boolean; run?: string }[]
       upgrade?: { state: string; version?: string } | null
-      turnOn?: { harness: string; state: string }[]
+      turnOn?: { harness: string; state: string; at?: number }[]
     }) => {
       if (me.upgrade?.state === 'asked') void upgradeAsked(me.upgrade.version)
-      for (const t of me.turnOn ?? []) if (t.state === 'asked' || (t.state === 'working' && !begunHere.has(t.harness))) void turnOnAsked(t.harness)
+      for (const t of me.turnOn ?? []) {
+        if (t.state === 'asked' && t.at !== undefined && gaveUp.get(t.harness) === t.at) continue
+        if (t.state === 'asked' || (t.state === 'working' && !begunHere.has(t.harness))) void turnOnAsked(t.harness, t.at)
+      }
       // A conversation the person asked to have stopped is stopped. One that It has down as
       // running and that is not, which a connector that died leaves behind, is said to be over.
       for (const r of me.runs ?? []) {
