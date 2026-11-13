@@ -1,5 +1,5 @@
-// The real Pi, with no account and no model of anyone's: does It's add-on load in it, and does It
-// say so when Pi has it turned off or taken away?
+// The real Pi, with no account and no model of anyone's: does It's add-on load in it, and does a
+// click on a page come back into the conversation as a new turn?
 //
 // Pi is installed from its official package into a folder of this run's own, and runs with a
 // throwaway home and a throwaway settings folder, so that nobody's own Pi is read or written.
@@ -12,10 +12,18 @@
 // turned off; taken away by `it setup --none`, Pi no longer lists it; and taken away with Pi's
 // own `pi remove`, It says it is no longer connected.
 //
+// Then, with a stand-in for the model's API that Pi is pointed at through its own `models.json`
+// and given a made-up key: the stand-in's first answer runs `it create --open` for a page with
+// one button, and the turn ends. A browser paired as the owner's clicks the button, and the run
+// passes only where Pi then sends the stand-in a new request in the same conversation whose
+// newest message from the user is the click, beginning `[It]` and ending `[action <id>]`. The
+// stand-in answers that with `it patch`, and the page shows the change.
+//
 //   node e2e/apps/pi.mjs --version <version | oldest | newest>   installs that Pi from npm first
 //   node e2e/apps/pi.mjs --pi <path to a pi program>              runs the Pi that is there
 //
-// IT_PORT is the port the run's It counts from (5800 where it is not set). IT_PI_ROOT is the folder the run's folders are made in; It's connector
+// IT_PORT is the port the run's It counts from (5800 where it is not set), and the stand-in model
+// listens 50 above it. IT_PI_ROOT is the folder the run's folders are made in; It's connector
 // listens at a socket in It's folder, whose path a system holds to about a hundred characters.
 // IT_BIN and IT_CLI name the It to run, as for the other end-to-end scripts.
 import { execFileSync, spawn } from 'node:child_process'
@@ -24,6 +32,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { COMMAND, root, sleep } from '../lib.mjs'
 import { printCleanly, verdict } from '../logs.mjs'
+import { launch, pairAsOwner } from '../site.mjs'
+import { newestFromUser, shellTool, standInModel, textOf } from './pi/model.mjs'
 import { startPi } from './pi/rpc.mjs'
 
 printCleanly()
@@ -169,7 +179,10 @@ async function untilTrue(test, ms, every = 500) {
 }
 
 let serve = null
+let model = null
+let browser = null
 const pis = []
+const slug = `pi-check-${Date.now().toString(36)}`
 
 try {
   // ---------- The program, and It set up for it ----------
@@ -231,6 +244,137 @@ try {
   })
   await bare.close()
 
+  // ---------- The loop, with a stand-in for the model ----------
+  const typed = 'Make me a page with one button, and show it.'
+  const pageHtml =
+    '<h1>Pi check</h1><button id=go onclick="It.action(&quot;approve&quot;,{n:1})">Approve</button><p id=said></p>' +
+    '<script>It.onState(function(s){document.getElementById("said").textContent=s.answer||""})</script>'
+  const answer = 'approved through Pi'
+  let actionId = null
+  model = await standInModel({
+    port: base + 50,
+    script(request, n) {
+      const tool = shellTool(request)
+      if (!tool) throw new Error('Pi offered no tool that runs a command')
+      // The person's first message: publish the page and show it
+      if (n === 0) return { call: { name: tool.name, arguments: { [tool.param]: `it create "Pi check" --id ${slug} --open --html '${pageHtml}'` } } }
+      // The command's result: the turn ends
+      if (n === 1) return { text: 'The page is up.' }
+      // The click: answer it on the page
+      if (n === 2) return { call: { name: tool.name, arguments: { [tool.param]: `it patch ${slug} '${JSON.stringify({ answer })}'` } } }
+      if (n === 3) return { text: 'Done.' }
+      throw new Error(`no answer is scripted for a request after the fourth, and Pi sent one: ${newestFromUser(request)?.slice(0, 200)}`)
+    },
+  })
+  writeFileSync(
+    path.join(agent, 'models.json'),
+    `${JSON.stringify({ providers: { standin: { baseUrl: model.url, api: 'openai-completions', apiKey: 'made-up', models: [{ id: 'script', name: 'Scripted stand-in' }] } } }, null, 2)}\n`,
+  )
+
+  // A browser paired as the owner's, on the site, where `--open` brings the page up
+  const opened = await launch()
+  browser = opened.browser
+  const run = (_home, args) => it(args)
+  await pairAsOwner(opened.page, { home: itHome, run })
+  check('a browser is paired as the owner’s', true)
+
+  const host = startPi('pi', ['--provider', 'standin', '--model', 'script'], { cwd: work, env })
+  pis.push(host)
+  const hostState = await host.command('get_state')
+  const session = hostState?.data?.sessionId
+  check(
+    'Pi runs with the stand-in model chosen through its own models.json',
+    hostState?.data?.model?.provider === 'standin' && session,
+    hostState?.data ?? { stderr: host.stderr().slice(-800) },
+  )
+  await untilTrue(async () => ((await loaded())?.state === 'active' ? true : null), 30_000)
+
+  const prompted = await host.command('prompt', { message: typed })
+  check('Pi takes the person’s message', prompted?.success === true, prompted)
+  await model.until(2, 60_000)
+  const first = model.requests[0]?.body
+  check(
+    'Pi sends it to the stand-in, with a made-up key, in a request that offers its shell tool',
+    first && newestFromUser(first) === typed && shellTool(first) && model.requests[0].headers.authorization === 'present',
+    first ? { tools: first.tools?.map((t) => t.function?.name) } : 'no request',
+  )
+  const second = model.requests[1]?.body
+  const result =
+    second?.messages
+      ?.filter((m) => m.role === 'tool')
+      .map(textOf)
+      .join('\n') ?? ''
+  let created = null
+  try {
+    created = JSON.parse(result.slice(result.indexOf('{'), result.lastIndexOf('}') + 1))
+  } catch {}
+  check(
+    'Pi ran `it create --open` and gave the stand-in what it printed: the page, shown on the display in use',
+    created?.id === slug && Array.isArray(created?.shownOn) && created.shownOn.length > 0,
+    result.slice(0, 800),
+  )
+  const settled = await host.until((r) => r.type === 'agent_end', 60_000)
+  check('and the turn ends', settled, host.records.slice(-5))
+
+  const made = await it(['read', slug]).catch((e) => ({ error: e.message }))
+  check('the page knows the Pi conversation that made it', made.session?.harness === 'pi' && made.session?.id === session, {
+    made: made.session ?? made.error,
+    session,
+  })
+
+  // The page as the owner's browser shows it, brought up there by `--open`
+  const frame = opened.page.frameLocator('.mount iframe')
+  const shown = await frame
+    .locator('#go')
+    .waitFor({ timeout: 30_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!check('the owner’s browser brings the page up by itself', shown, opened.page.url())) {
+    await opened.page.goto(`http://localhost:${base}/p/${slug}`)
+    await frame.locator('#go').waitFor({ timeout: 30_000 })
+  }
+  const before = model.requests.length
+  await frame.locator('#go').click()
+  const asked3 = await model.until(before + 1, 60_000)
+  const third = model.requests[before]?.body
+  const click = newestFromUser(third)
+  const ended = /\[action ([^\]\s]+)\]\s*$/.exec(click ?? '')
+  actionId = ended?.[1] ?? null
+  check(
+    'the click comes back into Pi as a new turn: Pi sends the stand-in a request whose newest message from the user begins [It] and ends [action <id>]',
+    asked3 && click?.startsWith('[It]') && actionId,
+    click ?? `no request from Pi within a minute of the click; Pi said: ${host.stderr().slice(-600)}`,
+  )
+  const all = third?.messages ?? []
+  check(
+    'in the same conversation: the request carries the person’s first message and the call that made the page',
+    all.some((m) => m.role === 'user' && textOf(m) === typed) &&
+      all.some((m) => m.role === 'assistant' && m.tool_calls?.some((c) => c.function?.arguments?.includes(`--id ${slug}`))),
+    all.map((m) => m.role),
+  )
+  check('and Pi still holds that conversation under the same id', (await host.command('get_state'))?.data?.sessionId === session)
+  const recent = (await it(['read', slug])).recentActions?.find((a) => a.id === actionId)
+  check(
+    'It records that the add-on handed that click over',
+    recent?.delivery === 'handed_off' && recent?.route === 'addon',
+    recent ?? (await it(['read', slug])).recentActions,
+  )
+
+  await model.until(before + 2, 60_000)
+  const patched = await untilTrue(async () => ((await it(['read', slug])).state?.answer === answer ? true : null), 30_000)
+  check('Pi runs the stand-in’s `it patch`, and the page’s state has the change', patched, (await it(['read', slug])).state)
+  const onPage = await frame
+    .locator('#said', { hasText: answer })
+    .waitFor({ timeout: 20_000 })
+    .then(() => true)
+    .catch(() => false)
+  check('and the page in the browser shows it', onPage)
+  await host.until((r) => r.type === 'agent_end', 30_000, host.records.indexOf(settled) + 1)
+  check('the stand-in had an answer for every request Pi sent', model.faults.length === 0, model.faults)
+  await host.close()
+  await browser.close().catch(() => {})
+  browser = null
+
   // ---------- Turned off, and taken away, by Pi's own means ----------
   // As `pi config` turns the extension off: the package's entry in Pi's settings becomes an
   // object whose filter of extensions leaves `extensions/it.js` out
@@ -269,6 +413,8 @@ try {
   check(`the run finished (${err.message})`, false, err.stack)
 } finally {
   for (const p of pis) await p.close().catch(() => {})
+  await browser?.close().catch(() => {})
+  await model?.close().catch(() => {})
   if (serve && serve.exitCode === null && serve.signalCode === null) {
     // The service is asked to stop, and waited for: it stops its backend program in its turn
     serve.kill('SIGTERM')
