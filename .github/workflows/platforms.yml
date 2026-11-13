@@ -25,8 +25,10 @@ on:
 permissions:
   contents: read
 
-# A push replaces only the run of an earlier push to the same branch. The nightly run and a run
-# started by hand are left to finish, each in a group of its own.
+# A push replaces only the run of an earlier push to the same branch. A push, the nightly run and
+# a run started by hand never cancel one another. Runs started by hand on one branch share a group,
+# as nightly runs do: one that is going is left to finish, and of those waiting behind it only
+# the newest is kept, as GitHub does in every group.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' }}
@@ -210,9 +212,13 @@ jobs:
         run: |
           sudo loginctl enable-linger "$USER"
           runtime="/run/user/$(id -u)"
-          for _ in $(seq 1 30); do [ -S "$runtime/bus" ] && break; sleep 1; done
+          # Asked as setup asks whether it can reach systemd for the account, until it can
+          for _ in $(seq 1 30); do XDG_RUNTIME_DIR="$runtime" systemctl --user show-environment > /dev/null 2>&1 && break; sleep 1; done
+          if ! XDG_RUNTIME_DIR="$runtime" systemctl --user show-environment > /dev/null; then
+            echo "::error::systemd started no manager for the runner's account within thirty seconds"
+            exit 1
+          fi
           echo "XDG_RUNTIME_DIR=$runtime" >> "$GITHUB_ENV"
-          XDG_RUNTIME_DIR="$runtime" systemctl --user is-system-running || true
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: it-programs
