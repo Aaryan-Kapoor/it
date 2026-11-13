@@ -5,7 +5,9 @@
 // Auto-wake reopens a closed Codex conversation with `codex exec resume`, in the words that
 // `carrying` in packages/cli/src/wake.ts gives, which are read from there and not copied here.
 // The connector puts a click into an open conversation with `codex queue --thread=<id>
-// --message=<text>` (`codexQueue` in packages/cli/src/connector.ts). A flag that Codex has
+// --message=<text>` (`codexQueue` in packages/cli/src/connector.ts), which builds those words
+// where it runs them and gives them nowhere else, so they are copied here: e2e/apps/codex.mjs is
+// what runs the connector's own call against the real Codex. A flag that Codex has
 // renamed or dropped would show on the page as "Couldn’t wake", or leave the click waiting.
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -45,7 +47,7 @@ describe.skipIf(!program)('the flags It gives the real Codex', () => {
     for (const option of options) expect(names(text, option), `codex exec resume takes ${option}`).toBe(true)
   })
 
-  test('the connector’s `codex queue --thread=<id> --message=<text>`', () => {
+  test('`codex queue --thread=<id> --message=<text>`, in the words the connector uses, copied from it', () => {
     const text = help('queue')
     expect(text).toMatch(/Usage: codex queue \[OPTIONS\] --thread <THREAD> --message <TEXT>/)
     for (const option of ['--thread', '--message']) expect(names(text, option), `codex queue takes ${option}`).toBe(true)
