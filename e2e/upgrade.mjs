@@ -49,7 +49,21 @@ process.on('unhandledRejection', (err) => {
 })
 
 /** What the installed `it` answers, as JSON. */
-const asked = (...args) => JSON.parse(execFileSync(program, [...args, '--json'], { encoding: 'utf8', timeout: 60_000 }))
+// What it prints, on either stream, is kept from the log, and so is what an error would repeat of
+// it: the failure is said by the command's words and its exit code alone.
+const asked = (...args) => {
+  let said
+  try {
+    said = execFileSync(program, [...args, '--json'], { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] })
+  } catch (err) {
+    throw new Error(`\`it ${args.join(' ')}\` failed (${err?.status ?? err?.signal ?? err?.code ?? 'no exit code'})`)
+  }
+  try {
+    return JSON.parse(said)
+  } catch {
+    throw new Error(`\`it ${args.join(' ')}\` printed no JSON`)
+  }
+}
 const site = asked('status').site
 if (typeof site !== 'string' || !/^http:\/\/localhost:\d+$/.test(site)) throw new Error(`\`it status\` named no site on this machine (${JSON.stringify(site)})`)
 
