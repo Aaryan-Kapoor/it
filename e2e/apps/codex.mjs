@@ -32,10 +32,12 @@
 //    conversation with a newest message from the person that begins `[It]` and holds the
 //    click's line, ending with its `[action <id>]`.
 //
-// What it does not prove: anything a real model does, Codex's desktop app, Codex inside T3 Code,
-// macOS or Windows. The approval is chosen in Codex's own terminal interface, which is the step a
-// person takes there; where Codex shows no such question (its desktop app, T3 Code) nothing here
-// stands for what a person does.
+// It runs on Linux, and on macOS too (where, with Codex 0.160.0 and 0.169.0, the click in step 2
+// was not handed over while Codex's terminal had the conversation open). Windows has no
+// pseudo-terminal for Codex's terminal interface. What it does not prove: anything a real model
+// does, Codex's desktop app, or Codex inside T3 Code. The approval is chosen in Codex's own
+// terminal interface, which is the step a person takes there; where Codex shows no such question
+// (its desktop app, T3 Code) nothing here stands for what a person does.
 import { spawn, spawnSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
