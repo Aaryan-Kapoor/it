@@ -2125,6 +2125,17 @@ describe('the microphone, live in a page', () => {
     expect(port.sent.filter((m) => m.type === 'it:microphone-heard' && m.microphone !== asked.microphone)).toEqual([])
   })
 
+  test('ends, and says so in words, when the site lets its channel go, though the site’s word on the channel comes after that or never', async () => {
+    const { p, mic, tracks, made } = await opened()
+    const told: unknown[][] = []
+    mic.onchange = (state: string, why?: string) => told.push([state, why])
+    p.w.dispatchEvent(Object.assign(new p.w.Event('message'), { origin: APP, source: p.w.parent, data: { type: 'it:gone' }, ports: [] }))
+    expect(told).toEqual([['ended', 'The page loaded another document while the microphone was live.']])
+    expect(mic.state).toBe('ended')
+    expect(tracks[0]!.stopped).toBe(true)
+    expect(made[0]!.state).toBe('closed')
+  })
+
   test('a page’s onsound handler that throws still has the piece played and said taken, and the console says only that it threw', async () => {
     const { p, played, mic, heard, taken } = await opened()
     const said: unknown[][] = []
@@ -2423,6 +2434,19 @@ describe('the camera, live in a page', () => {
     p.fromSite({ type: 'it:camera-state', camera: asked.camera, state: 'ended', why: 'replaced' })
     expect(told).toEqual([['ended', 'The page loaded another document while the camera was live.']])
     expect(tracks[0]!.stopped).toBe(true)
+  })
+
+  test('ends, and says so in words, when the site lets its channel go, though the site’s word on the channel comes after that or never', async () => {
+    const { p, asked, cam, tracks } = await opened()
+    const told: unknown[][] = []
+    cam.onchange = (state: string, why?: string) => told.push([state, why])
+    p.w.dispatchEvent(Object.assign(new p.w.Event('message'), { origin: APP, source: p.w.parent, data: { type: 'it:gone' }, ports: [] }))
+    expect(told).toEqual([['ended', 'The page loaded another document while the camera was live.']])
+    expect(cam.state).toBe('ended')
+    expect(tracks[0]!.stopped).toBe(true)
+    // The site's own word, had it come on the channel after all, says nothing more
+    p.fromSite({ type: 'it:camera-state', camera: asked.camera, state: 'ended', why: 'replaced' })
+    expect(told).toHaveLength(1)
   })
 
   test('stop closes the camera at the site and ends the stream, and resolves where the site had closed it already', async () => {

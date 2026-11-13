@@ -500,6 +500,10 @@ function lost(): void {
   port.close()
   port = null
   players.lost()
+  // The site ends whatever was live over a channel as it lets the channel go, and says so over the
+  // channel, which can come after this and is no longer listened to: it is said here instead
+  for (const held of [...cameras.values()]) held.heard('ended', 'replaced')
+  for (const held of [...hearing.values()]) held.told?.('ended', 'replaced')
   for (const [requestId, answer] of [...waiting]) {
     if (actionsOnTheirWay.has(requestId)) continue
     waiting.delete(requestId)
