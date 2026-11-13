@@ -9,7 +9,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { MARK, PROTOCOL_VERSION, TAKES, WAKE_BACK_MS } from '@it/protocol'
+import { MARK, PROTOCOL_VERSION, TAKES, TURN_ON_MS, WAKE_BACK_MS } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS } from './src/addons.generated'
@@ -427,6 +427,20 @@ async function start(
     for (const sig of ['SIGTERM', 'SIGINT'] as const) for (const l of process.listeners(sig)) if (!had[sig].has(l)) process.removeListener(sig, l)
   }
   return readJson<ConnectorInfo>(infoFile())!
+}
+
+/** What Codex's own file of a conversation says of its turns: one line for each word, the last of them written now. */
+const codexKept = (n: number, ...marks: string[]) => {
+  const day = path.join(process.env.CODEX_HOME!, 'sessions', '2026', '11', '10')
+  mkdirSync(day, { recursive: true })
+  const lines = marks.map((type, i) =>
+    JSON.stringify({
+      timestamp: new Date(Date.now() + 5 - (marks.length - 1 - i)).toISOString(),
+      type: 'event_msg',
+      payload: { type, ...(type === 'turn_aborted' ? { reason: 'interrupted' } : {}) },
+    }),
+  )
+  writeFileSync(path.join(day, `rollout-2026-11-10T10-00-00-thread-${n}.jsonl`), `${lines.join('\n')}\n`)
 }
 /** What It tells the connector the person has chosen on this machine. */
 const wants = (wanted: string[]) => stand.watching.get('machines:me')!({ wanted })
@@ -3064,19 +3078,6 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(stand.codex).toEqual([])
   })
 
-  /** What Codex's own file of a conversation says of its turns: one line for each word, the last of them written now. */
-  const codexKept = (n: number, ...marks: string[]) => {
-    const day = path.join(process.env.CODEX_HOME!, 'sessions', '2026', '11', '10')
-    mkdirSync(day, { recursive: true })
-    const lines = marks.map((type, i) =>
-      JSON.stringify({
-        timestamp: new Date(Date.now() + 5 - (marks.length - 1 - i)).toISOString(),
-        type: 'event_msg',
-        payload: { type, ...(type === 'turn_aborted' ? { reason: 'interrupted' } : {}) },
-      }),
-    )
-    writeFileSync(path.join(day, `rollout-2026-11-10T10-00-00-thread-${n}.jsonl`), `${lines.join('\n')}\n`)
-  }
   const holdsBack = () => stand.calls.filter((c) => c.name === 'delivery:holdBack').map((c) => c.args)
 
   test('a click for an open Codex conversation whose last turn was interrupted is not put in Codex’s queue, and its page says what brings it on', async () => {
@@ -4779,6 +4780,20 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(stand.t3.sent.length).toBe(1)
   })
 
+  test('one whose conversation is held in a thread is put to the thread though its last turn was interrupted, and its page is not told to send a message there', async () => {
+    withT3Code()
+    stand.t3.threads.set('thread-1', 't3-thread-a')
+    await start()
+    // The person pressed Esc in the thread's last turn, and some Codex has the conversation open
+    codexKept(1, 'task_started', 'turn_aborted')
+    offered(click(1))
+    await until(() => called('delivery:handedOff').includes('click-1'))
+    // T3 Code starts a turn for what it is given, so nothing waits for the person's next message
+    expect(stand.t3.sent).toEqual([{ thread: 't3-thread-a', text: '[It] "A page" (page-1): approve, with details [action click-1]' }])
+    expect(stand.calls.filter((c) => c.name === 'delivery:holdBack')).toEqual([])
+    expect(stand.codex).toEqual([])
+  })
+
   test('what a person typed above a page stands in the thread as they typed it, with none of It’s words to the agent, and is kept off Codex’s command line', async () => {
     withT3Code()
     stand.t3.threads.set('thread-6', 't3-thread-f')
@@ -5965,6 +5980,32 @@ describe.skipIf(process.platform === 'win32')('a conversation held in a thread o
     backend(click(1, { harness: 'codex', id: 'thread-1' }))
     await until(() => stand.t3.sent.length === 1)
     expect(stand.t3.sent[0]!.thread).toBe('t3-thread-a')
+    noOtherWay()
+  })
+
+  test('a Codex conversation whose last turn was interrupted goes to its thread through T3 Code while Codex has It’s add-on turned off, and its page is not told to send a message there', async () => {
+    withT3Code()
+    await start('socket', OFF, noted({ 'codex:thread-1': 't3-thread-a' }))
+    codexKept(1, 'task_started', 'turn_aborted')
+    backend(click(1, { harness: 'codex', id: 'thread-1' }))
+    await until(() => called('delivery:handedOff').includes('click-1'))
+    expect(stand.t3.sent.map((s) => s.thread)).toEqual(['t3-thread-a'])
+    expect(stand.calls.filter((c) => c.name === 'delivery:holdBack')).toEqual([])
+    noOtherWay()
+  })
+
+  test('a Codex conversation that no thread holds, whose last turn was interrupted while Codex has It’s add-on turned off, is neither put in Codex’s queue nor said to wait for a message there', async () => {
+    withT3Code()
+    await start('socket', OFF)
+    // Some Codex has it open, and the person pressed Esc in its last turn
+    codexKept(1, 'task_started', 'turn_aborted')
+    // Offered all the same, as a backend that sent it would: an add-on turned off gives It no way to it
+    stand.watching.get('delivery:inboxPage')!({ clicks: [click(1, { harness: 'codex', id: 'thread-1' })], after: [] })
+    await pause(2500)
+    expect(stand.t3.sent).toEqual([])
+    expect(called('delivery:claim')).toEqual([])
+    // Codex's queue would keep it until a message, and the page saying so would ask for one: neither is so while the add-on is off
+    expect(stand.calls.filter((c) => c.name === 'delivery:holdBack' && c.args.why === CODEX_INTERRUPTED)).toEqual([])
     noOtherWay()
   })
 
@@ -7589,14 +7630,10 @@ describe('an agent app that has It’s add-on turned off', () => {
     expect(stand.turnedOn).toEqual(['claude-code'])
   })
 
-  test('is not turned on where It does not take the machine’s word that it is at work on the asking, or could not be told', async () => {
+  test('is not turned on where It does not take the machine’s word that it is at work on the asking', async () => {
     await start('socket', { wanted: ['claude-code'], found: OFF })
-    for (const answer of [false, null, new Error('no connection')]) {
-      stand.answer = (name) => {
-        if (name !== 'machines:turningOn') return undefined
-        if (answer instanceof Error) throw answer
-        return answer
-      }
+    for (const answer of [false, null]) {
+      stand.answer = (name) => (name === 'machines:turningOn' ? answer : undefined)
       me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
       await until(() => turning().length > 0)
       await pause(200)
@@ -7608,6 +7645,59 @@ describe('an agent app that has It’s add-on turned off', () => {
     stand.answer = null
     me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
     await until(() => turning().some((t) => t.state === 'done'))
+    expect(stand.turnedOn).toEqual(['claude-code'])
+  })
+
+  test('whose first answer from It was lost on the way is asked again a moment later, and the app’s command is run once', async () => {
+    await start('socket', { wanted: ['claude-code'], found: OFF })
+    // It takes the machine's word, and its answer never arrives
+    let lost = 0
+    stand.answer = (name) => {
+      if (name !== 'machines:turningOn' || lost++ > 0) return undefined
+      throw new Error('no connection')
+    }
+    const asked = performance.now()
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+    await until(() => turning().some((t) => t.state === 'done'), 10_000)
+    // Not in five minutes, when It would take the asking to have been cut short, but in a moment
+    expect(performance.now() - asked).toBeLessThan(5000)
+    expect(turning()).toEqual([
+      { harness: 'claude-code', state: 'working' },
+      { harness: 'claude-code', state: 'working' },
+      { harness: 'claude-code', state: 'done' },
+    ])
+    // It still has it down as being turned on when its subscription says so, and that is not done again
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'working' }] })
+    await pause(1500)
+    expect(stand.turnedOn).toEqual(['claude-code'])
+  })
+
+  test('whose answers from It are all lost is asked again only while the asking is taken to be at work, and nothing is turned on', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    await start('socket', { wanted: ['claude-code'], found: OFF })
+    stand.answer = (name) => {
+      if (name === 'machines:turningOn') throw new Error('no connection')
+      return undefined
+    }
+    const at = Date.now()
+    me({ turnOn: [{ harness: 'claude-code', at, state: 'asked' }] })
+    await pass(TURN_ON_MS / 1000)
+    const asked = turning().length
+    // A few times, each after a longer wait, and not once a second
+    expect(asked).toBeGreaterThan(3)
+    expect(asked).toBeLessThan(15)
+    // Heard of again with each of It's reports, as asked still or as at work where a claim reached It, it is not begun again
+    for (let report = 0; report < 5; report++) {
+      me({ turnOn: [{ harness: 'claude-code', at, state: 'asked' }] })
+      me({ turnOn: [{ harness: 'claude-code', at: at + 1000, state: 'working' }] })
+      await pass(30)
+    }
+    expect(turning().length).toBe(asked)
+    expect(stand.turnedOn).toEqual([])
+    // Asked afresh by the person, once It answers again, it is done
+    stand.answer = null
+    me({ turnOn: [{ harness: 'claude-code', at: Date.now(), state: 'asked' }] })
+    await pass(2)
     expect(stand.turnedOn).toEqual(['claude-code'])
   })
 

@@ -75,7 +75,7 @@ export const WAS_CUT_OFF =
  * such as a container, is not seen.
  */
 export const LEFT_ENDED =
-  'It ended everything it found that that turn had left running. So a command it was in the middle of did not finish, and a server or anything else it had started is most likely not there any more. Check, and start again what is still needed.'
+  'It ended everything that turn had left running that It could find. So a command it was in the middle of did not finish, and a server or anything else it had started is most likely not there any more. Check, and start again what is still needed.'
 
 /**
  * What is said in its place where It could not tell what was left of the turn, and the person
@@ -1616,8 +1616,13 @@ const CODEX_TURN_MARKS = ['task_started', 'turn_started', 'user_message', 'task_
  * a turn begins, one as it ends by itself, and `turn_aborted` when the person interrupts it, and
  * the last of these says how the conversation stands. A Codex whose turn was interrupted keeps
  * what is in its queue until the person's next message there, though it has the conversation
- * open and is not working. The moment is the one the line carries, or else when the file was
- * last written. Only the end of the file is read, and again only once the file has changed.
+ * open and is not working. So does a Codex started after the interruption, which takes how the
+ * conversation stands from this same file: Codex 0.167, its app server ended and the
+ * conversation opened again with `codex resume`, took nothing from its queue until a message
+ * was typed there, and took a queued message at once where the last turn had ended by itself.
+ * So what this says holds whichever Codex has the conversation open, and however long ago the
+ * turn was interrupted. The moment is the one the line carries, or else when the file was last
+ * written. Only the end of the file is read, and again only once the file has changed.
  */
 export function codexInterruptedAt(thread: string, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')): number | null {
   const wrote = codexWroteAt(thread, codexHome)

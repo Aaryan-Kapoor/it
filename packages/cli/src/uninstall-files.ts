@@ -1,9 +1,11 @@
 import { spawnSync } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { lstatSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, unlinkSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { INSTALLATION_FILE } from './installation'
 import { withInstallerLock } from './installer-lock'
+import { claimLeft, claimLock } from './legacy-lock'
 import { Problem, RUN_ONCE, WINDOWS_CLEANUP, windowsDeletionCommand } from './lib'
 import { aloneAt, holderRuns, startOf } from './serve/backend'
 
@@ -51,6 +53,13 @@ export const ROOT_FILES = [
 export const ROOT_FOLDERS = ['backend', 'content', 'content-data', 'logs', 'publication-pending', 'addons', 'bin']
 const LOCK_SUFFIX = /^(?:\.after\.(?:[0-9a-f]{16}|unread-\d+-\d+))?(?:\.[0-9a-f]{16}\.tmp)?$/
 export const ROOT_LOCKS = ['connector.lock', 'setup.lock', 'enrol.lock']
+/**
+ * The locks a command takes beside a note of conversations while it changes the note
+ * (`claimLock`). A command that was killed leaves its lock, and the claims beside it, behind.
+ */
+export const NOTE_LOCKS = ['conversations.json.lock', 'opencode-unclaimed.json.lock']
+/** What follows such a lock's name in a claim made beside it, with a recovering command's mark or a left empty lock's, or in its record on its way to its name. */
+const NOTE_SUFFIX = /^(?:\.after\.(?:[0-9a-f]{16}|legacy-[0-9a-f]{64}))?(?:\.[0-9a-f]{16}\.tmp)?$/
 const LOCKS: Record<string, string[]> = {
   '': ROOT_LOCKS,
   addons: ['setup.lock'],
@@ -197,6 +206,26 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
       const owner = json(relative)
       if (lockRecord(owner) && !holderRuns(owner)) remove(relative)
     }
+  }
+  // Only where the command that took it has ended: one that is still at work keeps its lock. The
+  // lock is taken as a command that finds it left takes it, and then let go of, so that a command
+  // that takes it in the same moment is never the one whose lock is removed
+  for (const base of NOTE_LOCKS) {
+    const file = installationFile(folder, base)
+    if (!file) continue
+    try {
+      claimLock(file, 10_000, randomBytes(8).toString('hex'))?.()
+    } catch {}
+  }
+  // And a record on its way to its name that such a command left, which is under that command's
+  // own mark and no other's. A claim beside a lock is removed only once the lock itself is gone:
+  // while it is there, a command further along the line of claims may be recovering it, and
+  // another that found a claim before its own missing could recover it at the same moment
+  for (const name of readdirSync(folder)) {
+    const base = NOTE_LOCKS.find((lock) => name !== lock && name.startsWith(lock) && NOTE_SUFFIX.test(name.slice(lock.length)))
+    if (!base || (!name.endsWith('.tmp') && lstatSync(path.join(folder, base), { throwIfNoEntry: false }))) continue
+    const file = installationFile(folder, name)
+    if (file && claimLeft(file)) remove(name)
   }
   for (const dir of ROOT_FOLDERS) {
     if (keepAddons && (dir === 'addons' || dir === 'bin')) continue

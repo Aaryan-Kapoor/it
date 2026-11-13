@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -5,7 +6,7 @@ import ts from 'typescript'
 import { afterEach, describe, expect, test } from 'vitest'
 import { INSTALLATION_FILE, markInstallation } from './src/installation'
 import { RUN_ONCE, WINDOWS_CLEANUP, WINDOWS_PATH_MOST, windowsDeletionCommand } from './src/lib'
-import { deleteAtSignIn, ROOT_FILES, ROOT_FOLDERS, ROOT_LOCKS, removeInstallationFiles, stepOutOf } from './src/uninstall-files'
+import { deleteAtSignIn, NOTE_LOCKS, ROOT_FILES, ROOT_FOLDERS, ROOT_LOCKS, removeInstallationFiles, stepOutOf } from './src/uninstall-files'
 
 const folders: string[] = []
 function folder() {
@@ -28,6 +29,47 @@ test('uninstall removes whole owned subfolders and keeps unknown entries only at
   writeFileSync(path.join(at, 'notes'), 'mine')
   expect(removeInstallationFiles(at, false)).toEqual(['notes'])
   expect(readFileSync(path.join(at, 'notes'), 'utf8')).toBe('mine')
+})
+
+test('uninstall removes the lock a killed command left beside a note of conversations, with its claims, and keeps one whose command still runs', () => {
+  const at = folder()
+  markInstallation(at)
+  // A command that took the lock and was killed before letting go of it: no process has its number now
+  const ended = spawnSync(process.execPath, ['-e', '']).pid!
+  const record = (pid: number, holder = '0123456789abcdef') => JSON.stringify({ pid, holder })
+  // Each claim beside a lock is a recovering command's, under the mark of the holder it found, and a record on its way is under its own
+  for (const lock of NOTE_LOCKS) {
+    writeFileSync(path.join(at, lock), record(ended))
+    writeFileSync(path.join(at, `${lock}.after.0123456789abcdef`), record(ended, 'aaaaaaaaaaaaaaaa'))
+    writeFileSync(path.join(at, `${lock}.after.legacy-${'a'.repeat(64)}`), record(ended, 'bbbbbbbbbbbbbbbb'))
+    writeFileSync(path.join(at, `${lock}.fedcba9876543210.tmp`), record(ended, 'fedcba9876543210'))
+  }
+  writeFileSync(path.join(at, 'opencode-unclaimed.json'), '{}')
+  expect(removeInstallationFiles(at, false)).toEqual([])
+  // One that a running command holds is its own, and so is one that is not as such a command writes it
+  const busy = folder()
+  markInstallation(busy)
+  writeFileSync(path.join(busy, 'conversations.json.lock'), record(process.pid))
+  writeFileSync(path.join(busy, 'opencode-unclaimed.json.lock'), 'not a lock record')
+  expect(removeInstallationFiles(busy, false).sort()).toEqual(['conversations.json.lock', 'opencode-unclaimed.json.lock'])
+})
+
+test('uninstall leaves the claims beside a note lock while a running command is recovering it further along their line', () => {
+  const at = folder()
+  markInstallation(at)
+  const ended = spawnSync(process.execPath, ['-e', '']).pid!
+  const lock = path.join(at, 'conversations.json.lock')
+  // The lock's holder ended, and so did the first command that set out to recover it. A running
+  // command has the next claim, and has yet to put its own record in the lock's place
+  writeFileSync(lock, JSON.stringify({ pid: ended, holder: '0123456789abcdef' }))
+  writeFileSync(`${lock}.after.0123456789abcdef`, JSON.stringify({ pid: ended, holder: 'aaaaaaaaaaaaaaaa' }))
+  writeFileSync(`${lock}.after.aaaaaaaaaaaaaaaa`, JSON.stringify({ pid: process.pid, holder: 'bbbbbbbbbbbbbbbb' }))
+  // Taken away, the first claim would let another command recover the lock beside the running one
+  expect(removeInstallationFiles(at, false).sort()).toEqual([
+    'conversations.json.lock',
+    'conversations.json.lock.after.0123456789abcdef',
+    'conversations.json.lock.after.aaaaaaaaaaaaaaaa',
+  ])
 })
 
 test('the protection page distinguishes whole subfolder removal from unknown top-level files', () => {

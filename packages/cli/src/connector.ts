@@ -18,6 +18,7 @@ import {
   ALIVE,
   briefClick,
   type Click,
+  CODEX_INTERRUPTED,
   describeClick,
   LEASE_MS,
   LISTENING_MOST,
@@ -27,6 +28,7 @@ import {
   QUEUES,
   RETENTION,
   TAKES,
+  TURN_ON_MS,
   TURNS_ON,
   WAKE_MOST,
   WAKES,
@@ -605,15 +607,8 @@ export const OPEN_WITHOUT_ADDON =
  */
 export const PI_OPEN_WITHOUT_ADDON =
   'its conversation is open without It’s add-on, as when it was open before It was installed, so It did not start a second copy of it: type /reload in it, or open it again if you closed it, and what you did reaches it'
-/**
- * What the page says of a click for a Codex conversation that is open and whose last turn the
- * person interrupted. Codex keeps what is put in its queue from then until their next message
- * there, so the click is not put in it and said to be with the agent: it waits here, and is
- * handed to the turn that message begins. Shown after "Couldn't wake Codex:", well within the
- * 300 characters the backend keeps.
- */
-export const CODEX_INTERRUPTED =
-  'its last turn in that conversation was interrupted, and Codex starts nothing by itself after that: send it a message there, and what you did reaches it'
+/** What the page says of a click for a Codex conversation that is open and whose last turn the person interrupted (`CODEX_INTERRUPTED` in the protocol). */
+export { CODEX_INTERRUPTED }
 /** What the page says after why a Pi conversation could not be reopened, where it has not loaded It's add-on either (`notLoadedToo`). */
 export const PI_NOT_LOADED =
   'Its conversation has not loaded It’s add-on either, as when it was open before It was installed: if it is still open, type /reload in it, and what you did reaches it'
@@ -4686,14 +4681,41 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   // that this connector never began, was begun by a connector that stopped before it was done,
   // and is done again: it changes nothing where the add-on is on by now.
   const begunHere = new Set<string>()
-  const turnOnAsked = async (harness: string) => {
+  // The askings this connector stopped claiming once no answer came back, each by when it was
+  // asked: heard of again, as It's every report has it heard of, one is not begun again. One the
+  // person makes afresh, once It takes this one to have been cut short, is another asking.
+  const gaveUp = new Map<string, number | undefined>()
+  const turnOnAsked = async (harness: string, at?: number) => {
     if (turningNow.has(harness)) return
     turningNow.add(harness)
     begunHere.add(harness)
     try {
       // Only an asking that It answers it has taken this machine's word for is acted on: one It
-      // no longer has, or that could not be told, or an It that does not answer so, waits
-      const claimed = await call('mutation', api.machines.turningOn, { harness, state: 'working' }).catch(() => undefined)
+      // no longer has, or an It that does not answer so, waits. Nothing else has an asking taken
+      // up again until It takes it to have been cut short (`TURN_ON_MS`), so one whose answer did
+      // not come back is asked again a few times before then, after a short wait that grows. It
+      // takes the same word twice for one asking, and the app's command is run once, after the
+      // answer that does come back.
+      let claimed: unknown
+      let answered = false
+      const began = steady()
+      for (let wait = 1000; ; wait = Math.min(wait * 2, 30_000)) {
+        try {
+          claimed = await call('mutation', api.machines.turningOn, { harness, state: 'working' })
+          answered = true
+          break
+        } catch {}
+        if (closing || steady() - began + wait > TURN_ON_MS - 60_000) break
+        await new Promise((resolve) => setTimeout(resolve, wait).unref())
+        if (closing) break
+      }
+      // No answer came back at all: one of the claims may have reached It all the same, and It
+      // then has the asking down as at work, which this connector began and is not to begin again
+      if (!answered) {
+        if (gaveUp.size > 20) gaveUp.clear()
+        gaveUp.set(harness, at)
+        return
+      }
       if (claimed !== true) {
         begunHere.delete(harness)
         return
@@ -4791,10 +4813,13 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       wakes?: { harness: string; since: number }[]
       runs?: { harness: string; sessionId: string; stop?: boolean; run?: string }[]
       upgrade?: { state: string; version?: string } | null
-      turnOn?: { harness: string; state: string }[]
+      turnOn?: { harness: string; state: string; at?: number }[]
     }) => {
       if (me.upgrade?.state === 'asked') void upgradeAsked(me.upgrade.version)
-      for (const t of me.turnOn ?? []) if (t.state === 'asked' || (t.state === 'working' && !begunHere.has(t.harness))) void turnOnAsked(t.harness)
+      for (const t of me.turnOn ?? []) {
+        if (t.state === 'asked' && t.at !== undefined && gaveUp.get(t.harness) === t.at) continue
+        if (t.state === 'asked' || (t.state === 'working' && !begunHere.has(t.harness))) void turnOnAsked(t.harness, t.at)
+      }
       // A conversation the person asked to have stopped is stopped. One that It has down as
       // running and that is not, which a connector that died leaves behind, is said to be over.
       for (const r of me.runs ?? []) {

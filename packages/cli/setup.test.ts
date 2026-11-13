@@ -3855,6 +3855,11 @@ describe('an add-on that its app has turned off', () => {
     expect(output.said).toEqual([])
   })
 
+  test.each(OFF)('in $label is turned back on with the command that the page on add-ons names', ({ bin, enable }) => {
+    const page = readFileSync(path.join(import.meta.dirname, '../../docs/add-ons.md'), 'utf8')
+    expect(page).toContain(`\`${bin} ${enable}\``)
+  })
+
   test.each(OFF)('in $label is turned back on with the app’s own command when the person asks, and nothing else is run', async ({ id, bin, enable }) => {
     await connect(id, () => {})
     turnOff(bin)

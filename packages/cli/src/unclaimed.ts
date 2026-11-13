@@ -6,9 +6,10 @@
 // with what is waiting on it.
 
 import { randomBytes } from 'node:crypto'
+import { TAKES } from '@it/protocol'
 import { agentAppsAbove } from './ancestry'
 import { claimLock } from './legacy-lock'
-import { type Asking, api, call, inHome, Problem, readJson, writePrivate } from './lib'
+import { type Asking, api, backendTakes, call, inHome, Problem, readJson, writePrivate } from './lib'
 
 /** Where those pages are noted: in It's folder on this machine, and nowhere else. */
 export const unclaimedFile = () => inHome('opencode-unclaimed.json')
@@ -87,8 +88,9 @@ const takeUnowned: Take = (page, session) => call('mutation', api.artifacts.take
 
 /**
  * Gives a page that was made in an OpenCode without the add-on to the OpenCode conversation
- * that now names it, and answers whether it did: `took`, `not`, or `unanswered` where It gave no
- * answer and the page may well still be no conversation's. Only a page noted here, and only while
+ * that now names it, and answers whether it did: `took`, `not`, `unanswered` where It gave no
+ * answer and the page may well still be no conversation's, or `older` where the It this machine
+ * joined is older than this program and refused what it was asked. Only a page noted here, and only while
  * no conversation has it, which It tells in the same step that gives it: one that another
  * conversation has taken, by showing it or with --take, stays that conversation's, however
  * close together the two are, and the note goes. So does the note of a page that is gone. A
@@ -100,7 +102,8 @@ export async function claimUnclaimed(
   slug: string | undefined,
   session: { harness: string; id: string } | undefined,
   take: Take = takeUnowned,
-): Promise<'took' | 'not' | 'unanswered'> {
+  takes: (form: string) => Promise<boolean | undefined> = backendTakes,
+): Promise<'took' | 'not' | 'unanswered' | 'older'> {
   try {
     if (!slug || session?.harness !== 'opencode') return 'not'
     const note = notes()[slug]
@@ -109,7 +112,7 @@ export async function claimUnclaimed(
     try {
       answer = await take(note.page, session)
     } catch (err) {
-      if (!(err instanceof Problem && err.code === 'not_found')) return 'unanswered'
+      if (!(err instanceof Problem && err.code === 'not_found')) return (await olderIt(takes)) ? 'older' : 'unanswered'
       await forget(slug, note.page)
       return 'not'
     }
@@ -118,4 +121,13 @@ export async function claimUnclaimed(
   } catch {
     return 'unanswered'
   }
+}
+
+/**
+ * Whether the It this machine joined is one that refuses `unowned`, which keeps to itself why it
+ * refused a call: one that answers at its door without naming `TAKES.takeUnowned`. One that
+ * cannot be asked is not taken for older.
+ */
+async function olderIt(takes: (form: string) => Promise<boolean | undefined>): Promise<boolean> {
+  return (await takes(TAKES.takeUnowned).catch(() => undefined)) === false
 }

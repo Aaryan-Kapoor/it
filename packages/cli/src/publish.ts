@@ -760,7 +760,7 @@ export async function publish(input: {
         url: link ?? throughDoor(done.url),
         ...(said ? { note: said } : {}),
         ...(urlNote ? { urlNote } : {}),
-        ...(claimed === 'unanswered' ? { unclaimedLeft: true } : {}),
+        ...(claimed === 'unanswered' || claimed === 'older' ? { unclaimedLeft: claimed } : {}),
       }
     },
     0,

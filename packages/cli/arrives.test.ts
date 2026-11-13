@@ -128,10 +128,20 @@ describe('whether what the person does arrives by itself', () => {
   test('a page made before OpenCode loaded the add-on that It gave no answer for is not said to arrive by itself, where the conversation listens', () => {
     const session = { harness: 'opencode', id: 'ses_1' }
     expect(arrives({ session, addonHere: undefined, route: route({ listening: true }), slug: 'ping' }).byItself).toBe(true)
-    const left = arrives({ session, addonHere: undefined, route: route({ listening: true }), slug: 'ping', unclaimedLeft: true })
+    const left = arrives({ session, addonHere: undefined, route: route({ listening: true }), slug: 'ping', unclaimedLeft: 'unanswered' })
     expect(left.byItself).toBe(false)
     expect(left.next).toContain('belongs to no conversation')
     expect(left.next).toContain(`\`${it()} wait --id ping --timeout 100\``)
+  })
+
+  test('one that the It this machine joined refused, being older, is said to need that It updated, and not that It gave no answer', () => {
+    const session = { harness: 'opencode', id: 'ses_1' }
+    const left = arrives({ session, addonHere: undefined, route: route({ listening: true }), slug: 'ping', unclaimedLeft: 'older' })
+    expect(left.byItself).toBe(false)
+    expect(left.next).toContain('belongs to no conversation')
+    expect(left.next).toContain('the It this machine joined is older than this one')
+    expect(left.next).toContain('It needs updating on the computer this machine joined')
+    expect(left.next).not.toContain('gave no answer')
   })
 
   test('is said to be unknown, with the agent told to wait, wherever It cannot tell', () => {
