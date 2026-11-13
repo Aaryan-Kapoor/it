@@ -1,0 +1,85 @@
+name: Claude Code, the real app
+
+# What this proves, with the real Claude Code and no account. Claude Code is installed from its
+# official npm package on a fresh runner, at the oldest version It's add-on is installed into
+# (KNOWN in packages/cli/src/setup.ts) and at the newest one published when the job runs. Then
+# e2e/apps/claude-code.mjs, in throwaway folders and with an It of the job's own:
+#
+#   - runs `it setup` for Claude Code alone, asks Claude Code itself whether It's add-on is
+#     installed and turned on, and sees that `it status` agrees; turns the add-on off with Claude
+#     Code's own command and sees It say so; and turns it back on;
+#   - runs a whole conversation against a stand-in for the model on the runner, reached with
+#     ANTHROPIC_BASE_URL and a made-up key: the first turn runs `it create --open` for a page
+#     with one button, a paired browser presses it, and the job passes only when Claude Code then
+#     asks the model for a new turn of that conversation whose newest user message is It's
+#     wording for that click, which the stand-in answers with `it patch`, and the page shows it.
+#
+# It runs on every pull request, on every push to master, once a night and by hand. It is a
+# workflow of its own and blocks no merge: when Claude Code publishes a version that It does
+# not work with, the nightly run goes red, and that is what it is for.
+#
+# Every action is pinned to a commit, the checkout keeps no credentials, the token can only
+# read, and no job is given a secret.
+on:
+  pull_request:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_VERSION: 24
+
+jobs:
+  claude-code:
+    name: Claude Code, ${{ matrix.which }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        which: [oldest, newest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # The Node bundle, with everything it carries: the add-on that setup installs among it
+      - run: npm run generate
+      - name: Install the browser that presses the page's button
+        # Fetching a browser fails on a runner now and then, before anything of It has run: it is tried three times
+        run: for n in 1 2 3; do npx playwright install --with-deps chromium && exit 0; sleep 20; done; exit 1
+      # As a person installs it, from the official package, into a folder of the job's own
+      - name: Install Claude Code from its official package
+        env:
+          WHICH: ${{ matrix.which }}
+        run: |
+          set -euo pipefail
+          if [ "$WHICH" = oldest ]; then
+            version="$(sed -n "s/.*'claude-code': { label: 'Claude Code', bin: 'claude', min: '\([0-9.]*\)'.*/\1/p" packages/cli/src/setup.ts)"
+          else
+            version="$(npm view @anthropic-ai/claude-code version)"
+          fi
+          [ -n "$version" ] || { echo "::error::no version of Claude Code was found to install for \"$WHICH\""; exit 1; }
+          npm install --global --prefix "$RUNNER_TEMP/claude-code" --no-audit --no-fund "@anthropic-ai/claude-code@$version"
+          "$RUNNER_TEMP/claude-code/bin/claude" --version
+      - name: It's add-on in the real Claude Code, and a click that comes back as a turn
+        timeout-minutes: 10
+        run: node e2e/apps/claude-code.mjs "$RUNNER_TEMP/claude-code"
