@@ -16,6 +16,7 @@ import {
   inspectFunnel,
   inTailnet,
   isLoopback,
+  noSuchService,
   type System,
   servedAs,
   tailnetAddresses,
@@ -496,6 +497,25 @@ describe('finding Tailscale on each system', () => {
       }
     },
   )
+
+  // What sc.exe ends with where no service of that name is installed, as Node gives its exit code
+  // and as Bun gives it on Windows, which is only its lowest byte. The words around the code are
+  // in the language Windows speaks, and the code is in them as a number in every one.
+  test('sc.exe saying that no such service is installed is known by its code, from Node and from Bun', () => {
+    const none = '[SC] EnumQueryServicesStatus:OpenService FAILED 1060:\r\n\r\nThe specified service does not exist as an installed service.'
+    const another = '[SC] OpenService FAILED 5:\r\n\r\nAccess is denied.'
+    expect(noSuchService(1060, '')).toBe(true)
+    expect(noSuchService(1060, none)).toBe(true)
+    expect(noSuchService(36, none)).toBe(true)
+    expect(noSuchService(36, '[SC] OpenService FEHLER 1060:\r\n\r\nDer angegebene Dienst ist kein installierter Dienst.')).toBe(true)
+    // Any other ending is not that: Tailscale may be there, and the Funnel is not taken to be off
+    expect(noSuchService(36, '')).toBe(false)
+    expect(noSuchService(36, 'FAILED 10601:')).toBe(false)
+    expect(noSuchService(5, another)).toBe(false)
+    expect(noSuchService(1, none)).toBe(false)
+    expect(noSuchService(undefined, none)).toBe(false)
+    expect(noSuchService('ENOENT', '')).toBe(false)
+  })
 
   // CI's Windows machines have no Tailscale, which the system's own list of services says
   test.runIf(process.platform === 'win32' && process.env.CI === 'true')(
