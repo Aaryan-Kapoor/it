@@ -154,7 +154,10 @@ function end(child, signal) {
     if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal)
     else child.kill(signal)
   } catch {
-    child.kill(signal)
+    // The group has gone; the program itself is told, which does nothing where it has gone too
+    try {
+      child.kill(signal)
+    } catch {}
   }
 }
 /** Set once the run has been told to stop: from then on nothing of the run's own starts but its cleanup. */
@@ -382,9 +385,12 @@ function cleanUp(signal) {
   if (signal) stoppedBy ??= signal
   cleaning ??= (async () => {
     // What the run was waiting on when it was told to stop is ended first, before its folder goes
-    for (const child of inFlight) end(child, 'SIGTERM')
+    // Each one's whole process group is asked, and then ended, also where the program itself has
+    // gone by then and something it started is still there: a group outlives its first program
+    const groups = [...inFlight]
+    for (const child of groups) end(child, 'SIGTERM')
     await until(() => inFlight.size === 0, 5000, 100)
-    for (const child of inFlight) end(child, 'SIGKILL')
+    for (const child of groups) end(child, 'SIGKILL')
     // A browser still being launched is waited for, so that it is closed too
     const launched = await launching?.catch(() => undefined)
     await (browser ?? launched)?.close().catch(() => {})
