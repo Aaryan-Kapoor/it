@@ -298,7 +298,7 @@ export type Why = 'person' | 'taken_back' | 'not_shown' | 'replaced' | 'device' 
  */
 export function cannotOpen(): string | null {
   if (typeof window === 'undefined' || !window.isSecureContext)
-    return "This screen reaches It over plain http, and a browser gives the microphone and the camera only to an https address or to the machine itself. Open It at its https address on your tailnet: `it https on`, on the machine It runs on, says how. A photo can be taken here all the same with a file input in the page, which opens a phone's own camera."
+    return "This screen reaches It over plain http, and a browser gives the microphone and the camera only to an https address or to the machine itself. Open It at its https address on your tailnet: `it https on`, on the machine It runs on, says how. A file input in the page works here all the same, and on most phones it offers the phone's own camera for a photo."
   if (!navigator.mediaDevices?.getUserMedia) return 'This browser gives a site no microphone or camera.'
   return null
 }

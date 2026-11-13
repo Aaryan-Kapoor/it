@@ -257,7 +257,7 @@ describe('where a browser gives a site the microphone and the camera at all', ()
     expect(window.isSecureContext).not.toBe(true)
     expect(cannotOpen()).toMatch(/plain http.*it https on/)
     // A file input asks for no secure address, and a page can take a photo with it on any screen
-    expect(cannotOpen()).toMatch(/A photo can be taken here all the same with a file input in the page, which opens a phone's own camera\.$/)
+    expect(cannotOpen()).toMatch(/A file input in the page works here all the same, and on most phones it offers the phone's own camera for a photo\.$/)
   })
 
   test('and not where the browser has no way to ask for either', () => {
