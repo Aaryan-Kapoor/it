@@ -577,7 +577,8 @@ const shortForms = new Map<string, string | null>()
  * own so that nothing in it is read as cmd's own, and answers in UTF-16.
  */
 export function shortPath(file: string): string | null {
-  if (process.platform !== 'win32') return null
+  // A double quote, which no name on Windows has, would end the quotes the path is put in
+  if (process.platform !== 'win32' || /["\r\n]/.test(file)) return null
   if (shortForms.has(file)) return shortForms.get(file)!
   let found: string | null = null
   try {
@@ -592,7 +593,7 @@ export function shortPath(file: string): string | null {
       },
     )
     const said = r.status === 0 && r.stdout ? Buffer.from(r.stdout).toString('utf16le').trim() : ''
-    if (said && !said.includes('\n') && path.isAbsolute(said) && oneFile(said, file)) found = said
+    if (said && !said.includes('\n') && path.isAbsolute(said) && existsSync(said) && oneFile(said, file)) found = said
   } catch {}
   shortForms.set(file, found)
   return found
@@ -612,9 +613,17 @@ export function hookUnrunnable(hooks: string | null, windows = process.platform 
   } catch {
     return undefined
   }
-  if (!commands.some((command) => typeof command === 'string' && command.startsWith('"'))) return undefined
-  return 'Codex cannot run It’s hooks, and says that a hook failed at every turn: it runs each one in PowerShell, which cannot run a program whose path is in quotes, and the path of It’s folder needs them, for a space or another character in it, while Windows gives that folder no short name that does not. It hands Codex no click until that changes: what is done on a page waits for `it wait`.'
+  return commands.some((command) => typeof command === 'string' && command.startsWith('"')) ? HOOKS_UNRUNNABLE : undefined
 }
+export const HOOKS_UNRUNNABLE =
+  'Codex cannot run It’s hooks, and says that a hook failed at every turn: it runs each one in PowerShell, which cannot run a program whose path is in quotes, and the path of It’s folder needs them, for a space or another character in it, while Windows gives that folder no short name that does not. It hands Codex no click until that changes: what is done on a page waits for `it wait`.'
+/**
+ * Whether hooks that Codex cannot run would be read by PowerShell as more than a path in quotes:
+ * where the path has a character that PowerShell takes for a double quote, which would end the
+ * quotes. Such hooks are not given to Codex at all. The rest of what would change their reading
+ * (`"`, `%`, `!`) is refused for every command that names the folder (`unsafe`).
+ */
+const hooksUnsafe = (hooks: string | null) => hookUnrunnable(hooks) !== undefined && /[“”„]/.test(hooks ?? '')
 
 /** Writes an add-on's files where the harness will install them from. */
 export function unpack(id: Harness): string {
@@ -1150,7 +1159,7 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
     },
     async install(dir, at, was, wrote) {
       // Looked at before anything is changed, so that an install that cannot go ahead leaves what was there
-      if (unsafe([dir])) return UNSAFE
+      if (unsafe([dir]) || hooksUnsafe(textOf(path.join(dir, ...CODEX_HOOKS_REL.split('/'))))) return UNSAFE
       const env = envAt(this.profile, at)
       // Nothing is taken out first, as in Claude Code. Codex reads a local marketplace from its
       // folder, which unpacking has just brought up to date, and its own command for adding a
@@ -2723,7 +2732,10 @@ export function refresh(say: (line: string) => void, forLog = false): Promise<Ad
       if (!(id in ADAPTERS && id in ADDONS) || !supported(id) || !installations(id).length) continue
       try {
         const now = await statusOf(id)
-        if (now?.addon !== 'connected' && now?.addon !== 'needs_approval') continue
+        // And Codex where all that is wrong is hooks that an It from before wrote, which it cannot
+        // run: brought up to date, they may be ones it can
+        const repairable = now?.addon === 'error' && now.detail === HOOKS_UNRUNNABLE
+        if (now?.addon !== 'connected' && now?.addon !== 'needs_approval' && !repairable) continue
         const s = await connect(id, say, forLog, told)
         if (s.addon === 'error') say(forLog ? `${KNOWN[id].label}: its add-on could not be installed` : `${KNOWN[id].label}: ${s.detail}`)
       } catch (err) {

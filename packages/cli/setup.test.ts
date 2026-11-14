@@ -3726,6 +3726,59 @@ describe('on Windows', () => {
     expect((await connect('codex', () => {})).addon).not.toBe('error')
   })
 
+  test.skipIf(platform === 'win32')(
+    'Codex is not given hooks that PowerShell would read as more than a path, where a quote in the folder’s name would end the path’s quotes',
+    async () => {
+      // Taken on Windows to have no short name: a drive with short names turned off
+      useHome('it ” ; Write-Output x ; #')
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      ran = []
+      const status = await connect('codex', () => {})
+      expect(status.addon).toBe('error')
+      expect(status.detail).toMatch(/cannot be passed safely to a command on Windows/)
+      expect(commands('codex').filter((said) => /add|install/.test(said))).toEqual([])
+    },
+  )
+
+  test.skipIf(platform !== 'win32')(
+    'on Windows hooks in quotes that an It from before wrote are written again by setup and by refresh, once, where a short name serves',
+    async () => {
+      useHome(path.join('Ana Lee', '.it'))
+      await connect('codex', () => {})
+      const written = path.join(process.env.IT_HOME!, 'addons', 'codex', 'plugins', 'it-bridge', 'hooks', 'hooks.json')
+      const now = read(written)
+      if (!/"command": "[^"\\]/.test(now)) return // this drive gives no short names
+      const it = shim()
+      const old = now.replaceAll(JSON.stringify(`${shortPath(it)} hook codex`), JSON.stringify(`"${it}" hook codex`))
+      expect(old).not.toBe(now)
+      // Codex's own copy, as an It from before had it put there
+      const copy = path.join(person, '.codex', 'plugins', 'cache', 'it', 'it-bridge', '0.1.0', 'hooks', 'hooks.json')
+      for (const [via, again] of [
+        ['refresh', () => refresh(() => {})],
+        ['setup', () => connect('codex', () => {})],
+      ] as const) {
+        put(written, old)
+        put(copy, old)
+        ran = []
+        await again()
+        expect(read(written), via).toBe(now)
+        expect(
+          commands('codex').filter((said) => said === 'plugin add it-bridge@it'),
+          via,
+        ).toHaveLength(1)
+        // Codex copies the plugin anew as it adds it
+        put(copy, read(written))
+        ran = []
+        expect((await connect('codex', () => {})).addon, via).not.toBe('error')
+        expect(
+          commands('codex').filter((said) => said === 'plugin add it-bridge@it'),
+          via,
+        ).toHaveLength(0)
+      }
+    },
+    120_000,
+  )
+
   // On Windows itself: a launcher in a folder whose name has a space, run as Codex runs a hook,
   // in PowerShell given the command as one argument, and in cmd.exe given it in quotes as is
   test.skipIf(platform !== 'win32')(
@@ -3739,7 +3792,15 @@ describe('on Windows', () => {
       const command = addonHookCommand('codex', launcher)
       const short = shortPath(launcher)
       if (short === null) {
-        // This drive gives no short names: the command is in quotes, and Codex is said not to run it
+        // Only where this drive gives the folder no short name, as Windows itself says, asked another way
+        const asked = spawnSync(
+          path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+          ['-NoProfile', '-Command', '(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:IT_FOLDER).ShortPath'],
+          { env: { ...process.env, IT_FOLDER: path.dirname(path.dirname(folder)) }, encoding: 'utf8' },
+        )
+        expect(asked.status).toBe(0)
+        expect(asked.stdout.trim()).toMatch(/ /)
+        // Then the command is in quotes, and Codex is said not to run it
         expect(command).toBe(`"${launcher}" hook codex`)
         expect(hookUnrunnable(JSON.stringify({ hooks: { Stop: [{ hooks: [{ command }] }] } }))).toBeDefined()
         return
