@@ -762,7 +762,8 @@ const READYING_CHECK_MS = 100
  */
 const ENDED_WHILE_OPENING: Partial<Record<Why, string>> = {
   not_shown: 'The page was closed.',
-  replaced: 'The page loaded another document, which asks for itself.',
+  replaced:
+    'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
   taken_over:
     'Another conversation took this page over, so It stopped what it was doing for it. The person is asked again for the conversation that has it now.',
   taken_back: 'The person took back what they had allowed this page.',

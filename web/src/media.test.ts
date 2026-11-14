@@ -1657,7 +1657,8 @@ describe('how long the browser is given to hand over the device', () => {
     const made = standInSound()
     await expect(openMicrophone(true, { ...page(['mic']), still: () => 'replaced' })).rejects.toMatchObject({
       why: 'replaced',
-      message: 'The page loaded another document, which asks for itself.',
+      message:
+        'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
     })
     expect(device.tracks.map((t) => t.stopped)).toEqual([true])
     expect(made.contexts).toHaveLength(0)
@@ -1682,7 +1683,11 @@ describe('how long the browser is given to hand over the device', () => {
     stops[0]!()
     expect(device.tracks.map((t) => t.stopped)).toEqual([true])
     await vi.advanceTimersByTimeAsync(0)
-    expect(await said).toEqual({ message: 'The page loaded another document, which asks for itself.', why: 'replaced' })
+    expect(await said).toEqual({
+      message:
+        'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+      why: 'replaced',
+    })
     // And it is given nothing once it is no longer being made ready
     expect(stops).toEqual([stops[0], null])
     expect(microphoneFor('page-1')).toBeUndefined()
@@ -1705,7 +1710,9 @@ describe('how long the browser is given to hand over the device', () => {
     expect(device.tracks.map((t) => t.stopped)).toEqual([false, false])
     stops[0]!()
     expect(device.tracks.map((t) => t.stopped)).toEqual([true, true])
-    expect(await opening).toBe('The page loaded another document, which asks for itself.')
+    expect(await opening).toBe(
+      'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+    )
     expect(stops).toEqual([stops[0], null])
     expect(cameraFor('page-1')).toBeUndefined()
     await vi.advanceTimersByTimeAsync(LIVE_MICROPHONE.startMs)

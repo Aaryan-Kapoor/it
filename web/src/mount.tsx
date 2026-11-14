@@ -357,7 +357,8 @@ export function Mount({
               : null
     const SAID = {
       not_shown: 'The page was closed.',
-      replaced: 'The page loaded another document, which asks for itself.',
+      replaced:
+        'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
       taken_over: OWNER_MOVED,
       taken_back: TAKEN_BACK,
     } as const
@@ -1128,6 +1129,9 @@ export function Mount({
           if (asking.afterHello) {
             onItsLoad = true
             unclaimed = false
+            // The page's script holds what it asks of the microphone and the camera until the site
+            // has counted its document's own load, which ends nothing it asks for from now on
+            ;(e.source as Window).postMessage({ type: 'it:loaded' }, '*')
           }
           doneAsking()
           embeds?.release()
@@ -1165,9 +1169,12 @@ export function Mount({
         // Sent to whatever document the page has put in its frame. The channel is for this one
         // showing, and gives a document there nothing the page did not already have.
         // With what the site does for a page beyond what every site has done: a page's script does none of these where a site does not say so, as one open since before It was updated does not
-        ;(e.source as Window).postMessage({ type: 'it:port', v: CHANNEL_VERSION, embeds: embeds !== null, media: true, sound: true, opens: true }, '*', [
-          channel.port2,
-        ])
+        // `loaded` says whether the site has counted this document's own load already, as `it:loaded` says later
+        ;(e.source as Window).postMessage(
+          { type: 'it:port', v: CHANNEL_VERSION, embeds: embeds !== null, media: true, sound: true, opens: true, loaded: onItsLoad },
+          '*',
+          [channel.port2],
+        )
         const whole = liveState.whole()
         if (whole) toPage(channel.port1, whole)
         // A document that says hello while the frame is being asked is there to be asked again, as
