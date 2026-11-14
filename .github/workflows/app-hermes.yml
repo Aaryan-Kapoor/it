@@ -29,7 +29,7 @@ on:
   push:
     branches: [master]
   schedule:
-    - cron: '41 5 * * *'
+    - cron: '53 5 * * *'
   workflow_dispatch:
 
 permissions:
