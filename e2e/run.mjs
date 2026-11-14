@@ -6958,9 +6958,11 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
     const callSlug = `${recSlug}-call`
     await it(A, ['create', marked('Camera with sound'), '--id', callSlug, '--dir', recorderDir])
     const callTab = await page.context().newPage()
-    let crashed = false
+    // What the tab was doing when it crashed, if it did: opening the camera, recording, or what came after
+    let phase = 'opening'
+    let crashed = ''
     callTab.on('crash', () => {
-      crashed = true
+      crashed ||= phase
     })
     const callQuestion = callTab.locator('.media-ask')
     const callTakeAt = path.join(tmp, `call-${slug}.recording`)
@@ -6985,9 +6987,11 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
         .waitFor({ timeout: 15_000 })
         .then(() => recOut(callTab).textContent())
       // The page records the camera's stream itself, picture and sound together, and sends the take
+      phase = 'recording'
       call.recording = await recPressed(callTab, '#record', /^(recording|refused)/)
       await callTab.waitForTimeout(2000)
       call.sent = await recPressed(callTab, '#stop', /^(accepted|refused)/)
+      phase = 'sent'
       call.cameraChip = await callTab.locator('.page-nav .media-cam').count()
       call.take = await until(async () => (await it(A, ['actions', '--id', callSlug])).find((x) => x.action === 'take'), 30_000, 500)
       call.saved = call.take ? (await it(A, ['save', call.take.id, callTakeAt])).saved : null
@@ -6995,13 +6999,13 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
     } catch (err) {
       call.stoppedBy = err.message
       // Playwright may say that the tab crashed before the tab's own event has been heard
-      if (/(Page|Target) crashed/.test(err.message)) crashed = true
+      if (/(Page|Target) crashed/.test(err.message)) crashed ||= phase
     }
     const callName = 'what the page records of the camera’s stream, picture and sound together, reaches the agent as a video file, while the camera stays live'
     const callSaid = JSON.stringify({ crashed, ...call, take: undefined, files: call.take?.files, head: callTakeBytes.subarray(0, 8).toString('hex') })
-    // Only a crash once the camera was live with its sound and the page had begun to record is
-    // the one the fake devices cause on Windows
-    if (crashed && process.platform === 'win32' && /^live with sound/.test(call.live) && /^recording/.test(call.recording)) {
+    // Only a crash in Chromium on Windows, once the camera was live with its sound and before the
+    // recording was stopped and sent, is the one the fake devices cause
+    if (crashed === 'recording' && process.platform === 'win32' && /^chrom/.test(BROWSER) && /^live with sound/.test(call.live)) {
       console.log(`  skip  ${callName}: the tab crashed while it recorded, as it does on Windows with the browser’s fake camera and microphone`)
       if (process.env.GITHUB_ACTIONS === 'true')
         console.log(
