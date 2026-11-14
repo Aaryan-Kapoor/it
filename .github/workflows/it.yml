@@ -336,6 +336,16 @@ jobs:
         env:
           PROGRAM: ${{ matrix.program }}
         run: IT_BIN="$RUNNER_TEMP/it-programs/$PROGRAM" node e2e/service.mjs
+      # How a conversation that Auto-wake reopened went, under the Bun the Windows program runs
+      # on, which hands on only the lowest byte of a child's exit code. Here and not with the unit
+      # tests on Windows, whose job does not block a merge.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: runner.os == 'Windows'
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: A reopened run on Windows says how it went, under Bun
+        if: runner.os == 'Windows'
+        run: npm ci && npm run generate && bun test ./packages/cli/wake-windows.test.ts
 
   # Everything together on the runner, as a person has it: It running as one
   # service, which starts the backend program, opens the door and runs the

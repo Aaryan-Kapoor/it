@@ -45,6 +45,7 @@ import {
   jobName,
   KEPT_NOT,
   keeper,
+  keptWord,
   LEFT_ENDED,
   lastWords,
   listsProcesses,
@@ -1712,12 +1713,29 @@ describe('a reopened run on Windows, as it is put to the system', () => {
     )
   })
 
+  test("how a run went is read from the keeper's word alone: one of its three, or the app's code whole, and nothing else", () => {
+    const word = (said: string) => {
+      const file = path.join(scratch, `${randomUUID()}.kept`)
+      writeFileSync(file, said)
+      return keptWord(file)
+    }
+    expect(['not', 'missing', 'unstarted'].map(word)).toEqual(['not', 'missing', 'unstarted'])
+    // A code past what a byte holds is kept whole, the largest Windows has among them
+    expect(['ran 0', 'ran 2', 'ran 256', 'ran 1230241794', 'ran 4294967295'].map(word)).toEqual([0, 2, 256, 1230241794, 4294967295])
+    for (const said of ['', 'ran', 'ran -1', 'ran 01', 'ran 4294967296', 'ran 1 ', 'not\n', 'Missing', '2', 'ran 2\nnot'])
+      expect([said, word(said)]).toEqual([said, undefined])
+    // A keeper that wrote nothing said nothing
+    expect(keptWord(path.join(scratch, 'never-written.kept'))).toBeUndefined()
+  })
+
   test('a run is started by a keeper that is told its job, its command line and who started it in its environment, with nothing of the app on its own command line', () => {
     const run = randomUUID()
-    const started = keeper(['C:\\Users\\a b\\.local\\bin\\claude.exe', '--resume', 'x', '--allowedTools', 'Bash(it:*)'], run, {
-      PSModulePath: 'C:\\mods',
-      KEY: 'v',
-    })
+    const started = keeper(
+      ['C:\\Users\\a b\\.local\\bin\\claude.exe', '--resume', 'x', '--allowedTools', 'Bash(it:*)'],
+      run,
+      { PSModulePath: 'C:\\mods', KEY: 'v', IT_JOB_TOLD: 'C:\\elsewhere.kept' },
+      'C:\\it\\logs\\reopened-1-1.kept',
+    )
     if (typeof started === 'string') throw new Error(started)
     expect(started.file).toMatch(/[\\/]System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/)
     expect(started.args.slice(0, -1)).toEqual(['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand'])
@@ -1725,6 +1743,8 @@ describe('a reopened run on Windows, as it is put to the system', () => {
     expect(script).toContain("Add-Type -TypeDefinition @'")
     expect(script).toContain('$kept = [ItJob]::Keep()')
     expect(script).toContain(`exit ${KEPT_NOT}`)
+    // Where PowerShell cannot compile the keeper, it says so in the keeper's place
+    expect(script).toContain("Set-Content -LiteralPath $env:IT_JOB_TOLD -Value 'not'")
     expect(script).not.toContain('claude')
     expect(started.env).toMatchObject({
       KEY: 'v',
@@ -1732,7 +1752,11 @@ describe('a reopened run on Windows, as it is put to the system', () => {
       IT_JOB_LINE: '"C:\\Users\\a b\\.local\\bin\\claude.exe" --resume x --allowedTools Bash(it:*)',
       IT_JOB_PARENT: String(process.pid),
       IT_JOB_MODULES: '+C:\\mods',
+      // Told where to say how the run went, and never where the environment said
+      IT_JOB_TOLD: 'C:\\it\\logs\\reopened-1-1.kept',
     })
+    // Told of no file, it is told of none, whatever the environment held
+    expect((keeper(['C:\\x.exe'], run, { IT_JOB_TOLD: 'C:\\elsewhere.kept' }) as { env: NodeJS.ProcessEnv }).env.IT_JOB_TOLD).toBeUndefined()
     // Windows PowerShell is given no folders for its modules, and finds its own: the app is given back the person's through the keeper
     expect(Object.keys(started.env).filter((k) => k.toUpperCase() === 'PSMODULEPATH')).toEqual([])
     // An environment without the folders of PowerShell's modules has none given to the app either
