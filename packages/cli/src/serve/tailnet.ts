@@ -276,6 +276,14 @@ export function tailscaleCommand(system: System = thisSystem()): string | undefi
 }
 
 /**
+ * Whether `sc.exe`, ending with an error, said that no such service is installed: Windows's code
+ * 1060. Node gives a program's whole exit code, and Bun, which the standalone programs run on,
+ * gives only its lowest byte on Windows, which for 1060 is 36. Where that is all there is, sc.exe's
+ * own line names the code, as a number in every language Windows speaks.
+ */
+export const noSuchService = (code: unknown, said: string): boolean => code === 1060 || (code === (1060 & 0xff) && /\b1060\b/.test(said))
+
+/**
  * Whether Windows's Tailscale service may be running, as `sc.exe` says: not where no such service
  * is installed, or where it says the service is stopped, and taken for running where it cannot say.
  */
@@ -283,8 +291,7 @@ const windowsService = (env: NodeJS.ProcessEnv) => () =>
   new Promise<boolean>((resolve) => {
     const windir = Object.entries(env).find(([key]) => key.toLowerCase() === 'systemroot')?.[1] || 'C:\\Windows'
     execFile(path.win32.join(windir, 'System32', 'sc.exe'), ['query', 'Tailscale'], { encoding: 'utf8', timeout: 2000, windowsHide: true }, (error, stdout) => {
-      // 1060: no such service is installed
-      if (error) return resolve((error as { code?: unknown }).code !== 1060)
+      if (error) return resolve(!noSuchService((error as { code?: unknown }).code, `${stdout ?? ''}`))
       resolve(!/STATE\s*:\s*1\s+STOPPED/i.test(stdout))
     })
   })

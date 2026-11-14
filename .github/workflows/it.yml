@@ -5,10 +5,15 @@ name: It
 # nothing here needs an account anywhere, so a pull request from a fork runs
 # exactly what a branch of this repository runs.
 on:
+  # On every pull request and push to master, by hand, and every night on
+  # master, so that a change from outside the repository (a runner's image, a
+  # browser, a dependency, the newest Claude Code) shows itself without a commit.
   pull_request:
   push:
     branches: [master]
   workflow_dispatch:
+  schedule:
+    - cron: '7 4 * * *'
 
 permissions:
   contents: read

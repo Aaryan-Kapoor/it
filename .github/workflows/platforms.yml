@@ -2,26 +2,36 @@ name: It on macOS and Windows
 
 # The whole product in a browser on the systems where the main workflow only starts the
 # program and runs its install script: a Mac of each kind, and Windows. It is the same suite
-# the main workflow runs on Linux against the standalone program, in its quick form.
+# the main workflow runs on Linux against the standalone program, in its quick form, and then
+# the check over https that it runs after it. Beside that, on those three and on Linux, setup
+# registers It with the system's own service manager and the system keeps it running.
 #
-# Run by hand, or by a push to a branch named `platforms`, and by nothing else: never by a
-# pull request or a push to master. Where minutes are paid for, a Mac's cost ten times a
-# Linux machine's, and these jobs are asked for when a release is near, not for every commit.
-# Nothing waits on it, and no job of the main workflow needs it.
+# Run on every push to master, every night, and by hand, and never by a pull request: a fault
+# that only a Mac or Windows shows is found within a commit of master, and one that comes from
+# outside the repository (a runner's image, a browser, a dependency) within a night. The
+# repository is public, so GitHub's Macs and Windows machines cost it nothing. Nothing waits on
+# this workflow, and no job of the main workflow needs it, so a pull request is never held up
+# by a Mac's queue. A newer push to master replaces a run of an older one that has not ended.
 #
 # Like the main workflow: every action is pinned to a commit, no job keeps the checkout's
 # credentials, the token can only read, and no job is given a secret.
 on:
   workflow_dispatch:
   push:
-    branches: [platforms]
+    branches: [master, platforms]
+  schedule:
+    - cron: '23 4 * * *'
 
 permissions:
   contents: read
 
+# A push replaces only the run of an earlier push to the same branch. A push, the nightly run and
+# a run started by hand never cancel one another. Runs started by hand on one branch share a group,
+# as nightly runs do: one that is going is left to finish, and of those waiting behind it only
+# the newest is kept, as GitHub does in every group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 defaults:
   run:
@@ -164,10 +174,11 @@ jobs:
           retention-days: 3
           if-no-files-found: warn
 
-  # It as the system keeps it running: a launchd agent on a Mac, a task of the Task Scheduler
-  # on Windows. Setup registers it, the system starts it again after it is ended from outside,
-  # a second setup leaves it running, and it is taken away again whole. The browser suite above
-  # starts It by hand and asks the system for none of this.
+  # It as the system keeps it running: a systemd unit of the person's own on Linux, a launchd
+  # agent on a Mac, a task of the Task Scheduler on Windows. Setup registers it, the system
+  # starts it again after it is ended from outside, a second setup leaves it running, and it is
+  # taken away again whole. The browser suite above starts It by hand and asks the system for
+  # none of this.
   service:
     name: The service, as the system keeps it (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -177,6 +188,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - os: ubuntu-latest
+            program: it-linux-x64
           - os: macos-latest
             program: it-darwin-arm64
           - os: macos-15-intel
@@ -190,6 +203,22 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
+      # A runner's steps run in no login of the runner's account, so systemd keeps no manager for
+      # that account until it is told the account stays: then it starts the same manager a
+      # person's login starts, and It's unit is registered with it as on a person's machine.
+      # Setup finds the account staying already, and so leaves that as it found it.
+      - name: Give the runner's account a systemd of its own, as a person's login does
+        if: runner.os == 'Linux'
+        run: |
+          sudo loginctl enable-linger "$USER"
+          runtime="/run/user/$(id -u)"
+          # Asked as setup asks whether it can reach systemd for the account, until it can
+          for _ in $(seq 1 30); do XDG_RUNTIME_DIR="$runtime" systemctl --user show-environment > /dev/null 2>&1 && break; sleep 1; done
+          if ! XDG_RUNTIME_DIR="$runtime" systemctl --user show-environment > /dev/null; then
+            echo "::error::systemd started no manager for the runner's account within thirty seconds"
+            exit 1
+          fi
+          echo "XDG_RUNTIME_DIR=$runtime" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: it-programs
