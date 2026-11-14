@@ -101,6 +101,57 @@ describe('the ask for a star', () => {
     expect(host.innerHTML).toBe('')
   })
 
+  test('opened in a tab of its own with the middle button, is answered all the same', async () => {
+    vi.useFakeTimers()
+    await show()
+    await act(async () => {
+      link()!.dispatchEvent(new MouseEvent('auxclick', { bubbles: true, button: 1 }))
+      vi.runAllTimers()
+    })
+    expect(host.innerHTML).toBe('')
+    await reopen()
+    expect(host.innerHTML).toBe('')
+  })
+
+  test('answered in another tab of this browser, goes from this one too', async () => {
+    await show()
+    expect(link()).not.toBeNull()
+    await act(async () => {
+      localStorage.setItem('it.starAsked', '1')
+      window.dispatchEvent(new StorageEvent('storage', { key: 'it.starAsked', newValue: '1' }))
+    })
+    expect(host.innerHTML).toBe('')
+  })
+
+  describe('in a bar with no room to spare for it', () => {
+    let observers: (() => void)[]
+    beforeEach(() => {
+      observers = []
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          constructor(private fn: () => void) {
+            observers.push(() => this.fn())
+          }
+          observe() {}
+          disconnect() {}
+        },
+      )
+      vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(220)
+    })
+    afterEach(() => vi.unstubAllGlobals())
+    const visibility = () => host.querySelector<HTMLElement>('.star-ask')!.style.visibility
+
+    test('is hidden from sight, the keyboard and a screen reader, and is shown again once there is room', async () => {
+      const room = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(120)
+      await show()
+      expect(visibility()).toBe('hidden')
+      room.mockReturnValue(400)
+      await act(async () => observers.forEach((fn) => fn()))
+      expect(visibility()).toBe('')
+    })
+  })
+
   test('in a browser that keeps nothing, is not shown, and the site goes on', async () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('SecurityError')

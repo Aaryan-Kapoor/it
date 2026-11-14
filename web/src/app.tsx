@@ -1010,8 +1010,9 @@ function TopBar({
           </nav>
         )}
       </div>
-      <div className="grid-header-spacer" />
-      <StarAsk pages={count} owner={owner} locked={locked} path={path} pairing={code !== null} live={live} />
+      <div className="grid-header-spacer">
+        <StarAsk pages={count} owner={owner} locked={locked} path={path} pairing={code !== null} live={live} />
+      </div>
       {search && (
         <span className="grid-search-wrap">
           <input

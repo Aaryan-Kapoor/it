@@ -2225,14 +2225,18 @@ a.grid-chip {
   align-items: center;
 }
 
-/* The ask for a star on GitHub: one quiet chip in the room the bar has to spare, which is hidden
-   where that room is too small for it, so that it gives way before anything else there */
+/* The ask for a star on GitHub: one quiet chip inside the bar's spacer, so that it adds nothing to
+   the bar's layout, and hidden where the spacer is too small for it, so that it gives way before
+   anything else there */
+.grid-header-spacer:has(.star-room) {
+  display: flex;
+  overflow: hidden;
+}
 .star-room {
-  flex: 1000 1 0;
+  flex: 1 1 0;
   min-width: 0;
   display: flex;
   justify-content: flex-end;
-  overflow: hidden;
 }
 .star-ask {
   flex: none;
@@ -3518,7 +3522,8 @@ form.row-main {
     display: none;
   }
   /* The ask sits beside the name, where how things stand would be, and is only there while It can be reached */
-  .star-room {
+  .grid-header-spacer:has(.star-room) {
+    display: flex;
     grid-column: 1;
     grid-row: 1;
     margin-left: 40px;

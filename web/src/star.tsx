@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 /** How many pages an It holds before its site asks, once, for a star on GitHub. */
 export const STAR_AFTER = 5
@@ -48,8 +48,9 @@ export function starWanted(w: Where): boolean {
 
 /**
  * The one quiet line in the bar that asks for a star on GitHub, and the button that puts it away
- * for good. It takes only the room the bar has to spare, before the search, and where that room
- * is too small for it, it is hidden, and nothing else in the bar moves for it.
+ * for good. It is drawn inside the bar's spacer, in the room the bar has to spare before the
+ * search, so that it adds nothing to the bar's own layout; where that room is too small for it,
+ * it is hidden, and nothing else in the bar moves for it.
  */
 export function StarAsk(where: Where) {
   const [done, setDone] = useState(answered)
@@ -68,6 +69,14 @@ export function StarAsk(where: Where) {
     measure()
     return () => watch.disconnect()
   }, [shown])
+  // Answered in another tab of this browser: this one lets it go too
+  useEffect(() => {
+    const heard = (e: StorageEvent) => {
+      if (e.key === KEY || e.key === null) setDone((d) => d || answered())
+    }
+    window.addEventListener('storage', heard)
+    return () => window.removeEventListener('storage', heard)
+  }, [])
   if (!shown) return null
   const finish = () => {
     remember()
@@ -78,7 +87,16 @@ export function StarAsk(where: Where) {
     <div className="star-room" ref={room}>
       {/* Hidden, where it does not fit, from sight, from the keyboard and from a screen reader alike */}
       <span className="chip-pair star-ask" ref={ask} style={fits ? undefined : { visibility: 'hidden' }}>
-        <a className="chip ask" href={STAR_URL} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" onClick={finish}>
+        <a
+          className="chip ask"
+          href={STAR_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          referrerPolicy="no-referrer"
+          onClick={finish}
+          // Opened in a tab of its own with the middle button, it is answered all the same
+          onAuxClick={(e) => e.button === 1 && finish()}
+        >
           {STAR_WORDS}
         </a>
         <button type="button" className="chip x" aria-label="No thanks, do not ask for a star again" title="Do not ask again" onClick={finish}>
