@@ -296,13 +296,10 @@ export function carryOn(
         into = openSync(printed, 'w', 0o600)
       } catch {}
     const windows = process.platform === 'win32'
-    // On Windows the keeper says in a file how the run went (see `keeper`), and nothing else is
-    // written there: one of an earlier program that had this one's number goes first
-    const told = windows ? path.join(opts.keepIn ?? os.tmpdir(), `${numbered}.kept`) : null
-    if (told)
-      try {
-        rmSync(told, { force: true })
-      } catch {}
+    // On Windows the keeper says in a file how the run went (see `keeper`), named afresh for each
+    // run: a file of the same name that an earlier program left, and could not be removed, would
+    // otherwise be read as what this run's keeper said
+    const told = windows ? path.join(opts.keepIn ?? os.tmpdir(), `${numbered}-${randomUUID()}.kept`) : null
     const forget = () => {
       for (const file of [printed, told])
         if (file)

@@ -2500,7 +2500,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   // went, as its keeper says it, beside that. One that was left by a connector that was ended in
   // the middle of a run goes now.
   try {
-    for (const name of readdirSync(inHome('logs'))) if (/^reopened-\d+-\d+\.(?:txt|kept)$/.test(name)) rmSync(inHome('logs', name), { force: true })
+    for (const name of readdirSync(inHome('logs')))
+      if (/^reopened-\d+-\d+(?:\.txt|-[0-9a-f-]{36}\.kept)$/.test(name)) rmSync(inHome('logs', name), { force: true })
   } catch {}
   async function carry(
     session: { harness: string; id: string },
