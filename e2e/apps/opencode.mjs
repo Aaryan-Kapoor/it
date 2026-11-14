@@ -545,8 +545,20 @@ try {
   )
   check(`OpenCode ${version} refuses that file, and says so in its log`, refusal, ocLog(refusedFrom).slice(-1500))
   if (major >= 2) {
-    const failedOne = itsPlugin(await ocPlugins())
-    check('OpenCode lists that file among its plugins as failed', failedOne?.state === 'failed', JSON.stringify(failedOne))
+    // OpenCode writes the refusal to its log before its list of plugins has the file, so the list is asked until it does
+    const failedOne = await until(
+      async () => {
+        const one = itsPlugin(await ocPlugins())
+        return one?.state === 'failed' && one
+      },
+      15_000,
+      250,
+    )
+    check(
+      'OpenCode lists that file among its plugins as failed',
+      failedOne?.state === 'failed',
+      JSON.stringify(failedOne || itsPlugin(await ocPlugins()) || (await ocPlugins()).filter((p) => p.path)),
+    )
   }
   const saidRefused = await until(
     async () => {
