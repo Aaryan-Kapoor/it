@@ -1,0 +1,108 @@
+name: Hermes Agent, the real app
+
+# What this proves, with the real Hermes Agent and no account. Hermes is installed on a fresh
+# runner by its own installer, as a person installs it, into a throwaway home: at the oldest
+# version It's add-on is installed into (KNOWN in packages/cli/src/setup.ts), at 0.21.5 and 0.23.1,
+# where what Hermes lets a plugin do changed, and at the newest release its official install
+# command gives when the job runs. Then e2e/apps/hermes.mjs, with an It of the job's own:
+#
+#   - runs `it setup` for Hermes alone, sees Hermes itself list It's add-on as enabled, starts the
+#     plain `hermes` terminal in a pseudo-terminal, and reads what It says once Hermes has loaded
+#     the add-on: that it is at work, or that Hermes refuses what it hands over and how to allow
+#     it. What setup told the person, what `it create` tells the agent and what happens to a click
+#     must all agree with that;
+#   - holds a whole conversation against a stand-in for the model on the runner, set as Hermes's
+#     custom provider with no key: the first turn runs `it create --open` for a page with one
+#     button, a paired browser presses it, and the job passes only when Hermes then asks the model
+#     for a new turn of that conversation whose newest user message is It's wording for that
+#     click, which the stand-in answers with `it patch`, and the page shows it. Where Hermes
+#     refuses the add-on, the click must wait until the command that allows it has been run.
+#
+# It runs on every pull request, on every push to master, once a night and by hand. It is a
+# workflow of its own and blocks no merge: when Hermes publishes a version that It does not work
+# with, the nightly run goes red, and that is what it is for.
+#
+# Every action is pinned to a commit, the checkout keeps no credentials, the token can only read,
+# and no job is given a secret.
+on:
+  pull_request:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '41 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_VERSION: 24
+
+jobs:
+  hermes:
+    name: Hermes Agent, ${{ matrix.which }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        which: [oldest, '0.21.5', '0.23.1', newest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # The Node bundle, with everything it carries: the add-on that setup installs among it
+      - run: npm run generate
+      - name: Install the browser that presses the page's button
+        # Fetching a browser fails on a runner now and then, before anything of It has run: it is tried three times
+        run: for n in 1 2 3; do npx playwright install --with-deps chromium && exit 0; sleep 20; done; exit 1
+      # As a person installs it, with Hermes's own installer, into a home of the job's own. Hermes
+      # publishes no package of these versions anywhere else: its PyPI package ends at 0.19.0.
+      - name: Install Hermes Agent with its own installer
+        env:
+          WHICH: ${{ matrix.which }}
+        run: |
+          set -euo pipefail
+          case "$WHICH" in
+            oldest) version="$(sed -n "s/.*hermes: { label: 'Hermes Agent', bin: 'hermes', min: '\([0-9.]*\)'.*/\1/p" packages/cli/src/setup.ts)" ;;
+            *) version="$WHICH" ;;
+          esac
+          [ -n "$version" ] || { echo "::error::no version of Hermes Agent was found to install for \"$WHICH\""; exit 1; }
+          # Hermes tags its releases by version from 0.21.6 on, and earlier ones by the day they were made
+          case "$version" in
+            newest) tag='' ;;
+            0.20.1) tag=v2026.8.13 ;;
+            0.21.5) tag=v2026.9.24 ;;
+            0.20.* | 0.21.[0-5]) echo "::error::no release tag of Hermes Agent $version is known here: add it to this list"; exit 1 ;;
+            *) tag="v$version" ;;
+          esac
+          if [ -z "$tag" ]; then
+            # The command Hermes's own documents give, which installs its newest release
+            curl -fsSL --retry 3 https://hermes-agent.nousresearch.com/install.sh -o "$RUNNER_TEMP/install-hermes.sh"
+            args=()
+          else
+            # That release's own installer, told to install that release
+            curl -fsSL --retry 3 "https://raw.githubusercontent.com/NousResearch/hermes-agent/$tag/scripts/install.sh" -o "$RUNNER_TEMP/install-hermes.sh"
+            args=(--branch "$tag")
+          fi
+          if grep -q -- '--skip-computer-use' "$RUNNER_TEMP/install-hermes.sh"; then args+=(--skip-computer-use); fi
+          mkdir -p "$RUNNER_TEMP/hermes"
+          env -i HOME="$RUNNER_TEMP/hermes" PATH=/usr/local/bin:/usr/bin:/bin SHELL=/bin/bash LANG=C.UTF-8 \
+            bash "$RUNNER_TEMP/install-hermes.sh" ${args[@]+"${args[@]}"} --non-interactive --skip-browser < /dev/null
+          env -i HOME="$RUNNER_TEMP/hermes" PATH=/usr/bin:/bin "$RUNNER_TEMP/hermes/.local/bin/hermes" --version
+      - name: It's add-on in the real Hermes Agent, and a click that comes back as a turn
+        timeout-minutes: 8
+        run: node e2e/apps/hermes.mjs "$RUNNER_TEMP/hermes"

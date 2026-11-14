@@ -873,6 +873,23 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect(said.join('\n')).not.toContain(tmp)
   })
 
+  test('Hermes is told to enable the add-on with its input closed, so that a question it asks there takes its answer no and does not wait', async () => {
+    // Hermes 0.20.1 asks whether a plugin may replace its own tools as it enables one, and
+    // waits while its input is open: setup then waited a minute and called the install failed
+    const real = fake.execFile.getMockImplementation()!
+    const closed: string[] = []
+    fake.execFile.mockImplementation(
+      (command: string, given: string[], options: { env: NodeJS.ProcessEnv }, done: (err: Error | null, out: string, err2: string) => void) => {
+        real(command, given, options, done)
+        const words = given.map((word) => word.replace(/^"(.*)"$/, '$1')).join(' ')
+        return { stdin: { end: () => void closed.push(`${command} ${words}`) } }
+      },
+    )
+    expect((await connect('hermes', () => {})).addon).toBe('connected')
+    expect(closed).toContain('hermes plugins enable it-bridge')
+    expect(closed.every((said) => said === 'hermes plugins enable it-bridge')).toBe(true)
+  })
+
   test('an install that stops half way leaves a note of every file it wrote, and they are removed with it', async () => {
     const folder = folderOf('hermes')
     failing = ['hermes plugins enable it-bridge']

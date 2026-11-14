@@ -118,18 +118,20 @@ const detection = new AsyncLocalStorage<Map<string, Promise<Ran>>>()
 /**
  * Runs a harness's own command, outside any agent session this program may itself be inside.
  * `env` is given when the command is for an add-on installed where the harness kept its
- * settings at the time, which may not be where it keeps them now.
+ * settings at the time, which may not be where it keeps them now. `noAnswers` closes the
+ * command's input at once, for a command that may ask a question nobody is there to answer: it
+ * then takes the answer it gives where nobody is at a terminal, and does not wait to be killed.
  */
-function run(bin: string, args: string[], timeoutMs = 60_000, env: NodeJS.ProcessEnv = harnessEnv()): Promise<Ran> {
+function run(bin: string, args: string[], timeoutMs = 60_000, env: NodeJS.ProcessEnv = harnessEnv(), noAnswers = false): Promise<Ran> {
   const windows = process.platform === 'win32'
   if (unsafe(args)) return Promise.resolve(UNSAFE)
   const words = windows ? args.map((a) => `"${a}"`) : args
   const pass = detection.getStore()
-  const key = JSON.stringify([bin, args, env])
+  const key = JSON.stringify([bin, args, env, noAnswers])
   const previous = pass?.get(key)
   if (previous) return previous
-  const result = new Promise<Ran>((resolve) =>
-    execFile(
+  const result = new Promise<Ran>((resolve) => {
+    const child = execFile(
       bin,
       words,
       {
@@ -147,8 +149,9 @@ function run(bin: string, args: string[], timeoutMs = 60_000, env: NodeJS.Proces
           err: String(stderr).trim() || (err ? err.message : ''),
           ...(err ? { failed: err.killed ? 'timeout' : (err as { code?: unknown }).code === 'ENOENT' ? 'missing' : 'refused' } : {}),
         }),
-    ),
-  )
+    )
+    if (noAnswers) child?.stdin?.end()
+  })
   pass?.set(key, result)
   return result
 }
@@ -1745,11 +1748,14 @@ Object.assign(ADAPTERS, {
       const status = await hermesStatus(envAt(this.profile, at))
       return status !== null && status !== undefined && status !== 'enabled'
     },
+    // Hermes 0.20.1 asks whether a plugin may replace Hermes's own tools as it enables one, and
+    // waits for an answer while its input is open (0.21.5 no longer asks). With the input closed
+    // it takes the answer no, which is the one It's add-on needs.
     enable(at) {
-      return run('hermes', ['plugins', 'enable', PLUGIN], 60_000, envAt(this.profile, at))
+      return run('hermes', ['plugins', 'enable', PLUGIN], 60_000, envAt(this.profile, at), true)
     },
     after(at) {
-      return run('hermes', ['plugins', 'enable', PLUGIN], 60_000, envAt(this.profile, at))
+      return run('hermes', ['plugins', 'enable', PLUGIN], 60_000, envAt(this.profile, at), true)
     },
     async before(at) {
       // A whole-folder removal can erase files saved after an ownership check. Disable it
