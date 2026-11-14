@@ -147,7 +147,9 @@ describe('the ask for a star', () => {
       await show()
       expect(visibility()).toBe('hidden')
       room.mockReturnValue(400)
-      await act(async () => observers.forEach((fn) => fn()))
+      await act(async () => {
+        for (const fn of observers) fn()
+      })
       expect(visibility()).toBe('')
     })
   })
