@@ -31,7 +31,7 @@
 // listens at a socket in It's folder, whose path a system holds to about a hundred characters.
 // IT_BIN and IT_CLI name the It to run, as for the other end-to-end scripts.
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { COMMAND, root, sleep } from '../lib.mjs'
@@ -39,6 +39,7 @@ import { printCleanly, verdict } from '../logs.mjs'
 import { launch, pairAsOwner } from '../site.mjs'
 import { newestFromUser, shellTool, standInModel, textOf } from './pi/model.mjs'
 import { startPi } from './pi/rpc.mjs'
+import { homeOnWindows, nodeAlone, patience, systemPath, windows } from './windows.mjs'
 
 printCleanly()
 const PACKAGE = '@earendil-works/pi-coding-agent'
@@ -101,6 +102,9 @@ function npmEnv() {
     ...given,
     HOME: home,
     USERPROFILE: home,
+    // On Windows, the run's own settings, caches and temporary files, and a PATH with nothing of whoever runs it
+    ...homeOnWindows(home),
+    ...(windows ? { PATH: [path.dirname(process.execPath), ...systemPath()].join(path.delimiter) } : {}),
     npm_config_userconfig: userconfig,
     npm_config_globalconfig: globalconfig,
     npm_config_cache: at('npm-cache'),
@@ -130,17 +134,39 @@ function install(version) {
 }
 
 // The Pi the run is about, put on the PATH of everything the run starts under the name `pi`, so
-// that `it setup`, the connector and the run itself all find this one and no other
+// that `it setup`, the connector and the run itself all find this one and no other. On Windows,
+// where npm's `pi` is a .cmd file that runs Pi's script under Node, the folder npm put it in is
+// put on the PATH, as npm puts it on a person's, and the run starts Pi's script itself.
 const pi = given ? { program: path.resolve(given), want: null } : install(asked)
-symlinkSync(pi.program, path.join(bin, 'pi'))
+if (!windows) symlinkSync(pi.program, path.join(bin, 'pi'))
+const piFolder = windows ? path.dirname(pi.program) : bin
+const PI = windows ? [process.execPath, piScript(pi.program)] : 'pi'
+/** Pi's own script, which npm's .cmd file runs: the `bin` its package names. */
+function piScript(program) {
+  const pkg = path.join(path.dirname(program), '..', ...PACKAGE.split('/'))
+  const named = JSON.parse(readFileSync(path.join(pkg, 'package.json'), 'utf8')).bin
+  return path.join(pkg, typeof named === 'string' ? named : named.pi)
+}
+// The standalone program, where IT_BIN names one, is put where It's installers put it, in It's
+// folder's bin, with the record they write beside it, and run from there
+const IT = process.env.IT_BIN ? [path.join(itHome, 'bin', windows ? 'it.exe' : 'it')] : COMMAND
+if (process.env.IT_BIN) {
+  mkdirSync(path.dirname(IT[0]), { recursive: true })
+  copyFileSync(path.resolve(process.env.IT_BIN), IT[0])
+  // INSTALLATION in packages/cli/src/installation.ts
+  writeFileSync(path.join(itHome, 'installation.json'), '{"product":"It","format":1,"about":"This folder holds an installation of It."}\n')
+}
 
 // What every program the run starts is given: nothing of whoever runs it but the PATH and the
 // language, so that no key for a model, no setting of theirs and no folder of theirs is seen.
 const env = {
-  PATH: [bin, path.dirname(process.execPath), process.env.PATH ?? ''].join(path.delimiter),
+  // On Windows, nothing of the PATH of whoever runs it either, where their own It and agent apps are
+  PATH: [piFolder, nodeAlone(at('node')), ...(windows ? systemPath() : [process.env.PATH ?? ''])].join(path.delimiter),
   LANG: 'C.UTF-8',
   HOME: home,
   USERPROFILE: home,
+  // On Windows, where a home of the run's own is given by more than HOME
+  ...homeOnWindows(home),
   XDG_CONFIG_HOME: path.join(home, '.config'),
   XDG_DATA_HOME: path.join(home, '.local', 'share'),
   XDG_STATE_HOME: path.join(home, '.local', 'state'),
@@ -158,6 +184,25 @@ const env = {
   ...Object.fromEntries(
     ['IT_BACKEND_BIN', 'IT_BACKEND_RELEASES', 'CI', 'SystemRoot', 'ComSpec', 'PATHEXT', 'WINDIR'].filter((k) => process.env[k]).map((k) => [k, process.env[k]]),
   ),
+}
+
+/**
+ * The browser, started as every other program of the run is: on Windows with the run's own home,
+ * settings and temporary folders, which it takes from this program's environment as it starts.
+ */
+async function browserOfItsOwn() {
+  if (!windows) return launch()
+  const own = homeOnWindows(at('browser'))
+  const was = Object.fromEntries(Object.keys(own).map((k) => [k, process.env[k]]))
+  Object.assign(process.env, own)
+  try {
+    return await launch()
+  } finally {
+    for (const [k, v] of Object.entries(was)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  }
 }
 
 /** The commands `ran` has started that have not ended, which a run asked to stop part way ends. */
@@ -182,7 +227,7 @@ function ran(program, args, { cwd = work, ms = 120_000 } = {}) {
 }
 /** The run's It: what a command printed, as JSON where it is JSON. Throws where it failed. */
 async function it(args, options) {
-  const r = await ran(COMMAND[0], [...COMMAND.slice(1), ...args], options)
+  const r = await ran(IT[0], [...IT.slice(1), ...args], options)
   let parsed = r.out
   try {
     parsed = JSON.parse(r.out)
@@ -196,7 +241,9 @@ async function it(args, options) {
   }
   return parsed
 }
-const piList = () => ran('pi', ['list'], { ms: 60_000 })
+/** Runs Pi's own command to its end. */
+const piRan = (args, options) => ran([PI].flat()[0], [...[PI].flat().slice(1), ...args], options)
+const piList = () => piRan(['list'], { ms: 60_000 })
 const listed = (out) => out.split('\n').some((line) => path.resolve(work, line.trim().replace(/ \(filtered\)$/, '')) === path.join(itHome, 'addons', 'pi'))
 const filtered = (out) => out.split('\n').some((line) => line.trim().endsWith(' (filtered)'))
 const piStatus = async () => (await it(['status'])).harnesses?.find((h) => h.id === 'pi')
@@ -245,8 +292,10 @@ async function stopEverything() {
   await browser?.close().catch(() => {})
   await model?.close().catch(() => {})
   if (!serve || serve.exitCode !== null || serve.signalCode !== null) return false
-  // The service is asked to stop, and waited for: it stops its backend program in its turn
-  serve.kill('SIGTERM')
+  // The service is asked to stop, and waited for: it stops its backend program in its turn. On
+  // Windows, which has no signal to ask with, by the file It's service looks for in its folder
+  if (windows) writeFileSync(path.join(itHome, 'service.stop'), '')
+  else serve.kill('SIGTERM')
   const end = Date.now() + 90_000
   while (serve.exitCode === null && serve.signalCode === null && Date.now() < end) await sleep(250)
   const stillUp = serve.exitCode === null && serve.signalCode === null
@@ -293,7 +342,7 @@ let body = null
 body = (async () => {
   try {
     // ---------- The program, and It set up for it ----------
-    const version = (await ran('pi', ['--version'])).out.trim()
+    const version = (await piRan(['--version'])).out.trim()
     console.log(
       `\nPi ${version}${pi.want ? ` (asked for ${asked}, which is ${pi.want})` : ''}, It ${(await it(['--version']).catch(() => ({}))).version ?? '?'}\n`,
     )
@@ -313,7 +362,7 @@ body = (async () => {
 
     // ---------- It running, and the add-on loaded by Pi ----------
     guard()
-    serve = spawn(COMMAND[0], [...COMMAND.slice(1), 'serve'], {
+    serve = spawn(IT[0], [...IT.slice(1), 'serve'], {
       cwd: work,
       env,
       stdio: ['ignore', openSync(path.join(logs, 'serve.out.log'), 'w'), openSync(path.join(logs, 'serve.log'), 'w')],
@@ -321,15 +370,15 @@ body = (async () => {
     const up = await untilTrue(async () => {
       const s = await it(['status'])
       return s.running && s.connector?.ok ? s : null
-    }, 90_000)
+    }, patience(90_000))
     if (!check('It runs, with its connector', up, readFileSync(path.join(logs, 'serve.log'), 'utf8').slice(-1500))) throw new Error('It did not start')
     check('and has heard from no add-on of Pi’s yet', (await loaded())?.state !== 'active', await loaded())
 
     // With no model at all, as Pi first starts for someone who has not chosen one
     guard()
-    const bare = startPi('pi', ['--no-session'], { cwd: work, env })
+    const bare = startPi(PI, ['--no-session'], { cwd: work, env })
     pis.push(bare)
-    const active = await untilTrue(async () => ((await loaded())?.state === 'active' ? await loaded() : null), 30_000)
+    const active = await untilTrue(async () => ((await loaded())?.state === 'active' ? await loaded() : null), patience(30_000))
     check('Pi started with no model loads the add-on, which reports to It’s connector, and `it status` calls it active', active, {
       status: await loaded(),
       pi: bare.stderr().slice(-800),
@@ -388,14 +437,14 @@ body = (async () => {
     )
 
     // A browser paired as the owner's, on the site, where `--open` brings the page up
-    const opened = await kept(await launch(), (o) => o.browser.close())
+    const opened = await kept(await browserOfItsOwn(), (o) => o.browser.close())
     browser = opened.browser
     const run = (_home, args) => it(args)
     await pairAsOwner(opened.page, { home: itHome, run })
     check('a browser is paired as the owner’s', true)
 
     guard()
-    const host = startPi('pi', ['--provider', 'standin', '--model', 'script'], { cwd: work, env })
+    const host = startPi(PI, ['--provider', 'standin', '--model', 'script'], { cwd: work, env })
     pis.push(host)
     const hostState = await host.command('get_state')
     const session = hostState?.data?.sessionId
@@ -404,11 +453,11 @@ body = (async () => {
       hostState?.data?.model?.provider === 'standin' && session,
       hostState?.data ?? { stderr: host.stderr().slice(-800) },
     )
-    await untilTrue(async () => ((await loaded())?.state === 'active' ? true : null), 30_000)
+    await untilTrue(async () => ((await loaded())?.state === 'active' ? true : null), patience(30_000))
 
     const prompted = await host.command('prompt', { message: typed })
     check('Pi takes the person’s message', prompted?.success === true, prompted)
-    await model.until(2, 60_000)
+    await model.until(2, patience(60_000))
     const first = model.requests[0]?.body
     check(
       'Pi sends it to the stand-in, with a made-up key, in a request that offers its shell tool',
@@ -430,7 +479,7 @@ body = (async () => {
       created?.id === slug && Array.isArray(created?.shownOn) && created.shownOn.length > 0,
       result.slice(0, 800),
     )
-    const settled = await host.until((r) => r.type === 'agent_end', 60_000)
+    const settled = await host.until((r) => r.type === 'agent_end', patience(60_000))
     check('and the turn ends', settled, host.records.slice(-5))
 
     const made = await it(['read', slug]).catch((e) => ({ error: e.message }))
@@ -452,7 +501,7 @@ body = (async () => {
     }
     const before = model.requests.length
     await frame.locator('#go').click()
-    const asked3 = await model.until(before + 1, 60_000)
+    const asked3 = await model.until(before + 1, patience(60_000))
     const third = model.requests[before]?.body
     const click = newestFromUser(third)
     const ended = /\[action ([^\]\s]+)\]\s*$/.exec(click ?? '')
@@ -482,8 +531,8 @@ body = (async () => {
       recent ?? (await it(['read', slug])).recentActions,
     )
 
-    await model.until(before + 2, 60_000)
-    const patched = await untilTrue(async () => ((await it(['read', slug])).state?.answer === answer ? true : null), 30_000)
+    await model.until(before + 2, patience(60_000))
+    const patched = await untilTrue(async () => ((await it(['read', slug])).state?.answer === answer ? true : null), patience(30_000))
     check('Pi runs the stand-in’s `it patch`, and the page’s state has the change', patched, (await it(['read', slug])).state)
     const onPage = await frame
       .locator('#said', { hasText: answer })
@@ -500,7 +549,7 @@ body = (async () => {
     // with Pi's own command, `pi --print --session <id>`, and hands it the click
     const quiet = model.requests.length
     await frame.locator('#go').click()
-    const woke = await model.until(quiet + 1, 90_000)
+    const woke = await model.until(quiet + 1, patience(90_000))
     const fifth = model.requests[quiet]?.body
     const again = newestFromUser(fifth)
     // The click as an add-on hands it over, and after it what It tells a conversation it reopened
@@ -524,7 +573,7 @@ body = (async () => {
     check('and the reopened Pi answers on the page', reopenedOnPage, (await it(['read', slug])).state)
     const wokeWith = (await it(['read', slug])).recentActions?.find((a) => a.id === againId)
     check('It records that it reopened the conversation for that click', wokeWith?.delivery === 'handed_off' && wokeWith?.route === 'queue', wokeWith)
-    const over = await untilTrue(async () => ((await it(['status'])).machine?.runs?.length === 0 ? true : null), 60_000)
+    const over = await untilTrue(async () => ((await it(['status'])).machine?.runs?.length === 0 ? true : null), patience(60_000))
     check('and the reopened Pi ends by itself once it has answered', over, (await it(['status'])).machine?.runs)
 
     check('the stand-in had an answer for every request Pi sent', model.faults.length === 0, model.faults)
@@ -545,7 +594,7 @@ body = (async () => {
     check('turned off as `pi config` turns it off, Pi lists It’s package as filtered', listed(list.out) && filtered(list.out), list.out)
     check('and `it status` says the add-on is turned off in Pi', (await piStatus())?.addon === 'disabled', await piStatus())
     guard()
-    const off = startPi('pi', ['--no-session'], { cwd: work, env })
+    const off = startPi(PI, ['--no-session'], { cwd: work, env })
     pis.push(off)
     const offShell = await off.command('bash', { command: 'printf "%s" "$IT_PI_SESSION"' })
     check(
@@ -565,7 +614,7 @@ body = (async () => {
     })
     await it(['setup', '--only', 'pi', '--no-service'], { ms: 300_000 })
     check('`it setup --only pi` puts it back', listed((await piList()).out) && (await piStatus())?.addon === 'connected', await piStatus())
-    const removed = await ran('pi', ['remove', path.join(itHome, 'addons', 'pi')])
+    const removed = await piRan(['remove', path.join(itHome, 'addons', 'pi')])
     list = await piList()
     check('taken away with Pi’s own `pi remove`, Pi no longer lists it', removed.code === 0 && list.code === 0 && !listed(list.out), { removed, list })
     check('and `it status` says Pi is no longer connected', (await piStatus())?.addon === 'not_connected', await piStatus())

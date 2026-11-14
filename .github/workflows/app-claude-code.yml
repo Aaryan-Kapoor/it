@@ -54,12 +54,18 @@ jobs:
   claude-code:
     name: Claude Code, ${{ matrix.which }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 15 }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         which: [oldest, newest]
+        # On Windows too, where the add-on and the agent app run as participants run them
+        include:
+          - os: windows-latest
+            which: oldest
+          - os: windows-latest
+            which: newest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -71,6 +77,24 @@ jobs:
       - run: npm ci
       # The Node bundle, with everything it carries: the add-on that setup installs among it
       - run: npm run generate
+      # On Windows the standalone program people install there is what runs, built with the Bun
+      # that It's releases are built with: the Node bundle's `it` is a .cmd file, which the Bash
+      # tool of an agent app (Git Bash) does not run
+      - if: runner.os == 'Windows'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.11
+      - if: runner.os == 'Windows'
+        # The one program release.mjs builds for Windows, as it builds it: the Bun on a Windows
+        # runner cannot unpack its runtimes for the other systems, which release.mjs builds too. Its
+        # cache and temporary files are kept on the drive the job works on.
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}\bun-cache
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          bun build packages/cli/src/main.ts --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --minify --target=bun-windows-x64-baseline --outfile "$RUNNER_TEMP/it-windows-x64.exe"
+          echo "IT_BIN=$RUNNER_TEMP\it-windows-x64.exe" >> "$GITHUB_ENV"
       - name: Install the browser that presses the page's button
         # Fetching a browser fails on a runner now and then, before anything of It has run: it is tried three times
         run: for n in 1 2 3; do npx playwright install --with-deps chromium && exit 0; sleep 20; done; exit 1
@@ -87,7 +111,8 @@ jobs:
           fi
           [ -n "$version" ] || { echo "::error::no version of Claude Code was found to install for \"$WHICH\""; exit 1; }
           npm install --global --prefix "$RUNNER_TEMP/claude-code" --no-audit --no-fund "@anthropic-ai/claude-code@$version"
-          "$RUNNER_TEMP/claude-code/bin/claude" --version
+          # On Windows npm puts the command in the folder itself, and the program is the package's own claude.exe
+          if [ "$RUNNER_OS" = Windows ]; then "$RUNNER_TEMP/claude-code/node_modules/@anthropic-ai/claude-code/bin/claude.exe" --version; else "$RUNNER_TEMP/claude-code/bin/claude" --version; fi
       - name: It's add-on in the real Claude Code, and a click that comes back as a turn
-        timeout-minutes: 10
+        timeout-minutes: ${{ runner.os == 'Windows' && 25 || 10 }}
         run: node e2e/apps/claude-code.mjs "$RUNNER_TEMP/claude-code"
