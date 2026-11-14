@@ -2496,10 +2496,12 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    */
   /** The last line a reopened app printed where it ended badly, by conversation, until its next reopening. */
   const saidLast = new Map<string, string>()
-  // What a reopened app printed is kept in a file only while it runs. One that was left by a
-  // connector that was ended in the middle of a run goes now.
+  // What a reopened app printed is kept in a file only while it runs, and on Windows how its run
+  // went, as its keeper says it, beside that. One that was left by a connector that was ended in
+  // the middle of a run goes now.
   try {
-    for (const name of readdirSync(inHome('logs'))) if (/^reopened-\d+-\d+\.txt$/.test(name)) rmSync(inHome('logs', name), { force: true })
+    for (const name of readdirSync(inHome('logs')))
+      if (/^reopened-\d+-\d+(?:\.txt|-[0-9a-f-]{36}\.kept)$/.test(name)) rmSync(inHome('logs', name), { force: true })
   } catch {}
   async function carry(
     session: { harness: string; id: string },

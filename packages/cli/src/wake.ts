@@ -287,20 +287,26 @@ export function carryOn(
     // What the app prints goes to a file that is this run's alone, and is read only where the
     // app ends badly, for its last line. A file and not a pipe: something the app leaves
     // running would be ended by a pipe that nobody reads any more.
-    const printed = opts.keepIn ? path.join(opts.keepIn, `reopened-${process.pid}-${++runs}.txt`) : null
+    const numbered = `reopened-${process.pid}-${++runs}`
+    const printed = opts.keepIn ? path.join(opts.keepIn, `${numbered}.txt`) : null
     let into: number | null = null
     if (printed)
       try {
         mkdirSync(path.dirname(printed), { recursive: true, mode: 0o700 })
         into = openSync(printed, 'w', 0o600)
       } catch {}
-    const forget = () => {
-      if (printed)
-        try {
-          rmSync(printed, { force: true })
-        } catch {}
-    }
     const windows = process.platform === 'win32'
+    // On Windows the keeper says in a file how the run went (see `keeper`), named afresh for each
+    // run: a file of the same name that an earlier program left, and could not be removed, would
+    // otherwise be read as what this run's keeper said
+    const told = windows ? path.join(opts.keepIn ?? os.tmpdir(), `${numbered}-${randomUUID()}.kept`) : null
+    const forget = () => {
+      for (const file of [printed, told])
+        if (file)
+          try {
+            rmSync(file, { force: true })
+          } catch {}
+    }
     // On Windows what the run starts is kept in a job of the system's, named by the run: see `keeper`
     const job = windows ? (marks.run ?? randomUUID()) : ''
     const env: NodeJS.ProcessEnv = {
@@ -313,7 +319,7 @@ export function carryOn(
       IT_SESSION: marks.session,
       ...(marks.run ? { IT_RUN: marks.run } : {}),
     }
-    const start = windows ? keeper(how.argv, job, env) : { file: how.argv[0]!, args: how.argv.slice(1), env }
+    const start = windows ? keeper(how.argv, job, env, told ?? undefined) : { file: how.argv[0]!, args: how.argv.slice(1), env }
     if (typeof start === 'string') {
       if (into !== null) closeSync(into)
       forget()
@@ -413,15 +419,21 @@ export function carryOn(
             : `${how.app} was not found`,
       ),
     )
-    child.once('exit', (code, signal) => {
+    child.once('exit', (exitCode, signal) => {
       if (ending) return
       if (stopped) return end(STOPPED)
+      // On Windows how the run went is the keeper's word, and never its exit code: Bun, which
+      // the installed program runs on, hands on only the lowest byte of a code, so that what
+      // the keeper would say by its code is lost or reads as the app's own, and an app that
+      // ended with 256 reads as one that ended well. Where the keeper said nothing, the run is
+      // taken for one that ended badly, whatever its code.
+      const kept = told ? keptWord(told) : undefined
+      if (kept === 'missing') return end(`${how.app} was not found`)
+      if (kept === 'unstarted') return end(`${how.app} could not be started: Windows would not start its program`)
+      if (kept === 'not') return end(`${how.app} could not be started: Windows would not keep it in a job of its own, which It needs to be able to end it`)
+      const code = told ? (kept ?? null) : exitCode
       if (code === 0) return end(null)
-      if (windows && code === KEPT_MISSING) return end(`${how.app} was not found`)
-      if (windows && code === KEPT_UNSTARTED) return end(`${how.app} could not be started: Windows would not start its program`)
-      if (windows && code === KEPT_NOT)
-        return end(`${how.app} could not be started: Windows would not keep it in a job of its own, which It needs to be able to end it`)
-      const why = `${how.app} exited with ${signal ?? code ?? 'an error'}`
+      const why = `${how.app} exited with ${signal ?? code ?? exitCode ?? 'an error'}`
       // Ended badly by itself, killed or failing, in the middle of its turn: what it was asked
       // is tried again, and nothing it left running is to be there beside that. What it left
       // is ended as a run that is stopped is, and the run is answered for only once nothing
@@ -617,14 +629,31 @@ export async function endTree(
  */
 export const IN_JOB = 'job'
 /**
- * What the keeper ends with where nothing was started: Windows would not give the run a job of
- * its own, or the program that started the keeper could not be made sure of, or was gone.
+ * What the keeper exits with where nothing was started: Windows would not give the run a job of
+ * its own, or the program that started the keeper could not be made sure of, or was gone. It is
+ * not how It learns that (see `keptWord`): a runtime may hand on only the lowest byte of it.
  */
 export const KEPT_NOT = 0x49540001
-/** And where the app's program was not there to be started. */
-export const KEPT_MISSING = 0x49540002
-/** And where Windows would not start the app's program, for another reason: it was refused, or is no program Windows can run. */
-export const KEPT_UNSTARTED = 0x49540003
+/**
+ * How a run that a keeper held went, by the word the keeper wrote to the file it was told of
+ * (`keeper`): `not` where nothing was started, as for `KEPT_NOT`; `missing` where the app's
+ * program was not there to be started; `unstarted` where Windows would not start it for another
+ * reason, as where it was refused or is no program Windows can run; and the app's own exit code,
+ * whole, where it ran. Undefined where the keeper said none of these, as where it was ended
+ * before it could.
+ */
+export function keptWord(file: string): 'not' | 'missing' | 'unstarted' | number | undefined {
+  let said: string
+  try {
+    said = readFileSync(file, 'utf8')
+  } catch {
+    return undefined
+  }
+  if (said === 'not' || said === 'missing' || said === 'unstarted') return said
+  const ran = /^ran (0|[1-9][0-9]{0,9})$/.exec(said)
+  const code = ran ? Number(ran[1]) : Number.NaN
+  return code <= 0xffffffff ? code : undefined
+}
 /**
  * The job a run is kept in on Windows, by the run's own name. It is in the namespace of the whole
  * machine, so that it is found from whichever session of Windows asks: in a session's own, a
@@ -653,11 +682,18 @@ export const jobName = (run: string): string | null => (/^[A-Za-z0-9-]{1,64}$/.t
  * job is never made where one of that name is there already. Breaking away from the job is not
  * allowed, so a program the app starts that asks to be started outside it is refused.
  *
+ * Where it is told of a file, `Keep` writes there how the run went, as `keptWord` reads it, just
+ * before it ends, and ends with `Not` where that cannot be written. It also ends with the app's
+ * code, or with one of its own where nothing was started, but those are not to be read: a
+ * runtime that hands on only the lowest byte of a code has its own collide with the app's.
+ *
  * `End` ends everything in a job and waits until nothing is left of it. A job of that name not
  * being there says that nothing of it is left: nobody holds it, so the system ended what was in it.
  */
 const JOB_CODE = String.raw`
 using System;
+using System.Globalization;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -725,6 +761,21 @@ public static class ItJob {
   static bool Ended(IntPtr process) { return WaitForSingleObject(process, 0) == 0; }
 
   public static int Keep() {
+    string told = Environment.GetEnvironmentVariable("IT_JOB_TOLD");
+    Environment.SetEnvironmentVariable("IT_JOB_TOLD", null);
+    string said;
+    int code = Run(out said);
+    if (string.IsNullOrEmpty(told)) return code;
+    try {
+      File.WriteAllText(told, said);
+    } catch {
+      return Not;
+    }
+    return code;
+  }
+
+  static int Run(out string said) {
+    said = "not";
     string name = Environment.GetEnvironmentVariable("IT_JOB");
     string line = Environment.GetEnvironmentVariable("IT_JOB_LINE");
     string parentWord = Environment.GetEnvironmentVariable("IT_JOB_PARENT");
@@ -758,6 +809,7 @@ public static class ItJob {
     // With no window, in a console of its own that has none, which is then what everything it starts has as well
     if (!CreateProcessW(null, new StringBuilder(line), IntPtr.Zero, IntPtr.Zero, true, 0x08000000, IntPtr.Zero, null, ref start, out run)) {
       int why = Marshal.GetLastWin32Error();
+      said = why == 2 || why == 3 ? "missing" : "unstarted";
       return why == 2 || why == 3 ? Missing : Unstarted;
     }
     CloseHandle(run.hThread);
@@ -772,6 +824,7 @@ public static class ItJob {
       limits.Basic.LimitFlags = 0;
       SetInformationJobObject(job, 9, ref limits, size);
     }
+    said = "ran " + code.ToString(CultureInfo.InvariantCulture);
     return unchecked((int)code);
   }
 
@@ -811,7 +864,10 @@ const withJob = (body: string, fails: string): string =>
     `} catch { ${fails} }`,
   ].join('\n')
 const encoded = (script: string): string => Buffer.from(script, 'utf16le').toString('base64')
-const KEEP = encoded(`${withJob('$kept = [ItJob]::Keep()', `exit ${KEPT_NOT}`)}\nexit $kept`)
+// Where PowerShell could not compile the keeper, it says so in the file it was told of, as the keeper would
+const KEEP = encoded(
+  `${withJob('$kept = [ItJob]::Keep()', `if ($env:IT_JOB_TOLD) { try { Set-Content -LiteralPath $env:IT_JOB_TOLD -Value 'not' -NoNewline -Encoding Ascii } catch {} }; exit ${KEPT_NOT}`)}\nexit $kept`,
+)
 const END = encoded(withJob('[ItJob]::End($env:IT_JOB, 5000)', "'unknown'"))
 /** Windows PowerShell, where Windows keeps it, and never as whatever a PATH finds first by that name. */
 export const powershellExe = (): string =>
@@ -825,9 +881,10 @@ const POWERSHELL = ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand
  * gives the keeper, and its environment without what the keeper was told by. A run there ends
  * with the program that started it, however that program ended: on Linux and macOS it goes on
  * until the next one ends it. And what a run left running when it ended well by itself ends with that
- * program too (see `JOB_CODE`). Why it cannot be started this way, as a string.
+ * program too (see `JOB_CODE`). The keeper writes how the run went to `told`, which is how It
+ * learns it (`keptWord`). Why it cannot be started this way, as a string.
  */
-export function keeper(argv: string[], run: string, env: NodeJS.ProcessEnv): { file: string; args: string[]; env: NodeJS.ProcessEnv } | string {
+export function keeper(argv: string[], run: string, env: NodeJS.ProcessEnv, told?: string): { file: string; args: string[]; env: NodeJS.ProcessEnv } | string {
   const name = jobName(run)
   if (!name) return 'its run has no name a job can be given'
   const program = argv[0]
@@ -840,7 +897,8 @@ export function keeper(argv: string[], run: string, env: NodeJS.ProcessEnv): { f
     file: powershellExe(),
     args: [...POWERSHELL, KEEP],
     env: {
-      ...forPowerShell(env),
+      ...Object.fromEntries(Object.entries(forPowerShell(env)).filter(([k]) => k.toUpperCase() !== 'IT_JOB_TOLD')),
+      ...(told ? { IT_JOB_TOLD: told } : {}),
       IT_JOB: name,
       IT_JOB_LINE: windowsLine(argv),
       IT_JOB_PARENT: String(process.pid),
