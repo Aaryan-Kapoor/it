@@ -470,7 +470,12 @@ body = (async () => {
       all.map((m) => m.role),
     )
     check('and Pi still holds that conversation under the same id', (await host.command('get_state'))?.data?.sessionId === session)
-    const recent = (await it(['read', slug])).recentActions?.find((a) => a.id === actionId)
+    // The add-on tells It once Pi shows the click in the conversation, which may be a moment
+    // after Pi has sent it to the model, so It is asked until it has heard
+    const recent = await untilTrue(async () => {
+      const one = (await it(['read', slug])).recentActions?.find((a) => a.id === actionId)
+      return one?.delivery === 'handed_off' ? one : null
+    }, 15_000)
     check(
       'It records that the add-on handed that click over',
       recent?.delivery === 'handed_off' && recent?.route === 'addon',
