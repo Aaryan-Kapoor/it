@@ -32,7 +32,7 @@ import { chromium } from 'playwright'
 import { root, sleep, stopped } from '../lib.mjs'
 import { printCleanly, verdict } from '../logs.mjs'
 import { runs, standInModel, words } from './claude-code/model.mjs'
-import { commandNames, homeOnWindows, systemPath, windows } from './windows.mjs'
+import { commandNames, homeOnWindows, nodeAlone, systemPath, windows } from './windows.mjs'
 
 printCleanly()
 const args = process.argv.slice(2)
@@ -107,7 +107,7 @@ for (const signal of ['SIGINT', 'SIGTERM'])
 // for the standalone program, which needs none), and the system's. No `it` is put on it: It's
 // add-on puts It's own folder there for the commands a conversation runs, and that is part of
 // what is tested.
-const PATH = [CLAUDE_FOLDER, ...(STANDALONE ? [] : [path.dirname(process.execPath)]), ...systemPath()].join(path.delimiter)
+const PATH = [CLAUDE_FOLDER, ...(STANDALONE ? [] : [nodeAlone(path.join(scratch, 'node'))]), ...systemPath()].join(path.delimiter)
 /** What every program the run starts is given, and nothing more. */
 const base = {
   PATH,

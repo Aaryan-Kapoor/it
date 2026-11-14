@@ -48,7 +48,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterTool, newestUser, standInModel, textOf } from './opencode/model.mjs'
-import { homeOnWindows, processesIn, systemPath, windows } from './windows.mjs'
+import { homeOnWindows, nodeAlone, processesIn, systemPath, windows } from './windows.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const argv = process.argv.slice(2)
@@ -130,7 +130,7 @@ let opencodeBin = process.env.OPENCODE_BIN
 let opencodeFolder = opencodeBin && path.dirname(opencodeBin)
 /** What every program the run starts is given, and nothing else from the environment of whoever runs it. */
 function env(extra = {}) {
-  const dirs = [opencodeFolder, path.dirname(process.execPath), ...systemPath()].filter(Boolean)
+  const dirs = [opencodeFolder, nodeAlone(path.join(base, 'node')), ...systemPath()].filter(Boolean)
   return {
     PATH: [...new Set(dirs)].join(path.delimiter),
     HOME,
@@ -640,7 +640,7 @@ try {
 function leftRunning() {
   // On Windows, by the run's folder: in the program's path or its command line
   if (windows)
-    return processesIn(base).map(({ pid, command }) => {
+    return (processesIn(base) ?? [{ pid: null, command: '(the processes on this machine could not be listed)' }]).map(({ pid, command }) => {
       try {
         process.kill(pid, 'SIGKILL')
       } catch {}

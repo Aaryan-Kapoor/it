@@ -47,7 +47,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { standInModel, textOf } from './codex/model.mjs'
-import { homeOnWindows, systemPath, windows } from './windows.mjs'
+import { homeOnWindows, nodeAlone, systemPath, windows } from './windows.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..', '..')
@@ -105,7 +105,7 @@ mkdirSync(logs)
 // What every program the run starts is given, and nothing else of this process's surroundings:
 // the agent apps of whoever runs it, and their It, are not to be found from here.
 const env = {
-  PATH: [path.join(itHome, 'bin'), path.dirname(program), path.dirname(process.execPath), ...(windows ? [] : ['/opt/homebrew/bin']), ...systemPath()].join(
+  PATH: [path.join(itHome, 'bin'), path.dirname(program), nodeAlone(path.join(top, 'node')), ...(windows ? [] : ['/opt/homebrew/bin']), ...systemPath()].join(
     path.delimiter,
   ),
   HOME: home,
@@ -298,11 +298,13 @@ function terminal() {
 function ours(which = 'IT_HOME') {
   const folder = which === 'IT_HOME' ? itHome : codexHome
   const found = []
-  // Windows shows no other process's environment. A process is this run's there when it is one
-  // of the Codex under test's own programs, or names this run's folder in its command line, or
-  // was started by this process; and for IT_HOME, every one of those
+  // Windows shows no other process's environment. A process is this run's there when it was
+  // started by this process, or names this run's folder in its program's path or its command line,
+  // as Codex's background server, kept in this run's CODEX_HOME, does. For CODEX_HOME, only those
+  // that are Codex's own programs. A Codex of the same installation that another program started
+  // is not this run's. A listing that could not be made is said as one, so that no check passes on it.
   if (windows) {
-    const listed = spawnSync(
+    const listing = spawnSync(
       'powershell.exe',
       [
         '-NoProfile',
@@ -311,16 +313,17 @@ function ours(which = 'IT_HOME') {
         'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress',
       ],
       { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 },
-    ).stdout
-    let all = []
+    )
+    let all = null
     try {
-      all = [JSON.parse(listed)].flat()
+      if (listing.status === 0) all = [JSON.parse(listing.stdout)].flat()
     } catch {}
+    if (!all) return [{ pid: null, command: ['(the processes on this machine could not be listed)'] }]
     const lower = (s) => String(s ?? '').toLowerCase()
     // Codex's own programs: those of the package under test, and the copies of them Codex keeps in its CODEX_HOME
     const codexs = (p) => [codexPackages, codexHome].some((at) => lower(p.ExecutablePath).startsWith(lower(at)) || lower(p.CommandLine).includes(lower(at)))
     // The listing itself, and the console Windows gives it, are not the run's
-    const listing = (p) => /Get-CimInstance Win32_Process/.test(p.CommandLine ?? '') || /[\\/]conhost\.exe$/i.test(p.ExecutablePath ?? '')
+    const listed = (p) => /Get-CimInstance Win32_Process/.test(p.CommandLine ?? '') || /[\\/]conhost\.exe$/i.test(p.ExecutablePath ?? '')
     const mine = new Set([process.pid])
     for (let grew = true; grew; ) {
       grew = false
@@ -331,10 +334,9 @@ function ours(which = 'IT_HOME') {
         }
     }
     for (const p of all) {
-      if (p.ProcessId === process.pid || listing(p)) continue
-      const named = lower(p.CommandLine).includes(lower(top))
-      if (which === 'IT_HOME' ? codexs(p) || named || mine.has(p.ProcessId) : codexs(p))
-        found.push({ pid: p.ProcessId, command: (p.CommandLine ?? p.ExecutablePath ?? '').split(' ') })
+      if (p.ProcessId === process.pid || listed(p)) continue
+      const ours = mine.has(p.ProcessId) || lower(p.ExecutablePath).startsWith(lower(top)) || lower(p.CommandLine).includes(lower(top))
+      if (ours && (which === 'IT_HOME' || codexs(p))) found.push({ pid: p.ProcessId, command: (p.CommandLine ?? p.ExecutablePath ?? '').split(' ') })
     }
     return found
   }

@@ -39,7 +39,7 @@ import { printCleanly, verdict } from '../logs.mjs'
 import { launch, pairAsOwner } from '../site.mjs'
 import { newestFromUser, shellTool, standInModel, textOf } from './pi/model.mjs'
 import { startPi } from './pi/rpc.mjs'
-import { homeOnWindows, systemPath, windows } from './windows.mjs'
+import { homeOnWindows, nodeAlone, systemPath, windows } from './windows.mjs'
 
 printCleanly()
 const PACKAGE = '@earendil-works/pi-coding-agent'
@@ -102,6 +102,9 @@ function npmEnv() {
     ...given,
     HOME: home,
     USERPROFILE: home,
+    // On Windows, the run's own settings, caches and temporary files, and a PATH with nothing of whoever runs it
+    ...homeOnWindows(home),
+    ...(windows ? { PATH: [path.dirname(process.execPath), ...systemPath()].join(path.delimiter) } : {}),
     npm_config_userconfig: userconfig,
     npm_config_globalconfig: globalconfig,
     npm_config_cache: at('npm-cache'),
@@ -158,7 +161,7 @@ if (process.env.IT_BIN) {
 // language, so that no key for a model, no setting of theirs and no folder of theirs is seen.
 const env = {
   // On Windows, nothing of the PATH of whoever runs it either, where their own It and agent apps are
-  PATH: [piFolder, path.dirname(process.execPath), ...(windows ? systemPath() : [process.env.PATH ?? ''])].join(path.delimiter),
+  PATH: [piFolder, nodeAlone(at('node')), ...(windows ? systemPath() : [process.env.PATH ?? ''])].join(path.delimiter),
   LANG: 'C.UTF-8',
   HOME: home,
   USERPROFILE: home,
@@ -181,6 +184,25 @@ const env = {
   ...Object.fromEntries(
     ['IT_BACKEND_BIN', 'IT_BACKEND_RELEASES', 'CI', 'SystemRoot', 'ComSpec', 'PATHEXT', 'WINDIR'].filter((k) => process.env[k]).map((k) => [k, process.env[k]]),
   ),
+}
+
+/**
+ * The browser, started as every other program of the run is: on Windows with the run's own home,
+ * settings and temporary folders, which it takes from this program's environment as it starts.
+ */
+async function browserOfItsOwn() {
+  if (!windows) return launch()
+  const own = homeOnWindows(at('browser'))
+  const was = Object.fromEntries(Object.keys(own).map((k) => [k, process.env[k]]))
+  Object.assign(process.env, own)
+  try {
+    return await launch()
+  } finally {
+    for (const [k, v] of Object.entries(was)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  }
 }
 
 /** The commands `ran` has started that have not ended, which a run asked to stop part way ends. */
@@ -415,7 +437,7 @@ body = (async () => {
     )
 
     // A browser paired as the owner's, on the site, where `--open` brings the page up
-    const opened = await kept(await launch(), (o) => o.browser.close())
+    const opened = await kept(await browserOfItsOwn(), (o) => o.browser.close())
     browser = opened.browser
     const run = (_home, args) => it(args)
     await pairAsOwner(opened.page, { home: itHome, run })

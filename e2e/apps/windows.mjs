@@ -9,7 +9,7 @@
 // program on Windows cannot do without: where Windows is, which shell runs a .cmd file, and
 // which kinds of file are commands.
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync } from 'node:fs'
+import { copyFileSync, existsSync, linkSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 
 export const windows = process.platform === 'win32'
@@ -76,10 +76,10 @@ export function gitFolder() {
 /**
  * The processes whose program is in `folder`, or whose command line names it: on Windows, which
  * shows no other process's environment, how a run finds what it started that is still running.
- * The listing itself is left out.
+ * The listing itself is left out. Null where the processes could not be listed.
  */
 export function processesIn(folder) {
-  const listed = spawnSync(
+  const listing = spawnSync(
     'powershell.exe',
     [
       '-NoProfile',
@@ -88,11 +88,12 @@ export function processesIn(folder) {
       'Get-CimInstance Win32_Process | Select-Object ProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress',
     ],
     { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 },
-  ).stdout
-  let all = []
+  )
+  let all = null
   try {
-    all = [JSON.parse(listed)].flat()
+    if (listing.status === 0) all = [JSON.parse(listing.stdout)].flat()
   } catch {}
+  if (!all) return null
   const at = folder.toLowerCase()
   return all
     .filter((p) => p.ProcessId !== process.pid && !/Get-CimInstance Win32_Process/.test(p.CommandLine ?? ''))
@@ -106,6 +107,24 @@ export function processesIn(folder) {
           .includes(at),
     )
     .map((p) => ({ pid: p.ProcessId, command: p.CommandLine ?? p.ExecutablePath ?? '' }))
+}
+
+/**
+ * A folder for a PATH with the Node that runs this script in it and nothing else: on Windows a
+ * copy (or a link) of node.exe in `folder`, since Node's own folder may hold the commands that
+ * npm installed for the person, their agent apps among them. Elsewhere Node's own folder.
+ */
+export function nodeAlone(folder) {
+  if (!windows) return path.dirname(process.execPath)
+  mkdirSync(folder, { recursive: true })
+  const node = path.join(folder, 'node.exe')
+  if (!existsSync(node))
+    try {
+      linkSync(process.execPath, node)
+    } catch {
+      copyFileSync(process.execPath, node)
+    }
+  return folder
 }
 
 /** The names a command may be found by in a folder: the command itself and, on Windows, the kinds of file a command is. */
