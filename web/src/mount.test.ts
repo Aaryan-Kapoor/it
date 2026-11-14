@@ -1243,7 +1243,7 @@ describe('players and maps the site hosts over a page', () => {
     expect(said().at(-1)).toBe('port loaded=true')
   })
 
-  test('a document that says hello while the site asks about a load before it, and answers for that load, is not told that its own load was counted', async () => {
+  test('a document that says hello while the site asks about a load that came before its hello is not told by itself that the load was counted, and its channel says the site takes that load to be its own, as it takes any load no document has answered for', async () => {
     const page = await show()
     await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
     // A load the site asks about, during which another hello comes: the answer is about the new channel's document, and no load of its was counted
@@ -1254,6 +1254,7 @@ describe('players and maps the site hosts over a page', () => {
     expect(page.posted.filter((p) => p.data.type === 'it:who')).toHaveLength(2)
     expect((host.querySelector('.embed-shield') as HTMLElement | null)?.hidden ?? true).toBe(true)
     expect(page.posted.filter((p) => p.data.type === 'it:loaded')).toEqual([])
+    expect(page.posted.filter((p) => p.data.type === 'it:port').map((p) => p.data.loaded)).toEqual([false, true])
   })
 
   test('a document that answers with another value, or for another channel, is not taken as the one the channel was made for', async () => {
@@ -2054,6 +2055,7 @@ describe('what is open or asked for a page, when the page changes hands or is ta
         ok: false,
         error:
           'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+        retryAfterMs: 0,
       },
     ])
     await piece()
@@ -2111,6 +2113,7 @@ describe('what is open or asked for a page, when the page changes hands or is ta
         ok: false,
         error:
           'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+        retryAfterMs: 0,
       },
     ])
     const port = page.ports().at(-1)!
@@ -2971,6 +2974,7 @@ describe('what is open or asked for a page, when the page changes hands or is ta
         ok: false,
         error:
           'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+        retryAfterMs: 0,
       })
       await act(() => tick(60))
       expect(tracks).toEqual([])
@@ -3106,6 +3110,7 @@ describe('what is open or asked for a page, when the page changes hands or is ta
           ok: false,
           error:
             'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+          retryAfterMs: 0,
         },
       ])
     })
@@ -3138,6 +3143,7 @@ describe('what is open or asked for a page, when the page changes hands or is ta
         ok: false,
         error:
           'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+        retryAfterMs: 0,
       })
     })
 
@@ -3162,6 +3168,7 @@ describe('what is open or asked for a page, when the page changes hands or is ta
           ok: false,
           error:
             'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+          retryAfterMs: 0,
         },
       ])
       await picture()
@@ -3226,6 +3233,7 @@ describe('what is open or asked for a page, when the page changes hands or is ta
           ok: false,
           error:
             'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+          retryAfterMs: 0,
         })
         expect(states(heard)).toEqual([])
       })

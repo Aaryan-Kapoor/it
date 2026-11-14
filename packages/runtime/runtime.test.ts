@@ -2850,6 +2850,48 @@ describe('what a page asks of the microphone and the camera before the site has 
     await expect(cam).resolves.toMatchObject({ state: 'live' })
   })
 
+  test('what the site refuses because it let the channel go is sent again, once, over the next channel, though the refusal comes before the frame hears that the channel is gone, and nothing more goes over the channel let go', async () => {
+    const t = page()
+    t.done()
+    const told: unknown[] = []
+    const cam = t.p.It.camera()
+    cam.catch((err: Error) => told.push(err.message))
+    const first = t.answered(true)
+    await settled()
+    const [asked] = askedOf(first)
+    t.p.fromSite({ type: 'it:result', requestId: asked.requestId, ok: false, error: 'let go', retryAfterMs: 0 })
+    await settled()
+    expect(told).toEqual([])
+    // Asked meanwhile, and past the twenty seconds after which nothing is held for a load: still not sent over the channel let go
+    void t.p.It.photo()
+    await t.p.advance(21_000)
+    expect(askedOf(first)).toHaveLength(1)
+    t.gone()
+    const next = t.answered(true)
+    await settled()
+    const again = askedOf(next)
+    expect(again.map((m) => m.type).sort()).toEqual(['it:camera', 'it:photo'])
+    expect(again.find((m) => m.type === 'it:camera').requestId).toBe(asked.requestId)
+    t.p.fromSite({ type: 'it:result', requestId: asked.requestId, ok: true })
+    await expect(cam).resolves.toMatchObject({ state: 'live' })
+  })
+
+  test('any other refusal of the microphone or the camera is the page’s answer', async () => {
+    const t = page()
+    t.done()
+    const mic = t.p.It.microphone()
+    const port = t.answered(true)
+    await settled()
+    const [asked] = askedOf(port)
+    t.p.fromSite({
+      type: 'it:result',
+      requestId: asked.requestId,
+      ok: false,
+      error: 'The person did not allow this page to use the microphone on this screen.',
+    })
+    await expect(mic).rejects.toThrow('The person did not allow this page')
+  })
+
   test('what was sent and not answered when the site lets the channel go is sent again, once, over the next channel, and is not refused', async () => {
     const t = page()
     t.done()

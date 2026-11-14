@@ -275,6 +275,8 @@ const untilLoaded: (PageToSite & { requestId: string })[] = []
 const mediaOnItsWay = new Map<string, PageToSite & { requestId: string }>()
 /** The site has counted this document's own load, as it said over the channel in use once this document had loaded. */
 let loadedHere = false
+/** A channel the site has said it let go of, by refusing what was asked over it for that, which nothing more is sent over. */
+let letGoOf: MessagePort | null = null
 /** Whether a request is still held for the site to count this document's load: until HOLD_MS after the document began. */
 let untilLoadedHeld = true
 const HOLD_MS = 20_000
@@ -284,7 +286,7 @@ setTimeout(() => {
 }, HOLD_MS)
 /** Sends what was held, where nothing holds it any more. */
 function sendHeld(): void {
-  if (!port || (untilLoadedHeld && siteDoes?.loaded && !loadedHere)) return
+  if (!port || port === letGoOf || (untilLoadedHeld && siteDoes?.loaded && !loadedHere)) return
   for (const message of untilLoaded.splice(0)) {
     if (siteCannot(message)) refuseMedia(message.requestId)
     else {
@@ -350,6 +352,15 @@ function receive(message: SiteToPage): void {
   } else if (message.type === 'it:result') {
     const answer = waiting.get(message.requestId)
     if (!answer) return
+    // Refused because the site let this channel go, which the frame may hear of only after this:
+    // asked again over the next channel, as what is unanswered when it hears it is
+    const asked = mediaOnItsWay.get(message.requestId)
+    if (asked && !message.ok && message.retryAfterMs === 0) {
+      mediaOnItsWay.delete(message.requestId)
+      untilLoaded.unshift(asked)
+      letGoOf = port
+      return
+    }
     waiting.delete(message.requestId)
     actionsOnTheirWay.delete(message.requestId)
     mediaOnItsWay.delete(message.requestId)
@@ -544,6 +555,7 @@ function lost(): void {
   untilLoaded.unshift(...mediaOnItsWay.values())
   mediaOnItsWay.clear()
   loadedHere = false
+  letGoOf = null
   const held = new Set(untilLoaded.map((message) => message.requestId))
   for (const [requestId, answer] of [...waiting]) {
     if (actionsOnTheirWay.has(requestId) || held.has(requestId)) continue

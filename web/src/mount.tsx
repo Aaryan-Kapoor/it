@@ -1019,11 +1019,14 @@ export function Mount({
       microphone?.end('replaced')
       microphone = null
       starting?.stop()
-      // What it asked for and was not answered yet is answered now, while the channel can still carry it
+      // What it asked for and was not answered yet is answered now, while the channel can still carry
+      // it. No other refusal of the microphone or the camera says when to ask again: this one says
+      // at once, which It's script in a page takes to mean over its next channel, since the frame
+      // may hear that this one is gone after it hears this
       for (const [asked, { from, requestId }] of unanswered)
         if (from === was) {
           unanswered.delete(asked)
-          toPage(from, { type: 'it:result', requestId, ok: false, error: SAID.replaced })
+          toPage(from, { type: 'it:result', requestId, ok: false, error: SAID.replaced, retryAfterMs: 0 })
         }
       // And what it is beginning holds nothing back from the next document
       beginning = null
