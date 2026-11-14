@@ -63,6 +63,7 @@ import { ReloadNotice } from './reload'
 import { ServiceNotice } from './service'
 import { codeSeen, current, signOut as endSession, heldToken, pair, pairAsScreen, recheck, useSession } from './session'
 import { Displays, Settings } from './settings'
+import { Team } from './team'
 import { TourDialog } from './welcome'
 
 export function App() {
@@ -855,6 +856,8 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
     <Guard key={path} shown={slug}>
       {slug ? (
         <PageView slug={slug} user={user} owner={owner} display={display ?? null} />
+      ) : path === '/team' ? (
+        <Team owner={owner} />
       ) : owner && path === '/machines' ? (
         <Machines />
       ) : owner && path === '/displays' ? (
@@ -1003,6 +1006,7 @@ function TopBar({
         {!locked && (
           <nav aria-label="Sections">
             {tab('/', NOUN.Many)}
+            {tab('/team', 'Team')}
             {owner && tab('/machines', 'Machines')}
             {owner && tab('/displays', 'Displays')}
           </nav>

@@ -220,7 +220,7 @@ describe('a browser that is not paired', () => {
       { what: '/session/token' },
       { what: 'displays:register', args: { key: localStorage.getItem('it.display'), userAgent: navigator.userAgent } },
     ])
-    expect(sections()).toEqual(['Pages'])
+    expect(sections()).toEqual(['Pages', 'Team'])
   })
 
   test('a code that is wrong, used or run out is said to be, in so many words', async () => {
@@ -265,7 +265,7 @@ describe('a browser that is not paired', () => {
     expect(host.querySelectorAll('[role="alert"]').length).toBe(1)
     wrongCodesFor = null
     await press('Make this browser a screen of It')
-    expect(sections()).toEqual(['Pages'])
+    expect(sections()).toEqual(['Pages', 'Team'])
   })
 })
 
@@ -356,7 +356,7 @@ describe('what each kind of session is shown', () => {
   test('the owner has the machines and the displays beside the pages', async () => {
     cookie = CODES.ownercode00000000001!
     await start()
-    expect(sections()).toEqual(['Pages', 'Machines', 'Displays'])
+    expect(sections()).toEqual(['Pages', 'Team', 'Machines', 'Displays'])
   })
 
   test('a screen has its pages and its own settings, and no way to what is the owner’s, by a link or by an address', async () => {
@@ -367,7 +367,7 @@ describe('what each kind of session is shown', () => {
         host.remove()
       }
       await start(at)
-      expect(sections()).toEqual(['Pages'])
+      expect(sections()).toEqual(['Pages', 'Team'])
       expect(host.textContent).toContain('Say this to your agent')
       // Nor is it told to set anything up: that is done on the machine It runs on, by the owner
       expect(host.querySelector('.hello-connect')).toBeNull()

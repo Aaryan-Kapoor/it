@@ -130,6 +130,8 @@ export default defineSchema({
     replayUntil: v.optional(v.array(v.number())),
     /** Set when the session ends, however it ends. From then on the session is nobody. */
     endedAt: v.optional(v.number()),
+    /** The teammate this browser was paired for, where it was paired for one: it is shown the team's pages and what was sent to that teammate, and nothing else of the person's (`lib/authz.ts`). */
+    teammate: v.optional(v.id('teammates')),
     ...invitedBy,
   })
     .index('by_secret', ['secretHash'])
@@ -140,6 +142,12 @@ export default defineSchema({
     .index('by_machine', ['byMachine', 'endedAt'])
     .index('by_session', ['bySession', 'endedAt']),
 
+  // Someone the person works with, who has browsers of their own in this It (`team.ts`). A
+  // teammate is no second person of It's: what they see is the person's, as far as it was
+  // shared with the team or sent to them. One that was removed is kept, removed, so that
+  // nothing made for them is taken for another's.
+  teammates: defineTable({ userId: v.id('users'), name: v.string(), createdAt: v.number(), removedAt: v.optional(v.number()) }).index('by_user', ['userId']),
+
   // A code that lets one browser in, or one machine. Kept only as its hash, good for ten
   // minutes, and used once.
   invites: defineTable({
@@ -149,6 +157,8 @@ export default defineSchema({
     createdAt: v.number(),
     expiresAt: v.number(),
     usedAt: v.optional(v.number()),
+    /** The teammate the browser it lets in is paired for, where the code was made for one. */
+    teammate: v.optional(v.id('teammates')),
     ...invitedBy,
   })
     .index('by_code', ['codeHash'])
@@ -354,6 +364,20 @@ export default defineSchema({
     stoppedThrough: v.optional(v.number()),
     /** What the page's agent last said above the page, in its own words, and when. */
     said: v.optional(v.object({ text: v.string(), at: v.number() })),
+    /**
+     * The conversations that share this page beside the one it belongs to, each under the name
+     * it joined as, with the machine it runs on (`shared.ts`). The conversation the page belongs
+     * to is a member whether or not it is listed here.
+     */
+    members: v.optional(v.array(v.object({ name: v.string(), machineId: v.id('machines'), session, joinedAt: v.number() }))),
+    /** The conversations a person took off this page, which may not join it again. */
+    removed: v.optional(v.array(v.object({ machineId: v.id('machines'), session, at: v.number() }))),
+    /** Whether every teammate may see this page and act on it. A page is private until its person or its agent says otherwise. */
+    team: v.optional(v.boolean()),
+    /** The teammates this page was sent to for review, each since when, and when each sent it back. One that sent it back sees it no more. */
+    sentTo: v.optional(v.array(v.object({ teammate: v.id('teammates'), at: v.number(), backAt: v.optional(v.number()) }))),
+    /** The number the last post on this page was given (`posts.seq`). */
+    postSeq: v.optional(v.number()),
   })
     .index('by_user_slug', ['userId', 'slug'])
     .index('by_user_updated', ['userId', 'updatedAt'])
@@ -418,6 +442,19 @@ export default defineSchema({
     'by_artifact',
     ['artifactId'],
   ),
+
+  // What the members of a shared page said to each other on it, in order (`shared.ts`). `from`
+  // and `to` are members' names as they were when it was posted, and `to` is absent where it
+  // was for every member.
+  posts: defineTable({
+    userId: v.id('users'),
+    artifactId: v.id('artifacts'),
+    seq: v.number(),
+    from: v.string(),
+    to: v.optional(v.string()),
+    text: v.string(),
+    at: v.number(),
+  }).index('by_artifact_seq', ['artifactId', 'seq']),
 
   // The state a publish asked for its page to start with, kept with that publish until it is
   // shown: a publish that is given up on, or loses to another, starts nothing.

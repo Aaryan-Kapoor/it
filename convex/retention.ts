@@ -86,8 +86,15 @@ async function removeHangers(ctx: MutationCtx, artifactId: Id<'artifacts'>): Pro
     .withIndex('by_artifact_n', (q) => q.eq('artifactId', artifactId))
     .take(LIGHT)
   for (const p of publications) await ctx.db.delete(p._id)
+  // What the members of a shared page said to each other on it
+  const posts = await ctx.db
+    .query('posts')
+    .withIndex('by_artifact_seq', (q) => q.eq('artifactId', artifactId))
+    .take(HEAVY)
+  for (const p of posts) await ctx.db.delete(p._id)
   const more =
     kept ||
+    posts.length === HEAVY ||
     publications.length === LIGHT ||
     versions.length === VERSIONS ||
     actions.length === HEAVY ||

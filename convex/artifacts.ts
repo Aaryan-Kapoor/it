@@ -4,7 +4,17 @@ import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import { removeLater } from './content'
-import { artifactBySlug, ownArtifact, requireBrowser, requireCaller, requireMachine, requireMachineOrOwner, requireOwner } from './lib/authz'
+import {
+  artifactBySlug,
+  ownArtifact,
+  requireBrowser,
+  requireCaller,
+  requireMachine,
+  requireMachineOrOwner,
+  requireOwner,
+  shownTo,
+  teammateOf,
+} from './lib/authz'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
 import { addonNotLoaded } from './lib/listening'
@@ -26,6 +36,9 @@ const card = (a: Doc<'artifacts'>, pending: number, machineName: string | null) 
   session: a.session ?? null,
   pending,
   pinned: a.pinned ?? false,
+  // Whether every teammate sees it, and to how many it is out for review: what the site marks a page private or team by
+  team: a.team ?? false,
+  sent: (a.sentTo ?? []).filter((x) => x.backAt === undefined).length,
   folder: a.folder ?? null,
   order: a.order ?? null,
 })
@@ -42,12 +55,18 @@ export { resolve as resolveArtifact }
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    const { user } = await requireCaller(ctx)
-    const all = await ctx.db
-      .query('artifacts')
-      .withIndex('by_user_updated', (q) => q.eq('userId', user._id))
-      .order('desc')
-      .take(QUOTA.artifacts)
+    const c = await requireCaller(ctx)
+    const { user } = c
+    const teammate = teammateOf(c)
+    const all = (
+      await ctx.db
+        .query('artifacts')
+        .withIndex('by_user_updated', (q) => q.eq('userId', user._id))
+        .order('desc')
+        .take(QUOTA.artifacts)
+    )
+      // A teammate's browser is listed the team's pages and what was sent to its teammate, and nothing else
+      .filter((a) => teammate === null || shownTo(teammate, a))
     const names = new Map<string, string | null>()
     for (const a of all) {
       if (a.machineId && !names.has(a.machineId)) names.set(a.machineId, (await ctx.db.get(a.machineId))?.name ?? null)
