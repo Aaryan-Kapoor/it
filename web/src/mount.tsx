@@ -123,9 +123,10 @@ interface Held {
   /** Which of the documents the frame has shown asked for it: what one asked for is not the next one's. */
   doc: number
   /**
-   * The most loads of the page's frame it may see, counted from the first as the site counts them.
-   * Asked for before any document had loaded since the channel's hello, it may see one, which can be
-   * the load of the document that asked; asked for after that, none. Nothing the page says moves it.
+   * How many loads of the page's frame the site had seen when it was asked for, counted from the
+   * first: it may see none after that. A document's own load can reach the site before its hello or
+   * after it, and also before or after what it asks for, so no load that comes after the asking can
+   * be told from the next document's, and every one ends it. Nothing the page says moves it.
    */
   loads: number
 }
@@ -324,9 +325,8 @@ export function Mount({
     let letGo: unknown = null
     /** Which document the frame shows now, counted from the first: one that loads in its place is another, and what the one before began or asked for is not its. */
     let docs = 0
-    /** How many times a document has loaded in the frame, as the browser tells the site, and how many had when the channel in use was made. */
+    /** How many times a document has loaded in the frame, as the browser tells the site. */
     let loads = 0
-    let loadsAtHello = 0
     // Each thing done for the page is held to the conversation the page had when it was asked for:
     // what the person allowed is that one's, and no other's. Each keeps its own, so that something
     // asked for later, under another conversation, cannot stand in for what an earlier one began with.
@@ -357,7 +357,8 @@ export function Mount({
               : null
     const SAID = {
       not_shown: 'The page was closed.',
-      replaced: 'The page loaded another document, which asks for itself.',
+      replaced:
+        'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
       taken_over: OWNER_MOVED,
       taken_back: TAKEN_BACK,
     } as const
@@ -430,7 +431,13 @@ export function Mount({
       const cannot = cannotOpen()
       if (cannot) throw new Error(cannot)
       const doc = docs
-      const most = loads === loadsAtHello ? loads + 1 : loads
+      const most = loads
+      // While the frame is being asked which document it holds, the channel may be held by a document
+      // that is no longer there, or by a window it handed the channel to. What came over it is looked
+      // at once the frame has answered, and refused where the document went meanwhile.
+      while (asking) await new Promise<void>((answered) => untilAnswered.push(answered))
+      if (!live) throw new Error('The page was closed.')
+      if (doc !== docs || loads > most) throw new Error(SAID.replaced)
       // Nothing is begun for a page the screen does not show, where It's bar, which says what is live, cannot be seen
       if (document.visibilityState === 'hidden')
         throw new Error('It uses the microphone and the camera for a page only while this screen shows it. Ask again once the page is in front.')
@@ -447,8 +454,8 @@ export function Mount({
         throw new Error('It asks the person only while the page is in front, in the window they are using. Ask again from something they do on the page.')
       // What this call wants beyond what the page is allowed already, which stays as it is
       const had = grantsOf(user).find((g) => g.page === artifactId && g.owner === owner)
-      const asking = kinds.filter((k) => !had?.kinds.includes(k))
-      const asked = askPerson({ page: artifactId, title: titled.current, agent: by?.agent ?? null, machine: by?.machine ?? null, kinds: asking })
+      const lacking = kinds.filter((k) => !had?.kinds.includes(k))
+      const asked = askPerson({ page: artifactId, title: titled.current, agent: by?.agent ?? null, machine: by?.machine ?? null, kinds: lacking })
       question = asked
       questionBy = owner
       questionLoads = most
@@ -463,7 +470,7 @@ export function Mount({
         throw new Error(`The person did not allow this page to use ${kindsSaid(kinds)} on this screen.`)
       }
       if (doc !== docs) throw new Error(SAID.replaced)
-      allow(user, { page: artifactId, title: titled.current, agent: by?.agent ?? null, machine: by?.machine ?? null, owner, kinds: asking })
+      allow(user, { page: artifactId, title: titled.current, agent: by?.agent ?? null, machine: by?.machine ?? null, owner, kinds: lacking })
       const grant = grantFor(user, artifactId, owner, kinds)
       if (!grant) throw new Error(TAKEN_BACK)
       return { owner, grant, doc, loads: most }
@@ -978,9 +985,23 @@ export function Mount({
     // next document to load in the frame is another one, whatever it answers. So the channel, and
     // everything begun over it, ends then without asking: a page cannot keep the camera, the
     // microphone or its players by having the next document answer with the name the first one said.
+    //
+    // A document says hello before it has loaded, but the two reach the site separately, and on a
+    // slower machine its load can come first. So a load that no document has answered for since
+    // may be the load of the next document to say hello, and that document is taken to have loaded.
     let asking: { nonce: string; timer: ReturnType<typeof setTimeout>; afterHello: boolean } | null = null
-    /** The document the channel was made for has loaded, and answered for that load: the next load is another document. */
+    /** The document the channel was made for has loaded, or may have: the next load is another document. */
     let onItsLoad = false
+    /** A document has loaded in the frame that has not answered as the one on the channel: it may be the next one to say hello. */
+    let unclaimed = false
+    /** What the page asked of the microphone and the camera while the frame was being asked, waiting for the asking to end. */
+    const untilAnswered: (() => void)[] = []
+    /** The frame is no longer being asked, whether it answered or the document is taken to be gone. */
+    const doneAsking = () => {
+      clearTimeout(asking?.timer)
+      asking = null
+      for (const go of untilAnswered.splice(0)) go()
+    }
     /**
      * The document the channel was made for is gone. Its channel is closed, so that whatever holds
      * the other end now is heard no more, and everything it began here ends with it: its players
@@ -998,11 +1019,14 @@ export function Mount({
       microphone?.end('replaced')
       microphone = null
       starting?.stop()
-      // What it asked for and was not answered yet is answered now, while the channel can still carry it
+      // What it asked for and was not answered yet is answered now, while the channel can still carry
+      // it. No other refusal of the microphone or the camera says when to ask again: this one says
+      // at once, which It's script in a page takes to mean over its next channel, since the frame
+      // may hear that this one is gone after it hears this
       for (const [asked, { from, requestId }] of unanswered)
         if (from === was) {
           unanswered.delete(asked)
-          toPage(from, { type: 'it:result', requestId, ok: false, error: SAID.replaced })
+          toPage(from, { type: 'it:result', requestId, ok: false, error: SAID.replaced, retryAfterMs: 0 })
         }
       // And what it is beginning holds nothing back from the next document
       beginning = null
@@ -1029,7 +1053,7 @@ export function Mount({
         nonce,
         afterHello,
         timer: setTimeout(() => {
-          asking = null
+          doneAsking()
           documentGone()
           embeds?.release()
           // A document of It's that was only slow to answer asks for a channel again when it hears this
@@ -1105,9 +1129,14 @@ export function Mount({
       if (type === 'it:here') {
         const said = e.data as { nonce?: unknown; doc?: unknown }
         if (asking && said.nonce === asking.nonce && typeof said.doc === 'string' && said.doc === answered && port.current) {
-          clearTimeout(asking.timer)
-          if (asking.afterHello) onItsLoad = true
-          asking = null
+          if (asking.afterHello) {
+            onItsLoad = true
+            unclaimed = false
+            // The page's script holds what it asks of the microphone and the camera until the site
+            // has counted its document's own load, which ends nothing it asks for from now on
+            ;(e.source as Window).postMessage({ type: 'it:loaded' }, '*')
+          }
+          doneAsking()
           embeds?.release()
         }
         return
@@ -1136,19 +1165,23 @@ export function Mount({
         documentGone()
         const channel = new MessageChannel()
         port.current = channel.port1
-        loadsAtHello = loads
+        // Its load may have reached the site before its hello did
+        onItsLoad = unclaimed
+        unclaimed = false
         channel.port1.onmessage = (m) => void fromPage(channel.port1, m.data as PageToSite)
         // Sent to whatever document the page has put in its frame. The channel is for this one
         // showing, and gives a document there nothing the page did not already have.
         // With what the site does for a page beyond what every site has done: a page's script does none of these where a site does not say so, as one open since before It was updated does not
-        ;(e.source as Window).postMessage({ type: 'it:port', v: CHANNEL_VERSION, embeds: embeds !== null, media: true, sound: true, opens: true }, '*', [
-          channel.port2,
-        ])
+        // `loaded` says whether the site has counted this document's own load already, as `it:loaded` says later
+        ;(e.source as Window).postMessage(
+          { type: 'it:port', v: CHANNEL_VERSION, embeds: embeds !== null, media: true, sound: true, opens: true, loaded: onItsLoad },
+          '*',
+          [channel.port2],
+        )
         const whole = liveState.whole()
         if (whole) toPage(channel.port1, whole)
         // A document that says hello while the frame is being asked is there to be asked again, as
-        // the one this channel is for. The load that began the asking came before its hello, so its
-        // answer does not say that its own load is behind it
+        // the one this channel is for. Whether its own load is behind it was settled just now
         if (asking) askWho(false)
         // And whether It is fullscreen, which also tells the page that the site takes its asking for it
         toPage(channel.port1, fullscreenSaid())
@@ -1164,6 +1197,7 @@ export function Mount({
      */
     const frameLoaded = () => {
       loads += 1
+      unclaimed = true
       if (question && loads > questionLoads) {
         letGo = question
         question.cancel()
@@ -1173,10 +1207,12 @@ export function Mount({
       if (microphone && loads > microphoneBy.loads) microphone.end('replaced')
       if (starting && loads > starting.loads) starting.stop()
       if (port.current && (onItsLoad || asking?.afterHello)) {
-        clearTimeout(asking?.timer)
-        asking = null
+        doneAsking()
         embeds?.release()
         documentGone()
+        // A document of It's that the site took to have loaded when it had not, and which loads only
+        // now, asks for a channel again when it hears this; any other document lets it go by
+        frame.current?.contentWindow?.postMessage({ type: 'it:gone' }, '*')
       } else askWho(true)
     }
     const shown = frame.current
@@ -1227,7 +1263,7 @@ export function Mount({
       microphone?.end('not_shown')
       microphone = null
       shown?.removeEventListener('load', frameLoaded)
-      clearTimeout(asking?.timer)
+      doneAsking()
       unhost?.()
       embeds?.dispose()
       port.current?.close()

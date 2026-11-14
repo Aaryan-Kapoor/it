@@ -3460,6 +3460,75 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
   await pageIn(page, { id: slug })
   for (const gone of [recSlug, camSlug]) await it(A, ['delete', gone])
 
+  // A page that asks for the camera and then the microphone at the top of its script, before its
+  // own document has finished loading and with nothing clicked, as a page an agent writes often
+  // does. Its picture is held back for seconds, so its load reaches the site long after it asked.
+  // The site ends what a document asked for at the next load of its frame, which it cannot tell
+  // from another document's, so the page's script holds the asking until the site has counted
+  // this document's own load: the person is asked once that has, and nothing ends at the load
+  {
+    const earlySlug = `${slug}-early`
+    await it(A, ['create', marked('Early'), '--id', earlySlug, '--dir', path.join(root, 'e2e/fixtures/early')])
+    const late = async (route) => {
+      await new Promise((go) => setTimeout(go, 4000))
+      await route.continue()
+    }
+    await page.context().route('**/late.png', late)
+    const earlyOut = () => page.frameLocator('.mount iframe').locator('#out')
+    const earlyCount = (id) =>
+      page
+        .frameLocator('.mount iframe')
+        .locator(`#${id}`)
+        .textContent()
+        .then(Number, () => 0)
+    const earlyQuestion = page.locator('.media-ask')
+    /** Presses Allow once It asks, and says how long after the page was opened It asked. */
+    const allowed = async (opened) => {
+      await earlyQuestion.getByRole('button', { name: 'Allow', exact: true }).click({ timeout: 20_000 })
+      return Date.now() - opened
+    }
+    const opened = Date.now()
+    await page.goto(`${APP}/p/${earlySlug}`)
+    await pageIn(page, { id: earlySlug })
+    const askedCameraAfter = await allowed(opened).catch(() => null)
+    await earlyOut()
+      .filter({ hasText: /camera live|refused/ })
+      .waitFor({ timeout: 15_000 })
+      .catch(() => {})
+    const askedMicrophoneAfter = await allowed(opened).catch(() => null)
+    await earlyOut()
+      .filter({ hasText: /microphone live|refused/ })
+      .waitFor({ timeout: 15_000 })
+      .catch(() => {})
+    const framesThen = await earlyCount('frames')
+    const piecesThen = await earlyCount('pieces')
+    // Still live a while after the page's load, with its pictures and its sound still coming
+    await page.waitForTimeout(3000)
+    const early = {
+      said: (await earlyOut().textContent()) ?? '',
+      askedCameraAfter,
+      askedMicrophoneAfter,
+      frames: [framesThen, await earlyCount('frames')],
+      pieces: [piecesThen, await earlyCount('pieces')],
+      chips: [await page.locator('.page-nav .media-cam').count(), await page.locator('.page-nav .media-mic').count()],
+    }
+    await page.context().unroute('**/late.png', late)
+    check(
+      'a page that asks for the camera and then the microphone at the top of its script, before its document has loaded and with nothing clicked, is asked about each once its document has loaded, and both stay live after its load',
+      early.said === 'loaded | camera live | microphone live' &&
+        early.askedCameraAfter >= 4000 &&
+        early.askedMicrophoneAfter > early.askedCameraAfter &&
+        early.frames[1] > early.frames[0] &&
+        early.pieces[1] > early.pieces[0] &&
+        early.chips[0] === 1 &&
+        early.chips[1] === 1,
+      JSON.stringify(early),
+    )
+    await page.goto(`${APP}/p/${slug}`)
+    await pageIn(page, { id: slug })
+    await it(A, ['delete', earlySlug])
+  }
+
   // ------------------------------------------------------------------
   section('Large files')
   // A page with a film in it, as a demonstration is: one file of more than 100 MB, which the

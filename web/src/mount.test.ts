@@ -670,7 +670,7 @@ describe('the frame around a page', () => {
     expect(calls.some((c) => c.fn === 'state:store')).toBe(false)
   })
 
-  test('a page’s channel says that it takes several stored values at once, that the site hosts embeds, opens the microphone and the camera for the page, passes it the microphone’s sound and opens its links, and what the page keeps goes to the backend as one write', async () => {
+  test('a page’s channel says that it takes several stored values at once, that the site hosts embeds, opens the microphone and the camera for the page, passes it the microphone’s sound, opens its links and says when it has counted the page’s load, and what the page keeps goes to the backend as one write', async () => {
     const page = await show()
     await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
     // A page's script refuses to ask for the microphone or the camera, and opens its links itself, where the site does not say these: a site from before them would drop what it was sent
@@ -681,6 +681,7 @@ describe('the frame around a page', () => {
       media: true,
       sound: true,
       opens: true,
+      loaded: false,
     })
     const port = page.ports()[0]!
     const heard = await page.send(port, {
@@ -1186,6 +1187,75 @@ describe('players and maps the site hosts over a page', () => {
     const asked = page.posted.filter((p) => p.data.type === 'it:who')
     expect(asked.length).toBe(1)
   }, 15_000)
+
+  test('a document whose load reached the site before its hello loses its players and its channel at once when the next document loads, even one that answers as the page, which is not asked which it is', async () => {
+    const page = await show()
+    // On a slower machine the frame's load can reach the site before the hello its document sent before it loaded
+    await page.loads()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    const port = page.ports()[0]!
+    await page.send(port, { type: 'it:embed', id: 'e1', url: 'https://www.youtube.com/embed/a' })
+    expect(hosted().length).toBe(1)
+    const asked = page.posted.filter((p) => p.data.type === 'it:who').length
+    await page.loads()
+    expect(hosted()).toEqual([])
+    expect(page.posted.filter((p) => p.data.type === 'it:who').length).toBe(asked)
+    expect(await page.send(port, { type: 'it:embed', id: 'e2', url: 'https://www.youtube.com/embed/b' })).toEqual([])
+    expect(hosted()).toEqual([])
+  })
+
+  test('a document taken to have loaded when its load was still to come is told at its load that its channel is gone, and is given another when it says hello again', async () => {
+    const page = await show()
+    // A load the site cannot place, as of a document that answers nothing, and then a document says hello before it has loaded
+    await page.loads(false)
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    await page.send(page.ports()[0]!, { type: 'it:embed', id: 'e1', url: 'https://www.youtube.com/embed/a' })
+    // Its own load is taken for the next document's: its channel goes, and it is told so
+    await page.loads()
+    expect(hosted()).toEqual([])
+    expect(page.posted.at(-1)?.data).toEqual({ type: 'it:gone' })
+    // A document of It's says hello again under a new name, as on any it:gone, and is given a channel
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1-again' })
+    await page.send(page.ports()[1]!, { type: 'it:embed', id: 'e2', url: 'https://www.youtube.com/embed/b' })
+    expect(hosted().map((f) => f.src)).toEqual(['https://www.youtube.com/embed/b'])
+    // Its load is behind it now, so the next load is another document's, and is not asked about
+    const asked = page.posted.filter((p) => p.data.type === 'it:who').length
+    await page.loads()
+    expect(hosted()).toEqual([])
+    expect(page.posted.filter((p) => p.data.type === 'it:who').length).toBe(asked)
+  })
+
+  test('the site tells the frame once it has counted the load of the document on the channel, and says with the channel whether it has already, so that the page’s script can hold what it asks of the microphone and the camera until then', async () => {
+    const page = await show()
+    const said = () => page.posted.map((p) => (p.data.type === 'it:port' ? `port loaded=${p.data.loaded}` : p.data.type))
+    // A hello before the document's load: not counted yet
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    expect(said()).toEqual(['port loaded=false'])
+    // Its load, which it answers for as the document on the channel: counted, and the frame is told, after it was asked
+    await page.loads()
+    expect(said()).toEqual(['port loaded=false', 'it:who', 'it:loaded'])
+    expect(page.posted.at(-1)?.to).toBe('*')
+    // The next load is another document's, which is not told that its load was counted: the frame is told its channel is gone
+    await page.loads()
+    expect(said().slice(3)).toEqual(['it:gone'])
+    // That document says hello after its load reached the site: the channel says its load is counted already
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-2' })
+    expect(said().at(-1)).toBe('port loaded=true')
+  })
+
+  test('a document that says hello while the site asks about a load that came before its hello is not told by itself that the load was counted, and its channel says the site takes that load to be its own, as it takes any load no document has answered for', async () => {
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    // A load the site asks about, during which another hello comes: the answer is about the new channel's document, and no load of its was counted
+    const loading = page.loads()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-2' })
+    await loading
+    // It was asked twice, and its answer to the second asking was taken
+    expect(page.posted.filter((p) => p.data.type === 'it:who')).toHaveLength(2)
+    expect((host.querySelector('.embed-shield') as HTMLElement | null)?.hidden ?? true).toBe(true)
+    expect(page.posted.filter((p) => p.data.type === 'it:loaded')).toEqual([])
+    expect(page.posted.filter((p) => p.data.type === 'it:port').map((p) => p.data.loaded)).toEqual([false, true])
+  })
 
   test('a document that answers with another value, or for another channel, is not taken as the one the channel was made for', async () => {
     const page = await show()
@@ -1699,7 +1769,7 @@ describe('what is open or asked for a page, when the page changes hands or is ta
     Reflect.deleteProperty(window, 'isSecureContext')
   })
   /** The page shown under one conversation, its channel open, and what the person allowed that conversation. */
-  async function shownFor(owner: string, kinds: ('mic' | 'camera')[]) {
+  async function shownFor(owner: string, kinds: ('mic' | 'camera')[], { loadedFirst = false } = {}) {
     const { allow } = await import('./media')
     if (kinds.length) allow('alice', { page: 'page1', title: 'Plan', agent: 'Claude Code', machine: 'studio', owner, kinds })
     const { Mount } = await import('./mount')
@@ -1712,6 +1782,8 @@ describe('what is open or asked for a page, when the page changes hands or is ta
       await tick()
     })
     const page = framed()
+    // On a slower machine the frame's load can reach the site before the hello its document sent before it loaded
+    if (loadedFirst) await page.loads()
     await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
     const port = page.ports()[0]!
     const heard: any[] = []
@@ -1977,7 +2049,14 @@ describe('what is open or asked for a page, when the page changes hands or is ta
     expect(tracks.every((t) => t.stopped)).toBe(true)
     // Told so before its channel closed, and only that
     expect(heard.filter((m) => m.type === 'it:result' && m.requestId === 'm1')).toEqual([
-      { type: 'it:result', requestId: 'm1', ok: false, error: 'The page loaded another document, which asks for itself.' },
+      {
+        type: 'it:result',
+        requestId: 'm1',
+        ok: false,
+        error:
+          'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+        retryAfterMs: 0,
+      },
     ])
     await piece()
     expect(sound(heard)).toEqual([])
@@ -2028,7 +2107,14 @@ describe('what is open or asked for a page, when the page changes hands or is ta
     expect(currentQuestion()).toBeNull()
     // Told so before its channel closed, and only that
     expect(heard.filter((m) => m.type === 'it:result' && m.requestId === 'm1')).toEqual([
-      { type: 'it:result', requestId: 'm1', ok: false, error: 'The page loaded another document, which asks for itself.' },
+      {
+        type: 'it:result',
+        requestId: 'm1',
+        ok: false,
+        error:
+          'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+        retryAfterMs: 0,
+      },
     ])
     const port = page.ports().at(-1)!
     const later: any[] = []
@@ -2053,13 +2139,12 @@ describe('what is open or asked for a page, when the page changes hands or is ta
     expect(resultOf(heard, 'm1')).toBeUndefined()
   })
 
-  test('the live microphone stays open through the load of the document that opened it, and ends at the next document to load, even one that answers as the page, which is told why', async () => {
+  test('the live microphone opened after the document’s load ends at the next document to load, even one that answers as the page, which is told why', async () => {
     const { heard, ask, page } = await shownFor(FIRST, ['mic'])
     const { microphoneFor } = await import('./media')
-    // Opened while the document is still loading, and kept through its own load
+    await page.loads()
     await ask(openMic)
     expect(resultOf(heard, 'm1')).toMatchObject({ ok: true })
-    await page.loads()
     await piece()
     expect(micStates(heard)).toEqual([])
     expect(sound(heard)).toHaveLength(1)
@@ -2072,9 +2157,46 @@ describe('what is open or asked for a page, when the page changes hands or is ta
     expect(sound(heard)).toHaveLength(1)
   })
 
+  test('the live microphone opened before any load of the frame has reached the site since the hello ends at the next load, which the site cannot tell from another document’s, and the page can open it again', async () => {
+    const { heard, ask, page } = await shownFor(FIRST, ['mic'])
+    const { currentQuestion } = await import('./media')
+    await ask(openMic)
+    expect(resultOf(heard, 'm1')).toMatchObject({ ok: true })
+    // The document's own load, or the next document's, which answers with the same name: the site cannot tell which
+    await page.loads()
+    expect(micStates(heard)).toEqual([{ type: 'it:microphone-state', microphone: 'mic-a', state: 'ended', why: 'replaced' }])
+    expect(tracks.map((t) => t.stopped)).toEqual([true])
+    // Where it was the document's own load, the document is still on its channel, and opens it again without the person being asked
+    await ask({ ...openMic, requestId: 'm2' })
+    expect(currentQuestion()).toBeNull()
+    expect(resultOf(heard, 'm2')).toMatchObject({ ok: true })
+    expect(tracks.map((t) => t.stopped)).toEqual([true, false])
+  })
+
   test('the live microphone ends at once when the next document to load answers nothing, without waiting for the asking to give up', async () => {
     const { heard, ask, page } = await shownFor(FIRST, ['mic'])
     await page.loads()
+    await ask(openMic)
+    await page.loads(false)
+    expect(micStates(heard)).toEqual([{ type: 'it:microphone-state', microphone: 'mic-a', state: 'ended', why: 'replaced' }])
+    expect(tracks.map((t) => t.stopped)).toEqual([true])
+  })
+
+  test('the live microphone of a document whose load reached the site before its hello ends at once when the next document loads, even one that answers as the page, and that document is not asked which it is', async () => {
+    const { heard, ask, page } = await shownFor(FIRST, ['mic'], { loadedFirst: true })
+    await ask(openMic)
+    expect(resultOf(heard, 'm1')).toMatchObject({ ok: true })
+    await piece()
+    expect(sound(heard)).toHaveLength(1)
+    const asked = page.posted.filter((p) => p.data.type === 'it:who').length
+    await page.loads()
+    expect(micStates(heard)).toEqual([{ type: 'it:microphone-state', microphone: 'mic-a', state: 'ended', why: 'replaced' }])
+    expect(tracks.map((t) => t.stopped)).toEqual([true])
+    expect(page.posted.filter((p) => p.data.type === 'it:who').length).toBe(asked)
+  })
+
+  test('the live microphone of a document whose load reached the site before its hello ends at once when the next document to load answers nothing', async () => {
+    const { heard, ask, page } = await shownFor(FIRST, ['mic'], { loadedFirst: true })
     await ask(openMic)
     await page.loads(false)
     expect(micStates(heard)).toEqual([{ type: 'it:microphone-state', microphone: 'mic-a', state: 'ended', why: 'replaced' }])
@@ -2103,7 +2225,11 @@ describe('what is open or asked for a page, when the page changes hands or is ta
     expect(tracks.map((t) => t.stopped)).toEqual([true])
     await loading
     await arrived(() => !!resultOf(heard, 'm1'))
-    expect(resultOf(heard, 'm1')).toMatchObject({ ok: false, error: 'The page loaded another document, which asks for itself.' })
+    expect(resultOf(heard, 'm1')).toMatchObject({
+      ok: false,
+      error:
+        'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+    })
     expect(micStates(heard)).toEqual([])
   })
 
@@ -2128,7 +2254,11 @@ describe('what is open or asked for a page, when the page changes hands or is ta
     letThrough = null
     const page = framed()
     await page.fromFrame({ type: 'it:hello', doc: 'doc-2' })
-    expect(resultOf(heard, 'm1')).toMatchObject({ ok: false, error: 'The page loaded another document, which asks for itself.' })
+    expect(resultOf(heard, 'm1')).toMatchObject({
+      ok: false,
+      error:
+        'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+    })
     const next = page.ports().at(-1)!
     const later: any[] = []
     next.onmessage = (m) => later.push(m.data)
@@ -2775,13 +2905,12 @@ describe('what is open or asked for a page, when the page changes hands or is ta
       expect(frames(heard)).toEqual([])
     })
 
-    test('the live camera stays open through the load of the document that opened it, and ends at the next document to load, even one that answers as the page, which is told why', async () => {
+    test('the live camera opened after the document’s load ends at the next document to load, even one that answers as the page, which is told why', async () => {
       const { heard, ask, page } = await shownFor(FIRST, ['camera'])
       const { cameraFor } = await import('./media')
-      // Opened while the document is still loading, and kept through its own load
+      await page.loads()
       await ask(openLive)
       await picture()
-      await page.loads()
       expect(states(heard)).toEqual([])
       page.ports()[0]!.postMessage({ type: 'it:camera-drawn', camera: 'cam-a', frame: 1 })
       await act(() => tick(20))
@@ -2806,6 +2935,62 @@ describe('what is open or asked for a page, when the page changes hands or is ta
       expect(tracks.map((t) => t.stopped)).toEqual([true])
       await picture()
       expect(frames(heard)).toHaveLength(1)
+    })
+
+    test('the live camera of a document whose load reached the site before its hello ends at once when the next document loads, even one that answers as the page, and that document is not asked which it is', async () => {
+      const { heard, ask, page } = await shownFor(FIRST, ['camera'], { loadedFirst: true })
+      await ask(openLive)
+      await picture()
+      expect(frames(heard)).toHaveLength(1)
+      const asked = page.posted.filter((p) => p.data.type === 'it:who').length
+      await page.loads()
+      expect(states(heard)).toMatchObject([{ camera: 'cam-a', state: 'ended', why: 'replaced' }])
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+      expect(page.posted.filter((p) => p.data.type === 'it:who').length).toBe(asked)
+      await picture()
+      expect(frames(heard)).toHaveLength(1)
+    })
+
+    test('the live camera of a document whose load reached the site before its hello ends at once when the next document to load answers nothing', async () => {
+      const { heard, ask, page } = await shownFor(FIRST, ['camera'], { loadedFirst: true })
+      await ask(openLive)
+      await picture()
+      await page.loads(false)
+      expect(states(heard)).toMatchObject([{ state: 'ended', why: 'replaced' }])
+      expect(tracks.map((t) => t.stopped)).toEqual([true])
+    })
+
+    test('a camera asked for over the channel while the frame is being asked which document it holds is not opened where the document turns out to be gone', async () => {
+      const { heard, ask, page } = await shownFor(FIRST, ['camera'])
+      // A document loads that does not answer, and the channel, perhaps in another window's hands, asks for the camera meanwhile
+      await page.loads(false)
+      await ask(openLive)
+      expect(tracks).toEqual([])
+      expect(resultOf(heard, 'c1')).toBeUndefined()
+      // Another document loads before any answer: the channel's document is gone
+      await page.loads(false)
+      await arrived(() => !!resultOf(heard, 'c1'))
+      expect(resultOf(heard, 'c1')).toMatchObject({
+        ok: false,
+        error:
+          'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+        retryAfterMs: 0,
+      })
+      await act(() => tick(60))
+      expect(tracks).toEqual([])
+    })
+
+    test('a camera asked for over the channel while the frame is being asked which document it holds is opened once the document answers', async () => {
+      const { heard, ask, page } = await shownFor(FIRST, ['camera'])
+      await page.loads(false)
+      await ask(openLive)
+      expect(tracks).toEqual([])
+      const nonce = page.posted.filter((p) => p.data.type === 'it:who').at(-1)!.data.nonce
+      await page.fromFrame({ type: 'it:here', nonce, doc: 'doc-1' })
+      await arrived(() => !!resultOf(heard, 'c1'))
+      expect(resultOf(heard, 'c1')).toMatchObject({ ok: true })
+      await picture()
+      expect(frames(heard)).toMatchObject([{ camera: 'cam-a', frame: 1 }])
     })
 
     test('a page that hands its channel to another window keeps neither the camera nor the channel once another document loads in its frame, and that window is told why', async () => {
@@ -2854,20 +3039,42 @@ describe('what is open or asked for a page, when the page changes hands or is ta
       expect(tracks.map((t) => t.stopped)).toEqual([true, false])
     })
 
-    test('the live camera ends at the second load of the frame after the channel’s hello, though no document answered for either', async () => {
+    test('the live camera opened before any load of the frame has reached the site since the hello ends at the next load, which the site cannot tell from another document’s, and the page can open it again', async () => {
       const { heard, ask, page } = await shownFor(FIRST, ['camera'])
+      const { currentQuestion } = await import('./media')
       await ask(openLive)
-      await page.loads(false)
-      expect(states(heard)).toEqual([])
-      // Another document loads before the asking about the first has given up, and nothing answers
-      await page.loads(false)
+      expect(resultOf(heard, 'c1')).toMatchObject({ ok: true })
+      // The document's own load, or the next document's, which answers with the same name: the site cannot tell which
+      await page.loads()
       expect(states(heard)).toMatchObject([{ state: 'ended', why: 'replaced' }])
       expect(tracks.map((t) => t.stopped)).toEqual([true])
       await picture()
       expect(frames(heard)).toEqual([])
+      // Where it was the document's own load, the document is still on its channel, and opens it again without the person being asked
+      await ask({ ...openLive, requestId: 'c2', camera: 'cam-b' })
+      expect(currentQuestion()).toBeNull()
+      expect(resultOf(heard, 'c2')).toMatchObject({ ok: true })
+      await picture()
+      expect(frames(heard)).toMatchObject([{ camera: 'cam-b', frame: 1 }])
     })
 
-    test('a camera opened over a channel asked for again after the frame loaded sees one more load at most, whatever the next documents answer', async () => {
+    test('a question about the camera put before any load of the frame has reached the site since the hello is taken away at the next load, which the site cannot tell from another document’s', async () => {
+      const { heard, ask, page } = await shownFor(FIRST, [])
+      const { currentQuestion } = await import('./media')
+      await ask(openLive)
+      expect(currentQuestion()).toMatchObject({ kinds: ['camera'] })
+      await page.loads()
+      expect(currentQuestion()).toBeNull()
+      await arrived(() => !!resultOf(heard, 'c1'))
+      expect(resultOf(heard, 'c1')).toMatchObject({
+        ok: false,
+        error:
+          'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+      })
+      expect(tracks).toEqual([])
+    })
+
+    test('a camera opened over a channel asked for again after the frame loaded sees no load after it, whatever the next documents answer', async () => {
       const { page } = await shownFor(FIRST, ['camera'])
       await page.loads()
       // The same document, or another, says hello under a new name, and opens the camera over the channel it is given
@@ -2878,22 +3085,9 @@ describe('what is open or asked for a page, when the page changes hands or is ta
       next.postMessage(openLive)
       await act(() => tick(60))
       expect(resultOf(later, 'c1')).toMatchObject({ ok: true })
-      // The load after that hello may be the document's own
-      await page.loads()
-      expect(states(later)).toEqual([])
-      // The next is not, whatever it answers
+      // The document said hello again after it had loaded, so the next load is another document's, whatever it answers
       await page.loads()
       expect(states(later)).toMatchObject([{ state: 'ended', why: 'replaced' }])
-      expect(tracks.map((t) => t.stopped)).toEqual([true])
-    })
-
-    test('a camera asked for after the frame has loaded is let go of at the next load, even where the channel is not yet known to be that document’s', async () => {
-      const { heard, ask, page } = await shownFor(FIRST, ['camera'])
-      await page.loads(false)
-      await ask(openLive)
-      expect(resultOf(heard, 'c1')).toMatchObject({ ok: true })
-      await page.loads()
-      expect(states(heard)).toMatchObject([{ state: 'ended', why: 'replaced' }])
       expect(tracks.map((t) => t.stopped)).toEqual([true])
     })
 
@@ -2910,7 +3104,14 @@ describe('what is open or asked for a page, when the page changes hands or is ta
       expect(frames(heard)).toEqual([])
       // Told once, before its channel closed
       expect(heard.filter((m) => m.type === 'it:result' && m.requestId === 'c1')).toEqual([
-        { type: 'it:result', requestId: 'c1', ok: false, error: 'The page loaded another document, which asks for itself.' },
+        {
+          type: 'it:result',
+          requestId: 'c1',
+          ok: false,
+          error:
+            'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+          retryAfterMs: 0,
+        },
       ])
     })
 
@@ -2938,7 +3139,12 @@ describe('what is open or asked for a page, when the page changes hands or is ta
       await page.loads()
       expect(tracks.map((t) => t.stopped)).toEqual([true])
       await arrived(() => !!resultOf(heard, 'c1'))
-      expect(resultOf(heard, 'c1')).toMatchObject({ ok: false, error: 'The page loaded another document, which asks for itself.' })
+      expect(resultOf(heard, 'c1')).toMatchObject({
+        ok: false,
+        error:
+          'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+        retryAfterMs: 0,
+      })
     })
 
     test('a document the page has left does not have the camera opened live for it, however late the browser gives the camera', async () => {
@@ -2956,7 +3162,14 @@ describe('what is open or asked for a page, when the page changes hands or is ta
       // The document that asked is gone, and is answered nothing
       // Told so before its channel closed, and only that
       expect(heard.filter((m) => m.type === 'it:result' && m.requestId === 'c1')).toEqual([
-        { type: 'it:result', requestId: 'c1', ok: false, error: 'The page loaded another document, which asks for itself.' },
+        {
+          type: 'it:result',
+          requestId: 'c1',
+          ok: false,
+          error:
+            'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+          retryAfterMs: 0,
+        },
       ])
       await picture()
       expect(frames(heard)).toEqual([])
@@ -3016,7 +3229,12 @@ describe('what is open or asked for a page, when the page changes hands or is ta
         expect(tracks.map((t) => t.stopped)).toEqual([true, true])
         await loading
         await arrived(() => !!resultOf(heard, 'c1'))
-        expect(resultOf(heard, 'c1')).toMatchObject({ ok: false, error: 'The page loaded another document, which asks for itself.' })
+        expect(resultOf(heard, 'c1')).toMatchObject({
+          ok: false,
+          error:
+            'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+          retryAfterMs: 0,
+        })
         expect(states(heard)).toEqual([])
       })
 

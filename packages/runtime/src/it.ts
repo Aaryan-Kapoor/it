@@ -82,7 +82,7 @@ let channel = 0
  * answer would wait for ever. A site open on a screen since before It was updated is one, since
  * nothing reloads it.
  */
-let siteDoes: { media: boolean; sound: boolean; opens: boolean } | null = null
+let siteDoes: { media: boolean; sound: boolean; opens: boolean; loaded: boolean } | null = null
 /** What a page is told where the site that framed it does not do what it asked of the microphone or the camera. */
 const RELOAD_FOR_MEDIA = 'Reload It in this browser to use the microphone and camera: It was updated while it was open here.'
 /** What opens the microphone or the camera, which such a site would never answer: each is refused there instead. */
@@ -247,6 +247,7 @@ function post(to: MessagePort, message: PageToSite): void {
     const answer = waiting.get(message.requestId)
     waiting.delete(message.requestId)
     actionsOnTheirWay.delete(message.requestId)
+    mediaOnItsWay.delete(message.requestId)
     answer?.({
       type: 'it:result',
       requestId: message.requestId,
@@ -261,6 +262,40 @@ function send(message: PageToSite): void {
   else unsent.push(message)
 }
 
+// The site ends what a document asked of the microphone or the camera at the first load of the
+// page's frame after it was asked for, since it cannot tell a document's own load from the next
+// document's. So a request this document makes before the site has counted its own load is held
+// here, and sent once the site says, over the channel in use, that it has counted it, which it
+// says only to a document that has loaded by then. The page's call is answered a little later,
+// and nothing the site allows is changed by it. A site from before it said so is not waited on,
+// and a document that has not loaded within HOLD_MS sends what it holds all the same.
+/** What opens the microphone or the camera, or takes a photo, waiting for the site to count this document's load. */
+const untilLoaded: (PageToSite & { requestId: string })[] = []
+/** Of those, what was sent over the channel in use and not answered yet, by request: held again where the channel is lost. */
+const mediaOnItsWay = new Map<string, PageToSite & { requestId: string }>()
+/** The site has counted this document's own load, as it said over the channel in use once this document had loaded. */
+let loadedHere = false
+/** A channel the site has said it let go of, by refusing what was asked over it for that, which nothing more is sent over. */
+let letGoOf: MessagePort | null = null
+/** Whether a request is still held for the site to count this document's load: until HOLD_MS after the document began. */
+let untilLoadedHeld = true
+const HOLD_MS = 20_000
+setTimeout(() => {
+  untilLoadedHeld = false
+  sendHeld()
+}, HOLD_MS)
+/** Sends what was held, where nothing holds it any more. */
+function sendHeld(): void {
+  if (!port || port === letGoOf || (untilLoadedHeld && siteDoes?.loaded && !loadedHere)) return
+  for (const message of untilLoaded.splice(0)) {
+    if (siteCannot(message)) refuseMedia(message.requestId)
+    else {
+      mediaOnItsWay.set(message.requestId, message)
+      post(port, message)
+    }
+  }
+}
+
 /** Sends a request to the site, and is answered with what the site answered. */
 function ask(message: PageToSite & { requestId: string }): Promise<Result> {
   return new Promise((answered) => {
@@ -268,6 +303,10 @@ function ask(message: PageToSite & { requestId: string }): Promise<Result> {
     // A site that has said it does not do this for a page is not asked: it would never answer
     if (siteCannot(message)) return refuseMedia(message.requestId)
     if (message.type === 'it:action') actionsOnTheirWay.set(message.requestId, message)
+    if (BEGINS_MEDIA.has(message.type)) {
+      untilLoaded.push(message)
+      return sendHeld()
+    }
     send(message)
   })
 }
@@ -313,8 +352,18 @@ function receive(message: SiteToPage): void {
   } else if (message.type === 'it:result') {
     const answer = waiting.get(message.requestId)
     if (!answer) return
+    // Refused because the site let this channel go, which the frame may hear of only after this:
+    // asked again over the next channel, as what is unanswered when it hears it is
+    const asked = mediaOnItsWay.get(message.requestId)
+    if (asked && !message.ok && message.retryAfterMs === 0) {
+      mediaOnItsWay.delete(message.requestId)
+      untilLoaded.unshift(asked)
+      letGoOf = port
+      return
+    }
     waiting.delete(message.requestId)
     actionsOnTheirWay.delete(message.requestId)
+    mediaOnItsWay.delete(message.requestId)
     answer(message)
   } else if (message.type === 'it:camera-frame' || message.type === 'it:camera-state') seen(message)
   else if (message.type === 'it:microphone-sound' || message.type === 'it:microphone-state') heard(message)
@@ -500,8 +549,16 @@ function lost(): void {
   port.close()
   port = null
   players.lost()
+  // What was asked of the microphone or the camera and not answered is held again, before what
+  // was held still, and sent over the next channel once the site has counted this document's
+  // load there: the site ended whatever it had begun for it as it let the channel go
+  untilLoaded.unshift(...mediaOnItsWay.values())
+  mediaOnItsWay.clear()
+  loadedHere = false
+  letGoOf = null
+  const held = new Set(untilLoaded.map((message) => message.requestId))
   for (const [requestId, answer] of [...waiting]) {
-    if (actionsOnTheirWay.has(requestId)) continue
+    if (actionsOnTheirWay.has(requestId) || held.has(requestId)) continue
     waiting.delete(requestId)
     answer({ type: 'it:result', requestId, ok: false, error: LOST, retryAfterMs: 0 })
   }
@@ -509,6 +566,14 @@ function lost(): void {
   unsent.unshift(...[...actionsOnTheirWay.values()].map((message) => ({ ...message, again: true }) as PageToSite))
   doc = id()
   hello()
+  // The site ends whatever was live over a channel as it lets the channel go, and says so over the
+  // channel, which can come after this and is no longer listened to: it is said here instead. Said
+  // last, so that what the page asks for as it hears it waits for the next channel, as anything
+  // asked for between channels does, and is not taken for something that was on its way
+  // Not what is held, which nothing was opened for yet
+  const opening = new Set(untilLoaded.map((message) => ('camera' in message ? message.camera : 'microphone' in message ? message.microphone : '')))
+  for (const [named, live] of [...cameras]) if (!opening.has(named)) live.heard('ended', 'replaced')
+  for (const [named, live] of [...hearing]) if (!opening.has(named)) live.told?.('ended', 'replaced')
 }
 
 // The site answers the hello with a port. Only the window that framed this one is listened to,
@@ -523,10 +588,26 @@ window.addEventListener('message', (e) => {
     return
   }
   if (type === 'it:gone') return lost()
+  // The site has counted the load of the document on its channel. Taken only by a document that
+  // has loaded: one that has not is not the document whose load it counted
+  if (type === 'it:loaded') {
+    if (port && document.readyState === 'complete') {
+      loadedHere = true
+      sendHeld()
+    }
+    return
+  }
   if (type !== 'it:port' || !e.ports[0] || port) return
   port = e.ports[0]
   channel = typeof e.data.v === 'number' ? e.data.v : 0
-  siteDoes = { media: e.data.media === true, sound: e.data.sound === true, opens: e.data.opens === true }
+  siteDoes = {
+    media: e.data.media === true,
+    sound: e.data.sound === true,
+    opens: e.data.opens === true,
+    loaded: typeof e.data.loaded === 'boolean',
+  }
+  // Where the frame's load reached the site before this document's hello, the site has counted it already
+  loadedHere = e.data.loaded === true && document.readyState === 'complete'
   port.onmessage = (m) => receive(m.data as SiteToPage)
   // What was asked before the site answered goes now, but for what it has said it does not take
   for (const m of unsent.splice(0)) {
@@ -534,6 +615,7 @@ window.addEventListener('message', (e) => {
     else post(port, m)
   }
   players.hosted(e.data.embeds === true)
+  sendHeld()
   flush()
 })
 // This document's own name. The site answers each document once, however often it asks. It is
@@ -1547,7 +1629,8 @@ const CAMERA_ENDED: Record<string, string> = {
   person: 'The person stopped the camera in It’s bar.',
   taken_back: 'The person took back what they had allowed this page.',
   not_shown: 'The page was closed while the camera was live.',
-  replaced: 'The page loaded another document while the camera was live.',
+  replaced:
+    'The page’s frame loaded a document after the camera was opened, and It could not tell that this page was still the one in it, so It closed the camera.',
   device: 'The camera stopped giving pictures.',
   taken_over: 'Another conversation took this page over.',
 }
@@ -1699,7 +1782,8 @@ const MICROPHONE_ENDED: Record<string, string> = {
   person: 'The person stopped the microphone in It’s bar.',
   taken_back: 'The person took back what they had allowed this page.',
   not_shown: 'The page was closed while the microphone was live.',
-  replaced: 'The page loaded another document while the microphone was live.',
+  replaced:
+    'The page’s frame loaded a document after the microphone was opened, and It could not tell that this page was still the one in it, so It closed the microphone.',
   device: 'The microphone stopped giving sound.',
   taken_over: 'Another conversation took this page over.',
 }

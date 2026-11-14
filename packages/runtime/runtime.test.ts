@@ -2125,6 +2125,22 @@ describe('the microphone, live in a page', () => {
     expect(port.sent.filter((m) => m.type === 'it:microphone-heard' && m.microphone !== asked.microphone)).toEqual([])
   })
 
+  test('ends, and says so in words, when the site lets its channel go, though the site’s word on the channel comes after that or never', async () => {
+    const { p, mic, tracks, made } = await opened()
+    const told: unknown[][] = []
+    mic.onchange = (state: string, why?: string) => told.push([state, why])
+    p.w.dispatchEvent(Object.assign(new p.w.Event('message'), { origin: APP, source: p.w.parent, data: { type: 'it:gone' }, ports: [] }))
+    expect(told).toEqual([
+      [
+        'ended',
+        'The page’s frame loaded a document after the microphone was opened, and It could not tell that this page was still the one in it, so It closed the microphone.',
+      ],
+    ])
+    expect(mic.state).toBe('ended')
+    expect(tracks[0]!.stopped).toBe(true)
+    expect(made[0]!.state).toBe('closed')
+  })
+
   test('a page’s onsound handler that throws still has the piece played and said taken, and the console says only that it threw', async () => {
     const { p, played, mic, heard, taken } = await opened()
     const said: unknown[][] = []
@@ -2143,7 +2159,12 @@ describe('the microphone, live in a page', () => {
     const told: unknown[][] = []
     mic.onchange = (state: string, why?: string) => told.push([state, why])
     p.fromSite({ type: 'it:microphone-state', microphone: asked.microphone, state: 'ended', why: 'replaced' })
-    expect(told).toEqual([['ended', 'The page loaded another document while the microphone was live.']])
+    expect(told).toEqual([
+      [
+        'ended',
+        'The page’s frame loaded a document after the microphone was opened, and It could not tell that this page was still the one in it, so It closed the microphone.',
+      ],
+    ])
     expect(tracks[0]!.stopped).toBe(true)
     expect(made[0]!.state).toBe('closed')
   })
@@ -2421,8 +2442,52 @@ describe('the camera, live in a page', () => {
     const told: unknown[][] = []
     cam.onchange = (state: string, why?: string) => told.push([state, why])
     p.fromSite({ type: 'it:camera-state', camera: asked.camera, state: 'ended', why: 'replaced' })
-    expect(told).toEqual([['ended', 'The page loaded another document while the camera was live.']])
+    expect(told).toEqual([
+      [
+        'ended',
+        'The page’s frame loaded a document after the camera was opened, and It could not tell that this page was still the one in it, so It closed the camera.',
+      ],
+    ])
     expect(tracks[0]!.stopped).toBe(true)
+  })
+
+  test('ends, and says so in words, when the site lets its channel go, though the site’s word on the channel comes after that or never', async () => {
+    const { p, asked, cam, tracks } = await opened()
+    const told: unknown[][] = []
+    cam.onchange = (state: string, why?: string) => told.push([state, why])
+    p.w.dispatchEvent(Object.assign(new p.w.Event('message'), { origin: APP, source: p.w.parent, data: { type: 'it:gone' }, ports: [] }))
+    expect(told).toEqual([
+      [
+        'ended',
+        'The page’s frame loaded a document after the camera was opened, and It could not tell that this page was still the one in it, so It closed the camera.',
+      ],
+    ])
+    expect(cam.state).toBe('ended')
+    expect(tracks[0]!.stopped).toBe(true)
+    // The site's own word, had it come on the channel after all, says nothing more
+    p.fromSite({ type: 'it:camera-state', camera: asked.camera, state: 'ended', why: 'replaced' })
+    expect(told).toHaveLength(1)
+  })
+
+  test('a camera the page opens again as it hears that the last one ended with its channel is asked for over the next channel, and is not refused', async () => {
+    const { p, cam } = await opened()
+    let again: Promise<unknown> | undefined
+    cam.onchange = () => {
+      again = p.It.camera()
+    }
+    p.w.dispatchEvent(Object.assign(new p.w.Event('message'), { origin: APP, source: p.w.parent, data: { type: 'it:gone' }, ports: [] }))
+    let refused: unknown = null
+    again!.catch((err) => {
+      refused = err
+    })
+    await new Promise((r) => setImmediate(r))
+    expect(refused).toBeNull()
+    // Asked for once, over the next channel, and opened there
+    const next = p.answer()
+    const asked = next.sent.filter((m) => m.type === 'it:camera')
+    expect(asked).toHaveLength(1)
+    p.fromSite({ type: 'it:result', requestId: asked[0].requestId, ok: true })
+    expect(await again).toMatchObject({ state: 'live' })
   })
 
   test('stop closes the camera at the site and ends the stream, and resolves where the site had closed it already', async () => {
@@ -2647,5 +2712,206 @@ describe('the microphone and the camera, on a site that does not open them for a
     p.fromSite({ type: 'it:result', requestId: camera.requestId, ok: false, error: 'The camera is in use by another app.' })
     await expect(atOnce(opening)).rejects.toThrow('The camera is in use by another app.')
     expect(askedOf(port)).toEqual(['it:photo', 'it:microphone', 'it:camera'])
+  })
+})
+
+describe('what a page asks of the microphone and the camera before the site has counted its load', () => {
+  /** A page whose document is loading until the test says it has loaded, whose browser can make the streams the camera and the microphone need. */
+  const page = () => {
+    let state = 'loading'
+    const p = load('', (w) => {
+      Object.defineProperty(w.document, 'readyState', { get: () => state, configurable: true })
+      w.HTMLCanvasElement.prototype.getContext = () => ({ drawImage: () => {} })
+      w.HTMLCanvasElement.prototype.captureStream = () => ({ getTracks: () => [], addTrack: () => {} })
+    })
+    soundIn(p.w, 'at once')
+    /** The site's word, on the frame's window, that it has counted the load of the document on its channel. */
+    const loadedSaid = () =>
+      p.w.dispatchEvent(Object.assign(new p.w.Event('message'), { origin: APP, source: p.w.parent, data: { type: 'it:loaded' }, ports: [] }))
+    const gone = () => p.w.dispatchEvent(Object.assign(new p.w.Event('message'), { origin: APP, source: p.w.parent, data: { type: 'it:gone' }, ports: [] }))
+    /** The site's channel, as a current site hands it over, saying whether it has counted this document's load already. */
+    const answered = (loaded: boolean) => p.answer(APP, p.w.parent, CHANNEL_VERSION, { media: true, sound: true, opens: true, loaded })
+    return {
+      p,
+      loadedSaid,
+      gone,
+      answered,
+      done: () => {
+        state = 'complete'
+      },
+    }
+  }
+  const askedOf = (port: { sent: any[] }) => port.sent.filter((m) => /^it:(photo|camera|microphone)$/.test(m.type))
+
+  test('a camera, a camera with sound, the microphone and a photo asked for at once are held until the site says it has counted the load of the page’s document, then sent once each, and the page is given what the site answers', async () => {
+    const t = page()
+    const cam = t.p.It.camera()
+    const call = t.p.It.camera({ audio: true })
+    const mic = t.p.It.microphone()
+    const photo = t.p.It.photo()
+    await settled()
+    const port = t.answered(false)
+    await settled()
+    expect(askedOf(port)).toEqual([])
+    // Its document loads, and the site says it has counted that load
+    t.done()
+    t.loadedSaid()
+    await settled()
+    const asked = askedOf(port)
+    // Those with sound start what plays it first, so they come in their own order
+    expect(asked.map((m) => m.type).sort()).toEqual(['it:camera', 'it:camera', 'it:microphone', 'it:photo'])
+    for (const m of asked)
+      t.p.fromSite({
+        type: 'it:result',
+        requestId: m.requestId,
+        ok: true,
+        ...(m.type === 'it:photo' ? { file: new t.p.w.Blob(['x'], { type: 'image/jpeg' }) } : {}),
+      })
+    await expect(cam).resolves.toMatchObject({ state: 'live' })
+    await expect(call).resolves.toMatchObject({ state: 'live' })
+    await expect(mic).resolves.toMatchObject({ state: 'live' })
+    await expect(photo).resolves.toBeInstanceOf(t.p.w.File)
+    // Said again, it sends nothing more
+    t.loadedSaid()
+    await settled()
+    expect(askedOf(port)).toHaveLength(4)
+  })
+
+  test('the site’s word that it counted a load, heard while the document is still loading, is not taken: the load it counted was not this document’s', async () => {
+    const t = page()
+    void t.p.It.camera()
+    const port = t.answered(false)
+    t.loadedSaid()
+    await settled()
+    expect(askedOf(port)).toEqual([])
+    // A channel handed over saying the site counted a load already is not taken as this document's either, while it is loading
+    const p2 = page()
+    void p2.p.It.camera()
+    const port2 = p2.answered(true)
+    await settled()
+    expect(askedOf(port2)).toEqual([])
+  })
+
+  test('a channel handed over to a document that has loaded, saying that the site counted its load already, is used at once', async () => {
+    const t = page()
+    t.done()
+    void t.p.It.microphone()
+    const port = t.answered(true)
+    await settled()
+    expect(askedOf(port).map((m) => m.type)).toEqual(['it:microphone'])
+  })
+
+  test('once the site has counted the load, what the page asks for is sent at once', async () => {
+    const t = page()
+    const port = t.answered(false)
+    t.done()
+    t.loadedSaid()
+    void t.p.It.camera()
+    await settled()
+    expect(askedOf(port).map((m) => m.type)).toEqual(['it:camera'])
+  })
+
+  test('a site from before it said when it counted a load is not waited on', async () => {
+    const t = page()
+    void t.p.It.camera()
+    const port = t.p.answer()
+    await settled()
+    expect(askedOf(port).map((m) => m.type)).toEqual(['it:camera'])
+  })
+
+  test('a document that has not loaded twenty seconds after it began sends what it holds all the same', async () => {
+    const t = page()
+    void t.p.It.camera()
+    const port = t.answered(false)
+    await t.p.advance(19_000)
+    expect(askedOf(port)).toEqual([])
+    await t.p.advance(1_000)
+    expect(askedOf(port).map((m) => m.type)).toEqual(['it:camera'])
+  })
+
+  test('what is held when the site lets the channel go is neither refused nor said to have ended, and is sent once over the next channel once the site has counted the load there', async () => {
+    const t = page()
+    const told: unknown[] = []
+    const cam = t.p.It.camera()
+    cam.catch((err: Error) => told.push(err.message))
+    const first = t.answered(false)
+    // The site took a load that was not this document's for its own, and lets the channel go when its own comes
+    t.loadedSaid()
+    t.done()
+    t.gone()
+    await settled()
+    expect(askedOf(first)).toEqual([])
+    expect(told).toEqual([])
+    const next = t.answered(true)
+    await settled()
+    const asked = askedOf(next)
+    expect(asked.map((m) => m.type)).toEqual(['it:camera'])
+    t.p.fromSite({ type: 'it:result', requestId: asked[0].requestId, ok: true })
+    await expect(cam).resolves.toMatchObject({ state: 'live' })
+  })
+
+  test('what the site refuses because it let the channel go is sent again, once, over the next channel, though the refusal comes before the frame hears that the channel is gone, and nothing more goes over the channel let go', async () => {
+    const t = page()
+    t.done()
+    const told: unknown[] = []
+    const cam = t.p.It.camera()
+    cam.catch((err: Error) => told.push(err.message))
+    const first = t.answered(true)
+    await settled()
+    const [asked] = askedOf(first)
+    t.p.fromSite({ type: 'it:result', requestId: asked.requestId, ok: false, error: 'let go', retryAfterMs: 0 })
+    await settled()
+    expect(told).toEqual([])
+    // Asked meanwhile, and past the twenty seconds after which nothing is held for a load: still not sent over the channel let go
+    void t.p.It.photo()
+    await t.p.advance(21_000)
+    expect(askedOf(first)).toHaveLength(1)
+    t.gone()
+    const next = t.answered(true)
+    await settled()
+    const again = askedOf(next)
+    expect(again.map((m) => m.type).sort()).toEqual(['it:camera', 'it:photo'])
+    expect(again.find((m) => m.type === 'it:camera').requestId).toBe(asked.requestId)
+    t.p.fromSite({ type: 'it:result', requestId: asked.requestId, ok: true })
+    await expect(cam).resolves.toMatchObject({ state: 'live' })
+  })
+
+  test('any other refusal of the microphone or the camera is the page’s answer', async () => {
+    const t = page()
+    t.done()
+    const mic = t.p.It.microphone()
+    const port = t.answered(true)
+    await settled()
+    const [asked] = askedOf(port)
+    t.p.fromSite({
+      type: 'it:result',
+      requestId: asked.requestId,
+      ok: false,
+      error: 'The person did not allow this page to use the microphone on this screen.',
+    })
+    await expect(mic).rejects.toThrow('The person did not allow this page')
+  })
+
+  test('what was sent and not answered when the site lets the channel go is sent again, once, over the next channel, and is not refused', async () => {
+    const t = page()
+    t.done()
+    const told: unknown[] = []
+    const mic = t.p.It.microphone()
+    mic.catch((err: Error) => told.push(err.message))
+    const first = t.answered(true)
+    await settled()
+    const before = askedOf(first)
+    expect(before).toHaveLength(1)
+    t.gone()
+    await settled()
+    expect(told).toEqual([])
+    const next = t.answered(true)
+    await settled()
+    const again = askedOf(next)
+    expect(again).toEqual([before[0]])
+    // An answer that comes late over the first channel is not taken
+    first.onmessage?.({ data: { type: 'it:result', requestId: before[0].requestId, ok: false, error: 'late' } })
+    t.p.fromSite({ type: 'it:result', requestId: again[0].requestId, ok: true, sound: { sampleRate: 48_000 } })
+    await expect(mic).resolves.toMatchObject({ state: 'live' })
   })
 })
