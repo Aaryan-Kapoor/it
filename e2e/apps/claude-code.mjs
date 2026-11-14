@@ -24,7 +24,7 @@
 // asked of the same stand-in, changes the page again. `--setup-only` stops before the loop.
 import { spawn, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
@@ -32,17 +32,32 @@ import { chromium } from 'playwright'
 import { root, sleep, stopped } from '../lib.mjs'
 import { printCleanly, verdict } from '../logs.mjs'
 import { runs, standInModel, words } from './claude-code/model.mjs'
+import { commandNames, homeOnWindows, nodeAlone, patience, systemPath, windows } from './windows.mjs'
 
 printCleanly()
 const args = process.argv.slice(2)
 const prefix = args.find((a) => !a.startsWith('--'))
 const setupOnly = args.includes('--setup-only')
-if (!prefix || !existsSync(path.join(prefix, 'bin', 'claude'))) {
-  console.error('Give the folder Claude Code was installed into with `npm install --prefix`, whose bin holds `claude`.')
+// On Windows, `npm install --global --prefix` puts the command, `claude.cmd`, in the folder itself
+// and not in its bin, and the program it runs is the package's own `claude.exe`, which is what
+// this script starts itself: a .cmd file is started only through a shell
+const CLAUDE =
+  prefix &&
+  (windows
+    ? path.join(path.resolve(prefix), 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe')
+    : path.join(path.resolve(prefix), 'bin', 'claude'))
+if (!prefix || !existsSync(CLAUDE) || (windows && !existsSync(path.join(prefix, 'claude.cmd')))) {
+  console.error(
+    `Give the folder Claude Code was installed into with \`npm install --global --prefix\`, which holds ${windows ? '`claude.cmd`' : '`bin/claude`'}.`,
+  )
   process.exit(2)
 }
-const CLAUDE = path.join(path.resolve(prefix), 'bin', 'claude')
+/** The folder whose `claude` a person's shell, and It, would find: the one npm put the command in. */
+const CLAUDE_FOLDER = windows ? path.resolve(prefix) : path.dirname(CLAUDE)
 const CLI = path.resolve(process.env.IT_CLI ?? path.join(root, 'packages/cli/dist/it.mjs'))
+// The standalone program, where IT_BIN names one, in place of the Node bundle. It is put where
+// It's installers put it, in It's folder's bin, and run from there.
+const STANDALONE = process.env.IT_BIN ? path.resolve(process.env.IT_BIN) : null
 const PORT = Number(process.env.IT_PORT ?? 4700)
 const PLUGIN = 'it-bridge@it'
 const PAGE = 'one-button'
@@ -69,6 +84,13 @@ const folders = Object.fromEntries(
   ]),
 )
 for (const folder of Object.values(folders)) mkdirSync(folder, { recursive: true })
+const IT = STANDALONE ? [path.join(folders.it, 'bin', windows ? 'it.exe' : 'it')] : [process.execPath, CLI]
+if (STANDALONE) {
+  mkdirSync(path.dirname(IT[0]), { recursive: true })
+  copyFileSync(STANDALONE, IT[0])
+  // With the record the installers write beside it (INSTALLATION in packages/cli/src/installation.ts)
+  writeFileSync(path.join(folders.it, 'installation.json'), '{"product":"It","format":1,"about":"This folder holds an installation of It."}\n')
+}
 let cleaning = null
 /** Once the run has begun to clean up, it starts nothing more: whatever it would start, it stops here. */
 const notStopping = () => {
@@ -81,14 +103,17 @@ for (const signal of ['SIGINT', 'SIGTERM'])
     cleanUp().finally(() => process.exit(1))
   })
 
-// The only PATH either program is given: Claude Code's own folder, the Node that runs It, and
-// the system's. No `it` is put on it: It's add-on puts It's own folder there for the commands a
-// conversation runs, and that is part of what is tested.
-const PATH = [path.dirname(CLAUDE), path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(path.delimiter)
+// The only PATH either program is given: Claude Code's own folder, the Node that runs It (none
+// for the standalone program, which needs none), and the system's. No `it` is put on it: It's
+// add-on puts It's own folder there for the commands a conversation runs, and that is part of
+// what is tested.
+const PATH = [CLAUDE_FOLDER, ...(STANDALONE ? [] : [nodeAlone(path.join(scratch, 'node'))]), ...systemPath()].join(path.delimiter)
 /** What every program the run starts is given, and nothing more. */
 const base = {
   PATH,
   HOME: folders.home,
+  // On Windows, where a home of the run's own is given by more than HOME
+  ...homeOnWindows(folders.home),
   LANG: 'C.UTF-8',
   ...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
   CLAUDE_CONFIG_DIR: folders.claude,
@@ -113,6 +138,7 @@ const base = {
 const browserEnv = {
   PATH,
   HOME: folders.browser,
+  ...homeOnWindows(folders.browser),
   XDG_CONFIG_HOME: path.join(folders.browser, 'config'),
   XDG_CACHE_HOME: path.join(folders.browser, 'cache'),
   ...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
@@ -137,7 +163,7 @@ function run(program, argv, more = {}, ms = 180_000) {
 /** The `it` command, which answers in JSON to a program. A last argument `{ env, ms }` adds to its environment and limits how long it may take. */
 async function it(...argv) {
   const { env = {}, ms = 60_000 } = typeof argv.at(-1) === 'object' ? argv.pop() : {}
-  const r = await run(process.execPath, [CLI, ...argv], env, ms)
+  const r = await run(IT[0], [...IT.slice(1), ...argv], env, ms)
   let json = null
   try {
     json = JSON.parse(r.out)
@@ -238,13 +264,15 @@ try {
   // ---------- with no model ----------
   // No `it` is to be found on the PATH the programs are given, or the commands a conversation
   // runs could reach it without the add-on having put It's own there
-  const already = PATH.split(path.delimiter).filter((folder) => {
-    try {
-      return statSync(path.join(folder, 'it')).isFile()
-    } catch {
-      return false
-    }
-  })
+  const already = PATH.split(path.delimiter).filter((folder) =>
+    commandNames('it').some((name) => {
+      try {
+        return statSync(path.join(folder, name)).isFile()
+      } catch {
+        return false
+      }
+    }),
+  )
   must('no `it` is on the PATH the run gives its programs', already.length === 0, already.join(', '))
   // The first run on a fresh machine, connecting Claude Code and no other app
   const setup = await it('setup', '--only', 'claude-code', '--no-service', { ms: 300_000 })
@@ -255,13 +283,13 @@ try {
   // script has put it on has, and as Auto-wake's note to a reopened conversation says it is. The
   // conversation this run starts itself is not given it: the add-on puts it there.
   notStopping()
-  service = spawn(process.execPath, [CLI, 'serve'], {
+  service = spawn(IT[0], [...IT.slice(1), 'serve'], {
     env: { ...base, PATH: `${PATH}${path.delimiter}${path.join(folders.it, 'bin')}` },
     cwd: folders.work,
     stdio: ['ignore', openSync(serviceLog, 'w'), openSync(serviceLog, 'a')],
   })
   service.on('error', (err) => (serviceFault = err))
-  const upBy = Date.now() + 240_000
+  const upBy = Date.now() + patience(240_000)
   let up = false
   while (!up && Date.now() < upBy && service.exitCode === null && !serviceFault) {
     up = (await answers(PORT + 41, '/health')) && (await answers(PORT, '/', `localhost:${PORT}`))
@@ -281,7 +309,7 @@ try {
   const off = await claude('plugin', 'disable', PLUGIN, '--scope', 'user')
   ;({ found, said } = await listed())
   check('Claude Code turns It’s plugin off with its own command', off.code === 0 && found?.enabled === false, off.out + off.err + said)
-  now = await until(statusOf, (s) => s.claudeCode?.addon === 'disabled', 20_000)
+  now = await until(statusOf, (s) => s.claudeCode?.addon === 'disabled', patience(20_000))
   check(
     'and `it status` says that the add-on is turned off in Claude Code',
     now.claudeCode?.addon === 'disabled' && /turned off/.test(now.claudeCode?.detail ?? ''),
@@ -291,7 +319,7 @@ try {
   const on = await claude('plugin', 'enable', PLUGIN, '--scope', 'user')
   ;({ found, said } = await listed())
   check('Claude Code turns it back on with its own command', on.code === 0 && found?.enabled === true, on.out + on.err + said)
-  now = await until(statusOf, (s) => s.claudeCode?.addon === 'connected', 20_000)
+  now = await until(statusOf, (s) => s.claudeCode?.addon === 'connected', patience(20_000))
   must('and `it status` says that Claude Code is connected again', now.claudeCode?.addon === 'connected', now.said)
 
   if (!setupOnly) {
@@ -366,7 +394,7 @@ try {
     const heard = await until(
       (ms) => it('status', { env: asWhat, ms }),
       (s) => s.json?.arrives?.byItself === true,
-      60_000,
+      patience(60_000),
     )
     const loaded = () => (existsSync(debugFile) ? readFileSync(debugFile, 'utf8') : '')
     must(
@@ -379,7 +407,7 @@ try {
     )
 
     conversation.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: 'Make a page with one button on It.' } })}\n`)
-    const firstDone = await untilFinished(1, 120_000)
+    const firstDone = await untilFinished(1, patience(120_000))
     const created = model.turns.flatMap((t) => t.results).find(Boolean)
     must(
       'the first turn runs `it create --open` through Claude Code’s own Bash tool, and ends',
@@ -395,7 +423,10 @@ try {
     // What `it create` told the agent, as Claude Code handed it back to the model
     let told = null
     try {
-      told = JSON.parse(typeof created.content === 'string' ? created.content : created.content.map((b) => b.text ?? '').join(''))
+      const output = typeof created.content === 'string' ? created.content : created.content.map((b) => b.text ?? '').join('')
+      // Claude Code may add a line of its own after the command's output, as it does on Windows
+      // ("Shell cwd was reset to …"): what It printed is the JSON object before it
+      told = JSON.parse(output.slice(output.indexOf('{'), output.lastIndexOf('}') + 1))
     } catch {}
     check(
       'and `it create` told the agent that a click arrives by itself, through the add-on',
@@ -415,7 +446,7 @@ try {
 
     // A click, as a person makes it, while the conversation is idle
     await frame.locator('#go').click()
-    const clickBy = Date.now() + 90_000
+    const clickBy = Date.now() + patience(90_000)
     while (!clickTurns.length && Date.now() < clickBy && !ended()) await sleep(200)
     const action = (await it('read', PAGE)).json?.recentActions?.[0]
     const turn = clickTurns[0]
@@ -438,7 +469,7 @@ try {
     const handed = await until(
       (ms) => it('read', PAGE, { ms }),
       (r) => r.json?.recentActions?.find((a) => a.id === action?.id)?.delivery === 'handed_off',
-      15_000,
+      patience(15_000),
     )
     const recorded = handed.json?.recentActions?.find((a) => a.id === action?.id)
     check(
@@ -446,11 +477,11 @@ try {
       recorded?.delivery === 'handed_off' && recorded?.route === 'addon',
       JSON.stringify(recorded ?? handed.err),
     )
-    check('and the turn ends', await untilFinished(2, 60_000), JSON.stringify(finished()))
+    check('and the turn ends', await untilFinished(2, patience(60_000)), JSON.stringify(finished()))
     const state = await until(
       (ms) => it('state', PAGE, { ms }),
       (s) => s.json?.state?.pressed === 'yes',
-      15_000,
+      patience(15_000),
     )
     check('the agent’s `it patch` changed the page’s state', state.json?.state?.pressed === 'yes', state.out + state.err)
     const seen = await frame
@@ -468,7 +499,7 @@ try {
     const closed = await until(
       (ms) => it('status', { env: asWhat, ms }),
       (s) => s.json?.arrives && s.json.arrives.via !== 'addon',
-      30_000,
+      patience(30_000),
     )
     check(
       'once Claude Code is closed, It no longer hears its add-on in that conversation',
@@ -476,7 +507,7 @@ try {
       JSON.stringify(closed.json?.arrives ?? closed.err),
     )
     await frame.locator('#go').click()
-    const wokenBy = Date.now() + 120_000
+    const wokenBy = Date.now() + patience(120_000)
     while (clickTurns.length < 2 && Date.now() < wokenBy) await sleep(250)
     const second = (await it('read', PAGE)).json?.recentActions?.[0]
     const woken = clickTurns[1]
@@ -502,7 +533,7 @@ try {
     const again = await until(
       (ms) => it('state', PAGE, { ms }),
       (s) => s.json?.state?.pressed === 'again',
-      30_000,
+      patience(30_000),
     )
     check(
       'the reopened conversation’s `it patch` changed the page’s state',
@@ -546,7 +577,9 @@ function cleanUp() {
     let clean = !service || serviceFault !== null
     if (service && service.exitCode === null && service.signalCode === null && !serviceFault) {
       const exited = new Promise((r) => service.once('exit', (code, signal) => r({ code, signal })))
-      service.kill('SIGTERM')
+      // On Windows, which has no signal to ask with, by the file It's service looks for in its folder
+      if (windows) writeFileSync(path.join(folders.it, 'service.stop'), '')
+      else service.kill('SIGTERM')
       const how = await Promise.race([exited, sleep(90_000).then(() => null)])
       clean = check('It’s service stops when it is asked to', how?.code === 0, JSON.stringify(how ?? 'still running after ninety seconds'))
       if (!how) {
@@ -558,7 +591,15 @@ function cleanUp() {
     // taken for it only while its command line names this run's It folder, so that an id the
     // system has given to another program since is left alone
     const backends = existsSync(serviceLog) ? [...readFileSync(serviceLog, 'utf8').matchAll(/backend: started \(pid (\d+)\)/g)].map((m) => Number(m[1])) : []
-    const ours = (pid) => alive(pid) && (spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).stdout ?? '').includes(folders.it)
+    const commandLine = (pid) =>
+      (windows
+        ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], {
+            encoding: 'utf8',
+            windowsHide: true,
+          })
+        : spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
+      ).stdout ?? ''
+    const ours = (pid) => alive(pid) && commandLine(pid).includes(folders.it)
     const stillOurs = async (ms) => {
       const end = Date.now() + ms
       while (backends.some(ours) && Date.now() < end) await sleep(250)

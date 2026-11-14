@@ -43,11 +43,12 @@
 // stopped by its own process id, and the folder is removed (IT_OC_KEEP=1 keeps it).
 import { execFileSync, spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterTool, newestUser, standInModel, textOf } from './opencode/model.mjs'
+import { homeOnWindows, nodeAlone, processesIn, systemPath, windows } from './windows.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const argv = process.argv.slice(2)
@@ -114,17 +115,31 @@ const SERVER_PASSWORD = randomBytes(18).toString('hex')
 
 /** The command that runs It: the standalone program, a bundle named, or the bundle in this checkout. */
 const IT_COMMAND = process.env.IT_BIN ? [process.env.IT_BIN] : [process.execPath, process.env.IT_CLI ?? path.join(root, 'packages', 'cli', 'dist', 'it.mjs')]
+// On Windows the standalone program is put where It's installer puts it, in It's folder's bin, with
+// the record it writes beside it, and run from there: a command OpenCode runs finds it there as `it.exe`
+if (windows && process.env.IT_BIN) {
+  IT_COMMAND[0] = path.join(IT_HOME, 'bin', 'it.exe')
+  mkdirSync(path.dirname(IT_COMMAND[0]), { recursive: true })
+  copyFileSync(process.env.IT_BIN, IT_COMMAND[0])
+  // INSTALLATION in packages/cli/src/installation.ts
+  writeFileSync(path.join(IT_HOME, 'installation.json'), '{"product":"It","format":1,"about":"This folder holds an installation of It."}\n')
+}
 
 let opencodeBin = process.env.OPENCODE_BIN
+/** The folder whose `opencode` It finds: on Windows that of npm's opencode.cmd, as npm puts it on a person's PATH. */
+let opencodeFolder = opencodeBin && path.dirname(opencodeBin)
 /** What every program the run starts is given, and nothing else from the environment of whoever runs it. */
 function env(extra = {}) {
-  const dirs = [opencodeBin && path.dirname(opencodeBin), path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin'].filter(Boolean)
+  const dirs = [opencodeFolder, nodeAlone(path.join(base, 'node')), ...systemPath()].filter(Boolean)
   return {
     PATH: [...new Set(dirs)].join(path.delimiter),
     HOME,
+    // On Windows, where a home of the run's own is given by more than HOME
+    ...homeOnWindows(HOME),
     ...XDG,
     USER: os.userInfo().username,
-    SHELL: '/bin/bash',
+    // On Windows no shell is named, as none is in a person's own surroundings there
+    ...(windows ? {} : { SHELL: '/bin/bash' }),
     LANG: 'C.UTF-8',
     TMPDIR: path.join(base, 'tmp'),
     IT_HOME,
@@ -230,7 +245,9 @@ async function stop(name, ms = 30_000) {
   if (!one) return true
   running.delete(name)
   if (one.exited) return true
-  one.child.kill('SIGTERM')
+  // It's service, on Windows, which has no signal to ask with, by the file it looks for in its folder
+  if (name === 'it' && windows) writeFileSync(path.join(IT_HOME, 'service.stop'), '')
+  else one.child.kill('SIGTERM')
   if (await until(() => one.exited, ms, 100)) return true
   one.child.kill('SIGKILL')
   await until(() => one.exited, 5000, 100)
@@ -244,10 +261,17 @@ async function install() {
   const into = path.join(base, 'opencode')
   mkdirSync(into, { recursive: true })
   writeFileSync(path.join(into, 'package.json'), '{"private":true}\n')
-  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-  const got = await run(npm, ['install', '--no-audit', '--no-fund', '--loglevel=error', PACKAGE], { cwd: into, ms: 300_000 })
+  // On Windows npm's own script, under the Node that runs this, since npm.cmd is started only through a shell
+  const npm = windows ? [process.execPath, path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')] : ['npm']
+  const got = await run(npm[0], [...npm.slice(1), 'install', '--no-audit', '--no-fund', '--loglevel=error', PACKAGE], { cwd: into, ms: 300_000 })
   if (got.code !== 0) throw new Error(`npm could not install ${PACKAGE}: ${got.err.slice(-800)}`)
   opencodeBin = path.join(into, 'node_modules', '.bin', 'opencode')
+  opencodeFolder = path.dirname(opencodeBin)
+  // On Windows `opencode` there is npm's opencode.cmd, and the program it runs is the package's own opencode.exe
+  if (windows)
+    opencodeBin = [path.join(into, 'node_modules', 'opencode-ai'), path.join(into, 'node_modules', '@opencode', 'cli')]
+      .map((pkg) => path.join(pkg, 'bin', 'opencode.exe'))
+      .find((program) => existsSync(program))
 }
 
 let version = ''
@@ -302,7 +326,9 @@ async function storedIn(id, action, { ends = false } = {}) {
   const name = `[action ${action}]`
   return users.some((t) => t.trim().startsWith('[It]') && (ends ? t.trim().endsWith(name) : t.includes(name)))
 }
-const itsPlugin = (plugins) => plugins.find((p) => p.path === PLUGIN)
+// On Windows OpenCode 1 names a plugin by its file URL's path, as /C:/…, in forward slashes
+const samePath = (a) => (windows ? Boolean(a) && path.resolve(String(a).replace(/^\/(?=[A-Za-z]:)/, '')).toLowerCase() === PLUGIN.toLowerCase() : a === PLUGIN)
+const itsPlugin = (plugins) => plugins.find((p) => samePath(p.path))
 const ocApi = async (route, init = {}) => {
   const res = await fetch(`${ocUrl}${route}`, {
     ...init,
@@ -612,6 +638,14 @@ try {
  * own process id, and named. Linux alone can be asked this way.
  */
 function leftRunning() {
+  // On Windows, by the run's folder: in the program's path or its command line
+  if (windows)
+    return (processesIn(base) ?? [{ pid: null, command: '(the processes on this machine could not be listed)' }]).map(({ pid, command }) => {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {}
+      return `${pid} ${command}`
+    })
   if (process.platform !== 'linux') return []
   const left = []
   let pids = []
@@ -643,6 +677,21 @@ function leftRunning() {
 
 // ---------- part 2: the stand-in for the model, and the click ----------
 
+// On Windows OpenCode runs a command in Windows PowerShell 5.1, and the agent does as It's skill
+// says there (addons/skill/more/page.md, "On Windows"): it runs It as `it.exe`, since a bare `it`
+// there may be Pester's own command, and gives JSON in a file, since that PowerShell takes the
+// double quotes out of an argument. The file is written here, as the agent writes it with its own
+// file tool, in the temporary folder. The Node bundle has no it.exe, only It's it.cmd, which is `it`.
+function itName() {
+  return windows && process.env.IT_BIN ? 'it.exe' : 'it'
+}
+function json_(value, as) {
+  if (!windows) return as === 'state' ? `--state '${JSON.stringify(value)}'` : `'${JSON.stringify(value)}'`
+  const file = path.join(HOME, 'AppData', 'Local', 'Temp', `${as}-${Date.now()}.json`)
+  writeFileSync(file, JSON.stringify(value))
+  return `${as === 'state' ? '--state-file' : '--file'} "${file.replaceAll('\\', '/')}"`
+}
+
 /** What the stand-in answers each request with: the whole script of the conversation. */
 function script(request) {
   // OpenCode asks for a conversation's title with no tools, and is given one
@@ -657,12 +706,16 @@ function script(request) {
     if (!heard.includes(clicked)) heard.push(clicked)
     answered.push('patch')
     const pings = heard.indexOf(clicked) + 1
-    return shellCall(request, `it patch ${PAGE} '{"pings":${pings},"heard":"${clicked}"}'`, 'Shows on the page that the click was heard')
+    return shellCall(request, `${itName()} patch ${PAGE} ${json_({ pings, heard: clicked }, 'patch')}`, 'Shows on the page that the click was heard')
   }
   if (said.includes('(stand-in turn: page)')) {
     answered.push('create')
     const html = '<p>Pressed: <b id="n" data-it-bind="pings">0</b></p><button id="ping" onclick="It.action(`ping`)">Press</button>'
-    return shellCall(request, `it create 'A page with a button' --id ${PAGE} --html '${html}' --state '{"pings":0}' --open`, 'Makes the page')
+    return shellCall(
+      request,
+      `${itName()} create 'A page with a button' --id ${PAGE} --html '${html}' ${json_({ pings: 0 }, 'state')} --open`,
+      'Makes the page',
+    )
   }
   answered.push('other')
   others.push(said.slice(0, 600))
@@ -703,7 +756,11 @@ async function part2() {
   const done = await until(() => answered.includes('done'), 60_000)
   const result = model.requests.find((r) => afterTool(r) && textOf(newestUser(r)).includes('(stand-in turn: page)'))
   const output = textOf(result?.messages?.at(-1))
-  check('OpenCode ran `it create --open`, and the turn ended', done && /"id":\s*"opencode-check"/.test(output), output.slice(0, 1500))
+  check(
+    'OpenCode ran `it create --open`, and the turn ended',
+    done && /"id":\s*"opencode-check"/.test(output),
+    `${output.slice(0, 1500)}\nanswered: ${answered}\nthe stand-in was last sent: ${JSON.stringify(model.requests.at(-1)?.messages?.slice(-2) ?? null).slice(0, 1500)}\n${turn.said().slice(-800)}`,
+  )
   // `opencode run` of OpenCode 1 stays attached once the turn is over; the conversation is held
   // by the OpenCode it was attached to, so ending it ends nothing of the conversation
   await until(() => running.get('turn')?.exited, 5000)
