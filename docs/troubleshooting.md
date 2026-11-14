@@ -79,6 +79,10 @@ After an agent has installed It from inside a Codex conversation, or `it setup` 
 
 In a thread of T3 Code there is nothing to approve: Codex never asks about It's hooks there, and what you do on a page reaches the thread through T3 Code. If a Codex that has been started again still asks before every `it` command, it is not reading It's rule: `it status` says when no rule lets `it` out, and [Add-ons](add-ons.md#codex) has the rule, where Codex reads it from, and what a file named `it.rules` that It did not write means.
 
+## Codex on Windows, where your folder's name has a space in it
+
+Codex runs It's hooks in PowerShell, which does not run a program whose path is in quotes, so an It before 0.1.41 whose folder's path had a space in it, as an account named "Ana Lee" has, made Codex say "Hook failed" at every turn. It now names its program there by the short name Windows gives the folder, and changes the hooks the first time it starts after the update. Codex then asks for the hooks to be approved again: start Codex again and choose "Trust all and continue". Where Windows gives the folder no short name without such a character, as for a name with an `&`, a parenthesis or an apostrophe in it, or on a drive that has short names turned off, `it status` says that Codex cannot run It's hooks, and what you do on a page waits for `it wait`.
+
 ## A pairing address that does not work
 
 A code pairs one browser, once, and works for ten minutes. An address from `it site`, or one made on the Displays page, is refused once its code has been used or its ten minutes are over, and the way on is a new one: run `it site` again, or choose "Add a display" again.
