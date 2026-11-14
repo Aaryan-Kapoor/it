@@ -4,7 +4,7 @@
 // own plugin commands, from files this program carries, and removed the same way. Nothing in
 // a harness is patched, wrapped or replaced.
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { execFile } from 'node:child_process'
+import { execFile, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import {
   chmodSync,
@@ -551,16 +551,69 @@ function retireUnpacked(dir: string, files: string[]): void {
 }
 
 /** Formats the fixed launcher address exactly as the host reads it. */
-export function addonHookCommand(id: Harness, it: string): string {
+export function addonHookCommand(id: Harness, it: string, short: (file: string) => string | null = shortPath): string {
   // The launcher's address, written so that a shell reads it as one word whatever is in it:
   // a space, an apostrophe, a dollar sign. On Windows a harness may hand a hook to cmd or to
   // PowerShell, and the two read an address in quotes differently: PowerShell takes it for a
   // piece of text, not for a command to run. An address with nothing in it that needs quotes
-  // is written without them, which both read alike. One that needs them is written as cmd reads it.
+  // is written without them, which both read alike.
   const windows = process.platform === 'win32'
   const plain = windows ? /^[A-Za-z0-9_:.~\\/-]+$/ : /^[A-Za-z0-9_@%+=:,./-]+$/
-  const quoted = plain.test(it) ? it : windows ? `"${it}"` : `'${it.replace(/'/g, `'\\''`)}'`
-  return `${quoted} hook ${id}`
+  if (plain.test(it)) return `${it} hook ${id}`
+  if (!windows) return `'${it.replace(/'/g, `'\\''`)}' hook ${id}`
+  // Codex hands a hook to the person's shell as one argument, and that shell is PowerShell, so
+  // an address in quotes is never run. The same file's short (8.3) name, where Windows has one
+  // that needs no quotes, is written instead. Where it has none, the address is written as cmd
+  // reads it, and `it status` says that Codex cannot run the hooks (`hookUnrunnable`).
+  const brief = short(it)
+  return brief && plain.test(brief) ? `${brief} hook ${id}` : `"${it}" hook ${id}`
+}
+
+const shortForms = new Map<string, string | null>()
+/**
+ * The short (8.3) form of the path of a file that is there, as Windows gives it, where it is
+ * the same file: null where it could not be had. A drive may have short names turned off, and a
+ * folder made while they were has none. cmd.exe is asked, with the path in a variable of its
+ * own so that nothing in it is read as cmd's own, and answers in UTF-16.
+ */
+export function shortPath(file: string): string | null {
+  if (process.platform !== 'win32') return null
+  if (shortForms.has(file)) return shortForms.get(file)!
+  let found: string | null = null
+  try {
+    const r = spawnSync(
+      path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe'),
+      ['/d /u /v:off /s /c "for %I in ("%IT_SHORT_OF%") do @echo(%~sI"'],
+      {
+        env: { ...process.env, IT_SHORT_OF: file },
+        windowsVerbatimArguments: true,
+        windowsHide: true,
+        timeout: 15_000,
+      },
+    )
+    const said = r.status === 0 && r.stdout ? Buffer.from(r.stdout).toString('utf16le').trim() : ''
+    if (said && !said.includes('\n') && path.isAbsolute(said) && oneFile(said, file)) found = said
+  } catch {}
+  shortForms.set(file, found)
+  return found
+}
+
+/**
+ * Why Codex cannot run the hooks in It's add-on as they are written in `hooks`, its hooks.json:
+ * on Windows, a command whose address is in quotes, which PowerShell does not run. Undefined
+ * where it can, or where there is nothing to read.
+ */
+export function hookUnrunnable(hooks: string | null, windows = process.platform === 'win32'): string | undefined {
+  if (!windows || hooks === null) return undefined
+  let commands: unknown[] = []
+  try {
+    const said = JSON.parse(hooks) as { hooks?: Record<string, { hooks?: { command?: unknown }[] }[]> }
+    commands = Object.values(said.hooks ?? {}).flatMap((groups) => groups.flatMap((group) => (group.hooks ?? []).map((hook) => hook.command)))
+  } catch {
+    return undefined
+  }
+  if (!commands.some((command) => typeof command === 'string' && command.startsWith('"'))) return undefined
+  return 'Codex cannot run It’s hooks, and says that a hook failed at every turn: it runs each one in PowerShell, which cannot run a program whose path is in quotes, and the path of It’s folder needs them, for a space or another character in it, while Windows gives that folder no short name that does not. It hands Codex no click until that changes: what is done on a page waits for `it wait`.'
 }
 
 /** Writes an add-on's files where the harness will install them from. */
@@ -673,6 +726,8 @@ interface Adapter {
   remove(at: Place, was?: Installation): Promise<Left | undefined>
   /** Something the person still has to do inside the harness, if anything. */
   pending?(): string | undefined
+  /** Why the harness cannot run the add-on as it is written, if it cannot: the add-on is then not connected. */
+  unrunnable?(): string | undefined
 }
 
 /** The files of an add-on that a removal left where they were. */
@@ -1125,7 +1180,12 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       const root = settingsAt(at, 'CODEX_HOME', '.codex')
       const rules = codexRulesIn(root)
       const now = lookAt(root, rules)
-      return free(root, rules, was) && !(now.is === 'file' && now.sha256 === sum(CODEX_RULES))
+      if (free(root, rules, was) && !(now.is === 'file' && now.sha256 === sum(CODEX_RULES))) return true
+      // And hooks written by an It from before it wrote a short name where an address needs
+      // quotes on Windows: written now, they would be run. Asked only of hooks in quotes, so that
+      // nothing changes for hooks that Codex runs already.
+      const written = textOf(path.join(addonDir('codex'), ...CODEX_HOOKS_REL.split('/')))
+      return hookUnrunnable(written) !== undefined && !addonHookCommand('codex', shim()).startsWith('"')
     },
     async remove(at, was) {
       if (await unplaced(this, at, was)) return NOWHERE
@@ -1143,7 +1203,22 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       if (!codexHooksPending()) return undefined
       return t3Here() ? `${CODEX_APPROVE} ${CODEX_IN_T3}` : CODEX_APPROVE
     },
+    // The hooks as Codex has them, in its own copy of the plugin
+    unrunnable() {
+      const folder = codexPluginFolder(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'))
+      return folder ? hookUnrunnable(textOf(path.join(folder, 'hooks', 'hooks.json'))) : undefined
+    },
   },
+}
+/** Where the plugin's hooks are, in the add-on's folder. */
+const CODEX_HOOKS_REL = 'plugins/it-bridge/hooks/hooks.json'
+/** A file's text, or null where it cannot be read. */
+const textOf = (file: string): string | null => {
+  try {
+    return readFileSync(file, 'utf8')
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -2084,6 +2159,8 @@ async function look(id: Harness): Promise<Seen | HarnessStatus | null> {
     if (mine && (await adapter.off?.(at, was))) return { ...seen, status: { id, version, addon: 'disabled', detail: offDetail(id, adapter) } }
     return { ...seen, status: { id, version, addon: 'not_connected' } }
   }
+  const cannot = adapter.unrunnable?.()
+  if (cannot) return { ...seen, status: { id, version, addon: 'error', detail: cannot } }
   const todo = adapter.pending?.()
   return { ...seen, status: todo ? { id, version, addon: 'needs_approval', detail: todo } : { id, version, addon: 'connected' } }
 }

@@ -3,7 +3,7 @@
 // every folder is a temporary one, so nothing here touches an app a person has. What it must
 // get right: only what It put there is ever replaced or removed, it is removed from where it
 // was put, and an add-on another It folder installed is left to that folder.
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs, {
   chmodSync,
@@ -25,7 +25,7 @@ import fs, {
 import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
-import type { Harness } from '@it/protocol'
+import { HARNESSES, type Harness } from '@it/protocol'
 import { build } from 'esbuild'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS, SKILL } from './src/addons.generated'
@@ -35,6 +35,7 @@ import { keepOriginal, ORIGINAL_LIMIT, restoreAbsent } from './src/preserve'
 import { startOf } from './src/serve/backend'
 import {
   AFTER,
+  addonHookCommand,
   afterHermes,
   alone,
   asLoaded,
@@ -49,10 +50,12 @@ import {
   detectAll,
   disconnect,
   holdsAddons,
+  hookUnrunnable,
   newerProgramSeen,
   reconcile,
   refresh,
   shim,
+  shortPath,
   stampFile,
   turnBackOn,
   unpack,
@@ -3592,11 +3595,174 @@ describe('on Windows', () => {
     const command = (dir: string) =>
       (JSON.parse(read(path.join(dir, 'plugins/it-bridge/hooks/hooks.json'))) as { hooks: Record<string, { hooks: { command: string }[] }[]> }).hooks.Stop![0]!
         .hooks[0]!.command
+    if (!/^[A-Za-z0-9_:.~\\/-]+$/.test(shim())) return
     expect(command(unpack('codex'))).toBe(`${shim()} hook codex`)
-    // An address with a space in it has to be in quotes, and is written as cmd reads it
-    useHome('an it folder')
-    expect(command(unpack('codex'))).toBe(`"${shim()}" hook codex`)
   })
+
+  // What It wrote before it wrote a short name, word for word: what it writes still for every
+  // address that this wrote without quotes, and on every other system for every address. Codex
+  // ties its approval of the hooks to their text, so a change there would have everyone approve
+  // them again.
+  const before = (id: Harness, it: string, windows: boolean) => {
+    const plain = windows ? /^[A-Za-z0-9_:.~\\/-]+$/ : /^[A-Za-z0-9_@%+=:,./-]+$/
+    const quoted = plain.test(it) ? it : windows ? `"${it}"` : `'${it.replace(/'/g, `'\\''`)}'`
+    return `${quoted} hook ${id}`
+  }
+  const unasked = () => {
+    throw new Error('the short name was looked up')
+  }
+  const PLAIN_WINDOWS = [
+    'C:\\Users\\aarya\\.it\\bin\\it.exe',
+    'C:\\Users\\john.doe\\.it\\bin\\it.exe',
+    'D:\\it-home\\bin\\it-here.cmd',
+    'C:/Users/a_b/.it/bin/it.cmd',
+    'C:\\Users\\RUNNER~1\\.it\\bin\\it.exe',
+  ]
+  const UNUSUAL = [
+    'C:\\Users\\Ana Lee\\.it\\bin\\it.exe',
+    'C:\\Users\\José\\.it\\bin\\it.exe',
+    'C:\\Users\\R&D (dev)\\.it\\bin\\it.exe',
+    "C:\\Users\\O'Brien\\.it\\bin\\it.exe",
+    '/home/Ana Lee/.it/bin/it',
+    "/Users/o'brien/.it/bin/it",
+    '/home/a$b/.it/bin/it',
+  ]
+
+  test.each(HARNESSES.flatMap((id) => PLAIN_WINDOWS.map((it) => ({ id, it }))))(
+    'a launcher whose address needs no quotes on Windows is written as before, byte for byte, with no short name looked up ($id, $it)',
+    ({ id, it }) => {
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      expect(addonHookCommand(id, it, unasked)).toBe(before(id, it, true))
+      expect(addonHookCommand(id, it, unasked)).toBe(`${it} hook ${id}`)
+    },
+  )
+
+  test.each(HARNESSES.flatMap((id) => [...PLAIN_WINDOWS, ...UNUSUAL, '/home/aarya/.it/bin/it'].map((it) => ({ id, it }))))(
+    'on Linux and macOS every launcher is written as before, byte for byte ($id, $it)',
+    ({ id, it }) => {
+      for (const system of ['linux', 'darwin']) {
+        Object.defineProperty(process, 'platform', { value: system })
+        expect(addonHookCommand(id, it, unasked)).toBe(before(id, it, false))
+      }
+    },
+  )
+
+  test('every add-on is unpacked as before for an It folder whose address needs no quotes: only Codex’s hooks name the launcher, as they did', () => {
+    for (const system of ['win32', 'linux']) {
+      Object.defineProperty(process, 'platform', { value: system })
+      const it = shim()
+      if (system === 'win32' && !/^[A-Za-z0-9_:.~\\/-]+$/.test(it)) continue
+      for (const id of Object.keys(ADDONS) as Harness[]) {
+        const dir = unpack(id)
+        for (const [rel, text] of Object.entries(ADDONS[id]!.files)) {
+          if (!rel.endsWith('hooks.json')) continue
+          // As It wrote it before: the template, with each `it hook <id>` put in as JSON
+          expect(read(path.join(dir, ...rel.split('/')))).toBe(
+            text.replaceAll(JSON.stringify(`it hook ${id}`), JSON.stringify(before(id, it, system === 'win32'))),
+          )
+        }
+      }
+    }
+  })
+
+  test.each([
+    {
+      it: 'C:\\Users\\Ana Lee\\.it\\bin\\it.exe',
+      short: 'C:\\Users\\ANALEE~1\\IT4752~1\\bin\\it.exe',
+      said: 'C:\\Users\\ANALEE~1\\IT4752~1\\bin\\it.exe hook codex',
+    },
+    {
+      it: 'C:\\Users\\Ana Lee\\.it\\bin\\it-here.cmd',
+      short: 'C:\\Users\\ANALEE~1\\IT4752~1\\bin\\it-here.cmd',
+      said: 'C:\\Users\\ANALEE~1\\IT4752~1\\bin\\it-here.cmd hook codex',
+    },
+    { it: 'C:\\Users\\José\\.it\\bin\\it.exe', short: 'C:\\Users\\JOS~1\\IT4752~1\\bin\\it.exe', said: 'C:\\Users\\JOS~1\\IT4752~1\\bin\\it.exe hook codex' },
+    {
+      it: 'C:\\Users\\José Luis\\.it\\bin\\it.exe',
+      short: 'C:\\Users\\JOSLUI~1\\IT4752~1\\bin\\it.exe',
+      said: 'C:\\Users\\JOSLUI~1\\IT4752~1\\bin\\it.exe hook codex',
+    },
+    // A short name keeps an ampersand and parentheses, which each shell reads as its own
+    {
+      it: 'C:\\Users\\R&D (dev)\\.it\\bin\\it.exe',
+      short: 'C:\\Users\\R&D(DE~1\\IT4752~1\\bin\\it.exe',
+      said: '"C:\\Users\\R&D (dev)\\.it\\bin\\it.exe" hook codex',
+    },
+    // A name that is a short name already has no other
+    {
+      it: "C:\\Users\\O'Brien\\.it\\bin\\it.exe",
+      short: "C:\\Users\\O'Brien\\IT4752~1\\bin\\it.exe",
+      said: '"C:\\Users\\O\'Brien\\.it\\bin\\it.exe" hook codex',
+    },
+    // A drive with short names turned off
+    { it: 'C:\\Users\\Ana Lee\\.it\\bin\\it.exe', short: null, said: '"C:\\Users\\Ana Lee\\.it\\bin\\it.exe" hook codex' },
+  ])('on Windows a launcher whose address needs quotes is written as its short name where that needs none ($it → $short)', ({ it, short, said }) => {
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    const asked: string[] = []
+    expect(
+      addonHookCommand('codex', it, (file) => {
+        asked.push(file)
+        return short
+      }),
+    ).toBe(said)
+    expect(asked).toEqual([it])
+    // And where none is had, Codex is said not to be able to run the hooks
+    const hooks = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: said }] }] } })
+    expect(hookUnrunnable(hooks, true) !== undefined).toBe(said.startsWith('"'))
+    expect(hookUnrunnable(hooks, false)).toBeUndefined()
+  })
+
+  test('Codex is not called connected where the hooks it has would not run, and is again once they would', async () => {
+    await connect('codex', () => {})
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    // Codex's own copy of the plugin, which is what it runs
+    const copy = path.join(person, '.codex', 'plugins', 'cache', 'it', 'it-bridge', '0.1.0', 'hooks', 'hooks.json')
+    const hooks = (command: string) => JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } })
+    put(copy, hooks('"C:\\Users\\Ana Lee\\.it\\bin\\it.exe" hook codex'))
+    const status = await connect('codex', () => {})
+    expect(status.addon).toBe('error')
+    expect(status.detail).toMatch(/^Codex cannot run It’s hooks/)
+    put(copy, hooks('C:\\Users\\ANALEE~1\\IT4752~1\\bin\\it.exe hook codex'))
+    expect((await connect('codex', () => {})).addon).not.toBe('error')
+  })
+
+  // On Windows itself: a launcher in a folder whose name has a space, run as Codex runs a hook,
+  // in PowerShell given the command as one argument, and in cmd.exe given it in quotes as is
+  test.skipIf(platform !== 'win32')(
+    'on Windows a hook for a launcher in a folder with a space in its name runs in PowerShell and in cmd, as Codex runs it',
+    () => {
+      const folder = path.join(tmp, 'Ana Lee', '.it', 'bin')
+      mkdirSync(folder, { recursive: true })
+      const launcher = path.join(folder, 'it-here.cmd')
+      const mark = path.join(tmp, 'ran.txt')
+      writeFileSync(launcher, `@echo off\r\necho %*> "${mark}"\r\n`)
+      const command = addonHookCommand('codex', launcher)
+      const short = shortPath(launcher)
+      if (short === null) {
+        // This drive gives no short names: the command is in quotes, and Codex is said not to run it
+        expect(command).toBe(`"${launcher}" hook codex`)
+        expect(hookUnrunnable(JSON.stringify({ hooks: { Stop: [{ hooks: [{ command }] }] } }))).toBeDefined()
+        return
+      }
+      expect(command).toBe(`${short} hook codex`)
+      expect(command).toMatch(/^[A-Za-z0-9_:.~\\/-]+ hook codex$/)
+      const system = process.env.SystemRoot ?? 'C:\\Windows'
+      const shells = {
+        powershell: (line: string) => spawnSync(path.join(system, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-Command', line]),
+        cmd: (line: string) => spawnSync(path.join(system, 'System32', 'cmd.exe'), [`/c "${line}"`], { windowsVerbatimArguments: true }),
+      }
+      for (const [shell, run] of Object.entries(shells)) {
+        rmSync(mark, { force: true })
+        expect(run(command).status, shell).toBe(0)
+        expect(read(mark).trim(), shell).toBe('hook codex')
+      }
+      // What was written before: PowerShell takes the address in quotes for text, and runs nothing
+      rmSync(mark, { force: true })
+      expect(shells.powershell(`"${launcher}" hook codex`).status).not.toBe(0)
+      expect(existsSync(mark)).toBe(false)
+    },
+    60_000,
+  )
 
   test.each([
     { id: 'claude-code' as const, bin: 'claude' },
