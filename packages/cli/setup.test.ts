@@ -3743,6 +3743,7 @@ describe('on Windows', () => {
   test('nor are such hooks given to Codex by turning the add-on back on', async () => {
     // Put in on a system where the name does not matter, and then turned off in Codex
     useHome('it ” ; Write-Output x ; #')
+    Object.defineProperty(process, 'platform', { value: 'linux' })
     await connect('codex', () => {})
     kept.codex!.get(folderOf('codex'))!.on = false
     Object.defineProperty(process, 'platform', { value: 'win32' })
