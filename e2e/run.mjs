@@ -6987,9 +6987,12 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
         .waitFor({ timeout: 15_000 })
         .then(() => recOut(callTab).textContent())
       // The page records the camera's stream itself, picture and sound together, and sends the take
-      phase = 'recording'
       call.recording = await recPressed(callTab, '#record', /^(recording|refused)/)
+      // The crash on Windows comes in the moments the page records, after it has said it does and
+      // before it is asked to stop, and only a crash in that window is the one it is known for
+      if (/^recording/.test(call.recording)) phase = 'recording'
       await callTab.waitForTimeout(2000)
+      phase = 'stopping'
       call.sent = await recPressed(callTab, '#stop', /^(accepted|refused)/)
       phase = 'sent'
       call.cameraChip = await callTab.locator('.page-nav .media-cam').count()
@@ -7003,8 +7006,8 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
     }
     const callName = 'what the page records of the camera’s stream, picture and sound together, reaches the agent as a video file, while the camera stays live'
     const callSaid = JSON.stringify({ crashed, ...call, take: undefined, files: call.take?.files, head: callTakeBytes.subarray(0, 8).toString('hex') })
-    // Only a crash in Chromium on Windows, once the camera was live with its sound and before the
-    // recording was stopped and sent, is the one the fake devices cause
+    // Only a crash in Chromium on Windows, once the camera was live with its sound, the page said
+    // it was recording, and before it was asked to stop, is the one the fake devices cause
     if (crashed === 'recording' && process.platform === 'win32' && /^chrom/.test(BROWSER) && /^live with sound/.test(call.live)) {
       console.log(`  skip  ${callName}: the tab crashed while it recorded, as it does on Windows with the browser’s fake camera and microphone`)
       if (process.env.GITHUB_ACTIONS === 'true')
