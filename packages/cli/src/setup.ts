@@ -1142,6 +1142,9 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
     // turns it on as it adds it, from the marketplace in this It folder, and keeps the approval
     // of its hooks, which Codex ties to the plugin's contents and not to whether it is on.
     async enable(at) {
+      // Codex copies the plugin from It's folder as it turns it on, so its hooks are held to what install holds them to
+      const dir = addonDir('codex')
+      if (unsafe([dir]) || hooksUnsafe(textOf(path.join(dir, ...CODEX_HOOKS_REL.split('/'))))) return UNSAFE
       const r = await run('codex', ['plugin', 'add', `${PLUGIN}@${MARKET}`], 60_000, envAt(this.profile, at))
       if (/^installed, enabled/.test((await codexHas(at)) ?? '')) return { ok: true, out: r.out, err: '' }
       return { ok: false, out: '', err: r.ok ? 'Codex still has It’s plugin turned off.' : r.err || r.out, failed: r.failed }

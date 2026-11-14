@@ -3740,6 +3740,30 @@ describe('on Windows', () => {
     },
   )
 
+  test('nor are such hooks given to Codex by turning the add-on back on', async () => {
+    // Put in on a system where the name does not matter, and then turned off in Codex
+    useHome('it ” ; Write-Output x ; #')
+    await connect('codex', () => {})
+    kept.codex!.get(folderOf('codex'))!.on = false
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    const hooks = path.join(process.env.IT_HOME!, 'addons', 'codex', 'plugins', 'it-bridge', 'hooks', 'hooks.json')
+    put(
+      hooks,
+      read(hooks).replace(/"command": "[^"]*"/g, () => `"command": ${JSON.stringify(`"${process.env.IT_HOME}\\bin\\it.cmd" hook codex`)}`),
+    )
+    ran = []
+    const status = await connect(
+      'codex',
+      () => {},
+      false,
+      () => {},
+      true,
+    )
+    expect(status.addon).toBe('disabled')
+    expect(status.detail).toMatch(/cannot be passed safely to a command on Windows/)
+    expect(commands('codex').filter((said) => said.startsWith('plugin add'))).toEqual([])
+  })
+
   test.skipIf(platform !== 'win32')(
     'on Windows hooks in quotes that an It from before wrote are written again by setup and by refresh, once, where a short name serves',
     async () => {
