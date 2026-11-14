@@ -1,0 +1,138 @@
+name: Codex, the real program
+
+# What this proves, with the real Codex program from its official npm package
+# and no account: at the oldest version It's setup accepts (CODEX_MIN_VERSION
+# in packages/protocol) and at the newest npm publishes, `it setup` installs
+# It's add-on, Codex itself says the plugin is installed and on and that its
+# hooks need approval, `it status` agrees in every state, the person's own
+# "Trust all and continue" in Codex's terminal approves the hooks, and a click
+# on a page that Codex made comes back into that conversation as a new turn,
+# through Codex's own queue while the conversation is open and by reopening it
+# (Auto-wake) once it is closed. A stand-in on the runner answers for the
+# model, by a script, with a made-up key. The flags It gives `codex exec
+# resume` and `codex queue` are held to what that Codex's own help says, and
+# the tests of what `codex execpolicy` makes of It's rules run against it.
+# `e2e/apps/codex.mjs` says each step.
+#
+# It runs on pull requests, on pushes to master, every night and by hand. It
+# is a workflow of its own, apart from "It", and blocks no merge: when Codex
+# publishes a version that breaks It, the nightly run goes red, and that is
+# what it is for.
+#
+# As in "It": every action is pinned to a commit, no job keeps the checkout's
+# credentials, the token can only read, and no job is given a secret.
+on:
+  pull_request:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_VERSION: 24
+
+jobs:
+  codex:
+    name: Codex ${{ matrix.which }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        which: [oldest, newest]
+        # Linux alone for now. On macos-latest (run 43397281673), with Codex
+        # 0.160.0 and 0.169.0, a click on a page whose Codex conversation was
+        # open in Codex's terminal stayed pending in It until the terminal was
+        # left, and was then delivered by reopening the conversation: the job
+        # would be red there until that is understood. Windows cannot run the
+        # script, which runs Codex's terminal interface in a pseudo-terminal,
+        # which Python has on Linux and macOS alone.
+        os: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build the program
+        run: npm run generate
+      - name: Install Playwright's Chromium
+        run: for n in 1 2 3; do npx playwright install --with-deps chromium && exit 0; sleep 20; done; exit 1
+      # The oldest is read from the source, where setup takes it from, and the
+      # newest from what npm publishes as Codex's latest
+      - name: Fetch the ${{ matrix.which }} Codex
+        run: |
+          if [ "${{ matrix.which }}" = oldest ]; then
+            version=$(sed -n "s/^export const CODEX_MIN_VERSION = '\([0-9.]*\)'.*/\1/p" packages/protocol/src/index.ts)
+          else
+            version=$(npm view @openai/codex dist-tags.latest)
+          fi
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "No Codex version could be read for ${{ matrix.which }}: '$version'"
+            exit 1
+          fi
+          # Codex's npm package fetches its program for this system as an
+          # optional package, which npm skips without failing where it cannot
+          # have it. In the minutes after a release that package can be listed
+          # and not yet be served, so the install is tried again until the
+          # program runs and says this version, for up to five minutes.
+          folder="$RUNNER_TEMP/codex-$version"
+          asked="$RUNNER_TEMP/codex-version-home"
+          mkdir -p "$asked"
+          for n in 1 2 3 4 5 6; do
+            rm -rf "$folder"
+            npm install --prefix "$folder" --prefer-online --no-save --no-audit --no-fund "@openai/codex@$version"
+            said=$(HOME="$asked" CODEX_HOME="$asked" "$folder/node_modules/.bin/codex" --version 2>/dev/null || true)
+            case "$said" in *" $version"*) break ;; esac
+            said=""
+            [ "$n" = 6 ] || { echo "Codex $version does not run here yet; trying again in a minute"; sleep 60; }
+          done
+          if [ -z "$said" ]; then
+            echo "Codex $version was installed from npm and does not run on this system: its program for this system was not there."
+            exit 1
+          fi
+          echo "CODEX_VERSION=$version" >> "$GITHUB_ENV"
+          echo "IT_E2E_CODEX=$folder/node_modules/.bin/codex" >> "$GITHUB_ENV"
+          echo "Codex $version"
+      - name: The add-on, approved, and a click back in the conversation
+        env:
+          IT_PORT: '5700'
+          IT_E2E_CODEX_LOGS: ${{ runner.temp }}/codex-logs
+        run: node e2e/apps/codex.mjs "$IT_E2E_CODEX" --version "$CODEX_VERSION"
+      # Each of these tests is skipped where no Codex is found, so the run
+      # fails here if any of them was
+      - name: Codex's flags, and what codex execpolicy makes of It's rules
+        if: ${{ !cancelled() && env.IT_E2E_CODEX != '' }}
+        run: |
+          export PATH="$(dirname "$IT_E2E_CODEX"):$PATH"
+          npx vitest run packages/cli/codex-rules.test.ts e2e/apps/codex/flags.test.mjs --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/codex-tests.json"
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))
+            console.log(`${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numPendingTests + r.numTodoTests} skipped`)
+            if (r.numPendingTests + r.numTodoTests > 0) { console.log("A test that asks the real Codex was skipped"); process.exit(1) }
+          ' "$RUNNER_TEMP/codex-tests.json"
+      - name: Keep what the run wrote down
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: codex-${{ matrix.which }}-${{ matrix.os }}-logs
+          path: |
+            ${{ runner.temp }}/codex-logs
+            ${{ runner.temp }}/codex-tests.json
+          retention-days: 7
+          if-no-files-found: ignore
