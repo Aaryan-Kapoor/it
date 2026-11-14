@@ -113,6 +113,8 @@ describe.skipIf(process.platform !== 'win32')('a reopened run on Windows says ho
       const left = Array.from({ length: 100 }, (_, k) => path.join(keepIn, `reopened-${process.pid}-${k + 1}.kept`))
       for (const file of left) writeFileSync(file, 'ran 0')
       const ready = path.join(scratch, `${randomUUID()}.ready`)
+      // In single quotes for PowerShell, where a quote in a folder's name is written twice
+      const quoted = (p: string) => `'${p.replaceAll("'", "''")}'`
       const holder = childProcess.spawn(
         powershellExe(),
         [
@@ -120,22 +122,26 @@ describe.skipIf(process.platform !== 'win32')('a reopened run on Windows says ho
           '-NoProfile',
           '-NonInteractive',
           '-Command',
-          `$held = @(Get-ChildItem -LiteralPath '${keepIn}' -Filter *.kept | ForEach-Object { [IO.File]::Open($_.FullName, 'Open', 'Read', 'Read') }); Set-Content -LiteralPath '${ready}' -Value $held.Count; Start-Sleep -Seconds 300`,
+          `$held = @(Get-ChildItem -LiteralPath ${quoted(keepIn)} -Filter *.kept | ForEach-Object { [IO.File]::Open($_.FullName, 'Open', 'Read', 'Read') }); Set-Content -LiteralPath ${quoted(ready)} -Value $held.Count; Start-Sleep -Seconds 300`,
         ],
         { stdio: 'ignore', windowsHide: true },
       )
+      let held = true
+      const gone = new Promise((r) => holder.once('exit', r)).then(() => (held = false))
+      holder.once('error', () => (held = false))
       const restore = cut?.()
       try {
         for (const by = Date.now() + 60_000; !existsSync(ready); await new Promise((r) => setTimeout(r, 100)))
-          if (Date.now() > by) throw new Error('the files were not held in time')
+          if (!held || Date.now() > by) throw new Error('the files were not held in time')
         let brokeOff = 0
         const ended = await carryOn(exiting(256), scratch, { harness: 'pi', session: 's-1', run: randomUUID() }, { keepIn, brokeOff: () => brokeOff++ })
         expect({ ended, brokeOff }).toEqual({ ended: 'Stand-in exited with 256', brokeOff: 1 })
       } finally {
         restore?.()
-        const gone = new Promise((r) => holder.once('exit', r))
-        holder.kill()
-        await gone
+        if (held) {
+          holder.kill()
+          await gone
+        }
       }
     }, 180_000)
   }
