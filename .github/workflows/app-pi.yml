@@ -79,9 +79,11 @@ jobs:
         with:
           bun-version: 1.3.11
       - if: runner.os == 'Windows'
+        # The one program release.mjs builds for Windows, as it builds it: the Bun on a Windows
+        # runner cannot unpack its runtimes for the other systems, which release.mjs builds too
         run: |
-          node packages/cli/release.mjs
-          echo "IT_BIN=$GITHUB_WORKSPACE\packages\cli\dist\bin\it-windows-x64.exe" >> "$GITHUB_ENV"
+          bun build packages/cli/src/main.ts --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --minify --target=bun-windows-x64-baseline --outfile "$RUNNER_TEMP/it-windows-x64.exe"
+          echo "IT_BIN=$RUNNER_TEMP\it-windows-x64.exe" >> "$GITHUB_ENV"
       - name: Install the browser the page is clicked in
         # Fetching a browser fails on a runner now and then, before anything of It has run: it is tried three times
         run: for n in 1 2 3; do npx playwright install --with-deps chromium && exit 0; sleep 20; done; exit 1
