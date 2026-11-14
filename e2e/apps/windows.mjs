@@ -133,5 +133,17 @@ export function nodeAlone(folder) {
  */
 export const patience = (ms) => (windows ? ms * 4 : ms)
 
+/**
+ * The folder a run makes its own folder in: the one IT_E2E_ROOT names, where it names one, so
+ * that the run's home and It's folder can be given a path such as a person's own may have, with
+ * a space, a letter outside ASCII or an ampersand in it (`C:\Users\Ana Lee`). Else `fallback`.
+ */
+export function runRoot(fallback) {
+  if (!process.env.IT_E2E_ROOT) return fallback
+  const root = path.resolve(process.env.IT_E2E_ROOT)
+  mkdirSync(root, { recursive: true })
+  return root
+}
+
 /** The names a command may be found by in a folder: the command itself and, on Windows, the kinds of file a command is. */
 export const commandNames = (command) => (windows ? ['', '.exe', '.cmd', '.bat', '.ps1', '.com'] : ['']).map((kind) => command + kind)
