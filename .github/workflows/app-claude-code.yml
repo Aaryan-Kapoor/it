@@ -54,7 +54,7 @@ jobs:
   claude-code:
     name: Claude Code, ${{ matrix.which }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 15 }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 15 }}
     strategy:
       fail-fast: false
       matrix:
@@ -114,5 +114,5 @@ jobs:
           # On Windows npm puts the command in the folder itself, and the program is the package's own claude.exe
           if [ "$RUNNER_OS" = Windows ]; then "$RUNNER_TEMP/claude-code/node_modules/@anthropic-ai/claude-code/bin/claude.exe" --version; else "$RUNNER_TEMP/claude-code/bin/claude" --version; fi
       - name: It's add-on in the real Claude Code, and a click that comes back as a turn
-        timeout-minutes: 10
+        timeout-minutes: ${{ runner.os == 'Windows' && 25 || 10 }}
         run: node e2e/apps/claude-code.mjs "$RUNNER_TEMP/claude-code"

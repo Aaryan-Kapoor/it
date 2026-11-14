@@ -39,7 +39,7 @@ import { printCleanly, verdict } from '../logs.mjs'
 import { launch, pairAsOwner } from '../site.mjs'
 import { newestFromUser, shellTool, standInModel, textOf } from './pi/model.mjs'
 import { startPi } from './pi/rpc.mjs'
-import { homeOnWindows, nodeAlone, systemPath, windows } from './windows.mjs'
+import { homeOnWindows, nodeAlone, patience, systemPath, windows } from './windows.mjs'
 
 printCleanly()
 const PACKAGE = '@earendil-works/pi-coding-agent'
@@ -370,7 +370,7 @@ body = (async () => {
     const up = await untilTrue(async () => {
       const s = await it(['status'])
       return s.running && s.connector?.ok ? s : null
-    }, 90_000)
+    }, patience(90_000))
     if (!check('It runs, with its connector', up, readFileSync(path.join(logs, 'serve.log'), 'utf8').slice(-1500))) throw new Error('It did not start')
     check('and has heard from no add-on of Pi’s yet', (await loaded())?.state !== 'active', await loaded())
 
@@ -378,7 +378,7 @@ body = (async () => {
     guard()
     const bare = startPi(PI, ['--no-session'], { cwd: work, env })
     pis.push(bare)
-    const active = await untilTrue(async () => ((await loaded())?.state === 'active' ? await loaded() : null), 30_000)
+    const active = await untilTrue(async () => ((await loaded())?.state === 'active' ? await loaded() : null), patience(30_000))
     check('Pi started with no model loads the add-on, which reports to It’s connector, and `it status` calls it active', active, {
       status: await loaded(),
       pi: bare.stderr().slice(-800),
@@ -453,11 +453,11 @@ body = (async () => {
       hostState?.data?.model?.provider === 'standin' && session,
       hostState?.data ?? { stderr: host.stderr().slice(-800) },
     )
-    await untilTrue(async () => ((await loaded())?.state === 'active' ? true : null), 30_000)
+    await untilTrue(async () => ((await loaded())?.state === 'active' ? true : null), patience(30_000))
 
     const prompted = await host.command('prompt', { message: typed })
     check('Pi takes the person’s message', prompted?.success === true, prompted)
-    await model.until(2, 60_000)
+    await model.until(2, patience(60_000))
     const first = model.requests[0]?.body
     check(
       'Pi sends it to the stand-in, with a made-up key, in a request that offers its shell tool',
@@ -479,7 +479,7 @@ body = (async () => {
       created?.id === slug && Array.isArray(created?.shownOn) && created.shownOn.length > 0,
       result.slice(0, 800),
     )
-    const settled = await host.until((r) => r.type === 'agent_end', 60_000)
+    const settled = await host.until((r) => r.type === 'agent_end', patience(60_000))
     check('and the turn ends', settled, host.records.slice(-5))
 
     const made = await it(['read', slug]).catch((e) => ({ error: e.message }))
@@ -501,7 +501,7 @@ body = (async () => {
     }
     const before = model.requests.length
     await frame.locator('#go').click()
-    const asked3 = await model.until(before + 1, 60_000)
+    const asked3 = await model.until(before + 1, patience(60_000))
     const third = model.requests[before]?.body
     const click = newestFromUser(third)
     const ended = /\[action ([^\]\s]+)\]\s*$/.exec(click ?? '')
@@ -531,8 +531,8 @@ body = (async () => {
       recent ?? (await it(['read', slug])).recentActions,
     )
 
-    await model.until(before + 2, 60_000)
-    const patched = await untilTrue(async () => ((await it(['read', slug])).state?.answer === answer ? true : null), 30_000)
+    await model.until(before + 2, patience(60_000))
+    const patched = await untilTrue(async () => ((await it(['read', slug])).state?.answer === answer ? true : null), patience(30_000))
     check('Pi runs the stand-in’s `it patch`, and the page’s state has the change', patched, (await it(['read', slug])).state)
     const onPage = await frame
       .locator('#said', { hasText: answer })
@@ -549,7 +549,7 @@ body = (async () => {
     // with Pi's own command, `pi --print --session <id>`, and hands it the click
     const quiet = model.requests.length
     await frame.locator('#go').click()
-    const woke = await model.until(quiet + 1, 90_000)
+    const woke = await model.until(quiet + 1, patience(90_000))
     const fifth = model.requests[quiet]?.body
     const again = newestFromUser(fifth)
     // The click as an add-on hands it over, and after it what It tells a conversation it reopened
@@ -573,7 +573,7 @@ body = (async () => {
     check('and the reopened Pi answers on the page', reopenedOnPage, (await it(['read', slug])).state)
     const wokeWith = (await it(['read', slug])).recentActions?.find((a) => a.id === againId)
     check('It records that it reopened the conversation for that click', wokeWith?.delivery === 'handed_off' && wokeWith?.route === 'queue', wokeWith)
-    const over = await untilTrue(async () => ((await it(['status'])).machine?.runs?.length === 0 ? true : null), 60_000)
+    const over = await untilTrue(async () => ((await it(['status'])).machine?.runs?.length === 0 ? true : null), patience(60_000))
     check('and the reopened Pi ends by itself once it has answered', over, (await it(['status'])).machine?.runs)
 
     check('the stand-in had an answer for every request Pi sent', model.faults.length === 0, model.faults)

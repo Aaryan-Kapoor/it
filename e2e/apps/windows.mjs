@@ -127,5 +127,11 @@ export function nodeAlone(folder) {
   return folder
 }
 
+/**
+ * How long to wait for something that waits on It's own commands, which on Windows take far longer
+ * than elsewhere: a single `it status` took 25 seconds on GitHub's Windows runner. Elsewhere as given.
+ */
+export const patience = (ms) => (windows ? ms * 4 : ms)
+
 /** The names a command may be found by in a folder: the command itself and, on Windows, the kinds of file a command is. */
 export const commandNames = (command) => (windows ? ['', '.exe', '.cmd', '.bat', '.ps1', '.com'] : ['']).map((kind) => command + kind)

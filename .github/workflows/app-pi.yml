@@ -49,7 +49,7 @@ jobs:
   pi:
     name: Pi ${{ matrix.version }}, on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 15 }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 15 }}
     strategy:
       fail-fast: false
       matrix:
@@ -95,7 +95,7 @@ jobs:
       # Pi is installed from npm by the script itself, into a folder of the run's own, and runs
       # with a home and a settings folder of the run's own
       - name: It's add-on in the real Pi, and a click back into its conversation
-        timeout-minutes: ${{ runner.os == 'Windows' && 15 || 8 }}
+        timeout-minutes: ${{ runner.os == 'Windows' && 25 || 8 }}
         env:
           IT_PI_ROOT: ${{ runner.temp }}
           IT_PORT: 5800

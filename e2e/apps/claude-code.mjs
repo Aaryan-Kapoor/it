@@ -32,7 +32,7 @@ import { chromium } from 'playwright'
 import { root, sleep, stopped } from '../lib.mjs'
 import { printCleanly, verdict } from '../logs.mjs'
 import { runs, standInModel, words } from './claude-code/model.mjs'
-import { commandNames, homeOnWindows, nodeAlone, systemPath, windows } from './windows.mjs'
+import { commandNames, homeOnWindows, nodeAlone, patience, systemPath, windows } from './windows.mjs'
 
 printCleanly()
 const args = process.argv.slice(2)
@@ -289,7 +289,7 @@ try {
     stdio: ['ignore', openSync(serviceLog, 'w'), openSync(serviceLog, 'a')],
   })
   service.on('error', (err) => (serviceFault = err))
-  const upBy = Date.now() + 240_000
+  const upBy = Date.now() + patience(240_000)
   let up = false
   while (!up && Date.now() < upBy && service.exitCode === null && !serviceFault) {
     up = (await answers(PORT + 41, '/health')) && (await answers(PORT, '/', `localhost:${PORT}`))
@@ -309,7 +309,7 @@ try {
   const off = await claude('plugin', 'disable', PLUGIN, '--scope', 'user')
   ;({ found, said } = await listed())
   check('Claude Code turns It’s plugin off with its own command', off.code === 0 && found?.enabled === false, off.out + off.err + said)
-  now = await until(statusOf, (s) => s.claudeCode?.addon === 'disabled', 20_000)
+  now = await until(statusOf, (s) => s.claudeCode?.addon === 'disabled', patience(20_000))
   check(
     'and `it status` says that the add-on is turned off in Claude Code',
     now.claudeCode?.addon === 'disabled' && /turned off/.test(now.claudeCode?.detail ?? ''),
@@ -319,7 +319,7 @@ try {
   const on = await claude('plugin', 'enable', PLUGIN, '--scope', 'user')
   ;({ found, said } = await listed())
   check('Claude Code turns it back on with its own command', on.code === 0 && found?.enabled === true, on.out + on.err + said)
-  now = await until(statusOf, (s) => s.claudeCode?.addon === 'connected', 20_000)
+  now = await until(statusOf, (s) => s.claudeCode?.addon === 'connected', patience(20_000))
   must('and `it status` says that Claude Code is connected again', now.claudeCode?.addon === 'connected', now.said)
 
   if (!setupOnly) {
@@ -394,7 +394,7 @@ try {
     const heard = await until(
       (ms) => it('status', { env: asWhat, ms }),
       (s) => s.json?.arrives?.byItself === true,
-      60_000,
+      patience(60_000),
     )
     const loaded = () => (existsSync(debugFile) ? readFileSync(debugFile, 'utf8') : '')
     must(
@@ -407,7 +407,7 @@ try {
     )
 
     conversation.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: 'Make a page with one button on It.' } })}\n`)
-    const firstDone = await untilFinished(1, 120_000)
+    const firstDone = await untilFinished(1, patience(120_000))
     const created = model.turns.flatMap((t) => t.results).find(Boolean)
     must(
       'the first turn runs `it create --open` through Claude Code’s own Bash tool, and ends',
@@ -446,7 +446,7 @@ try {
 
     // A click, as a person makes it, while the conversation is idle
     await frame.locator('#go').click()
-    const clickBy = Date.now() + 90_000
+    const clickBy = Date.now() + patience(90_000)
     while (!clickTurns.length && Date.now() < clickBy && !ended()) await sleep(200)
     const action = (await it('read', PAGE)).json?.recentActions?.[0]
     const turn = clickTurns[0]
@@ -469,7 +469,7 @@ try {
     const handed = await until(
       (ms) => it('read', PAGE, { ms }),
       (r) => r.json?.recentActions?.find((a) => a.id === action?.id)?.delivery === 'handed_off',
-      15_000,
+      patience(15_000),
     )
     const recorded = handed.json?.recentActions?.find((a) => a.id === action?.id)
     check(
@@ -477,11 +477,11 @@ try {
       recorded?.delivery === 'handed_off' && recorded?.route === 'addon',
       JSON.stringify(recorded ?? handed.err),
     )
-    check('and the turn ends', await untilFinished(2, 60_000), JSON.stringify(finished()))
+    check('and the turn ends', await untilFinished(2, patience(60_000)), JSON.stringify(finished()))
     const state = await until(
       (ms) => it('state', PAGE, { ms }),
       (s) => s.json?.state?.pressed === 'yes',
-      15_000,
+      patience(15_000),
     )
     check('the agent’s `it patch` changed the page’s state', state.json?.state?.pressed === 'yes', state.out + state.err)
     const seen = await frame
@@ -499,7 +499,7 @@ try {
     const closed = await until(
       (ms) => it('status', { env: asWhat, ms }),
       (s) => s.json?.arrives && s.json.arrives.via !== 'addon',
-      30_000,
+      patience(30_000),
     )
     check(
       'once Claude Code is closed, It no longer hears its add-on in that conversation',
@@ -507,7 +507,7 @@ try {
       JSON.stringify(closed.json?.arrives ?? closed.err),
     )
     await frame.locator('#go').click()
-    const wokenBy = Date.now() + 120_000
+    const wokenBy = Date.now() + patience(120_000)
     while (clickTurns.length < 2 && Date.now() < wokenBy) await sleep(250)
     const second = (await it('read', PAGE)).json?.recentActions?.[0]
     const woken = clickTurns[1]
@@ -533,7 +533,7 @@ try {
     const again = await until(
       (ms) => it('state', PAGE, { ms }),
       (s) => s.json?.state?.pressed === 'again',
-      30_000,
+      patience(30_000),
     )
     check(
       'the reopened conversation’s `it patch` changed the page’s state',

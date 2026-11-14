@@ -47,7 +47,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { standInModel, textOf } from './codex/model.mjs'
-import { homeOnWindows, nodeAlone, systemPath, windows } from './windows.mjs'
+import { homeOnWindows, nodeAlone, patience, systemPath, windows } from './windows.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..', '..')
@@ -553,7 +553,7 @@ trust_level = "trusted"
   let served = ''
   serve.stderr.on('data', (d) => (served += d))
   let site
-  for (const end = Date.now() + 90_000; Date.now() < end && !site; await sleep(1000)) {
+  for (const end = Date.now() + patience(90_000); Date.now() < end && !site; await sleep(1000)) {
     const r = await it(['site', '--no-open'], { ms: 20_000 })
     if (r.code === 0 && r.json?.url) site = r.json.url
   }
