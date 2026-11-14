@@ -1513,7 +1513,10 @@ export function openBy(file: string): number[] | null {
   }
   if (process.platform === 'darwin') {
     try {
-      const said = execFileSync('lsof', ['-t', '--', real], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
+      // By where macOS keeps it, as `ps` and `sysctl` are run: /usr/sbin is not on every PATH It
+      // is started with, and a `lsof` that is not found would leave every open conversation
+      // unknown, so that a click for it went neither into Codex's queue nor to a reopening.
+      const said = execFileSync('/usr/sbin/lsof', ['-t', '--', real], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
       return [
         ...new Set(
           said

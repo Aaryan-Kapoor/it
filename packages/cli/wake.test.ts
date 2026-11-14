@@ -50,6 +50,7 @@ import {
   listsProcesses,
   mayWake,
   NO_PS,
+  openBy,
   SINCE_TOLD,
   STOPPED,
   WAS_CUT_OFF,
@@ -723,6 +724,51 @@ describe('whether some Codex has a conversation open', () => {
     expect(codexHolder('thread-then', codexHome, t + 2000)).toBe(false)
     // An id that is not one Codex makes names no file at all
     expect(codexHolder('../thread-open', codexHome)).toBe(false)
+  })
+
+  test('on macOS asks lsof where macOS keeps it, so that a PATH without /usr/sbin still finds who has the file open', () => {
+    // As in the hackathon's real-Codex run on macOS, where It was started with a PATH that has
+    // no /usr/sbin: `lsof` by its name alone was not found, every open conversation was unknown,
+    // and a click for one waited until Codex was closed.
+    const lock = path.join(scratch, 'open.lock')
+    writeFileSync(lock, '')
+    const platform = process.platform
+    const execFileSync = childProcess.execFileSync
+    const asked: string[] = []
+    try {
+      Object.defineProperty(process, 'platform', { value: 'darwin' })
+      childProcess.execFileSync = new Proxy(execFileSync, {
+        apply(_target, _self, [file, args]) {
+          asked.push(String(file))
+          // What macOS has, and a PATH that does not lead to it: only the full path is found
+          if (file !== '/usr/sbin/lsof') throw Object.assign(new Error(`spawnSync ${file} ENOENT`), { code: 'ENOENT' })
+          expect(args).toEqual(['-t', '--', lock])
+          return '4242\n4242\n'
+        },
+      })
+      syncBuiltinESMExports()
+      expect(openBy(lock)).toEqual([4242])
+      expect(asked).toEqual(['/usr/sbin/lsof'])
+    } finally {
+      Object.defineProperty(process, 'platform', { value: platform })
+      childProcess.execFileSync = execFileSync
+      syncBuiltinESMExports()
+    }
+  })
+
+  test.skipIf(process.platform !== 'darwin')('on a real Mac finds who has a file open with /usr/sbin taken off PATH', () => {
+    const lock = path.join(scratch, 'held.lock')
+    writeFileSync(lock, '')
+    const fd = openSync(lock, 'r')
+    const PATH = process.env.PATH
+    try {
+      process.env.PATH = '/usr/bin:/bin'
+      expect(openBy(lock)).toContain(process.pid)
+    } finally {
+      if (PATH === undefined) delete process.env.PATH
+      else process.env.PATH = PATH
+      closeSync(fd)
+    }
   })
 
   test.skipIf(process.platform === 'win32')(
