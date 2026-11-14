@@ -29,9 +29,13 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request, or to master, replaces the run of the push before it, as in
+# "It on macOS and Windows": every push to master queues jobs on GitHub's few Macs, and merges in
+# a row would otherwise hold the main workflow's own Mac jobs behind them for hours. A nightly run
+# and one started by hand are never cancelled.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 defaults:
   run:
