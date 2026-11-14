@@ -33,8 +33,10 @@
 //    click's line, ending with its `[action <id>]`.
 //
 // It runs on Linux, and on macOS too (where, with Codex 0.160.0 and 0.169.0, the click in step 2
-// was not handed over while Codex's terminal had the conversation open). Windows has no
-// pseudo-terminal for Codex's terminal interface. What it does not prove: anything a real model
+// was not handed over while Codex's terminal had the conversation open). On Windows, which has
+// no pseudo-terminal Python can make, Codex's terminal interface is run in a pseudo console of
+// Windows's own (codex/terminal-windows.py, which needs pywinpty in the Python IT_E2E_PYTHON
+// names, or else `python`). What it does not prove: anything a real model
 // does, Codex's desktop app, or Codex inside T3 Code. The approval is chosen in Codex's own
 // terminal interface, which is the step a person takes there; where Codex shows no such question
 // (its desktop app, T3 Code) nothing here stands for what a person does.
@@ -45,6 +47,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { standInModel, textOf } from './codex/model.mjs'
+import { homeOnWindows, systemPath, windows } from './windows.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..', '..')
@@ -58,10 +61,19 @@ if (!program || !existsSync(program)) {
   console.error('Give the path of the codex program to test: node e2e/apps/codex.mjs <codex> [--version <x.y.z>]')
   process.exit(2)
 }
+// On Windows, npm's `codex` is a .cmd file that runs the package's own script under Node, which
+// is what this script starts itself: a .cmd file is started only through a shell. The folder the
+// command is in is the one put on the PATH, as npm puts it on a person's.
+const CODEX = windows ? [process.execPath, path.join(path.dirname(program), '..', '@openai', 'codex', 'bin', 'codex.js')] : [program]
+/** The folder the Codex under test is installed in: each of its programs is in it. */
+const codexPackages = path.resolve(path.dirname(program), '..', '@openai')
 const wanted = option('--version')
 const base = Number(process.env.IT_PORT || 5700)
 const modelPort = base + 90
 const CLI = process.env.IT_CLI ? path.resolve(process.env.IT_CLI) : path.join(root, 'packages', 'cli', 'dist', 'it.mjs')
+// The standalone program, where IT_BIN names one, in place of the Node bundle: put where It's
+// installers put it, in It's folder's bin, with the record they write beside it
+const STANDALONE = process.env.IT_BIN ? path.resolve(process.env.IT_BIN) : null
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 const results = []
@@ -80,16 +92,25 @@ const codexHome = path.join(home, '.codex')
 const itHome = path.join(home, '.it')
 const work = path.join(home, 'work')
 for (const folder of [codexHome, work, path.join(top, 'no-t3-code')]) mkdirSync(folder, { recursive: true })
+const IT = STANDALONE ? [path.join(itHome, 'bin', windows ? 'it.exe' : 'it')] : [process.execPath, CLI]
+if (STANDALONE) {
+  mkdirSync(path.dirname(IT[0]), { recursive: true })
+  cpSync(STANDALONE, IT[0])
+  // INSTALLATION in packages/cli/src/installation.ts
+  writeFileSync(path.join(itHome, 'installation.json'), '{"product":"It","format":1,"about":"This folder holds an installation of It."}\n')
+}
 const logs = path.join(top, 'logs')
 mkdirSync(logs)
 
 // What every program the run starts is given, and nothing else of this process's surroundings:
 // the agent apps of whoever runs it, and their It, are not to be found from here.
 const env = {
-  PATH: [path.join(itHome, 'bin'), path.dirname(program), path.dirname(process.execPath), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'].join(
+  PATH: [path.join(itHome, 'bin'), path.dirname(program), path.dirname(process.execPath), ...(windows ? [] : ['/opt/homebrew/bin']), ...systemPath()].join(
     path.delimiter,
   ),
   HOME: home,
+  // On Windows, where a home of the run's own is given by more than HOME
+  ...homeOnWindows(home),
   CODEX_HOME: codexHome,
   IT_HOME: itHome,
   IT_PORT: String(base),
@@ -124,10 +145,10 @@ function run(command, argv, { input, ms = 120_000, cwd = home } = {}) {
     })
   })
 }
-const codex = (argv, opts) => run(program, argv, opts)
+const codex = (argv, opts) => run(CODEX[0], [...CODEX.slice(1), ...argv], opts)
 /** Runs `it` as the machine of this run, and resolves with what it answered, read as JSON where it is. */
 async function it(argv, opts) {
-  const r = await run(process.execPath, [CLI, ...argv], opts)
+  const r = await run(IT[0], [...IT.slice(1), ...argv], opts)
   let json
   try {
     json = JSON.parse(r.out)
@@ -156,7 +177,7 @@ function stopped(child, ms = 10_000) {
  * it, for what Codex itself says about its hooks and to change its settings as its clients do.
  */
 async function appServer() {
-  const child = spawn(program, ['app-server', '--listen', 'stdio://'], { env, cwd: work, stdio: ['pipe', 'pipe', 'pipe'] })
+  const child = spawn(CODEX[0], [...CODEX.slice(1), 'app-server', '--listen', 'stdio://'], { env, cwd: work, stdio: ['pipe', 'pipe', 'pipe'] })
   let buf = ''
   let next = 1
   const waiting = new Map()
@@ -237,7 +258,12 @@ const pluginLine = async () => {
  * window. What it shows is kept, and read with its terminal's codes taken out.
  */
 function terminal() {
-  const child = spawn('python3', [path.join(here, 'codex', 'terminal.py'), '120', '40', program], { env, cwd: work, stdio: ['pipe', 'pipe', 'pipe'] })
+  const python = process.env.IT_E2E_PYTHON || (windows ? 'python' : 'python3')
+  const child = spawn(python, [path.join(here, 'codex', windows ? 'terminal-windows.py' : 'terminal.py'), '120', '40', ...CODEX], {
+    env,
+    cwd: work,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
   let shown = ''
   child.stdout.on('data', (d) => (shown += d))
   child.stderr.on('data', (d) => (shown += d))
@@ -272,6 +298,46 @@ function terminal() {
 function ours(which = 'IT_HOME') {
   const folder = which === 'IT_HOME' ? itHome : codexHome
   const found = []
+  // Windows shows no other process's environment. A process is this run's there when it is one
+  // of the Codex under test's own programs, or names this run's folder in its command line, or
+  // was started by this process; and for IT_HOME, every one of those
+  if (windows) {
+    const listed = spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress',
+      ],
+      { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 },
+    ).stdout
+    let all = []
+    try {
+      all = [JSON.parse(listed)].flat()
+    } catch {}
+    const lower = (s) => String(s ?? '').toLowerCase()
+    // Codex's own programs: those of the package under test, and the copies of them Codex keeps in its CODEX_HOME
+    const codexs = (p) => [codexPackages, codexHome].some((at) => lower(p.ExecutablePath).startsWith(lower(at)) || lower(p.CommandLine).includes(lower(at)))
+    // The listing itself, and the console Windows gives it, are not the run's
+    const listing = (p) => /Get-CimInstance Win32_Process/.test(p.CommandLine ?? '') || /[\\/]conhost\.exe$/i.test(p.ExecutablePath ?? '')
+    const mine = new Set([process.pid])
+    for (let grew = true; grew; ) {
+      grew = false
+      for (const p of all)
+        if (!mine.has(p.ProcessId) && mine.has(p.ParentProcessId)) {
+          mine.add(p.ProcessId)
+          grew = true
+        }
+    }
+    for (const p of all) {
+      if (p.ProcessId === process.pid || listing(p)) continue
+      const named = lower(p.CommandLine).includes(lower(top))
+      if (which === 'IT_HOME' ? codexs(p) || named || mine.has(p.ProcessId) : codexs(p))
+        found.push({ pid: p.ProcessId, command: (p.CommandLine ?? p.ExecutablePath ?? '').split(' ') })
+    }
+    return found
+  }
   // A Mac has no /proc. Its `ps` shows each process's environment after its command, for the
   // processes of the same user, and a folder of this run's names nothing else
   if (process.platform === 'darwin') {
@@ -341,7 +407,19 @@ async function stopCodexServer() {
 const slug = `codex-ci-${Date.now().toString(36)}`
 const PROMPT = `Put up a page that asks me to approve the deploy (${slug}).`
 const page = `<h1>Deploy</h1><button id="go" onclick="It.action(\`approve\`)">Approve</button>`
-const created = `it create "Approve the deploy" --id ${slug} --html '${page}' --open`
+// On Windows Codex runs a command in Windows PowerShell 5.1, and the agent does as It's skill says
+// there (addons/skill/more/page.md, "On Windows"): it runs It as `it.exe`, since a bare `it` there
+// may be Pester's own command, and gives JSON in a file, since that PowerShell takes the double
+// quotes out of an argument. The file is written here, as the agent writes it with its own file
+// tool, in the temporary folder. The Node bundle has no it.exe, only It's it.cmd, which is `it`.
+const itCommand = windows && STANDALONE ? 'it.exe' : 'it'
+const created = `${itCommand} create "Approve the deploy" --id ${slug} --html '${page}' --open`
+const patching = (patch) => {
+  if (!windows) return `it patch ${slug} '${JSON.stringify(patch)}'`
+  const file = path.join(home, 'AppData', 'Local', 'Temp', `${slug}-${Date.now()}.json`)
+  writeFileSync(file, JSON.stringify(patch))
+  return `${itCommand} patch ${slug} --file "${file.replaceAll('\\', '/')}"`
+}
 /**
  * The click a turn was started for, by its id: the line It wrote for it, which begins `[It]` and
  * ends with `[action <id>]`. It is in the person's newest message where It put the whole line
@@ -359,7 +437,7 @@ const model = await standInModel({
     if (asked.newest.startsWith('[It]')) {
       const action = clickOf(asked)
       // A click: the page is answered once, by a patch that names the click it answers
-      if (action && asked.outputs === 0) return { run: `it patch ${slug} '${JSON.stringify({ answered: action })}'` }
+      if (action && asked.outputs === 0) return { run: patching({ answered: action }) }
       return { say: 'Answered on the page.' }
     }
     if (asked.newest.trim() === PROMPT) return asked.outputs === 0 ? { run: created } : { say: 'The page is up, and I will wait for you to use it.' }
@@ -394,7 +472,11 @@ try {
     `model = "stand-in"
 model_provider = "standin"
 check_for_update_on_startup = false
-
+${
+  // Where IT_E2E_CODEX_SANDBOX is `off`, Codex runs commands outside its sandbox: on Windows its
+  // sandbox changes who may open folders, which a run on someone's own computer is to leave alone
+  process.env.IT_E2E_CODEX_SANDBOX === 'off' ? 'sandbox_mode = "danger-full-access"\n' : ''
+}
 [analytics]
 enabled = false
 
@@ -434,7 +516,8 @@ trust_level = "trusted"
     : ''
   check(
     'Codex itself lists It’s four hooks, each running `it hook codex`',
-    events === 'postToolUse,sessionStart,stop,userPromptSubmit' && hooks.every((h) => h.enabled && /(^|\/)it hook codex$/.test(h.command)),
+    events === 'postToolUse,sessionStart,stop,userPromptSubmit' &&
+      hooks.every((h) => h.enabled && (windows ? /(^|[\\/])it(-here)?(\.cmd|\.exe)?"? hook codex$/i : /(^|\/)it hook codex$/).test(h.command)),
     Array.isArray(hooks) ? JSON.stringify(hooks) : hooks.message,
   )
   check(
@@ -464,7 +547,7 @@ trust_level = "trusted"
 
   // It's own It, and a browser paired as the owner's, for the page to come up on. Started before
   // Codex's terminal is, so that the conversation's first turn finds them there.
-  serve = spawn(process.execPath, [CLI, 'serve'], { env, cwd: home, stdio: ['ignore', 'ignore', 'pipe'] })
+  serve = spawn(IT[0], [...IT.slice(1), 'serve'], { env, cwd: home, stdio: ['ignore', 'ignore', 'pipe'] })
   let served = ''
   serve.stderr.on('data', (d) => (served += d))
   let site
@@ -473,7 +556,8 @@ trust_level = "trusted"
     if (r.code === 0 && r.json?.url) site = r.json.url
   }
   check('It starts, and gives the address that pairs a browser', site, served.slice(-600))
-  browser = await chromium.launch()
+  // On Windows with a home of its own, as every other program of the run has
+  browser = await chromium.launch(windows ? { env: { PATH: env.PATH, ...homeOnWindows(path.join(top, 'browser')) } } : {})
   const tab = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage()
   await tab.goto(site)
   const paired = await tab
@@ -489,7 +573,9 @@ trust_level = "trusted"
   // The person's own step: Codex's terminal interface says the hooks need review as it starts,
   // and "Trust all and continue" is chosen
   tui = terminal()
-  const asked = await tui.until(/Hooksneedreview.*Trustallandcontinue/, 60_000)
+  // Windows's pseudo console draws a letter it has drawn before by moving the cursor past it, so
+  // there the first letter of "need" may not be in what it shows
+  const asked = await tui.until(windows ? /Hooksn?eedreview.*Trustallandcontinue/ : /Hooksneedreview.*Trustallandcontinue/, 60_000)
   check('Codex’s terminal says It’s hooks need review as it starts', asked, tui.plain().slice(-1500))
   // The second choice, as a person makes it: down one, and Enter once the terminal shows it chosen.
   // A key pressed before the question takes keys is lost, so Down is pressed again until it shows
@@ -581,9 +667,19 @@ trust_level = "trusted"
   tui.type('\x03')
   await sleep(500)
   tui.type('\x03')
+  // On Windows Codex keeps a terminal of its own running for the commands it ran, and Codex 0.169.0
+  // then takes Ctrl-C for that terminal and stays open: it is left with its own command, /quit
+  if (windows) {
+    for (let end = Date.now() + 5000; Date.now() < end && tui.child.exitCode === null; ) await sleep(200)
+    if (tui.child.exitCode === null) {
+      tui.type('/quit')
+      await sleep(700)
+      tui.type('\r')
+    }
+  }
   await stopped(tui.child, 15_000)
   const stopping = await stopCodexServer()
-  const anyCodex = ours('CODEX_HOME').filter(({ command }) => /(^|\/)codex$/.test(command[0] ?? ''))
+  const anyCodex = ours('CODEX_HOME').filter(({ command }) => command.slice(0, 2).some((word) => /(^|[\\/])codex(\.exe|\.js)?"?$/i.test(word)))
   check(
     // Codex's own `app-server daemon stop` is what stops the server, the process that listens.
     // It leaves the updater beside it running, which the run then ends itself
@@ -621,6 +717,13 @@ trust_level = "trusted"
   if (tui) await stopped(tui.child, 5000)
   await stopCodexServer().catch(() => {})
   await browser?.close().catch(() => {})
+  // On Windows, which has no signal to ask with, It's service is asked to stop by the file it
+  // looks for in its folder, and waited for; SIGTERM there would end it before it stops its backend
+  if (windows && serve && serve.exitCode === null) {
+    const exited = new Promise((r) => serve.once('close', r))
+    writeFileSync(path.join(itHome, 'service.stop'), '')
+    await Promise.race([exited, sleep(60_000)])
+  }
   await stopped(serve, 60_000)
   await model.close()
   // Everything the run started has been asked to stop and waited for. Anything still running

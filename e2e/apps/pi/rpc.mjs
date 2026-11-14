@@ -5,7 +5,9 @@ import { spawn } from 'node:child_process'
 
 /** Starts `pi` with these arguments in `cwd` and `env`. */
 export function startPi(program, args, { cwd, env }) {
-  const child = spawn(program, ['--mode', 'rpc', ...args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] })
+  // A program given as a list is a command with its first words, as Node and a script are
+  const [command, ...first] = [program].flat()
+  const child = spawn(command, [...first, '--mode', 'rpc', ...args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] })
   const records = []
   let pending = Buffer.alloc(0)
   let stderr = ''
