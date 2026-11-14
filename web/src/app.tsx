@@ -63,6 +63,7 @@ import { ReloadNotice } from './reload'
 import { ServiceNotice } from './service'
 import { codeSeen, current, signOut as endSession, heldToken, pair, pairAsScreen, recheck, useSession } from './session'
 import { Displays, Settings } from './settings'
+import { StarAsk } from './star'
 import { TourDialog } from './welcome'
 
 export function App() {
@@ -961,6 +962,7 @@ function TopBar({
 }) {
   const convex = useConvex()
   const path = usePath()
+  const { code } = useSession()
   const [menu, setMenu] = useState(false)
   // Whether the connection to It is up, which is what the dot says
   const live = useSyncExternalStore(
@@ -1008,7 +1010,9 @@ function TopBar({
           </nav>
         )}
       </div>
-      <div className="grid-header-spacer" />
+      <div className="grid-header-spacer">
+        <StarAsk pages={count} owner={owner} locked={locked} path={path} pairing={code !== null} live={live} />
+      </div>
       {search && (
         <span className="grid-search-wrap">
           <input

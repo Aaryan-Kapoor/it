@@ -2225,6 +2225,26 @@ a.grid-chip {
   align-items: center;
 }
 
+/* The ask for a star on GitHub: one quiet chip inside the bar's spacer, so that it adds nothing to
+   the bar's layout, and hidden where the spacer is too small for it, so that it gives way before
+   anything else there */
+.grid-header-spacer:has(.star-room) {
+  display: flex;
+  overflow: hidden;
+}
+.star-room {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+.star-ask {
+  flex: none;
+}
+.star-ask a.chip {
+  text-decoration: none;
+}
+
 /* ══ What a person presses and types into, wherever no look of its own is given ══ */
 
 :where(.list-view, .modal-panel, .door-card, .splash, .empty, .notice, .offer, .reminders, .mount-note)
@@ -3500,6 +3520,13 @@ form.row-main {
   }
   .grid-header-spacer {
     display: none;
+  }
+  /* The ask sits beside the name, where how things stand would be, and is only there while It can be reached */
+  .grid-header-spacer:has(.star-room) {
+    display: flex;
+    grid-column: 1;
+    grid-row: 1;
+    margin-left: 40px;
   }
 }
 
