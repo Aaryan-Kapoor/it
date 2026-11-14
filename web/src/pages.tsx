@@ -3,8 +3,10 @@
 import { ALIVE, CODEX_INTERRUPTED, LIMITS, NOUN, TAKES, WAKE_BACK_MS } from '@it/protocol'
 import { useAction, useConvex, useMutation, useQuery } from 'convex/react'
 import { Component, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Activity, type Click } from './activity'
 import {
   copy,
+  IconActivity,
   IconBack,
   IconFullscreen,
   IconLeaveFullscreen,
@@ -426,6 +428,8 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
   /** Whether the box to type to the page's agent in is open, and the button that opens it. */
   const [talking, setTalking] = useState(false)
   const talkButton = useRef<HTMLButtonElement>(null)
+  /** Whether the account of what became of the last things done here is open. */
+  const [activity, setActivity] = useState(false)
   // Whether something done here is with the page's agent, or on its way to it, and not yet
   // answered: shown as a line that moves under the bar, which is seen where the few words
   // beside the title are not
@@ -568,6 +572,16 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
               <IconSay />
             </button>
           )}
+          <button
+            type="button"
+            className="nav-action"
+            aria-pressed={activity}
+            title="Activity: what became of the last things done here"
+            aria-label="Activity on this page"
+            onClick={() => setActivity(!activity)}
+          >
+            <IconActivity />
+          </button>
           {display && takesLock && page.version !== null && <Lock display={display} page={{ id: page.id }} here={lockedHere} />}
           <Bell compact />
           <button
@@ -596,6 +610,14 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
             setTalking(false)
             talkButton.current?.focus()
           }}
+        />
+      )}
+      {activity && (
+        <Activity
+          clicks={recent as Click[] | undefined}
+          conversation={{ run: page.run ?? null, wakeFailed: page.wakeFailed ?? null, stoppedAt: page.stoppedAt ?? null }}
+          now={now}
+          onClose={() => setActivity(false)}
         />
       )}
       {page.version === null ? (
