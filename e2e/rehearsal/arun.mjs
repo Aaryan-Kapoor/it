@@ -173,19 +173,26 @@ const appId = app === 'codex' ? 'codex' : 'claude-code'
 let sentence = 'Give me the It tour.'
 let serveChild = null
 let swapping = null
-if (!agentInstalls) {
-  // The setup step, by the harness: the real install script, `it setup --only <app> --no-service`, `it serve`
-  term.note('The organisers set It up on this laptop before the event (done by the rehearsal harness):')
-  const ins = await install({ env, cwd: f.home, base: 'http://127.0.0.1:5690', term, log })
-  const set = await setup({ program: ins.program, env, cwd: f.work, app: appId, term, log })
+// The setup step, by the harness: the real install script, `it setup --only <app> --no-service`, `it serve`.
+// Before the terminal opens, or, with --late-setup, while the agent app is already open (the
+// `setup` event), so that the add-on arrives in a conversation that has begun without it
+let program = path.join(f.itHome, 'bin', 'it.exe')
+const serveLog = createWriteStream(path.join(f.logs, 'serve.log'), { flags: 'a' })
+function startServe() {
+  serveChild = spawn(program, ['serve'], { env: { ...env, ...appEnv }, cwd: f.work, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+  serveChild.stdout.pipe(serveLog, { end: false })
+  serveChild.stderr.pipe(serveLog, { end: false })
+}
+async function harnessSetup(during = false) {
+  if (!during) term.note('The organisers set It up on this laptop before the event (done by the rehearsal harness):')
+  const ins = await install({ env, cwd: f.home, base: 'http://127.0.0.1:5690', term: during ? null : term, log })
+  program = ins.program
+  const set = await setup({ program: ins.program, env, cwd: f.work, app: appId, term: during ? null : term, log })
   writeFileSync(path.join(f.logs, 'setup.txt'), scrub(`${set.out}\n${set.err}`).text)
   const say = /“([^”]*It tour[^”]*)”|"(Give me the It tour\.?)"/.exec(`${set.out}\n${set.err}`)
   sentence = say ? (say[1] ?? say[2]) : 'Give me the It tour.'
   log('what setup told the person to say', sentence)
-  const serveLog = createWriteStream(path.join(f.logs, 'serve.log'), { flags: 'a' })
-  serveChild = spawn(ins.program, ['serve'], { env: { ...env, ...appEnv }, cwd: f.work, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
-  serveChild.stdout.pipe(serveLog)
-  serveChild.stderr.pipe(serveLog)
+  startServe()
   let status = null
   for (let i = 0; i < 60 && !status?.running; i++) {
     await sleep(2500)
@@ -197,7 +204,11 @@ if (!agentInstalls) {
   log('the pairing link (it site --no-open)', pairUrl ?? site.out, Boolean(pairUrl))
   if (pairUrl) await browser.page.goto(pairUrl).catch(() => {})
   await sleep(3000)
-} else {
+}
+const lateSetup = process.argv.includes('--late-setup')
+if (!agentInstalls && !lateSetup) await harnessSetup()
+else if (lateSetup) log('It will be set up by the harness while the agent app is open (the setup event)')
+else {
   // The agent installs It itself. The moment the installer has put It's program in place, the
   // guard takes its place and the program is kept beside it, so that `it setup`, however the agent
   // runs it, registers no task for the owner's account: the guard adds `--no-service` and starts
@@ -268,6 +279,33 @@ const watchingWork = setInterval(async () => {
     termWas = busy
   }
 }, 500)
+// What goes wrong, done by the harness at a time it was given: It set up late, It stopped (every
+// process of It in the throwaway profile, by its own id), and It started again
+async function faultEvent(what) {
+  if (what === 'setup') {
+    await harnessSetup(true)
+    return `It was set up while the agent app was open; the person says: ${sentence}`
+  }
+  if (what === 'it-stop') {
+    const mine = leftIn(f.itHome) ?? []
+    for (const p of mine) killTree(p.pid)
+    if (serveChild) killTree(serveChild.pid)
+    await sleep(2000)
+    return `It stopped: ended ${mine.map((p) => `${p.name} ${p.pid}`).join(', ') || 'nothing'}; left: ${JSON.stringify(leftIn(f.itHome))}`
+  }
+  if (what === 'it-start') {
+    const st = (await it(program, ['status', '--json'], { env, cwd: f.work, ms: 60_000 })).json
+    if (st?.running) return 'It was already running again (started by the person or the agent); nothing done'
+    startServe()
+    let status = null
+    for (let i = 0; i < 40 && !status?.running; i++) {
+      await sleep(2500)
+      status = (await it(program, ['status', '--json'], { env, cwd: f.work, ms: 60_000 })).json
+    }
+    return `It started again by the harness (it serve): running ${status?.running}`
+  }
+  return `unknown event ${what}`
+}
 const meta = {
   id,
   scenario,
@@ -306,12 +344,21 @@ http
       else term.key(q.name)
       return reply('done')
     }
+    if (q.cmd === 'setup' || q.cmd === 'it-stop' || q.cmd === 'it-start') {
+      reply(await faultEvent(q.cmd))
+      return
+    }
     if (q.cmd === 'record') {
       if (!recording) {
         recording = true
         rec = recorder(path.join(f.results, 'video.mp4'), { width: SCREEN.width, height: SCREEN.height })
         await sleep(1500)
         log('recording started')
+        // --events setup@120,it-stop@600,it-start@900: what goes wrong, and when, in seconds of the video
+        for (const ev of String(arg('events', '')).split(',').filter(Boolean)) {
+          const [what, at] = ev.split('@')
+          setTimeout(() => faultEvent(what).then((r) => log(`event ${what}`, r)), Number(at) * 1000)
+        }
       }
       return reply('recording')
     }
