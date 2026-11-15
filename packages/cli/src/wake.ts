@@ -67,6 +67,25 @@ export const WAS_CUT_OFF =
   '[It] An earlier turn of this conversation that It had reopened was cut off before it ended, so some of what it was working on may already be done. What is above may be that same work given again, or something new, or both: go by the action ids. Look at the page’s state, and at what you last did in this conversation, before you do any of it, and do not do twice what was already done.'
 
 /**
+ * What is said straight after `WAS_CUT_OFF`, of what the turn that was cut off had started and
+ * left running. A turn that is cut off has what it left ended before its conversation is
+ * reopened again (see `carryOn` and `endTree`), and an agent that is not told so takes a server
+ * that turn started to be up still, or a command it was in the middle of to have finished. It
+ * says only what It found: something the turn started outside its process group and its marks,
+ * such as a container, is not seen.
+ */
+export const LEFT_ENDED =
+  'It ended everything that turn had left running that It could find. So a command it was in the middle of did not finish, and a server or anything else it had started is most likely not there any more. Check, and start again what is still needed.'
+
+/**
+ * What is said in its place where It could not tell what was left of the turn, and the person
+ * let its conversation be reopened all the same, with `it runs clear`: some of what the turn
+ * started may have been ended and some may be running beside whatever this one starts.
+ */
+export const LEFT_MAY_RUN =
+  'It could not make sure that everything that turn had started was ended: some of it may have been, and some of it may still be running. Look for each thing it started before you start it again. Start again what is not running, and do not start a second copy of what is.'
+
+/**
  * What a conversation is told, the next time it is reopened, when the person stopped its last
  * reopened turn from the page. Said so that nothing of that turn is taken up again: an app that
  * is ended in the middle of a turn leaves, in the conversation, what the turn was asked and
@@ -268,20 +287,26 @@ export function carryOn(
     // What the app prints goes to a file that is this run's alone, and is read only where the
     // app ends badly, for its last line. A file and not a pipe: something the app leaves
     // running would be ended by a pipe that nobody reads any more.
-    const printed = opts.keepIn ? path.join(opts.keepIn, `reopened-${process.pid}-${++runs}.txt`) : null
+    const numbered = `reopened-${process.pid}-${++runs}`
+    const printed = opts.keepIn ? path.join(opts.keepIn, `${numbered}.txt`) : null
     let into: number | null = null
     if (printed)
       try {
         mkdirSync(path.dirname(printed), { recursive: true, mode: 0o700 })
         into = openSync(printed, 'w', 0o600)
       } catch {}
-    const forget = () => {
-      if (printed)
-        try {
-          rmSync(printed, { force: true })
-        } catch {}
-    }
     const windows = process.platform === 'win32'
+    // On Windows the keeper says in a file how the run went (see `keeper`), named afresh for each
+    // run: a file of the same name that an earlier program left, and could not be removed, would
+    // otherwise be read as what this run's keeper said
+    const told = windows ? path.join(opts.keepIn ?? os.tmpdir(), `${numbered}-${randomUUID()}.kept`) : null
+    const forget = () => {
+      for (const file of [printed, told])
+        if (file)
+          try {
+            rmSync(file, { force: true })
+          } catch {}
+    }
     // On Windows what the run starts is kept in a job of the system's, named by the run: see `keeper`
     const job = windows ? (marks.run ?? randomUUID()) : ''
     const env: NodeJS.ProcessEnv = {
@@ -294,7 +319,7 @@ export function carryOn(
       IT_SESSION: marks.session,
       ...(marks.run ? { IT_RUN: marks.run } : {}),
     }
-    const start = windows ? keeper(how.argv, job, env) : { file: how.argv[0]!, args: how.argv.slice(1), env }
+    const start = windows ? keeper(how.argv, job, env, told ?? undefined) : { file: how.argv[0]!, args: how.argv.slice(1), env }
     if (typeof start === 'string') {
       if (into !== null) closeSync(into)
       forget()
@@ -394,15 +419,21 @@ export function carryOn(
             : `${how.app} was not found`,
       ),
     )
-    child.once('exit', (code, signal) => {
+    child.once('exit', (exitCode, signal) => {
       if (ending) return
       if (stopped) return end(STOPPED)
+      // On Windows how the run went is the keeper's word, and never its exit code: Bun, which
+      // the installed program runs on, hands on only the lowest byte of a code, so that what
+      // the keeper would say by its code is lost or reads as the app's own, and an app that
+      // ended with 256 reads as one that ended well. Where the keeper said nothing, the run is
+      // taken for one that ended badly, whatever its code.
+      const kept = told ? keptWord(told) : undefined
+      if (kept === 'missing') return end(`${how.app} was not found`)
+      if (kept === 'unstarted') return end(`${how.app} could not be started: Windows would not start its program`)
+      if (kept === 'not') return end(`${how.app} could not be started: Windows would not keep it in a job of its own, which It needs to be able to end it`)
+      const code = told ? (kept ?? null) : exitCode
       if (code === 0) return end(null)
-      if (windows && code === KEPT_MISSING) return end(`${how.app} was not found`)
-      if (windows && code === KEPT_UNSTARTED) return end(`${how.app} could not be started: Windows would not start its program`)
-      if (windows && code === KEPT_NOT)
-        return end(`${how.app} could not be started: Windows would not keep it in a job of its own, which It needs to be able to end it`)
-      const why = `${how.app} exited with ${signal ?? code ?? 'an error'}`
+      const why = `${how.app} exited with ${signal ?? code ?? exitCode ?? 'an error'}`
       // Ended badly by itself, killed or failing, in the middle of its turn: what it was asked
       // is tried again, and nothing it left running is to be there beside that. What it left
       // is ended as a run that is stopped is, and the run is answered for only once nothing
@@ -598,14 +629,31 @@ export async function endTree(
  */
 export const IN_JOB = 'job'
 /**
- * What the keeper ends with where nothing was started: Windows would not give the run a job of
- * its own, or the program that started the keeper could not be made sure of, or was gone.
+ * What the keeper exits with where nothing was started: Windows would not give the run a job of
+ * its own, or the program that started the keeper could not be made sure of, or was gone. It is
+ * not how It learns that (see `keptWord`): a runtime may hand on only the lowest byte of it.
  */
 export const KEPT_NOT = 0x49540001
-/** And where the app's program was not there to be started. */
-export const KEPT_MISSING = 0x49540002
-/** And where Windows would not start the app's program, for another reason: it was refused, or is no program Windows can run. */
-export const KEPT_UNSTARTED = 0x49540003
+/**
+ * How a run that a keeper held went, by the word the keeper wrote to the file it was told of
+ * (`keeper`): `not` where nothing was started, as for `KEPT_NOT`; `missing` where the app's
+ * program was not there to be started; `unstarted` where Windows would not start it for another
+ * reason, as where it was refused or is no program Windows can run; and the app's own exit code,
+ * whole, where it ran. Undefined where the keeper said none of these, as where it was ended
+ * before it could.
+ */
+export function keptWord(file: string): 'not' | 'missing' | 'unstarted' | number | undefined {
+  let said: string
+  try {
+    said = readFileSync(file, 'utf8')
+  } catch {
+    return undefined
+  }
+  if (said === 'not' || said === 'missing' || said === 'unstarted') return said
+  const ran = /^ran (0|[1-9][0-9]{0,9})$/.exec(said)
+  const code = ran ? Number(ran[1]) : Number.NaN
+  return code <= 0xffffffff ? code : undefined
+}
 /**
  * The job a run is kept in on Windows, by the run's own name. It is in the namespace of the whole
  * machine, so that it is found from whichever session of Windows asks: in a session's own, a
@@ -634,11 +682,18 @@ export const jobName = (run: string): string | null => (/^[A-Za-z0-9-]{1,64}$/.t
  * job is never made where one of that name is there already. Breaking away from the job is not
  * allowed, so a program the app starts that asks to be started outside it is refused.
  *
+ * Where it is told of a file, `Keep` writes there how the run went, as `keptWord` reads it, just
+ * before it ends, and ends with `Not` where that cannot be written. It also ends with the app's
+ * code, or with one of its own where nothing was started, but those are not to be read: a
+ * runtime that hands on only the lowest byte of a code has its own collide with the app's.
+ *
  * `End` ends everything in a job and waits until nothing is left of it. A job of that name not
  * being there says that nothing of it is left: nobody holds it, so the system ended what was in it.
  */
 const JOB_CODE = String.raw`
 using System;
+using System.Globalization;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -706,6 +761,21 @@ public static class ItJob {
   static bool Ended(IntPtr process) { return WaitForSingleObject(process, 0) == 0; }
 
   public static int Keep() {
+    string told = Environment.GetEnvironmentVariable("IT_JOB_TOLD");
+    Environment.SetEnvironmentVariable("IT_JOB_TOLD", null);
+    string said;
+    int code = Run(out said);
+    if (string.IsNullOrEmpty(told)) return code;
+    try {
+      File.WriteAllText(told, said);
+    } catch {
+      return Not;
+    }
+    return code;
+  }
+
+  static int Run(out string said) {
+    said = "not";
     string name = Environment.GetEnvironmentVariable("IT_JOB");
     string line = Environment.GetEnvironmentVariable("IT_JOB_LINE");
     string parentWord = Environment.GetEnvironmentVariable("IT_JOB_PARENT");
@@ -739,6 +809,7 @@ public static class ItJob {
     // With no window, in a console of its own that has none, which is then what everything it starts has as well
     if (!CreateProcessW(null, new StringBuilder(line), IntPtr.Zero, IntPtr.Zero, true, 0x08000000, IntPtr.Zero, null, ref start, out run)) {
       int why = Marshal.GetLastWin32Error();
+      said = why == 2 || why == 3 ? "missing" : "unstarted";
       return why == 2 || why == 3 ? Missing : Unstarted;
     }
     CloseHandle(run.hThread);
@@ -753,6 +824,7 @@ public static class ItJob {
       limits.Basic.LimitFlags = 0;
       SetInformationJobObject(job, 9, ref limits, size);
     }
+    said = "ran " + code.ToString(CultureInfo.InvariantCulture);
     return unchecked((int)code);
   }
 
@@ -792,7 +864,10 @@ const withJob = (body: string, fails: string): string =>
     `} catch { ${fails} }`,
   ].join('\n')
 const encoded = (script: string): string => Buffer.from(script, 'utf16le').toString('base64')
-const KEEP = encoded(`${withJob('$kept = [ItJob]::Keep()', `exit ${KEPT_NOT}`)}\nexit $kept`)
+// Where PowerShell could not compile the keeper, it says so in the file it was told of, as the keeper would
+const KEEP = encoded(
+  `${withJob('$kept = [ItJob]::Keep()', `if ($env:IT_JOB_TOLD) { try { Set-Content -LiteralPath $env:IT_JOB_TOLD -Value 'not' -NoNewline -Encoding Ascii } catch {} }; exit ${KEPT_NOT}`)}\nexit $kept`,
+)
 const END = encoded(withJob('[ItJob]::End($env:IT_JOB, 5000)', "'unknown'"))
 /** Windows PowerShell, where Windows keeps it, and never as whatever a PATH finds first by that name. */
 export const powershellExe = (): string =>
@@ -806,9 +881,10 @@ const POWERSHELL = ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand
  * gives the keeper, and its environment without what the keeper was told by. A run there ends
  * with the program that started it, however that program ended: on Linux and macOS it goes on
  * until the next one ends it. And what a run left running when it ended well by itself ends with that
- * program too (see `JOB_CODE`). Why it cannot be started this way, as a string.
+ * program too (see `JOB_CODE`). The keeper writes how the run went to `told`, which is how It
+ * learns it (`keptWord`). Why it cannot be started this way, as a string.
  */
-export function keeper(argv: string[], run: string, env: NodeJS.ProcessEnv): { file: string; args: string[]; env: NodeJS.ProcessEnv } | string {
+export function keeper(argv: string[], run: string, env: NodeJS.ProcessEnv, told?: string): { file: string; args: string[]; env: NodeJS.ProcessEnv } | string {
   const name = jobName(run)
   if (!name) return 'its run has no name a job can be given'
   const program = argv[0]
@@ -821,7 +897,8 @@ export function keeper(argv: string[], run: string, env: NodeJS.ProcessEnv): { f
     file: powershellExe(),
     args: [...POWERSHELL, KEEP],
     env: {
-      ...forPowerShell(env),
+      ...Object.fromEntries(Object.entries(forPowerShell(env)).filter(([k]) => k.toUpperCase() !== 'IT_JOB_TOLD')),
+      ...(told ? { IT_JOB_TOLD: told } : {}),
       IT_JOB: name,
       IT_JOB_LINE: windowsLine(argv),
       IT_JOB_PARENT: String(process.pid),
@@ -1494,7 +1571,10 @@ export function openBy(file: string): number[] | null {
   }
   if (process.platform === 'darwin') {
     try {
-      const said = execFileSync('lsof', ['-t', '--', real], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
+      // By where macOS keeps it, as `ps` and `sysctl` are run: /usr/sbin is not on every PATH It
+      // is started with, and a `lsof` that is not found would leave every open conversation
+      // unknown, so that a click for it went neither into Codex's queue nor to a reopening.
+      const said = execFileSync('/usr/sbin/lsof', ['-t', '--', real], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
       return [
         ...new Set(
           said
@@ -1588,6 +1668,61 @@ export function codexWroteAt(thread: string, codexHome = process.env.CODEX_HOME 
   return null
 }
 const found = new Map<string, string>()
+
+/** What Codex writes in a conversation's file as a turn begins, and as one ends by itself. */
+const CODEX_TURN_MARKS = ['task_started', 'turn_started', 'user_message', 'task_complete', 'turn_complete']
+/**
+ * When a Codex conversation's last turn was interrupted, as the file Codex keeps of it says, or
+ * null where its last turn was not, or nothing of a turn is found there. Codex writes a line as
+ * a turn begins, one as it ends by itself, and `turn_aborted` when the person interrupts it, and
+ * the last of these says how the conversation stands. A Codex whose turn was interrupted keeps
+ * what is in its queue until the person's next message there, though it has the conversation
+ * open and is not working. So does a Codex started after the interruption, which takes how the
+ * conversation stands from this same file: Codex 0.167, its app server ended and the
+ * conversation opened again with `codex resume`, took nothing from its queue until a message
+ * was typed there, and took a queued message at once where the last turn had ended by itself.
+ * So what this says holds whichever Codex has the conversation open, and however long ago the
+ * turn was interrupted. The moment is the one the line carries, or else when the file was last
+ * written. Only the end of the file is read, and again only once the file has changed.
+ */
+export function codexInterruptedAt(thread: string, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')): number | null {
+  const wrote = codexWroteAt(thread, codexHome)
+  const file = found.get(`${codexHome}\n${thread}`)
+  if (wrote === null || !file) return null
+  try {
+    const { size } = statSync(file)
+    const known = interrupted.get(file)
+    if (known && known.wrote === wrote && known.size === size) return known.at
+    let at: number | null = null
+    const lines = tail(file, 256 * 1024).split('\n')
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i]!
+      if (!line.includes('"turn_aborted"') && !CODEX_TURN_MARKS.some((mark) => line.includes(`"${mark}"`))) continue
+      let said: { type?: unknown; timestamp?: unknown; payload?: { type?: unknown; reason?: unknown } } | null = null
+      try {
+        said = JSON.parse(line)
+      } catch {
+        // The first line of what was read may be cut, and what a command printed is no line of Codex's
+      }
+      if (!said || typeof said !== 'object' || said.type !== 'event_msg' || typeof said.payload !== 'object' || said.payload === null) continue
+      const what = said.payload.type
+      if (what === 'turn_aborted') {
+        // A turn that Codex ended to begin another is followed by that one, and is no interruption
+        if (said.payload.reason !== undefined && said.payload.reason !== 'interrupted') continue
+        const when = typeof said.timestamp === 'string' ? Date.parse(said.timestamp) : Number.NaN
+        at = Number.isFinite(when) ? when : wrote
+        break
+      }
+      if (typeof what === 'string' && CODEX_TURN_MARKS.includes(what)) break
+    }
+    if (interrupted.size > 500) interrupted.clear()
+    interrupted.set(file, { wrote, size, at })
+    return at
+  } catch {
+    return null
+  }
+}
+const interrupted = new Map<string, { wrote: number; size: number; at: number | null }>()
 
 /** The permission modes of Claude Code that do not ask a person: a conversation last held in one of these is reopened in it. Any other is reopened in the mode that asks, where what would be asked is refused. */
 export const CLAUDE_MODES = ['acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'] as const

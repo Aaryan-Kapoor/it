@@ -2,7 +2,7 @@
 // The backend's own tests: who may do what, and that what is stored is what was meant.
 // They run against an in-memory copy of the backend; the service that runs it, with its content
 // service, is stood in for by a stub that records what the backend asked of it.
-import { ALIVE, BackendClock, describeClick, LEASE_MS, LIMITS, PUBLICATION, QUOTA, STORAGE, STORE_KEY } from '@it/protocol'
+import { ALIVE, BackendClock, describeClick, LEASE_MS, LIMITS, PUBLICATION, QUOTA, STORAGE, STORE_KEY, TURN_ON_AGAIN_MS } from '@it/protocol'
 import { type FunctionReturnType, getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
@@ -1411,6 +1411,30 @@ describe('publishing', () => {
     expect(await code(theirs.as.mutation(api.artifacts.take, { slug: 'board', session: today }))).toBe('not_found')
   })
 
+  test('a page is given to a conversation only while no conversation has it, where that is asked, with what was waiting on it', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice', 'laptop')
+    const first = { harness: 'opencode', id: 'ses_first' }
+    const second = { harness: 'opencode', id: 'ses_second' }
+    // Made in no conversation, as by an OpenCode that has not loaded It's add-on
+    const p = await publish(laptop, 'ping')
+    const { actionId } = await alice.browser.mutation(api.actions.submit, {
+      artifactId: p.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-0001'),
+    })
+    const owner = async () => (await alice.browser.query(api.artifacts.get, { slug: 'ping' })).session
+    expect(await owner()).toBeNull()
+    expect(await laptop.as.mutation(api.artifacts.take, { artifactId: p.artifactId, session: first, agent: 'opencode', unowned: true })).toEqual({ took: true })
+    expect(await owner()).toEqual(first)
+    await settle(t)
+    expect((await inbox(laptop, [first])).map((c) => c.id)).toEqual([actionId])
+    // Once a conversation has it, it is given to no other this way, and nothing changes
+    expect(await laptop.as.mutation(api.artifacts.take, { artifactId: p.artifactId, session: second, unowned: true })).toEqual({ took: false })
+    expect(await owner()).toEqual(first)
+  })
+
   test('a conversation that carries on as another hands every page it has on this machine to that one, with what was waiting on them, and none it has elsewhere', async () => {
     const t = backend()
     const alice = await person(t, 'alice')
@@ -1854,6 +1878,20 @@ describe('tour page ownership', () => {
     await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
     expect((await m.as.mutation(api.tour.clear, {})).kept).toEqual(['tour-chess'])
     await expect(start(m, 'chess')).rejects.toThrow('tour does not own')
+  })
+
+  test('a tour page that no conversation has stays the tour’s when it is given to its first conversation', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-unowned')
+    const mine = { harness: 'opencode', id: 'ses_after_restart' }
+    // Made by an OpenCode that had not loaded It's add-on, so in no conversation
+    const made = await publish(m, 'tour-chess', { tour: 'chess', state: '{"reply":"","note":""}' })
+    expect(await m.as.mutation(api.artifacts.take, { artifactId: made.artifactId, session: mine, unowned: true })).toEqual({ took: true })
+    expect((await t.run((ctx) => ctx.db.get(made.artifactId)))!.tour).not.toBeNull()
+    // The tour carries on with it in that conversation
+    const pending = await start(m, 'chess')
+    await finish(m, pending)
+    expect((await m.as.query(api.artifacts.get, { slug: 'tour-chess' })).session).toEqual(mine)
   })
 
   test('reusing an id after deletion never gives the replacement an old tour mark', async () => {
@@ -4201,6 +4239,7 @@ describe('displays and machines', () => {
         'delivery.holdBack',
         'displays.lock',
         'artifacts.notLoaded',
+        'artifacts.take.unowned',
         'turns.say',
         'machines.notLoaded',
       ],
@@ -4623,6 +4662,9 @@ describe('displays and machines', () => {
     ['codex', true, 'unavailable', '0.160.0', 'unavailable', false],
     ['codex', true, 'future-state', '0.160.0', 'unknown', false],
     ['claude-code', true, 'connected', '2.1.287', 'connected', false],
+    // Turned off in the app on that machine: said as that, and not as connecting
+    ['claude-code', true, 'disabled', '2.1.287', 'disabled', false],
+    ['codex', true, 'disabled', '0.160.0', 'disabled', false],
     ['openclaw', true, 'connected', '2026.9.6', 'connected', false],
     ['openclaw', false, 'connected', '2026.9.6', 'disconnected', false],
   ] as const)(
@@ -4850,6 +4892,69 @@ describe('displays and machines', () => {
     await report(host, '0.1.1', '')
     expect((await onSite(host.id)).latest).toBe('')
     expect(await code(ask(host.id))).toBe('conflict')
+  })
+
+  test('only the owner’s own browser can have a machine turn an app’s add-on back on, only where the machine says the app has it turned off, and the machine says how it went', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const desk = await machineOf(t, 'alice', 'the desk')
+    const onSite = async () => (await alice.browser.query(api.machines.list, {})).find((m) => m.id === desk.id)!
+    const ask = (harness: string, as = alice.browser, machineId = desk.id) => as.mutation(api.machines.turnOn, { machineId: machineId as never, harness })
+    const report = (addon: string) =>
+      desk.as.mutation(api.machines.report, {
+        connectorVersion: '0.1.0',
+        harnesses: [
+          { id: 'claude-code', version: '2.1.287', addon },
+          { id: 'pi', version: '0.82.0', addon: 'disabled' },
+        ],
+      })
+    await desk.as.mutation(api.machines.choose, { harnesses: ['claude-code', 'pi'] })
+    // On, nothing is turned on
+    await report('connected')
+    expect(await code(ask('claude-code'))).toBe('conflict')
+    await report('disabled')
+    expect(await onSite()).toMatchObject({ turnOn: [] })
+    // Not for an app It knows no command of to turn it on with, nor for one It does not know at all
+    expect(await code(ask('pi'))).toBe('invalid')
+    expect(await code(ask('made-up'))).toBe('invalid')
+    // Nor by a machine, which is to say by an agent, nor by a screen, nor of another person's machine
+    expect(await code(ask('claude-code', desk.as as never))).toBe('forbidden')
+    const screen = await browserOf(t, 'alice', 'screen')
+    expect(await code(ask('claude-code', screen.browser))).toBe('forbidden')
+    const bob = await person(t, 'bob')
+    expect(await code(ask('claude-code', bob.browser))).not.toBe('ok')
+    // Asked for by the owner, it is asked of the machine, with nothing but the app's name
+    expect(await code(ask('claude-code'))).toBe('ok')
+    expect((await onSite()).turnOn).toMatchObject([{ harness: 'claude-code', state: 'asked' }])
+    expect((await desk.as.query(api.machines.me, {})).turnOn).toEqual([{ harness: 'claude-code', at: expect.any(Number), state: 'asked' }])
+    expect(await desk.as.mutation(api.machines.turningOn, { harness: 'claude-code', state: 'working' })).toBe(true)
+    // Asked again while it is at work, it is the same asking
+    expect(await code(ask('claude-code'))).toBe('ok')
+    expect((await onSite()).turnOn).toMatchObject([{ harness: 'claude-code', state: 'working' }])
+    // It could not: why is kept for the site, cut to a length, and it can be asked for again
+    await desk.as.mutation(api.machines.turningOn, { harness: 'claude-code', state: 'failed', why: 'y'.repeat(1000) })
+    expect((await onSite()).turnOn).toMatchObject([{ harness: 'claude-code', state: 'failed', why: 'y'.repeat(300) }])
+    await report('disabled')
+    expect((await onSite()).turnOn).toMatchObject([{ state: 'failed' }])
+    // Not again at once, so that nobody keeps the machine running the app's command over and over
+    expect(await code(ask('claude-code'))).toBe('rate_limited')
+    // Nor can the machine take up again what failed as if it were asked
+    expect(await desk.as.mutation(api.machines.turningOn, { harness: 'claude-code', state: 'working' })).toBe(false)
+    await vi.advanceTimersByTimeAsync(TURN_ON_AGAIN_MS)
+    expect(await code(ask('claude-code'))).toBe('ok')
+    expect((await onSite()).turnOn).toMatchObject([{ harness: 'claude-code', state: 'asked' }])
+    // A machine speaks only of what it was asked
+    expect(await desk.as.mutation(api.machines.turningOn, { harness: 'codex', state: 'done' })).toBe(false)
+    expect((await onSite()).turnOn).toHaveLength(1)
+    // Done, and the machine reports the app with It's add-on on: there is nothing left to say of it
+    await desk.as.mutation(api.machines.turningOn, { harness: 'claude-code', state: 'done' })
+    expect((await onSite()).turnOn).toMatchObject([{ state: 'done' }])
+    await report('connected')
+    expect((await onSite()).turnOn).toEqual([])
+    // An app that is not connected on the machine is not asked of it
+    await desk.as.mutation(api.machines.choose, { harnesses: [] })
+    await report('disabled')
+    expect(await code(ask('claude-code'))).toBe('invalid')
   })
 
   test('a machine is heard from each half minute its connector says so, and is off from the moment its connector says it is stopping, until the next one reports', async () => {

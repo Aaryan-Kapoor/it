@@ -18,7 +18,7 @@ import { makeContent, startDoor } from './door'
 import { KEEP_MS, keepItsFolder } from './kept'
 import { onTheInternet, reachable } from './network'
 import { recoverStartup } from './startup'
-import { tailnetAddresses, tailnetName } from './tailnet'
+import { funnelNow, tailnetAddresses, tailnetName } from './tailnet'
 import { watchTask } from './task'
 
 /**
@@ -253,9 +253,12 @@ export const standsAs = (
 ) => {
   const onTailnet = tailnetAddresses().length > 0
   const internet = door.network && door.tailnet !== true && door.internet === true
+  // Nothing is said of a Funnel until Tailscale has first been heard
+  const funnel = funnelNow([port, contentPort(port)])
   // The door answers to that name kept to the tailnet, and open to every network on a machine that is on one
   const name = door.network && (door.tailnet === true || onTailnet) ? named() : undefined
   return {
+    ...(funnel ? { funnel } : {}),
     on: door.network,
     wanted,
     addresses: door.network ? reachable(port, undefined, door.tailnet === true, tailnetName, internet) : [],
@@ -272,7 +275,7 @@ export const standsAs = (
     ...(door.https ? { https: door.https } : {}),
   }
 }
-type Stands = ReturnType<typeof standsAs>
+type Stands = Omit<ReturnType<typeof standsAs>, 'funnel'> & { funnel?: 'off' | 'public' | 'unknown' }
 /** What the owner may ask of the network on the site: off, on for the network this machine is on, or on for the tailnet alone. Answering the internet too is asked only of the command. */
 type Way = 'off' | 'on' | 'tailscale'
 /**
@@ -342,7 +345,8 @@ export function teller(
  * to each, and which are owed the word that a turn of theirs was cut off or stopped. The first
  * is written by the command that publishes or brings up a page, once It has accepted that, and
  * by the connector as Codex's hooks say where a conversation is held; the rest by the connector
- * alone.
+ * alone. With them goes the note of the pages made in an OpenCode that had not loaded It's
+ * add-on, which the command that publishes writes and which names no conversation.
  *
  * The note of the turns It has reopened that are running now (`runs.json`) is not among them.
  * It is what keeps a conversation from being reopened a second time while a process of its
@@ -350,7 +354,9 @@ export function teller(
  */
 const NOTES = [
   conversationsFile,
-  ...['heard.json', 'aliases.json', 't3-threads.json', 't3-asked.json', 'cut-off.json', 'stopped.json', 'journal.jsonl'].map((name) => () => inHome(name)),
+  ...['heard.json', 'aliases.json', 't3-threads.json', 't3-asked.json', 'opencode-unclaimed.json', 'cut-off.json', 'stopped.json', 'journal.jsonl'].map(
+    (name) => () => inHome(name),
+  ),
 ]
 /** Removes those notes. Whether there was any of them to remove. */
 function removeNotes(): boolean {

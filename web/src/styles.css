@@ -2225,6 +2225,26 @@ a.grid-chip {
   align-items: center;
 }
 
+/* The ask for a star on GitHub: one quiet chip inside the bar's spacer, so that it adds nothing to
+   the bar's layout, and hidden where the spacer is too small for it, so that it gives way before
+   anything else there */
+.grid-header-spacer:has(.star-room) {
+  display: flex;
+  overflow: hidden;
+}
+.star-room {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+.star-ask {
+  flex: none;
+}
+.star-ask a.chip {
+  text-decoration: none;
+}
+
 /* ══ What a person presses and types into, wherever no look of its own is given ══ */
 
 :where(.list-view, .modal-panel, .door-card, .splash, .empty, .notice, .offer, .reminders, .mount-note)
@@ -3004,6 +3024,15 @@ span.card-fallback {
   line-height: 1.5;
   color: var(--fg-muted);
 }
+/* A Tailscale Funnel that makes It public, or may: a banner of its own above the ways, in the colour of danger, whatever the network setting */
+.panel-said.net-exposure {
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--fg);
+  background: color-mix(in oklab, var(--danger) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--danger) 45%, transparent);
+}
 
 .page-frame-unavailable {
   flex: 1;
@@ -3294,6 +3323,25 @@ form.row-main {
   font-size: 12px;
   color: var(--fg-muted);
 }
+/* Turn back on, under an app that has It's add-on turned off, and why it could not be where it was not */
+.turn-on[data-tone="bad"] {
+  color: var(--danger);
+}
+.turn-on-why {
+  display: block;
+  margin-bottom: 4px;
+}
+.turn-on-why code {
+  font-size: 11.5px;
+}
+/* Drawn as a button, since it is the one thing to do about the line above it */
+.turn-on button.link {
+  font-size: 12px;
+  color: var(--fg);
+  border: 1px solid var(--line);
+  padding: 4px 10px;
+  margin-top: 2px;
+}
 .switch-row {
   flex-direction: row;
   align-items: center;
@@ -3472,6 +3520,13 @@ form.row-main {
   }
   .grid-header-spacer {
     display: none;
+  }
+  /* The ask sits beside the name, where how things stand would be, and is only there while It can be reached */
+  .grid-header-spacer:has(.star-room) {
+    display: flex;
+    grid-column: 1;
+    grid-row: 1;
+    margin-left: 40px;
   }
 }
 
@@ -4039,9 +4094,8 @@ fieldset.media-bar {
 .media-waiting .media-bar-icon {
   color: var(--danger);
 }
-/* While a page records: a red dot, how long, and Discard. The camera live to a page looks the same, says it is live, and has Stop */
-.media-rec,
-.media-cam {
+/* While the camera or the microphone is live to a page: a red dot, what is live, and Stop */
+.media-live {
   flex: none;
   gap: 7px;
   padding: 0 3px 0 9px;
@@ -4049,28 +4103,19 @@ fieldset.media-bar {
   background: color-mix(in oklab, var(--danger) 16%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--danger) 45%, transparent);
 }
-.media-rec:has(.media-thumb) {
-  padding-left: 3px;
-}
-.media-rec-dot,
-.media-cam-dot {
+.media-live-dot {
   flex: none;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--danger);
-  animation: media-rec-pulse 1.4s ease-in-out infinite;
+  animation: media-live-pulse 1.4s ease-in-out infinite;
 }
-.media-rec[data-state="paused"] .media-rec-dot,
-.media-cam[data-state="paused"] .media-cam-dot {
+.media-live[data-state="paused"] .media-live-dot {
   animation: none;
   background: var(--wait);
 }
-.media-rec-time {
-  font-variant-numeric: tabular-nums;
-}
-.media-rec-discard,
-.media-cam-stop {
+.media-live-stop {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -4085,21 +4130,10 @@ fieldset.media-bar {
   font-weight: 550;
   cursor: pointer;
 }
-.media-rec-discard:hover,
-.media-cam-stop:hover {
+.media-live-stop:hover {
   background: var(--danger);
 }
-/* What the camera records, inside the bar, the height of the bar's row */
-.media-thumb {
-  flex: none;
-  display: block;
-  height: 22px;
-  width: auto;
-  max-width: 40px;
-  border-radius: var(--r-pill);
-  background: #000;
-}
-@keyframes media-rec-pulse {
+@keyframes media-live-pulse {
   50% {
     opacity: 0.35;
   }
@@ -4107,7 +4141,6 @@ fieldset.media-bar {
 .nav-action.media-allowed {
   color: var(--danger);
 }
-.media-note,
 .media-takeback {
   flex: none;
 }
@@ -4167,27 +4200,25 @@ fieldset.media-bar {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .media-rec-dot,
-  .media-cam-dot {
+  .media-live-dot {
     animation: none;
   }
 }
-/* On a phone, the camera's chip and a recording's beside it would push It's bar onto a second row and the page down with it: the mark steps aside, Stop shows only its square and Discard only its bin, and the camera's chip says just "Live". So does a recording beside a question It asks, which takes the title's place. Each keeps its own label for whoever hears the screen read */
+/* On a phone, the camera's chip and the microphone's side by side, or either beside a question It asks, which takes the title's place, would push It's bar onto a second row and the page down with it: the mark steps aside, each Stop shows only its square, and each chip says just "Cam" or "Mic". A camera opened with sound says both are live in one chip, which is as wide as two: the mark steps aside and its Stop shows only its square. Each keeps its own label for whoever hears the screen read */
 @media (max-width: 520px) {
-  .page-nav:has(.media-cam):has(.media-rec) .page-nav-mark {
+  .page-nav:is(:has(.media-cam):has(.media-mic), :has(.media-cam[data-sound])) .page-nav-mark {
     display: none;
   }
-  .page-nav:has(.media-cam):has(.media-rec) :is(.media-rec-discard, .media-cam-stop),
-  .page-nav:has(.media-rec):has(.media-ask, .media-waiting) .media-rec-discard {
+  .page-nav:is(:has(.media-cam):has(.media-mic), :has(.media-cam[data-sound]), :has(.media-live):has(.media-ask, .media-waiting)) .media-live-stop {
     gap: 0;
     padding: 0 7px;
     font-size: 0;
   }
-  .page-nav:has(.media-cam):has(.media-rec) .media-cam-what {
+  .page-nav:is(:has(.media-cam):has(.media-mic), :has(.media-live):has(.media-ask, .media-waiting)) .media-live-what {
     font-size: 0;
   }
-  .page-nav:has(.media-cam):has(.media-rec) .media-cam-what::after {
-    content: "Live";
+  .page-nav:is(:has(.media-cam):has(.media-mic), :has(.media-live):has(.media-ask, .media-waiting)) .media-live-what::after {
+    content: attr(data-short);
     font-size: 12px;
   }
 }

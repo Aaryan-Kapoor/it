@@ -32,7 +32,7 @@ On macOS and Linux the shell named by `SHELL` selects these files. Missing files
 | fish | `$XDG_CONFIG_HOME/fish/conf.d/it.fish`, or `~/.config/fish/conf.d/it.fish` when that variable is unset |
 | Any other shell, or no `SHELL` | `~/.profile` |
 
-On Windows the installer edits your account's PATH in the registry, and edits none of these shell files.
+On Windows the installer edits your account's PATH in the registry, and edits none of these shell files. It also puts the folder on the PATH of the PowerShell it runs in, so that `it` typed in that window next is It. Any other terminal or app that was open before the install keeps the PATH it started with until it is started again, and in Windows PowerShell a bare `it` there runs something else: [A bare `it` on Windows that speaks of a Describe block](troubleshooting.md#a-bare-it-on-windows-that-speaks-of-a-describe-block) says what, and what to type instead.
 
 Run at a terminal, the command says what it did in a few lines and goes straight on into the setup, which the next section describes. On macOS and Linux it says there that it is downloading and shows the program as it comes. A slow download is waited for, however long it takes, and one from which nothing has come for a minute is given up: the command then says that nothing was installed, and to run it again. Run by a script or an agent, it installs, says in sentences what it did, and names the command that sets It up, and the two commands an agent goes on with, which ask nothing at a terminal. Nothing is said at a terminal of the counts It reports of its use: the first screen of its site says it, and [Usage reporting](usage-reporting.md) says what is sent and how to turn it off.
 

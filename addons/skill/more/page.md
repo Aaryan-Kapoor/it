@@ -7,9 +7,9 @@ A page is shown in a sandbox, as a document that shares nothing with the site, w
 - **There is no IndexedDB, no `caches` and no service worker.** Each of them throws.
 - **A worker starts only from a `blob:` address.** `new Worker('worker.js')` fails. Fetch the script and start the worker from a `Blob` of it.
 - **It cannot frame its own files.** An `<iframe>`, `<embed>` or `<object>` that names another file of the page, a PDF included, stays empty. Link to the file, or draw what it holds in the page itself. Its scripts, styles, pictures, fonts and what it fetches from its own files all load as usual.
-- **A link to another site opens in a new tab.** Write links as on any page: one to another site opens in a tab of its own, whatever its `target` says, and the page stays as it was. The tab is an ordinary one, and neither it nor the page has a hold on the other, so `window.open` returns `null`: do not take that for a blocked window. No referrer is sent. A link within the page or to another of its files stays in the page, and a tab of the page's own files is sandboxed as the page is. Every link and form is given `rel="noopener noreferrer"`, which changes nothing where it is followed within the page. The page cannot move the tab it is shown in. Do not put a link in a closed shadow root that the markup declares (`<template shadowrootmode="closed">`): It cannot see that link, and following it shows the page again instead of opening the link. A shadow root a script makes, open or closed, and an open one the markup declares, is fine.
+- **A link to another site opens in a new tab.** Write links as on any page: one to another site opens in a tab of its own, whatever its `target` says, and the page stays as it was. The tab is an ordinary one, and neither it nor the page has a hold on the other, so `window.open` returns `null`: do not take that for a blocked window. No referrer is sent. In Firefox, a link inside an embedded `srcdoc` document can still send the page's showing address, with its token, to another site when clicked. Whoever receives it and can reach It's pages port can read that showing's version of the page, but no other page or browser pairing. The token lasts until ten minutes after the last request or a day after the showing began, whichever comes first; requests can keep it alive until that day. Closing the tab does not end it. It also ends when It stops or the content service hears of deletion or sign-out, which can be delayed. A link within the page or to another of its files stays in the page, and a tab of the page's own files is sandboxed as the page is. Every link and form It can see is given `rel="noopener noreferrer"`, which changes nothing where it is followed within the page. The page cannot move the tab it is shown in. Do not put a link in a closed shadow root that the markup declares (`<template shadowrootmode="closed">`): It cannot see that link, and following it shows the page again instead of opening the link. A shadow root a script makes, open or closed, and an open one the markup declares, is fine.
 - **A mail, phone or messages link is opened by It.** A `mailto:`, `tel:` or `sms:` link works when the user clicks it. From a script, call `It.open(url)` in the handler of the user's click or key: it opens an http, https, mailto, tel or sms address as a link would, and throws on any other kind. A window of a `javascript:`, `data:` or `blob:` address is never opened.
-- **It limits how markup sends the showing's address.** That address holds what opens this showing's files. In the main document, a `<meta name="referrer">` or a `referrerpolicy` is put back to `no-referrer`, and links lose their `ping` attributes. This is a mitigation, not a guarantee: shadow roots the markup declares and `srcdoc` documents are not watched, and page scripts can still send the address. Do not put policies that disclose the address or links with `ping` in embedded content.
+- **It limits how markup sends the showing's address.** That address holds what opens this showing's files. In the main document, a `<meta name="referrer">` or a `referrerpolicy` is put back to `no-referrer`, and links lose their `ping` attributes. This is a mitigation, not a guarantee: closed shadow roots the markup declares and `srcdoc` documents are not watched, and page scripts can still send the address. Do not put policies that disclose the address or links with `ping` in embedded content.
 - **Its own address is not one to keep.** What a page's script reads as `location` is where the files of this one showing are, and it stops answering when the showing ends. Do not show it, send it or store it. The address to give the user is the `url` that `it create` printed.
 
 ## Players and maps from other sites
@@ -31,44 +31,63 @@ A player lies over the page rather than in it, which has these costs. Lay the pa
 
 Put the file in what the action carries, wherever it fits: `It.action('receipt', { photo: input.files[0], table: 4 })`. A `File` from an `<input type="file">` or a drop, or a `Blob` from `canvas.toBlob`, goes with the action, beside what it carries, and the action is accepted only once It has every file whole. Never cut a file into pieces or write it into the data as text.
 
+- **For a photo from a phone, use a file input.** `<input type="file" accept="image/*" capture="environment">` works on every screen, over plain http too, and asks nothing of It. On most phones it offers the phone's own camera; elsewhere the user chooses a picture they have.
 - **A photo is made smaller before it is sent**, to 1600 pixels on its longer side, as a JPEG, which is what you read a picture at, and what the camera wrote into it, such as where it was taken, does not go with it. A picture that goes as it is keeps whatever is written in it: one that is small already (at most 1600 pixels and 1 MB, or at most 1600 pixels where a JPEG would only make it larger), and one this browser cannot read or redraw, as some browsers cannot a HEIC photo. Where the page needs the file as it is, pass `{ original: true }` as the third argument: `It.action('scan', { page: file }, { original: true })`, and `It.commit(name, extra, { original: true })` the same. Any other file, such as a PDF, a CSV or a recording, always goes as it is.
 - **A phone that loses its connection keeps the action and its files**, in that browser, and sends them once it is back, even if the page was closed in between. The promise stays unanswered while there is no connection, so show on the page that the photo is on its way, and say so when the promise rejects.
 - **`It.store` keeps no file.** To show a picture you were sent, on this page or on every screen, put it in the page's folder, publish again with `it update`, and refer to it by its path.
 
-## Recording sound, video or a photo
+## The microphone, the camera and a photo
 
-A page records from the microphone or the camera of the screen it is shown on by calling for them: nothing is said of it when you publish. The page never gets the device itself. The first time on each screen, It asks the user in its own bar whether this page may, and the browser asks too the first time for It's site; after that the page records there without being asked, and It's bar says that it is recording for as long as it is. What the user allows lasts until they take it back, or until the page goes 30 days without using it. It asks only while the page is in front, in the window the user is using, and begins nothing while the browser says the page is not shown, so call from something the user did on the page.
+A page uses the microphone or the camera of the screen it is shown on by calling for them: nothing is said of it when you publish. The page never gets the device itself: It opens it, and passes the page what it gives as it comes. The first time on each screen, It asks the user in its own bar whether this page may, and the browser asks too the first time for It's site; after that the page opens them there without being asked, and It's bar says what is live for as long as it is, with a Stop button. What the user allows lasts until they take it back, or until the page goes 30 days without using it. It asks only while the page is in front, in the window the user is using, and refuses a call made while the browser says the page is not shown, so call from something the user did on the page. A call made before the page has finished loading waits until it has, for up to 20 seconds.
+
+- **Show why it failed.** `It.microphone`, `It.camera` and `It.photo` reject with a sentence that says why: the user said no, the page was not in front, the call did not come from a click, the screen reaches It over plain http, the browser refused, or It was updated while that screen had it open, which reloading It there fixes. A browser gives the microphone only to an https address or to the machine It runs on, so on another screen It must be opened at its https address, which `it https on` on that machine sets up.
+- **It can end without the page asking.** The microphone and the camera stay live while the user looks at another tab, and end when the user presses Stop in It's bar or takes back what they allowed, when another conversation takes the page over, or when the page closes or loads another document, which has to ask again. `onchange` says which, and the stream ends.
+- **It does not record for the page.** A page records the stream it is given with a `MediaRecorder` of its own, as the next section shows. `It.record` is refused with a sentence that says so.
+- **A photo is the user's to take.** `const photo = await It.photo()` opens It's own view of the camera in its bar, the user takes the photo there or closes it, and the page is given a JPEG `File`. `It.photo({ facing: 'environment' })` asks for the camera on the back of a phone. Like the camera, it works only where the screen reaches It at its https address or is the machine It runs on, so it is for a page that wants It's own view of the camera; a file input works anywhere. It is refused while the camera or the microphone is live to the page: take your own picture from `cam.onframe` then, by drawing it on a canvas and using `canvas.toBlob`.
+
+## Hearing the microphone live
+
+For a call to another screen, live captions, a level meter, a voice note or anything that answers a voice, the page can hear the microphone as it happens. Call `It.microphone()` from a click or a key in the page. It's bar says "Mic live" with a Stop button for as long as it is open.
 
 ```js
-// Starts recording, and asks the user first the first time on each screen. video: true adds the camera.
-const take = await It.record({ audio: true })
-// ...later, when the user presses Stop on the page
-const file = await take.stop() // a File: audio/webm, or audio/mp4 in Safari
-await It.action('take', { take: file })
-// A photo: the user takes it in It's own view of the camera, and the page is given the JPEG
-const photo = await It.photo()
+talk.onclick = async () => {
+  const mic = await It.microphone() // asks the user first, the first time on each screen
+  mic.onsound = (samples, sampleRate) => meter(samples) // each piece: a Float32Array of one channel, from -1 to 1
+  mic.onchange = (state, why) => {} // 'ended', with why
+  // mic.stream is a MediaStream: record it, or send its track with RTCPeerConnection
+  const parts = []
+  const recorder = new MediaRecorder(mic.stream)
+  recorder.ondataavailable = (e) => parts.push(e.data)
+  recorder.onstop = () => {
+    const type = (parts[0]?.type ?? '').split(';')[0] // audio/webm, audio/ogg in Firefox, audio/mp4 in Safari
+    const name = `take.${type.endsWith('ogg') ? 'ogg' : type.endsWith('mp4') ? 'm4a' : 'webm'}`
+    It.action('take', { take: new File(parts, name, { type }) })
+  }
+  recorder.start(1000) // and recorder.stop() when the user is done, then mic.stop()
+}
 ```
 
-- **Show why it failed.** `It.record`, `It.photo` and `It.camera` reject with a sentence that says why: the user said no, the page was not in front, the screen reaches It over plain http, the browser refused, or It was updated while that screen had it open, which reloading It there fixes. A browser gives the microphone only to an https address or to the machine It runs on, so on another screen It must be opened at its https address, which `it https on` on that machine sets up.
-- **The user can stop it.** `take.state` is `recording`, `paused` (while the screen does not show It) or `ended`, and `take.onchange = (state, why) => …` is called when it changes without the page asking. The user can discard a recording with Discard in It's bar, which throws it away, and it is thrown away too when another conversation takes the page over. `take.cancel()` throws one away from the page.
-- **Settings are the page's to say.** `audio` and `video` may be objects such as `{ echoCancellation: false }` or `{ facingMode: 'environment', width: 1280 }`, and `audioBitsPerSecond`, `videoBitsPerSecond` and `mimeType` are as for a MediaRecorder. A page records one thing at a time, for an hour at most and up to 1 GB, the most one file sent with an action can be: It stops it there and gives the page what was recorded.
-- **A recording is a file like any other.** The action that carries it is held to the same limits as any file, so keep video takes short or their bit rate low, and save what arrives with `it save <id> take.webm`.
+- **Call it from a click or a key in the page.** A browser starts sound for a page only once the user has done something in it. Called at any other time, `It.microphone` rejects with a sentence that says so, and the user is asked nothing.
+- **The page never gets the microphone itself.** It sends the page the sound in pieces of a fiftieth of a second, of one channel, at `mic.sampleRate` samples a second, which is usually 48,000, and `mic.stream` is made in the page from them, about 60 milliseconds behind the microphone. `mic.onsound` is given each piece, for a meter or for captions made from the samples. A page that falls behind is sent less sound and never a backlog, so return from `onsound` quickly.
+- **Settings are the page's to say.** `It.microphone({ echoCancellation: false, noiseSuppression: false, autoGainControl: false })` turns off what a browser does to a voice, as for music. It takes nothing else, and no page can name a device.
+- **A recording is a file like any other.** Record `mic.stream` as above, and send the file with `It.action`: it is held to the same limits as any file, 1 GB at most, and the agent saves what arrives with `it save <id> <file>`. Each browser records its own kind, `audio/webm`, `audio/ogg` in Firefox or `audio/mp4` in Safari, so name the file by the type of what was recorded, `parts[0].type`, as above. Do not read `recorder.mimeType` once it has stopped: Firefox empties it then.
+- **Do not play `mic.stream` on the same screen.** Put in an `<audio>` there, the user hears themselves late, and the microphone hears it again. It is for a meter, a recorder, or a call to somewhere else.
+- **One of each at a time.** The microphone and the camera can be live together, each with its own Stop in It's bar: open one, wait for it, then open the other. A second `It.microphone()` is refused until the first is stopped.
 
 ## Seeing the camera live
 
-For a call to another screen, reading a QR code, a filter or a live preview, the page can see the camera's picture as it happens. Call `It.camera()`, with nothing declared when you publish. It asks once in its bar for that page on that screen, and the browser asks the first time; a page allowed the camera, for a photo or a recording too, opens it live without being asked again. It's bar says "Camera live" with a Stop button for as long as it is open.
+For a call to another screen, reading a QR code, a filter or a live preview, the page can see the camera's picture as it happens. Call `It.camera()`. It asks once in its bar for that page on that screen, and the browser asks the first time; a page allowed the camera, for a photo too, opens it live without being asked again. It's bar says "Camera live" with a Stop button for as long as it is open.
 
 ```js
 const cam = await It.camera({ facing: 'environment', width: 1280 }) // asks the user first, the first time on each screen
-video.srcObject = cam.stream // a MediaStream: show it, or send its track with RTCPeerConnection
+video.srcObject = cam.stream // a MediaStream: show it, or send its tracks with RTCPeerConnection
 cam.onframe = (picture) => ctx.drawImage(picture, 0, 0) // each picture, an ImageBitmap, closed when this returns
-cam.onchange = (state, why) => {} // 'live', 'paused' or 'ended', with why it ended
+cam.onchange = (state, why) => {} // 'ended', with why
 await cam.stop()
 ```
 
 - **The page never gets the camera itself.** It sends the page each picture, and `cam.stream` is made in the page from them. The next picture comes only once the page has drawn the last, so a slow `onframe` gets fewer pictures and never a backlog. Read or draw the picture inside `onframe`. `cam.width` and `cam.height` are the last picture's size, at most 1920 pixels on its longer side, and at most 30 pictures come in a second, whatever you ask for.
-- **It can end without the page asking.** It pauses while the browser says the page is not shown, and ends when the user stops it or takes back what they allowed, when another conversation takes the page over, or when the page closes. `cam.onchange` says which, and `cam.stream` ends.
-- **Sound can be recorded beside it.** While the camera is live, `It.record({ audio: true })` works, with its own Stop in It's bar. `It.photo` and a recording with video are refused then: take your own picture from `cam.onframe` (draw it on a canvas and use `canvas.toBlob`), or record `cam.stream` yourself. `It.camera` is refused while a recording with video or a photo is under way. Only the picture is live: a call made from `cam.stream` has no sound from the user.
+- **`It.camera({ audio: true })` adds the user's voice.** `cam.stream` then has a sound track as well, so a call made from it carries the person's voice, and a `MediaRecorder` on it records picture and sound together. `audio` may be the same settings `It.microphone` takes. Call it from a click or a key in the page, as `It.microphone`. It asks for the microphone and the camera in one question, It's bar says "Camera and mic live", and its one Stop ends both. Keep the `<video>` that shows it `muted`. It is refused while `It.microphone()` is open, and `It.microphone()` while it is: one of them has the microphone at a time.
 
 ## Keeping something with the page
 

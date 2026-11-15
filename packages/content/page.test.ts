@@ -427,6 +427,7 @@ describe.each(BROWSERS)('what %s makes of it', (_name, type) => {
     await context?.close()
     context = undefined
   })
+  // Firefox can be slow to close on Windows, longer than the ten seconds a hook is given unless it says otherwise
   afterAll(async () => {
     try {
       await browser?.close()
@@ -436,7 +437,7 @@ describe.each(BROWSERS)('what %s makes of it', (_name, type) => {
         await new Promise<void>((resolve) => server.close(() => resolve()))
       }
     }
-  })
+  }, 120_000)
 
   // Both are left out where the browser is not there to run them: see `here`, and the line written above when it is not
   test.skipIf(!here(type))(

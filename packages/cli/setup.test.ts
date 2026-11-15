@@ -3,7 +3,7 @@
 // every folder is a temporary one, so nothing here touches an app a person has. What it must
 // get right: only what It put there is ever replaced or removed, it is removed from where it
 // was put, and an add-on another It folder installed is left to that folder.
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs, {
   chmodSync,
@@ -25,7 +25,7 @@ import fs, {
 import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
-import type { Harness } from '@it/protocol'
+import { HARNESSES, type Harness } from '@it/protocol'
 import { build } from 'esbuild'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS, SKILL } from './src/addons.generated'
@@ -35,6 +35,7 @@ import { keepOriginal, ORIGINAL_LIMIT, restoreAbsent } from './src/preserve'
 import { startOf } from './src/serve/backend'
 import {
   AFTER,
+  addonHookCommand,
   afterHermes,
   alone,
   asLoaded,
@@ -49,11 +50,14 @@ import {
   detectAll,
   disconnect,
   holdsAddons,
+  hookUnrunnable,
   newerProgramSeen,
   reconcile,
   refresh,
   shim,
+  shortPath,
   stampFile,
+  turnBackOn,
   unpack,
 } from './src/setup'
 
@@ -154,6 +158,14 @@ function standIn(bin: string, words: string[], env: NodeJS.ProcessEnv): string {
       has.on = true
       return ''
     }
+    // As Claude Code 2.1.322 answers: it refuses to turn on a plugin that is on already
+    if (said === `plugin enable ${ID} --scope user`) {
+      if (has.on === undefined) throw new Error(`Plugin "${ID}" is not installed`)
+      if (has.on) throw new Error(`Plugin "${ID}" is already enabled at user scope`)
+      has.on = true
+      return '✔ Successfully enabled plugin: it-bridge (scope: user)'
+    }
+    // And updating a plugin leaves it on or off as it was
     if (said === `plugin update ${ID} --scope user`) {
       if (!has.from || has.on === undefined) throw new Error('not installed')
       if (offered() === has.version) return 'already at the latest version'
@@ -171,19 +183,26 @@ function standIn(bin: string, words: string[], env: NodeJS.ProcessEnv): string {
         name: 'it-bridge',
         marketplaceName: 'it',
         enabled: Boolean(has.on),
-        installed: Boolean(has.on),
+        installed: has.on !== undefined,
         source: { source: 'local', path: path.join(has.from ?? '', 'plugins/it-bridge') },
       }
-      return JSON.stringify({ installed: has.from && has.on ? [entry] : [], available: has.from && !has.on ? [entry] : [] })
+      const there = has.from && has.on !== undefined
+      return JSON.stringify({ installed: there ? [entry] : [], available: has.from && !there ? [entry] : [] })
     }
     if (said === 'plugin list --marketplace it') {
       if (!has.from) return 'No plugins found in marketplace `it`.'
       const source = path.join(has.from, 'plugins/it-bridge')
-      const row = has.on ? `${ID}  installed, enabled  0.1.0    ${source}` : `${ID}  not installed           ${source}`
+      // As Codex 0.167 lists one turned off in its settings (`enabled = false` under `[plugins."it-bridge@it"]`)
+      const row =
+        has.on === true
+          ? `${ID}  installed, enabled  0.1.0    ${source}`
+          : has.on === false
+            ? `${ID}  installed, disabled  0.1.0    ${source}`
+            : `${ID}  not installed           ${source}`
       return `Marketplace \`it\`\n${path.join(has.from, '.agents/plugins/marketplace.json')}\n\nPLUGIN        STATUS              VERSION  SOURCE\n${row}`
     }
     if (said === `plugin remove ${ID}`) {
-      if (!has.on) throw new Error('not installed')
+      if (has.on === undefined) throw new Error('not installed')
       has.on = undefined
       return ''
     }
@@ -206,7 +225,15 @@ function standIn(bin: string, words: string[], env: NodeJS.ProcessEnv): string {
   if (bin === 'pi') {
     // Pi knows a package by the folder it was installed from, and loads it from there
     has.packages ??= new Set()
-    if (said === 'list') return [...has.packages].join('\n')
+    // As Pi lists them: each by the source its settings name, ` (filtered)` after one whose
+    // settings choose which of its resources load, and the folder it loads from under it
+    if (said === 'list') {
+      if (!has.packages.size) return 'No packages installed.'
+      const settings = JSON.parse(existsSync(path.join(folder, 'settings.json')) ? read(path.join(folder, 'settings.json')) : '{}') as { packages?: unknown[] }
+      const filtered = (dir: string) =>
+        (settings.packages ?? []).some((p) => typeof p === 'object' && p !== null && path.resolve(folder, (p as { source: string }).source) === dir)
+      return ['User packages:', ...[...has.packages].flatMap((dir) => [`  ${dir}${filtered(dir) ? ' (filtered)' : ''}`, `    ${dir}`])].join('\n')
+    }
     if (words.length === 2 && words[0] === 'install') {
       has.packages.add(words[1]!)
       return ''
@@ -847,6 +874,23 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     }
     expect(said.join('\n')).toContain('originals were kept for recovery')
     expect(said.join('\n')).not.toContain(tmp)
+  })
+
+  test('Hermes is told to enable the add-on with its input closed, so that a question it asks there takes its answer no and does not wait', async () => {
+    // Hermes 0.20.1 asks whether a plugin may replace its own tools as it enables one, and
+    // waits while its input is open: setup then waited a minute and called the install failed
+    const real = fake.execFile.getMockImplementation()!
+    const closed: string[] = []
+    fake.execFile.mockImplementation(
+      (command: string, given: string[], options: { env: NodeJS.ProcessEnv }, done: (err: Error | null, out: string, err2: string) => void) => {
+        real(command, given, options, done)
+        const words = given.map((word) => word.replace(/^"(.*)"$/, '$1')).join(' ')
+        return { stdin: { end: () => void closed.push(`${command} ${words}`) } }
+      },
+    )
+    expect((await connect('hermes', () => {})).addon).toBe('connected')
+    expect(closed).toContain('hermes plugins enable it-bridge')
+    expect(closed.every((said) => said === 'hermes plugins enable it-bridge')).toBe(true)
   })
 
   test('an install that stops half way leaves a note of every file it wrote, and they are removed with it', async () => {
@@ -3421,9 +3465,9 @@ describe('what a person is told about an app', () => {
     standIn('hermes', ['plugins', 'disable', 'it-bridge'], process.env)
     const status = await connect('hermes', () => {})
     expect(status).toMatchObject({
-      addon: 'not_connected',
+      addon: 'disabled',
       detail:
-        'It’s add-on is switched off inside Hermes Agent. Switch it on there, or untick Hermes Agent here and tick it again to have the add-on installed afresh.',
+        'It’s add-on is turned off in Hermes Agent, so nothing done on a page reaches Hermes Agent by itself. Turn it back on under Machines on the site, or by running `it setup` on this machine.',
     })
     expect(commands('hermes').filter((said) => said === 'plugins enable it-bridge').length).toBe(1)
   })
@@ -3551,11 +3595,260 @@ describe('on Windows', () => {
     const command = (dir: string) =>
       (JSON.parse(read(path.join(dir, 'plugins/it-bridge/hooks/hooks.json'))) as { hooks: Record<string, { hooks: { command: string }[] }[]> }).hooks.Stop![0]!
         .hooks[0]!.command
+    if (!/^[A-Za-z0-9_:.~\\/-]+$/.test(shim())) return
     expect(command(unpack('codex'))).toBe(`${shim()} hook codex`)
-    // An address with a space in it has to be in quotes, and is written as cmd reads it
-    useHome('an it folder')
-    expect(command(unpack('codex'))).toBe(`"${shim()}" hook codex`)
   })
+
+  // What It wrote before it wrote a short name, word for word: what it writes still for every
+  // address that this wrote without quotes, and on every other system for every address. Codex
+  // ties its approval of the hooks to their text, so a change there would have everyone approve
+  // them again.
+  const before = (id: Harness, it: string, windows: boolean) => {
+    const plain = windows ? /^[A-Za-z0-9_:.~\\/-]+$/ : /^[A-Za-z0-9_@%+=:,./-]+$/
+    const quoted = plain.test(it) ? it : windows ? `"${it}"` : `'${it.replace(/'/g, `'\\''`)}'`
+    return `${quoted} hook ${id}`
+  }
+  const unasked = () => {
+    throw new Error('the short name was looked up')
+  }
+  const PLAIN_WINDOWS = [
+    'C:\\Users\\aarya\\.it\\bin\\it.exe',
+    'C:\\Users\\john.doe\\.it\\bin\\it.exe',
+    'D:\\it-home\\bin\\it-here.cmd',
+    'C:/Users/a_b/.it/bin/it.cmd',
+    'C:\\Users\\RUNNER~1\\.it\\bin\\it.exe',
+  ]
+  const UNUSUAL = [
+    'C:\\Users\\Ana Lee\\.it\\bin\\it.exe',
+    'C:\\Users\\José\\.it\\bin\\it.exe',
+    'C:\\Users\\R&D (dev)\\.it\\bin\\it.exe',
+    "C:\\Users\\O'Brien\\.it\\bin\\it.exe",
+    '/home/Ana Lee/.it/bin/it',
+    "/Users/o'brien/.it/bin/it",
+    '/home/a$b/.it/bin/it',
+  ]
+
+  test.each(HARNESSES.flatMap((id) => PLAIN_WINDOWS.map((it) => ({ id, it }))))(
+    'a launcher whose address needs no quotes on Windows is written as before, byte for byte, with no short name looked up ($id, $it)',
+    ({ id, it }) => {
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      expect(addonHookCommand(id, it, unasked)).toBe(before(id, it, true))
+      expect(addonHookCommand(id, it, unasked)).toBe(`${it} hook ${id}`)
+    },
+  )
+
+  test.each(HARNESSES.flatMap((id) => [...PLAIN_WINDOWS, ...UNUSUAL, '/home/aarya/.it/bin/it'].map((it) => ({ id, it }))))(
+    'on Linux and macOS every launcher is written as before, byte for byte ($id, $it)',
+    ({ id, it }) => {
+      for (const system of ['linux', 'darwin']) {
+        Object.defineProperty(process, 'platform', { value: system })
+        expect(addonHookCommand(id, it, unasked)).toBe(before(id, it, false))
+      }
+    },
+  )
+
+  test('every add-on is unpacked as before for an It folder whose address needs no quotes: only Codex’s hooks name the launcher, as they did', () => {
+    for (const system of ['win32', 'linux']) {
+      Object.defineProperty(process, 'platform', { value: system })
+      const it = shim()
+      if (system === 'win32' && !/^[A-Za-z0-9_:.~\\/-]+$/.test(it)) continue
+      for (const id of Object.keys(ADDONS) as Harness[]) {
+        const dir = unpack(id)
+        for (const [rel, text] of Object.entries(ADDONS[id]!.files)) {
+          if (!rel.endsWith('hooks.json')) continue
+          // As It wrote it before: the template, with each `it hook <id>` put in as JSON
+          expect(read(path.join(dir, ...rel.split('/')))).toBe(
+            text.replaceAll(JSON.stringify(`it hook ${id}`), JSON.stringify(before(id, it, system === 'win32'))),
+          )
+        }
+      }
+    }
+  })
+
+  test.each([
+    {
+      it: 'C:\\Users\\Ana Lee\\.it\\bin\\it.exe',
+      short: 'C:\\Users\\ANALEE~1\\IT4752~1\\bin\\it.exe',
+      said: 'C:\\Users\\ANALEE~1\\IT4752~1\\bin\\it.exe hook codex',
+    },
+    {
+      it: 'C:\\Users\\Ana Lee\\.it\\bin\\it-here.cmd',
+      short: 'C:\\Users\\ANALEE~1\\IT4752~1\\bin\\it-here.cmd',
+      said: 'C:\\Users\\ANALEE~1\\IT4752~1\\bin\\it-here.cmd hook codex',
+    },
+    { it: 'C:\\Users\\José\\.it\\bin\\it.exe', short: 'C:\\Users\\JOS~1\\IT4752~1\\bin\\it.exe', said: 'C:\\Users\\JOS~1\\IT4752~1\\bin\\it.exe hook codex' },
+    {
+      it: 'C:\\Users\\José Luis\\.it\\bin\\it.exe',
+      short: 'C:\\Users\\JOSLUI~1\\IT4752~1\\bin\\it.exe',
+      said: 'C:\\Users\\JOSLUI~1\\IT4752~1\\bin\\it.exe hook codex',
+    },
+    // A short name keeps an ampersand and parentheses, which each shell reads as its own
+    {
+      it: 'C:\\Users\\R&D (dev)\\.it\\bin\\it.exe',
+      short: 'C:\\Users\\R&D(DE~1\\IT4752~1\\bin\\it.exe',
+      said: '"C:\\Users\\R&D (dev)\\.it\\bin\\it.exe" hook codex',
+    },
+    // A name that is a short name already has no other
+    {
+      it: "C:\\Users\\O'Brien\\.it\\bin\\it.exe",
+      short: "C:\\Users\\O'Brien\\IT4752~1\\bin\\it.exe",
+      said: '"C:\\Users\\O\'Brien\\.it\\bin\\it.exe" hook codex',
+    },
+    // A drive with short names turned off
+    { it: 'C:\\Users\\Ana Lee\\.it\\bin\\it.exe', short: null, said: '"C:\\Users\\Ana Lee\\.it\\bin\\it.exe" hook codex' },
+  ])('on Windows a launcher whose address needs quotes is written as its short name where that needs none ($it → $short)', ({ it, short, said }) => {
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    const asked: string[] = []
+    expect(
+      addonHookCommand('codex', it, (file) => {
+        asked.push(file)
+        return short
+      }),
+    ).toBe(said)
+    expect(asked).toEqual([it])
+    // And where none is had, Codex is said not to be able to run the hooks
+    const hooks = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: said }] }] } })
+    expect(hookUnrunnable(hooks, true) !== undefined).toBe(said.startsWith('"'))
+    expect(hookUnrunnable(hooks, false)).toBeUndefined()
+  })
+
+  test('Codex is not called connected where the hooks it has would not run, and is again once they would', async () => {
+    await connect('codex', () => {})
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    // Codex's own copy of the plugin, which is what it runs
+    const copy = path.join(person, '.codex', 'plugins', 'cache', 'it', 'it-bridge', '0.1.0', 'hooks', 'hooks.json')
+    const hooks = (command: string) => JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } })
+    put(copy, hooks('"C:\\Users\\Ana Lee\\.it\\bin\\it.exe" hook codex'))
+    const status = await connect('codex', () => {})
+    expect(status.addon).toBe('error')
+    expect(status.detail).toMatch(/^Codex cannot run It’s hooks/)
+    put(copy, hooks('C:\\Users\\ANALEE~1\\IT4752~1\\bin\\it.exe hook codex'))
+    expect((await connect('codex', () => {})).addon).not.toBe('error')
+  })
+
+  test.skipIf(platform === 'win32')(
+    'Codex is not given hooks that PowerShell would read as more than a path, where a quote in the folder’s name would end the path’s quotes',
+    async () => {
+      // Taken on Windows to have no short name: a drive with short names turned off
+      useHome('it ” ; Write-Output x ; #')
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      ran = []
+      const status = await connect('codex', () => {})
+      expect(status.addon).toBe('error')
+      expect(status.detail).toMatch(/cannot be passed safely to a command on Windows/)
+      expect(commands('codex').filter((said) => /add|install/.test(said))).toEqual([])
+    },
+  )
+
+  test('nor are such hooks given to Codex by turning the add-on back on', async () => {
+    // Put in on a system where the name does not matter, and then turned off in Codex
+    useHome('it ” ; Write-Output x ; #')
+    Object.defineProperty(process, 'platform', { value: 'linux' })
+    await connect('codex', () => {})
+    kept.codex!.get(folderOf('codex'))!.on = false
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    const hooks = path.join(process.env.IT_HOME!, 'addons', 'codex', 'plugins', 'it-bridge', 'hooks', 'hooks.json')
+    put(
+      hooks,
+      read(hooks).replace(/"command": "[^"]*"/g, () => `"command": ${JSON.stringify(`"${process.env.IT_HOME}\\bin\\it.cmd" hook codex`)}`),
+    )
+    ran = []
+    const status = await connect(
+      'codex',
+      () => {},
+      false,
+      () => {},
+      true,
+    )
+    expect(status.addon).toBe('disabled')
+    expect(status.detail).toMatch(/cannot be passed safely to a command on Windows/)
+    expect(commands('codex').filter((said) => said.startsWith('plugin add'))).toEqual([])
+  })
+
+  test.skipIf(platform !== 'win32')(
+    'on Windows hooks in quotes that an It from before wrote are written again by setup and by refresh, once, where a short name serves',
+    async () => {
+      useHome(path.join('Ana Lee', '.it'))
+      await connect('codex', () => {})
+      const written = path.join(process.env.IT_HOME!, 'addons', 'codex', 'plugins', 'it-bridge', 'hooks', 'hooks.json')
+      const now = read(written)
+      if (!/"command": "[^"\\]/.test(now)) return // this drive gives no short names
+      const it = shim()
+      const old = now.replaceAll(JSON.stringify(`${shortPath(it)} hook codex`), JSON.stringify(`"${it}" hook codex`))
+      expect(old).not.toBe(now)
+      // Codex's own copy, as an It from before had it put there
+      const copy = path.join(person, '.codex', 'plugins', 'cache', 'it', 'it-bridge', '0.1.0', 'hooks', 'hooks.json')
+      for (const [via, again] of [
+        ['refresh', () => refresh(() => {})],
+        ['setup', () => connect('codex', () => {})],
+      ] as const) {
+        put(written, old)
+        put(copy, old)
+        ran = []
+        await again()
+        expect(read(written), via).toBe(now)
+        expect(
+          commands('codex').filter((said) => said === 'plugin add it-bridge@it'),
+          via,
+        ).toHaveLength(1)
+        // Codex copies the plugin anew as it adds it
+        put(copy, read(written))
+        ran = []
+        expect((await connect('codex', () => {})).addon, via).not.toBe('error')
+        expect(
+          commands('codex').filter((said) => said === 'plugin add it-bridge@it'),
+          via,
+        ).toHaveLength(0)
+      }
+    },
+    120_000,
+  )
+
+  // On Windows itself: a launcher in a folder whose name has a space, run as Codex runs a hook,
+  // in PowerShell given the command as one argument, and in cmd.exe given it in quotes as is
+  test.skipIf(platform !== 'win32')(
+    'on Windows a hook for a launcher in a folder with a space in its name runs in PowerShell and in cmd, as Codex runs it',
+    () => {
+      const folder = path.join(tmp, 'Ana Lee', '.it', 'bin')
+      mkdirSync(folder, { recursive: true })
+      const launcher = path.join(folder, 'it-here.cmd')
+      const mark = path.join(tmp, 'ran.txt')
+      writeFileSync(launcher, `@echo off\r\necho %*> "${mark}"\r\n`)
+      const command = addonHookCommand('codex', launcher)
+      const short = shortPath(launcher)
+      if (short === null) {
+        // Only where this drive gives the folder no short name, as Windows itself says, asked another way
+        const asked = spawnSync(
+          path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+          ['-NoProfile', '-Command', '(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:IT_FOLDER).ShortPath'],
+          { env: { ...process.env, IT_FOLDER: path.dirname(path.dirname(folder)) }, encoding: 'utf8' },
+        )
+        expect(asked.status).toBe(0)
+        expect(asked.stdout.trim()).toMatch(/ /)
+        // Then the command is in quotes, and Codex is said not to run it
+        expect(command).toBe(`"${launcher}" hook codex`)
+        expect(hookUnrunnable(JSON.stringify({ hooks: { Stop: [{ hooks: [{ command }] }] } }))).toBeDefined()
+        return
+      }
+      expect(command).toBe(`${short} hook codex`)
+      expect(command).toMatch(/^[A-Za-z0-9_:.~\\/-]+ hook codex$/)
+      const system = process.env.SystemRoot ?? 'C:\\Windows'
+      const shells = {
+        powershell: (line: string) => spawnSync(path.join(system, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-Command', line]),
+        cmd: (line: string) => spawnSync(path.join(system, 'System32', 'cmd.exe'), [`/c "${line}"`], { windowsVerbatimArguments: true }),
+      }
+      for (const [shell, run] of Object.entries(shells)) {
+        rmSync(mark, { force: true })
+        expect(run(command).status, shell).toBe(0)
+        expect(read(mark).trim(), shell).toBe('hook codex')
+      }
+      // What was written before: PowerShell takes the address in quotes for text, and runs nothing
+      rmSync(mark, { force: true })
+      expect(shells.powershell(`"${launcher}" hook codex`).status).not.toBe(0)
+      expect(existsSync(mark)).toBe(false)
+    },
+    60_000,
+  )
 
   test.each([
     { id: 'claude-code' as const, bin: 'claude' },
@@ -3769,5 +4062,212 @@ describe('Claude’s desktop app, which keeps a Claude Code of its own', () => {
     mkdirSync(path.join(file, '.config', 'Claude'), { recursive: true })
     writeFileSync(path.join(file, '.config', 'Claude', 'claude-code'), '')
     expect(claudeDesktopHere('linux', {}, file)).toBe(false)
+  })
+})
+
+describe('an add-on that its app has turned off', () => {
+  /** The apps that list It's add-on as turned off, and the command of theirs that turns it on again. */
+  const OFF = [
+    { id: 'claude-code' as const, bin: 'claude', enable: `plugin enable ${ID} --scope user`, label: 'Claude Code', person: `claude plugin enable ${ID}` },
+    { id: 'codex' as const, bin: 'codex', enable: `plugin add ${ID}`, label: 'Codex', person: `codex plugin add ${ID}` },
+    {
+      id: 'openclaw' as const,
+      bin: 'openclaw',
+      enable: 'plugins enable it-bridge --accept-capabilities',
+      label: 'OpenClaw',
+      person: 'openclaw plugins enable it-bridge',
+    },
+    { id: 'hermes' as const, bin: 'hermes', enable: 'plugins enable it-bridge', label: 'Hermes Agent', person: 'hermes plugins enable it-bridge' },
+  ]
+  /** The app turns It's add-on off, as the person does in it. */
+  const turnOff = (bin: string) => {
+    const folder = folderOf(bin)
+    kept[bin]!.get(bin === 'openclaw' ? realpathSync.native(folder) : folder)!.on = false
+  }
+  const changing = (bin: string) => commands(bin).filter((command) => /\b(?:uninstall|remove|add|install|enable|update|disable)\b/.test(command))
+
+  test.each(OFF)('in $label is reported as turned off, and the repair leaves it so, pass after pass, without a word', async ({ id, bin, label }) => {
+    await connect(id, () => {})
+    turnOff(bin)
+    expect(await statusOf(id)).toMatchObject({ addon: 'disabled', detail: expect.stringContaining(`It’s add-on is turned off in ${label}`) })
+    ran = []
+    const output = lines()
+    for (let pass = 0; pass < 3; pass++) await reconcile([id], output.say, true)
+    expect(changing(bin)).toEqual([])
+    expect(output.said).toEqual([])
+    expect(await statusOf(id)).toMatchObject({ addon: 'disabled' })
+  })
+
+  test('in Claude Code, after an update that left it turned off, is said once in the log by its code and not updated again', async () => {
+    await connect('claude-code', () => {})
+    turnOff('claude')
+    // As an install that stopped half way leaves the note, which has the next repair put the add-on in again
+    const note = JSON.parse(read(stampFile('claude-code')))
+    note.installs[0].version = 'installing'
+    writeFileSync(stampFile('claude-code'), JSON.stringify(note))
+    ran = []
+    const output = lines()
+    const first = await reconcile(['claude-code'], output.say, true)
+    expect(commands('claude')).toContain(`plugin update ${ID} --scope user`)
+    expect(first).toMatchObject([{ id: 'claude-code', did: 'installed' }])
+    expect(output.said.filter((line) => line.includes('addon_disabled'))).toEqual([
+      'Claude Code: addon_disabled: the add-on was brought up to date and the app keeps it turned off',
+    ])
+    // What the log says names no folder and no file
+    expect(output.said.join('\n')).not.toContain(tmp)
+    expect(await statusOf('claude-code')).toMatchObject({ addon: 'disabled' })
+    ran = []
+    output.said.length = 0
+    await reconcile(['claude-code'], output.say, true)
+    await reconcile(['claude-code'], output.say, true)
+    expect(changing('claude')).toEqual([])
+    expect(output.said).toEqual([])
+  })
+
+  test.each(OFF)('in $label is turned back on with the command that the page on add-ons names', ({ bin, enable }) => {
+    const page = readFileSync(path.join(import.meta.dirname, '../../docs/add-ons.md'), 'utf8')
+    expect(page).toContain(`\`${bin} ${enable}\``)
+  })
+
+  test.each(OFF)('in $label is turned back on with the app’s own command when the person asks, and nothing else is run', async ({ id, bin, enable }) => {
+    await connect(id, () => {})
+    turnOff(bin)
+    ran = []
+    expect(await turnBackOn(id)).toEqual({ ok: true })
+    expect(changing(bin)).toEqual([enable])
+    expect((await statusOf(id))?.addon).toMatch(/^(connected|needs_approval)$/)
+    // Asked again once it is on, nothing is run
+    ran = []
+    expect(await turnBackOn(id)).toEqual({ ok: true })
+    expect(changing(bin)).toEqual([])
+  })
+
+  test.each(OFF)(
+    'in $label, where the app refuses to turn it on, says so in a plain sentence with the command to run',
+    async ({ id, bin, enable, label, person }) => {
+      await connect(id, () => {})
+      turnOff(bin)
+      failing.push(`${bin} ${enable}`)
+      const answer = await turnBackOn(id)
+      expect(answer).toEqual({
+        ok: false,
+        code: 'refused',
+        why: `${label} refused to turn It’s add-on back on. Run \`${person}\` in a terminal on that machine to see why.`,
+      })
+      expect(await statusOf(id)).toMatchObject({ addon: 'disabled' })
+    },
+  )
+
+  test.each(OFF)('in $label, where the app answers and keeps it off, says that it is still off', async ({ id, bin, enable, label }) => {
+    await connect(id, () => {})
+    turnOff(bin)
+    replies.set(`${bin} ${enable}`, '')
+    const answer = await turnBackOn(id)
+    expect(answer).toMatchObject({
+      ok: false,
+      code: 'still_off',
+      why: expect.stringContaining(`${label} still has It’s add-on turned off after being asked to turn it on.`),
+    })
+  })
+
+  /** What stands under It's name in each app is replaced by something that is not this It folder's. */
+  const REPLACED = [
+    {
+      label: 'Claude Code, whose plugin has no note of which It folder put it there',
+      id: 'claude-code' as const,
+      bin: 'claude',
+      replace: () => rmSync(path.join(folderOf('claude'), 'plugins/cache/it/it-bridge', claudeVersion(), 'it-home.json')),
+    },
+    {
+      label: 'Codex, whose marketplace named it is another',
+      id: 'codex' as const,
+      bin: 'codex',
+      replace: () => {
+        const other = path.join(tmp, 'another-marketplace')
+        cpSync(kept.codex!.get(folderOf('codex'))!.from!, other, { recursive: true })
+        kept.codex!.get(folderOf('codex'))!.from = other
+      },
+    },
+    {
+      label: 'OpenClaw, whose plugin has no note of which It folder put it there',
+      id: 'openclaw' as const,
+      bin: 'openclaw',
+      replace: () => rmSync(path.join(folderOf('openclaw'), 'extensions/it-bridge/it-home.json')),
+    },
+    {
+      label: 'Hermes Agent, whose plugin file is not the one It put there',
+      id: 'hermes' as const,
+      bin: 'hermes',
+      replace: () => put(path.join(folderOf('hermes'), 'plugins/it-bridge/__init__.py'), '# not the add-on It put here\n'),
+    },
+  ]
+
+  test.each(REPLACED)('in $label is not turned on, from the site or by setup, and the person is told to run it setup', async ({ id, bin, replace }) => {
+    await connect(id, () => {})
+    turnOff(bin)
+    replace()
+    ran = []
+    expect(await turnBackOn(id)).toMatchObject({ ok: false, code: 'not_ours', why: expect.stringContaining('Run `it setup` in a terminal on that machine') })
+    await reconcile([id], () => {}, false, [id])
+    expect(changing(bin).filter((said) => /\b(?:enable|add)\b/.test(said))).toEqual([])
+  })
+
+  test.each(OFF)('in $label is not turned on for an app that does not have it off, and says why', async ({ id, bin }) => {
+    ran = []
+    expect(await turnBackOn(id)).toMatchObject({ ok: false, code: 'not_disabled' })
+    expect(changing(bin)).toEqual([])
+  })
+
+  test.each(OFF)('in $label is turned on again by a setup that a person runs, and by no other', async ({ id, bin, enable }) => {
+    await connect(id, () => {})
+    turnOff(bin)
+    ran = []
+    // Setup run where nobody asked, as an upgrade runs it
+    await reconcile([id], () => {}, false, [])
+    expect(changing(bin)).toEqual([])
+    await reconcile([id], () => {}, false, [id])
+    expect(changing(bin)[0]).toBe(enable)
+    expect((await statusOf(id))?.addon).toMatch(/^(connected|needs_approval)$/)
+  })
+
+  describe('in Pi, whose settings filter a package’s extensions', () => {
+    const agent = () => path.join(person, '.pi', 'agent')
+    const settle = (packages: unknown[]) => put(path.join(agent(), 'settings.json'), JSON.stringify({ packages }))
+    const ours = () => [...kept.pi!.get(agent())!.packages!][0]!
+    beforeEach(async () => {
+      vi.stubEnv('PI_CODING_AGENT_DIR', agent())
+      await connect('pi', () => {})
+    })
+
+    test.each([
+      { said: 'no extensions', extensions: [] },
+      { said: 'its extension taken out by name', extensions: ['-extensions/it.js'] },
+      { said: 'its extension left out by a pattern', extensions: ['!**/it.js'] },
+      { said: 'only another extension', extensions: ['extensions/other.js'] },
+    ])('is reported as turned off where they load $said', async ({ extensions }) => {
+      settle([{ source: ours(), extensions }])
+      expect(await statusOf('pi')).toMatchObject({ addon: 'disabled', detail: expect.stringContaining('Run `pi config`') })
+    })
+
+    test('reads a source its settings give from Pi’s own folder', async () => {
+      settle([{ source: path.relative(agent(), ours()), extensions: [] }])
+      expect((await statusOf('pi'))?.addon).toBe('disabled')
+    })
+
+    test.each([
+      { said: 'its extension by a pattern', extensions: ['extensions/*.js'] },
+      { said: 'its extension again after leaving everything out', extensions: ['!extensions/**', '+extensions/it.js'] },
+      { said: 'every extension', extensions: undefined },
+    ])('is connected where they load $said', async ({ extensions }) => {
+      settle([{ source: ours(), ...(extensions ? { extensions } : {}), skills: [] }])
+      expect((await statusOf('pi'))?.addon).toBe('connected')
+    })
+
+    test('is not turned on from the site, since Pi has no command for it, and the person is told how', async () => {
+      settle([{ source: ours(), extensions: [] }])
+      ran = []
+      expect(await turnBackOn('pi')).toMatchObject({ ok: false, code: 'no_command', why: expect.stringContaining('Run `pi config` in a terminal') })
+      expect(commands('pi').filter((said) => said !== 'list' && said !== '--version')).toEqual([])
+    })
   })
 })

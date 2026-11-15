@@ -36,6 +36,17 @@ const REFUSED: Record<string, string> = {
     'OpenCode refused to load It’s add-on, as its log says, so what is done on a page does not reach an open OpenCode conversation by itself, and Auto-wake does not reopen one that may be open. Update It and OpenCode, then restart OpenCode. Until then clicks wait in the inbox, where `it wait` and the site take them.',
 }
 
+/**
+ * What a person is told of an app whose add-on is loaded and says the app refuses every message
+ * it could hand over, because the person has not allowed it. Hermes alone has such a setting:
+ * where it runs its agent in a gateway, which from Hermes 0.23.1 is also where the plain
+ * `hermes` terminal's agent runs, it takes a plugin's message only once this is set.
+ */
+const NOT_ALLOWED: Record<string, string> = {
+  hermes:
+    'Hermes has loaded It’s add-on and refuses what it hands over, because that has not been allowed, so what is done on a page does not reach a Hermes conversation by itself. Run `hermes config set plugins.entries.it-bridge.allow_gateway_injection true` once to allow it. Until then clicks wait in the inbox, where `it wait` and the site take them.',
+}
+
 export class AddonRuntimes {
   private loaded = new Map<string, Loaded>()
   private overflowUntil = new Map<string, number>()
@@ -93,6 +104,10 @@ export class AddonRuntimes {
           .map((m) => names[m])
           .join(', ')
       : ''
+    // The app has everything the add-on needs and refuses what it hands over, until the person
+    // allows it. Where it lacks something else as well, allowing it would not be enough, so the
+    // person is told what is missing, as for any app that cannot deliver.
+    const notAllowed = Array.isArray(v.missing) && v.missing.length === 1 && v.missing[0] === 'consent' && Object.hasOwn(NOT_ALLOWED, harness)
     // Only what the running code cannot do with this connector keeps clicks from it: another
     // delivery API, or an app that lacks what the add-on needs to hand a click over. An add-on of
     // an earlier build that speaks this API works as one of this build does, and is said to be
@@ -109,7 +124,9 @@ export class AddonRuntimes {
           ? {
               state: 'incompatible',
               version: v.version,
-              detail: `The agent app is missing a delivery API${missing ? ` to ${missing}` : ' the add-on needs'}. Update the app and It, then restart the app. Clicks stay in the inbox.`,
+              detail: notAllowed
+                ? NOT_ALLOWED[harness]!
+                : `The agent app is missing a delivery API${missing ? ` to ${missing}` : ' the add-on needs'}. Update the app and It, then restart the app. Clicks stay in the inbox.`,
             }
           : {
               state: 'active',

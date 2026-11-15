@@ -885,6 +885,40 @@ class InTheTuiAndTheGateway(Case):
         hermes.allowed = True
         self.assertTrue(until(lambda: self.connector.acks()))
 
+    def test_a_hermes_that_refuses_its_messages_is_not_said_to_deliver_until_the_person_allows_them(self):
+        # Hermes 0.23.1 runs the plain terminal's agent in a gateway too, where the add-on is loaded
+        # and every message is refused until the person has allowed it. It said it could deliver all the same.
+        hermes = self.named(allowed=False)
+        self.assertTrue(until(lambda: hasattr(self.connector, "runtime") and self.connector.runtime["addon"]["delivery"] is False))
+        self.assertEqual(self.connector.runtime["addon"]["missing"], ["consent"])
+        bound["HERMES_SESSION_KEY"] = self.KEY
+        hermes.turn(A, running=False)
+        self.connector.offer(A, click("k1"))
+        self.a_while()
+        self.assertEqual(self.connector.log, [])
+        self.assertEqual(self.connector.runtime["addon"]["missing"], ["consent"])
+        # Allowed while Hermes runs: the next report says so, and the click that waited is handed over
+        hermes.allowed = True
+        self.assertTrue(until(lambda: self.connector.runtime["addon"]["delivery"] is True))
+        self.assertEqual(self.connector.runtime["addon"]["missing"], [])
+        self.assertTrue(until(lambda: self.connector.acks() == [("k1",)]))
+        self.assertEqual(hermes.messages, [(TEXT, "user", self.KEY)])
+
+    def test_a_terminal_that_takes_messages_without_being_allowed_is_still_said_to_deliver(self):
+        # The plain terminal of a Hermes that runs its own agent takes a message whatever the setting says
+        self.terminal(allowed=False)
+        self.assertTrue(until(lambda: hasattr(self.connector, "runtime")))
+        self.a_while()
+        self.assertEqual((self.connector.runtime["addon"]["delivery"], self.connector.runtime["addon"]["missing"]), (True, []))
+
+    def test_a_hermes_that_does_not_show_whether_it_allows_messages_is_not_called_refusing(self):
+        hermes = Hermes(terminal=None, allowed=False)
+        hermes._gateway_injection_allowed = None
+        self.load(hermes)
+        self.assertTrue(until(lambda: hasattr(self.connector, "runtime")))
+        self.a_while()
+        self.assertEqual((self.connector.runtime["addon"]["delivery"], self.connector.runtime["addon"]["missing"]), (True, []))
+
     def test_nothing_is_asked_where_no_message_could_be_taken(self):
         for hermes, key in ((self.named(host=False), self.KEY), (self.named(), "")):
             bound["HERMES_SESSION_KEY"] = key

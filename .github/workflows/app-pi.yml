@@ -1,0 +1,102 @@
+name: Pi, the real program
+
+# What this proves, with the real Pi and no account anywhere (e2e/apps/pi.mjs): that `it setup`
+# puts It's add-on into Pi, that Pi itself lists it and loads it, that It says so, and that it
+# says so too when the add-on is turned off as `pi config` turns it off or taken away with Pi's
+# own `pi remove`. And that a click on a page comes back into the Pi conversation that made it as
+# a new turn: Pi is pointed through its own models.json at a stand-in for a model's API on the
+# runner, with a made-up key, which answers by script with `it create --open`, then waits for
+# the click to arrive as a new request whose newest message from the user begins [It], and
+# answers it with `it patch`, which the page in a real browser shows. And that a click on the page
+# of a closed conversation reopens it through Pi's own command, Auto-wake's way.
+#
+# Each job installs Pi from its official package: the oldest version that `it setup` installs
+# into, as packages/cli/src/setup.ts says, and the newest that npm has when the job runs.
+#
+# It runs on every pull request, on every push to master, every night and when asked for. It is
+# a workflow of its own and blocks no merge: a Pi published tomorrow that breaks It turns the
+# nightly run red, which is what it is for. Every action is pinned to a commit, no job keeps the
+# checkout's credentials, the token can only read, and no job is given a secret.
+on:
+  pull_request:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request, or to master, replaces the run of the push before it, as in
+# "It on macOS and Windows": every push to master queues jobs on GitHub's few Macs, and merges in
+# a row would otherwise hold the main workflow's own Mac jobs behind them for hours. A push never
+# cancels a nightly run or one started by hand, which have groups of their own: one of those that
+# is going is left to finish, and of those waiting behind it only the newest is kept, as GitHub
+# does in every group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_VERSION: 24
+
+jobs:
+  pi:
+    name: Pi ${{ matrix.version }}, on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 15 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        version: [oldest, newest]
+        # On Windows too, where the add-on and the agent app run as participants run them
+        include:
+          - os: windows-latest
+            version: oldest
+          - os: windows-latest
+            version: newest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run generate
+      # On Windows the standalone program people install there is what runs, built with the Bun
+      # that It's releases are built with: the Node bundle's `it` is a .cmd file, which the Bash
+      # tool of an agent app (Git Bash) does not run
+      - if: runner.os == 'Windows'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.11
+      - if: runner.os == 'Windows'
+        # The one program release.mjs builds for Windows, as it builds it: the Bun on a Windows
+        # runner cannot unpack its runtimes for the other systems, which release.mjs builds too. Its
+        # cache and temporary files are kept on the drive the job works on.
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}\bun-cache
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          bun build packages/cli/src/main.ts --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --minify --target=bun-windows-x64-baseline --outfile "$RUNNER_TEMP/it-windows-x64.exe"
+          echo "IT_BIN=$RUNNER_TEMP\it-windows-x64.exe" >> "$GITHUB_ENV"
+      - name: Install the browser the page is clicked in
+        # Fetching a browser fails on a runner now and then, before anything of It has run: it is tried three times
+        run: for n in 1 2 3; do npx playwright install --with-deps chromium && exit 0; sleep 20; done; exit 1
+      # Pi is installed from npm by the script itself, into a folder of the run's own, and runs
+      # with a home and a settings folder of the run's own
+      - name: It's add-on in the real Pi, and a click back into its conversation
+        timeout-minutes: ${{ runner.os == 'Windows' && 25 || 8 }}
+        env:
+          IT_PI_ROOT: ${{ runner.temp }}
+          IT_PORT: 5800
+        run: node e2e/apps/pi.mjs --version ${{ matrix.version }}

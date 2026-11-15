@@ -56,6 +56,14 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 describe('what the service says of its door', () => {
+  test('Funnel exposure remains visible with the network off', async () => {
+    const { t, owner } = await household()
+    for (const funnel of ['public', 'unknown', 'off'] as const) {
+      await t.mutation(internal.network.report, { on: false, wanted: false, addresses: [], funnel })
+      expect(await owner.query(api.network.get, {})).toMatchObject({ on: false, funnel })
+      expect(await t.query(internal.network.current, {})).toMatchObject({ on: false, funnel })
+    }
+  })
   test('until it has said anything, the network is off and there are no addresses', async () => {
     const { t, owner } = await household()
     expect(await owner.query(api.network.get, {})).toMatchObject({ on: false, addresses: [] })

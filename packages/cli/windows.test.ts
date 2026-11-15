@@ -354,7 +354,9 @@ describe.skipIf(process.platform !== 'win32')('Windows scripts run by Windows Po
     }
   })
 
-  test('recovery restores only the recorded file after its writer has died', () => {
+  // Windows PowerShell is started six times here, one after another, and on a busy machine one
+  // start now and then takes most of the thirty seconds each is let take
+  test('recovery restores only the recorded file after its writer has died', { timeout: 180_000 }, () => {
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-recover-'))
     const program = path.join(folder, 'it.exe')
     const previous = path.join(folder, 'it.old.123.exe')

@@ -1,0 +1,108 @@
+name: OpenCode
+
+# What this proves: that the real OpenCode, installed from its official npm package, loads It's
+# add-on, and that a click on a page comes back into the OpenCode conversation that made it as a
+# new turn. It runs e2e/apps/opencode.mjs at three versions of OpenCode: the oldest that
+# `it setup` installs into (KNOWN in packages/cli/src/setup.ts), the newest OpenCode 1, and the
+# newest published. Each one runs the real `it setup --only opencode`, sees OpenCode itself load
+# the add-on and `it status` agree, sees a plugin that OpenCode refuses be said by `it status`
+# and not called connected, and then drives one conversation through a stand-in for the model
+# on the runner, which a real browser's click on a page has to reach as a turn. Last, with
+# OpenCode stopped, a click has to reopen the closed conversation through It's Auto-wake and the
+# real `opencode run --session`. No account, no key and no real model are used: the model's key
+# is made up.
+#
+# When it runs: on every pull request, on every push to master, once a night, and by hand. It
+# is a workflow of its own, apart from it.yml, so that it never blocks a merge. When OpenCode
+# publishes a version that breaks It's add-on, the nightly run goes red: that is its purpose.
+#
+# Every action is pinned to a commit, no job keeps the checkout's credentials, the token each
+# job is given can only read, and no job is given a secret.
+on:
+  pull_request:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request, or to master, replaces the run of the push before it, as in
+# "It on macOS and Windows": every push to master queues jobs on GitHub's few Macs, and merges in
+# a row would otherwise hold the main workflow's own Mac jobs behind them for hours. A push never
+# cancels a nightly run or one started by hand, which have groups of their own: one of those that
+# is going is left to finish, and of those waiting behind it only the newest is kept, as GitHub
+# does in every group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_VERSION: 24
+
+jobs:
+  opencode:
+    name: OpenCode (${{ matrix.which }})
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 15 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - which: oldest It accepts
+            package: oldest
+          - which: newest 1.x
+            package: opencode-ai@1
+          - which: newest published
+            package: '@opencode/cli@latest'
+          # On Windows too, where OpenCode runs its shell tool in Windows PowerShell
+          - which: oldest It accepts, on Windows
+            package: oldest
+            os: windows-latest
+          - which: newest published, on Windows
+            package: '@opencode/cli@latest'
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # The Node bundle, with the add-ons, the site and the backend's functions inside it
+      - run: npm run generate
+      # On Windows the standalone program people install there is what runs, built with the Bun
+      # that It's releases are built with
+      - if: runner.os == 'Windows'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.11
+      - if: runner.os == 'Windows'
+        # The one program release.mjs builds for Windows, as it builds it: the Bun on a Windows
+        # runner cannot unpack its runtimes for the other systems, which release.mjs builds too. Its
+        # cache and temporary files are kept on the drive the job works on.
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}\bun-cache
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          bun build packages/cli/src/main.ts --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --minify --target=bun-windows-x64-baseline --outfile "$RUNNER_TEMP/it-windows-x64.exe"
+          echo "IT_BIN=$RUNNER_TEMP\it-windows-x64.exe" >> "$GITHUB_ENV"
+      - name: Install the browser
+        # Fetching a browser fails on a runner now and then, before anything of It has run: it is tried three times
+        run: for n in 1 2 3; do npx playwright install --with-deps chromium && exit 0; sleep 20; done; exit 1
+      # OpenCode is installed from npm into the run's own folder, beside a home folder, XDG
+      # folders and an It that are the run's own, and all of it is removed at the end
+      - name: OpenCode loads It's add-on, and a click comes back as a turn
+        env:
+          PACKAGE: ${{ matrix.package }}
+          IT_OC_ROOT: ${{ runner.temp }}
+        run: node e2e/apps/opencode.mjs --package "$PACKAGE"

@@ -109,14 +109,20 @@ describe.skipIf(process.platform === 'win32')('a person who erases everything wh
   })
 
   test('has what the connector wrote down of their conversations on its way out removed as well, once the connector has stopped', async () => {
-    const [folders, heard, cutOff, threads, asked] = ['conversations.json', 'heard.json', 'cut-off.json', 't3-threads.json', 't3-asked.json'].map((name) =>
-      path.join(folder, name),
-    )
+    const [folders, heard, cutOff, threads, asked, unclaimed] = [
+      'conversations.json',
+      'heard.json',
+      'cut-off.json',
+      't3-threads.json',
+      't3-asked.json',
+      'opencode-unclaimed.json',
+    ].map((name) => path.join(folder, name))
     writeFileSync(path.join(folder, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'test', key: {} }))
     writeFileSync(folders!, JSON.stringify({ 'pi:a-conversation': { cwd: '/home/a person/a client of theirs', at: 1 } }))
     writeFileSync(heard!, JSON.stringify({ 'pi:a-conversation': 1 }))
     writeFileSync(threads!, JSON.stringify({ 'codex:a-conversation': 'a-thread' }))
     writeFileSync(asked!, JSON.stringify({ 'codex:a-conversation': 1 }))
+    writeFileSync(unclaimed!, JSON.stringify({ 'a-page': { at: 1 } }))
     let ended = false
     const serving = serve(() => {}).then(() => {
       ended = true
@@ -124,7 +130,13 @@ describe.skipIf(process.platform === 'win32')('a person who erases everything wh
     expect(await until(() => stand.connectorRuns === 1 && stand.erased !== undefined)).toBe(true)
     // The service is told of the erasing, and removes what is written down
     await stand.erased!('the person who erased everything')
-    expect([existsSync(folders!), existsSync(heard!), existsSync(threads!), existsSync(asked!)]).toEqual([false, false, false, false])
+    expect([existsSync(folders!), existsSync(heard!), existsSync(threads!), existsSync(asked!), existsSync(unclaimed!)]).toEqual([
+      false,
+      false,
+      false,
+      false,
+      false,
+    ])
     // The connector learns a moment later that its machine is gone, writes down what it still held, and stops
     stand.connectorStops()
     expect(await until(() => stand.wrote)).toBe(true)

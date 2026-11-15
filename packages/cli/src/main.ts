@@ -65,6 +65,7 @@ import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
 import * as flow from './flow'
 import { hook } from './hooks'
+import { tailscaleRefused, tailscaleRun, turnHttpsOn } from './https'
 import { checkInstallationFolder, checkInstallationRecord, legacyInstallation, markedInstallation, markInstallation } from './installation'
 import { withInstallerLock } from './installer-lock'
 import {
@@ -78,7 +79,6 @@ import {
   basePort,
   call,
   changeWhole,
-  claudeAddonHere,
   closedToNetwork,
   direct,
   doorRefusal,
@@ -135,7 +135,7 @@ import { HTTPS_NAME, noteHttps, noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
 import { serve } from './serve/index'
 import { onTheInternet, reachable } from './serve/network'
-import { servedAs, tailnetAddresses, tailnetName } from './serve/tailnet'
+import { funnelSaid, funnelWarning, inspectFunnel, servedAs, tailnetAddresses, tailnetName } from './serve/tailnet'
 import * as service from './service'
 import {
   type AddonOutcome,
@@ -167,6 +167,7 @@ import { printEnv } from './shell-env'
 import { zshDirectory } from './shell-profile'
 import { GUIDE, NAMES, END as TOUR_END, TOUR_PREFIX, START as TOUR_START, STEPS as TOUR_STEPS, tourPage } from './tour'
 import { answerAction, dropPicture, dropPictures, keepPicture, START_SLUG } from './tour-answer'
+import { inUnloadedOpenCode } from './unclaimed'
 import { finishInstallationRemoval, installationFile, removeInstallationFiles, stepOutOf, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
 import { addonsSaid, afterUpgrade, RELOAD_OPEN, restartLine } from './upgraded'
@@ -280,6 +281,7 @@ function appsSaid(found: LoadedStatus[], advise = true, withCodex = true): strin
     const app = KNOWN[h.id].label
     if (inApp(h)) return h.runtime ? `${app}: ${h.runtime.detail}` : `${app}'s add-on is installed. Its loaded code has not been verified.`
     if (h.addon === 'needs_approval') return `${app} is connected, and one thing is left for you to do: ${h.detail}`
+    if (h.addon === 'disabled') return h.detail ?? `${app} has It’s add-on turned off.`
     return `${app} is not connected${h.detail && h.addon !== 'not_connected' ? `: ${h.detail}` : '.'}`
   })
   // Said each time it is asked for as long as it is so: the first thing a Codex user would otherwise learn of it is a page that never appears
@@ -887,13 +889,26 @@ function anothers(slug: string, theirs: Made | null): Problem {
  * where the command cannot tell which conversation it runs in: a person's or a script's, or an
  * agent app's that does not say, which the skill tells to wait.
  */
-async function arrivalHere(slug?: string, tour = false): Promise<Arrives | undefined> {
-  const facts = await factsHere(slug, tour)
+async function arrivalHere(slug?: string, tour = false, unclaimedLeft?: 'unanswered' | 'older'): Promise<Arrives | undefined> {
+  const facts = await factsHere(slug, tour, unclaimedLeft)
   return facts && arrives(facts)
 }
 /** What It knows of the conversation a command runs in, which `arrives` goes by. Nothing where the command cannot tell which conversation that is. */
-async function factsHere(slug?: string, tour = false): Promise<Facts | undefined> {
-  const session = sessionAsked()?.session
+async function factsHere(slug?: string, tour = false, unclaimedLeft?: 'unanswered' | 'older'): Promise<Facts | undefined> {
+  const asked = sessionAsked()
+  const session = asked?.session
+  // A command that OpenCode ran and that names no conversation is told what to do about that. The
+  // connector is asked of OpenCode alone, under a name no conversation has: whether its add-on
+  // is connected here, and whether an OpenCode that has loaded it is heard from.
+  if (!session && inUnloadedOpenCode(asked))
+    return {
+      session: undefined,
+      addonHere: undefined,
+      route: await routeOf({ harness: 'opencode', id: 'unnamed' }),
+      slug,
+      tour,
+      unloadedOpenCode: true,
+    }
   if (!session) return undefined
   const route = await routeOf(session)
   return {
@@ -905,6 +920,7 @@ async function factsHere(slug?: string, tour = false): Promise<Facts | undefined
     tour,
     codexPending: session.harness === 'codex' && codexHooksPending(),
     t3: t3Here(),
+    unclaimedLeft,
   }
 }
 
@@ -930,7 +946,7 @@ async function lineHere(connected: (harness: string) => boolean): Promise<string
   if (!session || !connected(session.harness)) return undefined
   const facts = {
     session,
-    addonHere: session.harness === 'claude-code' ? claudeAddonHere() : undefined,
+    addonHere: addonHere(session.harness),
     claude: claudeRunning(),
     connected: true,
     codexPending: session.harness === 'codex' && codexHooksPending(),
@@ -955,7 +971,7 @@ export const asleepNext = (claude: string | undefined, it = itForAgent()): strin
   `It’s add-on is not running in this conversation yet, so the page says that it cannot be heard, and It keeps what the person does on it. Write the person one message that gives them the link to the page, and in that same message tell them this, word for word: “${reloadLine(claude)}” Then end your turn, and do not run \`${it} wait\`: Claude Code loads the add-on only once your reply is over. From then on what the person does arrives here by itself, as a message that begins [It], what was kept first.`
 
 async function published(
-  done: { slug: string; version: number; url: string; note?: string; urlNote?: string },
+  done: { slug: string; version: number; url: string; note?: string; urlNote?: string; unclaimedLeft?: 'unanswered' | 'older' },
   a: Args,
   fresh = false,
   tour = false,
@@ -963,7 +979,7 @@ async function published(
   /** What is said of how things arrive, where whoever published the page has worked that out already, and what else to say beside it. */
   worked?: { arrives: Arrives; beside: Record<string, unknown> },
 ): Promise<void> {
-  const arrival = worked?.arrives ?? (await arrivalHere(done.slug, tour))
+  const arrival = worked?.arrives ?? (await arrivalHere(done.slug, tour, done.unclaimedLeft))
   const result = {
     id: done.slug,
     version: done.version,
@@ -1033,7 +1049,7 @@ const TOUR_RULE_ONE = '1. **Never block.**'
  * in the background, which an app without one runs in front and never hears from again: so
  * here the rule is another, in the place of the first, and not a second word against it.
  */
-const TOUR_RULE_ONE_WAITING = `1. **Wait for each thing they do.** This conversation was most likely open before It's add-on was installed, and then what the person does on a page does not arrive here by itself. What each \`it tour show\` prints says so under \`arrives\`. Where \`arrives.byItself\` is \`true\`, as it is in a thread of T3 Code, what they do arrives as a message that begins \`[It]\`: after each page and each answer, end your turn, and do not wait. Otherwise, after every page you show and every answer you give, run \`it wait --timeout 100\` and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Where it is refused because your harness does not tell \`it\` which conversation this is, add \`--id\` and the id of the page that is on the screen. Do not use \`--follow\`, and do not put the command in the background: it has to end for you to be shown what it printed. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing. During the tour, say nothing else of what \`arrives.next\` says. Where it gives words for the person to type /reload-plugins or to start a new conversation, you told them those words with the pairing link, as setup said to: do not say them again during the tour. If you did not, say them once, word for word, after the ending. On the tour’s first page that waiting is done for you by \`it tour answer\` and \`it tour next\`, as its section says, and you run no \`it wait\` there. The one exception to waiting is the first page where showing it printed \`"asleep": true\`: there you give the person the words that its \`arrives.next\` gives and end your turn, as it says, since the add-on loads only once your reply is over.`
+const TOUR_RULE_ONE_WAITING = `1. **Wait for each thing they do.** This conversation was most likely open before It's add-on was installed, and then what the person does on a page does not arrive here by itself. What each \`it tour show\` prints says so under \`arrives\`. Where \`arrives.byItself\` is \`true\`, as it is in a thread of T3 Code, what they do arrives as a message that begins \`[It]\`: after each page and each answer, end your turn, and do not wait. Otherwise, after every page you show and every answer you give, run \`it wait --timeout 100\` and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Where it is refused because your harness does not tell \`it\` which conversation this is, add \`--id\` and the id of the page that is on the screen. Do not use \`--follow\`, and do not put the command in the background: it has to end for you to be shown what it printed. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing. During the tour, say nothing else of what \`arrives.next\` says. Where it gives words for the person to type /reload-plugins, to type /reload in Pi, or to start a new conversation, you told them those words with the pairing link, as setup said to: do not say them again during the tour. If you did not, say them once, word for word, after the ending. On the tour’s first page that waiting is done for you by \`it tour answer\` and \`it tour next\`, as its section says, and you run no \`it wait\` there. The one exception to waiting is the first page where showing it printed \`"asleep": true\`: there you give the person the words that its \`arrives.next\` gives and end your turn, as it says, since the add-on loads only once your reply is over.`
 /** The tour as an agent that waited for the button is given it. */
 function tourForOneThatWaited(guide: string): string {
   const lines = guide.split('\n')
@@ -1080,8 +1096,8 @@ const CODEX_RESTART_SETUP = `${CODEX_RESTART} Once Codex is back, say “Give me
  * What an agent that asked for a pairing link is told to do with it: give it to the person at
  * once, in a message, before it runs anything else. An agent installing It was seen to print the
  * link and go straight on to waiting for the tour, and the person was told nothing, the link
- * included, until the waiting was over. In a Claude Code conversation that has not loaded the
- * add-on, where Claude Code's add-on is connected on this machine, the same message carries the
+ * included, until the waiting was over. In a Claude Code or Pi conversation that has not loaded
+ * the add-on, where that app's add-on is connected on this machine, the same message carries the
  * words the person is to type to load it.
  */
 async function linkToTell(): Promise<{ tell?: string }> {
@@ -2249,7 +2265,8 @@ async function settingUpLed(a: Args, begunAlready = false) {
     // Asked only where an app is chosen: with none, reopening comes on for none
     const wokenBefore = wanted.length ? await wokenNow() : null
     let woken = await chosen(wanted).catch(() => null)
-    const outcomes = await reconcile(wanted, quiet)
+    // A person is leading this setup, so an app they chose that has It's add-on turned off is turned on again: that is them asking
+    const outcomes = await reconcile(wanted, quiet, false, wanted)
     woken ??= await chosen(wanted)
     const after = await detectAll()
     await call('mutation', api.machines.inventory, { harnesses: after })
@@ -2386,11 +2403,12 @@ async function settingUpLed(a: Args, begunAlready = false) {
       for (const said of left) for (const [i, row] of said.split('\n').entries()) flow.line(`${i === 0 ? flow.yellow('!') : ' '} ${row}`)
       flow.line()
     }
-    // The terminal the install script ran in has no `it` on its PATH yet, so a command given
-    // there is given with its whole path: typed as `it`, it would not be found
+    // A terminal the install script ran in that has no `it` on its PATH yet is given a command
+    // with its whole path: typed as `it`, it would not be found. One whose PATH the script gave
+    // the folder to, as the Windows script does for the PowerShell it was piped into, finds `it`
     // In PowerShell a program named by its path in quotation marks is run with `&` before it, and a quotation mark inside is written twice
     const byPath = process.platform === 'win32' ? `& '${process.execPath.replace(/'/g, "''")}'` : `'${process.execPath.replace(/'/g, `'\\''`)}'`
-    const it = process.env.IT_INSTALL_FLOW ? byPath : 'it'
+    const it = process.env.IT_INSTALL_FLOW && process.env.IT_INSTALL_ON_PATH !== '1' ? byPath : 'it'
     if (!stays) {
       flow.line(`${flow.bold('It is set up, and it is not running.')} Nothing starts it by itself on this machine, so two things are yours to do:`)
       flow.line()
@@ -2618,7 +2636,11 @@ async function settingUp(a: Args, joined: boolean) {
     // Asked only where an app is chosen: with none, reopening comes on for none
     const wokenBefore = wanted.length ? await wokenNow() : null
     let woken = await chosen(wanted).catch(() => null)
-    const outcomes = await reconcile(wanted, say)
+    // An app the person chose that has It's add-on turned off is turned on again only where a
+    // person runs this at a terminal: never from an agent's conversation, nor where nobody is
+    // there to have asked, as when an upgrade runs setup by itself
+    const byPerson = sessionAsked() === undefined && process.stdin.isTTY === true
+    const outcomes = await reconcile(wanted, say, false, byPerson ? wanted : [])
     woken ??= await chosen(wanted)
     const after = await detectAll()
     // The site is told what was found, and no more than that. Whether this machine can hear a
@@ -2710,8 +2732,8 @@ async function settingUp(a: Args, joined: boolean) {
       )
     }
     // What is left to do in the conversation this ran in, where setup connected its app: in
-    // Claude Code that has not loaded the add-on, /reload-plugins; in Codex, starting it again;
-    // in a thread of T3 Code, what is so there. It takes the place of the app's own note, and
+    // Claude Code that has not loaded the add-on, /reload-plugins; in Pi that has not, /reload;
+    // in Codex, starting it again; in a thread of T3 Code, what is so there. It takes the place of the app's own note, and
     // with the other apps' notes is said last of all, to the agent, with the words it is to tell
     // the person, since the agent is the one that reads it and the person sees only what it says
     const here = await lineHere(
@@ -2751,7 +2773,7 @@ async function settingUp(a: Args, joined: boolean) {
 const TAKEN_MS = 20_000
 
 /** Whether the network is on in this machine's settings, and where another device then reaches It. Off, with no address, on a machine that only joined an It. */
-function networkNow(): { on: boolean; addresses: string[]; tailnet?: true; internet?: true; unable?: true } {
+function networkNow(): { on: boolean; addresses: string[]; tailnet?: true; internet?: true; unable?: true; funnel?: 'off' | 'public' | 'unknown' } {
   try {
     const config = elsewhere() ? null : readConfig()
     const on = config?.network ?? false
@@ -2781,14 +2803,23 @@ function networkNow(): { on: boolean; addresses: string[]; tailnet?: true; inter
  * listen on the network and could not answers this machine only, whatever its settings say,
  * and to say that the network is on would send the person to addresses that nothing answers at.
  */
-async function networkAsItStands(running: boolean): Promise<ReturnType<typeof networkNow>> {
+async function networkAsItStands(running: boolean, inspect = true): Promise<ReturnType<typeof networkNow>> {
   const asked = networkNow()
+  try {
+    const local = inspect && !elsewhere() ? readConfig() : null
+    if (local) {
+      const found = await inspectFunnel([local.port, contentPort(local.port)])
+      if (found === undefined || found.length) asked.funnel = found === undefined ? 'unknown' : 'public'
+    }
+  } catch {
+    // Settings that cannot be read leave nothing to inspect, and nothing is said of a Funnel that was not looked for
+  }
   if (!asked.on || !running || elsewhere()) return asked
   try {
     const config = readConfig()
     const stands = config ? await doorStands(config) : undefined
     // The address over https is Tailscale's to take, and stands whether or not the door could listen on the network
-    if (stands?.wanted && !stands.on) return { on: false, addresses: asked.addresses.filter((a) => a.startsWith('https:')), unable: true }
+    if (stands?.wanted && !stands.on) return { funnel: asked.funnel, on: false, addresses: asked.addresses.filter((a) => a.startsWith('https:')), unable: true }
   } catch {}
   return asked
 }
@@ -2954,6 +2985,8 @@ async function network(a: Args) {
     throw notSetUp()
   }
   const config = readConfig()!
+  const inspected = await inspectFunnel([config.port, contentPort(config.port)])
+  const funnel = inspected === undefined ? 'unknown' : inspected.length ? 'public' : 'off'
   const on = to === undefined ? config.network : to !== 'off'
   const tailnet = on && (to === undefined ? config.tailnet === true : to === 'tailscale')
   const internet = on && !tailnet && (to === undefined ? config.internet === true : to === 'internet')
@@ -2977,9 +3010,9 @@ async function network(a: Args) {
       if (stands?.wanted && !stands.on) {
         const could =
           'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'
-        if (forPerson(a)) return tell([could])
-        say(could)
-        return out({ network: false, addresses: [] })
+        if (forPerson(a)) return tell([funnelSaid(funnel, could)])
+        say(funnelSaid(funnel, could))
+        return out({ network: false, ...(funnel === 'off' ? {} : { funnel }), addresses: [] })
       }
     }
     // Off, the door answers this machine alone. Kept to the tailnet, an earlier It did as this one does, and says so. On for the
@@ -3023,14 +3056,15 @@ async function network(a: Args) {
   const phone = on && !tailnet && !internet && addresses.length ? PHONE_SAID : undefined
   // To a person the sentence is what is printed, with the addresses under it. Anywhere else it is said beside the JSON
   const stale = earlier ? EARLIER : !internet && !confirmed ? UNCONFIRMED : undefined
-  if (forPerson(a)) return tell([said, ...addresses.map((address) => `  ${address}`), stale, toAll, phone, later])
-  say(addresses.length ? `${said} ${addresses.join(', ')}` : said)
+  if (forPerson(a)) return tell([funnelSaid(funnel, said), ...addresses.map((address) => `  ${address}`), stale, toAll, phone, later])
+  say(funnelSaid(funnel, addresses.length ? `${said} ${addresses.join(', ')}` : said))
   if (stale) say(stale)
   if (toAll) say(toAll)
   if (phone) say(phone)
   if (later) say(later)
   return out({
     network: on,
+    ...(funnel === 'off' ? {} : { funnel }),
     ...(tailnet ? { tailnet: true } : {}),
     ...(internet ? { internet: true } : {}),
     addresses,
@@ -3042,27 +3076,6 @@ async function network(a: Args) {
 
 // ---------- https on the tailnet ----------
 
-/** Tailscale's own command, as it is run here: what it printed, and whether it did what it was asked. */
-type Ran = { ok: boolean; out: string; err: string }
-const tailscaleRun = (args: string[]): Ran => {
-  const ran = spawnSync('tailscale', args, { encoding: 'utf8', timeout: 60_000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
-  return { ok: ran.status === 0, out: ran.stdout ?? '', err: `${ran.stderr ?? ''}${ran.error ? ` ${ran.error.message}` : ''}`.trim() }
-}
-/** What is said where Tailscale could not be asked or would not do it, with its own words where it said any. */
-function tailscaleRefused(what: string, ran: Ran): Problem {
-  const said = ran.err || ran.out
-  const operator = /access denied|permission|operator/i.test(said)
-  const enable = /not enabled|https?:\/\/login\.tailscale\.com\S*/i.exec(said)
-  return new Problem(
-    `Tailscale on this machine would not ${what}.${said ? ` It said: ${said.split('\n').slice(0, 3).join(' ').trim()}` : ''}`,
-    'tailscale',
-    operator
-      ? 'Let your user run `tailscale serve` with `sudo tailscale set --operator=$USER`, and run this again.'
-      : enable
-        ? 'Turn on MagicDNS and HTTPS certificates for your tailnet in Tailscale’s admin console (DNS), as the address it gave says, and run this again.'
-        : 'Check that Tailscale is running and signed in here, and that your tailnet has MagicDNS and HTTPS certificates turned on.',
-  )
-}
 /** Asks It over https at its name on the tailnet, as another device would, which also has Tailscale fetch that name's certificate the first time. Whether it answered. */
 function answersOverHttps(address: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -3110,28 +3123,11 @@ async function httpsCommand(a: Args) {
         'no_name',
         'Turn on MagicDNS for your tailnet in Tailscale’s admin console, and run this again.',
       )
-    const status = tailscaleRun(['serve', 'status', '--json'])
-    if (!status.ok) throw tailscaleRefused('say what it serves', status)
-    let served: unknown = {}
-    try {
-      served = status.out.trim() ? JSON.parse(status.out) : {}
-    } catch {}
-    const taken = ports.filter(({ port, at }) => servedAs(served, name, at, port) === 'other').map(({ at }) => at)
-    if (taken.length)
-      throw new Problem(
-        `Tailscale on this machine already serves something else on port ${taken.join(' and ')}, which It would answer https at.`,
-        'port_taken',
-        `\`tailscale serve status\` says what. Take it away there, or run It on other ports with IT_PORT, and run this again.`,
-      )
-    for (const { port, at } of ports) {
-      if (servedAs(served, name, at, port) === 'its') continue
-      const ran = tailscaleRun(['serve', '--bg', `--https=${at}`, `http://127.0.0.1:${port}`])
-      if (!ran.ok) throw tailscaleRefused(`serve https on port ${at}`, ran)
-    }
+    await turnHttpsOn(name, ports, tailscaleRun())
     noteHttps(name)
   } else if (to === 'off') {
     const name = config.https ?? tailnetName()
-    const status = tailscaleRun(['serve', 'status', '--json'])
+    const status = tailscaleRun()(['serve', 'status', '--json'])
     let served: unknown = {}
     try {
       served = status.ok && status.out.trim() ? JSON.parse(status.out) : {}
@@ -3139,7 +3135,7 @@ async function httpsCommand(a: Args) {
     // Only what It set up is taken away: whatever else Tailscale serves here is another program's
     for (const { port, at } of ports) {
       if (!name || servedAs(served, name, at, port) !== 'its') continue
-      const ran = tailscaleRun(['serve', `--https=${at}`, 'off'])
+      const ran = tailscaleRun()(['serve', `--https=${at}`, 'off'])
       if (!ran.ok) throw tailscaleRefused(`stop serving https on port ${at}`, ran)
     }
     noteHttps(undefined)
@@ -3252,7 +3248,7 @@ async function status(a: Args) {
     enrolled,
     machine,
     site: siteAddress() ?? null,
-    network: await networkAsItStands(running && !blocked),
+    network: await networkAsItStands(running && !blocked, !blocked),
     ...(database ? { database } : {}),
     connector,
     background: service.status(),
@@ -3291,6 +3287,7 @@ async function status(a: Args) {
         : undefined,
     // Said as it is on this machine, unless It has just said otherwise, which the first line then says
     refused ? undefined : enrolled ? `This machine is enrolled${name ? ` as “${name}”` : ''}.` : running ? undefined : 'This machine is not enrolled.',
+    here ? funnelWarning(network.funnel) : undefined,
     !here
       ? undefined
       : network.unable
@@ -3779,7 +3776,9 @@ async function main(argv: string[]): Promise<void> {
             'See that the disk It’s folder is on is not full, then run this again.',
           )
         if (!forPerson(a)) return out({ cleared: done?.cleared ?? 0 })
-        return tell([`It reopens them again. Each is told, the next time, that a turn of its was cut off and to look before it does anything twice.`])
+        return tell([
+          `It reopens them again. Each is told, the next time, that a turn of its was cut off, that what the turn started may still be running, and to look before it does anything twice.`,
+        ])
       }
       if (!forPerson(a)) return out(now)
       return tell([

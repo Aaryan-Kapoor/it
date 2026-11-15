@@ -36,6 +36,7 @@ import {
   claudeResume,
   claudeWroteAt,
   codexHolder,
+  codexInterruptedAt,
   codexWroteAt,
   endJob,
   endTree,
@@ -44,10 +45,13 @@ import {
   jobName,
   KEPT_NOT,
   keeper,
+  keptWord,
+  LEFT_ENDED,
   lastWords,
   listsProcesses,
   mayWake,
   NO_PS,
+  openBy,
   SINCE_TOLD,
   STOPPED,
   WAS_CUT_OFF,
@@ -669,6 +673,11 @@ describe('what a conversation is told when it is reopened after a turn of it was
     expect(WAS_CUT_OFF).toContain('go by the action ids')
     expect(WAS_CUT_OFF).toContain('do not do twice what was already done')
   })
+
+  test('says that what the turn had left running was ended, as far as It could find it, in a sentence that reads plainly', () => {
+    expect(LEFT_ENDED).toMatch(/^It ended everything that turn had left running that It could find\. /)
+    expect(LEFT_ENDED).not.toContain('that that')
+  })
 })
 
 describe('what a conversation is told after the person stopped it', () => {
@@ -716,6 +725,51 @@ describe('whether some Codex has a conversation open', () => {
     expect(codexHolder('thread-then', codexHome, t + 2000)).toBe(false)
     // An id that is not one Codex makes names no file at all
     expect(codexHolder('../thread-open', codexHome)).toBe(false)
+  })
+
+  test('on macOS asks lsof where macOS keeps it, so that a PATH without /usr/sbin still finds who has the file open', () => {
+    // As in the hackathon's real-Codex run on macOS, where It was started with a PATH that has
+    // no /usr/sbin: `lsof` by its name alone was not found, every open conversation was unknown,
+    // and a click for one waited until Codex was closed.
+    const lock = path.join(scratch, 'open.lock')
+    writeFileSync(lock, '')
+    const platform = process.platform
+    const execFileSync = childProcess.execFileSync
+    const asked: string[] = []
+    try {
+      Object.defineProperty(process, 'platform', { value: 'darwin' })
+      childProcess.execFileSync = new Proxy(execFileSync, {
+        apply(_target, _self, [file, args]) {
+          asked.push(String(file))
+          // What macOS has, and a PATH that does not lead to it: only the full path is found
+          if (file !== '/usr/sbin/lsof') throw Object.assign(new Error(`spawnSync ${file} ENOENT`), { code: 'ENOENT' })
+          expect(args).toEqual(['-t', '--', lock])
+          return '4242\n4242\n'
+        },
+      })
+      syncBuiltinESMExports()
+      expect(openBy(lock)).toEqual([4242])
+      expect(asked).toEqual(['/usr/sbin/lsof'])
+    } finally {
+      Object.defineProperty(process, 'platform', { value: platform })
+      childProcess.execFileSync = execFileSync
+      syncBuiltinESMExports()
+    }
+  })
+
+  test.skipIf(process.platform !== 'darwin')('on a real Mac finds who has a file open with /usr/sbin taken off PATH', () => {
+    const lock = path.join(scratch, 'held.lock')
+    writeFileSync(lock, '')
+    const fd = openSync(lock, 'r')
+    const PATH = process.env.PATH
+    try {
+      process.env.PATH = '/usr/bin:/bin'
+      expect(openBy(lock)).toContain(process.pid)
+    } finally {
+      if (PATH === undefined) delete process.env.PATH
+      else process.env.PATH = PATH
+      closeSync(fd)
+    }
   })
 
   test.skipIf(process.platform === 'win32')(
@@ -977,6 +1031,61 @@ describe('when Codex last wrote of a conversation', () => {
     expect(codexWroteAt('01a10f7c-0000-7010-8d57-000000000000', codexHome)).toBeNull()
     expect(codexWroteAt('../../etc', codexHome)).toBeNull()
     expect(codexWroteAt(thread, path.join(scratch, 'no-such-codex'))).toBeNull()
+  })
+})
+
+describe('whether a Codex conversation’s last turn was interrupted', () => {
+  const thread = '01a10f7c-062c-7010-8d57-8e1007169552'
+  const line = (type: string, more: Record<string, unknown> = {}, at = '2026-11-10T15:42:00.000Z') =>
+    `${JSON.stringify({ timestamp: at, type: 'event_msg', payload: { type, ...more } })}\n`
+  let file = ''
+  let wrote = 1_791_000_000
+  /** Writes the conversation's file as Codex would have it now, at a time of its own, as each writing has. */
+  const kept = (text: string) => {
+    writeFileSync(file, text)
+    wrote += 10
+    utimesSync(file, wrote, wrote)
+  }
+  const codexHome = () => path.join(scratch, 'codex-interrupted')
+  beforeEach(() => {
+    const day = path.join(codexHome(), 'sessions', '2026', '11', '10')
+    mkdirSync(day, { recursive: true })
+    file = path.join(day, `rollout-2026-11-10T10-00-00-${thread}.jsonl`)
+  })
+
+  test('is read from the last word of a turn in the file Codex keeps of it, with when that was', () => {
+    kept(line('task_started') + line('turn_aborted', { reason: 'interrupted' }, '2026-11-10T15:42:07.500Z'))
+    expect(codexInterruptedAt(thread, codexHome())).toBe(Date.parse('2026-11-10T15:42:07.500Z'))
+    // What Codex wrote after it that is no word of a turn changes nothing
+    kept(line('task_started') + line('turn_aborted', { reason: 'interrupted' }, '2026-11-10T15:42:07.500Z') + line('token_count'))
+    expect(codexInterruptedAt(thread, codexHome())).toBe(Date.parse('2026-11-10T15:42:07.500Z'))
+  })
+
+  test.each(['task_started', 'turn_started', 'user_message', 'task_complete', 'turn_complete'])(
+    'is not so once a turn has begun or ended by itself after the interruption (%s)',
+    (mark) => {
+      kept(line('turn_aborted', { reason: 'interrupted' }) + line(mark))
+      expect(codexInterruptedAt(thread, codexHome())).toBeNull()
+    },
+  )
+
+  test('is not so of a turn that ended by itself, of one Codex ended to begin another, or where nothing of a turn is written', () => {
+    kept(line('task_started') + line('task_complete'))
+    expect(codexInterruptedAt(thread, codexHome())).toBeNull()
+    kept(line('task_started') + line('task_complete') + line('turn_aborted', { reason: 'replaced' }))
+    expect(codexInterruptedAt(thread, codexHome())).toBeNull()
+    kept('{}\n')
+    expect(codexInterruptedAt(thread, codexHome())).toBeNull()
+    expect(codexInterruptedAt('01a10f7c-0000-7010-8d57-000000000000', codexHome())).toBeNull()
+  })
+
+  test('takes when the file was written where the line carries no time, and no line of a command’s output for Codex’s own', () => {
+    // What a command printed is kept inside another line, and says nothing of the turn
+    const printed = `${JSON.stringify({ type: 'response_item', payload: { type: 'function_call_output', output: '{"type":"event_msg","payload":{"type":"turn_aborted"}}' } })}\n`
+    kept(line('task_started') + line('task_complete') + printed)
+    expect(codexInterruptedAt(thread, codexHome())).toBeNull()
+    kept(`${JSON.stringify({ type: 'event_msg', payload: { type: 'turn_aborted', reason: 'interrupted' } })}\nnot a line of Codex’s\n`)
+    expect(codexInterruptedAt(thread, codexHome())).toBe(wrote * 1000)
   })
 })
 
@@ -1604,12 +1713,29 @@ describe('a reopened run on Windows, as it is put to the system', () => {
     )
   })
 
+  test("how a run went is read from the keeper's word alone: one of its three, or the app's code whole, and nothing else", () => {
+    const word = (said: string) => {
+      const file = path.join(scratch, `${randomUUID()}.kept`)
+      writeFileSync(file, said)
+      return keptWord(file)
+    }
+    expect(['not', 'missing', 'unstarted'].map(word)).toEqual(['not', 'missing', 'unstarted'])
+    // A code past what a byte holds is kept whole, the largest Windows has among them
+    expect(['ran 0', 'ran 2', 'ran 256', 'ran 1230241794', 'ran 4294967295'].map(word)).toEqual([0, 2, 256, 1230241794, 4294967295])
+    for (const said of ['', 'ran', 'ran -1', 'ran 01', 'ran 4294967296', 'ran 1 ', 'not\n', 'Missing', '2', 'ran 2\nnot'])
+      expect([said, word(said)]).toEqual([said, undefined])
+    // A keeper that wrote nothing said nothing
+    expect(keptWord(path.join(scratch, 'never-written.kept'))).toBeUndefined()
+  })
+
   test('a run is started by a keeper that is told its job, its command line and who started it in its environment, with nothing of the app on its own command line', () => {
     const run = randomUUID()
-    const started = keeper(['C:\\Users\\a b\\.local\\bin\\claude.exe', '--resume', 'x', '--allowedTools', 'Bash(it:*)'], run, {
-      PSModulePath: 'C:\\mods',
-      KEY: 'v',
-    })
+    const started = keeper(
+      ['C:\\Users\\a b\\.local\\bin\\claude.exe', '--resume', 'x', '--allowedTools', 'Bash(it:*)'],
+      run,
+      { PSModulePath: 'C:\\mods', KEY: 'v', IT_JOB_TOLD: 'C:\\elsewhere.kept' },
+      'C:\\it\\logs\\reopened-1-1.kept',
+    )
     if (typeof started === 'string') throw new Error(started)
     expect(started.file).toMatch(/[\\/]System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/)
     expect(started.args.slice(0, -1)).toEqual(['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand'])
@@ -1617,6 +1743,8 @@ describe('a reopened run on Windows, as it is put to the system', () => {
     expect(script).toContain("Add-Type -TypeDefinition @'")
     expect(script).toContain('$kept = [ItJob]::Keep()')
     expect(script).toContain(`exit ${KEPT_NOT}`)
+    // Where PowerShell cannot compile the keeper, it says so in the keeper's place
+    expect(script).toContain("Set-Content -LiteralPath $env:IT_JOB_TOLD -Value 'not'")
     expect(script).not.toContain('claude')
     expect(started.env).toMatchObject({
       KEY: 'v',
@@ -1624,7 +1752,11 @@ describe('a reopened run on Windows, as it is put to the system', () => {
       IT_JOB_LINE: '"C:\\Users\\a b\\.local\\bin\\claude.exe" --resume x --allowedTools Bash(it:*)',
       IT_JOB_PARENT: String(process.pid),
       IT_JOB_MODULES: '+C:\\mods',
+      // Told where to say how the run went, and never where the environment said
+      IT_JOB_TOLD: 'C:\\it\\logs\\reopened-1-1.kept',
     })
+    // Told of no file, it is told of none, whatever the environment held
+    expect((keeper(['C:\\x.exe'], run, { IT_JOB_TOLD: 'C:\\elsewhere.kept' }) as { env: NodeJS.ProcessEnv }).env.IT_JOB_TOLD).toBeUndefined()
     // Windows PowerShell is given no folders for its modules, and finds its own: the app is given back the person's through the keeper
     expect(Object.keys(started.env).filter((k) => k.toUpperCase() === 'PSMODULEPATH')).toEqual([])
     // An environment without the folders of PowerShell's modules has none given to the app either

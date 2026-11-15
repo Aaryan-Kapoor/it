@@ -5,10 +5,15 @@ name: It
 # nothing here needs an account anywhere, so a pull request from a fork runs
 # exactly what a branch of this repository runs.
 on:
+  # On every pull request and push to master, by hand, and every night on
+  # master, so that a change from outside the repository (a runner's image, a
+  # browser, a dependency, the newest Claude Code) shows itself without a commit.
   pull_request:
   push:
     branches: [master]
   workflow_dispatch:
+  schedule:
+    - cron: '7 4 * * *'
 
 permissions:
   contents: read
@@ -323,12 +328,24 @@ jobs:
           "./$PROGRAM" --version
           "./$PROGRAM" --help > /dev/null
       # install.sh on macOS and install.ps1 on Windows, neither of which the build machine can run
+      # On Windows it also lets the script put the folder on the account's PATH, and checks that
+      # a bare `it` then runs It and not the `It` command of Pester, which Windows comes with
       - name: The install script for this system installs it
         run: node e2e/install.mjs "$RUNNER_TEMP/it-programs"
       - name: The native service recovers and waits for a slow stop
         env:
           PROGRAM: ${{ matrix.program }}
         run: IT_BIN="$RUNNER_TEMP/it-programs/$PROGRAM" node e2e/service.mjs
+      # How a conversation that Auto-wake reopened went, under the Bun the Windows program runs
+      # on, which hands on only the lowest byte of a child's exit code. Here and not with the unit
+      # tests on Windows, whose job does not block a merge.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: runner.os == 'Windows'
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: A reopened run on Windows says how it went, under Bun
+        if: runner.os == 'Windows'
+        run: npm ci && npm run generate && bun test ./packages/cli/wake-windows.test.ts
 
   # Everything together on the runner, as a person has it: It running as one
   # service, which starts the backend program, opens the door and runs the
@@ -420,6 +437,17 @@ jobs:
       - name: Notifications, as a browser with the site closed gets them
         if: ${{ !cancelled() && matrix.cli == 'node bundle' && steps.stack.outcome == 'success' }}
         run: node e2e/push.mjs
+      # It as it answers its tailnet over https with `it https on`: a stand-in for Tailscale's own
+      # server hands each request to the door over plain http, saying that it came over https,
+      # and the site, the pages' port and the live connection are asked through it; then a
+      # browser is paired at the https address and shown a page there. It is run
+      # for both commands, and it is the standalone program's run that matters most: inside it
+      # the door listens with Bun's server, which hands it each request in another shape than
+      # Node's does, and no test that calls the door's own function sees that listener. Run
+      # whatever became of the suite, where It was started.
+      - name: Over https, as Tailscale hands a request to the door
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
+        run: node e2e/https.mjs
       # Nothing is read while it can still be written to. The stack is asked to stop and waited
       # for, and it asks the service in its turn: the service stops its connector, closes its
       # door, and asks the backend program to stop. The step waits longer than the stack itself

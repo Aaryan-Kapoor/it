@@ -1,6 +1,6 @@
 // What `it create`, `it update`, `it tour show` and `it status` say to an agent of whether what
 // the person does on its pages arrives in its conversation by itself, and what to do about it.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
@@ -14,6 +14,7 @@ import {
   itForAgent,
   loadAddon,
   notLoadedHere,
+  OPENCODE_RESTART,
   onWindows,
   PI_RELOAD,
   piNotLoadedHere,
@@ -87,6 +88,60 @@ describe('whether what the person does arrives by itself', () => {
     const incompatible = arrives({ session: claude, addonHere: true, route: route({ runtime: 'incompatible' }) })
     expect(incompatible.byItself).toBe(false)
     expect(incompatible.next).toContain(`\`${it()} status\``)
+  })
+
+  test('in an OpenCode that has not loaded It’s add-on, the agent is told to have the person start OpenCode again, and how the page becomes the conversation’s', () => {
+    const facts = { session: undefined, addonHere: undefined, unloadedOpenCode: true }
+    for (const runtime of ['inactive', 'unverified'] as const) {
+      const said = arrives({ ...facts, route: route({ runtime }), slug: 'ping' })
+      expect(said.byItself).toBe(false)
+      expect(said.next).toContain(`word for word: “${OPENCODE_RESTART}”`)
+      expect(said.next).toContain(`\`${it()} update ping\` or \`${it()} wait --id ping\``)
+      expect(said.next).toContain(`\`${it()} wait --id ping --timeout 100\``)
+    }
+    expect(OPENCODE_RESTART).toMatch(/^Quit OpenCode and start it again/)
+    // In the tour it is said once, after the ending
+    expect(arrives({ ...facts, route: route(), tour: true }).next).toContain('after the tour’s ending')
+  })
+
+  test('a command OpenCode ran that names no conversation is not told to start OpenCode again where that would not help', () => {
+    const facts = { session: undefined, addonHere: undefined, unloadedOpenCode: true, slug: 'ping' }
+    // The add-on is not connected on this machine at all
+    const unconnected = arrives({ ...facts, route: route({ connected: false }) })
+    expect(unconnected.byItself).toBe(false)
+    expect(unconnected.next).toContain('It’s add-on for OpenCode is not connected on this machine')
+    // The add-on OpenCode has loaded cannot take clicks
+    const incompatible = arrives({ ...facts, route: route({ runtime: 'incompatible' }) })
+    expect(incompatible.byItself).toBe(false)
+    expect(incompatible.next).toContain(`\`${it()} status\``)
+    // An OpenCode that has loaded the add-on is heard from, which may be this one; or the connector could not be asked
+    const heard = arrives({ ...facts, route: route({ runtime: 'active' }) })
+    const unasked = arrives({ ...facts, route: null })
+    for (const said of [unconnected, incompatible, heard, unasked]) expect(said.next).not.toContain(OPENCODE_RESTART)
+    for (const said of [heard, unasked]) expect(said.byItself).toBe('unknown')
+    // A conversation that is named is never told any of this
+    expect(
+      arrives({ session: { harness: 'opencode', id: 'ses_1' }, addonHere: undefined, route: route({ listening: true }), unloadedOpenCode: true }).byItself,
+    ).toBe(true)
+  })
+
+  test('a page made before OpenCode loaded the add-on that It gave no answer for is not said to arrive by itself, where the conversation listens', () => {
+    const session = { harness: 'opencode', id: 'ses_1' }
+    expect(arrives({ session, addonHere: undefined, route: route({ listening: true }), slug: 'ping' }).byItself).toBe(true)
+    const left = arrives({ session, addonHere: undefined, route: route({ listening: true }), slug: 'ping', unclaimedLeft: 'unanswered' })
+    expect(left.byItself).toBe(false)
+    expect(left.next).toContain('belongs to no conversation')
+    expect(left.next).toContain(`\`${it()} wait --id ping --timeout 100\``)
+  })
+
+  test('one that the It this machine joined refused, being older, is said to need that It updated, and not that It gave no answer', () => {
+    const session = { harness: 'opencode', id: 'ses_1' }
+    const left = arrives({ session, addonHere: undefined, route: route({ listening: true }), slug: 'ping', unclaimedLeft: 'older' })
+    expect(left.byItself).toBe(false)
+    expect(left.next).toContain('belongs to no conversation')
+    expect(left.next).toContain('the It this machine joined is older than this one')
+    expect(left.next).toContain('It needs updating on the computer this machine joined')
+    expect(left.next).not.toContain('gave no answer')
   })
 
   test('is said to be unknown, with the agent told to wait, wherever It cannot tell', () => {
@@ -198,6 +253,24 @@ describe('what setup says of the conversation it ran in, where it has just conne
     // T3 Code is not on this machine: no thread can hold it, whatever the connector could say
     expect(setupLine({ ...codexFacts, t3: false, route: null })).toBe(CODEX_RESTART)
     expect(CODEX_RESTART_OR_T3).toContain('In a T3 Code thread there’s nothing to approve')
+  })
+
+  test('in a Pi conversation that has not loaded the add-on: to type /reload in it, whether or not Pi was connected before', () => {
+    const inPi = { ...facts, session: { harness: 'pi', id: 'p' }, claude: undefined }
+    expect(setupLine(inPi)).toBe(PI_RELOAD)
+    expect(PI_RELOAD).toContain('Type /reload in this chat')
+    // The connector's answer does not change it: Pi has no thread of T3 Code
+    expect(setupLine({ ...inPi, route: route({ thread: 'none' }) })).toBe(PI_RELOAD)
+    // Nothing where the add-on runs in it, where that cannot be told, or where Pi is not connected
+    expect(setupLine({ ...inPi, addonHere: true })).toBeUndefined()
+    expect(setupLine({ ...inPi, addonHere: undefined })).toBeUndefined()
+    expect(setupLine({ ...inPi, connected: false })).toBeUndefined()
+  })
+
+  test('in a Hermes or an OpenCode conversation: nothing of its own, since neither lets It tell whether the add-on is loaded there, so the app’s own note is what is passed on', () => {
+    for (const harness of ['hermes', 'opencode']) {
+      for (const addonHere of [undefined, false]) expect(setupLine({ ...facts, session: { harness, id: 's' }, addonHere })).toBeUndefined()
+    }
   })
 
   test('nothing where the conversation’s app is not connected, where nothing is left to do in it, or where no conversation is known', () => {
@@ -349,5 +422,43 @@ describe('a Pi conversation that has not loaded It’s add-on', () => {
     }
     // Heard from under its id while not running here: another copy of the conversation has the add-on, as before
     expect(arrives({ session: pi, addonHere: false, route: route({ listening: true }) }).next).toContain('in another copy of it')
+  })
+})
+
+describe('what the docs say of a Codex that was open while It was set up', () => {
+  const doc = (name: string) => readFileSync(new URL(`../../docs/${name}`, import.meta.url), 'utf8')
+  /** The paragraph of a doc that begins with these words, as one line. */
+  const under = (text: string, start: string) => text.split('\n').find((line) => line.startsWith(start)) ?? ''
+
+  test('troubleshooting has a section for a Codex that asks before every `it` command, which says to start it again, and why', () => {
+    const text = doc('troubleshooting.md')
+    const at = text.indexOf('## Codex asks before every `it` command\n')
+    expect(at).toBeGreaterThan(-1)
+    const section = text.slice(at, text.indexOf('\n## ', at + 1))
+    // What ends the asking, in the words setup gives, and what brings the conversation back
+    expect(section).toContain('Quit Codex and start it again')
+    expect(section).toContain('"Trust all and continue"')
+    expect(CODEX_RESTART).toContain('“Trust all and continue”')
+    expect(section).toContain('`codex resume --last`')
+    expect(CODEX_RESTART).toContain('`codex resume --last`')
+    // Why: Codex reads the rule and asks about the hooks only as it starts
+    expect(section).toMatch(/only as it starts/)
+    // What goes on asking afterwards, so that nobody takes it for the same fault
+    expect(section).toContain('`it save`')
+    // A thread of T3 Code has nothing to approve, as setup says there
+    expect(section).toContain('In a thread of T3 Code there is nothing to approve')
+    expect(section).toContain('(add-ons.md#codex)')
+  })
+
+  test('the Codex section of the add-ons page says the same of the conversation that installed It, and no longer that T3 Code’s asking is unknown', () => {
+    const text = doc('add-ons.md')
+    const said = under(text, '**A Codex that was open while It was set up.**')
+    expect(said).toContain('asks you to approve every `it` command')
+    expect(said).toContain("runs none of It's hooks")
+    expect(said).toContain('Quit Codex and start it again')
+    expect(said).toContain('`codex resume --last`')
+    expect(said).toContain('leave the tour until Codex is back')
+    expect(text).toContain('In T3 Code, Codex never asks, and nothing needs approving there')
+    expect(text).not.toContain('How the desktop app and T3 Code ask')
   })
 })

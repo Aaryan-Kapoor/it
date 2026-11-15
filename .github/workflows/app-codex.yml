@@ -1,0 +1,185 @@
+name: Codex, the real program
+
+# What this proves, with the real Codex program from its official npm package
+# and no account: at the oldest version It's setup accepts (CODEX_MIN_VERSION
+# in packages/protocol) and at the newest npm publishes, `it setup` installs
+# It's add-on, Codex itself says the plugin is installed and on and that its
+# hooks need approval, `it status` agrees in every state, the person's own
+# "Trust all and continue" in Codex's terminal approves the hooks, and a click
+# on a page that Codex made comes back into that conversation as a new turn,
+# through Codex's own queue while the conversation is open and by reopening it
+# (Auto-wake) once it is closed. A stand-in on the runner answers for the
+# model, by a script, with a made-up key. The flags It gives `codex exec
+# resume` and `codex queue` are held to what that Codex's own help says, and
+# the tests of what `codex execpolicy` makes of It's rules run against it.
+# `e2e/apps/codex.mjs` says each step.
+#
+# It runs on pull requests, on pushes to master, every night and by hand. It
+# is a workflow of its own, apart from "It", and blocks no merge: when Codex
+# publishes a version that breaks It, the nightly run goes red, and that is
+# what it is for.
+#
+# As in "It": every action is pinned to a commit, no job keeps the checkout's
+# credentials, the token can only read, and no job is given a secret.
+on:
+  pull_request:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request, or to master, replaces the run of the push before it, as in
+# "It on macOS and Windows": every push to master queues jobs on GitHub's few Macs, and merges in
+# a row would otherwise hold the main workflow's own Mac jobs behind them for hours. A push never
+# cancels a nightly run or one started by hand, which have groups of their own: one of those that
+# is going is left to finish, and of those waiting behind it only the newest is kept, as GitHub
+# does in every group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  NODE_VERSION: 24
+
+jobs:
+  codex:
+    name: Codex ${{ matrix.which }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 35 || 20 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        which: [oldest, newest]
+        # Linux and macOS here, and Windows below.
+        os: [ubuntu-latest, macos-latest]
+        # On Windows Codex's terminal runs in a pseudo console of Windows's own, through pywinpty.
+        # The newest Codex alone: GitHub's Windows runners run as an administrator, and Codex
+        # 0.160.0 refuses to start its background server there ("start the Windows daemon from a
+        # non-elevated terminal"). It passed on a Windows laptop, run as a person runs it.
+        include:
+          - os: windows-latest
+            which: newest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build the program
+        run: npm run generate
+      # On Windows the standalone program people install there is what runs, built with the Bun
+      # that It's releases are built with
+      - if: runner.os == 'Windows'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.11
+      - if: runner.os == 'Windows'
+        # The one program release.mjs builds for Windows, as it builds it: the Bun on a Windows
+        # runner cannot unpack its runtimes for the other systems, which release.mjs builds too. Its
+        # cache and temporary files are kept on the drive the job works on.
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}\bun-cache
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          bun build packages/cli/src/main.ts --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --minify --target=bun-windows-x64-baseline --outfile "$RUNNER_TEMP/it-windows-x64.exe"
+          echo "IT_BIN=$RUNNER_TEMP\it-windows-x64.exe" >> "$GITHUB_ENV"
+      # The Python that runs Codex's terminal, named by its path, since the run gives Codex a PATH of its own
+      - if: runner.os == 'Windows'
+        run: |
+          python -m pip install pywinpty==3.1.2
+          echo "IT_E2E_PYTHON=$(python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+      - name: Install Playwright's Chromium
+        run: for n in 1 2 3; do npx playwright install --with-deps chromium && exit 0; sleep 20; done; exit 1
+      # The oldest is read from the source, where setup takes it from, and the
+      # newest from what npm publishes as Codex's latest
+      - name: Fetch the ${{ matrix.which }} Codex
+        run: |
+          if [ "${{ matrix.which }}" = oldest ]; then
+            version=$(sed -n "s/^export const CODEX_MIN_VERSION = '\([0-9.]*\)'.*/\1/p" packages/protocol/src/index.ts)
+          else
+            version=$(npm view @openai/codex dist-tags.latest)
+          fi
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "No Codex version could be read for ${{ matrix.which }}: '$version'"
+            exit 1
+          fi
+          # Codex's npm package fetches its program for this system as an
+          # optional package, which npm skips without failing where it cannot
+          # have it. In the minutes after a release that package can be listed
+          # and not yet be served, so the install is tried again until the
+          # program runs and says this version, for up to five minutes.
+          folder="$RUNNER_TEMP/codex-$version"
+          asked="$RUNNER_TEMP/codex-version-home"
+          mkdir -p "$asked"
+          for n in 1 2 3 4 5 6; do
+            rm -rf "$folder"
+            npm install --prefix "$folder" --prefer-online --no-save --no-audit --no-fund "@openai/codex@$version"
+            said=$(HOME="$asked" CODEX_HOME="$asked" "$folder/node_modules/.bin/codex" --version 2>/dev/null || true)
+            case "$said" in *" $version"*) break ;; esac
+            said=""
+            [ "$n" = 6 ] || { echo "Codex $version does not run here yet; trying again in a minute"; sleep 60; }
+          done
+          if [ -z "$said" ]; then
+            echo "Codex $version was installed from npm and does not run on this system: its program for this system was not there."
+            exit 1
+          fi
+          echo "CODEX_VERSION=$version" >> "$GITHUB_ENV"
+          echo "IT_E2E_CODEX=$folder/node_modules/.bin/codex" >> "$GITHUB_ENV"
+          echo "Codex $version"
+      - name: The add-on, approved, and a click back in the conversation
+        env:
+          IT_PORT: '5700'
+          IT_E2E_CODEX_LOGS: ${{ runner.temp }}/codex-logs
+        run: node e2e/apps/codex.mjs "$IT_E2E_CODEX" --version "$CODEX_VERSION"
+      # The same again for a person whose account's folder has a space in its name, as a Windows
+      # account named "Ana Lee" has: the run's home and It's folder are in C:\Users\Ana Lee. Codex
+      # runs a hook in PowerShell, which does not run a program whose path is in quotes, so It
+      # names its launcher there by the folder's short name, which Windows gives a new folder on
+      # a drive that has short names on, as the system's drive of a person's computer has. A
+      # runner may have them off, and they are turned on here first.
+      - name: The same, for an account whose folder has a space in its name
+        if: ${{ !cancelled() && runner.os == 'Windows' && env.IT_E2E_CODEX != '' }}
+        env:
+          IT_PORT: '5700'
+          IT_E2E_ROOT: C:\Users\Ana Lee
+          IT_E2E_CODEX_LOGS: ${{ runner.temp }}/codex-logs-space
+        run: |
+          fsutil 8dot3name query C: || true
+          fsutil 8dot3name set C: 0
+          node e2e/apps/codex.mjs "$IT_E2E_CODEX" --version "$CODEX_VERSION"
+      # Each of these tests is skipped where no Codex is found, so the run
+      # fails here if any of them was
+      - name: Codex's flags, and what codex execpolicy makes of It's rules
+        # Not yet tried on Windows
+        if: ${{ !cancelled() && env.IT_E2E_CODEX != '' && runner.os != 'Windows' }}
+        run: |
+          export PATH="$(dirname "$IT_E2E_CODEX"):$PATH"
+          npx vitest run packages/cli/codex-rules.test.ts e2e/apps/codex/flags.test.mjs --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/codex-tests.json"
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))
+            console.log(`${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numPendingTests + r.numTodoTests} skipped`)
+            if (r.numPendingTests + r.numTodoTests > 0) { console.log("A test that asks the real Codex was skipped"); process.exit(1) }
+          ' "$RUNNER_TEMP/codex-tests.json"
+      - name: Keep what the run wrote down
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: codex-${{ matrix.which }}-${{ matrix.os }}-logs
+          path: |
+            ${{ runner.temp }}/codex-logs
+            ${{ runner.temp }}/codex-logs-space
+            ${{ runner.temp }}/codex-tests.json
+          retention-days: 7
+          if-no-files-found: ignore

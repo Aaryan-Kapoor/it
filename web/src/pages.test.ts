@@ -1,6 +1,7 @@
 // What a page's bar says of the last thing the person did, in a stand-in browser with a stand-in
 // backend. What it must get right: it speaks of the click just made the moment it is made, and
 // never goes on saying what became of the one before.
+import { CODEX_INTERRUPTED } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { act, createElement } from 'react'
@@ -247,6 +248,25 @@ describe('what the page’s bar says of the last thing the person did', () => {
     await shown()
     expect(said()).toBe('Sent. Claude Code is busy, and gets it when it is free')
     Object.assign(PAGE, { agent: 'pi' })
+  })
+
+  test('a click held for a Codex conversation whose last turn was interrupted is said to wait for Codex, and not that Codex could not be woken', async () => {
+    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'codex', wakeFailed: null })
+    recent = [{ at: NOW - 2000, delivery: 'pending', outcome: null, heldBack: CODEX_INTERRUPTED }]
+    await shown()
+    expect(said()).toBe(`Not handed to Codex yet: ${CODEX_INTERRUPTED}`)
+    // Nothing failed, so it is not said in the colour of a failure
+    expect(host.querySelector('.status')?.getAttribute('data-tone')).toBe('wait')
+    await act(async () => root.unmount())
+    host.remove()
+    recent = [
+      { at: NOW - 2000, delivery: 'pending', outcome: null, heldBack: CODEX_INTERRUPTED },
+      { at: NOW - 3000, delivery: 'pending', outcome: null, heldBack: CODEX_INTERRUPTED },
+    ]
+    Object.assign(PAGE, { pending: 2 })
+    await shown()
+    expect(said()).toBe(`Not handed to Codex yet (2): ${CODEX_INTERRUPTED}`)
+    Object.assign(PAGE, { pending: 0, agent: 'pi' })
   })
 
   test('a click its machine set aside is said to be that, with when it is deleted, and is said to be waiting again once it is no longer set aside', async () => {

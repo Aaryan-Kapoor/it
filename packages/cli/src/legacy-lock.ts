@@ -78,6 +78,16 @@ function gone(file: string, owner: Owner): boolean {
   }
 }
 /**
+ * Whether a lock that `claimLock` made, or a claim it made beside one, was left by a command
+ * that has ended without letting go of it, as a command that was killed does: its record is one
+ * that `claimLock` writes, and no process has the number it names. One whose record cannot be
+ * read, or whose number a process has now, is not taken for left.
+ */
+export function claimLeft(file: string): boolean {
+  const owner = ownerOf(file)
+  return owner !== undefined && gone(file, owner)
+}
+/**
  * Takes a lock once, without waiting for a live or unknown owner. Both callers run on the
  * connector's event loop and arrange their own later attempts. Empty legacy
  * files retain the recovery age of their caller; recorded owners are never judged by age.

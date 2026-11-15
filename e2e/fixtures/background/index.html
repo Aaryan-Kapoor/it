@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Background e2e-private-page</title>
+  </head>
+  <body>
+    <h1>Background e2e-private-page</h1>
+    <button id="camera" onclick="camera()">Camera</button>
+    <button id="mic" onclick="hear()">Microphone</button>
+    <button id="record" onclick="record()">Record both</button>
+    <p id="out"></p>
+    <video id="view" autoplay muted playsinline width="320"></video>
+    <script>
+      // A page that records a call while the person looks at another tab: It passes it the
+      // camera's pictures and the microphone's sound, and it records each stream itself. It notes
+      // when each picture and each piece of sound came, and what it was told, for the run to read.
+      const out = document.getElementById('out')
+      const seen = (window.seen = { pictures: [], pieces: [], told: [], chunks: { cam: [], mic: [] }, errors: [] })
+      let cam = null
+      let mic = null
+      const recorders = {}
+      let recordingSince = 0
+      async function camera() {
+        try {
+          cam = await It.camera({ width: 640 })
+          document.getElementById('view').srcObject = cam.stream
+          cam.onframe = () => seen.pictures.push(Date.now())
+          cam.onchange = (state, why) => seen.told.push({ what: 'camera', state, why, at: Date.now(), hidden: document.visibilityState })
+          out.textContent = 'camera live'
+        } catch (e) {
+          out.textContent = `refused: ${e.message}`
+        }
+      }
+      async function hear() {
+        try {
+          mic = await It.microphone()
+          mic.onsound = () => seen.pieces.push(Date.now())
+          mic.onchange = (state, why) => seen.told.push({ what: 'microphone', state, why, at: Date.now(), hidden: document.visibilityState })
+          out.textContent = 'microphone live'
+        } catch (e) {
+          out.textContent = `refused: ${e.message}`
+        }
+      }
+      function record() {
+        try {
+          for (const [name, stream] of [
+            ['cam', cam.stream],
+            ['mic', mic.stream],
+          ]) {
+            const recorder = new MediaRecorder(stream)
+            const parts = []
+            recorder.ondataavailable = (e) => {
+              seen.chunks[name].push({ at: Date.now(), bytes: e.data.size })
+              if (e.data.size) parts.push(e.data)
+            }
+            recorder.onerror = (e) => seen.errors.push(`${name}: ${e.error?.name ?? 'error'}`)
+            recorder.start(250)
+            recorders[name] = { recorder, parts }
+          }
+          recordingSince = Date.now()
+          out.textContent = 'recording'
+        } catch (e) {
+          out.textContent = `refused: ${e.message}`
+        }
+      }
+      /** Stops both recordings, and says how long each plays for, read back from the file it made, and how long it was recorded for. */
+      window.stopRecording = async () => {
+        const made = { recordedFor: Math.round((Date.now() - recordingSince) / 100) / 10 }
+        for (const [name, { recorder, parts }] of Object.entries(recorders)) {
+          await new Promise((done) => {
+            recorder.onstop = done
+            recorder.stop()
+          })
+          const blob = new Blob(parts, { type: (parts[0]?.type ?? '').split(';')[0] })
+          made[name] = { type: blob.type, bytes: blob.size, state: recorder.state, seconds: await playsFor(blob) }
+        }
+        return made
+      }
+      /** How long a recording plays for, read from the file the way a player reads it, or why it could not be read. */
+      async function playsFor(blob) {
+        const player = document.createElement(blob.type.startsWith('video') ? 'video' : 'audio')
+        player.muted = true
+        player.src = URL.createObjectURL(blob)
+        try {
+          await new Promise((done, failed) => {
+            player.onloadedmetadata = done
+            player.onerror = () => failed(new Error(`unreadable: ${player.error?.code}`))
+          })
+          // A recording made as it goes says how long it is only once it has been read to its end
+          if (!Number.isFinite(player.duration)) {
+            await new Promise((done) => {
+              player.ondurationchange = () => Number.isFinite(player.duration) && done()
+              player.currentTime = 1e9
+              setTimeout(done, 5000)
+            })
+          }
+          return Number.isFinite(player.duration) ? Math.round(player.duration * 10) / 10 : -1
+        } catch (e) {
+          return e.message
+        } finally {
+          URL.revokeObjectURL(player.src)
+        }
+      }
+      /** Asks for the camera again, as a page that was given it once and asks with nothing clicked would. */
+      window.askAgain = () =>
+        It.camera({ width: 640 }).then(
+          (c) => {
+            cam = c
+            return 'live'
+          },
+          (e) => `refused: ${e.message}`,
+        )
+    </script>
+  </body>
+</html>

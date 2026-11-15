@@ -84,6 +84,16 @@ describe.each(BROWSERS)('an element a page makes fullscreen, in %s', (_name, typ
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
     browser = await type.launch({ timeout: 0 })
+    // The first page a browser shows can take Firefox on Windows most of the time a test is
+    // given, so one is shown here, where there is time for it
+    const context = await browser.newContext()
+    try {
+      const tab = await context.newPage()
+      await tab.goto(origin, { timeout: 0 })
+      await tab.waitForFunction(() => document.fullscreenEnabled, undefined, { timeout: 0 })
+    } finally {
+      await context.close()
+    }
   }, 300_000)
   // As page.test.ts does: the browser is closed first, and then every connection it left open to
   // the server is ended, since a server that is closed waits for those

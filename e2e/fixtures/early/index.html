@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Early e2e-private-page</title>
+    <script>
+      // A page that asks for the camera, and then the microphone, as soon as its script runs,
+      // before its own document has finished loading and with nothing clicked. Its picture is
+      // slow to come, so its document finishes loading seconds after it asked
+      const said = []
+      const show = () => {
+        const out = document.getElementById('out')
+        if (out) out.textContent = said.join(' | ')
+      }
+      const put = (what) => {
+        said.push(what)
+        show()
+      }
+      const count = (id) => {
+        const there = document.getElementById(id)
+        if (there) there.textContent = String(Number(there.textContent) + 1)
+      }
+      document.addEventListener('DOMContentLoaded', show)
+      window.addEventListener('load', () => put('loaded'))
+      ;(async () => {
+        try {
+          const cam = await It.camera()
+          cam.onframe = () => count('frames')
+          cam.onchange = (state, why) => put(`camera ${state}${why ? `: ${why}` : ''}`)
+          put('camera live')
+          const mic = await It.microphone()
+          mic.onsound = () => count('pieces')
+          mic.onchange = (state, why) => put(`microphone ${state}${why ? `: ${why}` : ''}`)
+          put('microphone live')
+        } catch (e) {
+          put(`refused: ${e.message}`)
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <h1>Early e2e-private-page</h1>
+    <img src="late.png" alt="" width="1" height="1" />
+    <p id="out"></p>
+    <p>Pictures: <span id="frames">0</span>, pieces of sound: <span id="pieces">0</span></p>
+  </body>
+</html>

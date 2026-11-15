@@ -203,7 +203,7 @@ describe('what the service tells the backend of how it stands', () => {
     // A folder that was only just made: nothing is registered for it, and nobody has been told of usage reporting
     // And with that, what the site needs to offer the network as a switch: whether the door is kept to
     // the tailnet, whether this machine is on one, and why "on" would mean the internet here, where it would
-    const { canTailnet, exposed, ...shut } = standsAs({ network: false }, true, 21000)
+    const { canTailnet, exposed, funnel, ...shut } = standsAs({ network: false }, true, 21000)
     expect(shut).toEqual({ on: false, wanted: true, addresses: [], background: false, usage: false, tailnet: false })
     expect(typeof canTailnet).toBe('boolean')
     expect(exposed === undefined || /^(has|is) /.test(exposed)).toBe(true)

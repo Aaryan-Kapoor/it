@@ -505,6 +505,7 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
     const off = await said(['network'])
     expect(off).toEqual({ answer: { network: false, addresses: [] }, words: expect.stringContaining(OFF) })
     expect(off.words).toContain(STOPPED)
+    expect(off.words).not.toContain('Tailscale Funnel')
     const on = await said(['network', 'on'])
     expect(on.answer).toEqual({ network: true, addresses: reachable(port) })
     expect(on.words).toContain(STOPPED)

@@ -41,11 +41,12 @@ import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { BOOLEAN } from './src/args'
-import { itForAgent, reloadLine, t3ClaudeLine } from './src/arrives'
+import { CODEX_RESTART, itForAgent, PI_RELOAD, reloadLine, T3_CODEX, t3ClaudeLine } from './src/arrives'
 import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
 import { VERSION } from './src/lib'
 import { aloneAt } from './src/serve/backend'
 import { instanceName } from './src/serve/config'
+import { afterHermes } from './src/setup'
 import { bases, holdBase } from './test-ports'
 import { standInZsh, zsh } from './test-zsh'
 
@@ -5400,6 +5401,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       enrolled: true,
       machine: { id: 'machine-1', name: 'the desk' },
       site: SITE,
+      // Nothing was asked of Tailscale on a machine that only joined, so nothing is said of a Funnel
       network: { on: false, addresses: [] },
       connector: { running: false },
       background: expect.objectContaining({ registered: false }),
@@ -5772,6 +5774,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
             '',
           ],
         ])
+        expect(stopped.shown).not.toContain('Tailscale Funnel')
         expect(stopped.shown).not.toMatch(/harness|[{}"]/)
         // Asked for JSON, it prints what it prints to a program
         const asked = await atTerminal(m, ['status', '--json'], {}, runtime)
@@ -5893,12 +5896,17 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     }
   })
 
-  test('an agent that asks for the pairing link is told to give it to the person at once, and in a Claude Code conversation without the add-on, with the words to load it', async () => {
+  test('an agent that asks for the pairing link is told to give it to the person at once, and in a Claude Code or Pi conversation without the add-on, with the words to load it', async () => {
     const m = machine(true, true)
     let connected = true
     const b = await backend(m, (asked) =>
       asked.path === 'machines:me'
-        ? { harnesses: [{ id: 'claude-code', addon: connected ? 'connected' : 'not_connected' }] }
+        ? {
+            harnesses: [
+              { id: 'claude-code', addon: connected ? 'connected' : 'not_connected' },
+              { id: 'pi', addon: connected ? 'connected' : 'not_connected' },
+            ],
+          }
         : { code: 'Ab3dEf6hIj9kLm2nOp5q' },
     )
     const url = `${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q`
@@ -5919,9 +5927,17 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
         url,
         tell: `${give} In that same message, tell them this, word for word: “${reloadLine('2.1.321')}”`,
       })
-      // But not where Claude Code's add-on is not connected on this machine, since loading it then does nothing
+      // From a Pi conversation that has not loaded the add-on, the same, with Pi's own words, and not where the add-on runs in it
+      const inPi = { ...b.env, PI_SESSION_ID: 'pi-1' }
+      expect(printed(await run(m, ['site', '--no-open'], inPi))).toEqual({
+        url,
+        tell: `${give} In that same message, tell them this, word for word: “${PI_RELOAD}”`,
+      })
+      expect(printed(await run(m, ['site', '--no-open'], { ...inPi, IT_PI_SESSION: 'pi-1' }))).toEqual({ url, tell: give })
+      // But not where the conversation's add-on is not connected on this machine, since loading it then does nothing
       connected = false
       expect(printed(await run(m, ['site', '--no-open'], claude))).toEqual({ url, tell: give })
+      expect(printed(await run(m, ['site', '--no-open'], inPi))).toEqual({ url, tell: give })
       // Nor where the add-on runs in the conversation already
       connected = true
       expect(printed(await run(m, ['site', '--no-open'], { ...claude, IT_HARNESS: 'claude-code', IT_SESSION: claude.CLAUDE_CODE_SESSION_ID }))).toEqual({
@@ -7522,6 +7538,146 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
     }
   })
 
+  // Whichever app an agent installs It from, what it is told to pass on is that app's own note,
+  // whole, in the step that gives the pairing link and again as the last thing setup prints
+  const passedOn = (setup: Awaited<ReturnType<typeof run>>, note: string) => {
+    expect(setup.code).toBe(0)
+    expect(printed(setup).next).toBe(AFTER_SETUP_TELLING(`this, word for word: “${note}”`))
+    expect(printed(setup).tell).toBe(`Tell the person this in your next message, word for word: “${note}”`)
+    expect(setup.err).toContain('For the agent that ran this: the person sees only what you say, and not what setup printed.')
+    expect(setup.err.trimEnd().endsWith(`Tell them this in your next message, word for word:\n\n${note.replace(/^/gm, '  ')}`)).toBe(true)
+  }
+  const mine = (m: ReturnType<typeof machine>) => backend(m, (asked) => (asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted: [] } : null))
+
+  test('run from a Pi conversation that has not loaded the add-on, it tells the agent to pass on the words that load it there, /reload, and not only where Pi was just connected', async () => {
+    const m = machine()
+    pi(m)
+    const b = await mine(m)
+    try {
+      // Pi sets PI_SESSION_ID for the commands its agent runs, and It's add-on, once it runs there, IT_PI_SESSION
+      const inPi = { ...b.env, PI_SESSION_ID: 'pi-1' }
+      const first = await run(m, ['setup', '--no-service', '--only', 'pi'], inPi)
+      passedOn(first, PI_RELOAD)
+      // It takes the place of Pi's general note in what the agent passes on, as Claude Code's and Codex's do
+      expect(printed(first).next).not.toContain(PI_NOTE)
+      // Asked again in the same conversation, which has still not loaded it, the same is said: Pi is connected already, and that changes nothing here
+      passedOn(await run(m, ['setup', '--no-service', '--only', 'pi'], inPi), PI_RELOAD)
+      // Once the add-on runs in the conversation, nothing is left to say of it
+      const loaded = await run(m, ['setup', '--no-service', '--only', 'pi'], { ...inPi, IT_PI_SESSION: 'pi-1' })
+      expect([loaded.code, printed(loaded).next, printed(loaded).tell]).toEqual([0, AFTER_SETUP, undefined])
+      expect(loaded.err).not.toContain('/reload')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('run from an OpenCode conversation, it tells the agent to pass on OpenCode’s note, whole: to restart it, and to send a message in a saved conversation', async () => {
+    const m = machine()
+    writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.18.32\n', { mode: 0o755 })
+    const b = await mine(m)
+    try {
+      const setup = await run(m, ['setup', '--no-service', '--only', 'opencode'], { ...b.env, OPENCODE_SESSION_ID: 'ses_1' })
+      expect(printed(setup).harnesses).toEqual([{ id: 'opencode', version: '1.18.32', addon: 'connected' }])
+      passedOn(
+        setup,
+        'OpenCode: If OpenCode is open, restart it: it reads its plugins when it starts.\nA saved conversation you open in OpenCode starts listening once you send a message in it.',
+      )
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('run from a Hermes conversation, it tells the agent to pass on Hermes’s note, whole: to restart it, the command that lets clicks in, and to send a message in a resumed conversation', async () => {
+    const m = machine()
+    // A stand-in for Hermes's own command: it lists It's plugin once its files are in Hermes's folder, as enabled once it was told to enable it
+    writeFileSync(
+      path.join(m.bin, 'hermes'),
+      [
+        '#!/bin/sh',
+        'PATH=/bin:/usr/bin',
+        'folder="$HOME/.hermes"',
+        'case "$*" in',
+        '  --version) echo "Hermes Agent v0.23.1" ;;',
+        '  "plugins enable it-bridge") : > "$HOME/hermes-on" ;;',
+        '  "plugins disable it-bridge") rm -f "$HOME/hermes-on" ;;',
+        '  "plugins list --json --no-bundled")',
+        '    if [ ! -f "$folder/plugins/it-bridge/plugin.yaml" ]; then echo "[]"',
+        '    elif [ -f "$HOME/hermes-on" ]; then echo \'[{"name":"it-bridge","status":"enabled"}]\'',
+        '    else echo \'[{"name":"it-bridge","status":"disabled"}]\'; fi ;;',
+        'esac',
+        'exit 0',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    )
+    const b = await mine(m)
+    try {
+      const setup = await run(m, ['setup', '--no-service', '--only', 'hermes'], { ...b.env, HERMES_SESSION_ID: '20261110_120000_abcd' })
+      expect(printed(setup).harnesses).toEqual([{ id: 'hermes', version: '0.23.1', addon: 'connected' }])
+      const note = `Hermes Agent: ${afterHermes('0.23.1')}`
+      passedOn(setup, note)
+      // The three things an agent in Hermes was seen to pass on only the first of
+      expect(note).toContain('If Hermes is open, restart it')
+      expect(note).toContain('\n    hermes config set plugins.entries.it-bridge.allow_gateway_injection true\n')
+      expect(note).toContain('A saved conversation you resume in the terminal starts listening once you send a message in it.')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('run from a Codex conversation, it tells the agent to pass on Codex’s note: to start Codex again now, and to ask for the tour once it is back', async () => {
+    const m = machine()
+    // A stand-in for Codex's own command: it keeps a marketplace and its one plugin, and lists them as Codex does
+    const kept = path.join(m.home, 'codex-kept.json')
+    writeFileSync(
+      path.join(m.bin, 'codex'),
+      `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path')
+const kept = ${JSON.stringify(kept)}
+const has = fs.existsSync(kept) ? JSON.parse(fs.readFileSync(kept, 'utf8')) : {}
+const words = process.argv.slice(2), said = words.join(' ')
+const keep = () => fs.writeFileSync(kept, JSON.stringify(has))
+const source = () => path.join(has.from, 'plugins/it-bridge')
+if (said === '--version') console.log('codex-cli 0.167.0')
+else if (said === 'plugin marketplace list --json') console.log(JSON.stringify({ marketplaces: has.from ? [{ name: 'it', root: has.from }] : [] }))
+else if (said === 'plugin list --marketplace it --json') {
+  const entry = { pluginId: 'it-bridge@it', name: 'it-bridge', marketplaceName: 'it', enabled: Boolean(has.on), installed: Boolean(has.on), source: { source: 'local', path: has.from ? source() : '' } }
+  console.log(JSON.stringify({ installed: has.from && has.on ? [entry] : [], available: has.from && !has.on ? [entry] : [] }))
+} else if (said === 'plugin list --marketplace it') {
+  if (!has.from) console.log('No plugins found in marketplace \`it\`.')
+  else console.log('PLUGIN        STATUS              VERSION  SOURCE\\n' + (has.on ? 'it-bridge@it  installed, enabled  0.1.0    ' : 'it-bridge@it  not installed           ') + source())
+} else if (words.length === 4 && said.startsWith('plugin marketplace add ')) { has.from = words[3]; keep() }
+else if (said === 'plugin add it-bridge@it') { has.on = true; keep() }
+else { console.error('the stand-in does not know ' + said); process.exit(2) }
+`,
+      { mode: 0o755 },
+    )
+    const b = await mine(m)
+    try {
+      const setup = await run(m, ['setup', '--no-service', '--only', 'codex'], {
+        ...b.env,
+        CODEX_THREAD_ID: 'thread-1',
+        CODEX_HOME: path.join(m.home, 'codex'),
+      })
+      expect(setup.code).toBe(0)
+      // Codex has yet to run It's hooks, which it does once it is started again and they are trusted
+      const said = printed(setup)
+      expect(said.harnesses).toMatchObject([{ id: 'codex', version: '0.167.0', addon: 'needs_approval' }])
+      // What is to be done in this conversation takes the place of Codex's general note, with what to ask for once Codex is back
+      const note =
+        'Quit Codex and start it again now, then choose “Trust all and continue” when it asks to review hooks. Until then, Codex may ask you to approve every `it` command I run, and It’s hooks don’t run. In a terminal, `codex resume --last` brings this chat back. Once Codex is back, say “Give me the It tour.”'
+      // Starting Codex again ends the agent's turn, so the tour is left until it is back
+      expect(said.next).toContain(
+        `write the person one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${note}” Then end your turn, and do not run \`it tour --wait\` yet`,
+      )
+      expect(said.tell).toBe(`Tell the person this in your next message, word for word: “${note}”`)
+      expect(Object.keys(said).pop()).toBe('tell')
+      expect(setup.err.trimEnd().endsWith(`Tell them this in your next message, word for word:\n\n  ${note}`)).toBe(true)
+    } finally {
+      await b.close()
+    }
+  })
+
   test('run from an agent’s conversation, `--only` keeps an app the person chose though its command was not found this once', async () => {
     const m = machine()
     writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.18.32\n', { mode: 0o755 })
@@ -8184,5 +8340,98 @@ else if (said === 'plugin install it-bridge@it --scope user') {
     expect(held.tell).toBe(`Tell the person this in your next message, word for word: “${t3ClaudeLine('2.1.321')}”`)
     expect(held.next).toContain(`tells them this, word for word: “${t3ClaudeLine('2.1.321')}”`)
     expect(inThread.err).not.toContain(reloadLine('2.1.321'))
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('what setup says last, from inside the Codex conversation that installed It', () => {
+  /** A stand-in for Codex's own command: it keeps a marketplace and its one plugin, and answers what setup asks of it. */
+  function codexStandIn(m: { home: string; bin: string }) {
+    const kept = path.join(m.home, 'codex-kept.json')
+    writeFileSync(
+      path.join(m.bin, 'codex'),
+      `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path')
+const kept = ${JSON.stringify(kept)}
+const has = fs.existsSync(kept) ? JSON.parse(fs.readFileSync(kept, 'utf8')) : {}
+const said = process.argv.slice(2).join(' ')
+const keep = () => fs.writeFileSync(kept, JSON.stringify(has))
+const plugin = () => path.join(has.from, 'plugins/it-bridge')
+if (said === '--version') console.log('codex-cli 0.167.0')
+else if (said === 'plugin marketplace list --json') console.log(JSON.stringify({ marketplaces: has.from ? [{ name: 'it', root: has.from }] : [] }))
+else if (said === 'plugin list --marketplace it --json')
+  console.log(JSON.stringify({ installed: has.on ? [{ pluginId: 'it-bridge@it', enabled: true, source: { source: 'local', path: plugin() } }] : [], available: [] }))
+else if (said === 'plugin list --marketplace it') console.log(has.on ? 'it-bridge@it  installed, enabled  0.1.0  ' + plugin() : has.from ? 'it-bridge@it  not installed' : '')
+else if (said.startsWith('plugin marketplace add ')) { has.from = process.argv[5]; keep() }
+else if (said === 'plugin add it-bridge@it') { has.on = true; keep() }
+else { console.error('the stand-in does not know ' + said); process.exit(2) }
+`,
+    )
+    chmodSync(path.join(m.bin, 'codex'), 0o755)
+  }
+
+  test('it tells the person to quit Codex and start it again now, and why, and the agent to end its turn and leave the tour until Codex is back', async () => {
+    // A machine joining an It on another computer, which is set up as a first setup is and needs no backend program of its own
+    const joining = async (env: Record<string, string>, answer = (_url: string) => '{"ok":true}') => {
+      const m = machine(false)
+      codexStandIn(m)
+      const answers = http.createServer((req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end(answer(req.url ?? '')))
+      const socket = path.join(m.it, 'connector.sock')
+      await new Promise<void>((r) => answers.listen(socket, r))
+      writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'ef'.repeat(24), pid: process.pid, version: 'x', startedAt: 0 }))
+      const b = await backend(m, (asked) => (asked.path === 'machines:me' ? { id: 'machine-2', name: 'the laptop', wanted: [] } : null))
+      try {
+        const ran = await run(m, ['login', '--url', b.url, '--code', 'Ab3dEf6hIj9kLm2nOp5q', '--name', 'the laptop', '--only', 'codex', '--no-service'], {
+          CODEX_HOME: path.join(m.home, 'codex'),
+          ...env,
+        })
+        return { ran, m }
+      } finally {
+        await new Promise((r) => answers.close(r))
+        await b.close()
+      }
+    }
+    // What setup says of Codex to whoever reads its sentences, as the program has it
+    const note =
+      'Codex: Start Codex again, and choose "Trust all and continue" when it says the hooks need review. Until then a Codex that is already open may ask before every `it` command, runs none of It’s hooks, and gets a click only as a new message once it is idle.'
+
+    // Inside the Codex conversation that ran setup, which read its rules and its hooks before either was there
+    const { ran, m } = await joining({ CODEX_THREAD_ID: 'thread-1' })
+    const said = printed(ran)
+    expect(said.harnesses).toMatchObject([{ id: 'codex', addon: 'needs_approval' }])
+    // The rule that lets `it` out of the sandbox is written, and Codex reads it only as it starts
+    expect(existsSync(path.join(m.home, 'codex', 'rules', 'it.rules'))).toBe(true)
+    const line = `${CODEX_RESTART} Once Codex is back, say “Give me the It tour.”`
+    expect(line).toMatch(/^Quit Codex and start it again now, /)
+    expect(line).toContain('Until then, Codex may ask you to approve every `it` command I run, and It’s hooks don’t run.')
+    expect(line).toContain('`codex resume --last` brings this chat back')
+    // The words are the last thing it prints, addressed to the agent, and in the step that comes next
+    expect(Object.keys(said).pop()).toBe('tell')
+    expect(said.tell).toBe(`Tell the person this in your next message, word for word: “${line}”`)
+    expect(said.next).toContain(`tells them this, word for word: “${line}”`)
+    expect(ran.err.trimEnd().endsWith(`Tell them this in your next message, word for word:\n\n  ${line}`)).toBe(true)
+    // Starting Codex again ends the agent's turn, so the tour is left until it is back, and is not run in this turn
+    expect(said.next).toContain('Then end your turn, and do not run `it tour --wait` yet: Codex has to be started again first, which ends this turn anyway.')
+    expect(said.next).not.toContain('in the same turn, run `it tour --wait`')
+    // And what it says in sentences for the person says to start Codex again, and why
+    expect(ran.err).toContain(note)
+
+    // Run by an agent in another app, or by a script, the note is passed on as it stands, and nobody is told to end a turn
+    const outside = await joining({})
+    expect(printed(outside.ran).harnesses).toMatchObject([{ id: 'codex', addon: 'needs_approval' }])
+    expect(printed(outside.ran).next).toBe(AFTER_SETUP_TELLING(`this, word for word: “${note}”`))
+    expect(printed(outside.ran).tell).toBe(`Tell the person this in your next message, word for word: “${note}”`)
+    expect(outside.ran.err).toContain(note)
+    expect(outside.ran.err).not.toContain('Quit Codex')
+
+    // In a thread of T3 Code, which the connector says holds the conversation, Codex never asks: nothing is to be approved or started again
+    const inThread = await joining({ CODEX_THREAD_ID: 'thread-1' }, (url) =>
+      url.startsWith('/route?harness=codex&session=thread-1')
+        ? JSON.stringify({ connected: true, listening: false, runtime: 'inactive', thread: 'held' })
+        : '{"ok":true}',
+    )
+    const held = printed(inThread.ran)
+    expect(held.tell).toBe(`Tell the person this in your next message, word for word: “${T3_CODEX}”`)
+    expect(held.next).toContain(`tells them this, word for word: “${T3_CODEX}” Then, only once that message is written and in the same turn`)
+    expect(held.next).not.toContain('Quit Codex')
   })
 })

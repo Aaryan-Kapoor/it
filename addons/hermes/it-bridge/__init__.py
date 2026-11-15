@@ -537,23 +537,47 @@ class _Bridge:
     def stop(self):
         self._stop.set()
 
+    def _refused_here(self):
+        """Whether Hermes refuses every message this add-on could hand it in this process.
+
+        A Hermes that runs its agent in a gateway loads the add-on there, for its plain terminal
+        as for its TUI and desktop app, and takes a plugin's message only once the person has
+        allowed it (hermes_cli/plugins_injection.py). Until then no click can be handed over
+        here, and the connector is told so, so that It does not say the add-on is at work.
+        Only what Hermes plainly says counts: where the process is a terminal, or where it
+        cannot be told, nothing is called refused.
+        """
+        if self._terminal() is not None:
+            return False  # the terminal itself, which takes a message without being allowed to, or a Hermes that does not show what it is
+        try:
+            return self._ctx._gateway_injection_allowed() is False
+        except Exception:
+            return False
+
     def _addon(self):
         delivery = callable(getattr(self._ctx, "inject_message", None))
+        missing = [] if delivery else ["submit"]
+        if delivery and self._refused_here():
+            delivery, missing = False, ["consent"]
         return {
             "api": 1,
             "version": ADDON_VERSION,
             "delivery": delivery,
             "idle": False,
-            "missing": [] if delivery else ["submit"],
+            "missing": missing,
         }
 
     def _run(self):
         while not self._stop.wait(POLL_SECONDS):
             try:
-                self._ask("/addon", {"harness": HARNESS, "instance": self._instance, "addon": self._addon()})
+                said = self._addon()
+            except Exception:
+                continue
+            try:
+                self._ask("/addon", {"harness": HARNESS, "instance": self._instance, "addon": said})
             except Exception:
                 pass
-            if not self._addon()["delivery"]:
+            if not said["delivery"]:
                 continue
             with self._lock:
                 talks = list(self._talks.values())

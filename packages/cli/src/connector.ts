@@ -18,6 +18,7 @@ import {
   ALIVE,
   briefClick,
   type Click,
+  CODEX_INTERRUPTED,
   describeClick,
   LEASE_MS,
   LISTENING_MOST,
@@ -27,6 +28,8 @@ import {
   QUEUES,
   RETENTION,
   TAKES,
+  TURN_ON_MS,
+  TURNS_ON,
   WAKE_MOST,
   WAKES,
   wakesOn,
@@ -72,7 +75,7 @@ import { profileEnvironment, profileOf, readProfile } from './profiles'
 import { addonMarks, conversationFolder, conversationProfile, forgetAddonMark, noteConversation, publishedWithoutAddon } from './publish'
 import { alone, lockHeld } from './serve/backend'
 import * as service from './service'
-import { claudeFolders, detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
+import { claudeFolders, detectAll, type HarnessStatus, KNOWN, newerProgramSeen, reconcile, turnBackOn } from './setup'
 import {
   type T3,
   T3_HELD_MOST,
@@ -99,8 +102,11 @@ import {
   claudeModeOf,
   claudeWroteAt,
   codexHolder,
+  codexInterruptedAt,
   endTree,
   fromAnotherStart,
+  LEFT_ENDED,
+  LEFT_MAY_RUN,
   listsProcesses,
   mayWake,
   NO_PS,
@@ -143,6 +149,8 @@ export interface ConnectorInfo {
 }
 
 const LIVE_MS = 5_000 // an add-on that asked this recently is listening
+/** How often the log says again that an app has It’s add-on turned off, while it stays so. */
+const OFF_SAID_MS = 6 * 3_600_000
 const KNOWN_MS = 90_000 // and one that asked this recently is still worth watching clicks for
 const HOLD_MS = 6_000 // how long a claimed click waits for an add-on that has stopped asking: one that is there asks every second
 const RENEW_MS = 10_000 // how often the lease on a held click is extended
@@ -600,6 +608,8 @@ export const OPEN_WITHOUT_ADDON =
  */
 export const PI_OPEN_WITHOUT_ADDON =
   'its conversation is open without It’s add-on, as when it was open before It was installed, so It did not start a second copy of it: type /reload in it, or open it again if you closed it, and what you did reaches it'
+/** What the page says of a click for a Codex conversation that is open and whose last turn the person interrupted (`CODEX_INTERRUPTED` in the protocol). */
+export { CODEX_INTERRUPTED }
 /** What the page says after why a Pi conversation could not be reopened, where it has not loaded It's add-on either (`notLoadedToo`). */
 export const PI_NOT_LOADED =
   'Its conversation has not loaded It’s add-on either, as when it was open before It was installed: if it is still open, type /reload in it, and what you did reaches it'
@@ -688,6 +698,14 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    * that asks for its clicks has shown that it is there, and is answered once its app is chosen.
    */
   const connected = (harness: string) => chosen(harness) && found.some((h) => h.id === harness && (h.addon === 'connected' || h.addon === 'needs_approval'))
+  /**
+   * Whether a conversation of this app that a thread of T3 Code holds may be handed a click
+   * through T3 Code's own server: once the app is chosen, whatever its add-on is. That way runs
+   * no command of the app's and asks nothing of its add-on, so an add-on that the app has turned
+   * off, or that is not there yet, keeps nothing from a thread. Every other way is still
+   * `connected`'s.
+   */
+  const throughT3 = chosen
   // The agent apps the person has switched reopening on for on this machine, and since when, as
   // It says. Until It has said, none is.
   let wakesNow = new Map<string, number>()
@@ -1699,6 +1717,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       await recovery.removeMark(entry.id)
     }
     const who = `${a(agentOf(harness))} conversation (${short(threadOf(key))})`
+    // Its short line goes the way the mark says: to a thread of T3 Code once the app is chosen, as any click does, and into Codex's queue only while Codex is connected
+    const open = () => (current()?.fallback?.via === 't3' ? throughT3(harness) : connected(harness))
     const after = (ms: number, what: () => void) => {
       const timer = setTimeout(() => {
         markTimers.delete(timer)
@@ -1712,7 +1732,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // Not into an app the person has disconnected since: what the mark stood for stays as it is, for a hook of the app once it is connected again
       if (!chosen(harness)) return
       // Recovery and the current machine settings must have answered before a restored mark can send anything.
-      if (unfitting || givingBack !== 'done' || !connected(harness)) return after(MARK_ASKED_MS, line)
+      if (unfitting || givingBack !== 'done' || !open()) return after(MARK_ASKED_MS, line)
       const fallback = copy.fallback
       if (!fallback) return
       const keyNow = follow(where() ?? key)
@@ -1730,7 +1750,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       }
       // The disk may have taken time. A hook, disconnection or shutdown that arrived
       // meanwhile takes precedence over sending the fallback whose attempt was reserved.
-      if (closing || unfitting || recovery.stopped || !kept() || !chosen(harness) || !connected(harness)) return
+      if (closing || unfitting || recovery.stopped || !kept() || !chosen(harness) || !open()) return
       if (fallback.via === 'codex' && !codexOpen(follow(where() ?? key))) return
       void (
         fallback.via === 't3'
@@ -1763,7 +1783,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       if (current()?.retry?.nextAt === null) return
       after(ms, () => {
         if (!chosen(harness)) return
-        if (unfitting || givingBack !== 'done' || !connected(harness)) return wait()
+        if (unfitting || givingBack !== 'done' || !open()) return wait()
         unmarked.add(where() ?? key)
         say(`${who} was given a mark and none of its hooks said it had what the mark stood for; it is given the short line now, and from here on`)
         line()
@@ -2120,7 +2140,20 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    * stopped, as that connector wrote them down. Each is told so when it is reopened for the
    * same thing again, once.
    */
-  const cutOff = new Set<string>(readJson<string[]>(cutOffFile()) ?? [])
+  const cutOff = new Set<string>()
+  /**
+   * Those of them whose turn may have left something running: It could not tell what was left
+   * of the run, and the person let go of it with `it runs clear`. Every other turn that was cut
+   * off had what it left ended before its conversation could be reopened. In the file such a
+   * conversation is written as `{ key, left: 'unknown' }`, and every other by its key alone.
+   */
+  const mayRun = new Set<string>()
+  for (const noted of readJson<unknown[]>(cutOffFile()) ?? []) {
+    const key = typeof noted === 'string' ? noted : (noted as { key?: unknown } | null)?.key
+    if (typeof key !== 'string') continue
+    cutOff.add(key)
+    if (typeof noted !== 'string' && (noted as { left?: unknown }).left === 'unknown') mayRun.add(key)
+  }
   // Each is owed until its conversation has been told, which may be several starts of this
   // connector later: so the list is kept in its file for as long as anything is on it
   /** Whether the notes as they stand are on the disk: where they could not be written, a run's own note is kept in their place. */
@@ -2128,8 +2161,14 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   const keepCutOff = () => {
     try {
       while (cutOff.size > 200) cutOff.delete(cutOff.values().next().value!)
+      // What is said of a turn's leavings goes with the word that it was cut off
+      for (const key of mayRun) if (!cutOff.has(key)) mayRun.delete(key)
       if (over) return
-      if (cutOff.size) writePrivate(cutOffFile(), [...cutOff])
+      if (cutOff.size)
+        writePrivate(
+          cutOffFile(),
+          [...cutOff].map((key) => (mayRun.has(key) ? { key, left: 'unknown' } : key)),
+        )
       else rmSync(cutOffFile(), { force: true })
       cutOffKept = true
     } catch {
@@ -2264,6 +2303,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       if (cutOff.delete(key)) keepCutOff()
     } else {
       cutOff.add(key)
+      // Nothing of the run is left, as this look has made sure: where a clear of it had already
+      // written down that something may still be running, and was cut short before it let go of
+      // the run's note, that word no longer holds
+      mayRun.delete(key)
       keepCutOff()
       if (!cutOffKept) return false
     }
@@ -2454,10 +2497,12 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    */
   /** The last line a reopened app printed where it ended badly, by conversation, until its next reopening. */
   const saidLast = new Map<string, string>()
-  // What a reopened app printed is kept in a file only while it runs. One that was left by a
-  // connector that was ended in the middle of a run goes now.
+  // What a reopened app printed is kept in a file only while it runs, and on Windows how its run
+  // went, as its keeper says it, beside that. One that was left by a connector that was ended in
+  // the middle of a run goes now.
   try {
-    for (const name of readdirSync(inHome('logs'))) if (/^reopened-\d+-\d+\.txt$/.test(name)) rmSync(inHome('logs', name), { force: true })
+    for (const name of readdirSync(inHome('logs')))
+      if (/^reopened-\d+-\d+(?:\.txt|-[0-9a-f-]{36}\.kept)$/.test(name)) rmSync(inHome('logs', name), { force: true })
   } catch {}
   async function carry(
     session: { harness: string; id: string },
@@ -2812,7 +2857,12 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
               if (t?.reason === reason && t.via === via) Object.assign(t, { asking: false, said: true })
             }
             const first = some[0]!.session!
-            if (reason !== null)
+            if (reason === CODEX_INTERRUPTED)
+              seldom(
+                `interrupted:${keyOf(first.harness, first.id)}`,
+                `a codex conversation (${short(keyOf(first.harness, first.id))}) is open and its last turn was interrupted, so Codex would keep a click in its queue until the next message there; its page says to send one`,
+              )
+            else if (reason !== null)
               seldom(
                 `shut:${keyOf(first.harness, first.id)}`,
                 `${a(first.harness)} conversation (${short(keyOf(first.harness, first.id))}) is open without It’s add-on, so it is not reopened; its page says to type ${reloadIn(first.harness)} in it`,
@@ -2912,6 +2962,19 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     const holder = codexHold(key)
     return holder === null ? null : holder === 'elsewhere'
   }
+  /**
+   * Whether a Codex conversation's last turn was interrupted, as Codex's own file of it says
+   * (`codexInterruptedAt`), and no turn has begun since. A hook that said a turn began after the
+   * interruption counts as well as the file: Codex may not have written of that turn yet.
+   */
+  const codexInterrupted = (key: string): boolean => {
+    const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: threadOf(key) }), harnessEnv())
+    if (typeof env === 'string') return false
+    const at = codexInterruptedAt(threadOf(key), env.CODEX_HOME)
+    if (at === null) return false
+    const s = sessions.get(key)
+    return !(s?.busy === true && s.busyAt > at)
+  }
   const codexPut = (thread: string, text: string) => {
     const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: thread }), harnessEnv())
     return typeof env === 'string' ? Promise.resolve(env) : codexQueue(thread, text, env)
@@ -2960,13 +3023,19 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // is done: so it is left where the waiter takes it.
       if (awaited(click, Date.now())) return
       // Nor is the app's command run once the app is not connected any more: the person may have
-      // disconnected it while the click stood in line
-      if (!connected(harness)) return
+      // disconnected it while the click stood in line. T3 Code's server, which runs no command of
+      // the app's, is asked only that the app is still chosen.
+      const stillFor = () => (t3 ? throughT3(harness) : connected(harness))
+      if (!stillFor()) return
       // Nor is a conversation reopened once the person has switched that off, or more often than it may be
       if ((reopening && !wakes(harness, click.at)) || (starting && !room(key, someoneThere(click, offered)))) return
       // Codex's queue is for a conversation some Codex has open. One that was closed while this
       // click stood in line is not given it: the click is looked at afresh on the next pass.
       if (!reopening && !t3 && codexOpen(key) !== true) return
+      // Nor one whose last turn the person interrupted while this click stood in line: Codex
+      // would keep it until their next message there, and the click is looked at afresh on the
+      // next pass, which has the page say what brings it on
+      if (!reopening && !t3 && codexInterrupted(key)) return
       // Only if it is still for this conversation on this machine: the page may have changed
       // hands while the click stood in line here
       // The hold is counted from before it was asked for: It starts counting when it gives it,
@@ -2981,7 +3050,14 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // And looked at once more, now that the claim is answered: a waiter that began while it
       // was being asked for cannot take what this machine holds, so it is given back to it. It
       // is given back as well when Codex was disconnected in that time.
-      if (closing || unfitting || awaited(click, Date.now()) || !connected(harness) || (reopening && !wakes(harness, click.at))) {
+      if (
+        closing ||
+        unfitting ||
+        awaited(click, Date.now()) ||
+        !stillFor() ||
+        (reopening && !wakes(harness, click.at)) ||
+        (!reopening && !t3 && codexInterrupted(key))
+      ) {
         journal('released', click.id)
         await release(click.id).catch(() => {})
         return
@@ -3143,6 +3219,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // Still not settled, it is reopened for nothing: said below, by `carry`, as why
       /** Whether this turn is told that the one before it was cut off: decided before it begins, since its own ending may make such a note anew. */
       const toldCutOff = cutOff.has(key)
+      /** What it is told became of what that turn had started: ended by It, or let go of by the person while It could not tell. */
+      const toldLeft = mayRun.has(key) ? LEFT_MAY_RUN : LEFT_ENDED
       const sent: { click: Offered; toWaiter: boolean; given?: Given; printed?: boolean } = { click, toWaiter: false }
       submitting.set(click.id, sent)
       // What is put into a conversation that is open, or into a thread: the mark alone, where a
@@ -3175,7 +3253,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           // not the same note every time.
           await carry(
             click.session!,
-            `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.has(key) ? `\n\n${WAS_STOPPED}` : ''}${toldCutOff ? `\n\n${WAS_CUT_OFF}` : ''}`,
+            `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.has(key) ? `\n\n${WAS_STOPPED}` : ''}${toldCutOff ? `\n\n${WAS_CUT_OFF} ${toldLeft}` : ''}`,
             // Still wanted at the moment it would start: the app connected, and reopening switched on for it
             () => connected(harness) && wakes(harness, click.at),
             [click, ...withIt].map((c) => c.id),
@@ -3444,7 +3522,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     routing = true
     try {
       // Discovery outlives the click that started it, including a completed fallback delivery.
-      for (const [key, session] of t3Pending) if (connected(session.harness)) t3For(key, session)
+      for (const [key, session] of t3Pending) if (throughT3(session.harness)) t3For(key, session)
       await retireLostClaims()
       await recovery
         .pruneWaiters(Date.now(), (key, restored) => (!restored || sessions.has(follow(key))) && !turnRunning(follow(key), Date.now()))
@@ -3645,7 +3723,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         const session = click.session
         let thread: ReturnType<typeof t3For>
         const heldInT3 = (): boolean => {
-          thread = connected(session.harness) && !reopenedNow.has(key) ? t3For(key, session, click.id) : undefined
+          thread = throughT3(session.harness) && !reopenedNow.has(key) ? t3For(key, session, click.id) : undefined
           return thread !== undefined
         }
         const s = sessions.get(key)
@@ -3684,6 +3762,19 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
                 // Asked last, since it tells the page: only of a click that would otherwise be reopened for
                 !keptShut(click, openThisPass),
             })
+        // A Codex that has the conversation open, and whose last turn the person interrupted,
+        // keeps what its queue is given until their next message there, and no hook of that
+        // turn is still to come. Put in the queue, the click would be said to be with the
+        // agent while nothing ran. It waits here instead, its page says what brings it on, and
+        // it is as new to the turn that message begins as one made then, so that turn's hooks
+        // hand it over. A conversation held in a thread of T3 Code goes to its thread as ever.
+        if (codex && (forAddOn || way === 'queue') && !t3Only(key) && codexInterrupted(key)) {
+          tellHeld(click, CODEX_INTERRUPTED)
+          hookSeen.delete(click.id)
+          hookSeen.set(click.id, { tag: tag(click), at: performance.now() })
+          continue
+        }
+        if (click.heldBack === CODEX_INTERRUPTED) tellHeld(click, null)
         if (forAddOn) {
           // Route 1: the add-on will ask for it, or the running turn's next hook will
           const asked = steady()
@@ -3980,18 +4071,33 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         const unreadToo = unread && (shown === null || body.unread === true)
         // Each is still owed the word that a turn of its was cut off, and that is written down
         // first: where it cannot be, nothing is let go of, and the person is told so
+        /** Those newly said to have been let go of, and to be said so no longer where they are not let go of after all: a run that stays held is still looked at, and may yet be ended. */
+        const letGo: string[] = []
+        const keptOn = () => {
+          for (const key of letGo) mayRun.delete(key)
+          if (letGo.length) keepCutOff()
+        }
         for (const key of keys) {
           if (unsettled.get(key)?.stopped || stoppedByPerson.has(key)) rememberStopped(key)
-          else cutOff.add(key)
+          else {
+            cutOff.add(key)
+            // Nothing of the run was ended, and whatever it started may be there still: its next turn is told that as well
+            if (!mayRun.has(key)) letGo.push(key)
+            mayRun.add(key)
+          }
         }
         keepCutOff()
-        if ((keys.length && !cutOffKept) || keys.some((key) => pendingStops.has(key))) return [200, { cleared: 0, unkept: true }]
+        if ((keys.length && !cutOffKept) || keys.some((key) => pendingStops.has(key))) {
+          keptOn()
+          return [200, { cleared: 0, unkept: true }]
+        }
         const clearing = keys.map((key) => [key, unsettled.get(key)!] as const)
         for (const key of keys) unsettled.delete(key)
         try {
           if (keys.length) keepRuns(true)
         } catch {
           for (const [key, run] of clearing) unsettled.set(key, run)
+          keptOn()
           return [200, { cleared: 0, unkept: true }]
         }
         // What was set aside meanwhile is tried again: for each conversation that was held,
@@ -4264,7 +4370,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     for (const h of found)
       record('app.seen', {
         agent: agentOf(h.id),
-        addon: h.addon,
+        // A published field, whose words do not change here: an add-on the app has turned off is counted as it was before It told the two apart
+        addon: h.addon === 'disabled' ? 'not_connected' : h.addon,
         version: /^\d{1,4}\.\d{1,4}\.\d{1,4}/.exec(h.version ?? '')?.[0] ?? 'unknown',
         wake: wakesOn(process.platform, true) && wakesNow.has(h.id),
       })
@@ -4364,7 +4471,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       const now = follow(key)
       for (const k of [key, now, ...(earlier.get(now) ?? [])]) {
         noted.add(k)
-        if (connected(k.slice(0, k.indexOf(':')))) ids.add(k)
+        if (throughT3(k.slice(0, k.indexOf(':')))) ids.add(k)
       }
     }
     // Counted whether or not they are here, so that what one is offered while here is still
@@ -4551,6 +4658,91 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       upgradingNow = false
     }
   }
+  /**
+   * An app that has It's add-on turned off, which the person may have done on purpose, is said
+   * in the log by a code, when it is first found so and then every few hours while it stays so,
+   * and not with every look: It does not turn the add-on on again, and the site says how to.
+   */
+  const offSaid = new Map<string, number>()
+  const sayOff = () => {
+    for (const h of found) {
+      if (h.addon !== 'disabled' || !chosen(h.id)) {
+        offSaid.delete(h.id)
+        continue
+      }
+      const at = offSaid.get(h.id)
+      if (at !== undefined && Date.now() - at < OFF_SAID_MS) continue
+      offSaid.set(h.id, Date.now())
+      say(
+        `${KNOWN[h.id].label}: addon_disabled: the app has It’s add-on turned off, so none of its conversations is handed a click but through T3 Code; It turns it on again only when the person asks, under Machines or with it setup`,
+      )
+    }
+  }
+  // Turning an add-on back on, as the person asked on the site: with the app's own command,
+  // for an app the person connected here whose add-on this machine finds turned off, and with
+  // nothing from the site but which app. What became of it goes back to the site in a sentence.
+  const turningNow = new Set<string>()
+  // The apps this connector has begun to turn on. One that It has down as being turned on, and
+  // that this connector never began, was begun by a connector that stopped before it was done,
+  // and is done again: it changes nothing where the add-on is on by now.
+  const begunHere = new Set<string>()
+  // The askings this connector stopped claiming once no answer came back, each by when it was
+  // asked: heard of again, as It's every report has it heard of, one is not begun again. One the
+  // person makes afresh, once It takes this one to have been cut short, is another asking.
+  const gaveUp = new Map<string, number | undefined>()
+  const turnOnAsked = async (harness: string, at?: number) => {
+    if (turningNow.has(harness)) return
+    turningNow.add(harness)
+    begunHere.add(harness)
+    try {
+      // Only an asking that It answers it has taken this machine's word for is acted on: one It
+      // no longer has, or an It that does not answer so, waits. Nothing else has an asking taken
+      // up again until It takes it to have been cut short (`TURN_ON_MS`), so one whose answer did
+      // not come back is asked again a few times before then, after a short wait that grows. It
+      // takes the same word twice for one asking, and the app's command is run once, after the
+      // answer that does come back.
+      let claimed: unknown
+      let answered = false
+      const began = steady()
+      for (let wait = 1000; ; wait = Math.min(wait * 2, 30_000)) {
+        try {
+          claimed = await call('mutation', api.machines.turningOn, { harness, state: 'working' })
+          answered = true
+          break
+        } catch {}
+        if (closing || steady() - began + wait > TURN_ON_MS - 60_000) break
+        await new Promise((resolve) => setTimeout(resolve, wait).unref())
+        if (closing) break
+      }
+      // No answer came back at all: one of the claims may have reached It all the same, and It
+      // then has the asking down as at work, which this connector began and is not to begin again
+      if (!answered) {
+        if (gaveUp.size > 20) gaveUp.clear()
+        gaveUp.set(harness, at)
+        return
+      }
+      if (claimed !== true) {
+        begunHere.delete(harness)
+        return
+      }
+      const answer =
+        (TURNS_ON as readonly string[]).includes(harness) && chosen(harness)
+          ? await turnBackOn(harness as (typeof TURNS_ON)[number])
+          : { ok: false as const, why: 'That agent app is not connected on this machine, so nothing was changed.', code: 'not_chosen' }
+      const label = KNOWN[harness as keyof typeof KNOWN]?.label ?? 'an agent app'
+      say(answer.ok ? `${label}: It’s add-on was turned back on, as asked on the site` : `${label}: turn_on_failed: ${answer.code}`)
+      // Looked at afresh, so that the site has the app as it is now before it is told this is over
+      if (!closing) {
+        found = await detectAll()
+        watch()
+        sayOff()
+        await report()
+      }
+      await call('mutation', api.machines.turningOn, answer.ok ? { harness, state: 'done' } : { harness, state: 'failed', why: answer.why }).catch(() => {})
+    } finally {
+      turningNow.delete(harness)
+    }
+  }
   // What is installed on the machine is looked at when the connector starts, when what is
   // wanted changes, when an add-on that was found waiting for the person's yes speaks, and
   // every half hour: each look runs every harness's own command. The report in between says
@@ -4574,6 +4766,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         makeWay()
         found = await detectAll()
         watch()
+        sayOff()
       } finally {
         looking = false
       }
@@ -4625,8 +4818,13 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       wakes?: { harness: string; since: number }[]
       runs?: { harness: string; sessionId: string; stop?: boolean; run?: string }[]
       upgrade?: { state: string; version?: string } | null
+      turnOn?: { harness: string; state: string; at?: number }[]
     }) => {
       if (me.upgrade?.state === 'asked') void upgradeAsked(me.upgrade.version)
+      for (const t of me.turnOn ?? []) {
+        if (t.state === 'asked' && t.at !== undefined && gaveUp.get(t.harness) === t.at) continue
+        if (t.state === 'asked' || (t.state === 'working' && !begunHere.has(t.harness))) void turnOnAsked(t.harness, t.at)
+      }
       // A conversation the person asked to have stopped is stopped. One that It has down as
       // running and that is not, which a connector that died leaves behind, is said to be over.
       for (const r of me.runs ?? []) {

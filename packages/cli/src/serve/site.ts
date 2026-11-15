@@ -19,7 +19,7 @@ export const BUILT: Site = SITE
 // What every answer for the site carries. Nobody may frame the site, which is said in both of
 // the ways a browser looks for it. A file is only ever what its type says. Wherever someone
 // goes from the site is not told that they came from it. The camera and the microphone are the
-// site's own to ask for, and no frame's: the site records for a page whose own call asked for
+// site's own to ask for, and no frame's: the site opens them for a page whose own call asked for
 // them, once the person allowed it in It's bar (web/src/media.ts), and a page in its frame is
 // given neither. Nothing uses the device's position. Nothing here tells a browser to insist on https:
 // the site is reached plainly on a home network, and a browser told so for a name such as

@@ -29,11 +29,19 @@ import { LIMITS, UPLOAD } from '@it/protocol'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
 import { type Browser, type BrowserType, chromium, firefox } from 'playwright'
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
-import { type Asked, type ContentSettings, createContent, pagePolicy } from './src/index'
+import { type Asked, type ContentSettings, createContent as openContent, pagePolicy } from './src/index'
 import { limit } from './src/limits'
 import { createLog } from './src/log'
 
-type Content = ReturnType<typeof createContent>
+type Content = ReturnType<typeof openContent>
+/** Every service a test opened, so that each is closed before the folder they keep their files in is removed. */
+const opened: Content[] = []
+/** Opens a service as the program does, and keeps it in the list of those to close at the end. */
+function createContent(settings: ContentSettings): Content {
+  const content = openContent(settings)
+  opened.push(content)
+  return content
+}
 
 // The service opens every file and makes every folder through this, so that a test can make
 // the disk fail under it, or do something of its own at the moment one is opened or made
@@ -343,11 +351,17 @@ beforeAll(async () => {
   root = mkdtempSync(path.join(os.tmpdir(), 'it-content-test-'))
 })
 
-afterAll(() => {
+afterAll(async () => {
   keys?.close()
-  rmSync(root, { recursive: true, force: true })
+  // Windows removes no file that a program still holds open, and a service holds its records
+  // open until it is closed. A group whose own hooks stopped early, as when one of them ran out
+  // of time, may have left its service open, so every service is closed here, whether or not
+  // it was closed already. Windows may still hold a file for a moment after it is let go, so
+  // the folder is removed with a few tries.
+  for (const content of opened) await content.close()
+  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   vi.restoreAllMocks()
-})
+}, 60_000)
 
 describe('tickets', () => {
   ownService()
@@ -3346,11 +3360,12 @@ describe.each(BROWSERS)('a page as %s shows it', (_name, type) => {
   const HOST = 'pages.invalid'
   const OWN = `http://${HOST}:${PAGES}`
   let browser: Browser
-  // A browser is slow to start on a machine that is busy
+  // A browser is slow to start on a machine that is busy, and Firefox can be slow to close on
+  // Windows, longer than the ten seconds a hook is given unless it says otherwise
   beforeAll(async () => {
     if (installed(type)) browser = await type.launch({ timeout: 0 })
   }, 300_000)
-  afterAll(() => browser?.close())
+  afterAll(() => browser?.close(), 120_000)
 
   test.skipIf(!installed(type))(
     'a page that takes its addresses from another site still keeps its showing at its own, and that site is asked for nothing that holds the showing’s token',
@@ -3478,7 +3493,7 @@ describe.each(BROWSERS)('a page as %s shows it', (_name, type) => {
   )
 
   test.skipIf(!installed(type))(
-    'a page that says its address may be told to the sites it leads to is held to telling none of it, since its address holds its showing’s token',
+    'links keep the showing token private except inside an embedded srcdoc document in Firefox',
     async () => {
       const prefix = `u/${USER}/telling/1/`
       const ELSEWHERE = 'http://elsewhere.invalid'
@@ -3486,6 +3501,9 @@ describe.each(BROWSERS)('a page as %s shows it', (_name, type) => {
       // Each page says it in a way of its own, and then leads to another site: in a window of
       // its own or in its own place, by a link, a form, a script, or by itself after a moment
       const pages: Record<string, string> = {
+        'shadow.html': `<html><body><div><template shadowrootmode="open"><a id="go" target="_blank" referrerpolicy="unsafe-url" rel="opener" href="${ELSEWHERE}/shadow">go</a></template></div></body></html>`,
+        'script-shadow.html': `<html><body><div id="host"></div><script>document.getElementById('host').attachShadow({mode:'open'}).innerHTML='<a id="go" target="_blank" referrerpolicy="unsafe-url" rel="opener" href="${ELSEWHERE}/script-shadow">go</a>'</script></body></html>`,
+        'srcdoc.html': `<html><body><iframe id="child" srcdoc='<a id="go" target="_blank" referrerpolicy="unsafe-url" rel="opener" href="${ELSEWHERE}/srcdoc">go</a>'></iframe></body></html>`,
         'meta.html': `<html><head>${telling('unsafe-url')}</head><body><a id="go" target="_blank" href="${ELSEWHERE}/meta">go</a></body></html>`,
         'old.html': `<html><head>${telling('no-referrer-when-downgrade')}</head><body><a id="go" href="${ELSEWHERE}/old">go</a></body></html>`,
         'link.html': `<html><body><a id="go" target="_blank" referrerpolicy="unsafe-url" href="${ELSEWHERE}/link">go</a></body></html>`,
@@ -3525,13 +3543,22 @@ describe.each(BROWSERS)('a page as %s shows it', (_name, type) => {
           tab.setDefaultTimeout(120_000)
           // A page that leaves by itself may have left before it is seen to have loaded
           await tab.goto(framed ? `http://${HOST}:${BASE}/` : `${OWN}${at}/v/1/${file}`, { waitUntil: 'commit' })
-          if (file !== 'refresh.html') await (framed ? tab.frameLocator('#page').locator('#go') : tab.locator('#go')).click({ noWaitAfter: true })
+          if (file !== 'refresh.html') {
+            const scope = framed ? tab.frameLocator('#page') : tab
+            await (file === 'srcdoc.html' ? scope.frameLocator('#child').locator('#go') : scope.locator('#go')).click({ noWaitAfter: true })
+          }
           const name = `${file}, ${framed ? 'framed' : 'by itself'}`
           await expect.poll(() => [name, asked.length], { timeout: 60_000 }).toEqual([name, 1])
           told[name] = JSON.stringify(asked).includes(token) ? 'its address, token and all' : 'nothing of its token'
           await context.close()
         }
-      expect(told).toEqual(Object.fromEntries(Object.keys(told).map((name) => [name, 'nothing of its token'])))
+      // This records the remaining limit in #81, not a protection: Firefox lets the embedded
+      // document send the showing address. A fix must change this expectation to no disclosure.
+      expect(told).toEqual(
+        Object.fromEntries(
+          Object.keys(told).map((name) => [name, type === firefox && name.startsWith('srcdoc.html,') ? 'its address, token and all' : 'nothing of its token']),
+        ),
+      )
     },
     600_000,
   )
