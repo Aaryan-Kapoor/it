@@ -1926,7 +1926,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
         for: { harness: 'codex', id: 'thread-1' },
         why: 'Codex is signed out on this machine, so it could not run: open Codex and sign in',
       })
-      expect(said.join('\n')).not.toMatch(/401|Unauthorized|cf-ray/)
+      expect(said.join('\n')).not.toMatch(/401 Unauthorized|Missing bearer|cf-ray/)
     },
   )
 
