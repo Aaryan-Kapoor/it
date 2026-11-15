@@ -16,6 +16,17 @@ const FILE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const TAG = /^v[0-9A-Za-z._-]+$/
 http
   .createServer((req, res) => {
+    // A copy of an install guide under test, where one is staged beside the build
+    if (new URL(req.url ?? '/', 'http://stand-in').pathname === '/install.md') {
+      try {
+        const guide = statSync('/build/guide/install.md')
+        console.log(`${new Date().toISOString()} 200 /install.md ${guide.size}`)
+        res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8', 'content-length': guide.size })
+        return void createReadStream('/build/guide/install.md').pipe(res)
+      } catch {
+        return void res.writeHead(404).end()
+      }
+    }
     const parts = new URL(req.url ?? '/', 'http://stand-in').pathname.split('/').filter(Boolean)
     const file =
       parts.length === 3 && parts[0] === 'latest' && parts[1] === 'download'
