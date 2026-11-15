@@ -1222,8 +1222,11 @@ export type SiteToPage =
   /**
    * Whether a turn of the page's conversation is running, as its machine says, and where the last
    * few things done on the page have got to, newest first. Sent to every page, each time it changes.
+   * `notLoaded` is whether the page's conversation is open and has not loaded It's add-on, as its
+   * machine says and as the site's own notice above the page goes by: true while that is known,
+   * and false where it is not. Left out where the site cannot say, as while It is out of reach.
    */
-  | { type: 'it:progress'; working: boolean; actions: ActionProgress[] }
+  | { type: 'it:progress'; working: boolean; actions: ActionProgress[]; notLoaded?: boolean }
   /** What changed of the page's state since what was last sent: the agent's part, whole, where it changed, and each value the page keeps that changed, with `null` for one taken away. */
   | { type: 'it:changed'; revision: number; state?: unknown; kept: [string, unknown][] }
   /** Accepted. Of values the page keeps, `revision` is the state's revision that has them. */

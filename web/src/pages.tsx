@@ -21,6 +21,7 @@ import {
 } from './brand'
 import { enterFullscreen, escapeLeavesFullscreen, fullscreenAvailable, leaveFullscreen, useFullscreen } from './fullscreen'
 import { agentName, ago, api, dayOf, type Id, NOT_YET_REVOKED, navigate, refusal, useBackendTakes, useNow } from './lib'
+import type { Listening } from './listening'
 import { ownerOf } from './media'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
@@ -439,7 +440,7 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
   // Every page is told what the bar goes by: whether its agent is at work, and where what was done on it has got to. As text, so that it is sent on only when it changes
   // Not while It cannot be reached: what the page was last told of its agent may be long out of date by then
   const unreachable = useUnreachable()
-  const progress = page ? progressFor(recent, unreachable ? undefined : work, now) : null
+  const progress = page ? progressFor(recent, unreachable ? undefined : work, now, (page as { listening?: Listening }).listening) : null
   const progressSaid = progress ? JSON.stringify(progress) : null
   useEffect(() => {
     if (page) document.title = `${page.title} · It`

@@ -369,16 +369,17 @@ function receive(message: SiteToPage): void {
   } else if (message.type === 'it:camera-frame' || message.type === 'it:camera-state') seen(message)
   else if (message.type === 'it:microphone-sound' || message.type === 'it:microphone-state') heard(message)
   else if (message.type === 'it:fullscreen') fullscreenSaid(message.on === true, message.enabled === true)
-  else if (message.type === 'it:progress') progressed(message.working, message.actions)
+  else if (message.type === 'it:progress') progressed(message.working, message.actions, message.notLoaded)
 }
 
 // Whether the page's agent is at work, and where the things done on the page have got to, as the
 // site says to every page: whether a turn of the page's conversation is running, and whether each
-// thing done was handed to the agent's conversation and what is known of the agent's turn for it.
-type Progress = { working: boolean; actions: ActionProgress[] }
+// thing done was handed to the agent's conversation and what is known of the agent's turn for it,
+// and, where the site says, whether the conversation is open and has not loaded It's add-on.
+type Progress = { working: boolean; actions: ActionProgress[]; notLoaded?: boolean }
 let progress: Progress | null = null
 const progressHearers: ((said: Progress) => void)[] = []
-function progressed(working: unknown, actions: unknown): void {
+function progressed(working: unknown, actions: unknown, notLoaded: unknown): void {
   if (!Array.isArray(actions)) return
   // Only what is shaped as it is to be: a page is given nothing here that it would have to check
   progress = {
@@ -386,6 +387,7 @@ function progressed(working: unknown, actions: unknown): void {
     actions: actions
       .filter((a): a is ActionProgress => typeof a === 'object' && a !== null && typeof (a as ActionProgress).id === 'string')
       .map((a) => ({ id: a.id, handed: a.handed === true, turn: a.turn === 'running' || a.turn === 'ended' ? a.turn : null })),
+    ...(typeof notLoaded === 'boolean' ? { notLoaded } : {}),
   }
   for (const hear of [...progressHearers]) tellProgress(hear)
 }
@@ -2392,8 +2394,9 @@ const api = {
    * Hears whether the page's agent is at work and where the things done on the page have got to,
    * each time the site says: whether a turn of the page's conversation is `working`, and for each
    * of the last few things done, by the `id` that `It.action` resolved with, whether it was
-   * `handed` to the agent's conversation and what is known of the agent's `turn` for it. Returns
-   * how to stop hearing.
+   * `handed` to the agent's conversation and what is known of the agent's `turn` for it; and,
+   * where the site says, whether the conversation is open and has `notLoaded` It's add-on.
+   * Returns how to stop hearing.
    */
   onProgress(cb: (said: Progress) => void) {
     progressHearers.push(cb)
