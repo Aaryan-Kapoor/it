@@ -8431,7 +8431,9 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
     )
     const held = printed(inThread.ran)
     expect(held.tell).toBe(`Tell the person this in your next message, word for word: “${T3_CODEX}”`)
-    expect(held.next).toContain(`tells them this, word for word: “${T3_CODEX}” What showing that page printed under \`arrives\` says whether to end your turn then or to wait.`)
+    expect(held.next).toContain(
+      `tells them this, word for word: “${T3_CODEX}” What showing that page printed under \`arrives\` says whether to end your turn then or to wait.`,
+    )
     expect(held.next).not.toContain('Quit Codex')
   })
 })
