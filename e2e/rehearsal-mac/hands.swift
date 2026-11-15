@@ -58,7 +58,24 @@ let MODS: [String: CGEventFlags] = [
   "alt": .maskAlternate, "option": .maskAlternate, "opt": .maskAlternate, "shift": .maskShift,
 ]
 
+// The modifier keys themselves, pressed before a chord and let go after it, so that no modifier is
+// left held in the event source's state (a Command flag on the key alone once left Command held)
+let MOD_KEYS: [(CGEventFlags, CGKeyCode)] = [(.maskCommand, 55), (.maskShift, 56), (.maskAlternate, 58), (.maskControl, 59)]
+
+func modifiers(_ flags: CGEventFlags, down: Bool) {
+  var held: CGEventFlags = down ? [] : flags
+  for (flag, key) in MOD_KEYS where flags.contains(flag) {
+    if down { held.insert(flag) } else { held.remove(flag) }
+    let e = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: down)
+    e?.flags = held
+    post(e)
+    pause(20)
+  }
+}
+
 func press(_ code: CGKeyCode, _ flags: CGEventFlags = []) {
+  if !flags.isEmpty { modifiers(flags, down: true) }
+  defer { if !flags.isEmpty { modifiers(flags, down: false) } }
   let down = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true)
   down?.flags = flags
   post(down)
@@ -78,10 +95,12 @@ func typeText(_ text: String) {
     let units = Array(String(ch).utf16)
     let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true)
     down?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+    down?.flags = []
     post(down)
     pause(12)
     let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false)
     up?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+    up?.flags = []
     post(up)
     pause(28)
   }

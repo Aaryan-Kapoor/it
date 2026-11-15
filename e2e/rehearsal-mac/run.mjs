@@ -270,7 +270,7 @@ async function start(id) {
   }
   // The person must meet a live, empty Terminal: a wipe ends the tmux session, and prepare's
   // desktop step is what opens it again
-  if ((await onMac(id, '/opt/homebrew/bin/tmux has-session -t agent')).code !== 0) throw new Error('The Terminal\'s tmux session is not running: run prepare\'s desktop step again before starting.')
+  if (!argv.includes('--plain') && (await onMac(id, '/opt/homebrew/bin/tmux has-session -t agent')).code !== 0) throw new Error('The Terminal\'s tmux session is not running: run prepare\'s desktop step again before starting.')
   // What the terminal shows, kept every four seconds where it changed: an app that clears the
   // screen as it leaves takes its scrollback with it
   await onMac(id, `rm -f ${SHARED}/video.mp4 ${SHARED}/screens.txt; sh -c 'trap "" HUP; p=""; while sleep 4; do c=$(/opt/homebrew/bin/tmux capture-pane -p -J -t agent 2>/dev/null) || continue; [ "$c" = "$p" ] && continue; printf "=== %s\\n%s\\n" "$(date -u +%T)" "$c" >> ${SHARED}/screens.txt; p="$c"; done' < /dev/null >/dev/null 2>&1 & echo $! > ${SHARED}/screens.pid`)
