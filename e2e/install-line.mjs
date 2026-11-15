@@ -118,7 +118,9 @@ print(json.dumps({'seen': seen, 'drawn': plain()[-6000:]}))
 /** Everything this test has, but anything of It's own and anything that marks an agent's conversation, which would turn the script and the program to words for an agent. */
 const plainEnv = () =>
   Object.fromEntries(
-    Object.entries(process.env).filter(([k]) => !/^(IT_|DO_NOT_TRACK$|CLAUDE|CODEX_|OPENCLAW_|HERMES_|OPENCODE_|PI_SESSION_ID$|ZDOTDIR$|BASH_ENV$|ENV$)/.test(k)),
+    Object.entries(process.env).filter(
+      ([k]) => !/^(IT_|DO_NOT_TRACK$|CLAUDE|CODEX_|OPENCLAW_|HERMES_|OPENCODE_|PI_SESSION_ID$|ZDOTDIR$|BASH_ENV$|ENV$)/.test(k),
+    ),
   )
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'it-line-'))
@@ -127,7 +129,7 @@ const leftFrom = (home) => {
   const listed = execFileSync('ps', ['-A', '-o', 'pid=,command='], { encoding: 'utf8' })
   for (const row of listed.split('\n')) {
     const m = /^\s*(\d+)\s+(.*)$/.exec(row)
-    if (m && m[2].includes(path.join(home, '.it', 'bin'))) {
+    if (m?.[2].includes(path.join(home, '.it', 'bin'))) {
       try {
         process.kill(Number(m[1]), 'SIGKILL')
       } catch {}
@@ -136,11 +138,11 @@ const leftFrom = (home) => {
 }
 
 /**
- * Starts the shell named in a home of its own, with a terminal, types `line` at its prompt, and
- * at setup's first question presses the down arrow and then Control+C, and asks the shell how
- * the line ended. Says what it saw.
+ * Starts the shell named, in a home of its own and with a terminal of its own, does there what
+ * `steps` say (see DRIVE), and says what it saw. Anything the program it installed left running
+ * is stopped afterwards.
  */
-async function atTheQuestion(shell, home, line) {
+async function inAShell(shell, home, steps) {
   const env = {
     ...plainEnv(),
     HOME: home,
@@ -154,19 +156,6 @@ async function atTheQuestion(shell, home, line) {
     PROMPT: '$ ',
   }
   const argv = path.basename(shell) === 'zsh' ? [shell, '-i'] : [shell, '--noprofile', '--norc', '-i']
-  const steps = [
-    { wait: 2 },
-    { send: `${line}\r` },
-    { expect: 'Where is your It\\?[\\s\\S]*On another computer', timeout: 240, as: 'question', stop: true },
-    // Time for setup to begin reading keys, as a person takes to read the question
-    { wait: 1.5 },
-    { send: '\x1b[B' },
-    { expect: '❯ ?On another computer', timeout: 10, as: 'moved' },
-    { send: '\x03' },
-    { wait: 2 },
-    { send: 'echo "ended:$?"\r' },
-    { expect: 'ended:\\d+', timeout: 10, as: 'ended' },
-  ]
   const said = await new Promise((resolve) => {
     const child = spawn('python3', ['-c', DRIVE, JSON.stringify({ argv, steps })], { env, cwd: home, stdio: ['ignore', 'pipe', 'pipe'] })
     let out = ''
@@ -185,7 +174,12 @@ async function atTheQuestion(shell, home, line) {
   return said
 }
 
-const shells = ['/bin/zsh', '/bin/bash', '/usr/bin/zsh', '/usr/bin/bash'].filter(existsSync).filter((s, i, all) => all.findIndex((t) => path.basename(t) === path.basename(s)) === i)
+/** Setup's first question, with its two answers drawn under it. */
+const QUESTION = 'Where is your It\\?[\\s\\S]*On another computer'
+
+const shells = ['/bin/zsh', '/bin/bash', '/usr/bin/zsh', '/usr/bin/bash']
+  .filter(existsSync)
+  .filter((s, i, all) => all.findIndex((t) => path.basename(t) === path.basename(s)) === i)
 try {
   for (const shell of shells) {
     const name = path.basename(shell)
@@ -193,44 +187,42 @@ try {
     mkdirSync(home, { recursive: true })
     // An empty startup file of the shell's own, as a person has one, so that zsh does not offer to write one first
     for (const file of ['.zshrc', '.bashrc']) writeFileSync(path.join(home, file), '')
-    const r = await atTheQuestion(shell, home, `curl -fsSL ${base}/install.sh | sh`)
+    // At the question: the down arrow, after the moment a person takes to read it, and then
+    // Control+C, after which the shell is asked how the line ended
+    const r = await inAShell(shell, home, [
+      { wait: 2 },
+      { send: `curl -fsSL ${base}/install.sh | sh\r` },
+      { expect: QUESTION, timeout: 240, as: 'question', stop: true },
+      { wait: 1.5 },
+      { send: '\x1b[B' },
+      { expect: '❯ ?On another computer', timeout: 10, as: 'moved' },
+      { send: '\x03' },
+      { wait: 2 },
+      { send: 'echo "ended:$?"\r' },
+      { expect: 'ended:\\d+', timeout: 10, as: 'ended' },
+    ])
     check(`in ${name}, the install line installs It and goes on to setup's first question`, r.seen.question, r.drawn)
     if (!r.seen.question) continue
     check(`in ${name}, setup hears the down arrow at its first question`, r.seen.moved, r.drawn)
     check(`in ${name}, Control+C ends setup at its first question and gives the shell its terminal back`, r.seen.ended === 'ended:130', r.drawn)
     check(`in ${name}, nothing was set up`, !readdirSync(path.join(home, '.it')).some((f) => ['settings.json', 'service.json', 'backend'].includes(f)))
 
-    // Setup started by hand with its input from /dev/tty, as the script started it before: it
-    // hears the keys, or says that it cannot and ends, and never sits there deaf
-    const byHand = await new Promise((resolve) => {
-      const steps = [
-        { wait: 2 },
-        { send: `"$HOME/.it/bin/it" setup < /dev/tty; echo "ended:$?"\r` },
-        { expect: 'Where is your It\\?[\\s\\S]*On another computer|ended:\\d+', timeout: 60, as: 'first', stop: true },
-        { wait: 1.5 },
-        { send: '\x1b[B' },
-        { expect: '❯ ?On another computer|ended:\\d+', timeout: 10, as: 'moved' },
-        { send: '\x03' },
-        { expect: 'ended:\\d+', timeout: 10, as: 'ended' },
-      ]
-      const env = { ...plainEnv(), HOME: home, SHELL: shell, TERM: 'xterm-256color', IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage', BASH_SILENCE_DEPRECATION_WARNING: '1', PS1: '$ ', PROMPT: '$ ' }
-      const argv = name === 'zsh' ? [shell, '-i'] : [shell, '--noprofile', '--norc', '-i']
-      const child = spawn('python3', ['-c', DRIVE, JSON.stringify({ argv, steps })], { env, cwd: home, stdio: ['ignore', 'pipe', 'inherit'] })
-      let out = ''
-      child.stdout.on('data', (d) => (out += d))
-      child.on('close', () => {
-        try {
-          resolve(JSON.parse(out))
-        } catch {
-          resolve({ seen: {}, drawn: out })
-        }
-      })
-    })
-    leftFrom(home)
+    // Setup started by hand with its input from /dev/tty: it hears the keys, or says that it
+    // cannot and ends, and never waits there deaf
+    const byHand = await inAShell(shell, home, [
+      { wait: 2 },
+      { send: '"$HOME/.it/bin/it" setup < /dev/tty; echo "ended:$?"\r' },
+      { expect: `${QUESTION}|ended:\\d+`, timeout: 60, as: 'first', stop: true },
+      { wait: 1.5 },
+      { send: '\x1b[B' },
+      { expect: '❯ ?On another computer|ended:\\d+', timeout: 10, as: 'moved' },
+      { send: '\x03' },
+      { expect: 'ended:\\d+', timeout: 10, as: 'ended' },
+    ])
     const heard = byHand.seen.moved?.includes('❯') && byHand.seen.ended === 'ended:130'
     const refused = /ended:[1-9]/.test(byHand.seen.first ?? '') && /setup`? again in a terminal/i.test(byHand.drawn)
     check(`in ${name}, setup started with its input from /dev/tty hears the keys, or says it cannot and ends`, heard || refused, byHand.drawn)
-    if (refused) console.log(`     (setup said it cannot read keys there, and ended)`)
+    if (refused) console.log('     (setup said that it cannot hear keys there, and ended)')
   }
   if (!shells.length) check('there is a zsh or a bash to type the install line into', false)
 } finally {
