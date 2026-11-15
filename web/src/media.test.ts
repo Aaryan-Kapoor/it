@@ -933,7 +933,7 @@ describe('the camera, live to a page', () => {
     expect(workers[1]!.ended).toBe(true)
   })
 
-  test('a camera that says it gives fewer than one picture a second is still looked at once a second while the screen does not show the site', async () => {
+  test('a camera that says it gives fewer than one picture a second is still looked at once a second while the screen does not show the site, and one that says a pace that is none as often as the most', async () => {
     const told: unknown[] = []
     vi.stubGlobal(
       'Worker',
@@ -947,18 +947,23 @@ describe('the camera, live to a page', () => {
       },
     )
     allow('person-1', grant('page-1', ['camera']))
-    standInCamera(undefined, { counts: false, frameRate: 0.25 })
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
-    open = await openCamera(true, false, {
-      ...camera,
-      id: 'cam-1',
-      grant: grantFor('person-1', 'page-1', OWNER, ['camera'])!,
-      still: () => null,
-      picture: () => {},
-      sound: () => {},
-      told: () => {},
-    })
-    expect(told).toEqual([1000])
+    // And one that says a pace that is none is taken to give the most there are, thirty a second
+    for (const frameRate of [0.25, -1, Number.NEGATIVE_INFINITY]) {
+      giveBack()
+      standInCamera(undefined, { counts: false, frameRate })
+      open?.stop()
+      open = await openCamera(true, false, {
+        ...camera,
+        id: 'cam-1',
+        grant: grantFor('person-1', 'page-1', OWNER, ['camera'])!,
+        still: () => null,
+        picture: () => {},
+        sound: () => {},
+        told: () => {},
+      })
+    }
+    expect(told).toEqual([1000, 33, 33])
   })
 
   test('where the worker cannot run, its pictures are looked for by the site’s own clock while the screen does not show the site', async () => {

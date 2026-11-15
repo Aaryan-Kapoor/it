@@ -660,7 +660,9 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
   /** How many milliseconds apart the pictures are looked for while the screen does not show the site. */
   const lookEvery = () => {
     const counts = (view.getVideoPlaybackQuality?.().totalVideoFrames ?? 0) > 0
-    const rate = Math.min(LIVE_CAMERA.perSecond, stream.getVideoTracks()[0]?.getSettings().frameRate || LIVE_CAMERA.perSecond)
+    // A camera that says nothing of its pace, or a pace that is none, is taken to give the most
+    const said = stream.getVideoTracks()[0]?.getSettings().frameRate ?? 0
+    const rate = Math.min(LIVE_CAMERA.perSecond, said > 0 ? said : LIVE_CAMERA.perSecond)
     // And never further apart than a second, however slowly the camera says it gives them
     return Math.min(1000, Math.round(1000 / (counts ? 2 * rate : rate)))
   }
