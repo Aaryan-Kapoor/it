@@ -454,6 +454,8 @@ export const forArtifact = query({
       attended: x.attended ?? null,
       // When it was handed over, or dropped by a stop: the site tells by it which stop dropped what
       handedAt: x.handedAt ?? null,
+      // When its agent said what became of it: an answer on the page after that is later news than a failure
+      settledAt: x.settledAt ?? null,
       // Set aside by its machine after tries that came to nothing: no machine offers it to an
       // agent again until its conversation is heard from, though it is still waiting all the same.
       // One that an agent waiting on the page has taken meanwhile is being delivered, and is not

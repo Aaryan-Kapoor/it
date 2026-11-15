@@ -1247,11 +1247,15 @@ function ActionStatus({
     // Left up, "Your agent has it" read as an agent still at work, minutes after it had answered.
     // (Handed over and not yet said to be done is what `running` means: every click an add-on took is that, until its agent says more)
     const changed = answeredAt !== null && answeredAt > last.at
+    // The agent said it could not do it, and has changed the page since it said so: what it put
+    // there is later than the failure, which the bar no longer says. Left up, the red read as out
+    // of date beside the answer the agent had gone on to give (seen with Codex, retrying a photo)
+    const failed = last.outcome === 'failed' && !(last.settledAt != null && answeredAt !== null && answeredAt > last.settledAt)
     // Unless it is still at work, as its machine says: then that is said, since the page looks done and its agent is not
     // A turn of its conversation is running: that is said, whatever became of what was done, but
     // where the agent said it could not do it, which the person may want to do again
-    if (working && last.outcome !== 'failed') return <WorkingNow agent={agent} />
-    if ((last.outcome === null || last.outcome === 'running') && changed) return null
+    if (working && !failed) return <WorkingNow agent={agent} />
+    if ((last.outcome === null || last.outcome === 'running' || (last.outcome === 'failed' && !failed)) && changed) return null
     // Its turn ended after it was handed over, and the page is as it was: said as that. Left as
     // "Your agent has it", it read as an agent still at work on something it had finished with
     if (atWork === 'ended') return <span className="status">{`${agent ?? 'Your agent'} finished without changing this ${NOUN.one}`}</span>

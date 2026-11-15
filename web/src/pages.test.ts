@@ -18,6 +18,7 @@ let recent: {
   outcome?: string | null
   route?: string | null
   handedAt?: number | null
+  settledAt?: number | null
   parked?: boolean
   expiresAt?: number | null
   madeAt?: number
@@ -836,6 +837,31 @@ describe('what the page’s bar says of the last thing the person did', () => {
     }
   })
 
+  test('what the agent said it could not do is said no more once it has changed the page after saying so', async () => {
+    // The agent explained on the page and then said it could not do it: the failure is the later news
+    recent = [{ at: NOW - 60_000, delivery: 'handed_off', outcome: 'failed', route: 'addon', handedAt: NOW - 59_000, settledAt: NOW - 40_000 }]
+    Object.assign(PAGE, { answeredAt: NOW - 41_000 })
+    await shown()
+    expect(said()).toBe('Your agent could not do that')
+    await act(async () => root.unmount())
+    host.remove()
+    // It went on and put an answer on the page: that is later than the failure, and is on the page
+    Object.assign(PAGE, { answeredAt: NOW - 5_000 })
+    await shown()
+    expect(said()).toBeNull()
+    await act(async () => root.unmount())
+    host.remove()
+    // A later click that succeeded is said in its place, as the last thing done
+    recent = [
+      { at: NOW - 20_000, delivery: 'handed_off', outcome: 'succeeded', route: 'addon', handedAt: NOW - 19_000, settledAt: NOW - 10_000 },
+      { at: NOW - 60_000, delivery: 'handed_off', outcome: 'failed', route: 'addon', handedAt: NOW - 59_000, settledAt: NOW - 40_000 },
+    ]
+    Object.assign(PAGE, { answeredAt: NOW - 41_000 })
+    await shown()
+    expect(said()).toBe('Done')
+    Object.assign(PAGE, { answeredAt: 0 })
+  })
+
   test('what the agent had already done is not said to have been stopped by a stop that came after it', async () => {
     // Done a minute ago, and the conversation was stopped since, from another of its pages
     recent = [{ at: NOW - 60_000, delivery: 'handed_off', outcome: 'succeeded', route: 'addon', handedAt: NOW - 59_000 }]
@@ -1250,6 +1276,22 @@ describe('the bar while a turn of the page’s conversation runs, which It did n
       Object.assign(PAGE, before)
     }
   }
+
+  test('says that the agent is working again after a failure it has since changed the page about, and not before', async () => {
+    recent = [{ at: NOW - 60_000, delivery: 'handed_off', outcome: 'failed', route: 'addon', handedAt: NOW - 59_000, settledAt: NOW - 40_000 }]
+    // Still the failure: the agent has not changed the page since it said so
+    await withTurn({ turn: RUNNING, answeredAt: NOW - 41_000 }, async () => {
+      await shown()
+      expect([working(), allSaid()]).toEqual([null, ['Your agent could not do that']])
+    })
+    await act(async () => root.unmount())
+    host.remove()
+    // It has, and is at work again: that is what is said
+    await withTurn({ turn: RUNNING, answeredAt: NOW - 5_000 }, async () => {
+      await shown()
+      expect([working(), allSaid()]).toEqual(['Claude Code is working', []])
+    })
+  })
 
   test('says that the agent is working, naming its app, with nothing done on the page lately or at all, and offers no Stop', async () => {
     await withTurn({ turn: RUNNING }, async () => {
