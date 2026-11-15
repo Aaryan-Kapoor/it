@@ -483,7 +483,9 @@ describe('the guide for the first page', () => {
     // The short line the guide gives is the very one an agent app is handed for a click that starts a turn
     const line = briefClick({ id: '<id>', artifact: 'tour-start', title: 'Getting started', name: 'moved', payload: { in_the_way: 'sofa' }, at: 0 })
     expect(line).toBe('[It] "Getting started" (tour-start): moved, with details [action <id>]')
-    expect(part).toContain(`Where you cannot see that, as where the action arrived as one short line such as \`${line}\`, run \`it action <id>\`, which prints it, and then answer.`)
+    expect(part).toContain(
+      `Where you cannot see that, as where the action arrived as one short line such as \`${line}\`, run \`it action <id>\`, which prints it, and then answer.`,
+    )
     // Nowhere does the guide forbid the one command that shows what an action carried, or tell the agent to run nothing to find it
     expect(GUIDE).not.toMatch(/never run[^.]*`it action`/)
     expect(GUIDE).not.toContain('so run nothing to find out more')

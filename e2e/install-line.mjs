@@ -220,7 +220,7 @@ try {
       { expect: 'ended:\\d+', timeout: 10, as: 'ended' },
     ])
     const heard = byHand.seen.moved?.includes('❯') && byHand.seen.ended === 'ended:130'
-    const refused = /ended:[1-9]/.test(byHand.seen.first ?? '') && /setup`? again in a terminal/i.test(byHand.drawn)
+    const refused = /ended:[1-9]/.test(byHand.seen.first ?? '') && /again in a terminal/i.test(byHand.drawn)
     check(`in ${name}, setup started with its input from /dev/tty hears the keys, or says it cannot and ends`, heard || refused, byHand.drawn)
     if (refused) console.log('     (setup said that it cannot hear keys there, and ended)')
   }

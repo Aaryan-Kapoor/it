@@ -4,6 +4,7 @@
 // that what a command prints for a program to read is never mixed with it.
 import { fstatSync, statSync } from 'node:fs'
 import qrcode from 'qrcode-generator'
+import { Problem } from './lib'
 
 const out = process.stderr
 /** Whether there is a person at a terminal to draw for: nothing is redrawn in place, and no key is read, where there is not. */
@@ -22,6 +23,22 @@ export function deaf(): boolean {
   } catch {
     return false
   }
+}
+/**
+ * Stops a command that is about to ask the person something where no key they press can be
+ * heard, before anything of the question is drawn, rather than wait at it for good. The command
+ * is named where it was started by the install script, whose terminal may not find `it` yet.
+ */
+export function hearing(): void {
+  if (!deaf()) return
+  const it = `'${process.execPath.replace(/'/g, `'\\''`)}'`
+  throw new Problem(
+    'It cannot hear the keys you press in this terminal, so it has stopped at a question it had to ask you. It was given /dev/tty to read them from, and on macOS It hears nothing from that.',
+    'invalid',
+    process.env.IT_INSTALL_FLOW
+      ? `Run \`${it} setup\` again in a terminal, typed there as it is.`
+      : 'Run the command again in a terminal, typed there as it is, without `< /dev/tty`.',
+  )
 }
 /**
  * Whether the command was run by an agent, which each agent app says with a variable of its
@@ -201,6 +218,7 @@ function listed(rows: string[], drawn: number): number {
  * list are then taken away again, for whoever asked to say in a line what was chosen.
  */
 export async function pick<T>(question: string, options: Option<T>[], first = 0): Promise<T> {
+  hearing()
   const can = options.map((o) => o.no === undefined)
   let at = can[first] ? first : Math.max(0, can.indexOf(true))
   const move = (by: number) => {
@@ -228,6 +246,7 @@ export async function pick<T>(question: string, options: Option<T>[], first = 0)
  * none, and Enter takes what is ticked. What cannot be chosen is listed with why, and passed over.
  */
 export async function pickMany<T>(question: string, options: (Option<T> & { on: boolean })[]): Promise<T[]> {
+  hearing()
   const can = options.map((o) => o.no === undefined)
   const on = options.map((o, i) => can[i]! && o.on)
   let at = Math.max(0, can.indexOf(true))
@@ -261,7 +280,8 @@ export async function pickMany<T>(question: string, options: (Option<T> & { on: 
 
 /** Waits for something, or for the person to press Enter, whichever comes first. Null where Enter came first. */
 export async function unlessEnter<T>(waited: Promise<T>): Promise<T | null> {
-  if (!live()) return waited
+  // Where no key can be heard, nothing is read, and the terminal is left as it is, where Ctrl-C ends the command
+  if (!live() || deaf()) return waited
   let done = false
   const input = process.stdin
   const was = input.isRaw === true
