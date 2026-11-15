@@ -18,10 +18,12 @@ import { session } from './schema'
 const BATCH = 200
 /**
  * How many conversations a machine may have a record for at once. Its connector listens for
- * forty conversations at a time, and a record of a turn that ended is kept for a week, so this
- * is room for what a machine does in that time and no more than a faulty one can fill.
+ * forty conversations at a time and tells of each under up to three ids, its own and the ones it
+ * had before it was cleared, so that every one that is running has its record however many have
+ * ended. A record of a turn that ended is kept for a week, so this is room for what a machine
+ * does in that time and no more than a faulty one can fill.
  */
-export const TURNS_MOST = 80
+export const TURNS_MOST = 200
 
 const kept = (ctx: QueryCtx, machineId: Id<'machines'>, harness: string, sessionId: string) =>
   ctx.db

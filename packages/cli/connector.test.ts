@@ -6630,12 +6630,14 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
     try {
       await start('socket', APPS)
-      await asks(false, 'before-1')
+      await asks(false, 'before-0')
+      await local('/session', { method: 'POST', body: { harness: 'claude-code', session: 'before-1', was: 'before-0' } })
       await local('/session', { method: 'POST', body: { harness: 'claude-code', session: 'before-2', was: 'before-1' } })
       await local('/session', { method: 'POST', body: { harness: 'claude-code', session: CLAUDE.id, was: 'before-2' } })
       await asks(true)
       await pass(3)
       const before = (id: string) => ({ harness: 'claude-code', id })
+      // The two latest of its earlier ids, and not the first, which is told of no more
       expect(told().slice(1)).toEqual([RUNNING, { for: before('before-2'), running: true }, { for: before('before-1'), running: true }])
       // Claude Code is closed in the middle of the turn: nothing more is said, and once that has gone on for a while It is told that the turn is not known any more
       vi.setSystemTime(Date.now() + 12_000)
@@ -6649,12 +6651,39 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     }
   })
 
+  test('a turn that ended is told before turns that began, where It could not be told of either at once', async () => {
+    standIn()
+    await start('socket', APPS)
+    const other = { harness: 'claude-code', id: 'conversation-2' }
+    // It takes nothing of the other conversation for a while, as when a machine has told it of too much at once, and then nothing at all
+    let refusing: 'other' | 'all' | null = 'other'
+    stand.answer = (name, args) =>
+      name === 'turns:say' && (refusing === 'all' || (refusing === 'other' && args.for?.id === other.id))
+        ? Promise.reject(new Error('rate_limited'))
+        : undefined
+    await asks(true, other.id)
+    await pass()
+    await asks(true)
+    await until(() => told().some((said) => said.for?.id === CLAUDE.id && said.running === true))
+    refusing = 'all'
+    await asks(false)
+    await pass()
+    const from = stand.calls.length
+    refusing = null
+    await pass(2)
+    const after = stand.calls
+      .slice(from)
+      .filter((c) => c.name === 'turns:say')
+      .map((c) => c.args)
+    expect(after).toEqual([ENDED, { for: other, running: true }])
+  })
+
   test('a Codex turn the person interrupted, whose Codex stays open, is told as ended though no hook says so', async () => {
     standIn()
     await start('socket', APPS)
     const codex = { harness: 'codex', id: 'thread-1' }
-    // Some Codex holds the conversation, as its terminal does while it is open, and a hook says a turn began
-    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: true } })
+    // Some Codex holds the conversation, as its terminal does while it is open, and its hook says a turn began
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: true, begins: true } })
     await until(() => told().length === 2)
     expect(told()[1]).toEqual({ for: codex, running: true })
     await pass(2)
@@ -6664,6 +6693,15 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     codexKept(1, 'task_started', 'turn_aborted')
     await pass(3)
     expect(told()[2]).toEqual({ for: codex, running: false })
+    // A hook of the turn that was interrupted runs after all, as one after a command can: it begins no turn
+    await local('/clicks?harness=codex&session=thread-1', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: true } })
+    await pass(3)
+    expect(told().length).toBe(3)
+    // The person's next message begins one, before Codex has written of it
+    await new Promise((r) => setTimeout(r, 30))
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: true, begins: true } })
+    await until(() => told().length === 4)
+    expect(told()[3]).toEqual({ for: codex, running: true })
   })
 
   test('a click that starts a turn has It told that the turn is running, and that it ended only when it has, after which the conversation is watched no more', async () => {

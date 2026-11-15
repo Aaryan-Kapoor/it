@@ -159,7 +159,7 @@ const HOOK_HOLD_MS = 60_000 // and this is how long it is held before Codex's qu
 const TURN_QUIET_MS = 30 * 60_000 // a turn that has run no hook for this long is taken to be over
 const TURN_SAID_MS = 20_000 // an add-on that says whether a turn is running, and has not said so for this long, is no longer known to have one
 const TURN_BEGINS_MS = 30_000 // how long a conversation that was handed a click, and is to begin a turn for it, is watched for that turn to begin
-const TURN_NAMES_MOST = 5 // how many of a conversation's ids It is told its turn under, where nothing was handed to it: its own and its latest earlier ones
+const TURN_NAMES_MOST = 3 // how many of a conversation's ids It is told its turn under, where nothing was handed to it: its own and its latest earlier ones (TURNS_MOST in the backend leaves room for this many of each conversation listened for)
 const WAIT_MS = 5_000 // an `it wait` that said so this recently is still waiting
 const WAIT_AGAIN_MS = 120_000 // how long after an `it wait` ended its conversation, where it is one never heard from, is taken to be coming to wait again
 const QUEUE_WAITS = [0, 10_000, 60_000, 600_000] // how long before each try at a harness's own queue; after the last, the click is left waiting
@@ -713,7 +713,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   // And never on a system It does not reopen conversations on, whatever It says is switched on
   const wakes = (harness: string, at: number) => wakesOn(process.platform, true) && mayWake(wakesNow, harness, at)
 
-  const sessions = new Map<string, { seen: number; busy: boolean; busyAt: number }>()
+  const sessions = new Map<string, { seen: number; busy: boolean; busyAt: number; begunAt?: number }>()
   // A conversation that was cleared carries on under a new id; its pages follow it
   const aliases = new Map<string, string>(Object.entries(readJson<Record<string, string>>(aliasFile()) ?? {}))
   const follow = (key: string) => {
@@ -842,8 +842,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     // of it here: that no hook ran is not the turn saying that it ended
     if (s.busy && now - s.busyAt >= TURN_QUIET_MS) return null
     // A Codex turn the person interrupted runs no hook to say that it ended, and Codex stays open
-    // with the conversation: its own file of the conversation says so, and the turn is over
-    if (s.busy && key.startsWith('codex:') && codexInterrupted(key)) return false
+    // with the conversation: its own file of the conversation says so, and the turn is over. A hook
+    // of that turn may still run after it, which says nothing of a turn begun since: only the hook
+    // that runs as a turn begins does
+    if (s.busy && key.startsWith('codex:') && codexStoppedSinceBegun(key, s.begunAt ?? 0)) return false
     return turnRunning(key, now)
   }
   /**
@@ -1034,7 +1036,11 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         turnsForgotten = true
       }
       for (const id of handedTo.keys()) if (!toConfirm.has(id)) handedTo.delete(id)
-      for (const [key, w] of watchedTurns) {
+      // What is no longer running is told first: where It takes only so much at once, a turn that
+      // ended is not left said to be running behind turns that have begun
+      for (const [key, w] of watchedTurns) lookAtTurn(key, w)
+      // Each conversation is told apart from the others, so that what It refuses of one keeps nothing back of the rest
+      const tellOne = async (key: string, w: Watched): Promise<void> => {
         lookAtTurn(key, w)
         const harness = key.slice(0, key.indexOf(':'))
         if (w.want === 'running') {
@@ -1043,23 +1049,23 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
             await call('mutation', api.turns.say, { for: { harness, id }, running: true })
             kept(w).told.add(id)
           }
-          continue
+          return
         }
         if (w.want === 'wait') {
           // The turn It was told of is over, and the one that is owed has not begun by the next
           // pass: nothing is known to be running, so what It was told is taken back, and the
           // conversation is watched on
-          if (!settle) continue
+          if (!settle) return
           for (const id of [...w.told]) {
             await call('mutation', api.turns.say, { for: { harness, id } })
             kept(w).told.delete(id)
           }
-          continue
+          return
         }
         // An ending that It was never told the turn of is told all the same, under every id its pages know it by
         const generation = w.generation
         const ended = w.want === 'ended' && w.finished
-        if (w.want === 'ended' && (w.told.size || ended) && [...handedTo.values()].includes(key)) continue
+        if (w.want === 'ended' && (w.told.size || ended) && [...handedTo.values()].includes(key)) return
         for (const id of ended ? [...w.names] : [...w.told]) {
           await call('mutation', api.turns.say, {
             for: { harness, id },
@@ -1069,13 +1075,23 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           kept(w).told.delete(id)
         }
         // A newer hand-over or turn change still needs its own ending told.
-        if (w.generation !== generation) continue
+        if (w.generation !== generation) return
         // Only this watch's own: one it was merged into meanwhile may have an ending of its own still to tell
         if (ended) w.finished = false
         // Something may have been handed to it while It was being told
         lookAtTurn(key, w)
         if (watchedTurns.get(key) === w && (w.want === 'ended' || w.want === 'unknown') && !w.told.size) watchedTurns.delete(key)
       }
+      let failed: unknown = null
+      for (const [key, w] of [...watchedTurns].sort(([, a], [, b]) => Number(a.want === 'running') - Number(b.want === 'running'))) {
+        if (watchedTurns.get(key) !== w) continue
+        try {
+          await tellOne(key, w)
+        } catch (err) {
+          failed ??= err
+        }
+      }
+      if (failed) throw failed
     } catch (err) {
       // Tried again with the next pass, and not at once
       tellTurnsAgain = false
@@ -2992,6 +3008,13 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     const s = sessions.get(key)
     return !(s?.busy === true && s.busyAt > at)
   }
+  /** Whether a Codex conversation's last turn was interrupted, as Codex's own file of it says, since a turn was last heard to begin. */
+  const codexStoppedSinceBegun = (key: string, begunAt: number): boolean => {
+    const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: threadOf(key) }), harnessEnv())
+    if (typeof env === 'string') return false
+    const at = codexInterruptedAt(threadOf(key), env.CODEX_HOME)
+    return at !== null && at > begunAt
+  }
   const codexPut = (thread: string, text: string) => {
     const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: thread }), harnessEnv())
     return typeof env === 'string' ? Promise.resolve(env) : codexQueue(thread, text, env)
@@ -4023,6 +4046,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       if (typeof body.busy === 'boolean') {
         s.busy = body.busy
         s.busyAt = Date.now()
+        if (body.busy && body.begins === true) s.begunAt = s.busyAt
         // A turn has begun in a conversation that It is not reopening: the person is in it
         // themselves, and what they stopped is no longer its last turn. The note of the stop
         // is let go, where it would otherwise be told to the agent at some later reopening,
