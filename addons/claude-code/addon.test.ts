@@ -1234,6 +1234,32 @@ describe('what the add-on says of whether its conversation is at work', () => {
     expect(asked.filter((a) => a.path === '/ack').at(-1)?.body).not.toHaveProperty('turnOver')
   })
 
+  test('a prompt that was taken and whose turn never begins is not said to be at work for longer than half a minute, and a conversation that ends in the middle of a turn is not said to be at work', async () => {
+    const host = await start()
+    offered = [{ id: 'click-1', text: 'one' }]
+    await host.tick()
+    host.submits[0]!.settle()
+    await host.settle()
+    await host.tick()
+    expect(saidWithClicks().at(-1)).toBe(true)
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 31_000)
+    try {
+      await host.tick()
+      expect(saidWithClicks().at(-1)).toBe(false)
+    } finally {
+      clock.mockRestore()
+    }
+    // A turn that is running when its conversation ends, with no word that the turn completed
+    await host.fire('turn.start')
+    await host.tick()
+    expect(saidWithClicks().at(-1)).toBe(true)
+    await host.fire('session.end', { sessionId: 'session-1', reason: 'other' })
+    await host.fire('session.start')
+    await host.tick()
+    expect(saidWithClicks().at(-1)).toBe(false)
+  })
+
   test('a prompt that was refused starts nothing, and the conversation is not said to be at work', async () => {
     const host = await start()
     offered = [{ id: 'click-1', text: 'one' }]
