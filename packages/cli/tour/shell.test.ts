@@ -200,6 +200,12 @@ describe('the frame of the tour’s first page', () => {
     expect(late.$('#asleep').hidden).toBe(true)
     await late.advance(20_000)
     expect(late.$('#asleep').hidden).toBe(true)
+    // Nor does anything done after that bring it back, however long it waits to be handed over
+    const again = moved(late)
+    expect(late.sentOf('moved')).toHaveLength(2)
+    await again.accept()
+    await late.advance(20_000)
+    expect(late.$('#asleep').hidden).toBe(true)
     late.close()
     // The same on a page nothing was done on yet
     const idle = await opened({ asleep: true })
@@ -228,6 +234,23 @@ describe('the frame of the tour’s first page', () => {
     await page.progress([{ id: asked.id, handed: true, turn: null }], false)
     expect(page.$('#asleep').hidden).toBe(true)
     page.close()
+    // The eight seconds are counted from the click, however long It takes to say it has what was done
+    const slow = await opened({ asleep: true })
+    await slow.progress([], false)
+    const unanswered = moved(slow)
+    await slow.advance(8000)
+    expect(slow.$('#asleep').hidden).toBe(false)
+    await unanswered.accept()
+    expect(slow.$('#asleep').hidden).toBe(false)
+    slow.close()
+    // What It did not take is not waiting for the conversation, and says nothing of it
+    const refused = await opened({ asleep: true })
+    await refused.progress([], false)
+    const turnedAway = moved(refused)
+    await turnedAway.refuse()
+    await refused.advance(20_000)
+    expect(refused.$('#asleep').hidden).toBe(true)
+    refused.close()
     // A page whose conversation could hear it when it was put up, as Codex's or a Claude Code one that had loaded the add-on, or could not load it with /reload-plugins, as a Claude Code too old to, never says it, whatever the site says and however long a click waits
     const heard = await opened()
     await heard.progress([], true)
