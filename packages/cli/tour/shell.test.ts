@@ -431,7 +431,7 @@ describe('the guide for the first page', () => {
   /** The guide's section for one part of the page, by the name of an action the part sends. */
   const sectionFor = (action: string) => part.split(/^### /m).find((text) => text.split('\n')[0]!.includes(`\`${action}\``))!
   const examples = (text: string) =>
-    [...text.matchAll(/^it tour answer <the action's id> "\$\(cat <<'EOF'\n(\{.*\})\nEOF\n\)"$/gm)].map((m) => JSON.parse(m[1]!) as Record<string, unknown>)
+    [...text.matchAll(/^it tour answer <the action's id> '(\{.*\})'$/gm)].map((m) => JSON.parse(m[1]!) as Record<string, unknown>)
 
   test('shows the first page before anything else, and before the pairing link where no screen is paired', () => {
     expect([...GUIDE.matchAll(/^it tour show ([a-z]+)/gm)][0]![1]).toBe('start')
@@ -446,7 +446,7 @@ describe('the guide for the first page', () => {
     for (const heading of part.matchAll(/^### [^\n]*$/gm)) for (const named of heading[0].matchAll(/`([a-z]+)`/g)) expect(sends, named[1]).toContain(named[1])
   })
 
-  test('answers each part with one `it tour answer` whose answer is a here-document’s text, in a shape the part reads, never has the agent copy the request, and has it set the page’s state itself only for the ideas', () => {
+  test('answers each part with one plain `it tour answer` whose answer is single-quoted JSON, in a shape the part reads, never has the agent copy the request, and has it set the page’s state itself only for the ideas', () => {
     const shapes = {
       moved: ['armchair', 'lamp', 'say'],
       checked: ['read', 'right', 'answer', 'hint', 'say', 'blind'],
@@ -467,12 +467,19 @@ describe('the guide for the first page', () => {
       expect(given.some((example) => 'request' in example || 'part' in example)).toBe(false)
     }
     // The one time the agent sets the state itself is the ideas, once, at the start
-    expect([...part.matchAll(/^it (patch|set) tour-start\b.*$/gm)].map((m) => m[0])).toEqual([`it patch tour-start "$(cat <<'EOF'`])
-    expect(part.indexOf('it patch tour-start "$(cat')).toBeLessThan(part.indexOf('### The room'))
-    // Every example is given where no apostrophe in the agent's words can end it, and the guide says once why
-    expect(part).not.toMatch(/^it tour answer <the action's id> '/m)
-    expect(part).toContain('nothing in your words can end the command early, so write them as you would, apostrophes and quotes and all')
-    expect(part).not.toMatch(/without an apostrophe|no apostrophe/i)
+    const sets = [...part.matchAll(/^it (patch|set) tour-start\b.*$/gm)].map((m) => m[0])
+    expect(sets).toHaveLength(1)
+    expect(JSON.parse(/^it patch tour-start '(\{.*\})'$/.exec(sets[0]!)![1]!)).toHaveProperty('end.ideas')
+    expect(part.indexOf("it patch tour-start '")).toBeLessThan(part.indexOf('### The room'))
+    // Every answer is one plain `it` command, which Codex's rule lets out of its sandbox unasked: no here-document, no
+    // substitution, no pipe and no variable, which made Codex ask the person to approve every answer in the rehearsals
+    const commands = [...part.matchAll(/^it tour answer .*$/gm)].map((m) => m[0])
+    expect(commands.length).toBeGreaterThan(10)
+    for (const command of commands) expect(command).toMatch(/^it tour answer <the action's id>( --no-wait)? '\{[^'`$]*\}'$/)
+    expect(part).not.toMatch(/<<'EOF'|\$\(cat/)
+    // And the guide says once how words with an apostrophe are written so, and what not to wrap it in
+    expect(part).toContain('write every apostrophe in your words as ’, as in `That’s it`')
+    expect(part).toContain('Never wrap it in `$(…)`, a here-document, a pipe or a variable')
     expect(part).not.toMatch(/^it (wait|ack|action|save) /m)
     expect(part).toContain('you never copy `part` or `request` into your answer')
     // Every example is small beside what a state may hold

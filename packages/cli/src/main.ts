@@ -777,7 +777,7 @@ function noMore(cmd: string, a: Args): void {
       : cmd === 'create' && text(a, 'state') !== undefined
         ? ' If your shell split the JSON of --state at a space, write it to a file and give it with `--state-file <path>`.'
         : cmd === 'tour' && a._[0] === 'answer'
-          ? ` If your shell split the JSON at a space or at an apostrophe in it, give it in a here-document: \`it tour answer ${a._[1]} "$(cat <<'EOF'\`, then the JSON on a line of its own, then EOF on a line of its own, then \`)"\`.`
+          ? ` If your shell split the JSON at a space or at an apostrophe in it: ${PLAIN_ANSWER(a._[1] ?? '<action-id>')}`
           : ''
   throw new Problem(`It does not know what to do with "${a._[most]}".`, 'invalid', `Usage: it ${usage}${split}`)
 }
@@ -1196,12 +1196,16 @@ function pictureFolderFor(c: { session: { harness: string; id: string } | null }
  * one command. `it tour next` is that wait by itself.
  */
 /**
- * How an answer is given where nothing in it can end a shell's quoting: in a here-document whose
- * text is the argument. Claude Code refuses a here-document given to a command as its standard
- * input where it holds a brace and a quote, as JSON does, and takes it in this form.
+ * How an answer is given whole, as one plain command: the JSON in single quotes, inside which a
+ * shell takes nothing but the closing quote, with each apostrophe in its words written as ’ or as
+ * \u0027, which JSON reads as one. It used to be a here-document given as `"$(cat <<'EOF' …)"`,
+ * which no apostrophe could end either, but a command so wrapped is not a plain `it …` to Codex,
+ * whose rule lets only that out of its sandbox: every answer then asked the person (seen in the
+ * rehearsals, with Codex in "Ask for approval"). Windows PowerShell 5.1 takes the quotes out of a
+ * single-quoted argument it hands a program, so there the JSON goes in a here-string, piped.
  */
-const HEREDOC = (id: string) =>
-  `Give the JSON in a here-document, where nothing in it ends anything: \`it tour answer ${id} "$(cat <<'EOF'\`, then the JSON on a line of its own, then EOF on a line of its own, then \`)"\`.`
+export const PLAIN_ANSWER = (id: string) =>
+  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In PowerShell, pipe it in a here-string: \`@'\` on a line, the JSON, then \`'@ | it tour answer ${id} -\`.`
 async function tourAnswer(a: Args, counted: (code?: string) => void) {
   const USAGE = "tour answer <action-id> [- | '<json>' | --file <path>] [--wait | --no-wait] [--timeout <seconds>]"
   if (a._[0] === 'answer') {
@@ -1211,8 +1215,8 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
     const file = text(a, 'file')
     if (file !== undefined && a._[2] !== undefined)
       throw new Problem('The answer is given once, on the command line or with --file, and this command was given both.', 'invalid', `Usage: it ${USAGE}`)
-    // The answer is the JSON on the command line, which the guide has the agent write as a
-    // here-document's text, where no apostrophe or quote in its words can end it. With `-` it is
+    // The answer is the JSON on the command line, which the guide has the agent write in single
+    // quotes, with its apostrophes written as ’, so that nothing in its words can end it. With `-` it is
     // read from standard input, as a here-string piped to it in PowerShell is. With neither, a pipe
     // or a here-document given all the same is read, so that an agent that left out the `-` is not
     // taken to have given no answer
@@ -1231,7 +1235,7 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
       read = given === undefined ? undefined : json(given, from)
     } catch (err) {
       // Most often an apostrophe in the agent's words, which ended the quotes round the JSON
-      throw err instanceof Problem && from === 'The answer' ? new Problem(err.message, err.code, HEREDOC(id)) : err
+      throw err instanceof Problem && from === 'The answer' ? new Problem(err.message, err.code, PLAIN_ANSWER(id)) : err
     }
     const answer = read === undefined ? undefined : object(read, 'An answer')
     const done = await answerAction(id, answer)
