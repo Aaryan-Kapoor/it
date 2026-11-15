@@ -428,6 +428,17 @@ log("the permissions of the owner's profile folder are as they were", same ? 'ic
 const guard = existsSync(path.join(f.logs, 'guard.log')) ? readFileSync(path.join(f.logs, 'guard.log'), 'utf8') : ''
 if (guard) log('the guard refused a command under the owner account', guard.trim(), true)
 writeFileSync(path.join(f.results, 'session.json'), `${JSON.stringify({ ...meta, start: startedAt, end: endedAt, stoppedBecause: stopping.reason ?? '', steps }, null, 2)}\n`)
+// Which It was installed: the program's own `version`, run by its path in the throwaway profile
+for (const name of ['it-real.exe', 'it.exe']) {
+  const exe = path.join(f.itHome, 'bin', name)
+  if (!existsSync(exe)) continue
+  try {
+    log('the installed program says its version', execFileSync(exe, ['version'], { encoding: 'utf8', windowsHide: true, timeout: 30_000, env }).replace(/\s+/g, ' ').trim())
+  } catch (e) {
+    log('the installed program would not say its version', String(e.message).slice(0, 200), false)
+  }
+  break
+}
 // The agent app's own record of the conversation (every command it ran, in full), scrubbed of
 // anything shaped like a token, kept before the profile goes
 const transcripts = path.join(f.results, 'agent-transcript')
