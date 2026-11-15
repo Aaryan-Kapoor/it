@@ -1640,7 +1640,7 @@ interface Camera {
   /** The size of the last picture, or 0 before the first. */
   readonly width: number
   readonly height: number
-  /** Live, paused (while the screen does not show It), or ended. */
+  /** Live, whether or not the screen shows It, until it ends. */
   readonly state: CameraState
   /** Called with each picture, as an ImageBitmap, once it is drawn into the stream. It is closed when the call returns. */
   onframe: ((picture: ImageBitmap) => void) | null
@@ -1792,7 +1792,7 @@ interface Microphone {
   readonly stream: MediaStream
   /** How many samples of the sound there are in a second. */
   readonly sampleRate: number
-  /** Live, paused (while the screen does not show It), or ended. */
+  /** Live, whether or not the screen shows It, until it ends. */
   readonly state: MicrophoneState
   /** Called with each piece of sound as it comes: its samples, of one channel, each from -1 to 1, and how many there are in a second. */
   onsound: ((samples: Float32Array, sampleRate: number) => void) | null
