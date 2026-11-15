@@ -1201,11 +1201,13 @@ function pictureFolderFor(c: { session: { harness: string; id: string } | null }
  * \u0027, which JSON reads as one. It used to be a here-document given as `"$(cat <<'EOF' …)"`,
  * which no apostrophe could end either, but a command so wrapped is not a plain `it …` to Codex,
  * whose rule lets only that out of its sandbox: every answer then asked the person (seen in the
- * rehearsals, with Codex in "Ask for approval"). Windows PowerShell 5.1 takes the quotes out of a
- * single-quoted argument it hands a program, so there the JSON goes in a here-string, piped.
+ * rehearsals, with Codex in "Ask for approval"). Windows PowerShell 5.1 takes the quotes out of an
+ * argument it hands a program, and sends what it pipes in ASCII, so that × arrived as "?" on the
+ * tour's whiteboard (the Windows rehearsal): there `--%` hands the rest of the line over as it is
+ * written, in a command line that holds every letter.
  */
 export const PLAIN_ANSWER = (id: string) =>
-  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In PowerShell, pipe it in a here-string: \`@'\` on a line, the JSON, then \`'@ | it tour answer ${id} -\`.`
+  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In Windows PowerShell, put \`--%\` after \`it\` and write the JSON in double quotes with its own written as \`\\"\`: \`it --% tour answer ${id} "{\\"say\\":\\"That’s it.\\"}"\`. Do not pipe it in there, which turns every letter outside ASCII into a question mark.`
 async function tourAnswer(a: Args, counted: (code?: string) => void) {
   const USAGE = "tour answer <action-id> [- | '<json>' | --file <path>] [--wait | --no-wait] [--timeout <seconds>]"
   if (a._[0] === 'answer') {

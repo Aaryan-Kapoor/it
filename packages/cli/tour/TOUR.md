@@ -35,7 +35,15 @@ Each thing the person does on this page arrives as one action, which ends `[acti
 it tour answer <the action's id> '{"say":"<one sentence>"}'
 ```
 
-That is one plain `it` command, which your agent app lets you run without stopping to ask the person, so give every answer and the ideas in exactly that form. Never wrap it in `$(…)`, a here-document, a pipe or a variable: some apps, Codex among them, then ask the person to approve every answer. Inside single quotes nothing ends the command but a single quote, so write every apostrophe in your words as ’, as in `That’s it`, and the rest as JSON has it, with a double quote as `\"`. Keep it on one line, and leave backticks out, which Claude Code takes for a command inside the command. In PowerShell, which takes the double quotes out of such an argument, pipe the JSON to the command as a here-string: `@'` on a line, the JSON, and `'@ | it tour answer <the action's id> -`.
+That is one plain `it` command, which your agent app lets you run without stopping to ask the person, so give every answer and the ideas in exactly that form. Never wrap it in `$(…)`, a here-document, a pipe or a variable: some apps, Codex among them, then ask the person to approve every answer. Inside single quotes nothing ends the command but a single quote, so write every apostrophe in your words as ’, as in `That’s it`, and the rest as JSON has it, with a double quote as `\"`. Keep it on one line, and leave backticks out, which Claude Code takes for a command inside the command.
+
+In Windows PowerShell, which is where Codex runs commands on Windows, the answer is one plain command as well, written another way, since PowerShell takes the double quotes out of an argument it hands a program. Put `--%` straight after `it`, write the JSON in double quotes with each of its own double quotes written as `\"`, and in your words use ’ for an apostrophe and “ ” for quotation marks, and no `%` sign:
+
+```powershell
+it --% tour answer <the action's id> "{\"say\":\"<one sentence>\"}"
+```
+
+`--%` has PowerShell hand the rest to It as it is written, with letters outside ASCII such as × and ★ whole. Never pipe the JSON into It there: Windows PowerShell 5.1 sends what it pipes in ASCII, and every such letter arrives as a question mark. Write every answer below in that way in PowerShell, and the ideas too, as `it --% patch tour-start "{\"end\":…}"`. Where a bare `it` runs another command there, as Pester's `It` does, write `it.exe --%` in its place.
 
 The command puts your answer on the page under the part the action came from, with the request it answers, in place of your answer before it. It acknowledges the action and clears up after it. So you never copy `part` or `request` into your answer, each answer is the whole of it, since nothing of the one before stays, and on this page you never run `it ack` or `it wait`. Then do what it printed:
 
@@ -168,6 +176,8 @@ Build it now, small and whole. The person is watching the seconds count, and the
 ```sh
 it create "<the idea's name>" --id <a-short-id> --open --html '<the whole page>'
 ```
+
+In Windows PowerShell, which takes the double quotes out of an argument, write the page with your own file tool to a file in the temporary folder, and give `--file "<its path, with forward slashes>"` in place of `--html`.
 
 3. Only then take the tour away. In this order the new page takes the tour's place on their screen and they are never left looking at nothing:
 
