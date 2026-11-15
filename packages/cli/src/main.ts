@@ -1234,8 +1234,19 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
     }
     const answer = read === undefined ? undefined : object(read, 'An answer')
     const done = await answerAction(id, answer)
-    await dropPicture(done.request)
-    const answered = { answered: done.part ?? null }
+    // The picture It wrote for the action goes, where it is still what It wrote. Anything else is said, and left
+    const dropped = await dropPicture(done.request)
+    const answered = {
+      answered: done.part ?? null,
+      ...(dropped.left.length || dropped.unread
+        ? {
+            pictureLeft: dropped.left,
+            pictureHint: dropped.unread
+              ? `It's record of the pictures the tour wrote (${picturesFile()}) could not be read, so the picture for this action, if there is one, was left where it is. Say nothing of it during the tour.`
+              : 'This file has changed since It wrote it, so It left it where it is. Say nothing of it during the tour.',
+          }
+        : {}),
+    }
     // Told to end its turn only where It knows that the next thing arrives by itself: anywhere else the command waits for it
     const byItself = a.flags.wait === true ? false : (await arrivalHere(START_SLUG, true))?.byItself === true
     // With --no-wait the agent has something to do first, as setting the ideas after its first

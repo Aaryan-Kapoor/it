@@ -8057,7 +8057,18 @@ describe('whether what the person does arrives by itself, as a page’s command 
       writeFileSync(kept, 'png')
       writeFileSync(
         path.join(m.it, 'tour-pictures.json'),
-        JSON.stringify({ pictures: [{ file: kept, bytes: 3, sha256: createHash('sha256').update('png').digest('hex'), at: 1 }] }),
+        JSON.stringify({
+          pictures: [
+            {
+              file: kept,
+              bytes: 3,
+              sha256: createHash('sha256').update('png').digest('hex'),
+              dev: String(lstatSync(kept, { bigint: true }).dev),
+              ino: String(lstatSync(kept, { bigint: true }).ino),
+              at: 1,
+            },
+          ],
+        }),
       )
       writeFileSync(path.join(folder, 'sheet.png'), 'theirs')
       const env = { ...b.env, CLAUDE_CODE_SESSION_ID: claude, IT_HARNESS: 'claude-code', IT_SESSION: claude, CLAUDE_CODE_EXECPATH: '/x/versions/2.1.321' }

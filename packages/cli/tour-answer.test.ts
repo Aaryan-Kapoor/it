@@ -1,23 +1,10 @@
 // What `it tour answer` does with an action of the tour's first page, and the picture It keeps
 // for the agent: whose page has one written, what is written, where, and what takes it away
 // again.
-import { randomUUID } from 'node:crypto'
-import {
-  closeSync,
-  existsSync,
-  linkSync,
-  mkdirSync,
-  mkdtempSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-  writeSync,
-} from 'node:fs'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { crc32, deflateSync } from 'node:zlib'
 import { deepMerge } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
@@ -58,25 +45,12 @@ vi.mock('./src/lib', async (original) => ({
     return null
   },
 }))
-// As the real one does it: written beside where it is to be under a name of its own, made anew,
-// shown to `accept`, and given its name only where nothing has it, never following a link
+// Reads the file an action carried into a file that is made anew, as the real one does, with what `stand.bytes` holds
 vi.mock('./src/files', () => ({
-  saveAttached: async (id: string, number: number, to: string, accept?: (fd: number) => void | Promise<void>) => {
+  saveAttached: async (id: string, number: number, to: string) => {
     stand.saved.push({ id, number, to })
     if (stand.save) stand.save(to)
-    const temp = `${to}.${randomUUID().slice(0, 8)}.part`
-    const fd = openSync(temp, 'wx+', 0o600)
-    try {
-      try {
-        writeSync(fd, stand.bytes)
-        await accept?.(fd)
-      } finally {
-        closeSync(fd)
-      }
-      linkSync(temp, to)
-    } finally {
-      rmSync(temp, { force: true })
-    }
+    writeFileSync(to, stand.bytes, { flag: 'wx', mode: 0o600 })
     return { file: to, number, name: 'sheet.png', type: 'image/png', bytes: stand.bytes.length }
   },
 }))
@@ -97,10 +71,30 @@ import {
   START_SLUG,
 } from './src/tour-answer'
 
-/** A small picture, as the whiteboard makes one begins: the signature, the header chunk, and some of what follows. */
-const picture = (more = 'the drawing') =>
-  Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]), Buffer.from(more)])
-
+/** A chunk of a PNG, with the checksum it carries, made with Node's own. */
+const chunk = (type: string, data: Buffer, crc?: number) => {
+  const head = Buffer.alloc(8)
+  head.writeUInt32BE(data.length, 0)
+  head.write(type, 4, 'latin1')
+  const sum = Buffer.alloc(4)
+  sum.writeUInt32BE(crc ?? crc32(Buffer.concat([head.subarray(4), data])), 0)
+  return Buffer.concat([head, data, sum])
+}
+const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+const header = (width = 4, height = 3) => {
+  const h = Buffer.alloc(13)
+  h.writeUInt32BE(width, 0)
+  h.writeUInt32BE(height, 4)
+  h[8] = 8
+  h[9] = 6
+  return h
+}
+/** A real picture, as the whiteboard makes one: white, `width` by `height`, with `seed` in its pixels so that two can differ. */
+const picture = (seed = 1, width = 4, height = 3) => {
+  const rows = Buffer.alloc((width * 4 + 1) * height, 0xff)
+  rows[1] = seed & 0xff
+  return Buffer.concat([SIGNATURE, chunk('IHDR', header(width, height)), chunk('IDAT', deflateSync(rows)), chunk('IEND', Buffer.alloc(0))])
+}
 const REQUEST = 'ab'.repeat(16)
 const PNG = [{ name: 'sheet.png', type: 'image/png', bytes: 2048 }]
 const action = (data: unknown, more: Record<string, unknown> = {}) => ({ id: 'act1', artifact: START_SLUG, payload: JSON.stringify(data), ...more })
@@ -226,11 +220,26 @@ test('with no answer an action is acknowledged alone, and an answer with nowhere
 const at = (request = REQUEST, where = folder) => path.join(where, pictureName(request))
 const recorded = () => keptPictures()?.map((k) => ({ file: k.file, bytes: k.bytes }))
 
-test('a picture begins as a PNG does, with its signature and then its header chunk', () => {
+test('a picture is a whole PNG, chunk by chunk, with the checksum each says and nothing after its end', () => {
   expect(isPng(picture())).toBe(true)
-  expect(isPng(picture().subarray(0, 16))).toBe(false)
-  expect(isPng(Buffer.from('#!/bin/sh\necho this is no picture\n'))).toBe(false)
-  expect(isPng(Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('anything at all after it')]))).toBe(false)
+  const whole = picture()
+  const bad = [
+    Buffer.from('#!/bin/sh\necho this is no picture\n'),
+    // Its signature and header alone, or cut short anywhere
+    whole.subarray(0, 33),
+    whole.subarray(0, 17),
+    whole.subarray(0, whole.length - 1),
+    // Anything after its end
+    Buffer.concat([whole, Buffer.from('more')]),
+    // A checksum that is not the chunk's
+    Buffer.concat([SIGNATURE, chunk('IHDR', header(), 0), chunk('IDAT', deflateSync(Buffer.alloc(51))), chunk('IEND', Buffer.alloc(0))]),
+    // No image data, a header that is not first, and a picture of no size or too large a size
+    Buffer.concat([SIGNATURE, chunk('IHDR', header()), chunk('IEND', Buffer.alloc(0))]),
+    Buffer.concat([SIGNATURE, chunk('IDAT', Buffer.alloc(4)), chunk('IHDR', header()), chunk('IEND', Buffer.alloc(0))]),
+    Buffer.concat([SIGNATURE, chunk('IHDR', header(0, 3)), chunk('IDAT', Buffer.alloc(4)), chunk('IEND', Buffer.alloc(0))]),
+    Buffer.concat([SIGNATURE, chunk('IHDR', header(9000, 3)), chunk('IDAT', Buffer.alloc(4)), chunk('IEND', Buffer.alloc(0))]),
+  ]
+  for (const bytes of bad) expect(isPng(bytes), bytes.subarray(0, 40).toString('hex')).toBe(false)
 })
 
 test('the picture an action carried is written into the folder under the name its request gives it, once, and noted as It’s own', async () => {
@@ -247,6 +256,12 @@ test('the picture an action carried is written into the folder under the name it
   expect(await Promise.all([keepPicture(other, folder), keepPicture(other, folder)])).toEqual([at('cd'.repeat(16)), at('cd'.repeat(16))])
   expect(readdirSync(folder).sort()).toEqual([pictureName(REQUEST), pictureName('cd'.repeat(16))].sort())
   expect(recorded()).toHaveLength(2)
+  // Nothing is left of the copies It read them into first
+  expect(readdirSync(path.join(itHome, 'tour-pictures'))).toEqual([])
+  // And the record knows each for the file of the disk it is
+  const [first] = keptPictures()!
+  const seen = lstatSync(at(), { bigint: true })
+  expect([first!.dev, first!.ino]).toEqual([String(seen.dev), String(seen.ino)])
 })
 
 test('nothing is written for a page the backend does not say this machine published as the tour’s, as one an agent or another machine published under its id', async () => {
@@ -277,15 +292,24 @@ test('nothing is written for an action that is not the first page’s, has no re
   expect(readdirSync(folder)).toEqual([])
 })
 
-test('what is said to be a PNG and is not one, or is longer than the most that is kept, is never given the picture’s name', async () => {
+test('what is said to be a PNG and is not one, or is longer than the most that is kept, never reaches the folder at all', async () => {
   const carried = action({ part: 'board', request: REQUEST }, { files: PNG })
-  for (const bytes of [Buffer.from('#!/bin/sh\necho this is no picture\n'), Buffer.alloc(0), Buffer.concat([picture(), Buffer.alloc(MOST_BYTES)])]) {
+  // While it is read, nothing of it is in the folder: it is read into It's own
+  stand.save = () => expect(readdirSync(folder)).toEqual([])
+  for (const bytes of [
+    Buffer.from('#!/bin/sh\necho this is no picture\n'),
+    Buffer.alloc(0),
+    picture().subarray(0, 40),
+    Buffer.concat([picture(), Buffer.from('#!/bin/sh')]),
+    Buffer.concat([picture(1, 1280, 1280).subarray(0, 33), Buffer.alloc(MOST_BYTES)]),
+  ]) {
     stand.bytes = bytes
     expect(await keepPicture(carried, folder)).toBeUndefined()
-    // Nothing is left of it, under the picture's name or the one it was written under
     expect(readdirSync(folder)).toEqual([])
+    expect(readdirSync(path.join(itHome, 'tour-pictures'))).toEqual([])
     expect(keptPictures()).toEqual([])
   }
+  expect(stand.saved).toHaveLength(5)
 })
 
 test('a file that is there under the picture’s name and that It did not write is never written over, followed or said to be the picture', async () => {
@@ -317,7 +341,7 @@ test('a file that is there under the picture’s name and that It did not write 
       rmSync(at())
     }
     // A file that turned up under the name while the picture was on its way, which is not the picture
-    stand.save = (to) => writeFileSync(to, 'came meanwhile')
+    stand.save = () => writeFileSync(at(), 'came meanwhile')
     expect(await keepPicture(carried, folder)).toBeUndefined()
     expect(readFileSync(at(), 'utf8')).toBe('came meanwhile')
     expect(keptPictures()).toEqual([])
@@ -345,7 +369,7 @@ test('the connector has a picture written as it hears of the action, once for an
   keepPictureFor(carried, folderOf)
   await vi.waitFor(() => expect(existsSync(at())).toBe(true))
   expect(asked).toEqual([session])
-  expect(stand.saved).toEqual([{ id: 'heard-1', number: 1, to: at() }])
+  expect(stand.saved.map((s) => s.id)).toEqual(['heard-1'])
   // An action with no conversation, of another page, or with no file, asks nothing; and a folder that is not known writes nothing
   keepPictureFor({ ...carried, id: 'heard-2', session: null }, folderOf)
   keepPictureFor({ ...carried, id: 'heard-3', artifact: 'plan' }, folderOf)
@@ -413,4 +437,34 @@ test('where the record cannot be read, clearing the tour removes no picture, and
   writeFileSync(picturesFile(), '{"pictures": "not a list"}')
   expect(await dropPictures([folder])).toEqual({ removed: 0, left: [at()], unread: true })
   expect(existsSync(at())).toBe(true)
+})
+
+test('a file put in the place of a picture It wrote is not taken for it, though its bytes are the same', async () => {
+  await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)
+  // The same bytes, in another file of the disk, under the picture's name
+  copyFileSync(at(), `${at()}.copy`)
+  renameSync(`${at()}.copy`, at())
+  expect(await dropPicture(REQUEST)).toEqual({ left: [at()] })
+  expect(existsSync(at())).toBe(true)
+  expect(keptPictures()).toEqual([])
+  // And clearing the tour leaves it too, and says so
+  expect(await dropPictures([folder])).toEqual({ removed: 0, left: [at()] })
+  expect(existsSync(at())).toBe(true)
+})
+
+test('a picture noted a moment ago and not yet given its name keeps its note, so that it is taken away once it is there', async () => {
+  const coming = { file: at(), bytes: 3, sha256: 'a'.repeat(64), dev: '1', ino: '2', at: Date.now() }
+  const gone = { ...coming, file: at('cd'.repeat(16)), at: Date.now() - 120_000 }
+  writeFileSync(picturesFile(), JSON.stringify({ pictures: [coming, gone] }))
+  expect(await dropPicture(REQUEST)).toEqual({ left: [] })
+  expect(await dropPictures([folder])).toEqual({ removed: 0, left: [] })
+  expect(keptPictures()).toEqual([coming])
+})
+
+test('an answer says which picture it left, and that it could not tell, where the record cannot be read', async () => {
+  await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)
+  writeFileSync(at(), 'changed since')
+  expect(await dropPicture(REQUEST)).toEqual({ left: [at()] })
+  writeFileSync(picturesFile(), 'not as It writes it')
+  expect(await dropPicture('cd'.repeat(16))).toEqual({ left: [], unread: true })
 })

@@ -38,19 +38,15 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
  * It is written beside where it is to be, under a name of its own, and given its name only once
  * it is whole and right. A file larger than one answer carries is read a part at a time, each
  * written as it comes: none of it is held in memory but the part that is arriving.
- *
- * `accept`, where it is given, is shown the whole file, open, before it is given its name, and
- * keeps it from being named by throwing.
  */
-export async function saveAttached(id: string, number: number, to: string, accept?: (fd: number) => void | Promise<void>): Promise<Saved> {
+export async function saveAttached(id: string, number: number, to: string): Promise<Saved> {
   const at = path.resolve(to)
   // Said before anything is read, and made sure of again as it is given its name
   if (lstatSync(at, { throwIfNoEntry: false })) throw thereAlready(at)
   const temp = `${at}.${randomUUID().slice(0, 8)}.part`
   let fd: number
   try {
-    // Open for reading too, so that `accept` can be shown what arrived
-    fd = openSync(temp, accept ? 'wx+' : 'wx', 0o600)
+    fd = openSync(temp, 'wx', 0o600)
   } catch (err) {
     throw cannotWrite(at, err)
   }
@@ -69,7 +65,6 @@ export async function saveAttached(id: string, number: number, to: string, accep
       await sleep(1000 * 2 ** attempt)
     }
     fsyncSync(fd)
-    await accept?.(fd)
   } catch (err) {
     closeSync(fd)
     rmSync(temp, { force: true })
