@@ -7,6 +7,12 @@ export interface PageConnection {
   queue: boolean
 }
 
+/**
+ * What a person does so that Codex runs It's hooks, where Codex runs: in its terminal or its
+ * desktop app, Codex asks to review them only as it starts, and "Trust all and continue" approves them.
+ */
+export const CODEX_TRUST = 'Start Codex again, and choose “Trust all and continue” when it asks to review hooks'
+
 /** Older backends expose inventory to owners only. Screens keep their generic waiting status. */
 export function reportedConnection(
   harness: string,

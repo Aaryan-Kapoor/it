@@ -8,6 +8,7 @@ import { Copyable, Dialog } from './dialog'
 import type { Playing } from './film/play'
 import { agentName, api, navigate, refusal, useNow } from './lib'
 import { say as toast } from './notifications'
+import { CODEX_TRUST } from './readiness'
 
 /** What the person gives their agent to be led through It. */
 export const TOUR_PROMPT = 'Give me the It tour.'
@@ -429,7 +430,7 @@ export function Welcome({ owner, tour }: { owner: boolean; tour: ReturnType<type
         )}
         {apps && apps.approval.length > 0 && (
           <p className="hello-hint">
-            {`${listed(apps.approval)} needs add-on approval. Open the app to review it.`}
+            {`${listed(apps.approval)} needs add-on approval. ${apps.approval.includes('Codex') ? CODEX_TRUST : 'Open the app to review it'}.`}
             {apps.approval.includes('Codex') && ' Codex can still receive queued clicks in an open conversation.'}
           </p>
         )}

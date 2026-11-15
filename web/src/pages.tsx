@@ -42,7 +42,7 @@ import {
 import { holdPending } from './pending'
 import { Preview } from './preview'
 import { progressFor } from './progress'
-import { type PageConnection, reportedConnection } from './readiness'
+import { CODEX_TRUST, type PageConnection, reportedConnection } from './readiness'
 import { MediaAllowed, MediaBar } from './recording'
 import { useSession } from './session'
 import { Starters, useTour, Welcome } from './welcome'
@@ -1279,8 +1279,8 @@ function ActionStatus({
     const reason =
       readiness.state === 'needs_approval'
         ? readiness.queue
-          ? `${app}'s hooks need approval. Its open conversation can still receive queued clicks. Open the app to review the hooks`
-          : `${app}'s add-on needs approval. Open the app to review it`
+          ? `${app}'s hooks need approval. Its open conversation can still receive queued clicks. ${CODEX_TRUST}`
+          : `${app}'s add-on needs approval. ${readiness.harness === 'codex' ? CODEX_TRUST : 'Open the app to review it'}`
         : readiness.state === 'disabled'
           ? `${app}'s It add-on is turned off on ${machine ?? 'its machine'}, so it does not get this by itself. Turn it back on under Machines`
           : readiness.state === 'connecting'

@@ -123,6 +123,9 @@ describe('the way into the tour, for someone with no pages', () => {
     expect(await said({ harnesses: [{ id: 'codex', addon: 'needs_approval' }] })).toBe('It is ready to show pages')
     expect(host.textContent).toContain('needs add-on approval')
     expect(host.textContent).toContain('can still receive queued clicks')
+    // What to do, as a person who runs Codex in a terminal does it, and with no app to look for
+    expect(host.textContent).toContain('Codex needs add-on approval. Start Codex again, and choose “Trust all and continue” when it asks to review hooks.')
+    expect(host.textContent).not.toContain('Open the app')
   })
 
   test('disconnecting an app takes precedence over its last connected inventory report', async () => {

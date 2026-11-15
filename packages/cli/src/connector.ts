@@ -75,7 +75,7 @@ import { profileEnvironment, profileOf, readProfile } from './profiles'
 import { addonMarks, conversationFolder, conversationProfile, forgetAddonMark, noteConversation, publishedWithoutAddon } from './publish'
 import { alone, lockHeld } from './serve/backend'
 import * as service from './service'
-import { claudeFolders, detectAll, type HarnessStatus, KNOWN, newerProgramSeen, reconcile, turnBackOn } from './setup'
+import { claudeFolders, codexHooksPending, detectAll, type HarnessStatus, KNOWN, newerProgramSeen, reconcile, turnBackOn } from './setup'
 import {
   type T3,
   T3_HELD_MOST,
@@ -4937,6 +4937,15 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   }, 1000)
   // Which open Claude Code conversations have not loaded It's add-on, looked at every few seconds
   const looksOpen = setInterval(() => void reportNotLoaded(), 5_000)
+  // Whether Codex's hooks, found waiting for the person's yes, have been trusted since. Codex
+  // notes that in its settings as the person chooses "Trust all and continue", and may run no
+  // hook of It's until their next message, so its settings are read every few seconds while it
+  // waits, and the machine is looked at again once they say so: the site stops asking at once
+  const looksTrusted = setInterval(() => {
+    try {
+      if (found.some((h) => h.id === 'codex' && h.addon === 'needs_approval') && !codexHooksPending()) void lookAgain()
+    } catch {}
+  }, 3_000)
   // Whether OpenCode refused to load It's add-on, which only its log says: looked at every few
   // seconds while OpenCode is connected, and as soon as the apps have been looked at
   function lookForRefusal() {
@@ -5012,6 +5021,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   })
   clearInterval(tick)
   clearInterval(looksOpen)
+  clearInterval(looksTrusted)
   clearInterval(looksRefused)
   clearInterval(beat)
   clearInterval(alive)
