@@ -28,6 +28,8 @@ const card = (a: Doc<'artifacts'>, pending: number, machineName: string | null) 
   pinned: a.pinned ?? false,
   folder: a.folder ?? null,
   order: a.order ?? null,
+  // Which page of It's own tour this is, where it is one and has not been made anything else since
+  tour: a.tour?.name ?? null,
 })
 
 async function resolve(ctx: QueryCtx, userId: Id<'users'>, ref: { slug?: string; artifactId?: Id<'artifacts'> }) {

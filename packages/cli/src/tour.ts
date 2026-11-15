@@ -8,7 +8,9 @@ import { GUIDE, PAGES } from './tour.generated'
 export { GUIDE }
 /** What the id of every page of the tour begins with. Ownership is kept separately by the backend. */
 export const TOUR_PREFIX = TOUR.prefix
-/** The page a person picks from, and the page the tour ends on. Neither is one of the things It is shown being. */
+/** The page the tour begins on, which holds a first run of It by itself. */
+export const START = TOUR.start
+/** The page a person who asks for more picks from, and the page that ends what they pick. Neither is one of the things It is shown being. */
 export const MENU = TOUR.menu
 export const END = TOUR.end
 /** The things a person is shown, in the order the tour goes on through them. */
@@ -21,7 +23,7 @@ const escaped = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCod
 /**
  * One page of the tour, ready to publish: its id, its title, its HTML and the state it starts
  * with. `given` is set over what the page says by default. `agent` is the name of the agent
- * app that is giving the tour, which the page puts on the agent's plate.
+ * app that is giving the tour, which the page names it by.
  */
 export function tourPage(name: string, given: Record<string, unknown> = {}, agent?: string): { slug: string; title: string; html: string; state: string } {
   const page = Object.hasOwn(PAGES, name) ? PAGES[name]! : null

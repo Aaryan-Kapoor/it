@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs'
 import { LIMITS, TOUR_NAMES } from '@it/protocol'
 import { chromium } from 'playwright'
 import { describe, expect, test } from 'vitest'
-import { END, GUIDE, MENU, NAMES, STEPS, TOUR_PREFIX, tourPage } from './src/tour'
+import { END, GUIDE, MENU, NAMES, START, STEPS, TOUR_PREFIX, tourPage } from './src/tour'
 
 // The stand-in for a browser comes with no types of its own, so it is asked for by a name the type check does not follow
 const { JSDOM } = (await import('jsdom' as string)) as any
@@ -96,8 +96,10 @@ async function opened(name: string, before: (w: any) => void = () => {}) {
 }
 
 describe('the pages of the tour', () => {
-  test('are a menu, the things it offers in the order the tour goes on through them, and an ending', () => {
+  test('are the first page, and for a person who asks for more a menu, the things it offers in the order the tour goes on through them, and an ending', () => {
     expect(NAMES).toEqual(TOUR_NAMES)
+    expect(START).toBe('start')
+    expect(NAMES[0]).toBe(START)
     expect(STEPS).toEqual(['whiteboard', 'chess', 'checklist', 'drums', 'button'])
     expect([MENU, END]).toEqual(['menu', 'done'])
   })
@@ -110,7 +112,7 @@ describe('the pages of the tour', () => {
       expect(page.html.startsWith('<!doctype html>')).toBe(true)
       // Nothing is left for the page to say that was not said, and nothing of what the pages share is left to be set in
       expect(page.html, name).not.toMatch(/\{\{[a-z_]+\}\}/)
-      expect(page.html, name).not.toMatch(/\/\*kit\.(css|js)\*\/|<!--rail-->/)
+      expect(page.html, name).not.toMatch(/\/\*(kit\.(css|js)|fonts\.css|chess\.engine|whiteboard\.fitting)\*\/|<!--rail-->/)
       expect(page.html).toContain('<script>window.__PARAMS = {')
       expect(params(page.html).tour_id).toBe(name)
       expect(typeof JSON.parse(page.state)).toBe('object')

@@ -1,4 +1,12 @@
 {
+  "start": {
+    "title": "Getting started",
+    "parts": ["room", "board", "studio", "chess", "cube", "drums", "end"],
+    "params": {
+      "asleep": false
+    },
+    "state": {}
+  },
   "menu": {
     "title": "The It tour",
     "params": {

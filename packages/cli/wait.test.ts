@@ -145,3 +145,35 @@ test('an interrupted output write for a newly claimed click ends without confirm
   expect(stand.exits).toEqual([1])
   expect(stand.counted).toEqual(['error'])
 })
+
+test('what the command that waits says of an action is printed beside it, as the tour says where it kept the action’s picture, and its failing loses nothing', async () => {
+  const seen: string[] = []
+  void wait(
+    { _: [], flags: { id: 'board', timeout: '30' }, many: {} },
+    (code) => stand.counted.push(code),
+    async (c) => {
+      seen.push(c.id)
+      if (c.id === 'bare') throw new Error('could not be written')
+      return { picture: `/somewhere/${c.id}.png` }
+    },
+  )
+  await flush()
+  stand.updates!([click('drawn')])
+  await flush()
+  expect(stand.lines).toEqual([expect.objectContaining({ id: 'drawn', action: 'yes', picture: '/somewhere/drawn.png' })])
+  expect(stand.exits).toEqual([0])
+  stand.lines.length = stand.exits.length = 0
+  void wait(
+    { _: [], flags: { id: 'board', timeout: '30' }, many: {} },
+    (code) => stand.counted.push(code),
+    async (c) => {
+      seen.push(c.id)
+      throw new Error('could not be written')
+    },
+  )
+  await flush()
+  stand.updates!([click('bare')])
+  await flush()
+  expect(stand.lines.map((c) => [c.id, c.picture])).toEqual([['bare', undefined]])
+  expect(seen).toEqual(['drawn', 'bare'])
+})

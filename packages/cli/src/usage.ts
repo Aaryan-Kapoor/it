@@ -170,7 +170,7 @@ const FAILURES = ['backend_program', 'backend_silent', 'backend_exited', 'port_t
 export const failureOf = (code: string | undefined): (typeof FAILURES)[number] =>
   (FAILURES as readonly string[]).includes(code ?? '') ? (code as (typeof FAILURES)[number]) : 'other'
 
-const TOUR_PAGES = ['menu', 'whiteboard', 'chess', 'checklist', 'drums', 'button', 'done'] as const
+const TOUR_PAGES = ['start', 'menu', 'whiteboard', 'chess', 'checklist', 'drums', 'button', 'done'] as const
 export type TourPage = (typeof TOUR_PAGES)[number]
 
 /**

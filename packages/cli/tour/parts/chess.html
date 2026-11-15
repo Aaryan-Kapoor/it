@@ -1,0 +1,483 @@
+<!-- The chessboard: the person plays White and the agent Black. Each move goes to the agent with a few sound answers and every move it may make. -->
+<style>
+  /* The table: the board with the two who play at one side of it and the sheet of moves at the other. `--b` is the board's side */
+  [data-part="chess"] .chess-table { --gap: 24px; --side: clamp(168px, calc((100cqw - 100cqh) / 2 - 24px), 288px); --b: min(100cqh, calc(100cqw - 2 * var(--side) - 2 * var(--gap)));
+    display: grid; grid-template: "black board sheet" 1fr "white board sheet" auto / var(--side) var(--b) var(--side); column-gap: var(--gap); height: var(--b); min-width: 0; }
+  /* One square is 1em of the board, so that everything on it is cut to its size */
+  [data-part="chess"] .chess-board { grid-area: board; position: relative; width: var(--b); height: var(--b); display: grid; grid-template: repeat(8, 1fr) / repeat(8, 1fr); border-radius: 12px; overflow: hidden; container-type: inline-size; line-height: 1; -webkit-user-select: none; user-select: none; touch-action: manipulation; will-change: transform; transition: opacity .3s; box-shadow: 0 18px 40px -26px rgba(28, 26, 22, .55); }
+  [data-part="chess"] .sq { position: relative; min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; -webkit-appearance: none; appearance: none; font-size: 12.5cqi; cursor: default; background: var(--sq); color: var(--sq-dark); }
+  [data-part="chess"] .sq.dk { background: var(--sq-dark); color: var(--sq); }
+  [data-part="chess"] .sq.last { background: var(--sq-last); color: var(--wood-dark); }
+  /* The squares the agent's move left and reached are framed in the agent's colour as well */
+  [data-part="chess"] .sq.last.theirs { box-shadow: inset 0 0 0 .05em var(--green); }
+  [data-part="chess"] .sq.check { background: var(--clay); color: #fff; }
+  [data-part="chess"] .sq.can { cursor: pointer; }
+  @media (hover: hover) { [data-part="chess"] .sq.can:hover { box-shadow: inset 0 0 0 .05em rgba(14, 14, 16, .25); } }
+  [data-part="chess"] .sq.pick, [data-part="chess"] .sq.pick:hover { box-shadow: inset 0 0 0 .065em var(--ink); }
+  [data-part="chess"] .sq:focus-visible { outline: 0; box-shadow: inset 0 0 0 .065em var(--green); }
+  [data-part="chess"] .sq.to::after { content: ""; position: absolute; left: 50%; top: 50%; width: 30%; height: 30%; margin: -15% 0 0 -15%; border-radius: 50%; background: rgba(14, 14, 16, .26); pointer-events: none; }
+  [data-part="chess"] .sq.to.cap::after { width: 90%; height: 90%; margin: -45% 0 0 -45%; background: none; box-shadow: inset 0 0 0 .075em rgba(14, 14, 16, .34); }
+  [data-part="chess"] .co { position: absolute; font-size: max(9px, .17em); font-weight: 700; font-style: normal; line-height: 1; pointer-events: none; }
+  [data-part="chess"] .co.r { left: 6%; top: 6%; } [data-part="chess"] .co.f { right: 7%; bottom: 5%; }
+  /* A piece is a drawing of its square, a hundred units a side, with its figure's outline in the middle. The edge of a white piece is 6 of those units, in the outline's own thousandths */
+  [data-part="chess"] .pc { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+  [data-part="chess"] .pc path { fill: #1c1a16; }
+  [data-part="chess"] .pc.w path { fill: #fffdf8; stroke: #1c1a16; stroke-width: 73; stroke-linejoin: round; paint-order: stroke fill; }
+  [data-part="chess"] .pc.fly { inset: auto; width: 12.5%; height: 12.5%; z-index: 3; }
+  [data-part="chess"] .pc.fly.heavy { filter: drop-shadow(0 .6cqi .5cqi rgba(28, 26, 22, .4)); }
+  [data-part="chess"] .chess-arrow { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; opacity: 0; pointer-events: none; }
+  [data-part="chess"][data-wait="1"] .chess-board { opacity: .94; }
+  /* The two who play */
+  [data-part="chess"] .chess-seat { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 10px; align-content: start; }
+  [data-part="chess"] #chess-black { grid-area: black; } [data-part="chess"] #chess-white { grid-area: white; align-content: end; }
+  [data-part="chess"] .chess-disc { width: 16px; height: 16px; border-radius: 50%; background: #1c1a16; box-shadow: 0 0 0 2px var(--line); } [data-part="chess"] #chess-white .chess-disc { background: #fffdf8; box-shadow: 0 0 0 2px var(--faint); }
+  [data-part="chess"] .chess-name { min-width: 0; display: flex; align-items: baseline; gap: 8px; } [data-part="chess"] .chess-name b { font: 700 17px/1.2 Display; letter-spacing: -.015em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } [data-part="chess"] .chess-name small { font-size: 12.5px; color: var(--faint); white-space: nowrap; }
+  [data-part="chess"] .chess-turn { grid-column: 2; justify-self: start; display: inline-flex; align-items: center; gap: 7px; font: 600 12px/1 Text; color: var(--green); visibility: hidden; }
+  [data-part="chess"] .chess-turn::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+  [data-part="chess"] .chess-seat.said .chess-turn { visibility: visible; }
+  [data-part="chess"][data-wait="1"] #chess-black .chess-turn::before { animation: chess-beat 1.3s ease-out infinite; }
+  @keyframes chess-beat { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 55%, transparent); } to { box-shadow: 0 0 0 8px transparent; } }
+  /* What each has taken, and by how much it is ahead */
+  [data-part="chess"] .chess-taken { grid-column: 1 / -1; min-height: 24px; display: flex; align-items: center; flex-wrap: wrap; }
+  [data-part="chess"] .chess-taken .pc { position: static; flex: none; width: 26px; height: 26px; } [data-part="chess"] .chess-taken .pc + .pc { margin-left: -9px; }
+  [data-part="chess"] .chess-taken b { margin-left: 12px; font: 600 12px/1 var(--mono); color: var(--soft); }
+  /* The agent's own words about its move, in its hand */
+  [data-part="chess"] .chess-note { grid-column: 1 / -1; margin-top: 6px; padding-left: 12px; border-left: 3px solid var(--green); font: 600 25px/1.15 Hand, cursive; color: var(--ink); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; overflow: hidden; } [data-part="chess"] .chess-note:empty { display: none; }
+  /* The sheet of moves, as a player keeps one */
+  [data-part="chess"] .chess-sheet { grid-area: sheet; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 12px; align-items: stretch; }
+  [data-part="chess"] .chess-moves { flex: 1 1 0; min-height: 0; list-style: none; overflow: hidden; padding: 6px 14px 0; border: 1px solid var(--line); border-radius: 14px; background: var(--card) repeating-linear-gradient(to bottom, transparent 0 35px, var(--line) 35px 36px) 0 6px; font: 600 24px/36px Hand, cursive; color: var(--ink); }
+  [data-part="chess"] .chess-moves li { display: grid; grid-template-columns: 2.1em minmax(0, 1fr) minmax(0, 1fr); align-items: baseline; height: 36px; white-space: nowrap; }
+  [data-part="chess"] .chess-moves i { font: 400 12px/36px var(--mono); color: var(--faint); }
+  [data-part="chess"] .chess-moves span { justify-self: start; padding: 0 7px; margin-left: -7px; border-radius: 7px; line-height: 28px; } [data-part="chess"] .chess-moves span.now { background: var(--sq-last); color: #1c1a16; }
+  [data-part="chess"] .chess-sheet .btn { align-self: flex-end; }
+  @media (prefers-color-scheme: dark) {
+    /* On the board's dimmer squares the black pieces are given a thin light edge, so that they stand off both colours */
+    [data-part="chess"] .pc:not(.w) path { stroke: rgba(244, 240, 231, .7); stroke-width: 34; stroke-linejoin: round; paint-order: stroke fill; }
+    [data-part="chess"] .chess-disc { box-shadow: 0 0 0 2px var(--faint); }
+    [data-part="chess"] .chess-board { box-shadow: none; }
+  }
+  /* The board's side is a whole number of eights, so that every square is a whole number of the screen's dots and a piece is drawn the same in each */
+  @supports (width: round(down, 10px, 8px)) { [data-part="chess"] .chess-table { --b: round(down, min(100cqh, calc(100cqw - 2 * var(--side) - 2 * var(--gap))), 8px); } }
+  /* A stage that is not wide has the board across it, with the two who play above and below and the moves in a line under them */
+  @container (max-aspect-ratio: 14 / 10) {
+    [data-part="chess"] .chess-table { --b: min(100cqw, calc(100cqh - 116px)); grid-template: "black" 30px "board" var(--b) "white" 30px "sheet" 38px / var(--b); row-gap: 6px; height: auto; }
+    [data-part="chess"] .chess-seat { grid-template-columns: auto auto auto minmax(0, 1fr); align-content: center; gap: 0 9px; } [data-part="chess"] #chess-white { align-content: center; }
+    [data-part="chess"] .chess-name b { font-size: 15.5px; } [data-part="chess"] .chess-name small { display: none; }
+    [data-part="chess"] .chess-turn { grid-column: auto; } [data-part="chess"] .chess-taken { grid-column: auto; justify-content: flex-end; flex-wrap: nowrap; overflow: hidden; min-height: 0; } [data-part="chess"] .chess-taken .pc { width: 24px; height: 24px; } [data-part="chess"] #chess-white .chess-taken { order: 4; }
+    [data-part="chess"] .chess-note { display: none; }
+    [data-part="chess"] .chess-sheet { flex-direction: row; align-items: center; gap: 10px; }
+    [data-part="chess"] .chess-moves { display: flex; gap: 14px; padding: 0 12px; height: 34px; border-radius: 10px; background: var(--card); font-size: 21px; line-height: 32px; }
+    [data-part="chess"] .chess-moves.more { -webkit-mask-image: linear-gradient(to right, transparent, #000 34px); mask-image: linear-gradient(to right, transparent, #000 34px); }
+    [data-part="chess"] .chess-moves li { display: flex; gap: 7px; height: auto; } [data-part="chess"] .chess-moves i { line-height: 32px; } [data-part="chess"] .chess-moves span { margin-left: 0; padding: 0 5px; line-height: 26px; }
+    [data-part="chess"] .chess-sheet .btn { align-self: center; min-height: 34px; }
+    /* Here a square is a whole number of half dots, which a phone's screen draws whole */
+    @supports (width: round(down, 10px, 8px)) { [data-part="chess"] .chess-table { --b: round(down, min(100cqw, calc(100cqh - 116px)), 4px); } }
+    /* Where there is little height as well, the line of moves gives its room to the board, and New game stands beside the person's name */
+    @container (max-height: 440px) {
+      [data-part="chess"] .chess-table { --b: min(100cqw, calc(100cqh - 76px)); grid-template: "black" 26px "board" var(--b) "white" 34px / var(--b); }
+      [data-part="chess"] .chess-moves { display: none; }
+      [data-part="chess"] .chess-sheet { grid-area: white; justify-self: end; }
+      [data-part="chess"] #chess-white { padding-right: 100px; } [data-part="chess"] #chess-white .chess-name { min-width: max-content; }
+      @supports (width: round(down, 10px, 8px)) { [data-part="chess"] .chess-table { --b: round(down, min(100cqw, calc(100cqh - 76px)), 4px); } }
+    }
+  }
+</style>
+<section class="part" data-part="chess" data-title="A game of chess" data-line="You play White. Tap a piece and where it goes, and {agent} answers on the board." data-wait="0" hidden>
+  <div class="fill">
+    <div class="chess-table">
+      <div class="chess-seat" id="chess-black"><i class="chess-disc"></i><div class="chess-name"><b id="chess-black-name"></b><small>plays Black</small></div><span class="chess-turn" id="chess-black-turn"></span><div class="chess-taken" id="chess-black-taken"></div><p class="chess-note" id="chess-note"></p></div>
+      <div class="chess-board" id="chess-board" role="group" aria-label="The chessboard. You play White, from the bottom."><svg class="chess-arrow" id="chess-arrow" viewBox="0 0 8 8" aria-hidden="true"><line stroke="var(--green)" stroke-width=".17" stroke-linecap="round"/><path fill="var(--green)"/></svg></div>
+      <div class="chess-seat" id="chess-white"><div class="chess-taken" id="chess-white-taken"></div><i class="chess-disc"></i><div class="chess-name"><b>You</b><small>play White</small></div><span class="chess-turn" id="chess-white-turn"></span></div>
+      <div class="chess-sheet"><ol class="chess-moves" id="chess-moves" aria-label="The moves so far"></ol><button class="btn ghost small" id="chess-new" type="button">New game</button></div>
+    </div>
+  </div>
+</section>
+<script>
+/*chess.engine*/
+// A game of chess. The person plays White from the bottom and the agent plays Black. Each
+// move of the person goes to the agent with the position it left, a few sound answers and
+// every move the agent may answer with; the agent answers by setting its move in the state,
+// and the page plays it on the board. The rules are the engine's: nothing here decides a move.
+Shell.part("chess", (my) => {
+  var $ = Shell.$, NS = Shell.SVG;
+  var box = my.box, C = Chess, AGENT = my.agent, calm = Shell.calm, newId = Shell.newId;
+  var card = my.el, boardEl = $("chess-board"), arrowEl = $("chess-arrow");
+  // The six figures, as the outlines the site's own face of them draws, a thousand units to the
+  // size and with `box` the corners of what each paints. A piece is drawn from its outline and
+  // not set as a letter, so that where it stands in its square is the same in every browser,
+  // whatever that browser makes of a face's measures: the middle of what is painted is put on
+  // the middle of the square, with as much of the square above it as below and to either side
+  var FIGURE = {
+    k: { box: [203, -34, 797, 753], d: "M500 -34Q454 -34 417 -30Q380 -25 353 -18Q299 -3 299 24L313 227Q203 343 203 436Q203 499 236 536Q268 573 325 573Q391 573 439 525L435 591Q432 628 483 636V692H442V716H483V753H517V716H558V692H517V636Q568 628 565 591L561 525Q609 573 675 573Q732 573 764 536Q797 499 797 436Q797 343 687 227L701 24Q701 -3 647 -18Q620 -25 584 -30Q547 -34 500 -34ZM500 422Q515 462 528 483V578Q528 611 500 611Q472 611 472 578V483Q485 462 500 422ZM500 448Q498 457 494 469Q491 481 487 491V562Q487 570 489 578Q491 585 500 585Q509 585 511 578Q513 570 513 562V491Q509 481 506 469Q502 457 500 448ZM347 247Q422 262 479 262V294Q479 338 468 380Q456 422 435 456Q414 490 386 510Q359 531 327 531Q290 531 269 504Q248 478 248 431Q248 393 276 342Q304 291 347 247ZM653 247Q696 291 724 342Q752 393 752 431Q752 478 732 504Q711 531 673 531Q641 531 614 510Q586 490 565 456Q544 422 532 380Q521 338 521 294V262Q578 262 653 247ZM351 279Q279 363 279 422Q279 457 294 478Q308 499 337 499Q370 499 396 468Q423 438 438 392Q454 345 454 295V290Q436 290 410 287Q385 284 351 279ZM649 279Q615 284 590 287Q564 290 546 290V295Q546 345 562 392Q577 438 604 468Q631 499 663 499Q692 499 706 478Q721 457 721 422Q721 363 649 279ZM353 149Q363 153 386 157Q410 161 440 164Q471 166 500 166Q530 166 560 164Q590 161 614 157Q637 153 647 149L645 177Q613 185 577 190Q541 194 500 194Q460 194 424 190Q387 185 355 177ZM346 72Q399 90 500 90Q602 90 654 72L652 98Q624 106 582 112Q540 118 500 118Q460 118 418 112Q376 106 348 98Z" },
+    q: { box: [125, -34, 875, 767], d: "M500 -34Q454 -34 417 -30Q380 -25 353 -18Q299 -3 299 24L302 239L210 518Q207 517 202 516Q198 516 192 516Q164 516 144 536Q125 555 125 586Q125 614 145 633Q165 652 193 652Q222 652 242 632Q261 613 261 584Q261 568 253 552Q245 535 231 527L362 306L333 598H331Q305 598 284 618Q264 638 264 666Q264 694 284 714Q303 735 331 735Q359 735 380 716Q400 696 400 667Q400 645 388 628Q377 611 356 603L450 318L488 632Q465 636 448 654Q432 673 432 699Q432 728 452 748Q472 767 500 767Q528 767 548 748Q568 728 568 699Q568 673 552 654Q535 636 512 632L550 318L644 603Q623 611 612 628Q600 645 600 667Q600 696 620 716Q641 735 669 735Q698 735 717 714Q736 694 736 666Q736 638 716 618Q695 598 669 598H667L638 306L769 527Q756 535 748 552Q739 568 739 584Q739 613 758 632Q778 652 807 652Q836 652 856 633Q875 614 875 586Q875 555 856 536Q836 516 808 516Q802 516 798 516Q793 517 790 518L698 239L701 24Q701 -4 647 -19Q593 -34 500 -34ZM482 681Q493 681 500 688Q507 696 507 706Q507 717 500 724Q493 731 482 731Q472 731 464 724Q457 717 457 706Q457 696 464 688Q472 681 482 681ZM315 649Q326 649 333 656Q340 664 340 674Q340 685 333 692Q326 699 315 699Q305 699 298 692Q290 685 290 674Q290 664 298 656Q305 649 315 649ZM650 649Q661 649 668 656Q675 664 675 674Q675 685 668 692Q661 699 650 699Q640 699 632 692Q625 685 625 674Q625 664 632 656Q640 649 650 649ZM175 568Q186 568 193 576Q200 583 200 593Q200 604 193 611Q186 618 175 618Q165 618 158 611Q150 604 150 593Q150 583 158 576Q165 568 175 568ZM789 568Q800 568 807 576Q814 583 814 593Q814 604 807 611Q800 618 789 618Q779 618 772 611Q764 604 764 593Q764 583 772 576Q779 568 789 568ZM334 174Q397 194 500 194Q544 194 590 190Q636 185 667 174V192Q655 197 626 202Q596 206 562 209Q527 212 500 212Q472 212 438 209Q403 206 374 202Q346 197 334 192ZM333 114Q396 134 500 134Q542 134 589 129Q636 124 668 114V132Q657 137 628 142Q598 146 563 149Q528 152 500 152Q473 152 438 149Q404 146 374 142Q345 137 333 132ZM332 56Q359 65 405 70Q451 74 500 74Q548 74 596 70Q643 65 669 56V72Q657 77 628 82Q599 86 564 89Q529 92 500 92Q472 92 438 89Q403 86 374 82Q344 77 332 72Z" },
+    r: { box: [176, 0, 825, 719], d: "M176 0V91H236V159H278L316 227V531L278 599H236V719H360V690H420V715H581V690H641V719H765V599H722L685 531V227L722 159H765V91H825V0ZM266 622H735V643H266ZM326 564H675L687 585H314ZM311 169H690L678 190H323ZM266 101H735V122H266ZM206 33H795V54H206Z" },
+    b: { box: [153, -49, 847, 741], d: "M153 -49V48Q169 62 198 72Q227 81 262 81H406Q429 81 441 84Q453 88 453 104Q338 111 338 153Q338 159 341 165L376 255Q341 277 320 318Q300 360 300 407Q300 472 346 532Q392 591 472 636Q444 652 444 685Q444 708 460 724Q477 741 500 741Q523 741 540 724Q556 708 556 685Q556 652 528 636Q608 591 654 532Q700 472 700 407Q700 360 680 318Q659 277 624 255L659 165Q662 159 662 153Q662 111 547 104Q547 88 559 84Q571 81 594 81H738Q773 81 802 72Q831 62 847 48V-49H822Q815 -6 746 -6H559Q515 -6 500 21Q485 -6 441 -6H254Q185 -6 178 -49ZM483 292H517V470H597V502H517V582H483V502H403V470H483ZM403 193Q432 203 500 203Q568 203 597 193L582 230Q560 226 540 224Q521 222 500 222Q479 222 460 224Q440 226 418 230ZM500 136Q528 136 548 138Q567 139 580 141Q606 146 606 153Q606 160 578 166Q564 169 544 170Q525 171 500 171Q475 171 456 170Q436 169 422 166Q394 160 394 153Q394 146 420 141Q433 139 452 138Q472 136 500 136Z" },
+    n: { box: [160, 0, 840, 767], d: "M336 0Q336 49 348 90Q360 131 375 152Q383 163 400 182Q416 200 443 227Q475 259 488 280Q502 300 502 321Q502 331 500 339H496Q495 331 482 316Q468 301 448 295Q438 292 422 290Q405 287 382 285Q370 277 356 263Q343 249 328 229Q298 190 274 190Q248 190 232 196Q215 202 205 218L160 289Q167 302 174 322Q182 342 191 367Q200 393 210 412Q219 430 227 440Q244 462 256 505Q264 534 272 552Q279 571 293 585Q307 599 335 614Q344 643 344 675Q344 691 342 706Q340 722 336 738H360Q413 718 424 668H430Q434 677 436 698Q438 719 438 733Q438 742 438 751Q437 760 436 767H471Q501 751 519 718Q537 685 537 647Q599 630 654 584Q710 538 752 467Q793 396 812 304Q826 235 833 162Q840 88 840 9V0ZM706 67H772Q772 145 764 219Q755 293 737 355Q719 417 689 459Q667 491 644 515Q621 539 597 554L588 548Q630 513 658 470Q685 428 699 364Q713 300 713 198Q713 161 712 128Q710 95 706 67ZM358 494Q371 494 383 504Q395 514 408 514L416 513V522L388 530Q382 532 376 533Q369 534 363 534Q347 534 336 528Q326 522 326 511V504L327 500Q335 494 358 494ZM258 279Q261 293 272 312Q283 330 303 344L299 349Q271 348 254 334Q236 321 231 301Q235 293 244 286Q252 280 258 279Z" },
+    p: { box: [186, 0, 814, 755], d: "M186 0V37Q186 115 210 180Q235 246 280 293Q325 340 386 360Q318 404 318 473Q318 526 351 565Q384 604 445 623Q424 631 412 648Q399 665 399 688Q399 719 426 737Q454 755 500 755Q546 755 574 737Q601 719 601 688Q601 665 588 648Q575 630 555 623Q615 604 648 565Q682 526 682 473Q682 404 614 360Q676 340 721 293Q766 246 790 180Q814 115 814 37V0ZM445 644Q432 654 432 684Q432 715 461 733Q450 733 435 718Q420 704 420 683Q420 669 428 658Q436 646 445 644ZM406 396Q393 415 386 433Q380 451 380 479Q380 548 439 585Q422 584 402 570Q382 555 368 531Q355 507 355 478Q355 450 371 426Q387 403 406 396ZM238 62H272V76Q275 161 300 214Q326 266 370 298Q309 278 274 220Q238 162 238 86Z" },
+  };
+  // A figure's size beside its square: its thousand units are this many of the square's hundred
+  var FIGURE_SIZE = 0.082;
+  var still = calm;
+  var pos = C.read(C.START), now = C.state(pos);   // the position, and how it stands for the side to move
+  var picked = -1, goes = {}, last = null;          // the square picked up, where it may go, and the last move
+  var waiting = false, sent = false, turn = 0;      // waiting for the agent; whether it has been told; which move this is
+  var pendingId = null;
+  var played = null;                                // the reply that was played last in this game
+  var early = null;                                 // what the agent set for this move before it was known to have been told
+  var log = [];                                     // the moves of this game, each as a sheet writes it, with whose it was and what it took
+  var before = null;                                // how the game before this one ended, for the agent to be told with this one's first move
+  var cells = [], shown = [], figures = [], home = 12;
+  var HINT = "You are White. What " + AGENT + " says of its move is written here.";
+  $("chess-black-name").textContent = AGENT;
+
+  // ── Sound answers, for the agent to choose among ──
+  // A few of Black's moves that lose nothing at once, best first, from a count of what each
+  // takes and what it leaves to be taken, with a little for bringing a piece out. They are
+  // sent beside every move Black may make, so that an agent in a hurry has good ones to
+  // pick from, and nothing here plays a move: the agent's own is what is played.
+  var WORTH = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+  function sound(after, state) {
+    var scored = state.legal.map((m, i) => {
+      var next = C.play(after, m), theirs = C.state(next), kind = C.kind(m.piece), s = 0;
+      if (theirs.over === "checkmate") return { m: m, s: 1000, i: i };
+      if (theirs.over) return { m: m, s: -5, i: i };
+      if (m.took) s += WORTH[C.kind(m.took)];
+      if (m.promo) s += WORTH[m.promo] - 1;
+      if (theirs.check) s += 0.4;
+      // What White can take next, and what that costs: all of a piece that nothing guards, and otherwise what it is worth beyond the piece that takes it
+      var worst = 0, mated = false;
+      theirs.legal.forEach((w) => {
+        if (w.took) {
+          var v = WORTH[C.kind(w.took)], guarded = w.flag !== "ep" && C.attacked(next.b, w.to, "b");
+          worst = Math.max(worst, guarded ? Math.max(0, v - WORTH[C.kind(w.piece)]) : v);
+        }
+        var then = C.play(next, w);
+        if (C.inCheck(then, "b") && C.state(then).over === "checkmate") mated = true;
+      });
+      s -= worst;
+      if (mated) s -= 500;
+      // A little for what a sound opening does: a knight or bishop brought out, the centre taken, the king castled
+      var from = m.from >> 3, to = m.to >> 3, file = m.to & 7;
+      if ((kind === "n" || kind === "b") && from === 7) s += 0.35;
+      if (kind === "p" && (file === 3 || file === 4) && to <= 5 && to >= 3) s += to === 4 ? 0.4 : 0.25;
+      if (m.flag === "short" || m.flag === "long") s += 0.6;
+      if (kind === "k" && !m.flag) s -= 0.4;
+      if (kind === "q" && after.full < 8) s -= 0.2;
+      if (kind === "n" && (file === 0 || file === 7)) s -= 0.2;
+      return { m: m, s: s, i: i };
+    });
+    scored.sort((a, b) => b.s - a.s || a.i - b.i);
+    return scored.slice(0, 4).map((x) => C.uci(x.m));
+  }
+
+  function figure(p) {
+    var el = document.createElementNS(NS, "svg"), shape = document.createElementNS(NS, "path"), f = FIGURE[C.kind(p)];
+    el.setAttribute("class", "pc " + C.side(p));
+    el.setAttribute("viewBox", "0 0 100 100");
+    el.setAttribute("aria-hidden", "true");
+    el.setAttribute("data-piece", p);
+    // An outline is drawn with its heights going up, and a square's go down
+    shape.setAttribute("transform", "translate(" + (50 - (FIGURE_SIZE * (f.box[0] + f.box[2])) / 2) + " " + (50 + (FIGURE_SIZE * (f.box[1] + f.box[3])) / 2) + ") scale(" + FIGURE_SIZE + " " + -FIGURE_SIZE + ")");
+    shape.setAttribute("d", f.d);
+    el.appendChild(shape);
+    return el;
+  }
+  function square(s) {
+    var el = document.createElement("button"), f = s & 7, r = s >> 3;
+    el.type = "button";
+    el.setAttribute("data-sq", C.name(s));
+    el.tabIndex = s === home ? 0 : -1;
+    var mark = (cls, text) => {
+      var i = document.createElement("i");
+      i.className = "co " + cls;
+      i.setAttribute("aria-hidden", "true");
+      i.textContent = text;
+      el.appendChild(i);
+    };
+    if (f === 0) mark("r", String(r + 1));
+    if (r === 0) mark("f", "abcdefgh".charAt(f));
+    el.addEventListener("click", () => tap(s));
+    // One square of the board is in the order of the tab key, and the arrows go from it to the others
+    el.addEventListener("focus", () => {
+      cells[home].tabIndex = -1;
+      home = s;
+      el.tabIndex = 0;
+    });
+    cells[s] = el;
+    shown[s] = "";
+    figures[s] = null;
+    return el;
+  }
+  for (var row = 7; row >= 0; row--) for (var file = 0; file < 8; file++) boardEl.insertBefore(square(row * 8 + file), arrowEl);
+  boardEl.addEventListener("keydown", (e) => {
+    var step = { ArrowUp: 8, ArrowDown: -8, ArrowLeft: -1, ArrowRight: 1 }[e.key], at = cells.indexOf(document.activeElement);
+    if (!step || at < 0) return;
+    e.preventDefault();
+    var to = at + step;
+    if (to >= 0 && to < 64 && (step === 8 || step === -8 || (to >> 3) === (at >> 3))) cells[to].focus();
+  });
+
+  // A move as a sheet writes it: `Nf3`, `exd5`, `O-O`, with `+` for check and `#` for mate. `legal` is what could be played where it was made
+  function written(m, legal, after) {
+    var kind = C.kind(m.piece), from = C.name(m.from), to = C.name(m.to), text;
+    if (m.flag === "short" || m.flag === "long") text = m.flag === "short" ? "O-O" : "O-O-O";
+    else if (kind === "p") text = (m.took ? from.charAt(0) + "x" : "") + to + (m.promo ? "=" + m.promo.toUpperCase() : "");
+    else {
+      // Where another piece of the kind could have gone there too, the one that did is told apart by its file, or else its rank, or else both
+      var twins = legal.filter((o) => o.piece === m.piece && o.to === m.to && o.from !== m.from);
+      var which = !twins.length ? "" : twins.every((o) => (o.from & 7) !== (m.from & 7)) ? from.charAt(0) : twins.every((o) => (o.from >> 3) !== (m.from >> 3)) ? from.charAt(1) : from;
+      text = kind.toUpperCase() + which + (m.took ? "x" : "") + to;
+    }
+    return text + (after.over === "checkmate" ? "#" : after.check ? "+" : "");
+  }
+  // What stands around the board: what each side has taken and by how much it is ahead, and the sheet of moves
+  function around() {
+    var worth = { w: 0, b: 0 }, taken = { w: [], b: [] };
+    pos.b.forEach((p) => { if (p) worth[C.side(p)] += WORTH[C.kind(p)]; });
+    log.forEach((e) => { if (e.took) taken[e.side].push(e.took); });
+    [["w", "chess-white-taken"], ["b", "chess-black-taken"]].forEach((x) => {
+      var el = $(x[1]), lead = worth[x[0]] - worth[x[0] === "w" ? "b" : "w"];
+      el.textContent = "";
+      taken[x[0]].sort((a, b) => WORTH[C.kind(b)] - WORTH[C.kind(a)]).forEach((p) => el.appendChild(figure(p)));
+      if (lead > 0) el.appendChild(document.createElement("b")).textContent = "+" + lead;
+    });
+    var sheet = $("chess-moves");
+    sheet.textContent = "";
+    for (var i = 0; i < Math.max(1, Math.ceil(log.length / 2)); i++) {
+      var line = sheet.appendChild(document.createElement("li"));
+      line.appendChild(document.createElement("i")).textContent = i + 1 + ".";
+      for (var k = 2 * i; k < 2 * i + 2; k++) {
+        var cell = line.appendChild(document.createElement("span"));
+        if (log[k]) { cell.textContent = log[k].text; if (k === log.length - 1) cell.className = "now"; }
+      }
+    }
+    // The sheet shows its last lines, and on a narrow stage the end of its one line
+    sheet.scrollTop = sheet.scrollHeight;
+    sheet.scrollLeft = sheet.scrollWidth;
+    sheet.classList.toggle("more", sheet.scrollLeft > 0);
+  }
+
+  function render() {
+    var mine = !waiting && !now.over && pos.turn === "w";
+    goes = {};
+    // A pawn of the person's that reaches the far side always becomes a queen
+    if (mine && picked >= 0) now.legal.forEach((m) => { if (m.from === picked && (!m.promo || m.promo === "q")) goes[m.to] = m; });
+    var hot = now.check ? C.king(pos.b, pos.turn) : -1;
+    for (var s = 0; s < 64; s++) {
+      var el = cells[s], p = pos.b[s], m = goes[s], own = mine && C.side(p) === "w";
+      el.className = "sq" + (((s & 7) + (s >> 3)) % 2 ? "" : " dk") + (last && (last.from === s || last.to === s) ? " last" + (C.side(last.piece) === "b" ? " theirs" : "") : "") +
+        (s === hot ? " check" : "") + (mine && s === picked ? " pick" : "") + (m ? " to" + (m.took ? " cap" : "") : "") + (own || m ? " can" : "");
+      el.setAttribute("aria-label", C.name(s) + (p ? ", " + (C.side(p) === "w" ? "white " : "black ") + C.NAME[C.kind(p)] : "") +
+        (s === hot ? ", in check" : "") + (mine && s === picked ? ", picked up" : "") + (m ? (m.took ? ", can take here" : ", can go here") : ""));
+      if (shown[s] !== p) {
+        if (figures[s]) el.removeChild(figures[s]);
+        figures[s] = p ? el.appendChild(figure(p)) : null;
+        shown[s] = p;
+      }
+    }
+    card.setAttribute("data-wait", waiting ? "1" : "0");
+    // Whose move it is, or how the game ended, beside each of the two
+    [["w", "chess-white"], ["b", "chess-black"]].forEach((x) => {
+      var word = now.over === "checkmate" ? (pos.turn === x[0] ? "" : "won") : now.over ? "a draw" : pos.turn === x[0] ? "to move" : "";
+      $(x[1] + "-turn").textContent = word;
+      $(x[1]).classList.toggle("said", !!word);
+    });
+    my.line(now.over === "checkmate" ? "Checkmate. " + (pos.turn === "b" ? "You won." : AGENT + " won.")
+      : now.over ? "Stalemate. " + (pos.turn === "b" ? AGENT + " has" : "You have") + " no move, so it is a draw."
+      : now.check && pos.turn === "w" ? "Your king is in check."
+      : waiting ? "The move is " + AGENT + "’s." : "You play White. Tap a piece and where it goes, and " + AGENT + " answers on the board.");
+  }
+
+  // A piece drawn over the board, on the square `s`, for as long as it is moving
+  function flying(p, s) {
+    var el = figure(p);
+    el.classList.add("fly");
+    el.style.left = (s & 7) * 12.5 + "%";
+    el.style.top = (7 - (s >> 3)) * 12.5 + "%";
+    return boardEl.appendChild(el);
+  }
+  // Slides what now stands on `to` there from `from`. The piece itself is already in its place:
+  // only a picture of it travels, so that nothing is left half-way if the board changes meanwhile.
+  // The agent's piece is lifted off the board as it goes, and is set down with some weight.
+  function slide(from, to, ms, heavy) {
+    var real = figures[to];
+    if (!real) return;
+    var fly = flying(pos.b[to], to), dx = ((from & 7) - (to & 7)) * 100, dy = ((to >> 3) - (from >> 3)) * 100, at = (part, scale) => "translate(" + dx * part + "%," + dy * part + "%) scale(" + scale + ")";
+    real.style.visibility = "hidden";
+    if (heavy) fly.classList.add("heavy");
+    var a = fly.animate(heavy ? [{ transform: at(1, 1) }, { transform: at(0.92, 1.22), offset: 0.18 }, { transform: at(0.06, 1.22), offset: 0.86 }, { transform: at(0, 1) }] : [{ transform: at(1, 1) }, { transform: at(0, 1) }], { duration: ms, easing: heavy ? "cubic-bezier(.45,0,.2,1)" : "cubic-bezier(.3,.75,.3,1)" });
+    a.onfinish = a.oncancel = () => {
+      real.style.visibility = "";
+      fly.remove();
+      if (!heavy || a.playState !== "finished") return;
+      // Set down: the piece settles, and its square takes the knock
+      real.animate([{ transform: "scale(1.06, .93)", transformOrigin: "50% 85%" }, { transform: "scale(1)", transformOrigin: "50% 85%" }], { duration: 240, easing: "cubic-bezier(.2,1.4,.4,1)" });
+      cells[to].animate([{ boxShadow: "inset 0 0 0 .5em color-mix(in srgb, var(--green) 50%, transparent)" }, { boxShadow: "inset 0 0 0 .05em var(--green)" }], { duration: 520, easing: "ease-out" });
+    };
+  }
+  // An arrow along the agent's move, from the square it left to the one it reached, which is there while the piece travels and a moment after
+  function arrow(from, to, ms) {
+    var x1 = (from & 7) + 0.5, y1 = 7.5 - (from >> 3), x2 = (to & 7) + 0.5, y2 = 7.5 - (to >> 3), far = Math.hypot(x2 - x1, y2 - y1) || 1, ux = (x2 - x1) / far, uy = (y2 - y1) / far;
+    var line = arrowEl.querySelector("line"), tip = { x: x2 - ux * 0.3, y: y2 - uy * 0.3 }, back = { x: tip.x - ux * 0.36, y: tip.y - uy * 0.36 };
+    line.setAttribute("x1", x1); line.setAttribute("y1", y1); line.setAttribute("x2", back.x); line.setAttribute("y2", back.y);
+    arrowEl.querySelector("path").setAttribute("d", "M" + tip.x + " " + tip.y + " L" + (back.x - uy * 0.21) + " " + (back.y + ux * 0.21) + " L" + (back.x + uy * 0.21) + " " + (back.y - ux * 0.21) + " Z");
+    arrowEl.animate([{ opacity: 0 }, { opacity: 0.6, offset: 0.1 }, { opacity: 0.6, offset: 0.7 }, { opacity: 0 }], { duration: ms + 1500 });
+  }
+  // Plays a move on the board: the position and the sheet, then the picture of it
+  function put(m, ms, heavy) {
+    var took = m.took ? { piece: m.took, at: m.flag === "ep" ? m.to + (pos.turn === "w" ? -8 : 8) : m.to } : null, legal = now.legal, side = pos.turn;
+    pos = C.play(pos, m);
+    now = C.state(pos);
+    log.push({ side: side, text: written(m, legal, now), took: m.took });
+    last = m;
+    picked = -1;
+    turn++;
+    around();
+    return () => {
+      // Nothing travels where the person asked for less motion, or while the board is not the part that is shown
+      if (still || !my.shown() || !boardEl.animate) return;
+      // The piece that was taken fades where it stood, under the one that takes it
+      if (took) {
+        var ghost = flying(took.piece, took.at), a = ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: ms, easing: "ease-in" });
+        a.onfinish = a.oncancel = () => ghost.remove();
+      }
+      slide(m.from, m.to, ms, heavy);
+      // In castling the rook goes too
+      if (m.flag === "short") slide(m.to + 1, m.to - 1, ms, false);
+      if (m.flag === "long") slide(m.to - 2, m.to + 1, ms, false);
+      if (heavy) arrow(m.from, m.to, ms);
+    };
+  }
+
+  // The person's move: played at once, and told to the agent with all it needs to answer
+  function mine(m) {
+    var was = { pos: pos, last: last }, first = log.length === 0, draw = put(m, 180, false), at = turn, began = Date.now();
+    waiting = !now.over;
+    sent = false;
+    early = null;
+    $("chess-note").textContent = "";
+    render();
+    draw();
+    box.hint(HINT);
+    // A move that ended the game has no answer to wait for, and so nothing is sent: the agent is told of it with the first move of the next game
+    if (now.over) { pendingId = null; box.idle(); return; }
+    pendingId = newId();
+    box.did("played " + log[log.length - 1].text);
+    box.sending(began);
+    // What the answer is made of comes first. A game's first move says that it is one, and how the game before it ended
+    var data = { request: pendingId, move: C.uci(m), said: C.said(m, now), good: sound(pos, now) };
+    if (first) { data.new_game = true; if (before) data.last_game = before; }
+    data.fen = C.fen(pos);
+    data.legal = now.legal.map(C.uci);
+    // The move is taken back where the agent was not told of it, and where it has not answered in forty seconds: the
+    // person has their move again, and an answer to the move taken back names a request that is gone, and is not played
+    var undo = () => {
+      pos = was.pos; last = was.last; now = C.state(pos); waiting = false; early = null; pendingId = null; turn++;
+      log.pop();
+      around();
+      render();
+    };
+    my.send("move", data).then((result) => {
+      if (turn !== at) return;
+      var kept = early;
+      sent = true;
+      early = null;
+      box.asked(() => { if (turn === at && waiting) undo(); }, result, { late: false });
+      // The agent had answered already: its answer is played now
+      if (kept) answer(kept.reply, kept.fresh);
+    }, () => {
+      if (turn !== at) return;
+      undo();
+      box.did("");
+      box.refused();
+    });
+  }
+  // The agent's move
+  function theirs(m, reply) {
+    var draw = put(m, 620, true);
+    waiting = false;
+    pendingId = null;
+    played = reply;
+    // Its words about this move are said whatever it said about the one before
+    seenNote = "";
+    render();
+    draw();
+    box.got();
+  }
+  function tap(s) {
+    if (waiting || now.over || pos.turn !== "w") return;
+    if (goes[s]) return mine(goes[s]);
+    // Another of their pieces is picked up in its place; the same one again, or anywhere else, puts it down
+    picked = C.side(pos.b[s]) === "w" && s !== picked ? s : -1;
+    render();
+  }
+  // What the agent set as its move. It counts only while the move is the agent's and the agent
+  // has been told of the person's. The agent may be told, and answer, before the page hears
+  // that it was: a connection that dropped between the two brings them back in that order. So
+  // what is set meanwhile is kept for that move, and played when the move is known to have gone.
+  function answer(reply, fresh) {
+    if (!waiting || now.over || pos.turn !== "b" || !pendingId) return;
+    var prefix = pendingId + ":";
+    if (!reply.startsWith(prefix)) return;
+    var move = reply.slice(prefix.length).trim();
+    if (!move) return;
+    // Hearing the same answer twice before the move was accepted must keep its request for a correction.
+    if (!sent) { early = { reply: reply, fresh: fresh || !!(early && early.reply === reply && early.fresh) }; return; }
+    var m = C.find(now.legal, move);
+    if (m) { theirs(m, reply); noted(); }
+    // Not a move it may make: the agent is told so, once for what it set, and the person is shown nothing of it
+    else if (fresh) my.send("illegal", { request: pendingId, move: move.slice(0, 40), good: sound(pos, now), fen: C.fen(pos), legal: now.legal.map(C.uci) }).catch(() => {});
+  }
+  var text = (v) => (v == null ? "" : String(v));
+  // The agent's move is `move` beside the `request` it answers. `reply`, which is the two with a colon between them, is the chessboard page's own way of saying the same
+  var replyOf = (st) => (text(st.request) && text(st.move) ? text(st.request) + ":" + text(st.move) : text(st.reply));
+  var revision = my.revision;
+  // What was in the state when the page opened is of an earlier game, and is not a move in this one
+  var seenReply = replyOf(my.answers()), seenNote = "", heardNote = "", seenRev = revision();
+  // The agent's words about its move belong to the reply they are set beside. They are shown while
+  // that reply is the one that was played: beside a reply to an earlier move, or to a game that was
+  // started again, they are about a board that is no longer there. They are the agent's own, and
+  // are written as text in the dock and beside its name
+  function noted() {
+    var st = my.answers(), note = Shell.tidy(st.note, 160);
+    if (!played || replyOf(st) !== played || note === seenNote) return;
+    seenNote = note;
+    if (!note) return;
+    box.say(note);
+    $("chess-note").textContent = note;
+  }
+  function heard() {
+    var st = my.answers(), reply = replyOf(st), note = Shell.tidy(st.note, 160);
+    var rev = revision(), again = seenRev >= 0 && rev > seenRev, sameNote = note === heardNote;
+    seenRev = rev;
+    heardNote = note;
+    if (reply !== seenReply) {
+      seenReply = reply;
+      answer(reply, true);
+    } else if (again && sameNote) {
+      // A repeated state still belongs only to the request its reply names.
+      answer(reply, false);
+    }
+    noted();
+  }
+  // A new game is the page's own to begin, and sends nothing: the agent hears of it with the game's first move
+  $("chess-new").addEventListener("click", () => {
+    before = now.over === "checkmate" ? (pos.turn === "b" ? "White won by checkmate" : "Black won by checkmate") : now.over ? "drawn by stalemate" : log.length ? "left unfinished" : before;
+    turn++;
+    pendingId = null;
+    pos = C.read(C.START); now = C.state(pos); last = null; picked = -1; waiting = false; sent = false; early = null; played = null; log = [];
+    $("chess-note").textContent = "";
+    around();
+    render();
+    box.did("");
+    box.hint(HINT);
+    box.idle();
+  });
+  my.listen(heard);
+  around();
+  render();
+  heard();
+  box.idle();
+  box.hint(HINT);
+});
+</script>

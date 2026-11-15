@@ -144,12 +144,15 @@ export function Mount({
   title,
   user,
   madeBy,
+  progress,
   onFault,
 }: {
   artifactId: Id<'artifacts'>
   title: string
   user: string
   madeBy?: MadeBy
+  /** Where the things done on the page have got to, as the `it:progress` message for it written out, for a page that is told. */
+  progress?: string | null
   /** Told what the page's own script failed with, each time it says so. */
   /** The page's own script failed, with what it failed with; and again once its agent has been told. */
   onFault?: (message: string, agentTold: boolean) => void
@@ -178,6 +181,9 @@ export function Mount({
   /** Who made the page, as it is now: kept apart from the channel, as `told` is. */
   const maker = useRef(madeBy)
   maker.current = madeBy
+  /** What the page is to be told of where its actions have got to, as it is now, for a document that has just been given its channel. */
+  const progressNow = useRef(progress ?? null)
+  progressNow.current = progress ?? null
   /** The showing's word that the page has another owner now: what is open or is asked for it under the one before is let go. */
   const ownerMoved = useRef<((owner: string) => void) | null>(null)
   const titled = useRef(title)
@@ -1180,6 +1186,7 @@ export function Mount({
         )
         const whole = liveState.whole()
         if (whole) toPage(channel.port1, whole)
+        if (progressNow.current) toPage(channel.port1, JSON.parse(progressNow.current) as SiteToPage)
         // A document that says hello while the frame is being asked is there to be asked again, as
         // the one this channel is for. Whether its own load is behind it was settled just now
         if (asking) askWho(false)
@@ -1273,6 +1280,10 @@ export function Mount({
 
   // State flows down: what changed goes to whatever the frame is showing now
   useEffect(() => liveState.listen((message) => port.current?.postMessage(message)), [liveState])
+  // And so does where what was done on the page has got to, for a page that is told, each time that changes
+  useEffect(() => {
+    if (progress) port.current?.postMessage(JSON.parse(progress) as SiteToPage)
+  }, [progress])
   // And so does It going fullscreen or leaving it, however that came about
   useEffect(() => onFullscreenChange(() => port.current?.postMessage(fullscreenSaid())), [])
 
