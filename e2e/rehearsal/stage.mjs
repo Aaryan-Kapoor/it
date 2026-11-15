@@ -86,7 +86,7 @@ export async function serve({ program, env, cwd, logFile, log }) {
 
 /** The person's browser: the real Edge or Chrome, headed, with a profile of its own, on the right half of the screen. */
 export async function personBrowser({ channel, profile, fakeMedia = false, realMedia = false, app = null }) {
-  const args = [`--window-position=${HALF},0`, `--window-size=${HALF + 8},${SCREEN.height + 24}`, '--no-first-run', '--no-default-browser-check', '--disable-features=Translate']
+  const args = [`--window-position=${HALF - 8},0`, `--window-size=${HALF + 16},${SCREEN.height + 24}`, '--no-first-run', '--no-default-browser-check', '--disable-features=Translate']
   // As an app window (one window, no tabs), since Windows keeps an app window of Chromium on top
   // of the others when asked, and a browser window with tabs not: on the owner's own desktop,
   // only the rehearsal's windows may ever be on the screen
