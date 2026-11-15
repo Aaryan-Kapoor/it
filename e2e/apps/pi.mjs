@@ -39,7 +39,7 @@ import { printCleanly, verdict } from '../logs.mjs'
 import { launch, pairAsOwner } from '../site.mjs'
 import { newestFromUser, shellTool, standInModel, textOf } from './pi/model.mjs'
 import { startPi } from './pi/rpc.mjs'
-import { homeOnWindows, nodeAlone, patience, systemPath, windows } from './windows.mjs'
+import { homeOnWindows, nodeAlone, patience, runRoot, systemPath, windows } from './windows.mjs'
 
 printCleanly()
 const PACKAGE = '@earendil-works/pi-coding-agent'
@@ -64,7 +64,7 @@ const check = (name, ok, detail = '') => {
 const began = Date.now()
 
 const base = Number(process.env.IT_PORT ?? 5800)
-const top = mkdtempSync(path.join(process.env.IT_PI_ROOT ?? os.tmpdir(), 'itpi-'))
+const top = mkdtempSync(path.join(runRoot(process.env.IT_PI_ROOT ?? os.tmpdir()), 'itpi-'))
 const at = (...p) => path.join(top, ...p)
 const home = at('home')
 const agent = at('pi-agent')

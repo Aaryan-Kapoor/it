@@ -143,6 +143,22 @@ jobs:
           IT_PORT: '5700'
           IT_E2E_CODEX_LOGS: ${{ runner.temp }}/codex-logs
         run: node e2e/apps/codex.mjs "$IT_E2E_CODEX" --version "$CODEX_VERSION"
+      # The same again for a person whose account's folder has a space in its name, as a Windows
+      # account named "Ana Lee" has: the run's home and It's folder are in C:\Users\Ana Lee. Codex
+      # runs a hook in PowerShell, which does not run a program whose path is in quotes, so It
+      # names its launcher there by the folder's short name, which Windows gives a new folder on
+      # a drive that has short names on, as the system's drive of a person's computer has. A
+      # runner may have them off, and they are turned on here first.
+      - name: The same, for an account whose folder has a space in its name
+        if: ${{ !cancelled() && runner.os == 'Windows' && env.IT_E2E_CODEX != '' }}
+        env:
+          IT_PORT: '5700'
+          IT_E2E_ROOT: C:\Users\Ana Lee
+          IT_E2E_CODEX_LOGS: ${{ runner.temp }}/codex-logs-space
+        run: |
+          fsutil 8dot3name query C: || true
+          fsutil 8dot3name set C: 0
+          node e2e/apps/codex.mjs "$IT_E2E_CODEX" --version "$CODEX_VERSION"
       # Each of these tests is skipped where no Codex is found, so the run
       # fails here if any of them was
       - name: Codex's flags, and what codex execpolicy makes of It's rules
@@ -163,6 +179,7 @@ jobs:
           name: codex-${{ matrix.which }}-${{ matrix.os }}-logs
           path: |
             ${{ runner.temp }}/codex-logs
+            ${{ runner.temp }}/codex-logs-space
             ${{ runner.temp }}/codex-tests.json
           retention-days: 7
           if-no-files-found: ignore

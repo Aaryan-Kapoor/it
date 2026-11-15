@@ -47,7 +47,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { standInModel, textOf } from './codex/model.mjs'
-import { homeOnWindows, nodeAlone, patience, systemPath, windows } from './windows.mjs'
+import { homeOnWindows, nodeAlone, patience, runRoot, systemPath, windows } from './windows.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..', '..')
@@ -86,7 +86,7 @@ const check = (name, ok, detail = '') => {
 
 // The run's own folder. Codex refuses to put its helper programs under a temporary folder and
 // says so, which changes nothing here.
-const top = mkdtempSync(path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'it-codex-'))
+const top = mkdtempSync(path.join(runRoot(process.env.RUNNER_TEMP || os.tmpdir()), 'it-codex-'))
 const home = path.join(top, 'home')
 const codexHome = path.join(home, '.codex')
 const itHome = path.join(home, '.it')
@@ -665,6 +665,14 @@ trust_level = "trusted"
   // leaves it, and its background server, which keeps a conversation open after the terminal
   // is gone, is stopped: then no Codex has the conversation open
   check('and Codex’s terminal shows the turn the click started, to its end', await tui.until(/Answeredonthepage/, 60_000), tui.plain().slice(-1500))
+  // A hook that Codex could not run is said in its terminal, at every event, as "Hook failed"
+  // and "hook exited with code 1": as on Windows where It's folder had a space in its path
+  const failed = /Hook\s*failed|hook\s*exited\s*with\s*code/i.exec(tui.plain())
+  check(
+    'and Codex’s terminal never says that one of It’s hooks failed',
+    !failed,
+    tui.plain().slice(Math.max(0, (failed?.index ?? 0) - 300), (failed?.index ?? 0) + 300),
+  )
   await sleep(2000)
   tui.type('\x03')
   await sleep(500)

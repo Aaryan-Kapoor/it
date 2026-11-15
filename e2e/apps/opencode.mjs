@@ -48,7 +48,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterTool, newestUser, standInModel, textOf } from './opencode/model.mjs'
-import { homeOnWindows, nodeAlone, processesIn, systemPath, windows } from './windows.mjs'
+import { homeOnWindows, nodeAlone, processesIn, runRoot, systemPath, windows } from './windows.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const argv = process.argv.slice(2)
@@ -95,7 +95,7 @@ async function until(fn, ms = 20_000, every = 250) {
 // ---------- the run's own folder, and what every program it starts is given ----------
 
 // Short, since It's connector listens at a socket inside IT_HOME and a socket's path is limited
-const base = mkdtempSync(path.join(process.env.IT_OC_ROOT ?? os.tmpdir(), 'it-oc-'))
+const base = mkdtempSync(path.join(runRoot(process.env.IT_OC_ROOT ?? os.tmpdir()), 'it-oc-'))
 const HOME = path.join(base, 'h')
 const WORK = path.join(base, 'work')
 const IT_HOME = path.join(base, 'it')

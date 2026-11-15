@@ -32,7 +32,7 @@ import { chromium } from 'playwright'
 import { root, sleep, stopped } from '../lib.mjs'
 import { printCleanly, verdict } from '../logs.mjs'
 import { runs, standInModel, words } from './claude-code/model.mjs'
-import { commandNames, homeOnWindows, nodeAlone, patience, systemPath, windows } from './windows.mjs'
+import { commandNames, homeOnWindows, nodeAlone, patience, runRoot, systemPath, windows } from './windows.mjs'
 
 printCleanly()
 const args = process.argv.slice(2)
@@ -76,7 +76,7 @@ const must = (name, ok, detail) => {
   if (!check(name, ok, detail)) throw new Stop(name)
 }
 
-const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-cc-'))
+const scratch = mkdtempSync(path.join(runRoot(os.tmpdir()), 'it-cc-'))
 const folders = Object.fromEntries(
   Object.entries({ home: 'home', claude: 'claude', it: 'it', work: 'work', none: 'no-t3-code', browser: 'browser' }).map(([k, v]) => [
     k,
