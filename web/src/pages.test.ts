@@ -242,7 +242,10 @@ describe('what the page’s bar says of the last thing the person did', () => {
       'Couldn’t wake Pi: the folder its conversation was held in is not known on this machine, or is gone. Open its conversation in Pi yourself, and what you did reaches it there',
     )
     // As a Claude Code that is not signed in said it, which sent a person to type /login on the page
-    Object.assign(PAGE, { agent: 'claude-code', wakeFailed: { at: NOW - 1000, why: 'Claude Code exited with 1, and its last words were: Not logged in · Please run /login.' } })
+    Object.assign(PAGE, {
+      agent: 'claude-code',
+      wakeFailed: { at: NOW - 1000, why: 'Claude Code exited with 1, and its last words were: Not logged in · Please run /login.' },
+    })
     await drawnAgain()
     expect(said()).toBe(
       'Couldn’t wake Claude Code: Claude Code exited with 1, and its last words were: Not logged in · Please run /login. Open its conversation in Claude Code yourself, and what you did reaches it there',

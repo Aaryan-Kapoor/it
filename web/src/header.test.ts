@@ -35,3 +35,19 @@ describe('the bar on a phone-sized screen', () => {
     expect(sheet).toMatch(/\n\.grid-meta-live::after \{\n {2}content: "offline";/)
   })
 })
+
+describe('the bar above a page', () => {
+  /** What the stylesheet's own rule for a selector says, at every width. */
+  const own = (selector: string) => {
+    const at = sheet.indexOf(`\n${selector} {`)
+    return at === -1 ? '' : sheet.slice(at, sheet.indexOf('\n}', at))
+  }
+  test('keeps room of its own for the title, so that what it says beside it goes below the controls and is never drawn over the title', () => {
+    // At a 960-pixel window a failed wake's long words were laid out in the title's row and the title was drawn over by them
+    const title = own('.page-nav-titlewrap')
+    expect(title).toMatch(/min-width: min\(14em, 40%\);/)
+    expect(title).toContain('overflow: hidden;')
+    // The words beside the title give way before the title does
+    expect(own('.page-nav-meta')).toContain('flex-shrink: 100;')
+  })
+})
