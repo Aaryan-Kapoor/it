@@ -214,6 +214,8 @@ describe('what setup says of the conversation it ran in, where it has just conne
   test('in a Claude Code conversation that has not loaded the add-on: to type /reload-plugins, or in one too old for that, to start a new conversation', () => {
     expect(setupLine(facts)).toBe(reloadLine('2.1.321'))
     expect(reloadLine('2.1.321')).toContain('Type /reload-plugins in this chat')
+    // With why, in words a person who has not seen It yet follows: what they do on a page comes to the agent without their telling it
+    expect(reloadLine('2.1.321')).toContain('so that what you do on It’s pages reaches me without you telling me.')
     expect(setupLine({ ...facts, claude: '2.1.286' })).toContain('Start a new Claude Code chat to use It')
     expect(claudeReloadLine(inClaude)).toBe(reloadLine(undefined))
   })

@@ -59,7 +59,7 @@ export const loadAddon = (running: string | undefined): string =>
 export const reloadLine = (running: string | undefined): string =>
   tooOldToReload(running)
     ? 'Start a new Claude Code chat to use It. This Claude Code is too old to load It’s add-on into this one.'
-    : 'Type /reload-plugins in this chat, so that what you do on It’s pages reaches me. If I’m still replying, it takes effect when I’m done.'
+    : 'Type /reload-plugins in this chat, so that what you do on It’s pages reaches me without you telling me. If I’m still replying, it takes effect when I’m done.'
 
 /**
  * What a person in a Codex conversation is told, in so many words, once It's add-on is in Codex
