@@ -373,6 +373,17 @@ function envNames(pid) {
   const names = out.split('\n').map((l) => l.trim()).filter((l) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(l))
   return names.length ? names : null
 }
+/** Whether It's own folder is on a process's PATH (a PATH holds no secret), or null where it is gone. */
+function itOnPath(pid) {
+  const path = sh(`tr '\\0' '\\n' < /proc/${Number(pid)}/environ 2>/dev/null | sed -n 's/^PATH=//p'`).trim()
+  return path ? /\/\.it\/bin(:|$)/.test(path) : null
+}
+/** Codex's own background server, which outlives /quit, and what it has. */
+function codexServer() {
+  const pid = sh("ps -u ana -o pid=,args= | grep 'codex app-server' | grep -v grep | head -1 | awk '{print $1}'").trim()
+  return pid ? { pid: Number(pid), itOnPath: itOnPath(pid) } : null
+}
+
 /** The agent app's processes of ana's: pid and command line, the command line cut short and with no value of any variable. */
 function appProcs(who) {
   const re = who === 'claude' ? /(^|\/)claude( |$)/ : /(^|\/)codex( |$)/
@@ -441,7 +452,7 @@ async function WAKE() {
         const fresh = appProcs(who).filter((x) => !had.has(x.pid))
         if (fresh.length) {
           const names = envNames(fresh[0].pid)
-          woke = { pid: fresh[0].pid, args: fresh[0].args, seconds: Math.round((Date.now() - t0) / 1000), names, onlyWoken: names?.filter((n) => !term.includes(n)).join(' '), onlyTerminal: names ? term.filter((n) => !names.includes(n)).join(' ') : null, configDir: names?.includes('CLAUDE_CONFIG_DIR') ? sh(`tr '\\0' '\\n' < /proc/${fresh[0].pid}/environ | sed -n 's/^CLAUDE_CONFIG_DIR=//p'`).trim() : 'not set' }
+          woke = { pid: fresh[0].pid, args: fresh[0].args, seconds: Math.round((Date.now() - t0) / 1000), itOnPath: itOnPath(fresh[0].pid), names, onlyWoken: names?.filter((n) => !term.includes(n)).join(' '), onlyTerminal: names ? term.filter((n) => !names.includes(n)).join(' ') : null, configDir: names?.includes('CLAUDE_CONFIG_DIR') ? sh(`tr '\\0' '\\n' < /proc/${fresh[0].pid}/environ | sed -n 's/^CLAUDE_CONFIG_DIR=//p'`).trim() : 'not set' }
         }
       }
       const b = await bar(p)
@@ -458,7 +469,7 @@ async function WAKE() {
     if (!ok) check(`${what}: answered on the page`, false, { seconds: Math.round(ms / 1000), bars: bars.join(' | ').slice(0, 600) })
     await sleep(3000)
     const marksAfter = marks()
-    step(`${what}: processes`, { reopened: woke ?? 'none new', appProcessesNow: appProcs(who).length, serverStarts: marksAfter.server - marksBefore.server, projectHookRuns: marksAfter.projectHook - marksBefore.projectHook, globalSettingsFile: sh('ls -la ~/.claude.json ~/.claude/.claude.json 2>&1 | sed "s/^.* ana ana *//"').trim().replace(/\n/g, ' | ') })
+    step(`${what}: processes`, { reopened: woke ?? 'none new', codexServer: who === 'codex' ? codexServer() : undefined, appProcessesNow: appProcs(who).length, serverStarts: marksAfter.server - marksBefore.server, projectHookRuns: marksAfter.projectHook - marksBefore.projectHook, globalSettingsFile: sh('ls -la ~/.claude.json ~/.claude/.claude.json 2>&1 | sed "s/^.* ana ana *//"').trim().replace(/\n/g, ' | ') })
     return ok
   }
 
@@ -620,7 +631,7 @@ async function WAKEBOOT2() {
   while (Date.now() - t0 < 300_000) {
     if (!woke) {
       const fresh = appProcs(who).filter((x) => !had.has(x.pid))
-      if (fresh.length) woke = { pid: fresh[0].pid, seconds: Math.round((Date.now() - t0) / 1000), names: envNames(fresh[0].pid)?.join(' ') }
+      if (fresh.length) woke = { pid: fresh[0].pid, seconds: Math.round((Date.now() - t0) / 1000), itOnPath: itOnPath(fresh[0].pid), names: envNames(fresh[0].pid)?.join(' ') }
     }
     const b = await bar(p)
     if (b && b !== bars.at(-1)) bars.push(b)
@@ -677,7 +688,7 @@ async function WAKELITE() {
         const fresh = appProcs(who).filter((x) => !had.has(x.pid))
         if (fresh.length) {
           const names = envNames(fresh[0].pid)
-          woke = { pid: fresh[0].pid, args: fresh[0].args, seconds: Math.round((Date.now() - t0) / 1000), onlyWoken: names?.filter((n) => !term.includes(n)).join(' '), onlyTerminal: names ? term.filter((n) => !names.includes(n)).join(' ') : null }
+          woke = { pid: fresh[0].pid, args: fresh[0].args, seconds: Math.round((Date.now() - t0) / 1000), itOnPath: itOnPath(fresh[0].pid), onlyWoken: names?.filter((n) => !term.includes(n)).join(' '), onlyTerminal: names ? term.filter((n) => !names.includes(n)).join(' ') : null }
         }
       }
       const b = await bar(p)
@@ -685,7 +696,7 @@ async function WAKELITE() {
       const now = await shown(p).catch(() => before)
       const fresh = now.split('\n').filter((l) => l.trim().length > 25 && !before.includes(l) && !/sending|sent\.|waiting|working|thinking|picking|choosing/i.test(l)).join(' / ').slice(0, 200)
       if (now !== before && fresh) {
-        check(`${what}: answered on the page`, true, { seconds: Math.round((Date.now() - t0) / 1000), fresh, bars: bars.join(' | ').slice(0, 400), reopened: woke ?? 'none new' })
+        check(`${what}: answered on the page`, true, { seconds: Math.round((Date.now() - t0) / 1000), fresh, bars: bars.join(' | ').slice(0, 400), reopened: woke ?? 'none new', codexServer: who === 'codex' ? codexServer() : undefined })
         return true
       }
       await sleep(1000)
