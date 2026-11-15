@@ -153,7 +153,7 @@ describe('the frame of the tour’s first page', () => {
     page.close()
   })
 
-  test('never says it to a person whose agent was listening before the page opened, though it could not hear when it put the page up', async () => {
+  test('does not say it to a person whose agent was listening before the page opened, though it could not hear when it put the page up, while what they do is handed over as it is to a conversation that hears', async () => {
     const page = await opened({ asleep: true })
     // However long the site takes to say anything
     await page.advance(10_000)
