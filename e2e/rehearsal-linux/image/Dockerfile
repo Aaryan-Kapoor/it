@@ -45,3 +45,6 @@ COPY rehearsal-browser.desktop /usr/share/applications/rehearsal-browser.desktop
 COPY mimeapps.list /etc/xdg/mimeapps.list
 RUN chmod 755 /usr/local/bin/browser && update-desktop-database /usr/share/applications 2>/dev/null || true; \
     update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/local/bin/browser 300
+# Ubuntu Desktop has the system's bubblewrap, which Ubuntu's AppArmor profile lets make user
+# namespaces and which Codex's sandbox uses where it is there
+RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap && rm -rf /var/lib/apt/lists/*

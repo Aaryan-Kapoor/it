@@ -85,7 +85,12 @@ async function main() {
   log(`starting ${name} from ${from}`)
   const run = sh([
     'run', '-d', '--name', name, '--hostname', 'laptop',
+    // systemd needs a cgroup tree it can write (SYS_ADMIN, to remount its own namespace's), and the
+    // system's bubblewrap, which Codex's sandbox uses, needs to make namespaces and mount a /proc
+    // of its own, as on a laptop: so AppArmor, seccomp and Docker's masking of /proc are lifted.
+    // No device, no other capability, and nothing of the host's but the build, read-only.
     '--cgroupns=private', '--cap-add', 'SYS_ADMIN', '--security-opt', 'apparmor=unconfined',
+    '--security-opt', 'seccomp=unconfined', '--security-opt', 'systempaths=unconfined',
     '--tmpfs', '/run', '--tmpfs', '/run/lock', '--shm-size=1g', '-e', 'container=docker',
     '-v', `${STAGE}:/build:ro`,
     from, 'sh', '-c', 'mount -o remount,rw /sys/fs/cgroup && exec /sbin/init',
@@ -110,7 +115,10 @@ async function main() {
   result.os = exec('. /etc/os-release; echo $PRETTY_NAME').stdout.trim()
 
   // ---- the agent app, as a participant who chose its model would have it ----
-  if (app === 'codex') asAna(`mkdir -p ~/.codex && printf 'model = "${MODEL.codex.model}"\nmodel_reasoning_effort = "${MODEL.codex.effort}"\n' > ~/.codex/config.toml`)
+  if (app === 'codex') asAna(`mkdir -p ~/.codex && printf 'model = "${MODEL.codex.model}"\nmodel_reasoning_effort = "${MODEL.codex.effort}"\n\n[features]\napps = false\n' > ~/.codex/config.toml`)
+  // The owner's ChatGPT account has apps of its own (one named it_dot_test among them), which
+  // Codex offers its model as tools; a participant's account has none of those
+  if (app === 'codex') result.codexAppsOff = 'features.apps = false in ~/.codex/config.toml, so that the ChatGPT apps on the owner\'s account are not offered to the model'
   else {
     asAna(`mkdir -p ~/.claude && printf '{"model":"${MODEL.claude.model}","effortLevel":"${MODEL.claude.effort}"}\n' > ~/.claude/settings.json`)
     // Claude Code 2.1.325 shows "Medium effort" with effortLevel in its settings alone, and takes
