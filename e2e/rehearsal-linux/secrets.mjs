@@ -133,8 +133,9 @@ const CONTAINER = /^it-rehearsal-[a-z0-9-]+$/
 export async function injectCodex(container, held) {
   if (!CONTAINER.test(container) || held?.app !== 'codex') throw new Error('injectCodex: not a rehearsal container or not a Codex token.')
   // A fresh file of its own, made by mktemp (exclusive, mode 600), so that nothing already there
-  // under a fixed name (a symlink, a looser mode) decides where or how the token is written
-  const script = 'set -e; umask 077; mkdir -p "$HOME/.codex"; chmod 700 "$HOME/.codex"; t=$(mktemp "$HOME/.codex/auth.json.XXXXXX"); cat > "$t"; mv -f "$t" "$HOME/.codex/auth.json"'
+  // under a fixed name (a symlink, a looser mode) decides where or how the token is written; an
+  // older copy it replaces is overwritten first, never only unlinked
+  const script = 'set -e; umask 077; mkdir -p "$HOME/.codex"; chmod 700 "$HOME/.codex"; t=$(mktemp "$HOME/.codex/auth.json.XXXXXX"); cat > "$t"; o="$HOME/.codex/auth.json"; if [ -f "$o" ] && [ ! -L "$o" ]; then shred -fz -n 1 "$o"; fi; mv -f "$t" "$o"'
   const code = await docker(['exec', '-i', '-u', 'ana', '-e', 'HOME=/home/ana', container, 'sh', '-c', script], held.json)
   if (code !== 0) throw new Error(`The Codex sign-in could not be written into the container (exit ${code}).`)
 }
@@ -146,7 +147,7 @@ export async function injectCodex(container, held) {
  */
 export async function injectClaudeFile(container, held) {
   if (!CONTAINER.test(container) || held?.app !== 'claude' || !held.json) throw new Error('injectClaudeFile: not a rehearsal container or not a Claude token.')
-  const script = 'set -e; umask 077; mkdir -p "$HOME/.claude"; chmod 700 "$HOME/.claude"; t=$(mktemp "$HOME/.claude/.credentials.json.XXXXXX"); cat > "$t"; mv -f "$t" "$HOME/.claude/.credentials.json"'
+  const script = 'set -e; umask 077; mkdir -p "$HOME/.claude"; chmod 700 "$HOME/.claude"; t=$(mktemp "$HOME/.claude/.credentials.json.XXXXXX"); cat > "$t"; o="$HOME/.claude/.credentials.json"; if [ -f "$o" ] && [ ! -L "$o" ]; then shred -fz -n 1 "$o"; fi; mv -f "$t" "$o"'
   const code = await docker(['exec', '-i', '-u', 'ana', '-e', 'HOME=/home/ana', container, 'sh', '-c', script], held.json)
   if (code !== 0) throw new Error(`The Claude Code sign-in could not be written into the container (exit ${code}).`)
 }

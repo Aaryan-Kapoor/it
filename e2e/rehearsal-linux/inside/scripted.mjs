@@ -263,12 +263,99 @@ async function SOAK() {
   }
 }
 
+/**
+ * Both agent apps on one machine for the whole night: a page from each, then a click every fifteen
+ * minutes, alternating between them. In the first half Codex stays open and Claude Code is closed,
+ * so Claude Code's clicks go through Auto-wake; in the second half Codex is closed and Claude Code
+ * resumed, so Codex's go through Auto-wake. Played on a fresh machine where It is set up for both.
+ */
+async function SOAK2() {
+  const hours = Number(process.env.SOAK_HOURS ?? '8')
+  const DRINK = /lemonade|iced tea|cola|tea|drink/i
+  const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
+  let p = ctx.pages().find((x) => !x.url().startsWith('devtools')) ?? (await ctx.newPage())
+  // The browser paired as the tour would have it, by the link that `it site` prints
+  const pair = /https?:\/\/localhost:\d+\/pair#[A-Za-z0-9]+/.exec(sh('~/.it/bin/it site --no-open 2>&1'))?.[0]
+  check('it site gives a pairing link', !!pair)
+  if (pair) await p.goto(pair).catch(() => {})
+  await sleep(8000)
+  const answeredBy = async (who, before, ms, what) => {
+    const start = Date.now()
+    while (Date.now() - start < ms) {
+      await answerApp(who, counts).catch(() => {})
+      const now = await shown(p).catch(() => before)
+      const fresh = now.split('\n').filter((l) => l.trim().length > 25 && !before.includes(l) && !/sending|sent\.|waiting|working|thinking|taking a look|picking|choosing/i.test(l)).join(' / ').slice(0, 300)
+      if (now !== before && fresh) return check(what, true, { seconds: Math.round((Date.now() - start) / 1000), fresh })
+      await sleep(2000)
+    }
+    return check(what, false, { seconds: Math.round(ms / 1000) })
+  }
+  const makePage = async (who, ask, re) => {
+    await startApp(who, counts)
+    step(`types to ${who === 'claude' ? 'Claude Code' : 'Codex'}: "${ask}"`)
+    await type(ask)
+    await sleep(5000)
+    await settle(who, counts, 600_000, 8000)
+    for (let i = 0; i < 40; i++) {
+      p = ctx.pages().find((x) => x.url().includes('/p/')) ?? p
+      if (re.test(await shown(p).catch(() => ''))) return p.url()
+      await sleep(3000)
+    }
+    check(`${who} put its page on the screen`, false)
+    return p.url()
+  }
+  const urlA = await makePage('claude', 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.', PIZZA)
+  let before = await shown(p)
+  step(`claude page: picks "${await press(p, PIZZA, 0)}"`)
+  await answeredBy('claude', before, 240_000, 'Claude Code, conversation open: a pick is answered')
+  await settle('claude', counts, 120_000, 6000)
+  await quitApp('claude')
+  const urlB = await makePage('codex', 'Make me a page with It where I can pick one of three drinks: lemonade, iced tea or cola, and tell me on the page what snack you would have with it.', DRINK)
+  before = await shown(p)
+  step(`codex page: picks "${await press(p, DRINK, 0)}"`)
+  await answeredBy('codex', before, 240_000, 'Codex, conversation open: a pick is answered')
+  await settle('codex', counts, 120_000, 6000)
+  step('soak pages', { claude: urlA, codex: urlB })
+  const start = Date.now()
+  const until = start + hours * 3600_000
+  let n = 0
+  let swapped = false
+  while (Date.now() < until) {
+    const next = Date.now() + 15 * 60_000
+    if (!swapped && Date.now() - start > (hours * 3600_000) / 2) {
+      // Halfway: Codex closed, Claude Code's conversation resumed in the terminal
+      await quitApp('codex')
+      // The harness's sign-in variable in this terminal is as old as the night; Claude Code then
+      // reads the newest copy the harness keeps in its own file, as a laptop's Claude Code would
+      await type('unset CLAUDE_CODE_OAUTH_TOKEN')
+      await startApp('claude', counts, '--continue')
+      swapped = true
+      step('halfway: Codex closed, Claude Code resumed with --continue')
+    }
+    n++
+    const who = n % 2 ? 'claude' : 'codex'
+    const open = swapped ? who === 'claude' : who === 'codex'
+    await p.goto(who === 'claude' ? urlA : urlB).catch(() => {})
+    await sleep(8000)
+    before = await shown(p)
+    const which = await press(p, who === 'claude' ? PIZZA : DRINK, Math.floor(n / 2) % 3)
+    step(`soak click ${n} (${who}, ${open ? 'conversation open' : 'closed, Auto-wake'}): picks "${which}"`, { bar: await bar(p) })
+    await answeredBy(open ? who : swapped ? 'claude' : 'codex', before, 300_000, `soak click ${n}, ${who}, ${open ? 'open' : 'Auto-wake'}: answered on the page`)
+    step(`after soak click ${n}`, { bar: await bar(p) })
+    while (Date.now() < next && Date.now() < until) {
+      await answerApp(swapped ? 'claude' : 'codex', counts).catch(() => {})
+      await sleep(5000)
+    }
+  }
+}
+
 async function main() {
   try {
     if (scenario === 'S4') await S4()
     else if (scenario === 'S6') await S6()
     else if (scenario === 'S7') await S7()
     else if (scenario === 'SOAK') await SOAK()
+    else if (scenario === 'SOAK2') await SOAK2()
     else check(`no scenario ${scenario}`, false)
     const failed = verdict.checks.filter((c) => !c.ok)
     verdict.ok = failed.length === 0 && verdict.checks.length > 0

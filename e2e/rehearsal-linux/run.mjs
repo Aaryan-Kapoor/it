@@ -27,6 +27,9 @@ const ubuntu = arg('ubuntu', '24')
 const from = arg('from', `it-rehearsal-ubuntu${ubuntu}:base`)
 const snapshot = arg('snapshot')
 const minutes = Number(arg('minutes', '45'))
+// The released It from its real site and release, as a participant gets it: no stand-in, no IT_INSTALL_BASE
+const released = has('released')
+const BASE_ENV = released ? {} : { IT_INSTALL_BASE: 'http://127.0.0.1:8765' }
 const RUNS = process.env.IT_REHEARSAL_RUNS ?? '/tmp/it-rehearsal-runs'
 const RESULTS = process.env.IT_REHEARSAL_RESULTS ?? join(homedir(), 'it-rehearsal', '2026-11-15-linux')
 const STAGE = process.env.IT_REHEARSAL_STAGE
@@ -63,7 +66,7 @@ const result = {
   app,
   browser: which,
   ubuntu: `${ubuntu}.04`,
-  build: arg('installed') ? `${arg('installed')} (installed in the snapshot ${from}); stand-in serves ${build.commit}` : build.commit,
+  build: released ? `released ${build.version}${arg('installed') ? `; ${arg('installed')}` : ''}` : arg('installed') ? `${arg('installed')} (installed in the snapshot ${from}); stand-in serves ${build.commit}` : build.commit,
   harness: build.harness,
   buildVersion: build.version,
   person: person === 'model' ? 'Claude Opus 5.5 at high effort, looking at the screen' : 'a script',
@@ -76,6 +79,8 @@ const result = {
 }
 
 let held = null
+let refresher = null
+let refreshing = false
 async function main() {
   const free = freeGB()
   log(`free disk ${free.toFixed(1)} GB`)
@@ -110,9 +115,12 @@ async function main() {
   exec(`mkdir -p /opt/person-profile ${FLOW} && chown ana:ana /opt/person-profile ${FLOW} && mkdir -p -m 700 /var/lib/rehearsal-video`)
   // The one difference from a participant's machine: the install script and `it upgrade` fetch the
   // build under test from the stand-in, set in the machine's environment before the video starts
-  exec("echo 'IT_INSTALL_BASE=http://127.0.0.1:8765' >> /etc/environment")
-  result.installBase = 'IT_INSTALL_BASE=http://127.0.0.1:8765 in /etc/environment, before the video starts: the install script fetches the build under test from a stand-in for the releases inside the machine'
-  exec('systemd-run --unit=rehearsal-releases --property=User=nobody node /build/harness/releases.mjs /build/bin 8765')
+  if (released) result.installBase = 'none: the real https://itcan.do and the real GitHub release, as a participant has them'
+  else {
+    exec("echo 'IT_INSTALL_BASE=http://127.0.0.1:8765' >> /etc/environment")
+    result.installBase = 'IT_INSTALL_BASE=http://127.0.0.1:8765 in /etc/environment, before the video starts: the install script fetches the build under test from a stand-in for the releases inside the machine'
+    exec('systemd-run --unit=rehearsal-releases --property=User=nobody node /build/harness/releases.mjs /build/bin 8765')
+  }
   result.appVersion = exec(app === 'claude' ? 'claude --version' : 'codex --version').stdout.trim()
   result.os = exec('. /etc/os-release; echo $PRETTY_NAME').stdout.trim()
 
@@ -147,7 +155,7 @@ async function main() {
       result.alsoCodex = { model: MODEL.codex, tokenMinutesLeftAtStart: c.minutesLeft }
     }
   }
-  await startAgentShell(name, app === 'claude' ? held : null, { IT_INSTALL_BASE: 'http://127.0.0.1:8765' })
+  await startAgentShell(name, app === 'claude' ? held : null, BASE_ENV)
   // A laptop keeps Claude Code's sign-in on its disk, so a conversation It reopens by itself is
   // signed in too. Here the token is in memory alone: ana's user manager is given the variable, and
   // an It already running (on a machine from a snapshot) is started again to take it, all before
@@ -159,6 +167,36 @@ async function main() {
     if (has('claude-file')) {
       await injectClaudeFile(name, held)
       result.claudeFile = '~/.claude/.credentials.json, the access token alone (refresh token blank), mode 600, shredded at the end'
+    }
+    // A run longer than the token lives (the night's soak): when the owner's own Claude Code has a
+    // newer access token, the machine is given a copy of it the same way, into the same file and the
+    // user manager, and its value joins those the run looks for and redacts. Never a refresh token.
+    if (has('claude-file') && has('follow-claude-token')) {
+      result.claudeTokenFollowed = 0
+      let delivered = held.token
+      refresher = setInterval(async () => {
+        if (refreshing || !held) return
+        refreshing = true
+        try {
+          const t = take('claude', 30)
+          if (t.held.token !== delivered) {
+            // Looked for and redacted from the moment it is read, delivered or not
+            for (const v of t.held.values) if (!held.values.includes(v)) held.values.push(v)
+            const next = { ...held, token: t.held.token, json: t.held.json }
+            await injectClaudeFile(name, next)
+            await shareWithUserManager(name, next)
+            held.token = next.token
+            held.json = next.json
+            delivered = next.token
+            result.claudeTokenFollowed++
+            log(`gave the machine the owner's newer Claude Code access token (${t.minutesLeft} minutes)`)
+          }
+        } catch {
+          // An older token is kept until a newer one is there; the error names no part of a token
+        } finally {
+          refreshing = false
+        }
+      }, 5 * 60_000)
     }
     if (!from.endsWith(':base')) asAna('systemctl --user restart it.service', { quiet: true, timeout: 180_000 })
   }
@@ -198,10 +236,10 @@ async function main() {
       await new Promise((r) => setTimeout(r, 1000))
     }
     result.serviceAfterBootBeforeLogin = asAna('systemctl --user is-active it.service', { quiet: true }).stdout.trim()
-    exec('systemctl start rehearsal-releases 2>/dev/null || systemd-run --unit=rehearsal-releases --property=User=nobody node /build/harness/releases.mjs /build/bin 8765', { quiet: true })
+    if (!released) exec('systemctl start rehearsal-releases 2>/dev/null || systemd-run --unit=rehearsal-releases --property=User=nobody node /build/harness/releases.mjs /build/bin 8765', { quiet: true })
     exec('mkdir -p /var/lib/rehearsal-flow /opt/person-profile && chown ana:ana /var/lib/rehearsal-flow && touch /etc/rehearsal-cdp && install -m 755 /build/harness/browser.sh /usr/local/bin/browser')
     // The person signs in again: their session, their terminal and their browser
-    await startAgentShell(name, app === 'claude' ? held : null, { IT_INSTALL_BASE: 'http://127.0.0.1:8765' })
+    await startAgentShell(name, app === 'claude' ? held : null, BASE_ENV)
     if (app === 'claude' && held) {
       await shareWithUserManager(name, held)
       asAna('systemctl --user restart it.service', { quiet: true, timeout: 180_000 })
@@ -256,6 +294,9 @@ async function main() {
 let collected = false
 let videoWithheld = false
 async function collect() {
+  if (refresher) clearInterval(refresher)
+  refresher = null
+  while (refreshing) await new Promise((r) => setTimeout(r, 500))
   // The recording, stopped as ffmpeg finishes a file
   exec('kill -INT $(cat /run/rehearsal-ffmpeg.pid) 2>/dev/null; for i in $(seq 30); do kill -0 $(cat /run/rehearsal-ffmpeg.pid) 2>/dev/null || exit 0; sleep 1; done', { quiet: true })
   // Where the token is in the machine before it is wiped. Codex's own auth.json is expected; a
@@ -351,6 +392,10 @@ async function collect() {
 
 /** Ends the machine and every trace of the token in it, whatever happened before. */
 async function teardown() {
+  if (refresher) clearInterval(refresher)
+  refresher = null
+  // A refresh already writing into the machine finishes before the wipe, so nothing lands after it
+  for (let i = 0; refreshing && i < 400; i++) await new Promise((r) => setTimeout(r, 500))
   await wipe(name, held).catch(() => {})
   // A withheld recording takes the screenshots and any part kept outside the machine with it
   if (videoWithheld) spawnSync('sh', ['-c', 'find "$1" -type f \\( -name "*.png" -o -name "*.mp4" \\) -exec shred -u {} +', 'sh', runHere])
