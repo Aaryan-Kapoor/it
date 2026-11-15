@@ -97,11 +97,12 @@ export default defineSchema({
 
   // Whether the agent a page belongs to is at work: since when a turn of a conversation has
   // been running, as the machine it runs on said, and when that turn ended. A machine says so
-  // only of a conversation it has handed something done on a page to, and each conversation on
-  // a machine has one record, written again in place. Both times are this backend's own, taken
-  // as it is told. Kept apart from the machine's record, which every page that is open and the
-  // list of machines read: a turn begins and ends far oftener than anything else about a
-  // machine changes, and written there, each would have had all of that asked for again.
+  // of a conversation it has handed something done on a page to, and of one whose add-on says a
+  // turn of it is running, and each conversation on a machine has one record, written again in
+  // place. Both times are this backend's own, taken as it is told. Kept apart from the machine's
+  // record, which every page that is open and the list of machines read: a turn begins and ends
+  // far oftener than anything else about a machine changes, and written there, each would have
+  // had all of that asked for again.
   turns: defineTable({
     userId: v.id('users'),
     machineId: v.id('machines'),

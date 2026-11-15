@@ -6607,16 +6607,63 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
   const RUNNING = { for: CLAUDE, running: true }
   const ENDED = { for: CLAUDE, running: false }
 
-  test('a connector that starts says that none of this machine’s turns is known any more, and tells nothing of a conversation it handed nothing to', async () => {
+  test('a connector that starts says that none of this machine’s turns is known any more, and tells of every turn a conversation is heard to run, though it was handed nothing', async () => {
     standIn()
     await start('socket', APPS)
     await pass()
     expect(told()).toEqual([{}])
     // Its turns come and go, as Claude Code's add-on says with everything it asks, and Codex's hooks say
-    for (const turn of [false, true, true, false, true, false]) await asks(turn)
-    for (const busy of [true, false, true]) await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy } })
+    for (const turn of [false, true, true, false, true, false]) {
+      await asks(turn)
+      await pass()
+    }
+    const codex = { harness: 'codex', id: 'thread-1' }
+    for (const busy of [true, false, true]) {
+      await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy } })
+      await pass()
+    }
+    await pass(2)
+    expect(told()).toEqual([{}, RUNNING, ENDED, RUNNING, ENDED, { for: codex, running: true }, { for: codex, running: false }, { for: codex, running: true }])
+  })
+
+  test('a conversation heard to run a turn that was handed nothing is told under its own id and the ids it had before it was cleared, and what was told is taken back when its add-on goes quiet', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    try {
+      await start('socket', APPS)
+      await asks(false, 'before-1')
+      await local('/session', { method: 'POST', body: { harness: 'claude-code', session: 'before-2', was: 'before-1' } })
+      await local('/session', { method: 'POST', body: { harness: 'claude-code', session: CLAUDE.id, was: 'before-2' } })
+      await asks(true)
+      await pass(3)
+      const before = (id: string) => ({ harness: 'claude-code', id })
+      expect(told().slice(1)).toEqual([RUNNING, { for: before('before-2'), running: true }, { for: before('before-1'), running: true }])
+      // Claude Code is closed in the middle of the turn: nothing more is said, and once that has gone on for a while It is told that the turn is not known any more
+      vi.setSystemTime(Date.now() + 12_000)
+      await pass(2)
+      expect(told().length).toBe(4)
+      vi.setSystemTime(Date.now() + 10_000)
+      await pass(2)
+      expect(told().slice(4)).toEqual([{ for: CLAUDE }, { for: before('before-2') }, { for: before('before-1') }])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('a Codex turn the person interrupted, whose Codex stays open, is told as ended though no hook says so', async () => {
+    standIn()
+    await start('socket', APPS)
+    const codex = { harness: 'codex', id: 'thread-1' }
+    // Some Codex holds the conversation, as its terminal does while it is open, and a hook says a turn began
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: true } })
+    await until(() => told().length === 2)
+    expect(told()[1]).toEqual({ for: codex, running: true })
+    await pass(2)
+    expect(told().length).toBe(2)
+    // The person presses Escape: Codex writes that the turn was aborted, and runs no hook
+    await new Promise((r) => setTimeout(r, 30))
+    codexKept(1, 'task_started', 'turn_aborted')
     await pass(3)
-    expect(told()).toEqual([{}])
+    expect(told()[2]).toEqual({ for: codex, running: false })
   })
 
   test('a click that starts a turn has It told that the turn is running, and that it ended only when it has, after which the conversation is watched no more', async () => {
@@ -6640,12 +6687,12 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     const order = stand.calls.map((c) => (c.name === 'delivery:handedOff' ? 'handed' : c.name === 'turns:say' && c.args.running === false ? 'ended' : ''))
     expect(order.indexOf('handed')).toBeGreaterThan(-1)
     expect(order.indexOf('handed')).toBeLessThan(order.indexOf('ended'))
-    // A turn the person begins themselves afterwards is none of the page's
+    // A turn the person begins themselves afterwards is told as well: the page shows every turn of its conversation
     for (const turn of [true, true, false]) {
       await asks(turn)
       await pass()
     }
-    expect(told()).toEqual([{}, RUNNING, ENDED])
+    expect(told()).toEqual([{}, RUNNING, ENDED, RUNNING, ENDED])
   })
 
   test('a click that joins a running turn has that turn told as running, and one handed over before the turn is seen to begin has it told once it does', async () => {
@@ -6721,10 +6768,10 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
       await until(() => told().length === 3)
       // Neither running nor ended: not known any more
       expect(told()).toEqual([{}, RUNNING, { for: CLAUDE }])
-      // And an add-on that speaks again later is the page's no more
+      // And an add-on that speaks again later, in a turn, has that turn told afresh
       await asks(true)
-      await pause(1500)
-      expect(told().length).toBe(3)
+      await until(() => told().length === 4)
+      expect(told()[3]).toEqual(RUNNING)
     } finally {
       vi.useRealTimers()
     }
@@ -6778,27 +6825,35 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     const busy = (on: boolean) => local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: on } })
     await busy(true)
     await busy(false)
+    await pass(2)
+    // That turn was told from its beginning to its end, as every turn is
+    expect(told()).toEqual([{}, { for: codex, running: true }, { for: codex, running: false }])
+    const at = told().length
     // Put into Codex's own queue while the conversation is not working, and a turn of the person's own begins before
     // Codex has taken it: the queue holds it until that turn is done
     offered(click(1, codex))
     await until(() => stand.codex.length === 1)
     await busy(true)
     stand.codex[0]!.end()
-    await until(() => told().length === 2)
-    expect(told()).toEqual([{}, { for: codex, running: true }])
+    await until(() => told().length === at + 1)
+    expect(told().slice(at)).toEqual([{ for: codex, running: true }])
     // The turn it stood behind ends, and its own begins at once: nothing says that the agent finished in between
     await busy(false)
     await busy(true)
     await pass(2)
-    expect(told()).toEqual([{}, { for: codex, running: true }])
+    expect(told().slice(at)).toEqual([{ for: codex, running: true }])
     await busy(false)
-    await until(() => told().length === 3)
-    expect(told()[2]).toEqual({ for: codex, running: false })
-    // And once that is told, the conversation is watched no more
+    await until(() => told().length === at + 2)
+    expect(told()[at + 1]).toEqual({ for: codex, running: false })
+    // And a turn after that is told as one of its own
     await busy(true)
+    await pass()
     await busy(false)
     await pass(2)
-    expect(told().length).toBe(3)
+    expect(told().slice(at + 2)).toEqual([
+      { for: codex, running: true },
+      { for: codex, running: false },
+    ])
   })
 
   test('a click that Codex’s queue took behind a turn, whose own turn has not begun a pass after that turn ended, is no longer said to be at work, and is said to be again once it begins', async () => {
@@ -6808,22 +6863,24 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     const busy = (on: boolean) => local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: on } })
     await busy(true)
     await busy(false)
+    await pass(2)
+    const at = told().length
     offered(click(1, codex))
     await until(() => stand.codex.length === 1)
     await busy(true)
     stand.codex[0]!.end()
-    await until(() => told().length === 2)
+    await until(() => told().length === at + 1)
     // The turn it stood behind ends, and Codex does not begin the next: what It was told is taken back, and nothing says the turn of the click ended
     await busy(false)
     await pass(2)
-    expect(told().length).toBe(3)
-    expect(told()[2]).toEqual({ for: codex })
+    expect(told().length).toBe(at + 2)
+    expect(told()[at + 1]).toEqual({ for: codex })
     // Its own turn begins after all, and is told from its beginning to its end
     await busy(true)
-    await until(() => told().length === 4)
+    await until(() => told().length === at + 3)
     await busy(false)
-    await until(() => told().length === 5)
-    expect(told().slice(3)).toEqual([
+    await until(() => told().length === at + 4)
+    expect(told().slice(at + 2)).toEqual([
       { for: codex, running: true },
       { for: codex, running: false },
     ])
@@ -6862,12 +6919,12 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     const order = stand.calls.map((c) => (c.name === 'delivery:handedOff' ? 'handed' : c.name === 'turns:say' && c.args.running === false ? 'ended' : ''))
     expect(order.indexOf('handed')).toBeGreaterThan(-1)
     expect(order.indexOf('handed')).toBeLessThan(order.indexOf('ended'))
-    // And the conversation is watched no more
+    // And a later turn is told as one of its own, and nothing of the click's is told again
     for (const turn of [true, false]) {
       await asks(turn)
       await pass()
     }
-    expect(told().length).toBe(2)
+    expect(told().slice(2)).toEqual([RUNNING, ENDED])
   })
 
   test('a newer short turn in the same conversation is reported after an older ending awaiting its reply', async () => {
@@ -6895,11 +6952,13 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     await settled()
     await pass()
     expect(told()).toEqual([{}, { ...ENDED, untold: true }, { ...ENDED, untold: true }])
-    // A later turn with no click must not be reported: the watch has ended cleanly.
+    // A later turn with no click is told as a turn of its own, from its beginning to its end: the watch had ended cleanly
     await asks(true)
+    await pass()
     await asks(false)
     await pass()
-    expect(endings).toBe(2)
+    expect(endings).toBe(3)
+    expect(told().slice(3)).toEqual([RUNNING, ENDED])
   })
 
   test('a conversation that carries on under another id after /clear is watched under the new one, and its turn’s end is told under the id its page knows', async () => {
@@ -7046,12 +7105,13 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     await settled()
     await pass()
     expect(told()).toContainEqual({ for: other, running: false, untold: true })
-    const reported = told()
-    // Both watches have been let go: later turns without a click are not reported.
+    const reported = told().length
+    // Both watches have been let go: a later turn without a click is told as a turn of its own, under both ids its pages know it by, and nothing of the endings is told again
     await asks(true)
+    await pass()
     await asks(false)
     await pass()
-    expect(told()).toEqual(reported)
+    expect(told().slice(reported)).toEqual([RUNNING, { for: other, running: true }, ENDED, { for: other, running: false }])
   })
 
   test.each([false, undefined])('an older or unknown backend gets no new reports, capability %s', async (takes) => {

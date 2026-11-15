@@ -1,10 +1,11 @@
 // Whether the agent a page belongs to is at work, as the machine its conversation runs on says.
 //
-// A page shows a line that moves for as long as something done on it is with its agent. What
-// the agent does to the page says nothing of whether it has finished: it may change the page at
-// once and work on for minutes. So the machine says when a turn of the conversation is running
-// and when it has ended, for a conversation it has handed something to, and the page goes by
-// that where it is known. All of it is kept in a record of its own: see `turns` in the schema.
+// A page says that its agent is at work for as long as a turn of its conversation runs, and
+// shows a line that moves for as long as something done on it is with its agent. What the agent
+// does to the page says nothing of whether it has finished: it may change the page at once and
+// work on for minutes. So the machine says when a turn of the conversation is running and when
+// it has ended, for a conversation it has handed something to and for one whose add-on says a
+// turn of it is running, and the page goes by that where it is known. All of it is kept in a record of its own: see `turns` in the schema.
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'

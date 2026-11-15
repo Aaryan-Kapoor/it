@@ -159,6 +159,7 @@ const HOOK_HOLD_MS = 60_000 // and this is how long it is held before Codex's qu
 const TURN_QUIET_MS = 30 * 60_000 // a turn that has run no hook for this long is taken to be over
 const TURN_SAID_MS = 20_000 // an add-on that says whether a turn is running, and has not said so for this long, is no longer known to have one
 const TURN_BEGINS_MS = 30_000 // how long a conversation that was handed a click, and is to begin a turn for it, is watched for that turn to begin
+const TURN_NAMES_MOST = 5 // how many of a conversation's ids It is told its turn under, where nothing was handed to it: its own and its latest earlier ones
 const WAIT_MS = 5_000 // an `it wait` that said so this recently is still waiting
 const WAIT_AGAIN_MS = 120_000 // how long after an `it wait` ended its conversation, where it is one never heard from, is taken to be coming to wait again
 const QUEUE_WAITS = [0, 10_000, 60_000, 600_000] // how long before each try at a harness's own queue; after the last, the click is left waiting
@@ -840,13 +841,16 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     // it to be over, so that a click is not kept for a hook that may never come. Nothing is said
     // of it here: that no hook ran is not the turn saying that it ended
     if (s.busy && now - s.busyAt >= TURN_QUIET_MS) return null
+    // A Codex turn the person interrupted runs no hook to say that it ended, and Codex stays open
+    // with the conversation: its own file of the conversation says so, and the turn is over
+    if (s.busy && key.startsWith('codex:') && codexInterrupted(key)) return false
     return turnRunning(key, now)
   }
   /**
-   * A conversation that was handed something done on a page, watched until the turn that deals
-   * with it is over: It is told when a turn of it is running and when that turn has ended, and
-   * the page shows its agent at work for exactly that long. Nothing is told of a conversation
-   * that was handed nothing, so that what is written is two records' worth for each thing done.
+   * A conversation that was handed something done on a page, or that is heard to be running a
+   * turn, watched until the turn that deals with it is over: It is told when a turn of it is
+   * running and when that turn has ended, and its pages show its agent at work for exactly that
+   * long. What is written is two records' worth for each turn.
    *
    * `names` are the ids its pages know the conversation by, which are the ones It is told under,
    * and `told` those of them It has been told a running turn of. `owed` says that what was
@@ -980,9 +984,22 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     } else watchedTurns.set(key, w)
     turnSeen(key)
   }
-  /** A conversation said how its turn stands: looked at the moment it is said, so that a turn that ends and another that begins at once are seen as two. */
+  /**
+   * A conversation said how its turn stands: looked at the moment it is said, so that a turn that
+   * ends and another that begins at once are seen as two. One that is not watched is watched from
+   * the moment a turn of it is running, whether or not it was handed anything, so that every page
+   * of it shows its agent at work for as long as that turn runs. It is told under its own id and
+   * under the ids it had before it was cleared, which pages made then still know it by.
+   */
   const turnSeen = (key: string): void => {
-    const w = watchedTurns.get(key)
+    let w = watchedTurns.get(key)
+    if (!w && turnsTaken !== false && turnKnown(key, Date.now()) === true) {
+      const names = new Set([key.slice(key.indexOf(':') + 1)])
+      // The latest few, since a conversation cleared many times is told of under each
+      for (const [from] of [...aliases].reverse()) if (names.size < TURN_NAMES_MOST && follow(from) === key) names.add(from.slice(from.indexOf(':') + 1))
+      w = { names, told: new Set(), owed: false, behind: false, finished: false, generation: 0, idleAt: null, want: 'wait' }
+      watchedTurns.set(key, w)
+    }
     if (!w) return
     const before = w.want
     lookAtTurn(key, w)
