@@ -622,25 +622,38 @@ export async function publish(input: {
         throw new Problem(
           'The publication could not be confirmed.',
           'unavailable',
-          `Run the same publishing command again to recover this publication. If recovery keeps failing, wait for other publishing commands to end and check the page before removing ${file}.`,
+          `Run the same command again once It answers, and if it fails this way again, check with \`it list\` whether the page is there before removing ${file} and publishing again.`,
         )
       }
       const begin = async () => {
+        let recovering = resuming
         for (let attempt = 0; ; attempt++) {
           try {
             return await call<{ artifactId: string; slug: string; version: number; upload: { url: string; grant: string } }>(
               'action',
-              resuming ? api.publish.resume : api.publish.begin,
-              resuming ? { operation: pending.operation } : { ...request, operation: pending.operation },
+              recovering ? api.publish.resume : api.publish.begin,
+              recovering ? { operation: pending.operation } : { ...request, operation: pending.operation },
             )
           } catch (err) {
             // Another command can have saved the shared receipt before begin reaches the backend.
-            // A missing record is inconclusive, including after a begin whose answer was lost.
             const missing = err instanceof Problem && err.code === 'not_found'
-            if (resuming && missing && attempt < 2) {
+            if (recovering && missing && attempt < 2) {
               await new Promise((resolve) => setTimeout(resolve, 250))
               continue
             }
+            // It has no record of this publication: its begin never reached It, as when It was not
+            // running, or it did and nothing finished it, which nothing but this receipt can do. It
+            // is begun again under the same identity, which It answers with the publication it
+            // already has of that identity, if it has one by then. The receipt is written again
+            // first, so that its time is that of the begin It records, which its age is told by.
+            if (recovering && missing) {
+              recovering = false
+              pending.at = Date.now()
+              writePrivate(file, pending)
+              continue
+            }
+            // Begun again and refused for a publication It does have of that identity: not known
+            if (resuming && !recovering && err instanceof Problem && err.code === 'conflict') return unresolved()
             if (missing) return unresolved()
             if (!uncertain(err)) clear()
             throw err
