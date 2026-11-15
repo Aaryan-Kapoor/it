@@ -871,6 +871,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     told: Set<string>
     /** Those of them It is being told this moment are running, and has not answered. */
     telling: Set<string>
+    /** Those of them It was told are running without its answer coming back: It may have taken it, so they are taken back as told ones are, and told again while the turn runs. */
+    maybe: Set<string>
     owed: boolean
     behind: boolean
     finished: boolean
@@ -899,7 +901,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    */
   const idsWatched = (): number => {
     let n = 0
-    for (const w of watchedTurns.values()) n += new Set([...w.names, ...w.told, ...w.telling]).size
+    for (const w of watchedTurns.values()) n += new Set([...w.names, ...w.told, ...w.telling, ...w.maybe]).size
     return n
   }
   /** The conversation each click was handed to, for as long as It has yet to confirm the hand-over. */
@@ -927,7 +929,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       return
     }
     // What It was told is taken back at once where it is no longer known
-    if (w.owed && !(running === null && w.told.size)) {
+    if (w.owed && !(running === null && (w.told.size || w.maybe.size))) {
       w.idleAt ??= steady()
       if (steady() - w.idleAt < TURN_BEGINS_MS) {
         w.want = 'wait'
@@ -957,6 +959,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       names: new Set<string>(),
       told: new Set<string>(),
       telling: new Set<string>(),
+      maybe: new Set<string>(),
       owed: false,
       behind: false,
       finished: false,
@@ -996,9 +999,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     if (there) {
       // Merged names and endings still need reporting, even when both watches already want ended.
       there.generation++
-      for (const name of w.names) if (there.names.size < TURN_IDS_MOST || w.told.has(name) || w.telling.has(name)) there.names.add(name)
+      for (const name of w.names) if (there.names.size < TURN_IDS_MOST || w.told.has(name) || w.telling.has(name) || w.maybe.has(name)) there.names.add(name)
       for (const name of w.told) there.told.add(name)
       for (const name of w.telling) there.telling.add(name)
+      for (const name of w.maybe) there.maybe.add(name)
       there.owed ||= w.owed
       there.behind ||= w.behind
       there.finished ||= w.finished
@@ -1023,7 +1027,18 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // The latest few, since a conversation cleared many times is told of under each, as many as there is room for
       const room = Math.min(TURN_NAMES_MOST, TURN_RECORDS_MOST - idsWatched())
       for (const [from] of [...aliases].reverse()) if (names.size < room && follow(from) === key) names.add(from.slice(from.indexOf(':') + 1))
-      w = { names, told: new Set(), telling: new Set(), owed: false, behind: false, finished: false, generation: 0, idleAt: null, want: 'wait' }
+      w = {
+        names,
+        told: new Set(),
+        telling: new Set(),
+        maybe: new Set(),
+        owed: false,
+        behind: false,
+        finished: false,
+        generation: 0,
+        idleAt: null,
+        want: 'wait',
+      }
       watchedTurns.set(key, w)
     }
     if (!w) return
@@ -1075,6 +1090,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
             try {
               await call('mutation', api.turns.say, { for: { harness, id }, running: true })
               kept(w).told.add(id)
+              kept(w).maybe.delete(id)
+            } catch (err) {
+              kept(w).maybe.add(id)
+              throw err
             } finally {
               kept(w).telling.delete(id)
             }
@@ -1086,23 +1105,25 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           // pass: nothing is known to be running, so what It was told is taken back, and the
           // conversation is watched on
           if (!settle) return
-          for (const id of [...w.told]) {
+          for (const id of new Set([...w.told, ...w.maybe])) {
             await call('mutation', api.turns.say, { for: { harness, id } })
             kept(w).told.delete(id)
+            kept(w).maybe.delete(id)
           }
           return
         }
         // An ending that It was never told the turn of is told all the same, under every id its pages know it by
         const generation = w.generation
         const ended = w.want === 'ended' && w.finished
-        if (w.want === 'ended' && (w.told.size || ended) && [...handedTo.values()].includes(key)) return
-        for (const id of ended ? [...w.names] : [...w.told]) {
+        if (w.want === 'ended' && (w.told.size || w.maybe.size || ended) && [...handedTo.values()].includes(key)) return
+        for (const id of new Set(ended ? [...w.names, ...w.maybe] : [...w.told, ...w.maybe])) {
           await call('mutation', api.turns.say, {
             for: { harness, id },
             ...(w.want === 'ended' ? { running: false } : {}),
             ...(ended && !w.told.has(id) ? { untold: true } : {}),
           })
           kept(w).told.delete(id)
+          kept(w).maybe.delete(id)
         }
         // A newer hand-over or turn change still needs its own ending told.
         if (w.generation !== generation) return
@@ -1110,7 +1131,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         if (ended) w.finished = false
         // Something may have been handed to it while It was being told
         lookAtTurn(key, w)
-        if (watchedTurns.get(key) === w && (w.want === 'ended' || w.want === 'unknown') && !w.told.size) watchedTurns.delete(key)
+        if (watchedTurns.get(key) === w && (w.want === 'ended' || w.want === 'unknown') && !w.told.size && !w.maybe.size) watchedTurns.delete(key)
       }
       let failed: unknown = null
       for (const [key, w] of [...watchedTurns].sort(([, a], [, b]) => Number(a.want === 'running') - Number(b.want === 'running'))) {

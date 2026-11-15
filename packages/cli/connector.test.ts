@@ -6705,6 +6705,25 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     expect([running().size, running().has('fresh')]).toEqual([200, false])
   }, 60_000)
 
+  test('a turn It was told of with no answer coming back, which may have been taken, is taken back when it ends though no retry got through', async () => {
+    standIn()
+    await start('socket', APPS)
+    // It takes what it is told and its answer is lost on the way back
+    let lose = true
+    stand.answer = (name, args) => (name === 'turns:say' && args.running === true && lose ? Promise.reject(new Error('the connection dropped')) : undefined)
+    await asks(true)
+    await until(() => told().some((said) => said.running === true))
+    lose = false
+    // The turn ends before the next pass could tell it again
+    await asks(false)
+    await pass(2)
+    expect(
+      told()
+        .filter((said) => said.for?.id === CLAUDE.id)
+        .at(-1),
+    ).toEqual(ENDED)
+  })
+
   test('a turn that ended is told before turns that began, where It could not be told of either at once', async () => {
     standIn()
     await start('socket', APPS)
