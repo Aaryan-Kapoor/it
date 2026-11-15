@@ -230,7 +230,9 @@ describe('the ending', () => {
     // The page that opens is the answer, and this one is gone with the tour. Where none has come when a page has had its time, the ideas are the person's again
     await page.advance(LONG - SLOW - 20_000)
     expect([page.read('end').stage, mode(page), names(page)]).toEqual(['slow', 'ideas', IDEAS.map((idea) => idea.name)])
-    expect(page.state('end')).toBe('No answer after 300 s. Claude Code may be waiting for you in its own window. This is yours again, and a late answer is still shown.')
+    expect(page.state('end')).toBe(
+      'No answer after 300 s. Claude Code may be waiting for you in its own window. This is yours again, and a late answer is still shown.',
+    )
     pressed(page, 0)
     expect(page.sentOf('make')[1]!.data.name).toBe('Release cut board')
     expect(page.errors).toEqual([])
