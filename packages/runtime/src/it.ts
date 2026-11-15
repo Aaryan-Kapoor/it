@@ -369,25 +369,27 @@ function receive(message: SiteToPage): void {
   } else if (message.type === 'it:camera-frame' || message.type === 'it:camera-state') seen(message)
   else if (message.type === 'it:microphone-sound' || message.type === 'it:microphone-state') heard(message)
   else if (message.type === 'it:fullscreen') fullscreenSaid(message.on === true, message.enabled === true)
-  else if (message.type === 'it:progress') progressed(message.actions)
+  else if (message.type === 'it:progress') progressed(message.working, message.actions)
 }
 
-// Where the things done on the page have got to, where the site says: whether each was handed to
-// the agent's conversation, and what is known of the agent's turn for it. The site says it to a
-// page of It's own tour, and to no other, so on any other page nothing is ever heard here.
-let progress: { actions: ActionProgress[] } | null = null
-const progressHearers: ((said: { actions: ActionProgress[] }) => void)[] = []
-function progressed(actions: unknown): void {
+// Whether the page's agent is at work, and where the things done on the page have got to, as the
+// site says to every page: whether a turn of the page's conversation is running, and whether each
+// thing done was handed to the agent's conversation and what is known of the agent's turn for it.
+type Progress = { working: boolean; actions: ActionProgress[] }
+let progress: Progress | null = null
+const progressHearers: ((said: Progress) => void)[] = []
+function progressed(working: unknown, actions: unknown): void {
   if (!Array.isArray(actions)) return
   // Only what is shaped as it is to be: a page is given nothing here that it would have to check
   progress = {
+    working: working === true,
     actions: actions
       .filter((a): a is ActionProgress => typeof a === 'object' && a !== null && typeof (a as ActionProgress).id === 'string')
       .map((a) => ({ id: a.id, handed: a.handed === true, turn: a.turn === 'running' || a.turn === 'ended' ? a.turn : null })),
   }
   for (const hear of [...progressHearers]) tellProgress(hear)
 }
-function tellProgress(hear: (said: { actions: ActionProgress[] }) => void): void {
+function tellProgress(hear: (said: Progress) => void): void {
   if (!progress) return
   try {
     hear(progress)
@@ -2387,12 +2389,13 @@ const api = {
   },
   action,
   /**
-   * Hears where the things done on the page have got to, each time the site says: for each of
-   * the last few, by the `id` that `It.action` resolved with, whether it was `handed` to the
-   * agent's conversation and what is known of the agent's `turn` for it. Only a page of It's own
-   * tour is told. Returns how to stop hearing.
+   * Hears whether the page's agent is at work and where the things done on the page have got to,
+   * each time the site says: whether a turn of the page's conversation is `working`, and for each
+   * of the last few things done, by the `id` that `It.action` resolved with, whether it was
+   * `handed` to the agent's conversation and what is known of the agent's `turn` for it. Returns
+   * how to stop hearing.
    */
-  onProgress(cb: (said: { actions: ActionProgress[] }) => void) {
+  onProgress(cb: (said: Progress) => void) {
     progressHearers.push(cb)
     if (progress) queueMicrotask(() => tellProgress(cb))
     return () => {

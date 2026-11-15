@@ -253,6 +253,11 @@ try {
       clickTurns.push(turn)
       return runs(`it patch ${PAGE} '{"pressed":"${clickTurns.length === 1 ? 'yes' : 'again'}"}'`, 'Marking the page as pressed.')
     }
+    // A turn the person starts, which works for a while: a few seconds, or until it is stopped.
+    // Claude Code refuses a long `sleep` by itself, so a long one is several short ones
+    if (!result && /^Work on this for a while/.test(turn.text)) return runs('sleep 6', 'Working on it.')
+    if (!result && /^Work on this until you are stopped/.test(turn.text))
+      return runs(Array.from({ length: 10 }, () => 'sleep 9').join(' && '), 'Working on it.')
     if (result) return words(result.is_error ? `The command failed: ${resultText.slice(0, 300)}` : 'Done.')
     return words('Nothing to do.')
   })
@@ -490,6 +495,46 @@ try {
       .then(() => true)
       .catch(() => false)
     check('and the page in the browser shows it', seen)
+
+    // ---------- a turn the person starts, above the page ----------
+    // The person types to the conversation, and its turn runs a while. The bar above the page says
+    // that Claude Code is working for as long as the turn runs, though nothing was done on the page,
+    // and says so no more once it has ended. A turn stopped as a host such as T3 Code stops it, with
+    // Claude Code's own request to interrupt, is over at once.
+    const working = tab.locator('.page-nav .working')
+    const barSays = async (words, ms) => {
+      const end = Date.now() + ms
+      let now
+      do {
+        now = (await working.count()) ? await working.innerText({ timeout: 1000 }).catch(() => null) : null
+        if (now === words) return now
+        await sleep(250)
+      } while (Date.now() < end)
+      return now
+    }
+    const say = (text) => conversation.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: text } })}\n`)
+    say('Work on this for a while.')
+    const whileItRuns = await barSays('Claude Code is working', patience(30_000))
+    check(
+      'while a turn the person started runs, the bar above the page says that Claude Code is working, and offers no Stop',
+      whileItRuns === 'Claude Code is working' && (await tab.locator('.page-nav button[aria-label="Stop the agent"]').count()) === 0,
+      JSON.stringify({ whileItRuns }),
+    )
+    const ran = await untilFinished(3, patience(60_000))
+    const afterIt = await barSays(null, patience(15_000))
+    check('and once that turn has ended, it says so no more', ran && afterIt === null, JSON.stringify({ ran, afterIt }))
+    say('Work on this until you are stopped.')
+    const longOne = await barSays('Claude Code is working', patience(30_000))
+    await sleep(3000)
+    conversation.stdin.write(`${JSON.stringify({ type: 'control_request', request_id: 'it-e2e-stop', request: { subtype: 'interrupt' } })}\n`)
+    const stoppedAt = Date.now()
+    const afterStop = await barSays(null, patience(15_000))
+    check(
+      'a turn stopped as a host such as T3 Code stops it is said to be over within a few seconds',
+      longOne === 'Claude Code is working' && afterStop === null,
+      JSON.stringify({ longOne, afterStop, after: Date.now() - stoppedAt }),
+    )
+    await untilFinished(4, patience(30_000))
 
     // ---------- a closed conversation, reopened ----------
     // Claude Code is closed, and the page is pressed again. It's service, which was given the

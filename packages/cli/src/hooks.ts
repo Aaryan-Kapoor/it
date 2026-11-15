@@ -73,7 +73,8 @@ async function codex(): Promise<void> {
     return { texts: got?.texts ?? [], taken: async () => (marks.length ? local('/marked', { method: 'POST', body: { ...from, taken: marks } }) : null) }
   }
   if (event === 'UserPromptSubmit') {
-    await local('/session', { method: 'POST', body: { ...from, busy: true } })
+    // A turn begins here, and only here: every other hook that says the conversation is busy runs in a turn that has begun
+    await local('/session', { method: 'POST', body: { ...from, busy: true, begins: true } })
     // A turn that It started with its mark alone: the agent is handed what the mark stands
     // for here, beside the message and out of the person's sight. Not for a message of the
     // person's own, where Codex says what the message is: the mark's own turn is still to come,

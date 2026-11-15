@@ -415,6 +415,12 @@ const page = `<h1>Deploy</h1><button id="go" onclick="It.action(\`approve\`)">Ap
 // quotes out of an argument. The file is written here, as the agent writes it with its own file
 // tool, in the temporary folder. The Node bundle has no it.exe, only It's it.cmd, which is `it`.
 const itCommand = windows && STANDALONE ? 'it.exe' : 'it'
+/**
+ * A command that takes a few seconds and that Codex runs without asking. On Windows Codex asks
+ * before running anything but what It's rules let out, so there it is It's own `it wait`, which
+ * waits that long for a click on the page and prints that none came.
+ */
+const waiting = (seconds) => (windows ? `${itCommand} wait --id ${slug} --timeout ${seconds}` : `sleep ${seconds}`)
 const created = `${itCommand} create "Approve the deploy" --id ${slug} --html '${page}' --open`
 const patching = (patch) => {
   if (!windows) return `it patch ${slug} '${JSON.stringify(patch)}'`
@@ -443,6 +449,11 @@ const model = await standInModel({
       return { say: 'Answered on the page.' }
     }
     if (asked.newest.trim() === PROMPT) return asked.outputs === 0 ? { run: created } : { say: 'The page is up, and I will wait for you to use it.' }
+    // A turn the person starts, which works for a while: a few seconds, or until it is stopped.
+    // Codex hands a command that runs for more than ten seconds back to its model still running,
+    // so a long one is many short ones, one after another
+    if (asked.newest.trim() === 'Work on this for a while.') return asked.outputs < 2 ? { run: waiting(4) } : { say: 'Done working.' }
+    if (asked.newest.trim() === 'Work on this until you are stopped.') return asked.outputs < 15 ? { run: waiting(8) } : { say: 'Done working.' }
     return { say: 'OK' }
   },
 })
@@ -673,6 +684,49 @@ trust_level = "trusted"
     !failed,
     tui.plain().slice(Math.max(0, (failed?.index ?? 0) - 300), (failed?.index ?? 0) + 300),
   )
+  // A turn the person starts: the bar above the page says that Codex is working for as long as it
+  // runs, though nothing was done on the page, and says so no more once it has ended. One the
+  // person interrupts with Escape runs no hook to say so, and Codex stays open with the
+  // conversation: it is over all the same, as Codex's own file of the conversation says
+  const working = tab.locator('.page-nav .working')
+  const barSays = async (words, ms) => {
+    const end = Date.now() + ms
+    let now
+    do {
+      now = (await working.count()) ? await working.innerText({ timeout: 1000 }).catch(() => null) : null
+      if (now === words) return now
+      await sleep(250)
+    } while (Date.now() < end)
+    return now
+  }
+  const ask = async (text) => {
+    await sleep(1000)
+    tui.type(text)
+    await sleep(700)
+    tui.type('\r')
+  }
+  await ask('Work on this for a while.')
+  const whileItRuns = await barSays('Codex is working', patience(30_000))
+  check(
+    'while a turn the person started runs, the bar above the page says that Codex is working, and offers no Stop',
+    whileItRuns === 'Codex is working' && (await tab.locator('.page-nav button[aria-label="Stop the agent"]').count()) === 0,
+    JSON.stringify({ whileItRuns }),
+  )
+  const ran = await tui.until(/Doneworking/, 60_000)
+  const afterIt = await barSays(null, patience(15_000))
+  check('and once that turn has ended, it says so no more', ran && afterIt === null, JSON.stringify({ ran, afterIt }))
+  await ask('Work on this until you are stopped.')
+  const longOne = await barSays('Codex is working', patience(30_000))
+  await sleep(3000)
+  tui.type('\x1b')
+  const stoppedAt = Date.now()
+  const afterStop = await barSays(null, patience(20_000))
+  check(
+    'a turn the person interrupts in Codex’s terminal is said to be over within a few seconds, though no hook says so and Codex stays open',
+    longOne === 'Codex is working' && afterStop === null,
+    JSON.stringify({ longOne, afterStop, after: Date.now() - stoppedAt }),
+  )
+
   await sleep(2000)
   tui.type('\x03')
   await sleep(500)

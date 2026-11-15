@@ -7012,6 +7012,89 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
   } else console.log('  skip  a showing that nothing keeps alive ending by itself: the quick run does not wait ten minutes')
 
   // ------------------------------------------------------------------
+  section('The agent at work, above a page and on it')
+  // A conversation whose add-on says that a turn of it is running has its page say so, in the bar
+  // and to the page's own script, though nothing was done on the page; and say so no more once the
+  // turn ends, or once the add-on goes quiet in the middle of a turn, as it does when its app is
+  // killed. The add-on is stood in for on the machine It runs on, for an app chosen there.
+  {
+    const wslug = `${slug}-working`
+    const wsession = `working-${Date.now().toString(36)}`
+    const machineId = JSON.parse(readFileSync(path.join(A, 'machine.json'), 'utf8')).id
+    const atWork = began(await launch())
+    await pairAsOwner(atWork.page)
+    const ownerToken = async () => (await sessionOf(atWork.page)).token
+    const chose = await answerTo('mutation', 'machines:toggle', { machineId, harness: 'claude-code', on: true }, await ownerToken())
+    await it(
+      A,
+      [
+        'create',
+        marked('At work'),
+        '--id',
+        wslug,
+        '--html',
+        '<p id="working">nothing heard</p><p id="actions"></p><script>It.onProgress((said) => { document.getElementById("working").textContent = said.working ? "working" : "not working"; document.getElementById("actions").textContent = JSON.stringify(said.actions) })</script>',
+      ],
+      { extraEnv: { IT_HARNESS: 'claude-code', IT_SESSION: wsession } },
+    )
+    await atWork.page.goto(`${APP}/p/${wslug}`)
+    await pageIn(atWork.page, { id: wslug })
+    const onPage = () => atWork.page.frameLocator('.mount iframe').locator('#working').textContent()
+    const inBar = async () =>
+      (await atWork.page.locator('.page-nav .working').count())
+        ? await atWork.page
+            .locator('.page-nav .working')
+            .innerText({ timeout: 1000 })
+            .catch(() => null)
+        : null
+    /** What the bar and the page say, once both say what is waited for, or as they are when the time is up. */
+    const saying = async (bar, page, ms) => {
+      const seen = await until(async () => {
+        const now = { bar: await inBar(), page: await onPage() }
+        return now.bar === bar && now.page === page ? now : undefined
+      }, ms)
+      return seen ?? { bar: await inBar(), page: await onPage() }
+    }
+    // The add-on asks once a second, as Claude Code's does, saying whether a turn is running
+    let turn = true
+    let asking = true
+    const asks = (async () => {
+      while (asking) {
+        await askConnector(A, `/clicks?harness=claude-code&session=${encodeURIComponent(wsession)}`, { turn }).catch(() => {})
+        await sleep(1000)
+      }
+    })()
+    const running = await saying('Claude Code is working', 'working', 20_000)
+    turn = false
+    const ended = await saying(null, 'not working', 15_000)
+    turn = true
+    const again = await saying('Claude Code is working', 'working', 15_000)
+    // The add-on stops in the middle of the turn, as it does when its app is killed: the turn is not known any more after twenty seconds
+    asking = false
+    await asks
+    const quietAt = Date.now()
+    const quiet = await saying(null, 'not working', 45_000)
+    const quietFor = Date.now() - quietAt
+    check(
+      'a turn that an add-on says is running has its page say that the agent is working, in the bar and to the page, though nothing was done on the page, and no Stop is offered',
+      chose === 'answered' &&
+        running.bar === 'Claude Code is working' &&
+        running.page === 'working' &&
+        (await atWork.page.locator('.page-nav button[aria-label="Stop the agent"]').count()) === 0,
+      JSON.stringify({ chose, running }),
+    )
+    check('and say so no more once the turn ends', ended.bar === null && ended.page === 'not working', JSON.stringify(ended))
+    check(
+      'and no more, within half a minute, once the add-on goes quiet in the middle of a turn',
+      again.bar === 'Claude Code is working' && quiet.bar === null && quiet.page === 'not working' && quietFor < 35_000,
+      JSON.stringify({ again, quiet, quietFor }),
+    )
+    await answerTo('mutation', 'machines:toggle', { machineId, harness: 'claude-code', on: false }, await ownerToken())
+    await it(A, ['delete', wslug]).catch(() => {})
+    await atWork.context.close().catch(() => {})
+  }
+
+  // ------------------------------------------------------------------
   section('A tab behind another')
   // What is live to a page stays live while the person looks at another tab: the page goes on
   // being given the camera's pictures and the microphone's sound, and what it records of them is

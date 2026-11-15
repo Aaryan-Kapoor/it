@@ -1199,10 +1199,10 @@ export interface CameraPicture {
 }
 
 /**
- * Where something done on a page has got to, as the site tells a page of It's own tour, which
- * shows it to the person: the action, by the id it was answered with when It took it; whether it
- * was handed to the agent's conversation; and what is known of the agent's turn for it, which is
- * `running`, `ended`, or null where nothing is known. It is what the bar above the page goes by.
+ * Where something done on a page has got to, as the site tells every page, which may show it to
+ * the person: the action, by the id it was answered with when It took it; whether it was handed to
+ * the agent's conversation; and what is known of the agent's turn for it, which is `running`,
+ * `ended`, or null where nothing is known. It is what the bar above the page goes by.
  */
 export interface ActionProgress {
   id: string
@@ -1219,8 +1219,11 @@ export interface Sound {
 export type SiteToPage =
   /** The page's whole state. */
   | { type: 'it:state'; state: unknown; revision: number }
-  /** Where the last few things done on the page have got to, newest first. Sent to a page of It's own tour, each time it changes. */
-  | { type: 'it:progress'; actions: ActionProgress[] }
+  /**
+   * Whether a turn of the page's conversation is running, as its machine says, and where the last
+   * few things done on the page have got to, newest first. Sent to every page, each time it changes.
+   */
+  | { type: 'it:progress'; working: boolean; actions: ActionProgress[] }
   /** What changed of the page's state since what was last sent: the agent's part, whole, where it changed, and each value the page keeps that changed, with `null` for one taken away. */
   | { type: 'it:changed'; revision: number; state?: unknown; kept: [string, unknown][] }
   /** Accepted. Of values the page keeps, `revision` is the state's revision that has them. */

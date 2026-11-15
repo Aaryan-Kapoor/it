@@ -1,10 +1,11 @@
 // Whether the agent a page belongs to is at work, as the machine its conversation runs on says.
 //
-// A page shows a line that moves for as long as something done on it is with its agent. What
-// the agent does to the page says nothing of whether it has finished: it may change the page at
-// once and work on for minutes. So the machine says when a turn of the conversation is running
-// and when it has ended, for a conversation it has handed something to, and the page goes by
-// that where it is known. All of it is kept in a record of its own: see `turns` in the schema.
+// A page says that its agent is at work for as long as a turn of its conversation runs, and
+// shows a line that moves for as long as something done on it is with its agent. What the agent
+// does to the page says nothing of whether it has finished: it may change the page at once and
+// work on for minutes. So the machine says when a turn of the conversation is running and when
+// it has ended, for a conversation it has handed something to and for one whose add-on says a
+// turn of it is running, and the page goes by that where it is known. All of it is kept in a record of its own: see `turns` in the schema.
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -13,14 +14,16 @@ import { requireMachine } from './lib/authz'
 import { rateLimit } from './lib/limits'
 import { session } from './schema'
 
-/** How many of a machine's records are removed in one step. */
-const BATCH = 200
+/** How many of a machine's records are removed in one step: more than it may have, so that one step mostly does. */
+const BATCH = 250
 /**
  * How many conversations a machine may have a record for at once. Its connector listens for
- * forty conversations at a time, and a record of a turn that ended is kept for a week, so this
- * is room for what a machine does in that time and no more than a faulty one can fill.
+ * forty conversations at a time and tells of each under up to three ids, its own and the ones it
+ * had before it was cleared, so that every one that is running has its record however many have
+ * ended. A record of a turn that ended is kept for a week, so this is room for what a machine
+ * does in that time and no more than a faulty one can fill.
  */
-export const TURNS_MOST = 80
+export const TURNS_MOST = 200
 
 const kept = (ctx: QueryCtx, machineId: Id<'machines'>, harness: string, sessionId: string) =>
   ctx.db
@@ -103,19 +106,22 @@ async function makeRoom(ctx: MutationCtx, machineId: Id<'machines'>): Promise<vo
  * Removes what a machine said of its conversations' turns, a batch at a time: when its
  * connector starts and knows of none of them, and when the machine is revoked.
  */
-export async function forgetTurns(ctx: MutationCtx, machineId: Id<'machines'>): Promise<void> {
+export async function forgetTurns(ctx: MutationCtx, machineId: Id<'machines'>, before = Date.now()): Promise<void> {
   const rows = await ctx.db
     .query('turns')
     .withIndex('by_conversation', (q) => q.eq('machineId', machineId))
     .take(BATCH)
-  for (const row of rows) await ctx.db.delete(row._id)
-  if (rows.length === BATCH) await ctx.scheduler.runAfter(0, internal.turns.forget, { machineId })
+  // Only what was there when the machine said so: what it says after that, before a later step
+  // has run, is of turns it knows of, and stays
+  const old = rows.filter((row) => row.since <= before)
+  for (const row of old) await ctx.db.delete(row._id)
+  if (rows.length === BATCH && old.length > 0) await ctx.scheduler.runAfter(0, internal.turns.forget, { machineId, before })
 }
 
 export const forget = internalMutation({
-  args: { machineId: v.id('machines') },
-  handler: async (ctx, { machineId }) => {
-    await forgetTurns(ctx, machineId)
+  args: { machineId: v.id('machines'), before: v.optional(v.number()) },
+  handler: async (ctx, { machineId, before }) => {
+    await forgetTurns(ctx, machineId, before)
     return null
   },
 })

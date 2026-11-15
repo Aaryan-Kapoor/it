@@ -237,8 +237,9 @@ const sharedPage = (agent: Record<string, unknown>, stored: Record<string, unkno
 describe('the agent skill', () => {
   test('is short, and names each part it leaves out where an agent would want it, by the command that prints it', () => {
     // It is read whole every time, by every agent that uses It: what it once held was 27 KB. It
-    // grew by half a kilobyte when it came to say that a page keeps all it shows, and its controls, in its state
-    expect(Buffer.byteLength(short)).toBeLessThan(13_000)
+    // grew by half a kilobyte when it came to say that a page keeps all it shows, and its controls, in its state,
+    // and by a line when a page came to be told whether its agent has what was done on it and is at work
+    expect(Buffer.byteLength(short)).toBeLessThan(13_150)
     expect(readdirSync(new URL('./more', import.meta.url)).sort()).toEqual(PARTS.map((part) => `${part}.md`))
     // A part nothing in the skill points to is never opened
     for (const part of PARTS) expect(short, part).toContain(`\`it help ${part}\``)

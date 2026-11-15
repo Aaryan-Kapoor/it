@@ -64,6 +64,7 @@ let running = false // a turn is in progress
 let turns = 0 // how many turns of the conversation have begun
 let talks = 0 // how many times another conversation has taken this one's place: /clear does not, and anything else that ends one does
 let starting = false // a click was submitted as a prompt and taken, and the turn it starts has not begun yet
+let startingAt = 0 // when that prompt was taken
 let session = null // this conversation's id, which /clear changes
 const pending = [] // clicks taken from the connector, not yet handed to Claude
 const given = new Set() // clicks Claude already has, which must never be handed over a second time
@@ -233,7 +234,9 @@ const report = ($, ids, woke, turnOver) =>
  * ago and its turn is about to begin. The page the click was made on shows its agent at work
  * for as long as this says so. It has no part in when a click is handed over.
  */
-const working = () => running || starting
+const working = () => running || (starting && Date.now() - startingAt < STARTING_MS)
+/** How long a prompt that was taken is said to begin a turn, where no turn is seen to begin: one that has not begun by then is not said to be at work, since the page would say so for as long as this conversation stays open. */
+const STARTING_MS = 30_000
 
 // Being submitted this moment. Neither new (so not submitted a second time) nor yet Claude's
 // (so not reported): a prompt can still be refused, by one of the person's own hooks say.
@@ -290,7 +293,10 @@ function handOver($) {
       submitMisses = 0
       if (began === generation) refusals = 0
       // Taken, and its turn has not begun: the conversation is at work from here, and not only once the turn says it has begun
-      if (began === generation && before === turns && !running) starting = true
+      if (began === generation && before === turns && !running) {
+        starting = true
+        startingAt = Date.now()
+      }
       for (const c of clicks) {
         submitting.delete(c.id)
         given.add(c.id)
@@ -499,7 +505,9 @@ export function register(on) {
     // After a clear it goes on as the same conversation and keeps what was taken for it;
     // after anything else, what was taken is dropped.
     generation += 1
+    // And no turn of the one that ended runs any more, whether or not its end was heard
     starting = false
+    running = false
     if (e?.reason !== 'clear') {
       talks += 1
       pending.length = 0

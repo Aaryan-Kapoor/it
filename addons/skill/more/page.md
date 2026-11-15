@@ -256,6 +256,27 @@ Windows PowerShell 5.1 also takes the double quotes out of an argument it hands 
 
 A page can change its own state while you work, and so can another conversation. Where a change of yours must not overwrite one you have not seen, read the state with `it state deploy-plan`, which prints its `revision` beside it, and give that number back: `it patch deploy-plan '{"total":42}' --if-revision 7`. The change is made only while the state is still at that revision. If it has moved on, the command is refused with the code `conflict`: read the state again and decide anew.
 
+## Showing that you are at work
+
+`It.onProgress(fn)` calls `fn({ working, actions })` as soon as it is known and whenever it changes, with what your machine reports:
+
+- `working` is `true` while a turn of your conversation is running, on this page or anything else, and `false` where none is or that is not known.
+- `actions` are the last eight things done on the page, newest first. Each has the `id` that `It.action` resolved with; `handed`, `true` once it was handed to you, or to the conversation that had the page before; and `turn`, which is `'running'` while a turn of yours runs after that, `'ended'` once one has ended, and `null` where that is not known or you have said with `it ack` that it is done. A later turn makes it `'running'` again until you have said it is done.
+
+A turn ending does not mean the action was done: your answer on the page says that. Some agent apps do not say when their turns run: where `turn` stays `null` for something `handed`, say no more than that you have it.
+
+```js
+let sent = null
+go.onclick = async () => {
+  sent = (await It.action('build')).id
+  go.textContent = 'Sent'
+}
+It.onProgress(({ actions }) => {
+  const a = actions.find((x) => x.id === sent)
+  if (a) go.textContent = a.turn === 'running' ? 'Working…' : a.turn === 'ended' ? 'Turn ended' : a.handed ? 'Your agent has it' : 'Sent'
+})
+```
+
 ## Going fullscreen
 
 It's bar has a fullscreen button above every page, so a page needs none of its own. Where one helps, as on a slideshow, call `It.fullscreen()` from a click, and `It.exitFullscreen()` to leave. It is It that goes fullscreen, with its bar still above the page, and the page has the rest of the screen. `It.isFullscreen` says whether It is fullscreen, and the page hears `fullscreenchange` whenever that changes, whether by its own button, by It's or by Escape.
