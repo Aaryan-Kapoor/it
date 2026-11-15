@@ -61,7 +61,7 @@ describe('the chessboard on the first page', () => {
     other.close()
   })
 
-  test('where no answer has come in forty seconds the person has their move back, as the dock says, and a late answer to it is not played', async () => {
+  test('where no answer has come in forty seconds the person has their move back, as the dock says, and a late answer is played where the board still fits it', async () => {
     const page = await chess()
     const slow = moved(page, 'e2', 'e4')
     await slow.accept()
@@ -72,15 +72,38 @@ describe('the chessboard on the first page', () => {
     expect([piece(page, 'e2') !== '', piece(page, 'e4'), waits(page)]).toEqual([true, '', false])
     expect(page.read('chess').stage).toBe('slow')
     expect(page.state('chess')).toBe('No answer after 40 s. Claude Code may be waiting for you in its own window. This is yours again.')
-    await reply(page, `${slow.data.request}:e7e5`, 'Late.')
-    expect([piece(page, 'e7') !== '', piece(page, 'e5')]).toEqual([true, ''])
-    expect(page.said('chess')).toBe('')
-    // And they play on, with a move of their own that waits on an answer of its own
-    const next = moved(page, 'd2', 'd4')
+    // The answer comes later, as from an agent that waited on an approval, and nothing has happened on the board since:
+    // the person's move is played again, and the agent's after it, as if it had come in time
+    await reply(page, `${slow.data.request}:e7e5`, 'Late, but here.')
+    expect([piece(page, 'e2'), piece(page, 'e4') !== '', piece(page, 'e7'), piece(page, 'e5') !== '', waits(page)]).toEqual(['', true, '', true, false])
+    expect(page.read('chess').stage).toBe('answered')
+    expect(page.$('#chess-note').textContent).toBe('Late, but here.')
+    // And they play on from there, with a move that waits on an answer of its own
+    const next = moved(page, 'g1', 'f3')
     expect(next.data.request).not.toBe(slow.data.request)
-    expect(next.data.new_game).toBe(true)
+    expect(next.data.new_game).toBeUndefined()
     await next.accept()
-    await reply(page, `${next.data.request}:d7d5`)
+    await reply(page, `${next.data.request}:b8c6`)
+    expect([piece(page, 'c6') !== '', waits(page)]).toEqual([true, false])
+    expect(page.errors).toEqual([])
+    page.close()
+  })
+
+  test('a late answer to a move taken back is not played where the person has played on since, and they are told so plainly', async () => {
+    const page = await chess()
+    const slow = moved(page, 'e2', 'e4')
+    await slow.accept()
+    await page.advance(40_500)
+    // They play another move in its place, which waits on an answer of its own
+    const other = moved(page, 'd2', 'd4')
+    await other.accept()
+    await reply(page, `${slow.data.request}:e7e5`, 'Late.')
+    expect([piece(page, 'e4'), piece(page, 'd4') !== '', piece(page, 'e7') !== '', piece(page, 'e5'), waits(page)]).toEqual(['', true, true, '', true])
+    const told = 'Claude Code’s answer to your earlier move came after you had played on, so it is not on the board.'
+    expect(page.$('#chess-note').textContent).toBe(told)
+    expect(page.said('chess')).toBe(told)
+    // The answer to the move they did play is played as ever
+    await reply(page, `${other.data.request}:d7d5`)
     expect([piece(page, 'd5') !== '', waits(page)]).toEqual([true, false])
     expect(page.errors).toEqual([])
     page.close()

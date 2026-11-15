@@ -122,6 +122,7 @@ Shell.part("chess", (my) => {
   var picked = -1, goes = {}, last = null;          // the square picked up, where it may go, and the last move
   var waiting = false, sent = false, turn = 0;      // waiting for the agent; whether it has been told; which move this is
   var pendingId = null;
+  var taken = null;                                 // the person's move taken back after forty seconds, with the request it was, until its answer comes
   var played = null;                                // the reply that was played last in this game
   var early = null;                                 // what the agent set for this move before it was known to have been told
   var log = [];                                     // the moves of this game, each as a sheet writes it, with whose it was and what it took
@@ -370,9 +371,13 @@ Shell.part("chess", (my) => {
     data.fen = C.fen(pos);
     data.legal = now.legal.map(C.uci);
     // The move is taken back where the agent was not told of it, and where it has not answered in forty seconds: the
-    // person has their move again, and an answer to the move taken back names a request that is gone, and is not played
+    // person has their move again. An answer to the move taken back that comes later is played with it where the board
+    // is still as it was left, and where the person has played on since, they are told that it came too late (`late`).
+    // Thrown away without a word, it reset the board twice in a rehearsal while the agent waited on an approval
     var undo = () => {
+      taken = { request: pendingId, move: m };
       pos = was.pos; last = was.last; now = C.state(pos); waiting = false; early = null; pendingId = null; turn++;
+      taken.turn = turn;
       log.pop();
       around();
       render();
@@ -416,6 +421,7 @@ Shell.part("chess", (my) => {
   // that it was: a connection that dropped between the two brings them back in that order. So
   // what is set meanwhile is kept for that move, and played when the move is known to have gone.
   function answer(reply, fresh) {
+    if (taken && reply.startsWith(taken.request + ":")) return late(reply);
     if (!waiting || now.over || pos.turn !== "b" || !pendingId) return;
     var prefix = pendingId + ":";
     if (!reply.startsWith(prefix)) return;
@@ -427,6 +433,32 @@ Shell.part("chess", (my) => {
     if (m) { theirs(m, reply); noted(); }
     // Not a move it may make: the agent is told so, once for what it set, and the person is shown nothing of it
     else if (fresh) my.send("illegal", { request: pendingId, move: move.slice(0, 40), good: sound(pos, now), fen: C.fen(pos), legal: now.legal.map(C.uci) }).catch(() => {});
+  }
+  // The agent's answer to a move that was taken back after forty seconds. Where nothing has happened on the board
+  // since, the person's move is played again and the agent's after it, as if it had come in time. Where the person
+  // has played on, or begun a new game, it fits no longer, and they are told so in plain words
+  function late(reply) {
+    var was = taken, move = reply.slice(was.request.length + 1).trim();
+    taken = null;
+    var fits = turn === was.turn && !waiting && !now.over && pos.turn === "w";
+    if (fits) {
+      var back = { pos: pos, last: last };
+      var draw = put(was.move, 180, false), m = C.find(now.legal, move);
+      if (m) {
+        draw();
+        theirs(m, reply);
+        noted();
+        return;
+      }
+      // Not a move it may make here: the board is left as the person has it
+      pos = back.pos; last = back.last; now = C.state(pos); turn++;
+      log.pop();
+      around();
+      render();
+    }
+    var said = $("chess-black-name").textContent + "’s answer to your earlier move came " + (fits ? "too late, and could not be played" : "after you had played on, so it is not on the board") + ".";
+    $("chess-note").textContent = said;
+    box.say(said);
   }
   var text = (v) => (v == null ? "" : String(v));
   // The agent's move is `move` beside the `request` it answers. `reply`, which is the two with a colon between them, is the chessboard page's own way of saying the same
