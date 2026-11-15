@@ -98,7 +98,11 @@ EOF
   gui open -a Terminal ~/Terminal.command
   sleep 3
   if [ "$browser" = chrome ]; then
-    gui open -a "Google Chrome" --args --no-first-run --no-default-browser-check about:blank || true
+    # Chrome's binary started inside the session (open -na waits on a first-run question), asked to
+    # become the default browser, so that a link the person opens from the Terminal goes to it;
+    # macOS asks the person to confirm that, and run.mjs answers it before the video starts
+    gui bash -c 'trap "" HUP; exec "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --no-first-run --no-default-browser-check --make-default-browser about:blank' </dev/null >/dev/null 2>&1 &
+    sleep 6
   else
     gui open -a Safari
   fi
@@ -114,6 +118,9 @@ place)
   gui /usr/local/bin/hands place Terminal 0 "$top" "$half" $((H - top)) || true
   gui /usr/local/bin/hands place "$app" "$half" "$top" "$half" $((H - top)) || true
   echo "placed in ${W}x${H}"
+  ;;
+default-browser)
+  gui osascript -l JavaScript -e 'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL($.NSURL.URLWithString("https://example.com")).path.js'
   ;;
 facts)
   echo "macos=$(sw_vers -productVersion) build=$(sw_vers -buildVersion)"
