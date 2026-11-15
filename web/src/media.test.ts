@@ -875,6 +875,94 @@ describe('the camera, live to a page', () => {
     expect(given).toEqual([1, 2, 3, 4, 5, 6, 7])
   })
 
+  test('while the screen does not show the site, its pictures are looked for at a worker’s ticks, which the browser does not hold back as it holds the site’s own timers, and the worker ends once the site is shown again or the camera closes', async () => {
+    const workers: { url: string; told: unknown[]; ended: boolean; onmessage: (() => void) | null; onerror: (() => void) | null }[] = []
+    vi.stubGlobal(
+      'Worker',
+      class {
+        url: string
+        told: unknown[] = []
+        ended = false
+        onmessage: (() => void) | null = null
+        onerror: (() => void) | null = null
+        constructor(url: string) {
+          this.url = url
+          workers.push(this)
+        }
+        postMessage(m: unknown) {
+          this.told.push(m)
+        }
+        terminate() {
+          this.ended = true
+        }
+      },
+    )
+    const { device, given } = await opened({ drawAll: true })
+    await device.picture()
+    let hidden = true
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (hidden ? 'hidden' : 'visible') })
+    document.dispatchEvent(new Event('visibilitychange'))
+    // The site's own file, told to tick twice as often as the camera gives pictures, since the browser counts them
+    expect(workers.map((w) => [w.url, w.told])).toEqual([['/picture-clock.js', [17]]])
+    await settle()
+    expect(given).toEqual([1])
+    for (let n = 0; n < 3; n++) {
+      device.frame()
+      workers[0]!.onmessage?.()
+      // A tick with no new picture sends nothing
+      workers[0]!.onmessage?.()
+      await settle()
+    }
+    expect(given).toEqual([1, 2, 3, 4])
+    // Hidden again with the worker still there, no second one is made
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(workers).toHaveLength(1)
+    hidden = false
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(workers[0]!.ended).toBe(true)
+    // A tick that was on its way as the site was shown sends nothing
+    device.frame()
+    workers[0]!.onmessage?.()
+    await settle()
+    expect(given).toEqual([1, 2, 3, 4])
+    // Hidden once more, a new worker; closed, it ends
+    hidden = true
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(workers).toHaveLength(2)
+    open!.stop()
+    expect(workers[1]!.ended).toBe(true)
+  })
+
+  test('where the worker cannot run, its pictures are looked for by the site’s own clock while the screen does not show the site', async () => {
+    const workers: { ended: boolean; onerror: (() => void) | null; onmessage: (() => void) | null }[] = []
+    vi.stubGlobal(
+      'Worker',
+      class {
+        ended = false
+        onmessage: (() => void) | null = null
+        onerror: (() => void) | null = null
+        constructor() {
+          workers.push(this)
+        }
+        postMessage() {}
+        terminate() {
+          this.ended = true
+        }
+      },
+    )
+    const { device, given } = await opened({ drawAll: true })
+    vi.useFakeTimers()
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(given).toEqual([1])
+    workers[0]!.onerror?.()
+    expect(workers[0]!.ended).toBe(true)
+    device.frame()
+    await vi.advanceTimersByTimeAsync(40)
+    expect(given).toEqual([1, 2])
+  })
+
   test('while the screen does not show the site and the browser counts no frames, its pictures are looked for as often as the camera gives them, and one is sent each time the video has moved on', async () => {
     allow('person-1', grant('page-1', ['camera']))
     const device = standInCamera(undefined, { counts: false, frameRate: 10 })
@@ -1875,6 +1963,39 @@ describe('how long the browser is given to hand over the device', () => {
 // What gathers the microphone's sound into pieces is a file of the site's own, which a browser
 // runs where it makes sound and nowhere a test can reach. It is run here as the browser runs it,
 // with a stand-in for what it is given there.
+describe('the clock the camera’s pictures are looked for by while the screen does not show the site', () => {
+  /** The file, run as a browser runs a worker: what it does with what it is told, and the ticks it sends. */
+  const clock = () => {
+    vi.useFakeTimers()
+    let heard: ((m: { data: unknown }) => void) | null = null
+    const ticks: unknown[] = []
+    const self = { addEventListener: (_type: string, fn: (m: { data: unknown }) => void) => (heard = fn) }
+    const source = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../public/picture-clock.js'), 'utf8')
+    new Function('self', 'postMessage', source)(self, (m: unknown) => ticks.push(m))
+    return { tell: (data: unknown) => heard?.({ data }), ticks }
+  }
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  test('ticks as many milliseconds apart as it is told, until it is told otherwise, and not at all when told something that is no such time', () => {
+    const { tell, ticks } = clock()
+    vi.advanceTimersByTime(1000)
+    expect(ticks).toHaveLength(0)
+    tell(25)
+    vi.advanceTimersByTime(100)
+    expect(ticks).toHaveLength(4)
+    tell(50)
+    vi.advanceTimersByTime(100)
+    expect(ticks).toHaveLength(6)
+    for (const told of [0, 2, 5000, 'soon', null]) {
+      tell(told)
+      vi.advanceTimersByTime(1000)
+      expect(ticks, String(told)).toHaveLength(6)
+    }
+  })
+})
+
 describe('what gathers the microphone’s sound into pieces', () => {
   /** The file, run as a browser runs it: what it registered, by the name it registered it under. */
   const gatherer = () => {

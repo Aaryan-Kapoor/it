@@ -468,6 +468,9 @@ export async function shoot(
 // Opened with sound, the microphone is opened with it, and its sound goes to the page as a live
 // microphone's does, under the camera's own name.
 
+/** Where the site keeps the clock the live camera's pictures are looked for by while the screen does not show the site: a file of its own, since a worker runs only one of the site's files. */
+const PICTURE_CLOCK = '/picture-clock.js'
+
 /** The camera live to a page, as It's bar shows it. */
 export interface LiveCamera {
   id: string
@@ -599,7 +602,7 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
     if (over) return false
     over = true
     clearInterval(watching)
-    clearTimeout(looking)
+    stopLooking()
     document.removeEventListener('visibilitychange', pace)
     unask()
     cameras = cameras.filter((c) => c.id !== page.id)
@@ -646,26 +649,58 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
   }
   // While the screen does not show the site the browser draws nothing, and calls neither of those
   // until it does again; the camera goes on all the same, and the video with it. So its pictures
-  // are looked for by the clock then, as often as the camera gives them, or twice as often where
-  // the browser counts its frames and a frame is taken once. Shown again, the browser's own calls
-  // go on, asked for afresh in case it let go of one while nothing was drawn.
+  // are looked for by a clock then, as often as the camera gives them, or twice as often where the
+  // browser counts its frames and a frame is taken once. The clock is a worker's, since a browser
+  // holds the site's own timers to about one a second while it is not shown, and the site's own
+  // only where no worker starts. Shown again, the browser's own calls go on, asked for afresh in
+  // case it let go of one while nothing was drawn.
+  let clock: Worker | null = null
   let looking: ReturnType<typeof setTimeout> | undefined
-  const look = () => {
-    looking = undefined
-    if (over || document.visibilityState !== 'hidden') return
+  /** How many milliseconds apart the pictures are looked for while the screen does not show the site. */
+  const lookEvery = () => {
     const counts = (view.getVideoPlaybackQuality?.().totalVideoFrames ?? 0) > 0
     const rate = Math.min(LIVE_CAMERA.perSecond, stream.getVideoTracks()[0]?.getSettings().frameRate || LIVE_CAMERA.perSecond)
-    looking = setTimeout(look, 1000 / (counts ? 2 * rate : rate))
+    return Math.round(1000 / (counts ? 2 * rate : rate))
+  }
+  const hidden = () => !over && document.visibilityState === 'hidden'
+  /** Looks by the site's own clock, where no worker's ticks. */
+  const look = () => {
+    looking = undefined
+    if (!hidden()) return
+    looking = setTimeout(look, lookEvery())
     take(false)
+  }
+  function stopLooking() {
+    clearTimeout(looking)
+    looking = undefined
+    clock?.terminate()
+    clock = null
   }
   function pace() {
     if (over) return
     if (document.visibilityState === 'hidden') {
-      if (looking === undefined) look()
+      if (clock || looking !== undefined) return
+      take(false)
+      try {
+        const ticks = new Worker(PICTURE_CLOCK)
+        clock = ticks
+        ticks.onmessage = () => {
+          if (hidden()) take(false)
+        }
+        // A worker that cannot run, as where its file is not there, gives way to the site's own clock
+        ticks.onerror = () => {
+          if (clock !== ticks) return
+          stopLooking()
+          look()
+        }
+        ticks.postMessage(lookEvery())
+      } catch {
+        stopLooking()
+        look()
+      }
       return
     }
-    clearTimeout(looking)
-    looking = undefined
+    stopLooking()
     unask()
     next()
   }
