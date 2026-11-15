@@ -1068,8 +1068,9 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         lookAtTurn(key, w)
         const harness = key.slice(0, key.indexOf(':'))
         if (w.want === 'running') {
-          for (const id of w.names) {
-            if (kept(w).told.has(id)) continue
+          for (const id of [...w.names]) {
+            // Not one that a merge meanwhile left out of the watch it was merged into, which has no room for it
+            if (kept(w).told.has(id) || !kept(w).names.has(id)) continue
             kept(w).telling.add(id)
             try {
               await call('mutation', api.turns.say, { for: { harness, id }, running: true })
