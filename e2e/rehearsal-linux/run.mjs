@@ -156,6 +156,32 @@ async function main() {
   exec(`ffmpeg -nostdin -y -loglevel error -f x11grab -framerate 12 -video_size 1920x1080 -i :1 -vf scale=1600:-2 -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p /var/lib/rehearsal-video/video.mp4 > /var/lib/rehearsal-video/ffmpeg.log 2>&1 & echo $! > /run/rehearsal-ffmpeg.pid`)
   result.videoStart = new Date().toISOString()
 
+  if (flow === 'S7') {
+    // The machine restarted as a reboot: everything stops as systemd stops it, and comes back
+    log('rebooting the machine')
+    await new Promise((r) => setTimeout(r, 20_000))
+    exec('kill -INT $(cat /run/rehearsal-ffmpeg.pid) 2>/dev/null; sleep 3')
+    sh(['cp', `${name}:/var/lib/rehearsal-video/video.mp4`, join(runHere, 'before-reboot.mp4')], { timeout: 300_000 })
+    sh(['restart', '-t', '90', name], { timeout: 240_000 })
+    for (let i = 0; i < 60; i++) {
+      const st = exec('systemctl is-system-running', { quiet: true }).stdout.trim()
+      if (st === 'running' || st === 'degraded') break
+      await new Promise((r) => setTimeout(r, 1000))
+    }
+    result.serviceAfterBootBeforeLogin = asAna('systemctl --user is-active it.service', { quiet: true }).stdout.trim()
+    exec('systemctl start rehearsal-releases 2>/dev/null || systemd-run --unit=rehearsal-releases --property=User=nobody node /build/harness/releases.mjs /build/bin 8765', { quiet: true })
+    exec('mkdir -p /var/lib/rehearsal-flow /opt/person-profile && chown ana:ana /var/lib/rehearsal-flow && touch /etc/rehearsal-cdp && install -m 755 /build/harness/browser.sh /usr/local/bin/browser')
+    // The person signs in again: their session, their terminal and their browser
+    await startAgentShell(name, app === 'claude' ? held : null, { IT_INSTALL_BASE: 'http://127.0.0.1:8765' })
+    if (app === 'claude' && held) await shareWithUserManager(name, held)
+    asAna('tmux set -g status off')
+    exec(`ffmpeg -nostdin -y -loglevel error -f x11grab -framerate 12 -video_size 1920x1080 -i :1 -vf scale=1600:-2 -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p /var/lib/rehearsal-video/video.mp4 > /var/lib/rehearsal-video/ffmpeg.log 2>&1 & echo $! > /run/rehearsal-ffmpeg.pid`)
+    sh(['exec', '-d', name, 'su', '-l', 'ana', '-c', 'DISPLAY=:1 xfce4-terminal --disable-server --hide-menubar --hide-toolbar --hide-scrollbar --title=Terminal --font="DejaVu Sans Mono 11" --geometry=104x54+0+0 -x tmux attach -t agent'])
+    await new Promise((r) => setTimeout(r, 2500))
+    sh(['exec', '-d', name, 'su', '-l', 'ana', '-c', 'DISPLAY=:1 browser'])
+    await new Promise((r) => setTimeout(r, 6000))
+    exec(`DISPLAY=:1 su ana -c "wmctrl -r Terminal -e 0,0,0,960,1080; wmctrl -r Chromium -e 0,960,0,960,1080"`, { quiet: true })
+  }
   writeFileSync(join(runHere, 't0'), `${Math.floor(Date.now() / 1000)}\n`)
   writeFileSync(join(runHere, 'ready'), name)
 
@@ -270,6 +296,12 @@ async function collect() {
   // The recording, kept only where nothing says the token was on the screen
   if (!videoWithheld) {
     sh(['cp', `${name}:/var/lib/rehearsal-video/video.mp4`, join(dir, 'video.mp4')], { timeout: 300_000 })
+    if (existsSync(join(runHere, 'before-reboot.mp4'))) {
+      writeFileSync(join(runHere, 'parts.txt'), `file '${join(runHere, 'before-reboot.mp4')}'\nfile '${join(dir, 'video.mp4')}'\n`)
+      spawnSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', join(runHere, 'parts.txt'), '-c', 'copy', join(runHere, 'joined.mp4')])
+      if (existsSync(join(runHere, 'joined.mp4'))) spawnSync('mv', ['-f', join(runHere, 'joined.mp4'), join(dir, 'video.mp4')])
+      result.video = 'two parts joined: before the reboot, and from the person signing in again'
+    }
   } else result.video = 'withheld: the token was seen in the machine, so it may be in the recording'
   collected = left.length === 0
 }
