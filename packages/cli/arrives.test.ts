@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
+import { CODEX_TRUST, CODEX_IN_T3 as SITE_IN_T3 } from '../../web/src/readiness'
 import {
   afterSetupForAgent,
   arrives,
@@ -26,6 +27,7 @@ import {
   tooOldToReload,
 } from './src/arrives'
 import type { Route } from './src/connector'
+import { CODEX_APPROVE, CODEX_IN_T3 } from './src/setup'
 
 const claude = { harness: 'claude-code', id: '11111111-2222-4333-8444-555555555555' }
 /** It's program as a command names it here: `it`, and on Windows its whole path or `it.exe` (`itForAgent`). */
@@ -303,6 +305,14 @@ describe('what setup says of the conversation it ran in, where it has just conne
     }
     expect(CODEX_RESTART.length).toBeLessThan(260)
     expect(reloadLine('2.1.321')).toContain('reaches me')
+  })
+})
+
+describe('what the site says of Codex’s hooks, beside what setup says of them', () => {
+  test('it says what to do in Codex as setup does, and knows T3 Code to be on the machine by the words setup adds there', () => {
+    expect(CODEX_APPROVE).toContain('choose "Trust all and continue"')
+    expect(CODEX_TRUST).toContain('choose “Trust all and continue” when it asks to review hooks')
+    expect(CODEX_IN_T3.startsWith(SITE_IN_T3)).toBe(true)
   })
 })
 

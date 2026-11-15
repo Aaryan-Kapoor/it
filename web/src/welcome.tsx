@@ -8,7 +8,7 @@ import { Copyable, Dialog } from './dialog'
 import type { Playing } from './film/play'
 import { agentName, api, navigate, refusal, useNow } from './lib'
 import { say as toast } from './notifications'
-import { CODEX_TRUST } from './readiness'
+import { CODEX_IN_T3, CODEX_TRUST } from './readiness'
 
 /** What the person gives their agent to be led through It. */
 export const TOUR_PROMPT = 'Give me the It tour.'
@@ -237,10 +237,10 @@ export function TourDialog({ onClose }: { onClose: () => void }) {
  * them on machines currently available, and those that were found there and could be connected. Unknown
  * until the backend has said.
  */
-function useApps(owner: boolean): { connected: string[]; ready: string[]; approval: string[]; more: string[] } | undefined {
+function useApps(owner: boolean): { connected: string[]; ready: string[]; approval: string[]; more: string[]; t3?: boolean } | undefined {
   const machines = useQuery(api.machines.list, owner ? {} : 'skip') as
     | {
-        harnesses: { id: string; addon: string }[]
+        harnesses: { id: string; addon: string; detail?: string }[]
         wanted?: string[]
         lastSeenAt: number
         connectorVersion: string | null
@@ -268,7 +268,9 @@ function useApps(owner: boolean): { connected: string[]; ready: string[]; approv
   )
   // Found and not connected, and nothing stands in the way of connecting it: not one that is too old, or that It cannot connect yet
   const off = all.filter((h) => !on.includes(h.id) && h.addon !== 'unavailable' && h.addon !== 'too_old').map((h) => h.id)
-  return { connected: named(on), ready: named(ready), approval: named(approval), more: named(off) }
+  // Codex waiting on a machine where T3 Code is too, which its words from setup say
+  const t3 = there.some((m) => m.harnesses.some((h) => h.id === 'codex' && h.addon === 'needs_approval' && h.detail?.includes(CODEX_IN_T3)))
+  return { connected: named(on), ready: named(ready), approval: named(approval), more: named(off), t3 }
 }
 
 /** A list of names as a person says it: "Claude Code", "Claude Code and Codex", "Claude Code, Codex and Pi". */
@@ -432,6 +434,7 @@ export function Welcome({ owner, tour }: { owner: boolean; tour: ReturnType<type
           <p className="hello-hint">
             {`${listed(apps.approval)} needs add-on approval. ${apps.approval.includes('Codex') ? CODEX_TRUST : 'Open the app to review it'}.`}
             {apps.approval.includes('Codex') && ' Codex can still receive queued clicks in an open conversation.'}
+            {apps.approval.includes('Codex') && apps.t3 && ` ${CODEX_IN_T3}.`}
           </p>
         )}
         <div className="hello-say">
