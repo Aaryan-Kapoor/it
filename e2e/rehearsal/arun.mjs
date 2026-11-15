@@ -14,9 +14,10 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { copyFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
+import os from 'node:os'
 import path from 'node:path'
 import { claudeAccess, codexAuth, forget, scrub, shredAll, shredLedger, shredOnExit } from './credentials.mjs'
-import { killTree, leftIn, ownerFingerprint, profileEnv, recorder, runFolders, sleep, stamp, WORK } from './lib.mjs'
+import { killTree, leftIn, ownerFingerprint, ownerSkillsOff, profileEnv, recorder, runFolders, sleep, stamp, WORK } from './lib.mjs'
 import { install, it, personBrowser, SCREEN, setup, terminalView, terminalWindow } from './stage.mjs'
 
 const arg = (n, d) => {
@@ -82,7 +83,7 @@ if (app === 'codex') {
   // Under the owner's account Codex's own Windows sandbox stays off (it changes folder permissions)
   writeFileSync(
     path.join(f.codexHome, 'config.toml'),
-    `model = "${MODEL.model}"\nmodel_reasoning_effort = "${MODEL.effort}"\nsandbox_mode = "danger-full-access"\ncli_auth_credentials_store = "file"\n`,
+    `model = "${MODEL.model}"\nmodel_reasoning_effort = "${MODEL.effort}"\nsandbox_mode = "danger-full-access"\ncli_auth_credentials_store = "file"\n${ownerSkillsOff()}`,
   )
   const auth = codexAuth(f.codexHome)
   tokenExpiry = new Date(auth.expiresAt).toISOString()
@@ -296,6 +297,9 @@ async function faultEvent(what) {
   if (what === 'it-start') {
     const st = (await it(program, ['status', '--json'], { env, cwd: f.work, ms: 60_000 })).json
     if (st?.running) return 'It was already running again (started by the person or the agent); nothing done'
+    // Nor while a start of the person's or the agent's is still under way
+    const already = leftIn(f.itHome) ?? []
+    if (already.length) return `It is being started already (${already.map((p) => p.name).join(', ')}); nothing done`
     startServe()
     let status = null
     for (let i = 0; i < 40 && !status?.running; i++) {
@@ -426,7 +430,18 @@ const keepFrom = (dir) => {
     const file = path.join(dir, String(entry))
     if (!/\.jsonl$/.test(file) || !statSync(file).isFile()) continue
     mkdirSync(transcripts, { recursive: true })
-    writeFileSync(path.join(transcripts, path.basename(file)), scrub(readFileSync(file, 'utf8')).text)
+    // A line naming the owner's profile, or holding a skill file, is left out: Codex reads skills
+    // from the owner's own home folder whatever the throwaway profile says
+    const owner = os.userInfo().homedir.toLowerCase()
+    const owners = [owner, owner.replaceAll('\\', '/'), owner.replaceAll('\\', '\\\\')]
+    const kept1 = scrub(readFileSync(file, 'utf8'))
+      .text.split('\n')
+      .map((l) => {
+        const low = l.toLowerCase()
+        const drop = owners.some((o) => low.includes(o)) || (l.includes('name: ') && l.includes('description: ') && l.includes('---'))
+        return drop ? JSON.stringify({ redacted: "a line naming the owner's profile, or holding a skill file, was left out by the harness" }) : l
+      })
+    writeFileSync(path.join(transcripts, path.basename(file)), kept1.join('\n'))
     n++
   }
   return n

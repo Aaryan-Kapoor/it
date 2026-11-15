@@ -3,7 +3,7 @@
 // writes down, and the run's result.
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -80,6 +80,32 @@ export function profileEnv(f, { port, appBin, guard = true, extra = {} }) {
   }
   mkdirSync(env.CODEX_HOME, { recursive: true })
   return env
+}
+
+/**
+ * Codex on Windows finds the home folder through Windows itself, not USERPROFILE, so a throwaway
+ * Codex still sees the skills in the owner's own `~\.agents\skills`, which a participant does not
+ * have. Each is turned off in the throwaway Codex's config by its path: only the folder's names
+ * are read, never a skill's contents.
+ */
+export function ownerSkillsOff() {
+  const dir = path.join(os.userInfo().homedir, '.agents', 'skills')
+  let names = []
+  try {
+    names = readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() || d.isSymbolicLink())
+      .map((d) => d.name)
+  } catch {}
+  // A skill folder may be a link (a junction) to another place, and Codex knows it by that place:
+  // both are turned off
+  const paths = new Set()
+  for (const n of names) {
+    paths.add(path.join(dir, n, 'SKILL.md'))
+    try {
+      paths.add(path.join(realpathSync(path.join(dir, n)), 'SKILL.md'))
+    } catch {}
+  }
+  return [...paths].map((p) => `\n[[skills.config]]\npath = ${JSON.stringify(p)}\nenabled = false\n`).join('')
 }
 
 /** Runs a program to its end within `ms`, and resolves with its exit code and what it printed. */
