@@ -128,7 +128,6 @@ async function main() {
   if (app === 'codex') result.codexAppsOff = 'features.apps = false in ~/.codex/config.toml, so that the ChatGPT apps on the owner\'s account are not offered to the model'
   result.modelSetting = { ...MODEL[app], where: app === 'codex' ? '~/.codex/config.toml' : '~/.claude/settings.json, and CLAUDE_CODE_EFFORT_LEVEL in ~/.bashrc and the user manager' }
   asAna('mkdir -p ~/work')
-  if (has('prepare')) exec(arg('prepare'))
 
   // ---- the sign-in, and the terminal ----
   {
@@ -146,6 +145,8 @@ async function main() {
     await shareWithUserManager(name, held)
     if (!from.endsWith(':base')) asAna('systemctl --user restart it.service', { quiet: true, timeout: 180_000 })
   }
+  // The state the scenario wants the machine in, after anything above that starts It again
+  if (has('prepare')) result.prepared = exec(arg('prepare')).status
   asAna('tmux set -g status off; tmux set -g history-limit 50000')
   // What the terminal shows, kept every few seconds where it changed: an app that clears the
   // screen as it leaves takes its scrollback with it
@@ -181,7 +182,10 @@ async function main() {
     exec('mkdir -p /var/lib/rehearsal-flow /opt/person-profile && chown ana:ana /var/lib/rehearsal-flow && touch /etc/rehearsal-cdp && install -m 755 /build/harness/browser.sh /usr/local/bin/browser')
     // The person signs in again: their session, their terminal and their browser
     await startAgentShell(name, app === 'claude' ? held : null, { IT_INSTALL_BASE: 'http://127.0.0.1:8765' })
-    if (app === 'claude' && held) await shareWithUserManager(name, held)
+    if (app === 'claude' && held) {
+      await shareWithUserManager(name, held)
+      asAna('systemctl --user restart it.service', { quiet: true, timeout: 180_000 })
+    }
     asAna('tmux set -g status off')
     exec(`nohup su ana -c 'p=""; while sleep 4; do c=$(tmux capture-pane -p -J -t agent 2>/dev/null) || continue; [ "$c" = "$p" ] && continue; printf "=== %s\\n%s\\n" "$(date -u +%T)" "$c" >> ${FLOW}/screens.txt; p="$c"; done' >/dev/null 2>&1 &`)
     exec(`ffmpeg -nostdin -y -loglevel error -f x11grab -framerate 12 -video_size 1920x1080 -i :1 -vf scale=1600:-2 -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p /var/lib/rehearsal-video/video.mp4 > /var/lib/rehearsal-video/ffmpeg.log 2>&1 & echo $! > /run/rehearsal-ffmpeg.pid`)
