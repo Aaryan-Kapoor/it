@@ -5,11 +5,13 @@
 //   piped into the container's `ana` as ~/.codex/auth.json, mode 600. Never a file on the host.
 // - Claude Code: the access token and its expiry, read in memory from ~/.claude/.credentials.json,
 //   handed to the tmux server that runs the agent's terminal through CLAUDE_CODE_OAUTH_TOKEN,
-//   by way of the standard input of `docker exec`, so that it is on no command line. No file.
+//   by way of the standard input of `docker exec`, so that it is on no command line. No file,
+//   unless a run asks for one (`--claude-file`): then also ~/.claude/.credentials.json, built in
+//   memory with the refresh token blank, mode 600, as Codex's is.
 //
 // No refresh token is copied anywhere. Nothing here prints, logs or returns a token to a caller
 // outside this module except as the opaque object `held`, which a caller hands back to `wipe`,
-// `inject*` and `redact`. `wipe` overwrites and deletes the token's file in the container and ends
+// `inject*` and `redact`. `wipe` overwrites and deletes the token's files in the container and ends
 // what holds the variable, and is called when a run ends, also when it fails.
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -109,7 +111,18 @@ export function take(app, minutes) {
     if (!Number.isFinite(expiresAt)) throw new Error('The expiry of the Claude Code access token could not be read.')
     if (expiresAt - now < minutes * 60_000) throw new Error(`The Claude Code access token lives ${Math.floor((expiresAt - now) / 60_000)} more minutes, fewer than ${minutes}.`)
     if (/[\r\n\0]/.test(oauth.accessToken)) throw new Error('The Claude Code access token is not one line.')
-    return { held: { app, token: oauth.accessToken, values: [oauth.accessToken] }, expiresAt, minutesLeft: Math.floor((expiresAt - now) / 60_000) }
+    // The copy for Claude Code's own credential file, used only where a run asks for it
+    // (`injectClaudeFile`): the access token, its expiry and its scopes, with the refresh token blank
+    const file = {
+      claudeAiOauth: {
+        accessToken: oauth.accessToken,
+        refreshToken: '',
+        expiresAt,
+        scopes: Array.isArray(oauth.scopes) ? oauth.scopes.filter((s) => typeof s === 'string') : [],
+        subscriptionType: typeof oauth.subscriptionType === 'string' ? oauth.subscriptionType : null,
+      },
+    }
+    return { held: { app, token: oauth.accessToken, json: `${JSON.stringify(file, null, 2)}\n`, values: [oauth.accessToken] }, expiresAt, minutesLeft: Math.floor((expiresAt - now) / 60_000) }
   }
   throw new Error(`No token is taken for ${app}.`)
 }
@@ -119,9 +132,23 @@ const CONTAINER = /^it-rehearsal-[a-z0-9-]+$/
 /** Writes the Codex copy into the container as ana's ~/.codex/auth.json, readable by her alone. */
 export async function injectCodex(container, held) {
   if (!CONTAINER.test(container) || held?.app !== 'codex') throw new Error('injectCodex: not a rehearsal container or not a Codex token.')
-  const script = 'set -e; umask 077; mkdir -p "$HOME/.codex"; chmod 700 "$HOME/.codex"; cat > "$HOME/.codex/auth.json.new"; mv -f "$HOME/.codex/auth.json.new" "$HOME/.codex/auth.json"'
+  // A fresh file of its own, made by mktemp (exclusive, mode 600), so that nothing already there
+  // under a fixed name (a symlink, a looser mode) decides where or how the token is written
+  const script = 'set -e; umask 077; mkdir -p "$HOME/.codex"; chmod 700 "$HOME/.codex"; t=$(mktemp "$HOME/.codex/auth.json.XXXXXX"); cat > "$t"; mv -f "$t" "$HOME/.codex/auth.json"'
   const code = await docker(['exec', '-i', '-u', 'ana', '-e', 'HOME=/home/ana', container, 'sh', '-c', script], held.json)
   if (code !== 0) throw new Error(`The Codex sign-in could not be written into the container (exit ${code}).`)
+}
+
+/**
+ * Writes the Claude Code copy into the container as ana's ~/.claude/.credentials.json, readable by
+ * her alone, as a laptop keeps it: so that a conversation It reopens by itself, which It starts
+ * without the CLAUDE_* variables of the terminal, is signed in too. Only for runs that ask for it.
+ */
+export async function injectClaudeFile(container, held) {
+  if (!CONTAINER.test(container) || held?.app !== 'claude' || !held.json) throw new Error('injectClaudeFile: not a rehearsal container or not a Claude token.')
+  const script = 'set -e; umask 077; mkdir -p "$HOME/.claude"; chmod 700 "$HOME/.claude"; t=$(mktemp "$HOME/.claude/.credentials.json.XXXXXX"); cat > "$t"; mv -f "$t" "$HOME/.claude/.credentials.json"'
+  const code = await docker(['exec', '-i', '-u', 'ana', '-e', 'HOME=/home/ana', container, 'sh', '-c', script], held.json)
+  if (code !== 0) throw new Error(`The Claude Code sign-in could not be written into the container (exit ${code}).`)
 }
 
 /**
@@ -165,7 +192,7 @@ export async function shareWithUserManager(container, held) {
  * Lists the files under the container's folders `dirs` that hold any of the token's values, by
  * name only. The values go in on standard input, and grep is told to print names and no line.
  */
-export async function filesHolding(container, held, dirs = ['/home', '/root', '/tmp', '/var', '/run', '/etc', '/opt/person-profile', '/var/lib/rehearsal-flow']) {
+export async function filesHolding(container, held, dirs = ['/home', '/root', '/tmp', '/dev/shm', '/var', '/run', '/etc', '/opt/person-profile', '/var/lib/rehearsal-flow']) {
   if (!CONTAINER.test(container) || !held?.values?.length) return []
   // grep says 0 where it found something and 1 where it found nothing; anything else, or no
   // closing word, means the look did not finish, which is never taken for "nothing there"
@@ -184,8 +211,8 @@ export async function filesHolding(container, held, dirs = ['/home', '/root', '/
 export async function wipe(container, held) {
   if (!CONTAINER.test(container)) return []
   const script = [
-    'f=/home/ana/.codex/auth.json; if [ -e "$f" ]; then shred -fzu -n 2 "$f" 2>/dev/null || rm -f "$f"; fi',
-    'f=/home/ana/.codex/auth.json.new; if [ -e "$f" ]; then shred -fzu -n 2 "$f" 2>/dev/null || rm -f "$f"; fi',
+    // The files and any half-written copy beside them (a symlink is unlinked, never followed)
+    'for f in /home/ana/.codex/auth.json /home/ana/.codex/auth.json.* /home/ana/.claude/.credentials.json /home/ana/.claude/.credentials.json.*; do if [ -L "$f" ]; then rm -f "$f"; elif [ -e "$f" ]; then shred -fzu -n 2 "$f" 2>/dev/null || rm -f "$f"; fi; done',
     "su -l ana -c 'tmux kill-server' >/dev/null 2>&1 || true",
     // Every agent app the person started, and any it started, goes with the variable it holds
     'pkill -TERM -u ana -f "(^|/)(claude|codex)( |$)" >/dev/null 2>&1 || true',

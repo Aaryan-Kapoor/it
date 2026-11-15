@@ -11,7 +11,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, statfsSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { filesHolding, holdsToken, injectCodex, redact, shareWithUserManager, startAgentShell, take, wipe } from './secrets.mjs'
+import { filesHolding, holdsToken, injectClaudeFile, injectCodex, redact, shareWithUserManager, startAgentShell, take, wipe } from './secrets.mjs'
 import { writeReport } from './report.mjs'
 
 const arg = (name, fallback) => {
@@ -154,6 +154,12 @@ async function main() {
   // the video starts
   if (app === 'claude' && held) {
     await shareWithUserManager(name, held)
+    // It starts a reopened conversation without the terminal's CLAUDE_* variables, so a run that
+    // needs Auto-wake gives Claude Code its sign-in as a laptop keeps it, in its own file
+    if (has('claude-file')) {
+      await injectClaudeFile(name, held)
+      result.claudeFile = '~/.claude/.credentials.json, the access token alone (refresh token blank), mode 600, shredded at the end'
+    }
     if (!from.endsWith(':base')) asAna('systemctl --user restart it.service', { quiet: true, timeout: 180_000 })
   }
   // The state the scenario wants the machine in, after anything above that starts It again
@@ -255,7 +261,7 @@ async function collect() {
   // Where the token is in the machine before it is wiped. Codex's own auth.json is expected; a
   // copy anywhere else (the agent's transcript, a page, a log) means the agent saw it, and what it
   // saw may be in the recording, so the recording is not kept.
-  const expected = app === 'codex' || has('also-codex') ? ['/home/ana/.codex/auth.json'] : []
+  const expected = [...(app === 'codex' || has('also-codex') ? ['/home/ana/.codex/auth.json'] : []), ...(app === 'claude' && has('claude-file') ? ['/home/ana/.claude/.credentials.json'] : [])]
   const before = held ? await filesHolding(name, held) : []
   result.tokenFilesBeforeWipe = redact(before.join(', '), held)
   const elsewhere = before.filter((f) => !expected.includes(f))
