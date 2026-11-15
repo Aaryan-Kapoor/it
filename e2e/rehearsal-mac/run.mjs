@@ -15,11 +15,11 @@
 // Results go to ~/it-rehearsal/2026-11-15-mac/<run id>/, the ledger to ledger.md there. What a run
 // is working on (the person's screenshots, its clock) is in $IT_REHEARSAL_LIVE.
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { NSC, HAIKU, filesHolding, holdsSecret, inject, onMac, redact, take, wipe } from './secrets.mjs'
+import { NSC, HAIKU, SAFE_ENV, filesHolding, fingerprint, holdsSecret, inject, onMac, redact, take, wipe } from './secrets.mjs'
 import { writeReport } from './report.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -67,7 +67,7 @@ function writeLedger(rows) {
 }
 
 function nsc(args, { timeout = 600_000 } = {}) {
-  return spawnSync(NSC, args, { encoding: 'utf8', timeout, maxBuffer: 64 * 1024 * 1024 })
+  return spawnSync(NSC, args, { encoding: 'utf8', timeout, maxBuffer: 64 * 1024 * 1024, env: SAFE_ENV })
 }
 
 async function create() {
@@ -98,7 +98,9 @@ async function create() {
 async function destroy(id) {
   await wipeAll(id)
   const r = nsc(['destroy', id, '--force'], { timeout: 180_000 })
-  log(`destroy ${id}: exit ${r.status} ${(r.stderr || r.stdout || '').trim().slice(0, 200)}`)
+  log(`destroy ${id}: exit ${r.status} ${redact((r.stderr || r.stdout || '').trim().slice(0, 200))}`)
+  const listed = nsc(['list', '-o', 'json']).stdout ?? ''
+  if (r.status !== 0 && listed.includes(id)) throw new Error(`${id} was not destroyed and is still listed; its ledger line stays open.`)
   const rows = ledger()
   const m = rows.find((x) => x.id === id && !x.destroyed)
   if (m) m.destroyed = new Date().toISOString()
@@ -116,7 +118,9 @@ async function wipeAll(id) {
       log(`wipe: the ${app} values could not be read (${err.message}); the files are wiped all the same`)
     }
     const left = await wipe(id, held)
-    log(`wipe ${app}: ${left.length ? `${left.length} file(s) still hold a value: ${redact(left.join(', '), held)}` : 'nothing left'}`)
+    const fp = join(LIVE, `mac-${id}-${app}.fp`)
+    if (held && existsSync(fp) && readFileSync(fp, 'utf8').trim() !== fingerprint(held)) left.push('(the values read now are not the ones written to this Mac, so copies of those were not looked for)')
+    log(`wipe ${app}: ${left.length ? `not clean: ${redact(left.join(', '), held)}` : 'nothing left'}`)
     held = null
   }
 }
@@ -131,8 +135,8 @@ function upload(id) {
   mkdirSync(join(stage, 'bin'), { recursive: true })
   for (const f of files) copyFileSync(join(BIN, f), join(stage, 'bin', f))
   for (const f of ['hands.swift', 'prepare.sh', 'releases.mjs']) copyFileSync(join(HERE, f), join(stage, f))
-  const tar = spawn('tar', ['-czf', '-', '-C', stage, '.'], { stdio: ['ignore', 'pipe', 'inherit'] })
-  const ssh = spawn(NSC, ['ssh', '-T', id, 'rm -rf ~/rehearsal-upload && mkdir -p ~/rehearsal-upload && tar -xzf - -C ~/rehearsal-upload && ls ~/rehearsal-upload ~/rehearsal-upload/bin'], { stdio: ['pipe', 'inherit', 'inherit'] })
+  const tar = spawn('tar', ['-czf', '-', '-C', stage, '.'], { stdio: ['ignore', 'pipe', 'inherit'], env: SAFE_ENV })
+  const ssh = spawn(NSC, ['ssh', '-T', id, 'rm -rf ~/rehearsal-upload && mkdir -p ~/rehearsal-upload && tar -xzf - -C ~/rehearsal-upload && ls ~/rehearsal-upload/bin | wc -l'], { stdio: ['pipe', 'inherit', 'ignore'], env: SAFE_ENV })
   tar.stdout.pipe(ssh.stdin)
   return new Promise((resolve, reject) => ssh.on('close', (c) => (c === 0 ? resolve() : reject(new Error(`upload exited ${c}`)))))
 }
@@ -140,18 +144,41 @@ function upload(id) {
 async function step(id, what, timeout = 600_000) {
   const t = Date.now()
   const { code, out } = await onMac(id, `bash ~/rehearsal-upload/prepare.sh ${what}`, { timeout })
-  log(`prepare ${what}: exit ${code} in ${Math.round((Date.now() - t) / 1000)} s\n${out.trim()}`)
+  log(`prepare ${what}: exit ${code} in ${Math.round((Date.now() - t) / 1000)} s\n${redact(out.trim())}`)
   if (code !== 0) throw new Error(`prepare ${what} failed`)
   return out
 }
 
+/** When the Mac ends itself, from its ledger line, less three minutes: when the watch on it wipes. */
+function wipeAt(id) {
+  const m = ledger().find((x) => x.id === id && !x.destroyed)
+  const end = m ? Date.parse(m.made) + (m.duration ?? 75) * 60_000 : Date.now() + 70 * 60_000
+  return Math.floor(end / 1000) - 180
+}
+
 async function signIn(id, app) {
   const { held, minutesLeft } = take(app, 50)
-  await inject(id, held)
+  writeFileSync(join(LIVE, `mac-${id}-${app}.fp`), `${fingerprint(held)}\n`, { mode: 0o600 })
+  try {
+    await inject(id, held, wipeAt(id))
+  } catch (err) {
+    await wipe(id, held)
+    throw err
+  }
   log(`signed in ${app} on ${id}${minutesLeft ? ` (the copy lives ${minutesLeft} more minutes)` : ''}`)
 }
 
 async function prepare(id) {
+  try {
+    await prepareSteps(id)
+  } catch (err) {
+    log(`prepare failed (${redact(err.message)}): wiping the credentials off ${id}`)
+    await wipeAll(id)
+    throw err
+  }
+}
+
+async function prepareSteps(id) {
   const app = arg('app', 'codex')
   const browser = arg('browser', 'safari')
   const t = Date.now()
@@ -238,6 +265,9 @@ async function finish(live) {
   } catch (err) {
     log(`the ${app} values could not be read for the scan (${err.message})`)
   }
+  const fp = join(LIVE, `mac-${id}-${app}.fp`)
+  const sameValues = held && existsSync(fp) && readFileSync(fp, 'utf8').trim() === fingerprint(held)
+  if (!sameValues) result.credentialCheck = 'the values read now are not the ones written to the Mac, so the scan could not look for those: the video is withheld'
   // Where the credential is on the Mac before it is wiped. The file it was written to is expected;
   // a copy anywhere else (a transcript, a page, a log) means the agent saw it, and what it saw may
   // be in the recording, so the recording is not kept.
@@ -245,25 +275,40 @@ async function finish(live) {
   const before = held ? await filesHolding(id, held) : ['(the values could not be read)']
   const elsewhere = before.filter((f) => !expected.includes(f))
   result.credentialFilesBeforeWipe = elsewhere.length ? `${elsewhere.length} beyond the one written: ${redact(elsewhere.join(', '), held)}` : 'only the one written'
-  const text = async (cmd) => (await onMac(id, cmd, { timeout: 120_000 })).out
-  const tmuxText = await text(`/opt/homebrew/bin/tmux capture-pane -p -J -S - -t agent 2>/dev/null`)
-  const screens = await text(`cat ${SHARED}/screens.txt 2>/dev/null`)
-  let withhold = elsewhere.length > 0 || !held
-  if (holdsSecret(tmuxText, held) || holdsSecret(screens, held)) withhold = true
-  const itLogs = await text('for f in ~/.it/logs/*; do [ -f "$f" ] && { echo "=== $(basename "$f")"; tail -n 400 "$f"; }; done 2>/dev/null')
-  const status = await text('~/.it/bin/it status 2>&1 | head -100')
-  const standIn = await text(`tail -n 200 ${SHARED}/releases.log 2>/dev/null`)
-  const service = await text('ls ~/Library/LaunchAgents 2>/dev/null; launchctl print gui/501 2>/dev/null | grep -i " it" | head -20')
-  const ffmpegLog = await text(`cat ${SHARED}/ffmpeg.log 2>/dev/null | tail -20`)
+  const unread = []
+  const text = async (cmd, name) => {
+    const r = await onMac(id, cmd, { timeout: 120_000 })
+    if (r.code !== 0) unread.push(name)
+    return r.out
+  }
+  const tmuxText = await text(`/opt/homebrew/bin/tmux capture-pane -p -J -S - -t agent`, 'terminal')
+  const screens = await text(`cat ${SHARED}/screens.txt`, 'terminal-screens')
+  let withhold = elsewhere.length > 0 || !sameValues || unread.length > 0
+  const itLogs = await text('for f in ~/.it/logs/*; do [ -f "$f" ] && { echo "=== $(basename "$f")"; tail -n 400 "$f"; }; done 2>/dev/null; true', 'it-logs')
+  const status = await text('~/.it/bin/it status 2>&1 | head -100; true', 'it-status')
+  const standIn = await text(`tail -n 200 ${SHARED}/releases.log 2>/dev/null; true`, 'stand-in')
+  const service = await text('ls ~/Library/LaunchAgents 2>/dev/null; launchctl print gui/501 2>/dev/null | grep -i " it" | head -20; true', 'service')
+  const ffmpegLog = await text(`tail -20 ${SHARED}/ffmpeg.log 2>/dev/null; true`, 'ffmpeg')
+  // The person's own notes are cleaned where they lie, too
+  for (const f of ['person-log.txt', 'person-account.txt']) {
+    const p = join(live, f)
+    if (existsSync(p) && holdsSecret(readFileSync(p, 'utf8'), held)) writeFileSync(p, redact(readFileSync(p, 'utf8'), held))
+  }
   // Every trace of the credential off the Mac, before anything is kept
   const left = await wipe(id, held)
   result.credentialFilesLeftAfterWipe = left.length
-  if (left.length) log(`after the wipe ${left.length} file(s) still hold a value`)
+  if (left.length) log(`after the wipe the Mac is not clean: ${redact(left.join(', '), held)}`)
+  // A file in which a value or its shape is seen is not kept at all, and the video is withheld
   const keep = (file, body) => {
-    const clean = redact(body ?? '', held)
-    if (clean !== (body ?? '')) result.redacted = [...(result.redacted ?? []), file]
-    writeFileSync(join(dir, file), clean, { mode: 0o600 })
-    return clean
+    const raw = body ?? ''
+    if (holdsSecret(raw, held)) {
+      withhold = true
+      result.notKept = [...(result.notKept ?? []), file]
+      writeFileSync(join(dir, file), '(not kept: something shaped like a credential was in it)\n', { mode: 0o600 })
+      return ''
+    }
+    writeFileSync(join(dir, file), raw, { mode: 0o600 })
+    return raw
   }
   keep('terminal.txt', tmuxText)
   keep('terminal-screens.txt', screens)
@@ -275,11 +320,13 @@ async function finish(live) {
   for (const f of ['person-log.txt', 'person-account.txt', 'actions.jsonl']) {
     if (existsSync(join(live, f))) keep(f, readFileSync(join(live, f), 'utf8'))
   }
+  if (unread.length) result.unread = unread
+  if (withhold) rmSync(join(live, 'shots'), { recursive: true, force: true })
   if (!withhold) {
     const { out } = await onMac(id, `cat ${SHARED}/video.mp4`, { binary: true, timeout: 900_000 })
     writeFileSync(join(dir, 'video.mp4'), out)
     result.videoBytes = out.length
-  } else result.video = 'withheld: a credential was seen on the Mac outside its own file, or could not be looked for, so it may be in the recording'
+  } else result.video = 'withheld: a credential was seen on the Mac outside its own file or in what was collected, or could not be looked for, so it may be in the recording; the screenshots were deleted too'
   result.end = new Date().toISOString()
   result.macMinutes = Math.ceil((Date.parse(result.end) - Date.parse(result.start)) / 60_000)
   held = null
@@ -290,6 +337,17 @@ async function finish(live) {
 }
 
 const [cmd, target] = argv
+// Stopped while a Mac holds a credential: wipe it before going
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, async () => {
+    const id = cmd === 'finish' && target && existsSync(join(target, 'ready')) ? readFileSync(join(target, 'ready'), 'utf8').trim() : target
+    if (['prepare', 'sign-in', 'start', 'finish'].includes(cmd) && id) {
+      log(`stopped by ${sig}: wiping the credentials off ${id}`)
+      await wipeAll(id).catch(() => {})
+    }
+    process.exit(130)
+  })
+}
 try {
   if (cmd === 'create') await create()
   else if (cmd === 'prepare') await prepare(target)

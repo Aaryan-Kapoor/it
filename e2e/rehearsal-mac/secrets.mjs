@@ -16,6 +16,7 @@
 // and overwrites and deletes any other file that took a copy; it is called when a run ends, also
 // when it fails, and again before the Mac is destroyed.
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -25,6 +26,8 @@ export const NSC = '/tmp/claude-1000/-home-cbak-programming-it/51f6f360-74f1-48c
 const ENV_FILE = '/home/cbak/programming/it/.env'
 export const HAIKU = 'anthropic/claude-haiku-5.5'
 const INSTANCE = /^[a-z0-9]{6,40}$/
+/** The environment every program this harness starts is given: enough to run, and no credential. */
+export const SAFE_ENV = Object.fromEntries(['HOME', 'PATH', 'USER', 'LOGNAME', 'LANG', 'TERM', 'TMPDIR', 'XDG_RUNTIME_DIR'].filter((k) => process.env[k]).map((k) => [k, process.env[k]]))
 
 /**
  * Runs `command` on the Mac `id` as its user, with `input` on its standard input, and resolves
@@ -35,7 +38,7 @@ export function onMac(id, command, { input = '', timeout = 300_000, binary = fal
   if (!INSTANCE.test(id)) return Promise.resolve({ code: -1, out: binary ? Buffer.alloc(0) : '' })
   return new Promise((resolve) => {
     const chunks = []
-    const child = spawn(NSC, ['ssh', '-T', id, command], { stdio: ['pipe', 'pipe', 'ignore'] })
+    const child = spawn(NSC, ['ssh', '-T', id, command], { stdio: ['pipe', 'pipe', 'ignore'], env: SAFE_ENV })
     const timer = setTimeout(() => child.kill('SIGTERM'), timeout)
     child.stdout.on('data', (d) => chunks.push(d))
     child.on('error', () => {
@@ -146,17 +149,53 @@ export function take(app, minutes) {
   throw new Error(`Nothing is taken for ${app}.`)
 }
 
-/** Writes the held file into the Mac user's home, readable by that user alone. */
-export async function inject(id, held) {
+/** SHA-256 of each held value, which says whether two reads were of the same values and nothing more. */
+export function fingerprint(held) {
+  return (held?.values ?? []).map((v) => createHash('sha256').update(v).digest('hex')).sort().join(',')
+}
+
+// Overwrites a file with zeros in fixed blocks, every step checked, then deletes it, and says
+// FAILED <path> where it could not. A symlink is removed and never followed: a target that holds a
+// value is found by the look and overwritten on its own. macOS has no shred, and on APFS an
+// overwrite cannot reach earlier copy-on-write blocks or snapshots; the rented Mac is destroyed
+// after each run, which is what ends those.
+const OVERWRITE = [
+  'ow() {',
+  '[ -L "$1" ] && { rm -f "$1" || echo "FAILED $1"; return 0; };',
+  '[ -f "$1" ] || return 0;',
+  'n=$(stat -f%z "$1") || { echo "FAILED $1"; return 0; };',
+  'if [ "$n" -gt 0 ]; then dd if=/dev/zero of="$1" bs=65536 count=$(( (n + 65535) / 65536 )) conv=notrunc 2>/dev/null || { echo "FAILED $1"; return 0; }; sync; fi;',
+  'rm -f "$1" || echo "FAILED $1";',
+  '}',
+].join(' ')
+const FILES = '"$HOME/.codex/auth.json" "$HOME/.codex/auth.json.new" "$HOME/.claude/settings.json" "$HOME/.claude/settings.json.new"'
+
+/**
+ * Writes the held file into the Mac user's home, readable by that user alone, and leaves a watch
+ * on the Mac that overwrites and deletes it at `until` (seconds since 1970) whatever happens here,
+ * so that a crash of this machine or a lost connection cannot leave it there past the run.
+ */
+export async function inject(id, held, until) {
   if (!INSTANCE.test(id) || !held?.file) throw new Error('inject: not a Mac instance or nothing held.')
+  if (!Number.isInteger(until)) throw new Error('inject: give the time the watch wipes the file.')
   const dir = held.file.split('/')[0]
-  const script = `set -e; umask 077; mkdir -p "$HOME/${dir}"; chmod 700 "$HOME/${dir}"; cat > "$HOME/${held.file}.new"; chmod 600 "$HOME/${held.file}.new"; mv -f "$HOME/${held.file}.new" "$HOME/${held.file}"; echo WROTE`
-  const { code, out } = await onMac(id, `sh -c '${script}'`, { input: held.json, timeout: 120_000 })
+  const script = [
+    'set -eu; umask 077',
+    // The folder is a real folder of runner's, not a link, and the staging file is made new
+    `d="$HOME/${dir}"; [ -L "$d" ] && exit 3; mkdir -p "$d"; chmod 700 "$d"`,
+    `f="$HOME/${held.file}"; [ -L "$f" ] && rm -f "$f"; rm -f "$f.new"`,
+    'set -C; cat > "$f.new"; set +C; mv -f "$f.new" "$f"',
+    // The watch, detached from this connection
+    `nohup bash -c '${OVERWRITE.replace(/'/g, '')}; while [ $(date +%s) -lt ${until} ]; do sleep 20; done; for f in ${FILES}; do ow "$f"; done' >/dev/null 2>&1 &`,
+    'echo WROTE',
+  ].join('; ')
+  const { code, out } = await onMac(id, `bash -c "$(cat <<'SCRIPT'\n${script}\nSCRIPT\n)"`, { input: held.json, timeout: 120_000 })
   if (code !== 0 || !out.includes('WROTE')) throw new Error(`The sign-in could not be written on the Mac (exit ${code}).`)
 }
 
-// Where on the Mac a copy could land: the user's home (Library too), the temporary folders, and logs
-const LOOK_IN = ['/Users/runner', '/tmp', '/private/tmp', '/private/var/folders', '/private/var/log', '/Library/Logs']
+// Where on the Mac a copy could land: the user's home (Library too), the harness's own folder,
+// root's home, the temporary folders, and logs
+const LOOK_IN = ['/Users', '/private/var/root', '/tmp', '/private/tmp', '/private/var/folders', '/private/var/log', '/Library/Logs']
 
 /**
  * Lists the files on the Mac that hold any of the held values, by name only. The values go in on
@@ -172,44 +211,59 @@ export async function filesHolding(id, held) {
   return lines.slice(0, -1)
 }
 
-// Overwrites a file with zeros as long as itself, then deletes it. macOS has no shred.
-const OVERWRITE = 'ow() { [ -e "$1" ] || return 0; n=$(stat -f%z "$1" 2>/dev/null || echo 0); if [ "$n" -gt 0 ]; then dd if=/dev/zero of="$1" bs="$n" count=1 conv=notrunc 2>/dev/null; sync; fi; rm -f "$1"; }'
-
 /**
- * Takes every trace of the credential off the Mac: both files overwritten and deleted (whichever
- * app this run used), the terminal that ran the agent app ended with every process in it, and any
- * other file that took a copy overwritten and deleted. Resolves with the files that still hold a
- * value afterwards, which should be none. Safe to call with `held` null: the files are wiped all
- * the same, only the look for copies elsewhere needs the values.
+ * Takes every trace of the credential off the Mac: first the terminal that ran the agent app is
+ * ended with every agent process, so that nothing writes the file again; then both apps' files are
+ * overwritten and deleted, and any other file that took a copy. Resolves with what is left: the
+ * files that still hold a value, and "(...)" lines for anything that could not be done or checked.
+ * With `held` null the files are wiped all the same, and the result says that no look was made.
  */
 export async function wipe(id, held) {
-  if (!INSTANCE.test(id)) return []
+  if (!INSTANCE.test(id)) return ['(not a Mac instance)']
   const script = [
     OVERWRITE,
-    'for f in "$HOME/.codex/auth.json" "$HOME/.codex/auth.json.new" "$HOME/.claude/settings.json" "$HOME/.claude/settings.json.new"; do ow "$f"; done',
-    // The agent app and everything it started run inside the tmux server, which takes them with it
     '/opt/homebrew/bin/tmux kill-server >/dev/null 2>&1 || true',
-    'echo WIPED',
+    'pkill -TERM -u runner -x codex >/dev/null 2>&1; pkill -TERM -u runner -x claude >/dev/null 2>&1; pkill -TERM -u runner -f "node.*(@openai/codex|claude-code)" >/dev/null 2>&1; sleep 2',
+    `for f in ${FILES}; do ow "$f"; done`,
+    `left=0; for f in ${FILES}; do [ -e "$f" ] || [ -L "$f" ] && left=1; done; [ $left = 0 ] && echo WIPED`,
   ].join('; ')
-  await onMac(id, `bash -c '${script}'`, { timeout: 120_000 })
-  if (!held) return []
+  const first = await onMac(id, `bash -c '${script}'`, { timeout: 120_000 })
+  const problems = []
+  if (!first.out.includes('WIPED')) problems.push('(the credential files could not be shown to be gone)')
+  for (const l of first.out.split('\n')) if (l.startsWith('FAILED ')) problems.push(`(could not overwrite ${l.slice(7)})`)
+  if (!held) return [...problems, '(no look for copies was made: the values were not held)']
   const found = (await filesHolding(id, held)).filter((f) => f.startsWith('/'))
-  if (found.length) await onMac(id, `sudo bash -c '${OVERWRITE}; while IFS= read -r f; do ow "$f"; done'`, { input: `${found.join('\n')}\n`, timeout: 300_000 })
-  return filesHolding(id, held)
+  if (found.length) {
+    const r = await onMac(id, `sudo bash -c '${OVERWRITE}; while IFS= read -r f; do ow "$f"; done'`, { input: `${found.join('\n')}\n`, timeout: 300_000 })
+    for (const l of r.out.split('\n')) if (l.startsWith('FAILED ')) problems.push(`(could not overwrite ${l.slice(7)})`)
+  }
+  return [...problems, ...(await filesHolding(id, held))]
 }
+
+const SHAPES = [
+  /sk-or-v1-[A-Za-z0-9_-]{16,}/g,
+  /sk-ant-[A-Za-z0-9_-]{8,}/g,
+  /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
+  /\b(?:sk|rt|at)-[A-Za-z0-9_-]{24,}/g,
+]
 
 /** `text` with every held value, and anything shaped like a credential, put out of sight. */
 export function redact(text, held) {
   let out = String(text)
   for (const v of held?.values ?? []) out = out.split(v).join('[credential removed]')
+  for (const re of SHAPES) out = out.replace(re, '[credential removed]')
   return out
-    .replace(/sk-or-v1-[A-Za-z0-9]{16,}/g, '[credential removed]')
-    .replace(/sk-ant-[A-Za-z0-9_-]{8,}/g, '[credential removed]')
-    .replace(/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, '[credential removed]')
-    .replace(/\b(?:sk|rt|at)-[A-Za-z0-9_-]{24,}/g, '[credential removed]')
 }
 
-/** Whether `text` holds a held value or anything shaped like a credential. */
+/**
+ * Whether `text` holds a held value or anything shaped like a credential, also where a value was
+ * broken by line ends, spaces or a terminal's control sequences, which redaction cannot find.
+ */
 export function holdsSecret(text, held) {
-  return redact(text, held) !== String(text)
+  const raw = String(text)
+  if (redact(raw, held) !== raw) return true
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the terminal's escape sequences are what is taken out
+  const flat = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[\s─-╿│]+/g, '')
+  if ((held?.values ?? []).some((v) => flat.includes(v.replace(/\s+/g, '')))) return true
+  return SHAPES.some((re) => new RegExp(re.source).test(flat))
 }
