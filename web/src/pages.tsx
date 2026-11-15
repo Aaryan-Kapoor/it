@@ -743,11 +743,21 @@ export function atWorkNow(work: Work | undefined, now: number): boolean {
  * room, and on a bar as narrow as a phone's says only "Working", which leaves the page's title room.
  */
 export const workingSaid = (agent: string | null): string => `${agent ?? 'Your agent'} is working`
-function WorkingNow({ agent }: { agent: string | null }) {
+/**
+ * How long a turn that began with something done on a page goes on, with nothing new on the page,
+ * before the bar allows that the agent may be waiting for the person: an agent app may hold its
+ * turn on a question in its own window, as Codex does on an approval, and tells It nothing of that.
+ * Said as "is working" alone, it kept a person waiting at the page for something that waited for
+ * them (seen in a rehearsal). The plain words stay for the first half minute, which is longer than
+ * an answer usually takes.
+ */
+export const MAY_WAIT_MS = 30_000
+export const workingOrWaiting = (agent: string | null): string => `${workingSaid(agent)}, or waiting for you in its own window`
+function WorkingNow({ agent, mayWait = false }: { agent: string | null; mayWait?: boolean }) {
   return (
     <span className="working">
       <span className="working-dot" />
-      <span className="working-long">{workingSaid(agent)}</span>
+      <span className="working-long">{mayWait ? workingOrWaiting(agent) : workingSaid(agent)}</span>
       <span className="working-short">Working</span>
     </span>
   )
@@ -1254,7 +1264,12 @@ function ActionStatus({
     // Unless it is still at work, as its machine says: then that is said, since the page looks done and its agent is not
     // A turn of its conversation is running: that is said, whatever became of what was done, but
     // where the agent said it could not do it, which the person may want to do again
-    if (working && !failed) return <WorkingNow agent={agent} />
+    // A turn that this click began, still running a while after it was handed over, with nothing on the page since
+    // (Begun by it: between the click and a few seconds after it was handed over, and not a turn the person began later by typing)
+    const handed = last.handedAt ?? last.at
+    const begunByIt = turn !== null && turn.since >= last.at && turn.since <= handed + 10_000
+    const mayWait = atWork === 'running' && begunByIt && !changed && (last.outcome === null || last.outcome === 'running') && now - handed > MAY_WAIT_MS
+    if (working && !failed) return <WorkingNow agent={agent} mayWait={mayWait} />
     if ((last.outcome === null || last.outcome === 'running' || (last.outcome === 'failed' && !failed)) && changed) return null
     // Its turn ended after it was handed over, and the page is as it was: said as that. Left as
     // "Your agent has it", it read as an agent still at work on something it had finished with
