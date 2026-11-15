@@ -1207,7 +1207,7 @@ function pictureFolderFor(c: { session: { harness: string; id: string } | null }
  * written, in a command line that holds every letter.
  */
 export const PLAIN_ANSWER = (id: string) =>
-  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In Windows PowerShell, put \`--%\` after \`it\` and write the JSON in double quotes with its own written as \`\\"\`: \`it --% tour answer ${id} "{\\"say\\":\\"That’s it.\\"}"\`. Do not pipe it in there, which turns every letter outside ASCII into a question mark.`
+  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \\u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In Windows PowerShell, put \`--%\` after \`it\` and write the JSON in double quotes with its own written as \`\\"\`: \`it --% tour answer ${id} "{\\"say\\":\\"That’s it.\\"}"\`. Do not pipe it in there, which turns every letter outside ASCII into a question mark.`
 async function tourAnswer(a: Args, counted: (code?: string) => void) {
   const USAGE = "tour answer <action-id> [- | '<json>' | --file <path>] [--wait | --no-wait] [--timeout <seconds>]"
   if (a._[0] === 'answer') {
