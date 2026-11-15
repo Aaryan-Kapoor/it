@@ -1392,7 +1392,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     expect(JSON.parse(list.err().trim().split('\n').pop()!).error).toMatchObject({
       code: 'offline',
       message: 'It is not running on this machine.',
-      hint: 'Start it with `it serve`, or run `it setup` to keep it running in the background.',
+      hint: 'Run `it setup`, which starts It and keeps it running in the background. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.',
     })
   }, 120_000)
 
@@ -1504,7 +1504,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
           expect(await well(after)).toBe(0)
           expect(JSON.parse(after.out())).toMatchObject({
             running: false,
-            hint: 'It is not running on this machine. Start it with `it serve`, or run `it setup` to keep it running in the background.',
+            hint: 'It is not running on this machine. Run `it setup`, which starts It and keeps it running in the background. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.',
           })
         } finally {
           await stopped(left)

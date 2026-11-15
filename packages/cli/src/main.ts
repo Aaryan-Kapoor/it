@@ -72,6 +72,7 @@ import {
   addonHere,
   api,
   askConnectorWith,
+  askRegisteredWith,
   askShell,
   backend,
   backendAt,
@@ -96,11 +97,11 @@ import {
   left,
   machine,
   machineFile,
-  NOT_RUNNING,
   NOT_SET_UP,
   noteLeft,
   noteWas,
   notKnown,
+  notRunningHint,
   notSetUp,
   PROXIED,
   Problem,
@@ -1507,15 +1508,15 @@ async function notRunning(found: Answers): Promise<Problem> {
     return new Problem(
       `It is not running on this machine: another program answers at port ${port}, where It’s site would be.`,
       'offline',
-      `Stop whatever is using that port, or choose another first port for It by setting IT_PORT. ${NOT_RUNNING}`,
+      `Stop whatever is using that port, or choose another first port for It by setting IT_PORT. ${notRunningHint()}`,
     )
   return port !== undefined && (await healthy(backendAt(port).site))
     ? new Problem(
         'It is not running on this machine: only its backend program is, as it is while `it setup` is at work.',
         'offline',
-        `If no setup is at work here, one was ended before it had stopped that program, and running \`it setup\` again stops it. ${NOT_RUNNING}`,
+        `If no setup is at work here, one was ended before it had stopped that program, and running \`it setup\` again stops it. ${notRunningHint()}`,
       )
-    : new Problem('It is not running on this machine.', 'offline', NOT_RUNNING)
+    : new Problem('It is not running on this machine.', 'offline', notRunningHint())
 }
 /** What is said on a machine that joined an It when that It does not answer where the machine asks it. */
 const notAnswering = (found: Answers): string => {
@@ -3630,6 +3631,8 @@ they print JSON.
 
 async function main(argv: string[]): Promise<void> {
   const [cmd, ...rest] = argv
+  // What is said where It is not running names the background service where this folder registered one
+  askRegisteredWith(() => service.installedHereOr('unknown'))
   // Run as a script, it is held to the Node it needs before anything else is done. The standalone program has its own runtime.
   if (!('Bun' in globalThis)) {
     const old = nodeTooOld(process.versions.node)
@@ -3783,12 +3786,7 @@ async function main(argv: string[]): Promise<void> {
       const now = await local<Held>('/runs')
       // Only the system's refusing this command the network altogether says that it is shut in: the connector's not answering does not
       if (!now && (await closedToNetwork())) throw shutIn()
-      if (!now)
-        throw new Problem(
-          'It is not running on this machine, so there is nothing to ask about what it reopened.',
-          'offline',
-          'Start it with `it serve` or `it setup`.',
-        )
+      if (!now) throw new Problem('It is not running on this machine, so there is nothing to ask about what it reopened.', 'offline', notRunningHint())
       if (sub === 'clear') {
         if (!now.unread && !now.held.length) return forPerson(a) ? tell(['Nothing is held back: there is nothing to clear.']) : out({ cleared: 0 })
         if (!a.flags.yes && !flow.live())
