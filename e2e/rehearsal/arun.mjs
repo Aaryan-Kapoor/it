@@ -68,6 +68,9 @@ const icacls0 = icacls()
 // What every program of the run is given: the throwaway home, It's folder and ports, the agent
 // app on the PATH behind the guard, and the stand-in for the releases
 const env = profileEnv(f, { port, appBin, guard: true, extra: { IT_INSTALL_BASE: 'http://127.0.0.1:5690', IT_INSTALL_NO_PATH: '1' } })
+// A run that tests an update: the guard passes `it upgrade`, once It says no service is
+// registered for this folder (guard.ts)
+if (process.argv.includes('--allow-upgrade')) env.IT_REHEARSAL_ALLOW_UPGRADE = '1'
 if (agentInstalls)
   Object.assign(env, {
     IT_REHEARSAL_GUARD: 'convert',
