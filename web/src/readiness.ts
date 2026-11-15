@@ -19,6 +19,8 @@ export const CODEX_TRUST = 'Start Codex again, and choose “Trust all and conti
  * says T3 Code is there by the words setup gives the person, which begin this way.
  */
 export const CODEX_IN_T3 = 'In T3 Code, Codex never asks this, and nothing needs approving there'
+/** The same, said where the machine does not say whether T3 Code is there, as a page's bar does not know: short, since it is said to everyone. */
+export const NOTHING_IN_T3 = 'Nothing needs approving in T3 Code'
 
 /** Older backends expose inventory to owners only. Screens keep their generic waiting status. */
 export function reportedConnection(

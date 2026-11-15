@@ -746,6 +746,8 @@ describe('what the page’s bar says of the last thing the person did', () => {
       // What to do, as a person who runs Codex in a terminal does it, and with no app to look for
       expect(said()).toContain('Start Codex again, and choose “Trust all and continue” when it asks to review hooks')
       expect(said()).not.toContain('Open the app')
+      // And true for a thread of T3 Code too, where Codex never asks
+      expect(said()).toContain('Nothing needs approving in T3 Code')
       expect(said()).not.toContain('not connected')
       expect(said()).not.toContain('looks closed')
       expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
