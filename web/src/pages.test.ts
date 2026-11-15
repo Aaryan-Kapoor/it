@@ -75,7 +75,18 @@ vi.mock('convex/react', () => ({
   },
 }))
 // The frame a page is shown in has tests of its own
-vi.mock('./mount', () => ({ Mount: () => null }))
+/** What the frame was last given: where what was done on the page has got to, as it is to tell the page, and how to say that the page's script failed. */
+const mounted = vi.hoisted(() => ({
+  progress: undefined as string | null | undefined,
+  onFault: undefined as ((message: string, agentTold: boolean) => void) | undefined,
+}))
+vi.mock('./mount', () => ({
+  Mount: (props: { progress?: string | null; onFault?: (message: string, agentTold: boolean) => void }) => {
+    mounted.progress = props.progress
+    mounted.onFault = props.onFault
+    return null
+  },
+}))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 let root: Root
@@ -1322,6 +1333,32 @@ describe('the bar while a turn of the page’s conversation runs, which It did n
       expect([working(), said()]).toEqual([null, 'Can’t reach It. What you do here is saved on this browser, and sent when It is back'])
       await connection(true)
       expect(working()).toBe('Claude Code is working')
+    })
+  })
+
+  test('gives way to the page saying that its own script failed', async () => {
+    recent = []
+    await withTurn({ turn: RUNNING }, async () => {
+      await shown()
+      expect(working()).toBe('Claude Code is working')
+      await act(async () => mounted.onFault?.('TypeError: x is undefined', false))
+      expect(working()).toBeNull()
+      expect(allSaid()[0]).toContain('This page has an error in it')
+    })
+  })
+
+  test('is told to the page, and is told no more once It has not been reachable for a few seconds', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    recent = []
+    await withTurn({ turn: RUNNING }, async () => {
+      await shown()
+      expect(JSON.parse(mounted.progress ?? 'null')).toEqual({ type: 'it:progress', working: true, actions: [] })
+      await connection(false)
+      await pass(5500)
+      expect(JSON.parse(mounted.progress ?? 'null')).toEqual({ type: 'it:progress', working: false, actions: [] })
+      await connection(true)
+      expect(JSON.parse(mounted.progress ?? 'null')?.working).toBe(true)
     })
   })
 

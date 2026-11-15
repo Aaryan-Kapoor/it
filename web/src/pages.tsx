@@ -437,7 +437,9 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
     : undefined
   const underWay = page ? inHand(recent, page.answeredAt ?? null, page.run !== null && page.run !== undefined, now, work) : false
   // Every page is told what the bar goes by: whether its agent is at work, and where what was done on it has got to. As text, so that it is sent on only when it changes
-  const progress = page ? progressFor(recent, work, now) : null
+  // Not while It cannot be reached: what the page was last told of its agent may be long out of date by then
+  const unreachable = useUnreachable()
+  const progress = page ? progressFor(recent, unreachable ? undefined : work, now) : null
   const progressSaid = progress ? JSON.stringify(progress) : null
   useEffect(() => {
     if (page) document.title = `${page.title} · It`
@@ -549,6 +551,8 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
               wakeFailed={page.wakeFailed}
               answeredAt={page.answeredAt ?? null}
               turn={(page as { turn?: Turn | null }).turn ?? null}
+              // The page's own script failed, which the bar says first and asks the person to act on
+              faulted={fault?.of === `${page.id}:${page.version}`}
             />
           )}
         </span>
@@ -1076,6 +1080,7 @@ function ActionStatus({
   wakeFailed,
   answeredAt,
   turn,
+  faulted = false,
 }: {
   artifactId: Id<'artifacts'>
   user: string
@@ -1106,6 +1111,8 @@ function ActionStatus({
   answeredAt: number | null
   /** What the page's machine said of the turn of its conversation. Null where it said nothing. */
   turn: Turn | null
+  /** Whether the bar says that the page's own script failed. */
+  faulted?: boolean
 }) {
   const convex = useConvex()
   const setWake = useMutation(api.machines.wake)
@@ -1198,7 +1205,9 @@ function ActionStatus({
   // says the agent has what was done, or that nothing is to be said, and never in place of what
   // asks something of the person or says that something is waiting or went wrong, which is said
   // first. Nothing above this line is about the agent, and what is below is, but for those
-  const working = atWorkNow({ turn, machineSeenAt, stoppedAt }, now)
+  // (What the bar says beside this of a page's fault and of clicks refused asks something of the person too, and the agent is not said to be working beside it)
+  const working =
+    !faulted && refusedClick(user, artifactId) === null && refusedLately(user, artifactId) === null && atWorkNow({ turn, machineSeenAt, stoppedAt }, now)
   if (!last) return working ? <WorkingNow agent={agent} /> : null
   // Everything among the last things done was dealt with, and something older still waits
   if (last.delivery === 'handed_off' && waiting > 0)
@@ -1445,6 +1454,22 @@ function ActionStatus({
       )}
     </>
   )
+}
+
+/** Whether It has not been reachable for longer than a connection takes to come back by itself. */
+function useUnreachable(): boolean {
+  const convex = useConvex()
+  const connected = useSyncExternalStore(
+    useCallback((fn: () => void) => convex.subscribeToConnectionState(fn), [convex]),
+    () => convex.connectionState().isWebSocketConnected,
+  )
+  const [down, setDown] = useState(false)
+  useEffect(() => {
+    if (connected) return setDown(false)
+    const t = setTimeout(() => setDown(true), DOWN_MS)
+    return () => clearTimeout(t)
+  }, [connected])
+  return down
 }
 
 /** How long a click has gone untaken before the owner is offered the reopening of its conversation. */
