@@ -284,12 +284,14 @@ try {
   const connected = setup.json?.harnesses?.find((h) => h.id === 'claude-code')
   must('`it setup --only claude-code` connects Claude Code', setup.code === 0 && connected?.addon === 'connected', setup.out + setup.err)
 
-  // The service has It's own folder on its PATH, as a service started from a shell that the install
-  // script has put it on has, and as Auto-wake's note to a reopened conversation says it is. The
-  // conversation this run starts itself is not given it: the add-on puts it there.
+  // The service is not given It's own folder on its PATH, as a person's service is not after the
+  // install the guide describes, where their agent ran `it setup` from a shell opened before It
+  // was installed. It puts its folder first on the PATH of the conversation it reopens, which is
+  // how that conversation runs `it` by its name, as Auto-wake's note to it says it can. The
+  // conversation this run starts itself is not given it either: the add-on puts it there.
   notStopping()
   service = spawn(IT[0], [...IT.slice(1), 'serve'], {
-    env: { ...base, PATH: `${PATH}${path.delimiter}${path.join(folders.it, 'bin')}` },
+    env: base,
     cwd: folders.work,
     stdio: ['ignore', openSync(serviceLog, 'w'), openSync(serviceLog, 'a')],
   })

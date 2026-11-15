@@ -559,8 +559,14 @@ trust_level = "trusted"
   )
 
   // It's own It, and a browser paired as the owner's, for the page to come up on. Started before
-  // Codex's terminal is, so that the conversation's first turn finds them there.
-  serve = spawn(IT[0], [...IT.slice(1), 'serve'], { env, cwd: home, stdio: ['ignore', 'ignore', 'pipe'] })
+  // Codex's terminal is, so that the conversation's first turn finds them there. It is started
+  // with a PATH that does not have It's own folder, as a person's service has it after the
+  // install the guide describes, where their agent ran `it setup` from a shell opened before It
+  // was installed. Codex's terminal below is one opened after the install, and has it. So the
+  // conversation It reopens in step 3 runs `it` by its name only where It itself puts its folder
+  // on that conversation's PATH.
+  const serviceEnv = { ...env, PATH: env.PATH.split(path.delimiter).filter((dir) => dir !== path.join(itHome, 'bin')).join(path.delimiter) }
+  serve = spawn(IT[0], [...IT.slice(1), 'serve'], { env: serviceEnv, cwd: home, stdio: ['ignore', 'ignore', 'pipe'] })
   let served = ''
   serve.stderr.on('data', (d) => (served += d))
   let site
