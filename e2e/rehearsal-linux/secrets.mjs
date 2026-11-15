@@ -44,6 +44,23 @@ function dockerOut(args, input) {
   })
 }
 
+/** A credential file read as JSON, with an error that carries nothing of what is in it. */
+function readJson(path, what) {
+  let text
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch {
+    throw new Error(`The ${what} credential file could not be read.`)
+  }
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new Error(`The ${what} credential file is not JSON as expected.`)
+  } finally {
+    text = null
+  }
+}
+
 function jwtExpiry(jwt) {
   try {
     const part = String(jwt).split('.')[1]
@@ -62,19 +79,30 @@ function jwtExpiry(jwt) {
 export function take(app, minutes) {
   const now = Date.now()
   if (app === 'codex') {
-    const auth = JSON.parse(readFileSync(join(HOME, '.codex', 'auth.json'), 'utf8'))
+    const auth = readJson(join(HOME, '.codex', 'auth.json'), 'Codex')
     const tokens = auth?.tokens
     if (!tokens || typeof tokens.access_token !== 'string' || !tokens.access_token) throw new Error('Codex has no access token on this machine.')
     const expiresAt = jwtExpiry(tokens.access_token)
     if (!expiresAt) throw new Error('The expiry of the Codex access token could not be read.')
     if (expiresAt - now < minutes * 60_000) throw new Error(`The Codex access token lives ${Math.floor((expiresAt - now) / 60_000)} more minutes, fewer than ${minutes}.`)
-    // The copy: everything Codex needs to make requests, with the refresh token blanked
-    const copy = { ...auth, tokens: { ...tokens, refresh_token: '' } }
+    // The copy: only the fields Codex needs to make requests, named one by one, with the refresh
+    // token blank and no API key. The id token says who is signed in; it cannot get a new token.
+    const copy = {
+      auth_mode: typeof auth.auth_mode === 'string' ? auth.auth_mode : 'chatgpt',
+      OPENAI_API_KEY: null,
+      tokens: {
+        id_token: typeof tokens.id_token === 'string' ? tokens.id_token : '',
+        access_token: tokens.access_token,
+        refresh_token: '',
+        account_id: typeof tokens.account_id === 'string' ? tokens.account_id : '',
+      },
+      last_refresh: typeof auth.last_refresh === 'string' ? auth.last_refresh : new Date().toISOString(),
+    }
     const values = [tokens.access_token, tokens.id_token].filter((v) => typeof v === 'string' && v.length >= 16)
     return { held: { app, json: `${JSON.stringify(copy, null, 2)}\n`, values }, expiresAt, minutesLeft: Math.floor((expiresAt - now) / 60_000) }
   }
   if (app === 'claude') {
-    const creds = JSON.parse(readFileSync(join(HOME, '.claude', '.credentials.json'), 'utf8'))
+    const creds = readJson(join(HOME, '.claude', '.credentials.json'), 'Claude Code')
     const oauth = creds?.claudeAiOauth
     if (!oauth || typeof oauth.accessToken !== 'string' || !oauth.accessToken) throw new Error('Claude Code has no access token on this machine.')
     const expiresAt = Number(oauth.expiresAt)
@@ -137,11 +165,15 @@ export async function shareWithUserManager(container, held) {
  * Lists the files under the container's folders `dirs` that hold any of the token's values, by
  * name only. The values go in on standard input, and grep is told to print names and no line.
  */
-export async function filesHolding(container, held, dirs = ['/home/ana', '/tmp', '/opt/person-profile']) {
+export async function filesHolding(container, held, dirs = ['/home', '/root', '/tmp', '/var', '/run', '/etc', '/opt/person-profile', '/var/lib/rehearsal-flow']) {
   if (!CONTAINER.test(container) || !held?.values?.length) return []
-  const script = `grep -rlsF -f /dev/stdin -- ${dirs.map((d) => `'${d}'`).join(' ')} 2>/dev/null || true`
+  // grep says 0 where it found something and 1 where it found nothing; anything else, or no
+  // closing word, means the look did not finish, which is never taken for "nothing there"
+  const script = `grep -rlsF --exclude-dir=proc -f /dev/stdin -- ${dirs.map((d) => `'${d}'`).join(' ')} 2>/dev/null; c=$?; [ $c -le 1 ] && echo LOOKED-ALL`
   const out = await dockerOut(['exec', '-i', container, 'sh', '-c', script], `${held.values.join('\n')}\n`)
-  return out.split('\n').filter(Boolean)
+  const lines = out.split('\n').filter(Boolean)
+  if (lines.at(-1) !== 'LOOKED-ALL') return ['(the look for the token did not finish)']
+  return lines.slice(0, -1)
 }
 
 /**
@@ -155,6 +187,8 @@ export async function wipe(container, held) {
     'f=/home/ana/.codex/auth.json; if [ -e "$f" ]; then shred -fzu -n 2 "$f" 2>/dev/null || rm -f "$f"; fi',
     'f=/home/ana/.codex/auth.json.new; if [ -e "$f" ]; then shred -fzu -n 2 "$f" 2>/dev/null || rm -f "$f"; fi',
     "su -l ana -c 'tmux kill-server' >/dev/null 2>&1 || true",
+    // Every agent app the person started, and any it started, goes with the variable it holds
+    'pkill -TERM -u ana -f "(^|/)(claude|codex)( |$)" >/dev/null 2>&1 || true',
     "su -l ana -c 'systemctl --user unset-environment CLAUDE_CODE_OAUTH_TOKEN' >/dev/null 2>&1 || true",
   ].join('; ')
   await docker(['exec', container, 'bash', '-c', script])
