@@ -258,7 +258,12 @@ A page can change its own state while you work, and so can another conversation.
 
 ## Showing that you are at work
 
-`It.onProgress(fn)` calls `fn({ working, actions })` as soon as it is known and whenever it changes. `working` is `true` while a turn of your conversation is running, on this page or anything else, and `false` where that is not known. `actions` are the last eight things done on the page, newest first, each with the `id` that `It.action` resolved with, `handed`, which is `true` once you have it, and `turn`: `'running'` while a turn of yours runs after you were handed it, `'ended'` once a turn ended after that, and `null` where that is not known. A turn that ended is not the action done, which only your answer on the page says. Show it beside what was pressed. Some agent apps do not say when their turns run: where `turn` stays `null`, say no more than that you have it.
+`It.onProgress(fn)` calls `fn({ working, actions })` as soon as it is known and whenever it changes, with what your machine reports:
+
+- `working` is `true` while a turn of your conversation is running, on this page or anything else, and `false` where none is or that is not known.
+- `actions` are the last eight things done on the page, newest first. Each has the `id` that `It.action` resolved with; `handed`, `true` once it was handed to you; and `turn`, which is `'running'` while a turn of yours runs after that, `'ended'` once one has ended, and `null` where that is not known or you have said with `it ack` that it is done. A later turn makes it `'running'` again.
+
+A turn ending does not mean the action was done: your answer on the page says that. Some agent apps do not say when their turns run: where `turn` stays `null`, say no more than that you have it.
 
 ```js
 let sent = null
