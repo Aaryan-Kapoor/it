@@ -12,7 +12,7 @@
 //   record   the screen recording starts and the tester can no longer type: the person plays.
 //   stop     the end: recording stopped, everything the run started stopped by its own id.
 import { execFileSync, spawn } from 'node:child_process'
-import { copyFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { claudeAccess, codexAuth, forget, scrub, shredAll, shredLedger, shredOnExit } from './credentials.mjs'
@@ -32,7 +32,7 @@ const controlPort = Number(arg('control', 5697))
 const profileName = arg('profile-name', 'rehearsal')
 const person = arg('person', 'model')
 const agentInstalls = process.argv.includes('--agent-installs')
-const build = process.env.IT_REHEARSAL_BUILD || '82c71960cbc6'
+const build = process.env.IT_REHEARSAL_BUILD || '68e03a6dc1b2'
 const id = arg('id', `${stamp().slice(0, 16).replace(/[-:T]/g, '').replace(/^(\d{8})/, '$1-')}-s${scenario}-${app}-${channel}-aarya`)
 const MODEL = app === 'codex' ? { model: 'gpt-6.1-sol', effort: 'high' } : { model: 'claude-sonnet-5-5', effort: 'high' }
 const appDir = path.join(WORK, 'apps', `${app === 'codex' ? 'codex' : 'claude'}-${version}`)
@@ -369,6 +369,23 @@ log("the permissions of the owner's profile folder are as they were", same ? 'ic
 const guard = existsSync(path.join(f.logs, 'guard.log')) ? readFileSync(path.join(f.logs, 'guard.log'), 'utf8') : ''
 if (guard) log('the guard refused a command under the owner account', guard.trim(), true)
 writeFileSync(path.join(f.results, 'session.json'), `${JSON.stringify({ ...meta, start: startedAt, end: endedAt, stoppedBecause: stopping.reason ?? '', steps }, null, 2)}\n`)
+// The agent app's own record of the conversation (every command it ran, in full), scrubbed of
+// anything shaped like a token, kept before the profile goes
+const transcripts = path.join(f.results, 'agent-transcript')
+const keepFrom = (dir) => {
+  if (!existsSync(dir)) return 0
+  let n = 0
+  for (const entry of readdirSync(dir, { recursive: true })) {
+    const file = path.join(dir, String(entry))
+    if (!/\.jsonl$/.test(file) || !statSync(file).isFile()) continue
+    mkdirSync(transcripts, { recursive: true })
+    writeFileSync(path.join(transcripts, path.basename(file)), scrub(readFileSync(file, 'utf8')).text)
+    n++
+  }
+  return n
+}
+const kept = app === 'codex' ? keepFrom(path.join(f.codexHome, 'sessions')) : keepFrom(path.join(f.home, '.claude', 'projects'))
+log("the agent app's own transcript was kept, scrubbed", `${kept} file(s) in agent-transcript`)
 // The throwaway profile goes; its results stay
 try {
   rmSync(f.top, { recursive: true, force: true })
