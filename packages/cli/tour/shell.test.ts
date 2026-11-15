@@ -113,12 +113,16 @@ describe('the frame of the tour’s first page', () => {
     page.close()
   })
 
-  test('where the conversation that put it up cannot hear it yet, says so in amber with the line to type, until the first answer', async () => {
+  test('where the conversation that put it up could not hear it and the site says nothing of that, says so in amber with the line to type, until the first answer', async () => {
     const quiet = await opened()
+    await quiet.advance(10_000)
     expect(quiet.$('#asleep').hidden).toBe(true)
     expect(quiet.state('room')).toBe('Claude Code hears what you do here')
     quiet.close()
     const page = await opened({ asleep: true })
+    // Not before the site has had a moment to say what It knows now, so that it never flashes up
+    expect(page.$('#asleep').hidden).toBe(true)
+    await page.advance(2000)
     expect(page.$('#asleep').hidden).toBe(false)
     expect(page.$('#asleep').textContent).toContain('/reload-plugins')
     expect(page.$('#asleep').textContent).toContain('What you do here is kept')
@@ -137,6 +141,7 @@ describe('the frame of the tour’s first page', () => {
 
   test('says it no more once It says that something done here reached the conversation, before any answer has come', async () => {
     const page = await opened({ asleep: true })
+    await page.advance(2000)
     const asked = moved(page)
     await asked.accept()
     // Taken by It and waiting: the conversation may still not hear
@@ -147,6 +152,76 @@ describe('the frame of the tour’s first page', () => {
     expect(page.$('#asleep').hidden).toBe(true)
     expect(page.state('room')).not.toContain('cannot hear')
     page.close()
+  })
+
+  test('never says it to a person whose agent was listening before the page opened, though it could not hear when it put the page up', async () => {
+    const page = await opened({ asleep: true })
+    expect(page.$('#asleep').hidden).toBe(true)
+    // The person typed /reload-plugins before opening the page: the site says It does not know of the conversation as one that has not loaded the add-on
+    await page.progress([], false)
+    await page.advance(10_000)
+    expect(page.$('#asleep').hidden).toBe(true)
+    expect(page.state('room')).toBe('Claude Code hears what you do here')
+    // And what they do is handed over at once, as it is to a conversation that hears
+    const asked = moved(page)
+    await asked.accept()
+    await page.progress([{ id: asked.id, handed: true, turn: 'running' }], false)
+    await page.advance(60_000)
+    expect(page.$('#asleep').hidden).toBe(true)
+    page.close()
+  })
+
+  test('says it while It knows the conversation has not loaded the add-on, and no more as soon as the person has typed /reload-plugins, before anything is done', async () => {
+    const page = await opened({ asleep: true })
+    await page.progress([], true)
+    // At once, without waiting for anything
+    expect(page.$('#asleep').hidden).toBe(false)
+    expect(page.$('#asleep').textContent).toContain('/reload-plugins')
+    expect(page.state('room')).toBe('Claude Code cannot hear this page yet')
+    // What the person does is kept, and the conversation still does not hear it
+    const asked = moved(page)
+    await asked.accept()
+    await page.progress([{ id: asked.id, handed: false, turn: null }], true)
+    expect(page.$('#asleep').hidden).toBe(false)
+    // The person types /reload-plugins: the add-on is heard from, and It says so before what was kept is handed over
+    await page.progress([{ id: asked.id, handed: false, turn: null }], false)
+    expect(page.$('#asleep').hidden).toBe(true)
+    page.close()
+    // The same on a page nothing was done on yet
+    const idle = await opened({ asleep: true })
+    await idle.progress([], true)
+    expect(idle.$('#asleep').hidden).toBe(false)
+    await idle.progress([], false)
+    expect(idle.$('#asleep').hidden).toBe(true)
+    expect(idle.state('room')).toBe('Claude Code hears what you do here')
+    idle.close()
+  })
+
+  test('where It cannot know yet, says what to type once something done here has waited eight seconds without reaching a conversation that never loaded the add-on', async () => {
+    // Put up by a conversation that had not loaded the add-on, so soon after It's service started that the site does not know it yet
+    const page = await opened({ asleep: true })
+    await page.progress([], false)
+    expect(page.$('#asleep').hidden).toBe(true)
+    const asked = moved(page)
+    await asked.accept()
+    await page.progress([{ id: asked.id, handed: false, turn: null }], false)
+    await page.advance(7999)
+    expect(page.$('#asleep').hidden).toBe(true)
+    await page.advance(1)
+    expect(page.$('#asleep').hidden).toBe(false)
+    expect(page.$('#asleep').textContent).toContain('/reload-plugins')
+    // Once the person has typed it, what was kept is handed over, and the amber goes
+    await page.progress([{ id: asked.id, handed: true, turn: null }], false)
+    expect(page.$('#asleep').hidden).toBe(true)
+    page.close()
+    // A page whose conversation could hear it when it was put up, as Codex's or a Claude Code one that had loaded the add-on, never says it, however long a click waits
+    const heard = await opened()
+    await heard.progress([], false)
+    const waits = moved(heard)
+    await waits.accept()
+    await heard.advance(SLOW + 5000)
+    expect(heard.$('#asleep').hidden).toBe(true)
+    heard.close()
   })
 })
 
