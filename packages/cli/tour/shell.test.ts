@@ -505,6 +505,8 @@ describe('the guide for the first page', () => {
     expect(part).toContain('Never pipe the JSON into It there')
     expect(part).not.toMatch(/\| it tour answer/)
     expect(part).toContain('`it --% patch tour-start "{\\"end\\":…}"`')
+    // And so are the later pages' commands that carry JSON, which the menu's section sends there
+    expect(GUIDE).toContain('In Windows PowerShell, write every command below that carries JSON in the form the first page')
     expect(part).not.toMatch(/^it (wait|ack|action|save) /m)
     expect(part).toContain('you never copy `part` or `request` into your answer')
     // Every example is small beside what a state may hold

@@ -212,7 +212,7 @@ it displays
 
 If the list is empty, or every display in it has `"paired": false`, the person has no screen paired. Tell them to run `it site`, which opens the site in a browser and pairs that browser, and wait for them. Each `it tour show` below brings its page up on the display the person is using, which It chooses by itself, so name none. What `it tour show` prints says which display was asked to bring the page up, in `shownOn`: if that is empty, nobody is looking at the page, so say that in place of the page's line.
 
-Each page of the tour has a fixed id, `tour-` and its name, so every command below can be run as it is written. Keep the `id` and `version` printed by each `it tour show`: together they identify the showing now on the screen.
+Each page of the tour has a fixed id, `tour-` and its name, so every command below can be run as it is written. Keep the `id` and `version` printed by each `it tour show`: together they identify the showing now on the screen. In Windows PowerShell, write every command below that carries JSON in the form the first page's section gives for PowerShell, with `--%` after `it` and the JSON in double quotes with its own written as `\"`, as in `it --% patch tour-button "{\"status\":\"done\"}"`.
 
 Every page from here on has the buttons that go on, **Next** and **All of them**, which goes back to the menu: you move when one of them arrives, and not before. Each has a line under **Then say**.
 
