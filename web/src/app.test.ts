@@ -823,6 +823,28 @@ describe('what each tab says of itself', () => {
   })
 })
 
+describe('a report that met trouble', () => {
+  test('is sent once more a moment later, as is the word that this display reached It, and nothing is written as an error', async () => {
+    cookie = CODES.ownercode00000000001!
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    answers['displays:register'] = () => ({ ...DISPLAY, takes: ['displays.report'] })
+    answers['displays:heartbeat'] = () => ({ now: Date.now(), takes: ['displays.report'] })
+    // As the backend gives up on a write that kept clashing with another tab's: trouble, with no code
+    const clash = (name: string) => new Error(`[CONVEX M(${name})] [Request ID: 0123456789abcdef] Server Error`)
+    let reports = 0
+    let reached = 0
+    answers['displays:report'] = () => (++reports === 1 ? Promise.reject(clash('displays:report')) : { accepted: true, now: Date.now() })
+    answers['displays:reached'] = () => (++reached === 1 ? Promise.reject(clash('displays:reached')) : null)
+    await start()
+    await vi.waitFor(() => expect([reports >= 2, reached]).toEqual([true, 2]), 4000)
+    // The second report is the first one again: what failed is what is sent
+    const sent = asked.filter((a) => a.what === 'displays:report').map((a) => a.args as { sequence: number })
+    expect(sent[1]!.sequence).toBe(sent[0]!.sequence)
+    await settle()
+    expect(errors).toEqual([])
+  }, 10_000)
+})
+
 describe('a display locked to a page', () => {
   const PAGE = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, updatedAt: Date.now(), agent: 'pi', machine: 'here', run: null, pending: 0 }
   const locked = { ...DISPLAY, lockedTo: { id: 'page-1', slug: 'plan', title: 'Plan' }, lockEnded: false }
