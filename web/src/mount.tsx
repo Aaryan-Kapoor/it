@@ -151,7 +151,7 @@ export function Mount({
   title: string
   user: string
   madeBy?: MadeBy
-  /** Where the things done on the page have got to, as the `it:progress` message for it written out, for a page that is told. */
+  /** Whether the page's agent is at work and where the things done on the page have got to, as the `it:progress` message for it written out. */
   progress?: string | null
   /** Told what the page's own script failed with, each time it says so. */
   /** The page's own script failed, with what it failed with; and again once its agent has been told. */
@@ -1280,7 +1280,7 @@ export function Mount({
 
   // State flows down: what changed goes to whatever the frame is showing now
   useEffect(() => liveState.listen((message) => port.current?.postMessage(message)), [liveState])
-  // And so does where what was done on the page has got to, for a page that is told, each time that changes
+  // And so does whether the agent is at work and where what was done on the page has got to, each time that changes
   useEffect(() => {
     if (progress) port.current?.postMessage(JSON.parse(progress) as SiteToPage)
   }, [progress])

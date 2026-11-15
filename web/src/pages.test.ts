@@ -81,6 +81,8 @@ vi.mock('./mount', () => ({ Mount: () => null }))
 let root: Root
 let host: HTMLElement
 const said = () => host.querySelector('.status')?.textContent ?? null
+/** What the bar says of the page's agent being at work, in the look of a run It reopened, where it says so. */
+const working = () => host.querySelector('.page-nav .working')?.textContent ?? null
 /** Everything the bar says beside whether the agent is working, in the order it says it. */
 const allSaid = () => [...host.querySelectorAll('.status')].map((s) => s.textContent)
 /** The button that stops the page's agent, where it is offered. */
@@ -1059,7 +1061,7 @@ describe('the line that moves under a page’s bar', () => {
     expect(inHand([{ ...handed[0]!, outcome: 'failed' }], null, false, NOW, running)).toBe(false)
   })
 
-  test('the tour’s first page is told where what was done on it has got to, by what the bar goes by, and no other page is told anything', async () => {
+  test('every page is told whether its agent is at work and where what was done on it has got to, by what the bar goes by', async () => {
     await shown()
     const { progressFor } = await import('./progress')
     const at = NOW - 60_000
@@ -1070,8 +1072,9 @@ describe('the line that moves under a page’s bar', () => {
       { id: 'a', at: at - 9000, delivery: 'handed_off', outcome: 'succeeded', handedAt: at - 8000 },
     ]
     // Not yet handed over; handed over with the agent's turn running; and answered, of which no turn is said
-    expect(progressFor('start', recent, running, NOW)).toEqual({
+    expect(progressFor(recent, running, NOW)).toEqual({
       type: 'it:progress',
+      working: true,
       actions: [
         { id: 'c', handed: false, turn: null },
         { id: 'b', handed: true, turn: 'running' },
@@ -1079,18 +1082,19 @@ describe('the line that moves under a page’s bar', () => {
       ],
     })
     // A turn that ended once the click had been handed over is said to have ended, and one whose machine has gone quiet is not said at all
-    expect(progressFor('start', [recent[1]!], { ...running, turn: { since: at + 2000, endedAt: at + 30_000 } }, NOW)?.actions).toEqual([
-      { id: 'b', handed: true, turn: 'ended' },
-    ])
-    expect(progressFor('start', [recent[1]!], { ...running, machineSeenAt: NOW - 10 * 60_000 }, NOW)?.actions).toEqual([{ id: 'b', handed: true, turn: null }])
-    expect(progressFor('start', [recent[1]!], undefined, NOW)?.actions).toEqual([{ id: 'b', handed: true, turn: null }])
+    const ended = progressFor([recent[1]!], { ...running, turn: { since: at + 2000, endedAt: at + 30_000 } }, NOW)
+    expect([ended?.working, ended?.actions]).toEqual([false, [{ id: 'b', handed: true, turn: 'ended' }]])
+    const quiet = progressFor([recent[1]!], { ...running, machineSeenAt: NOW - 10 * 60_000 }, NOW)
+    expect([quiet?.working, quiet?.actions]).toEqual([false, [{ id: 'b', handed: true, turn: null }]])
+    expect(progressFor([recent[1]!], undefined, NOW)).toEqual({ type: 'it:progress', working: false, actions: [{ id: 'b', handed: true, turn: null }] })
+    // Nor past a stop the person asked for after the turn began
+    expect(progressFor([], { ...running, stoppedAt: at + 3000 }, NOW)?.working).toBe(false)
     // Only the newest few, since a part of the page waits on one at a time
     const many = Array.from({ length: 30 }, (_, i) => ({ id: `n${i}`, at: at - i, delivery: 'handed_off', outcome: 'succeeded', handedAt: at }))
-    expect(progressFor('start', many, running, NOW)?.actions.map((a) => a.id)).toEqual(['n0', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7'])
-    // Nothing done yet is nothing to say, and a page that is not the tour's first is told nothing whatever was done on it
-    expect(progressFor('start', [], running, NOW)).toBeNull()
-    expect(progressFor('start', undefined, running, NOW)).toBeNull()
-    for (const tour of [null, undefined, 'menu', 'chess', '']) expect(progressFor(tour, recent, running, NOW)).toBeNull()
+    expect(progressFor(many, running, NOW)?.actions.map((a) => a.id)).toEqual(['n0', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7'])
+    // A page nothing was done on is told that its agent is at work all the same, and nothing is said while what was done is still being asked for
+    expect(progressFor([], running, NOW)).toEqual({ type: 'it:progress', working: true, actions: [] })
+    expect(progressFor(undefined, running, NOW)).toBeNull()
   })
 
   test('stops when the turn ends, whether or not the page was changed, and not for a turn that ended before the click was handed over', async () => {
@@ -1144,12 +1148,12 @@ describe('the line that moves under a page’s bar', () => {
     try {
       await shown()
       expect(host.querySelector('.page-nav .page-progress')).not.toBeNull()
-      expect(allSaid()).toEqual(['Claude Code is working'])
+      expect([allSaid(), working()]).toEqual([[], 'Claude Code is working'])
       expect(stops()).toEqual([])
-      // Before the agent has changed the page, the bar says what it says of anything handed over
+      // Before the agent has changed the page it is working all the same, as its machine says
       Object.assign(PAGE, { answeredAt: 0 })
       await drawnAgain()
-      expect([said(), host.querySelector('.page-progress') !== null]).toEqual(['Your agent has it', true])
+      expect([working(), host.querySelector('.page-progress') !== null]).toEqual(['Claude Code is working', true])
       // The turn ends: the line stops, and with the page changed the bar has nothing to add
       Object.assign(PAGE, { answeredAt: NOW - 55_000, turn: { since: NOW - 58_000, endedAt: NOW - 1000 } })
       await drawnAgain()
@@ -1164,11 +1168,11 @@ describe('the line that moves under a page’s bar', () => {
     Object.assign(PAGE, { answeredAt: NOW - 24 * 60_000, turn: { since: NOW - 25 * 60_000, endedAt: null } })
     try {
       await shown()
-      expect([said(), host.querySelector('.page-progress') !== null]).toEqual(['Claude Code is working', true])
+      expect([working(), host.querySelector('.page-progress') !== null]).toEqual(['Claude Code is working', true])
       // Its machine goes quiet: whether it is still at work is not known, and nothing is said of it
       Object.assign(PAGE, { machineSeenAt: NOW - 3 * 60_000 })
       await drawnAgain()
-      expect([said(), host.querySelector('.page-progress')]).toEqual([null, null])
+      expect([said(), working(), host.querySelector('.page-progress')]).toEqual([null, null, null])
     } finally {
       Object.assign(PAGE, { answeredAt: 0, turn: undefined, machineSeenAt: NOW })
     }
@@ -1213,6 +1217,150 @@ describe('the line that moves under a page’s bar', () => {
     } finally {
       Object.assign(PAGE, { answeredAt: 0 })
     }
+  })
+})
+
+describe('the bar while a turn of the page’s conversation runs, which It did not start', () => {
+  const RUNNING = { since: NOW - 30_000, endedAt: null }
+  /** Draws the page with what its machine said of the turn, and puts the page back as it was afterwards. */
+  async function withTurn(more: Record<string, unknown>, look: () => Promise<void>) {
+    const before = { ...PAGE }
+    Object.assign(PAGE, { agent: 'claude-code', machineSeenAt: NOW, run: null, answeredAt: 0, stoppedAt: null, ...more })
+    try {
+      await look()
+    } finally {
+      for (const key of Object.keys(PAGE)) if (!(key in before)) delete (PAGE as Record<string, unknown>)[key]
+      Object.assign(PAGE, before)
+    }
+  }
+
+  test('says that the agent is working, naming its app, with nothing done on the page lately or at all, and offers no Stop', async () => {
+    await withTurn({ turn: RUNNING }, async () => {
+      recent = []
+      await shown()
+      expect([working(), allSaid(), stops()]).toEqual(['Claude Code is working', [], []])
+      expect(host.querySelector('.page-nav .working .working-dot')).not.toBeNull()
+      // Something done an hour ago, long since answered, changes nothing
+      recent = [{ at: NOW - 60 * 60_000, delivery: 'handed_off', outcome: 'succeeded', handedAt: NOW - 60 * 60_000 }]
+      await drawnAgain()
+      expect([working(), allSaid()]).toEqual(['Claude Code is working', []])
+      // A page that names no agent app says it of the person's agent
+      Object.assign(PAGE, { agent: null })
+      await drawnAgain()
+      expect(working()).toBe('Your agent is working')
+    })
+  })
+
+  test('says it in place of what it says of something handed over, done, or stopped before the turn began, and stops saying it when the turn ends', async () => {
+    await withTurn({ turn: RUNNING }, async () => {
+      for (const last of [
+        { at: NOW - 40_000, delivery: 'handed_off', outcome: 'running', handedAt: NOW - 39_000 },
+        { at: NOW - 40_000, delivery: 'handed_off', outcome: 'succeeded', handedAt: NOW - 39_000 },
+        { at: NOW - 40_000, delivery: 'handed_off', outcome: 'unknown', handedAt: NOW - 39_000 },
+        { at: NOW - 40_000, delivery: 'handed_off', outcome: null, route: 'stopped', handedAt: NOW - 39_000 },
+      ]) {
+        recent = [last]
+        Object.assign(PAGE, {
+          stoppedAt: last.route === 'stopped' ? NOW - 35_000 : null,
+          turn: last.route === 'stopped' ? { since: NOW - 20_000, endedAt: null } : RUNNING,
+        })
+        await shown()
+        expect([working(), allSaid()]).toEqual(['Claude Code is working', []])
+        await act(async () => root.unmount())
+        host.remove()
+      }
+      recent = [{ at: NOW - 40_000, delivery: 'handed_off', outcome: 'running', handedAt: NOW - 39_000 }]
+      Object.assign(PAGE, { stoppedAt: null, turn: { since: NOW - 30_000, endedAt: NOW - 1000 } })
+      await shown()
+      expect([working(), said()]).toEqual([null, 'Claude Code finished without changing this page'])
+    })
+  })
+
+  test('says nothing of a turn its machine may have stopped being able to speak of: one that ended, one on a machine gone quiet or stopping, one a stop came after, and one nothing is known of', async () => {
+    recent = []
+    for (const more of [
+      { turn: { since: NOW - 30_000, endedAt: NOW - 5000 } },
+      // Quiet for longer than a machine that is there ever is: asleep, cut off, or its connector killed
+      { turn: RUNNING, machineSeenAt: NOW - 3 * 60_000 },
+      // Its connector said it was stopping, or the machine was revoked
+      { turn: RUNNING, machineSeenAt: null },
+      // The person stopped the conversation after the turn began
+      { turn: RUNNING, stoppedAt: NOW - 10_000 },
+      { turn: RUNNING, stoppedAt: RUNNING.since },
+      // Nothing was ever said of a turn, as of an agent app that does not say when its turns run, and functions from before they said it
+      { turn: null },
+      { turn: undefined },
+    ])
+      await withTurn(more, async () => {
+        await shown()
+        expect([working(), allSaid()], JSON.stringify(more)).toEqual([null, []])
+        await act(async () => root.unmount())
+        host.remove()
+      })
+    // A stop that came before the turn began stands in the way of nothing
+    await withTurn({ turn: RUNNING, stoppedAt: RUNNING.since - 1 }, async () => {
+      await shown()
+      expect(working()).toBe('Claude Code is working')
+    })
+  })
+
+  test('says nothing of it once It has not been reachable for a few seconds, since what the page was last told may be long out of date', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    recent = []
+    await withTurn({ turn: RUNNING }, async () => {
+      await shown()
+      expect(working()).toBe('Claude Code is working')
+      await connection(false)
+      await pass(5500)
+      expect([working(), said()]).toEqual([null, 'Can’t reach It. What you do here is saved on this browser, and sent when It is back'])
+      await connection(true)
+      expect(working()).toBe('Claude Code is working')
+    })
+  })
+
+  test('gives way to whatever asks something of the person or says that something waits or went wrong', async () => {
+    await withTurn({ turn: RUNNING }, async () => {
+      // With nothing of the kind to say, it says that the agent is working
+      recent = [{ at: NOW - 40_000, delivery: 'handed_off', outcome: 'running', handedAt: NOW - 39_000 }]
+      await shown()
+      expect([working(), said()]).toEqual(['Claude Code is working', null])
+      await act(async () => root.unmount())
+      host.remove()
+      for (const [last, words] of [
+        [{ at: NOW - 2000, delivery: 'pending', outcome: null, heldBack: CODEX_INTERRUPTED }, `Not handed to Claude Code yet: ${CODEX_INTERRUPTED}`],
+        [{ at: NOW - 60_000, delivery: 'leased', outcome: null }, 'Sent. Claude Code is busy, and gets it when it is free'],
+        [{ at: NOW - 40_000, delivery: 'handed_off', outcome: 'failed', handedAt: NOW - 39_000 }, 'Your agent could not do that'],
+      ] as const) {
+        recent = [last]
+        await shown()
+        expect([working(), said()]).toEqual([null, words])
+        await act(async () => root.unmount())
+        host.remove()
+      }
+      // Something older that still waits is said before it, though the last thing done was handed over
+      recent = [{ at: NOW - 40_000, delivery: 'handed_off', outcome: 'running', handedAt: NOW - 39_000 }]
+      Object.assign(PAGE, { pending: 2 })
+      await shown()
+      expect([working(), said()]).toEqual([null, '2 earlier things done here are still waiting for Claude Code'])
+    })
+  })
+
+  test('leaves a run It reopened as it was, with its own words and its Stop', async () => {
+    recent = []
+    await withTurn({ turn: RUNNING, run: { stopping: false, identity: 'run-1' } }, async () => {
+      // Not reopened by It, the turn is said in the same look, with no Stop
+      Object.assign(PAGE, { run: null })
+      await shown()
+      expect([working(), stops().length]).toEqual(['Claude Code is working', 0])
+      await act(async () => root.unmount())
+      host.remove()
+      Object.assign(PAGE, { run: { stopping: false, identity: 'run-1' } })
+      await shown()
+      expect(working()).toContain('Working')
+      expect(working()).not.toContain('Claude Code is working')
+      expect(stops().length).toBe(1)
+    })
   })
 })
 
