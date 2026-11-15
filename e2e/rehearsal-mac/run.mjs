@@ -15,7 +15,7 @@
 // Results go to ~/it-rehearsal/2026-11-15-mac/<run id>/, the ledger to ledger.md there. What a run
 // is working on (the person's screenshots, its clock) is in $IT_REHEARSAL_LIVE.
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -99,8 +99,14 @@ async function destroy(id) {
   await wipeAll(id)
   const r = nsc(['destroy', id, '--force'], { timeout: 180_000 })
   log(`destroy ${id}: exit ${r.status} ${redact((r.stderr || r.stdout || '').trim().slice(0, 200))}`)
-  const listed = nsc(['list', '-o', 'json']).stdout ?? ''
-  if (r.status !== 0 && listed.includes(id)) throw new Error(`${id} was not destroyed and is still listed; its ledger line stays open.`)
+  if (r.status !== 0) {
+    const l = nsc(['list', '-o', 'json'])
+    let gone = false
+    try {
+      gone = l.status === 0 && !(JSON.parse(l.stdout || 'null') ?? []).some((m) => m.cluster_id === id)
+    } catch {}
+    if (!gone) throw new Error(`${id} could not be shown to be destroyed; its ledger line stays open.`)
+  }
   const rows = ledger()
   const m = rows.find((x) => x.id === id && !x.destroyed)
   if (m) m.destroyed = new Date().toISOString()
@@ -131,7 +137,7 @@ function upload(id) {
   for (const f of files) if (!existsSync(join(BIN, f))) throw new Error(`The build has no ${f} in ${BIN}.`)
   // Staged in one folder (the build's files under bin/, the harness beside them) and sent as one tar
   const stage = join(LIVE, 'upload')
-  spawnSync('rm', ['-rf', stage])
+  spawnSync('rm', ['-rf', stage], { env: SAFE_ENV })
   mkdirSync(join(stage, 'bin'), { recursive: true })
   for (const f of files) copyFileSync(join(BIN, f), join(stage, 'bin', f))
   for (const f of ['hands.swift', 'prepare.sh', 'releases.mjs']) copyFileSync(join(HERE, f), join(stage, f))
@@ -190,10 +196,29 @@ async function prepareSteps(id) {
   await signIn(id, app)
   await step(id, `desktop ${browser}`)
   await step(id, `place ${browser === 'chrome' ? '"Google Chrome"' : 'Safari'}`)
+  await clearScreen(id, browser)
   const facts = await step(id, 'facts')
   const machine = { id, app, browser, appVersion: version, facts: Object.fromEntries(facts.trim().split('\n').map((l) => [l.split('=')[0], l.slice(l.indexOf('=') + 1)])) }
   writeFileSync(join(LIVE, `mac-${id}.json`), `${JSON.stringify(machine, null, 2)}\n`)
   await look(id)
+}
+
+/**
+ * Clears what the test itself puts on a new Mac's screen and a participant never meets: the
+ * prompt macOS shows the first time the recorder's helper captures the screen (its Allow button
+ * is at the same place each time), and Safari's first-run "What's New" card.
+ */
+async function clearScreen(id, browser) {
+  const h = `${GUI} /usr/local/bin/hands`
+  await onMac(id, `${GUI} screencapture -x ${SHARED}/prompt.png; sleep 3; ${h} click 640 372; sleep 1${browser === 'safari' ? `; ${h} click 734 171` : ''}; sleep 0.5; ${h} click 300 400`)
+  log('cleared the capture prompt and the browser\'s first-run card')
+}
+
+/** One short question to Claude Code through OpenRouter, outside the person's folder, before any recording. */
+async function checkClaude(id) {
+  const q = 'Which model are you, exactly? Answer in one short sentence.'
+  const r = await onMac(id, `mkdir -p /tmp/check && cd /tmp/check && claude -p "${q}" 2>&1 | head -5; rm -rf ~/.claude/projects/-private-tmp-check ~/.claude/projects/-tmp-check`, { timeout: 180_000 })
+  log(`Claude Code answered (exit ${r.code}): ${redact(r.out.trim())}`)
 }
 
 async function look(id, file = join(LIVE, `look-${id}-${Date.now()}.png`)) {
@@ -212,7 +237,7 @@ async function start(id) {
   const runId = `${stamp}-${scenario}-${app}-${browser}-mac15`.toLowerCase()
   const live = join(LIVE, runId)
   mkdirSync(join(live, 'shots'), { recursive: true })
-  const build = { commit: spawnSync('git', ['-C', ROOT, 'log', '-1', '--format=%H', '--', '.', ':(exclude)e2e/rehearsal-mac'], { encoding: 'utf8' }).stdout.trim(), version: JSON.parse(readFileSync(join(BIN, 'latest.json'), 'utf8')).version }
+  const build = { commit: spawnSync('git', ['-C', ROOT, 'log', '-1', '--format=%H', '--', '.', ':(exclude)e2e/rehearsal-mac'], { encoding: 'utf8', env: SAFE_ENV }).stdout.trim(), version: JSON.parse(readFileSync(join(BIN, 'latest.json'), 'utf8')).version }
   const result = {
     id: runId,
     scenario,
@@ -286,20 +311,24 @@ async function finish(live) {
   }
   const tmuxText = await text(`/opt/homebrew/bin/tmux capture-pane -p -J -S - -t agent`, 'terminal')
   const screens = await text(`cat ${SHARED}/screens.txt`, 'terminal-screens')
-  let withhold = elsewhere.length > 0 || !sameValues || unread.length > 0
+  let withhold = elsewhere.length > 0 || !sameValues
   const itLogs = await text('for f in ~/.it/logs/*; do [ -f "$f" ] && { echo "=== $(basename "$f")"; tail -n 400 "$f"; }; done 2>/dev/null; true', 'it-logs')
   const status = await text('~/.it/bin/it status 2>&1 | head -100; true', 'it-status')
   const standIn = await text(`tail -n 200 ${SHARED}/releases.log 2>/dev/null; true`, 'stand-in')
   const service = await text('ls ~/Library/LaunchAgents 2>/dev/null; launchctl print gui/501 2>/dev/null | grep -i " it" | head -20; true', 'service')
   const ffmpegLog = await text(`tail -20 ${SHARED}/ffmpeg.log 2>/dev/null; true`, 'ffmpeg')
-  // The person's own notes are cleaned where they lie, too
+  // The person's own notes: a note in which a value is seen withholds the video and is replaced whole
   for (const f of ['person-log.txt', 'person-account.txt']) {
     const p = join(live, f)
-    if (existsSync(p) && holdsSecret(readFileSync(p, 'utf8'), held)) writeFileSync(p, redact(readFileSync(p, 'utf8'), held))
+    if (existsSync(p) && holdsSecret(readFileSync(p, 'utf8'), held)) {
+      withhold = true
+      writeFileSync(p, '(not kept: something shaped like a credential was in it)\n')
+    }
   }
   // Every trace of the credential off the Mac, before anything is kept
   const left = await wipe(id, held)
   result.credentialFilesLeftAfterWipe = left.length
+  if (left.length) withhold = true
   if (left.length) log(`after the wipe the Mac is not clean: ${redact(left.join(', '), held)}`)
   // A file in which a value or its shape is seen is not kept at all, and the video is withheld
   const keep = (file, body) => {
@@ -323,8 +352,14 @@ async function finish(live) {
   for (const f of ['person-log.txt', 'person-account.txt', 'actions.jsonl']) {
     if (existsSync(join(live, f))) keep(f, readFileSync(join(live, f), 'utf8'))
   }
-  if (unread.length) result.unread = unread
-  if (withhold) rmSync(join(live, 'shots'), { recursive: true, force: true })
+  if (unread.length) {
+    result.unread = unread
+    withhold = true
+  }
+  if (withhold) {
+    rmSync(join(live, 'shots'), { recursive: true, force: true })
+    for (const f of readdirSync(LIVE)) if (f.startsWith(`look-${id}-`)) rmSync(join(LIVE, f), { force: true })
+  }
   if (!withhold) {
     const { out } = await onMac(id, `cat ${SHARED}/video.mp4`, { binary: true, timeout: 900_000 })
     writeFileSync(join(dir, 'video.mp4'), out)
@@ -357,10 +392,25 @@ try {
   else if (cmd === 'sign-in') await signIn(target, arg('app', 'codex'))
   else if (cmd === 'look') await look(target)
   else if (cmd === 'upload') await upload(target)
+  else if (cmd === 'check-claude') await checkClaude(target)
+  else if (cmd === 'clear') await clearScreen(target, arg('browser', 'safari'))
   else if (cmd === 'step') await step(target, argv.slice(2).join(' '))
-  else if (cmd === 'start') await start(target)
-  else if (cmd === 'finish') await finish(target)
-  else if (cmd === 'wipe') await wipeAll(target)
+  else if (cmd === 'start') {
+    try {
+      await start(target)
+    } catch (err) {
+      await wipeAll(target)
+      throw err
+    }
+  } else if (cmd === 'finish') {
+    try {
+      await finish(target)
+    } catch (err) {
+      const id = existsSync(join(target, 'ready')) ? readFileSync(join(target, 'ready'), 'utf8').trim() : null
+      if (id) await wipeAll(id)
+      throw err
+    }
+  } else if (cmd === 'wipe') await wipeAll(target)
   else if (cmd === 'destroy') await destroy(target)
   else if (cmd === 'ledger') console.log(`${writeLedger(ledger())} Mac-minutes used of ${BUDGET}`)
   else console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(0, 16).join('\n'))

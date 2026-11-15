@@ -186,7 +186,7 @@ export async function inject(id, held, until) {
     `f="$HOME/${held.file}"; [ -L "$f" ] && rm -f "$f"; rm -f "$f.new"`,
     'set -C; cat > "$f.new"; set +C; mv -f "$f.new" "$f"',
     // The watch, detached from this connection
-    `bash -c 'trap "" HUP; ${OVERWRITE.replace(/'/g, '')}; while [ $(date +%s) -lt ${until} ]; do sleep 20; done; for f in ${FILES}; do ow "$f"; done' </dev/null >/dev/null 2>&1 &`,
+    `bash -c 'trap "" HUP; ${OVERWRITE.replace(/'/g, '')}; while [ $(date +%s) -lt ${until} ]; do sleep 20; done; /opt/homebrew/bin/tmux kill-server; pkill -KILL -u runner -x codex; pkill -KILL -u runner -x claude; for f in ${FILES}; do ow "$f"; done' </dev/null >/dev/null 2>&1 &`,
     'echo WROTE',
   ].join('\n')
   const { code, out } = await onMac(id, `bash -c "$(cat <<'SCRIPT'\n${script}\nSCRIPT\n)"`, { input: held.json, timeout: 120_000 })
@@ -245,7 +245,8 @@ export async function wipe(id, held) {
   const script = [
     OVERWRITE,
     '/opt/homebrew/bin/tmux kill-server >/dev/null 2>&1 || true',
-    'pkill -TERM -u runner -x codex >/dev/null 2>&1; pkill -TERM -u runner -x claude >/dev/null 2>&1; pkill -TERM -u runner -f "node.*(@openai/codex|claude-code)" >/dev/null 2>&1; sleep 2',
+    // Exact process names only, which this cleanup shell never has
+    'pkill -TERM -u runner -x codex >/dev/null 2>&1; pkill -TERM -u runner -x claude >/dev/null 2>&1; sleep 2; pkill -KILL -u runner -x codex >/dev/null 2>&1; pkill -KILL -u runner -x claude >/dev/null 2>&1',
     `for f in ${FILES}; do ow "$f"; done`,
     `left=0; for f in ${FILES}; do [ -e "$f" ] || [ -L "$f" ] && left=1; done; [ $left = 0 ] && echo WIPED`,
   ].join('; ')
@@ -285,7 +286,7 @@ export function holdsSecret(text, held) {
   const raw = String(text)
   if (redact(raw, held) !== raw) return true
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the terminal's escape sequences are what is taken out
-  const flat = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[\s─-╿│]+/g, '')
+  const flat = raw.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '').replace(/\x1b[[(][0-9;?]*[A-Za-z@]/g, '').replace(/\x1b./g, '').replace(/[\s─-╿│]+/g, '')
   if ((held?.values ?? []).some((v) => flat.includes(v.replace(/\s+/g, '')))) return true
   return SHAPES.some((re) => new RegExp(re.source).test(flat))
 }
