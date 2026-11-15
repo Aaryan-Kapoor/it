@@ -63,6 +63,13 @@ export async function answerApp(app, counts = {}) {
       await choose(/Yes|trust/i, 'Claude Code asks whether to trust the folder')
       return 'trust'
     }
+    // The same question with unnumbered options ("❯ No, exit" above "Yes, I trust this folder")
+    if (/Yes, I trust this folder/i.test(tail) && /No, exit/i.test(tail)) {
+      for (let i = 0; i < 4 && !/[❯›>]\s*Yes, I trust this folder/i.test(screen()); i++) await key('Down')
+      step('Claude Code asks whether to trust the folder; chooses "Yes, I trust this folder"')
+      await key('Enter')
+      return 'trust'
+    }
     if (/Do you want to (proceed|make this edit|create|allow)|Allow this|Do you want to run/i.test(tail) && /1\.\s*Yes/.test(tail)) {
       counts.approvals = (counts.approvals ?? 0) + 1
       const cmd = tail.match(/(?:Bash command|Bash\()([\s\S]{0,300}?)(?:Do you want|\n\s*\n)/i)?.[1]?.replace(/\s+/g, ' ').trim()
