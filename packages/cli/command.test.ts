@@ -8111,6 +8111,28 @@ describe('whether what the person does arrives by itself, as a page’s command 
     }
   })
 
+  test('`it tour next` waits on the tour’s first page alone, by its id, though the conversation is known, and leaves its other pages’ actions to them', async () => {
+    const m = machine()
+    const action = { id: 'k58', artifact: 'tour-start', title: 'Getting started', name: 'moved', payload: '{"part":"room"}', at: 1, session: null }
+    b = await backend(m, ({ path: fn }) => {
+      if (fn === 'artifacts:get') return { title: 'Getting started' }
+      if (fn === 'delivery:waiting') return [action]
+      if (fn === 'delivery:waitingFor') return [{ ...action, id: 'k59', artifact: 'plan', title: 'Plan' }]
+      if (fn === 'delivery:claim') return ['k58']
+      if (fn === 'delivery:handedOff') return { already: false }
+      return null
+    })
+    try {
+      const ran = await run(m, ['tour', 'next', '--timeout', '1'], { ...b.env, IT_HARNESS: 'claude-code', IT_SESSION: claude })
+      expect(ran.code).toBe(0)
+      expect(printed(ran)).toMatchObject({ id: 'k58', page: 'tour-start', action: 'moved' })
+      expect(b.asked.find((x) => x.path === 'artifacts:get')?.args).toEqual({ slug: 'tour-start' })
+      expect(b.asked.some((x) => x.path === 'delivery:waitingFor')).toBe(false)
+    } finally {
+      await b.close()
+    }
+  })
+
   test('where the conversation’s add-on is listening, or its Claude Code is too old to load one, the first page is put up awake', async () => {
     const m = machine()
     b = await backend(m, ({ path: fn, args }) => {

@@ -1190,7 +1190,6 @@ const HEREDOC = (id: string) =>
   `Give the JSON in a here-document, where nothing in it ends anything: \`it tour answer ${id} "$(cat <<'EOF'\`, then the JSON on a line of its own, then EOF on a line of its own, then \`)"\`.`
 async function tourAnswer(a: Args, counted: (code?: string) => void) {
   const USAGE = "tour answer <action-id> [- | '<json>' | --file <path>] [--wait | --no-wait] [--timeout <seconds>]"
-  const me = sessionAsked()?.session
   if (a._[0] === 'answer') {
     const id = need(a._[1], 'which action', USAGE)
     if (a.flags.wait === true && a.flags['no-wait'] === true)
@@ -1242,8 +1241,11 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
       `${JSON.stringify({ ...answered, next: 'Waiting for what the person does next, which is printed below. Answer it with this command again.' })}\n`,
     )
   } else if (a._.length > 1) throw new Problem('`it tour next` takes nothing after it.', 'invalid', 'Usage: it tour next [--timeout <seconds>]')
-  // An agent app that does not say which conversation this is waits on the page by its id, as the tour tells it to
-  const waiting: Args = { _: [], flags: { timeout: text(a, 'timeout') ?? '100', ...(me ? {} : { id: START_SLUG }) }, many: {} }
+  // The wait is on the tour's first page alone, by its id, whether or not the agent app says which
+  // conversation this is: what is done on the conversation's other pages is theirs to answer, and
+  // a first page that no conversation has yet, as one made before OpenCode loaded It's add-on, is
+  // given to this one by being waited on
+  const waiting: Args = { _: [], flags: { timeout: text(a, 'timeout') ?? '100', id: START_SLUG }, many: {} }
   return wait(waiting, counted, async (c) => {
     const picture = await keepPicture(c, process.cwd())
     return picture ? { picture } : {}
