@@ -12,7 +12,7 @@
 //   record   the screen recording starts and the tester can no longer type: the person plays.
 //   stop     the end: recording stopped, everything the run started stopped by its own id.
 import { execFileSync, spawn } from 'node:child_process'
-import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { claudeAccess, codexAuth, forget, scrub, shredAll, shredLedger, shredOnExit } from './credentials.mjs'
@@ -31,7 +31,8 @@ const port = Number(arg('port', 5600))
 const controlPort = Number(arg('control', 5697))
 const profileName = arg('profile-name', 'rehearsal')
 const person = arg('person', 'model')
-const build = process.env.IT_REHEARSAL_BUILD || '4488f0c8f19f'
+const agentInstalls = process.argv.includes('--agent-installs')
+const build = process.env.IT_REHEARSAL_BUILD || '027c39a03176'
 const id = arg('id', `${stamp().slice(0, 16).replace(/[-:T]/g, '').replace(/^(\d{8})/, '$1-')}-s${scenario}-${app}-${channel}-aarya`)
 const MODEL = app === 'codex' ? { model: 'gpt-6.1-sol', effort: 'high' } : { model: 'claude-sonnet-5-5', effort: 'high' }
 const appDir = path.join(WORK, 'apps', `${app === 'codex' ? 'codex' : 'claude'}-${version}`)
@@ -66,6 +67,13 @@ const icacls0 = icacls()
 // What every program of the run is given: the throwaway home, It's folder and ports, the agent
 // app on the PATH behind the guard, and the stand-in for the releases
 const env = profileEnv(f, { port, appBin, guard: true, extra: { IT_INSTALL_BASE: 'http://127.0.0.1:5690', IT_INSTALL_NO_PATH: '1' } })
+if (agentInstalls)
+  Object.assign(env, {
+    IT_REHEARSAL_GUARD: 'convert',
+    IT_REHEARSAL_REAL_IT: path.join(f.itHome, 'bin', 'it-real.exe'),
+    IT_REHEARSAL_SERVE_LOG: path.join(f.logs, 'serve.log'),
+    IT_REHEARSAL_SERVE_PIDS: path.join(f.top, 'serve-pids.txt'),
+  })
 // The agent app's settings, as a person who chose that model has them, in the throwaway profile
 let tokenExpiry = null
 const appEnv = {}
@@ -137,30 +145,68 @@ const browsing = setInterval(() => {
   browser.page.goto(url).catch((e) => log('the address could not be opened', e.message, false))
 }, 300)
 
-// The setup step, by the harness: the real install script, `it setup --only <app> --no-service`, `it serve`
-term.note('The organisers set It up on this laptop before the event (done by the rehearsal harness):')
-const ins = await install({ env, cwd: f.home, base: 'http://127.0.0.1:5690', term, log })
 const appId = app === 'codex' ? 'codex' : 'claude-code'
-const set = await setup({ program: ins.program, env, cwd: f.work, app: appId, term, log })
-writeFileSync(path.join(f.logs, 'setup.txt'), scrub(`${set.out}\n${set.err}`).text)
-const say = /“([^”]*It tour[^”]*)”|"(Give me the It tour\.?)"/.exec(`${set.out}\n${set.err}`)
-const sentence = say ? (say[1] ?? say[2]) : 'Give me the It tour.'
-log('what setup told the person to say', sentence)
-const serveLog = createWriteStream(path.join(f.logs, 'serve.log'), { flags: 'a' })
-const serveChild = spawn(ins.program, ['serve'], { env: { ...env, ...appEnv }, cwd: f.work, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
-serveChild.stdout.pipe(serveLog)
-serveChild.stderr.pipe(serveLog)
-let status = null
-for (let i = 0; i < 60 && !status?.running; i++) {
-  await sleep(2500)
-  status = (await it(ins.program, ['status', '--json'], { env, cwd: f.work, ms: 90_000 })).json
+let sentence = 'Give me the It tour.'
+let serveChild = null
+let swapping = null
+if (!agentInstalls) {
+  // The setup step, by the harness: the real install script, `it setup --only <app> --no-service`, `it serve`
+  term.note('The organisers set It up on this laptop before the event (done by the rehearsal harness):')
+  const ins = await install({ env, cwd: f.home, base: 'http://127.0.0.1:5690', term, log })
+  const set = await setup({ program: ins.program, env, cwd: f.work, app: appId, term, log })
+  writeFileSync(path.join(f.logs, 'setup.txt'), scrub(`${set.out}\n${set.err}`).text)
+  const say = /“([^”]*It tour[^”]*)”|"(Give me the It tour\.?)"/.exec(`${set.out}\n${set.err}`)
+  sentence = say ? (say[1] ?? say[2]) : 'Give me the It tour.'
+  log('what setup told the person to say', sentence)
+  const serveLog = createWriteStream(path.join(f.logs, 'serve.log'), { flags: 'a' })
+  serveChild = spawn(ins.program, ['serve'], { env: { ...env, ...appEnv }, cwd: f.work, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+  serveChild.stdout.pipe(serveLog)
+  serveChild.stderr.pipe(serveLog)
+  let status = null
+  for (let i = 0; i < 60 && !status?.running; i++) {
+    await sleep(2500)
+    status = (await it(ins.program, ['status', '--json'], { env, cwd: f.work, ms: 90_000 })).json
+  }
+  log('it serve is running, started by the harness', `running ${status?.running}, site ${status?.site}`, Boolean(status?.running))
+  const site = await it(ins.program, ['site', '--no-open'], { env, cwd: f.work })
+  const pairUrl = site.json?.url
+  log('the pairing link (it site --no-open)', pairUrl ?? site.out, Boolean(pairUrl))
+  if (pairUrl) await browser.page.goto(pairUrl).catch(() => {})
+  await sleep(3000)
+} else {
+  // The agent installs It itself. The moment the installer has put It's program in place, the
+  // guard takes its place and the program is kept beside it, so that `it setup`, however the agent
+  // runs it, registers no task for the owner's account: the guard adds `--no-service` and starts
+  // `it serve`, the one thing the task would have done for a person on their own account.
+  const bin = path.join(f.itHome, 'bin')
+  const target = path.join(bin, 'it.exe')
+  const realIt = path.join(bin, 'it-real.exe')
+  const guardExe = path.join(WORK, 'guard', 'it.exe')
+  const guardSize = statSync(guardExe).size
+  let lastSize = -1
+  let stableSince = 0
+  swapping = setInterval(() => {
+    try {
+      if (!existsSync(target)) return
+      const size = statSync(target).size
+      if (size === guardSize) return
+      if (size !== lastSize) {
+        lastSize = size
+        stableSince = Date.now()
+        return
+      }
+      if (Date.now() - stableSince < 1200) return
+      rmSync(realIt, { force: true })
+      renameSync(target, realIt)
+      copyFileSync(guardExe, target)
+      lastSize = -1
+      log("the installed program was kept as it-real.exe and the guard put in its place (so that setup registers no task for the owner's account)", `${size} bytes`)
+    } catch (e) {
+      log('the guard could not be put in place', e.message, false)
+    }
+  }, 150)
+  log('the agent will install It itself; the guard watches for the program', bin)
 }
-log('it serve is running, started by the harness', `running ${status?.running}, site ${status?.site}`, Boolean(status?.running))
-const site = await it(ins.program, ['site', '--no-open'], { env, cwd: f.work })
-const pairUrl = site.json?.url
-log('the pairing link (it site --no-open)', pairUrl ?? site.out, Boolean(pairUrl))
-if (pairUrl) await browser.page.goto(pairUrl).catch(() => {})
-await sleep(3000)
 
 // The terminal: Windows PowerShell in the empty project folder, as the person's own
 const pty = term.open(['C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', '-NoLogo'], { env: { ...env, ...appEnv }, cwd: f.work, python: path.join(WORK, 'pyembed', 'python.exe') })
@@ -181,7 +227,9 @@ const meta = {
   browser: channel,
   person,
   account: 'aarya (throwaway profile)',
-  setUpBy: 'the harness (install script, it setup --only ' + appId + ' --no-service, it serve), not the agent',
+  setUpBy: agentInstalls
+    ? 'the agent (install and setup), except that the harness turned its `it setup` into `it setup --no-service` plus `it serve`, which is what the background task would do'
+    : 'the harness (install script, it setup --only ' + appId + ' --no-service, it serve), not the agent',
   build,
   sentence,
   tokenExpiry,
@@ -240,10 +288,11 @@ writeFileSync(path.join(f.results, 'terminal-plain.txt'), transcript.text.replac
 // Everything the run started, by its own id
 killTree(pty.pid)
 await sleep(1000)
-const served = serveChild.pid
-spawnSyncSafe('taskkill', ['/PID', String(served), '/T'])
+if (swapping) clearInterval(swapping)
+const serves = [serveChild?.pid, ...(existsSync(path.join(f.top, 'serve-pids.txt')) ? readFileSync(path.join(f.top, 'serve-pids.txt'), 'utf8').split(/\s+/).map(Number) : [])].filter(Boolean)
+for (const served of serves) spawnSyncSafe('taskkill', ['/PID', String(served), '/T'])
 await sleep(8000)
-killTree(served)
+for (const served of serves) killTree(served)
 await browser.context.close().catch(() => {})
 await tw.context.close().catch(() => {})
 await term.close()
