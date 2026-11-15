@@ -687,7 +687,7 @@ trust_level = "trusted"
     const end = Date.now() + ms
     let now
     do {
-      now = (await working.count()) ? await working.innerText() : null
+      now = (await working.count()) ? await working.innerText({ timeout: 1000 }).catch(() => null) : null
       if (now === words) return now
       await sleep(250)
     } while (Date.now() < end)
