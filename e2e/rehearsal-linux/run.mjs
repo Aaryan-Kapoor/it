@@ -219,7 +219,7 @@ async function main() {
   asAna('tmux set -g status off; tmux set -g history-limit 50000')
   // What the terminal shows, kept every few seconds where it changed: an app that clears the
   // screen as it leaves takes its scrollback with it
-  exec(`nohup su ana -c 'p=""; while sleep 4; do c=$(tmux capture-pane -p -J -t agent 2>/dev/null) || continue; [ "$c" = "$p" ] && continue; printf "=== %s\\n%s\\n" "$(date -u +%T)" "$c" >> ${FLOW}/screens.txt; p="$c"; done' >/dev/null 2>&1 &`)
+  exec(`nohup su ana -s /bin/bash -c 'p=""; while sleep 4; do c=$(tmux capture-pane -p -J -t agent 2>/dev/null) || continue; [ "$c" = "$p" ] && continue; printf "=== %s\\n%s\\n" "$(date -u +%T)" "$c" >> ${FLOW}/screens.txt; p="$c"; done' >/dev/null 2>&1 &`)
   // The person's desktop: a terminal on the left, open and empty, and the web browser on the right
   sh(['exec', '-d', name, 'su', '-l', 'ana', '-s', '/bin/bash', '-c', 'DISPLAY=:1 xfce4-terminal --disable-server --hide-menubar --hide-toolbar --hide-scrollbar --title=Terminal --font="DejaVu Sans Mono 11" --geometry=104x54+0+0 -x tmux attach -t agent'])
   await new Promise((r) => setTimeout(r, 2500))
@@ -259,7 +259,7 @@ async function main() {
       asAna('systemctl --user restart it.service', { quiet: true, timeout: 180_000 })
     }
     asAna('tmux set -g status off')
-    exec(`nohup su ana -c 'p=""; while sleep 4; do c=$(tmux capture-pane -p -J -t agent 2>/dev/null) || continue; [ "$c" = "$p" ] && continue; printf "=== %s\\n%s\\n" "$(date -u +%T)" "$c" >> ${FLOW}/screens.txt; p="$c"; done' >/dev/null 2>&1 &`)
+    exec(`nohup su ana -s /bin/bash -c 'p=""; while sleep 4; do c=$(tmux capture-pane -p -J -t agent 2>/dev/null) || continue; [ "$c" = "$p" ] && continue; printf "=== %s\\n%s\\n" "$(date -u +%T)" "$c" >> ${FLOW}/screens.txt; p="$c"; done' >/dev/null 2>&1 &`)
     exec(`ffmpeg -nostdin -y -loglevel error -f x11grab -framerate 12 -video_size 1920x1080 -i :1 -vf scale=1600:-2 -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p /var/lib/rehearsal-video/video.mp4 > /var/lib/rehearsal-video/ffmpeg.log 2>&1 & echo $! > /run/rehearsal-ffmpeg.pid`)
     sh(['exec', '-d', name, 'su', '-l', 'ana', '-s', '/bin/bash', '-c', 'DISPLAY=:1 xfce4-terminal --disable-server --hide-menubar --hide-toolbar --hide-scrollbar --title=Terminal --font="DejaVu Sans Mono 11" --geometry=104x54+0+0 -x tmux attach -t agent'])
     await new Promise((r) => setTimeout(r, 2500))
