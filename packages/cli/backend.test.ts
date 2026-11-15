@@ -48,7 +48,6 @@ import {
   nothingLeft,
   programsHere,
   type Running,
-  raised,
   removeCopies,
   removeOtherPrograms,
   standing,
@@ -3780,16 +3779,6 @@ describe('the backend programs fetched for earlier releases', () => {
       ].sort(),
     )
     expect(readFileSync(path.join(folder, 'elsewhere', 'convex-local-backend'), 'utf8')).toBe('not made by It')
-  })
-})
-
-describe('the helper that raises Ctrl-C for the backend program on Windows', () => {
-  // Its limit may end it before its time (see src/child.ts), and it is run again only where it
-  // cannot have raised the event: a second event could reach a program that has the number since
-  test('is taken to have raised the event where it said it was raising it, and not otherwise', () => {
-    expect(raised('raising\r\n')).toBe(true)
-    expect(raised('raising')).toBe(true)
-    for (const printed of ['', null, undefined, 'raisingx\r\n', 'not raising']) expect(raised(printed)).toBe(false)
   })
 })
 

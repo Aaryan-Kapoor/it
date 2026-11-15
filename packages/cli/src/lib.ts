@@ -129,7 +129,9 @@ export function windowsPathCommand(folder: string): string {
  * again finishes what it began, a mark is put beside the PATH before it is written, without a
  * word to anyone, and taken away the same way only once running programs have been told. A
  * mark still there is taken for a removal that was begun: running programs are told, and that
- * says `off`.
+ * says `off`. Running programs are told once more after the mark is gone, so that they let go
+ * of it too; where this is ended just before that, the PATH they have is already the new one,
+ * and they keep the mark among their variables until they are next told of a change.
  */
 export function windowsPathRemoval(folder: string): string {
   const dir = psQuote(folder.replace(/[\\/]+$/, ''))

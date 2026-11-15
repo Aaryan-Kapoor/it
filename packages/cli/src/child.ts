@@ -57,9 +57,15 @@ export function runSync(
 export function runSync(
   file: string,
   args: readonly string[],
-  options?: SpawnSyncOptionsWithBufferEncoding | SpawnSyncOptions,
+  options?: SpawnSyncOptionsWithBufferEncoding,
   again?: (first: SpawnSyncReturns<Buffer>) => boolean,
 ): SpawnSyncReturns<Buffer>
+export function runSync(
+  file: string,
+  args: readonly string[],
+  options?: SpawnSyncOptions,
+  again?: (first: SpawnSyncReturns<string | Buffer>) => boolean,
+): SpawnSyncReturns<string | Buffer>
 export function runSync(
   file: string,
   args: readonly string[],

@@ -1837,10 +1837,6 @@ function settleErased(folder: string, more: number, say: (line: string) => void)
  * given none: the helper then says `no_console`. Whoever asks on Windows therefore never
  * depends on the answer, and ends the program where it could not be asked (see `halt`).
  */
-/** What the helper that raises Ctrl-C on Windows says just before it raises it. */
-const RAISING = 'raising'
-/** Whether that helper, by what it printed, may have raised the event. */
-export const raised = (printed: string | null | undefined): boolean => (printed ?? '').split(/\r?\n/).some((line) => line.trim() === RAISING)
 function interrupt(pid: number): 'no_process' | 'no_console' | 'no_event' | 'no_helper' | undefined {
   // A number that is no process's own would mean every process in this program's group
   if (!Number.isInteger(pid) || pid <= 1) return 'no_process'
@@ -1854,27 +1850,24 @@ function interrupt(pid: number): 'no_process' | 'no_console' | 'no_event' | 'no_
   }
   const script = [
     '$console = Add-Type -PassThru -Namespace It -Name Console -MemberDefinition \'[DllImport("kernel32.dll")] public static extern bool FreeConsole(); [DllImport("kernel32.dll")] public static extern bool AttachConsole(uint pid); [DllImport("kernel32.dll")] public static extern bool SetConsoleCtrlHandler(IntPtr handler, bool add); [DllImport("kernel32.dll")] public static extern bool GenerateConsoleCtrlEvent(uint what, uint group);\'',
-    // What it prints goes where it was started with, and not to the console it attaches to
-    "[Console]::Out.Write('')",
     '[void]$console::FreeConsole()',
     `if (-not $console::AttachConsole(${pid})) { exit 3 }`,
     '[void]$console::SetConsoleCtrlHandler([IntPtr]::Zero, $true)',
-    // Said before the event is raised, so that a helper ended before it raised one is known to have raised none
-    `[Console]::Out.WriteLine('${RAISING}')`,
     'if (-not $console::GenerateConsoleCtrlEvent(0, 0)) { exit 4 }',
     // The event is handed out by the console, and a helper that left at once could take it along
     'Start-Sleep -Milliseconds 500',
     'exit 0',
   ].join('\n')
-  // A helper whose limit ended it before its time is run again only where it had not yet said
-  // that it was raising the event. One that had may have raised it, and the program may have
-  // stopped on it since and its number gone to another program, whose console a second helper
-  // would then reach: that one is taken for a helper that failed, and the program is ended.
+  // A helper whose limit ended it before its time is not run again. It may have raised the
+  // event already, and the program may have stopped on it since and its number gone to another
+  // program, whose console a second helper would then reach; and nothing it printed can be
+  // counted on to say how far it got, since what a child printed is not always all read once it
+  // is ended. So it is taken for a helper that failed, and the program is ended (see `halt`).
   const ran = runSync(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-    { encoding: 'utf8', windowsHide: true, timeout: 30_000 },
-    (first) => !raised(first.stdout),
+    { windowsHide: true, timeout: 30_000 },
+    () => false,
   )
   return ran.status === 0 ? undefined : ran.status === 3 ? 'no_console' : ran.status === 4 ? 'no_event' : 'no_helper'
 }
