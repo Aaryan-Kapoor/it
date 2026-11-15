@@ -254,6 +254,11 @@ jobs:
       - name: The install script installs it, from a stand-in for the releases on this machine
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node e2e/install.mjs
+      # The line a person pastes, typed into bash at a real terminal, and the keys they press at
+      # setup's first question, which must be heard
+      - name: The install line, pasted at a terminal, hands the keys to setup
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node e2e/install-line.mjs
       - name: Bun bundles what the third-party notices say it does, and is the build of Bun they describe
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node scripts/notices.mjs --check --bun
@@ -332,6 +337,12 @@ jobs:
       # a bare `it` then runs It and not the `It` command of Pester, which Windows comes with
       - name: The install script for this system installs it
         run: node e2e/install.mjs "$RUNNER_TEMP/it-programs"
+      # The line a person pastes, typed into zsh and into bash at a real terminal, and the keys
+      # they press at setup's first question, which must be heard: on macOS the program hears
+      # nothing from /dev/tty itself, and the install hands it the terminal's own device
+      - name: The install line, pasted at a terminal, hands the keys to setup
+        if: runner.os == 'macOS'
+        run: node e2e/install-line.mjs "$RUNNER_TEMP/it-programs"
       - name: The native service recovers and waits for a slow stop
         env:
           PROGRAM: ${{ matrix.program }}
