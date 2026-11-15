@@ -123,9 +123,9 @@ export function windowsPathCommand(folder: string): string {
  * What takes a folder off the PATH Windows keeps for this account, for PowerShell to run. Every
  * entry that is that folder, as Windows would read the entry, goes, and the rest is written
  * back as it was kept, in its order, with a name such as %USERPROFILE% left as a name and the
- * value left the kind it was. Nothing is written where the folder is not there. It says `off`
- * where it took the folder off and `absent` where it was not on it, and running programs are
- * told as `windowsPathCommand` tells them. So that where this was ended partway, running it
+ * value left the kind it was. Where the folder is not there, and no removal was begun (below),
+ * nothing is written. It says `off` where it took the folder off and `absent` where it was not
+ * on it, and running programs are told as `windowsPathCommand` tells them. So that where this was ended partway, running it
  * again finishes what it began, a mark is put beside the PATH before it is written, without a
  * word to anyone, and taken away the same way only once running programs have been told. A
  * mark still there is taken for a removal that was begun: running programs are told, and that

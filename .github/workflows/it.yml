@@ -355,9 +355,10 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
       # A child waited for after a quiet stretch longer than its limit, under the same Bun. On
-      # Windows that Bun counts the limit from when it last waited for a child, and so ended such
-      # a child at once; every child It waits for goes through `runSync`, which runs it once
-      # more. It needs nothing installed, and so is run before anything is.
+      # Windows that Bun can count the limit from when it last waited for a child, and so end
+      # such a child at once; every timed child It waits for goes through `runSync`, which runs
+      # one cut short once more, unless its caller says a second run is not safe. It needs
+      # nothing installed, and so is run before anything is.
       - name: A child waited for after a quiet stretch is given its whole limit, under Bun
         if: runner.os == 'Windows'
         run: bun test ./packages/cli/child.test.ts
