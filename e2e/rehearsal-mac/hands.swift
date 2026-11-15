@@ -94,13 +94,16 @@ func place(_ app: String, _ x: Double, _ y: Double, _ w: Double, _ h: Double) {
   let ax = AXUIElementCreateApplication(target.processIdentifier)
   var value: CFTypeRef?
   guard AXUIElementCopyAttributeValue(ax, kAXWindowsAttribute as CFString, &value) == .success,
-    let windows = value as? [AXUIElement], let win = windows.first
+    let windows = value as? [AXUIElement], !windows.isEmpty
   else { fail("\(app) has no window.") }
   var pos = CGPoint(x: x, y: y)
   var size = CGSize(width: w, height: h)
-  if let p = AXValueCreate(.cgPoint, &pos) { AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p) }
-  if let s = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s) }
-  if let p = AXValueCreate(.cgPoint, &pos) { AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p) }
+  // Every window: Chrome keeps one that is not on the screen ahead of the one that is
+  for win in windows {
+    if let p = AXValueCreate(.cgPoint, &pos) { AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p) }
+    if let s = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s) }
+    if let p = AXValueCreate(.cgPoint, &pos) { AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p) }
+  }
 }
 
 var args = Array(CommandLine.arguments.dropFirst())
