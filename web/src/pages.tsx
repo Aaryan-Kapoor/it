@@ -1420,13 +1420,16 @@ function ActionStatus({
       </>
     )
   }
-  // Tried, and it could not be reopened: said as that, with why where it is asked for. Where an
-  // earlier click of the page's was set aside after such tries, it can be tried again from here
+  // Tried, and it could not be reopened: said as that, with why where it is asked for, and then
+  // what the person can do, which is to open the conversation themselves: what waits is handed to
+  // it there. Said with the app's own last words alone, as "… Please run /login", it named nothing
+  // the person could act on, and they typed that into the page. Where an earlier click of the
+  // page's was set aside after such tries, it can be tried again from here
   if (wakeFailed && wakeFailed.at >= last.at)
     return (
       <>
         <span className="status" data-tone="bad">
-          {`Couldn’t wake ${agent ?? 'your agent'}${waiting > 1 ? ` (${waiting})` : ''}: ${wakeFailed.why}`}
+          {`Couldn’t wake ${agent ?? 'your agent'}${waiting > 1 ? ` (${waiting})` : ''}: ${wakeFailed.why.replace(/[.\s]+$/, '')}. ${openItYourself(agent)}`}
         </span>
         {retryOffered}
       </>
@@ -1475,6 +1478,10 @@ function useUnreachable(): boolean {
   }, [connected])
   return down
 }
+
+/** What the person can do where a conversation could not be reopened for them: open it themselves, where what waits is handed to it. */
+export const openItYourself = (agent: string | null): string =>
+  `Open its conversation in ${agent ?? 'your agent app'} yourself, and what you did reaches it there`
 
 /** How long a click has gone untaken before the owner is offered the reopening of its conversation. */
 const WAKE_OFFER_MS = 3_000

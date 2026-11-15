@@ -237,8 +237,17 @@ describe('what the page’s bar says of the last thing the person did', () => {
     host.remove()
     Object.assign(PAGE, { wakeFailed: { at: NOW - 1000, why: 'the folder its conversation was held in is not known on this machine, or is gone' } })
     await shown()
-    expect(said()).toBe('Couldn’t wake Pi: the folder its conversation was held in is not known on this machine, or is gone')
-    Object.assign(PAGE, { wakeFailed: null })
+    // With what the person can do about it last: the app's own words are no help to act on
+    expect(said()).toBe(
+      'Couldn’t wake Pi: the folder its conversation was held in is not known on this machine, or is gone. Open its conversation in Pi yourself, and what you did reaches it there',
+    )
+    // As a Claude Code that is not signed in said it, which sent a person to type /login on the page
+    Object.assign(PAGE, { agent: 'claude-code', wakeFailed: { at: NOW - 1000, why: 'Claude Code exited with 1, and its last words were: Not logged in · Please run /login.' } })
+    await drawnAgain()
+    expect(said()).toBe(
+      'Couldn’t wake Claude Code: Claude Code exited with 1, and its last words were: Not logged in · Please run /login. Open its conversation in Claude Code yourself, and what you did reaches it there',
+    )
+    Object.assign(PAGE, { agent: 'pi', wakeFailed: null })
   })
 
   test('a click its machine holds back is said to be that, with why, for as long as it waits, whatever the machine’s last failure was', async () => {
@@ -406,12 +415,12 @@ describe('what the page’s bar says of the last thing the person did', () => {
         { at: NOW - 3_600_000, delivery: 'pending', outcome: null, parked: true, expiresAt: NOW - 3_600_000 + MONTH },
       ]
       await shown()
-      expect(said()).toBe('Couldn’t wake Pi (2): its command ended with an error')
+      expect(said()).toBe('Couldn’t wake Pi (2): its command ended with an error. Open its conversation in Pi yourself, and what you did reaches it there')
       expect(buttons('Retry')).toHaveLength(1)
       // With nothing set aside, It is still trying by itself, and there is nothing to try again
       recent = [recent[0]!]
       await drawnAgain()
-      expect(said()).toBe('Couldn’t wake Pi (2): its command ended with an error')
+      expect(said()).toBe('Couldn’t wake Pi (2): its command ended with an error. Open its conversation in Pi yourself, and what you did reaches it there')
       expect(buttons('Retry')).toHaveLength(0)
       // Set aside after it could not be reopened for, it is said so, and can be tried again
       recent = [{ ...recent[0]!, parked: true }]
