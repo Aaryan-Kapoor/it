@@ -193,7 +193,8 @@ function startServe() {
 }
 async function harnessSetup(during = false) {
   if (!during) term.note('The organisers set It up on this laptop before the event (done by the rehearsal harness):')
-  const ins = await install({ env, cwd: f.home, base: 'http://127.0.0.1:5690', term: during ? null : term, log })
+  // From the stand-in, or with --real-site from It's published releases; --it-version names a release by its tag
+  const ins = await install({ env, cwd: f.home, base: realSite ? 'https://itcan.do/releases' : 'http://127.0.0.1:5690', term: during ? null : term, log, version: arg('it-version', undefined) })
   program = ins.program
   const set = await setup({ program: ins.program, env, cwd: f.work, app: appId, term: during ? null : term, log })
   writeFileSync(path.join(f.logs, 'setup.txt'), scrub(`${set.out}\n${set.err}`).text)
