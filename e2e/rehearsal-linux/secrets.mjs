@@ -153,6 +153,19 @@ export async function injectClaudeFile(container, held) {
 }
 
 /**
+ * Signs Claude Code in the way a person who used `claude setup-token` may have it: the access token
+ * exported in ~/.bashrc and nowhere else, ~/.bashrc made readable by its owner alone. Only for the
+ * run that asks what a reopened conversation gets of a variable in the shell's profile. The wipe
+ * overwrites and deletes ~/.bashrc with every other file that holds the token.
+ */
+export async function injectClaudeTokenInProfile(container, held) {
+  if (!CONTAINER.test(container) || held?.app !== 'claude' || !held.token) throw new Error('injectClaudeTokenInProfile: not a rehearsal container or not a Claude token.')
+  const script = 'set -e; umask 077; chmod 600 "$HOME/.bashrc"; IFS= read -r v; printf "\\nexport CLAUDE_CODE_OAUTH_TOKEN=%s\\n" "$v" >> "$HOME/.bashrc"'
+  const code = await docker(['exec', '-i', '-u', 'ana', '-e', 'HOME=/home/ana', container, 'bash', '-c', script], `${held.token}\n`)
+  if (code !== 0) throw new Error(`The Claude Code sign-in could not be put into the profile (exit ${code}).`)
+}
+
+/**
  * Starts the tmux server that the agent's terminal shows, as ana in a login session (su -l, so
  * that PAM opens a logind session and sets XDG_RUNTIME_DIR), with `env` (plain settings such as
  * IT_INSTALL_BASE) and, for Claude Code, CLAUDE_CODE_OAUTH_TOKEN, all passed through standard input.
@@ -197,7 +210,8 @@ export async function filesHolding(container, held, dirs = ['/home', '/root', '/
   if (!CONTAINER.test(container) || !held?.values?.length) return []
   // grep says 0 where it found something and 1 where it found nothing; anything else, or no
   // closing word, means the look did not finish, which is never taken for "nothing there"
-  const script = `grep -rlsF -f /dev/stdin -- ${dirs.map((d) => `'${d}'`).join(' ')} 2>/dev/null; c=$?; [ $c -le 1 ] && echo LOOKED-ALL`
+  // Only the folders that are there, so that a folder this machine lacks never stops the look short
+  const script = `set --; for d in ${dirs.map((d) => `'${d}'`).join(' ')}; do [ -e "$d" ] && set -- "$@" "$d"; done; grep -rlsF -f /dev/stdin -- "$@" 2>/dev/null; c=$?; [ $c -le 1 ] && echo LOOKED-ALL`
   const out = await dockerOut(['exec', '-i', container, 'sh', '-c', script], `${held.values.join('\n')}\n`)
   const lines = out.split('\n').filter(Boolean)
   if (lines.at(-1) !== 'LOOKED-ALL') return ['(the look for the token did not finish)']

@@ -424,6 +424,9 @@ async function WAKE() {
     let woke = null
     let ok = false
     let bars = []
+    // Markers left by a server added for every project and by a hook in the project's settings
+    const marks = () => ({ server: Number(sh('ls /tmp/it-marker-server-* 2>/dev/null | wc -l').trim()), projectHook: Number(sh('ls /tmp/it-marker-hook-* 2>/dev/null | wc -l').trim()) })
+    const marksBefore = marks()
     while (Date.now() - t0 < ms) {
       if (open) await answerApp(who, counts).catch(() => {})
       if (!woke) {
@@ -445,7 +448,9 @@ async function WAKE() {
       await sleep(1000)
     }
     if (!ok) check(`${what}: answered on the page`, false, { seconds: Math.round(ms / 1000), bars: bars.join(' | ').slice(0, 600) })
-    step(`${what}: processes`, { reopened: woke ?? 'none new', appProcessesNow: appProcs(who).length })
+    await sleep(3000)
+    const marksAfter = marks()
+    step(`${what}: processes`, { reopened: woke ?? 'none new', appProcessesNow: appProcs(who).length, serverStarts: marksAfter.server - marksBefore.server, projectHookRuns: marksAfter.projectHook - marksBefore.projectHook, globalSettingsFile: sh('ls -la ~/.claude.json ~/.claude/.claude.json 2>&1 | sed "s/^.* ana ana *//"').trim().replace(/\n/g, ' | ') })
     return ok
   }
 
@@ -621,6 +626,79 @@ async function WAKEBOOT2() {
   check('after the restart, nobody signed in, a click from the second screen is answered', ok, { seconds: Math.round((Date.now() - t0) / 1000), bars: bars.join(' | ').slice(0, 500), reopened: woke ?? 'none seen' })
 }
 
+/**
+ * The shorter Auto-wake run for a machine prepared one particular way (the app under a version
+ * manager, an older app, a variable in the shell's profile): a page, a click with the app open,
+ * the app quit and a click, and, where /var/lib/rehearsal-flow/between.sh is there, that run (as
+ * root, by run.mjs, which watches for between-now) and a second click.
+ */
+async function WAKELITE() {
+  const who = app
+  const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
+  let p = ctx.pages().find((x) => !x.url().startsWith('devtools')) ?? (await ctx.newPage())
+  const pair = /https?:\/\/localhost:\d+\/pair#[A-Za-z0-9]+/.exec(sh('~/.it/bin/it site --no-open 2>&1'))?.[0]
+  check('it site gives a pairing link', !!pair)
+  if (pair) await p.goto(pair).catch(() => {})
+  await sleep(8000)
+  const pane = sh("tmux display -p -t agent '#{pane_pid}'").trim()
+  const term = envNames(pane) ?? []
+  step('the app in the terminal', { which: sh(`bash -ic 'command -v ${who}; ${who} --version' 2>/dev/null`).trim().split('\n').slice(-2).join(' / '), serviceFinds: sh(`systemd-run --user --wait --pipe -q sh -c 'command -v ${who} || echo none' 2>&1`).trim() })
+  await startApp(who, counts)
+  await ask(who, 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.')
+  await settle(who, counts, 600_000, 8000)
+  let url = null
+  for (let i = 0; i < 40 && !url; i++) {
+    p = ctx.pages().find((x) => x.url().includes('/p/')) ?? p
+    if (PIZZA.test(await shown(p).catch(() => ''))) url = p.url()
+    else await sleep(3000)
+  }
+  if (!check('the page is on the screen', !!url)) return
+  let nth = 0
+  const click = async (what, open) => {
+    await p.goto(url).catch(() => {})
+    await sleep(6000)
+    const had = new Set(appProcs(who).map((x) => x.pid))
+    const before = await shown(p)
+    const t0 = Date.now()
+    step(`${what}: picks "${await press(p, PIZZA, nth++ % 3)}"`, { bar: await bar(p) })
+    let woke = null
+    const bars = []
+    while (Date.now() - t0 < 300_000) {
+      if (open) await answerApp(who, counts).catch(() => {})
+      if (!woke) {
+        const fresh = appProcs(who).filter((x) => !had.has(x.pid))
+        if (fresh.length) {
+          const names = envNames(fresh[0].pid)
+          woke = { pid: fresh[0].pid, args: fresh[0].args, seconds: Math.round((Date.now() - t0) / 1000), onlyWoken: names?.filter((n) => !term.includes(n)).join(' '), onlyTerminal: names ? term.filter((n) => !names.includes(n)).join(' ') : null }
+        }
+      }
+      const b = await bar(p)
+      if (b && b !== bars.at(-1)) bars.push(b)
+      const now = await shown(p).catch(() => before)
+      const fresh = now.split('\n').filter((l) => l.trim().length > 25 && !before.includes(l) && !/sending|sent\.|waiting|working|thinking|picking|choosing/i.test(l)).join(' / ').slice(0, 200)
+      if (now !== before && fresh) {
+        check(`${what}: answered on the page`, true, { seconds: Math.round((Date.now() - t0) / 1000), fresh, bars: bars.join(' | ').slice(0, 400), reopened: woke ?? 'none new' })
+        return true
+      }
+      await sleep(1000)
+    }
+    check(`${what}: answered on the page`, false, { seconds: 300, bars: bars.join(' | ').slice(0, 600), reopened: woke ?? 'none new', site: (await p.mainFrame().evaluate(() => document.body.innerText).catch(() => '')).split('\n').filter((l) => /wake|listening|waiting|open its|could/i.test(l)).slice(0, 3).join(' / ') })
+    return false
+  }
+  await click('conversation open', true)
+  await settle(who, counts, 120_000, 6000)
+  await quitApp(who)
+  await sleep(30_000)
+  await click('app quit (Auto-wake)', false)
+  if (sh('test -f /var/lib/rehearsal-flow/between.sh && echo yes').trim() === 'yes') {
+    sh('touch /var/lib/rehearsal-flow/between-now')
+    for (let i = 0; i < 180 && sh('test -f /var/lib/rehearsal-flow/between-done && echo yes').trim() !== 'yes'; i++) await sleep(2000)
+    step('between the clicks', { did: sh('cat /var/lib/rehearsal-flow/between.log 2>/dev/null | tail -3').trim().slice(0, 300), appNow: sh(`bash -ic '${who} --version' 2>/dev/null`).trim().split('\n').pop() })
+    await sleep(20_000)
+    await click('after the change between the clicks (Auto-wake)', false)
+  }
+}
+
 async function main() {
   try {
     if (scenario === 'S4') await S4()
@@ -630,6 +708,7 @@ async function main() {
     else if (scenario === 'SOAK2') await SOAK2()
     else if (scenario === 'WAKE') await WAKE()
     else if (scenario === 'WAKEBOOT1') await WAKEBOOT1()
+    else if (scenario === 'WAKELITE') await WAKELITE()
     else if (scenario === 'WAKEBOOT2') await WAKEBOOT2()
     else check(`no scenario ${scenario}`, false)
     const failed = verdict.checks.filter((c) => !c.ok)

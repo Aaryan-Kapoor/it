@@ -11,7 +11,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, statfsSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { filesHolding, holdsToken, injectClaudeFile, injectCodex, redact, shareWithUserManager, startAgentShell, take, wipe } from './secrets.mjs'
+import { filesHolding, holdsToken, injectClaudeFile, injectClaudeTokenInProfile, injectCodex, redact, shareWithUserManager, startAgentShell, take, wipe } from './secrets.mjs'
 import { writeReport } from './report.mjs'
 
 const arg = (name, fallback) => {
@@ -167,7 +167,10 @@ async function main() {
   if (participant) {
     // Lingering as a participant's account has it before It: off, until `it setup` turns it on
     exec('rm -f /var/lib/systemd/linger/ana')
-    if (app === 'claude') await injectClaudeFile(name, held)
+    if (app === 'claude' && has('claude-token-in-profile')) {
+      await injectClaudeTokenInProfile(name, held)
+      result.claudeSignIn = 'CLAUDE_CODE_OAUTH_TOKEN exported in ~/.bashrc alone (mode 600), no credentials file'
+    } else if (app === 'claude') await injectClaudeFile(name, held)
     result.participant = 'released It from itcan.do; the service as it setup registers it; no variable put into the user manager; Claude Code signed in by its own ~/.claude/.credentials.json alone; Codex by its own ~/.codex/auth.json; lingering removed before setup'
   }
   if (app === 'claude' && held && !participant) {
@@ -278,6 +281,13 @@ async function main() {
   log(`flow ${flow} with ${app} in ${which}`)
   await new Promise((resolve) => {
     const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK|WAKE)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow === 'WAKEBOOT' ? 'WAKEBOOT1' : flow} ${app} ${which === 'chromium' && /^(S\d|SOAK|WAKE)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+    // A change the flow asks for between two clicks, run as root (an update of the agent app)
+    const between = setInterval(() => {
+      if (exec('test -f /var/lib/rehearsal-flow/between-now && test ! -f /var/lib/rehearsal-flow/between-done && echo yes', { quiet: true }).stdout.trim() !== 'yes') return
+      exec('sh /var/lib/rehearsal-flow/between.sh > /var/lib/rehearsal-flow/between.log 2>&1; touch /var/lib/rehearsal-flow/between-done', { quiet: true, timeout: 600_000 })
+      log('ran the change between the clicks')
+    }, 5000)
+    child.on('close', () => clearInterval(between))
     const kill = setTimeout(() => {
       log('the flow ran past its time')
       exec("pkill -INT -f 'node /build/harness/' || true")
@@ -354,7 +364,7 @@ async function collect() {
   // Where the token is in the machine before it is wiped. Codex's own auth.json is expected; a
   // copy anywhere else (the agent's transcript, a page, a log) means the agent saw it, and what it
   // saw may be in the recording, so the recording is not kept.
-  const expected = [...(app === 'codex' || has('also-codex') ? ['/home/ana/.codex/auth.json'] : []), ...(app === 'claude' && (has('claude-file') || participant) ? ['/home/ana/.claude/.credentials.json'] : [])]
+  const expected = [...(app === 'codex' || has('also-codex') ? ['/home/ana/.codex/auth.json'] : []), ...(app === 'claude' && (has('claude-file') || participant) && !has('claude-token-in-profile') ? ['/home/ana/.claude/.credentials.json'] : []), ...(app === 'claude' && has('claude-token-in-profile') ? ['/home/ana/.bashrc'] : [])]
   const before = held ? await filesHolding(name, held) : []
   result.tokenFilesBeforeWipe = redact(before.join(', '), held)
   const elsewhere = before.filter((f) => !expected.includes(f))
