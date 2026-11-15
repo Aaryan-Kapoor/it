@@ -43,7 +43,9 @@ mkdirSync(RESULTS, { recursive: true })
 mkdirSync(LIVE, { recursive: true })
 
 // ---- the ledger ----
-const LEDGER_JSON = join(RESULTS, 'ledger.json')
+// One ledger for the whole night, wherever a run's results go
+const LEDGER_DIR = join(homedir(), 'it-rehearsal', '2026-11-15-mac')
+const LEDGER_JSON = join(LEDGER_DIR, 'ledger.json')
 const ledger = () => (existsSync(LEDGER_JSON) ? JSON.parse(readFileSync(LEDGER_JSON, 'utf8')) : [])
 function minutesOf(m) {
   const end = m.destroyed ? Date.parse(m.destroyed) : Date.now()
@@ -60,7 +62,7 @@ function writeLedger(rows) {
     return `| ${m.id} | macos/arm64:${m.type} | ${m.purpose} | ${m.made.slice(0, 19).replace('T', ' ')} | ${m.destroyed ? m.destroyed.slice(0, 19).replace('T', ' ') : '**still running**'} | ${mins} | ${total} | $${dollars.toFixed(2)} |`
   })
   writeFileSync(
-    join(RESULTS, 'ledger.md'),
+    join(LEDGER_DIR, 'ledger.md'),
     `# Mac ledger, 15 November 2026\n\nThe budget is ${BUDGET} Mac-minutes (forty dollars at about nine cents a minute for macos/arm64:6x14). A machine's minutes run from the moment \`nsc create\` was asked for it to the moment it was destroyed, rounded up. The dollars are estimates: nine cents a minute for 6x14 and six cents for 4x7, which is Namespace's price scaled by size and not a figure from the bill.\n\n| Machine | Shape | What for | Made (UTC) | Destroyed (UTC) | Minutes | Running total | Running dollars |\n|---|---|---|---|---|---|---|---|\n${lines.join('\n')}\n\n**Total: ${total} Mac-minutes, about $${dollars.toFixed(2)}.**\n`,
   )
   return total
@@ -141,6 +143,8 @@ function upload(id) {
   mkdirSync(join(stage, 'bin'), { recursive: true })
   for (const f of files) copyFileSync(join(BIN, f), join(stage, 'bin', f))
   for (const f of ['hands.swift', 'prepare.sh', 'releases.mjs', 'site.mjs']) copyFileSync(join(HERE, f), join(stage, f))
+  // The guide the person gives the agent, where one is named, without the notes above it
+  if (process.env.IT_REHEARSAL_GUIDE) writeFileSync(join(stage, 'install.md'), readFileSync(process.env.IT_REHEARSAL_GUIDE, 'utf8').replace(/^<!--[\s\S]*?-->\s*/, ''))
   // A throwaway authority and certificate for the itcan.do stand-in, made fresh for each upload and
   // never kept: they are trusted only on the rented Mac, which is destroyed after the run
   mkdirSync(join(stage, 'site'))

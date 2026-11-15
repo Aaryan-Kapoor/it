@@ -5,12 +5,14 @@
 // curl trusts. /install.sh is answered from the build; every other path is passed on unchanged to
 // the real itcan.do, so the live guide and the rest of the site are what a participant gets.
 //
-//   sudo node site.mjs <install.sh> <key.pem> <cert.pem> <real address>
+//   sudo node site.mjs <install.sh> <key.pem> <cert.pem> <real address> [<install.md>]
 import https from 'node:https'
 import { readFileSync } from 'node:fs'
 
-const [script, key, cert, real] = process.argv.slice(2)
+const [script, key, cert, real, guideFile] = process.argv.slice(2)
 const body = readFileSync(script)
+// The guide to serve as /install.md, where one is given; otherwise the live one is passed on
+const guide = guideFile ? readFileSync(guideFile) : null
 https
   .createServer({ key: readFileSync(key), cert: readFileSync(cert) }, (req, res) => {
     const path = new URL(req.url ?? '/', 'https://itcan.do').pathname
@@ -18,6 +20,11 @@ https
       console.log(`${new Date().toISOString()} 200 /install.sh from the build (${body.length} bytes)`)
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'content-length': body.length })
       return void res.end(req.method === 'HEAD' ? undefined : body)
+    }
+    if (path === '/install.md' && guide) {
+      console.log(`${new Date().toISOString()} 200 /install.md from the guide given (${guide.length} bytes)`)
+      res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8', 'content-length': guide.length })
+      return void res.end(req.method === 'HEAD' ? undefined : guide)
     }
     const up = https.request({ host: real, servername: 'itcan.do', port: 443, method: req.method, path: req.url, headers: { ...req.headers, host: 'itcan.do' } }, (r) => {
       console.log(`${new Date().toISOString()} ${r.statusCode} ${req.url} passed on`)

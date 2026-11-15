@@ -125,9 +125,14 @@ site)
   grep -q "itcan.do" /etc/hosts || echo "127.0.0.1 itcan.do" | sudo tee -a /etc/hosts >/dev/null
   grep -q "It rehearsal CA" /etc/ssl/cert.pem || { printf '\n# It rehearsal CA\n' | sudo tee -a /etc/ssl/cert.pem >/dev/null; sudo tee -a /etc/ssl/cert.pem < "$here/site/ca.pem" >/dev/null; }
   sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder 2>/dev/null || true
-  sudo bash -c "trap '' HUP; exec node '$here/site.mjs' '$HOME/stand-in/install.sh' '$here/site/key.pem' '$here/site/cert.pem' '$real'" </dev/null >> /Users/Shared/rehearsal/site.log 2>&1 &
+  guide=""; [ -f "$here/install.md" ] && guide="$here/install.md"
+  # Node programs (Claude Code's own web fetch) trust the throwaway authority too
+  mkdir -p ~/.rehearsal-ca && cp "$here/site/ca.pem" ~/.rehearsal-ca/ca.pem
+  grep -q NODE_EXTRA_CA_CERTS ~/.zshenv 2>/dev/null || echo "export NODE_EXTRA_CA_CERTS=$HOME/.rehearsal-ca/ca.pem" >> ~/.zshenv
+  gui launchctl setenv NODE_EXTRA_CA_CERTS "$HOME/.rehearsal-ca/ca.pem"
+  sudo bash -c "trap '' HUP; exec node '$here/site.mjs' '$HOME/stand-in/install.sh' '$here/site/key.pem' '$here/site/cert.pem' '$real' '$guide'" </dev/null >> /Users/Shared/rehearsal/site.log 2>&1 &
   sleep 2
-  echo "served=$(curl -fsSL https://itcan.do/install.sh | shasum -a 256 | cut -c1-16) build=$(shasum -a 256 < "$HOME/stand-in/install.sh" | cut -c1-16) guide=$(curl -fsSL https://itcan.do/install.md | head -1)"
+  echo "served=$(curl -fsSL https://itcan.do/install.sh | shasum -a 256 | cut -c1-16) build=$(shasum -a 256 < "$HOME/stand-in/install.sh" | cut -c1-16) guide=$(curl -fsSL https://itcan.do/install.md | shasum -a 256 | cut -c1-16) given=$( [ -n "$guide" ] && shasum -a 256 < "$guide" | cut -c1-16) node=$(node -e 'fetch("https://itcan.do/install.md").then(r=>console.log(r.status)).catch(e=>console.log("fail",e.cause&&e.cause.code))')"
   ;;
 default-browser)
   gui osascript -l JavaScript -e 'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL($.NSURL.URLWithString("https://example.com")).path.js'
