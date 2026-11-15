@@ -8738,8 +8738,8 @@ describe('publication transactions', () => {
     const refusal = (begun: Promise<unknown>) =>
       begun.then(
         () => null,
-        (e: ConvexError<unknown>) => {
-          let data = e.data
+        (e: ConvexError<string>) => {
+          let data: unknown = e.data
           while (typeof data === 'string') data = JSON.parse(data)
           return data as { code: string; message: string; settled?: boolean }
         },
