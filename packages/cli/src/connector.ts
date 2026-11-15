@@ -159,6 +159,7 @@ const HOOK_HOLD_MS = 60_000 // and this is how long it is held before Codex's qu
 const TURN_QUIET_MS = 30 * 60_000 // a turn that has run no hook for this long is taken to be over
 const TURN_SAID_MS = 20_000 // an add-on that says whether a turn is running, and has not said so for this long, is no longer known to have one
 const TURN_BEGINS_MS = 30_000 // how long a conversation that was handed a click, and is to begin a turn for it, is watched for that turn to begin
+const TURN_IDS_MOST = 5 // and how many at most where pages made under more of them were handed something: forty conversations of five ids each are as many records as the backend keeps for a machine (TURNS_MOST)
 const TURN_NAMES_MOST = 3 // how many of a conversation's ids It is told its turn under, where nothing was handed to it: its own and its latest earlier ones (TURNS_MOST in the backend leaves room for this many of each conversation listened for)
 const WAIT_MS = 5_000 // an `it wait` that said so this recently is still waiting
 const WAIT_AGAIN_MS = 120_000 // how long after an `it wait` ended its conversation, where it is one never heard from, is taken to be coming to wait again
@@ -932,6 +933,11 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    */
   const handedOver = (click: Offered, key: string, starts: boolean, finished = false): void => {
     if (!click.session || turnsTaken === false) return
+    // No more conversations than are listened for, and no more ids of one than It has room for:
+    // past that its turn goes untold, and its page says what it says where nothing is known of one
+    if (!watchedTurns.has(key) && watchedTurns.size >= LISTENING_MOST) return
+    const known = watchedTurns.get(key)
+    if (known && !known.names.has(click.session.id) && known.names.size >= TURN_IDS_MOST) return
     handedTo.set(click.id, key)
     const w = watchedTurns.get(key) ?? {
       names: new Set<string>(),
@@ -975,7 +981,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     if (there) {
       // Merged names and endings still need reporting, even when both watches already want ended.
       there.generation++
-      for (const name of w.names) there.names.add(name)
+      for (const name of w.names) if (there.names.size < TURN_IDS_MOST || w.told.has(name)) there.names.add(name)
       for (const name of w.told) there.told.add(name)
       there.owed ||= w.owed
       there.behind ||= w.behind

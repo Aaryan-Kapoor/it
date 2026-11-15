@@ -6658,6 +6658,13 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     await pass(3)
     const running = told().filter((said) => said.running === true)
     expect(running.length).toBe(LISTENING_MOST)
+    // A click handed to one more conversation then has nothing more told: it is delivered all the same
+    offered(click(1, { harness: 'claude-code', id: 'one-more' }))
+    await until(async () => ((await asks(true, 'one-more'))?.clicks ?? []).some((c) => c.id === 'click-1'))
+    expect(await local('/ack', { method: 'POST', body: { ids: ['click-1'], woke: false, turn: true } })).toEqual({ ok: true, acked: 1 })
+    await pass(3)
+    expect(told().filter((said) => said.running === true).length).toBe(LISTENING_MOST)
+    expect(stand.calls.filter((c) => c.name === 'delivery:handedOff').map((c) => c.args.id)).toContain('click-1')
   })
 
   test('a turn that ended is told before turns that began, where It could not be told of either at once', async () => {
