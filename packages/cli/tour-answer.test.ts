@@ -26,6 +26,8 @@ const stand = vi.hoisted(() => ({
   failAck: false,
   /** A file that cannot be removed, as on Windows while another program has it open. */
   held: null as null | string,
+  /** A file that cannot be opened to be read, as on Windows while another program keeps others from reading it. */
+  unreadable: null as null | string,
   state: {} as Record<string, unknown>,
   revision: 6,
   clashes: 0,
@@ -37,6 +39,10 @@ vi.mock('node:fs', async (original) => {
     rmSync: (file: string, options?: Parameters<typeof real.rmSync>[1]) => {
       if (stand.held !== null && String(file) === stand.held) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
       return real.rmSync(file, options)
+    },
+    openSync: (file: string, ...rest: unknown[]) => {
+      if (stand.unreadable !== null && String(file) === stand.unreadable) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+      return (real.openSync as (...args: unknown[]) => number)(file, ...rest)
     },
   }
 })
@@ -142,6 +148,7 @@ beforeEach(() => {
   stand.onWrite = null
   stand.fixedSuffix = false
   stand.held = null
+  stand.unreadable = null
 })
 afterEach(() => {
   rmSync(folder, { recursive: true, force: true })
@@ -551,6 +558,17 @@ test('a picture that cannot be removed is said to be so, stays noted, and goes w
   expect(await dropPictures([folder])).toEqual({ removed: 1, left: [] })
   expect(existsSync(at())).toBe(false)
   expect(keptPictures()).toEqual([])
+})
+
+test('a picture that cannot be read is not taken for a changed file: it stays noted, and goes when the tour is cleared once it can be read', async () => {
+  await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)
+  stand.unreadable = at()
+  expect(await dropPicture(REQUEST)).toEqual({ left: [], stuck: [at()] })
+  expect(existsSync(at())).toBe(true)
+  expect(keptPictures()!.map((k) => k.file)).toEqual([at()])
+  stand.unreadable = null
+  expect(await dropPictures([folder])).toEqual({ removed: 1, left: [] })
+  expect(existsSync(at())).toBe(false)
 })
 
 test('a record that cannot be written is not said to be one that cannot be read', async () => {

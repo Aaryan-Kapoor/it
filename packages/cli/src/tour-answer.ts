@@ -212,13 +212,18 @@ async function changeKept(change: (kept: Kept[]) => Kept[]): Promise<'changed' |
   return 'unchanged'
 }
 
-/** Whether the file a note names is still the picture It wrote there: the same file of the disk, not a link, of the length and checksum noted. */
-function isOurs(k: Kept): 'ours' | 'gone' | 'another' {
+/**
+ * Whether the file a note names is still the picture It wrote there: the same file of the disk,
+ * not a link, of the length and checksum noted. `unknown` where it is that file of the disk and
+ * could not be read whole, as on Windows while another program keeps others from reading it.
+ */
+function isOurs(k: Kept): 'ours' | 'gone' | 'another' | 'unknown' {
   const seen = lstatSync(k.file, { throwIfNoEntry: false, bigint: true })
   if (!seen) return 'gone'
   if (!seen.isFile() || seen.size !== BigInt(k.bytes) || String(seen.dev) !== k.dev || String(seen.ino) !== k.ino) return 'another'
   const read = readOwn(k.file, MOST_BYTES)
-  return read && read.dev === k.dev && read.ino === k.ino && sha256(read.bytes) === k.sha256 ? 'ours' : 'another'
+  if (!read) return 'unknown'
+  return read.dev === k.dev && read.ino === k.ino && sha256(read.bytes) === k.sha256 ? 'ours' : 'another'
 }
 /**
  * Removes a picture a note names, where the file there is still that picture. `stuck` where it
@@ -227,6 +232,7 @@ function isOurs(k: Kept): 'ours' | 'gone' | 'another' {
 function removeIfOurs(k: Kept): 'removed' | 'gone' | 'another' | 'stuck' {
   try {
     const was = isOurs(k)
+    if (was === 'unknown') return 'stuck'
     if (was !== 'ours') return was
     rmSync(k.file, { force: true })
     return 'removed'
