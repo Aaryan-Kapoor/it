@@ -1,0 +1,12 @@
+[Unit]
+Description=The rehearsal's window manager
+After=rehearsal-xvfb.service
+Requires=rehearsal-xvfb.service
+[Service]
+User=ana
+Environment=DISPLAY=:1
+ExecStartPre=/bin/sh -c 'for i in $(seq 50); do xdpyinfo -display :1 >/dev/null 2>&1 && exit 0; sleep 0.2; done; exit 1'
+ExecStart=/usr/bin/openbox
+Restart=always
+[Install]
+WantedBy=multi-user.target
