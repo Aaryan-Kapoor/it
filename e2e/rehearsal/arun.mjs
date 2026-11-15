@@ -267,6 +267,26 @@ let stopping = null
 const workingLog = path.join(f.results, 'working.log')
 let barWas = null
 let termWas = null
+// Every process of the agent app, the moment it appears: its id, its parent's name and the words
+// it was started with (cut short and scrubbed), in agents.log beside the steps. A copy of a
+// conversation that It's Auto-wake starts (`codex exec resume …`, `claude --resume …`) shows here.
+const agentsLog = path.join(f.results, 'agents.log')
+const seenAgents = new Set()
+const watchingAgents = setInterval(() => {
+  if (!recording) return
+  const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$all = Get-CimInstance Win32_Process; $by = @{}; foreach ($p in $all) { $by[[int]$p.ProcessId] = $p.Name }; $all | Where-Object { $_.Name -match '^(codex|claude)(\\.exe)?$' -or ([string]$_.CommandLine) -match '(@openai[\\\\/]codex|claude-code)[\\\\/]' } | ForEach-Object { '{0}|{1}|{2}' -f $_.ProcessId, $by[[int]$_.ParentProcessId], $_.CommandLine }"], { windowsHide: true })
+  let out = ''
+  ps.stdout.on('data', (d) => (out += d))
+  ps.on('close', () => {
+    for (const line of out.split(/\r?\n/).filter(Boolean)) {
+      const [pid, parent, ...rest] = line.split('|')
+      if (seenAgents.has(pid)) continue
+      seenAgents.add(pid)
+      const words = scrub(rest.join('|')).text.replace(/\s+/g, ' ').slice(0, 260)
+      writeFileSync(agentsLog, `${rec ? rec.at().toFixed(1) : '?'}s new ${pid} (parent ${parent}): ${words}\n`, { flag: 'a' })
+    }
+  })
+}, 2000)
 const watchingWork = setInterval(async () => {
   if (!recording) return
   let bar = ''
@@ -385,6 +405,7 @@ while (!stopping) await sleep(1000)
 
 clearInterval(raising)
 clearInterval(watchingWork)
+clearInterval(watchingAgents)
 clearInterval(browsing)
 const endedAt = stamp()
 if (rec) {
