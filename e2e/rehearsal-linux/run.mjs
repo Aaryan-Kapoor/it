@@ -209,7 +209,7 @@ async function main() {
   }
   log(`flow ${flow} with ${app} in ${which}`)
   await new Promise((resolve) => {
-    const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^S\d/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow} ${app} ${which === 'chromium' && /^S\d/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow} ${app} ${which === 'chromium' && /^(S\d|SOAK)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
     const kill = setTimeout(() => {
       log('the flow ran past its time')
       exec("pkill -INT -f 'node /build/harness/' || true")

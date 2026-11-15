@@ -28,6 +28,7 @@ const sh = (cmd) => {
 }
 
 let browser
+const PIZZA = /margherita|pepperoni|pizza|funghi|hawaiian|veg|diavola|quattro|mushroom/i
 async function page() {
   browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')
   const ctx = browser.contexts()[0]
@@ -35,15 +36,24 @@ async function page() {
   return pages.find((p) => p.url().includes('localhost:4700')) ?? pages.at(-1) ?? (await ctx.newPage())
 }
 
-/** The text of every frame of the tab, which holds the agent's page inside the site. */
+/** The text of the agent's page alone, inside the site: never the site's own bar. */
 async function shown(p) {
   const parts = []
   for (const f of p.frames()) {
+    if (f === p.mainFrame()) continue
     try {
       parts.push(await f.evaluate(() => document.body?.innerText ?? ''))
     } catch {}
   }
   return parts.join('\n')
+}
+/** What the site's own bar says, for the record. */
+async function bar(p) {
+  try {
+    return (await p.mainFrame().evaluate(() => document.body?.innerText ?? '')).split('\n').filter((l) => /sent|waiting|wake|listening|working|done|reach/i.test(l)).slice(0, 3).join(' / ').slice(0, 300)
+  } catch {
+    return ''
+  }
 }
 
 /** The agent's page frame: the one that is not the site itself. */
@@ -77,7 +87,8 @@ async function answered(p, before, ms, what) {
     await answerApp(app, counts).catch(() => {})
     const now = await shown(p).catch(() => before)
     if (now !== before && now.length > 0) {
-      const fresh = now.split('\n').filter((l) => l.trim() && !before.includes(l)).join(' / ').slice(0, 300)
+      // A new line of the agent's that says more than that the pick is on its way
+      const fresh = now.split('\n').filter((l) => l.trim().length > 25 && !before.includes(l) && !/sending|sent\.|waiting|working|thinking|taking a look|picking|choosing/i.test(l)).join(' / ').slice(0, 300)
       if (fresh) return check(what, true, { seconds: Math.round((Date.now() - start) / 1000), fresh })
     }
     await sleep(2000)
@@ -147,7 +158,6 @@ async function S4() {
 }
 
 
-const PIZZA = /margherita|pepperoni|pizza|funghi|hawaiian|veg|diavola|quattro/i
 
 async function S6() {
   const p = await pizzaPage()
@@ -219,11 +229,36 @@ async function S7() {
   await answered(p, before, 300_000, 'a click on a page is answered after the reboot (Auto-wake reopens the conversation)')
 }
 
+
+async function SOAK() {
+  const p = await pizzaPage()
+  let before = await shown(p)
+  step(`picks "${await press(p, PIZZA, 0)}"`)
+  await answered(p, before, 240_000, 'the first pick, with the conversation open, is answered')
+  await settle(app, counts, 120_000, 6000)
+  await quitApp(app)
+  // Then a click every ten minutes for two hours, with the app closed: each reopens the conversation
+  const until = Date.now() + 120 * 60_000
+  let n = 0
+  while (Date.now() < until) {
+    const next = Date.now() + 10 * 60_000
+    n++
+    await p.bringToFront().catch(() => {})
+    before = await shown(p)
+    const which = await press(p, PIZZA, n % 3)
+    step(`soak click ${n}: picks "${which}"`, { bar: await bar(p) })
+    await answered(p, before, 300_000, `soak click ${n} is answered on the page`)
+    step(`after soak click ${n}`, { bar: await bar(p) })
+    while (Date.now() < next && Date.now() < until) await sleep(5000)
+  }
+}
+
 async function main() {
   try {
     if (scenario === 'S4') await S4()
     else if (scenario === 'S6') await S6()
     else if (scenario === 'S7') await S7()
+    else if (scenario === 'SOAK') await SOAK()
     else check(`no scenario ${scenario}`, false)
     const failed = verdict.checks.filter((c) => !c.ok)
     verdict.ok = failed.length === 0 && verdict.checks.length > 0
