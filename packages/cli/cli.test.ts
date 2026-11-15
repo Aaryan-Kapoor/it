@@ -1531,6 +1531,10 @@ describe('what takes It’s folder off the PATH Windows keeps, when It is taken 
     expect(line).toContain("$k.SetValue('Path', ($keep -join ';'), $k.GetValueKind('Path'))")
     expect(line).toContain("if ($keep.Count -eq $all.Count -and -not $begun) { 'absent' } else {")
     expect(line).toContain("if ($keep.Count -ne $all.Count) { $k.SetValue('Path'")
+    // A mark is put down before the PATH is written and taken up only after running programs are told
+    expect(line).toContain(
+      "$k.SetValue('IT_PATH_CHANGED', '1'); if ($keep.Count -ne $all.Count) { $k.SetValue('Path', ($keep -join ';'), $k.GetValueKind('Path')) }; [Environment]::SetEnvironmentVariable('IT_PATH_CHANGED', '1', 'User'); $k.DeleteValue('IT_PATH_CHANGED', $false);",
+    )
     expect(line).not.toContain("GetEnvironmentVariable('Path'")
     expect(line).not.toContain("SetEnvironmentVariable('Path'")
     expect(line).not.toContain('\n')

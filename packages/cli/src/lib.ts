@@ -125,9 +125,11 @@ export function windowsPathCommand(folder: string): string {
  * back as it was kept, in its order, with a name such as %USERPROFILE% left as a name and the
  * value left the kind it was. Nothing is written where the folder is not there. It says `off`
  * where it took the folder off and `absent` where it was not on it, and running programs are
- * told as `windowsPathCommand` tells them. The variable that tells them is set before the PATH
- * is written and removed after, so that where this was ended partway, running it again finishes
- * what it began: a variable still there is removed, which tells them, and that says `off`.
+ * told as `windowsPathCommand` tells them. So that where this was ended partway, running it
+ * again finishes what it began, a mark is put beside the PATH before it is written, without a
+ * word to anyone, and taken away the same way only once running programs have been told. A
+ * mark still there is taken for a removal that was begun: running programs are told, and that
+ * says `off`.
  */
 export function windowsPathRemoval(folder: string): string {
   const dir = psQuote(folder.replace(/[\\/]+$/, ''))
@@ -137,7 +139,7 @@ export function windowsPathRemoval(folder: string): string {
     "$all = @(([string]$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -split ';')",
     `$keep = @($all | Where-Object { -not ($_ -and [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\\') -eq ${dir}) })`,
     "$begun = $null -ne [Environment]::GetEnvironmentVariable('IT_PATH_CHANGED', 'User')",
-    "if ($keep.Count -eq $all.Count -and -not $begun) { 'absent' } else { [Environment]::SetEnvironmentVariable('IT_PATH_CHANGED', '1', 'User'); if ($keep.Count -ne $all.Count) { $k.SetValue('Path', ($keep -join ';'), $k.GetValueKind('Path')) }; [Environment]::SetEnvironmentVariable('IT_PATH_CHANGED', [NullString]::Value, 'User'); 'off' }",
+    "if ($keep.Count -eq $all.Count -and -not $begun) { 'absent' } else { $k.SetValue('IT_PATH_CHANGED', '1'); if ($keep.Count -ne $all.Count) { $k.SetValue('Path', ($keep -join ';'), $k.GetValueKind('Path')) }; [Environment]::SetEnvironmentVariable('IT_PATH_CHANGED', '1', 'User'); $k.DeleteValue('IT_PATH_CHANGED', $false); [Environment]::SetEnvironmentVariable('IT_PATH_CHANGED', [NullString]::Value, 'User'); 'off' }",
     '$k.Close()',
   ].join('; ')
 }

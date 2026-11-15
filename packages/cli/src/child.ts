@@ -31,32 +31,43 @@ export const cutShort = (ms: number, limit: number): boolean => ms < limit - 50
  * had passed, which only the fault above does. The second run is given the whole limit, and
  * what it gives is what is given back, whatever that is: nothing is run a third time. A child
  * that really ran out of time, and one that ended in any other way, is run once. Where a second
- * run is safe only while something still holds, `again` says whether it does, and the first
- * run's result is given back where it does not. `clock` is a monotonic count of milliseconds,
+ * run is safe only where the first did not get far, `again` says from the first run's result
+ * whether it is, and that result is given back where it is not. `clock` is a monotonic count of milliseconds,
  * which a test stands in for.
  */
 export function unlessCutShort<T extends { error?: Error }>(
   run: () => T,
   limit: number | undefined,
-  again: () => boolean = () => true,
+  again: (first: T) => boolean = () => true,
   clock: () => number = () => performance.now(),
 ): T {
   const began = clock()
   const first = run()
-  if (!limit || (first.error as NodeJS.ErrnoException | undefined)?.code !== 'ETIMEDOUT' || !cutShort(clock() - began, limit) || !again()) return first
+  if (!limit || (first.error as NodeJS.ErrnoException | undefined)?.code !== 'ETIMEDOUT' || !cutShort(clock() - began, limit) || !again(first)) return first
   return run()
 }
 
 /** `spawnSync`, given a second run where its limit ended the child before its time, and where `again` agrees (see `unlessCutShort`). */
-export function runSync(file: string, args: readonly string[], options: SpawnSyncOptionsWithStringEncoding, again?: () => boolean): SpawnSyncReturns<string>
+export function runSync(
+  file: string,
+  args: readonly string[],
+  options: SpawnSyncOptionsWithStringEncoding,
+  again?: (first: SpawnSyncReturns<string>) => boolean,
+): SpawnSyncReturns<string>
 export function runSync(
   file: string,
   args: readonly string[],
   options?: SpawnSyncOptionsWithBufferEncoding | SpawnSyncOptions,
-  again?: () => boolean,
+  again?: (first: SpawnSyncReturns<Buffer>) => boolean,
 ): SpawnSyncReturns<Buffer>
-export function runSync(file: string, args: readonly string[], options: SpawnSyncOptions = {}, again?: () => boolean): SpawnSyncReturns<string | Buffer> {
-  return unlessCutShort(() => spawnSync(file, args, options), options.timeout, again)
+export function runSync(
+  file: string,
+  args: readonly string[],
+  options: SpawnSyncOptions = {},
+  again?: ((first: SpawnSyncReturns<string>) => boolean) | ((first: SpawnSyncReturns<Buffer>) => boolean),
+): SpawnSyncReturns<string | Buffer> {
+  // Each signature above gives `again` what `spawnSync` gives for its options
+  return unlessCutShort(() => spawnSync(file, args, options), options.timeout, again as ((first: SpawnSyncReturns<string | Buffer>) => boolean) | undefined)
 }
 
 /**

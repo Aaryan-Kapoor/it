@@ -60,7 +60,10 @@ describe('a child that its limit ended before its time', () => {
 
   test('is run once more only where what a second run needs still holds', () => {
     const held = stand([cut, 25], [fine, 2000])
-    expect(unlessCutShort(held.run, 30_000, () => true, held.clock)).toBe(fine)
+    const shown: unknown[] = []
+    expect(unlessCutShort(held.run, 30_000, (first) => shown.push(first) > 0, held.clock)).toBe(fine)
+    // It is asked with what the first run gave
+    expect(shown).toEqual([cut])
     expect(held.runs()).toBe(2)
     const gone = stand([cut, 25], [fine, 2000])
     expect(unlessCutShort(gone.run, 30_000, () => false, gone.clock)).toBe(cut)
