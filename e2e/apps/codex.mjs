@@ -415,6 +415,12 @@ const page = `<h1>Deploy</h1><button id="go" onclick="It.action(\`approve\`)">Ap
 // quotes out of an argument. The file is written here, as the agent writes it with its own file
 // tool, in the temporary folder. The Node bundle has no it.exe, only It's it.cmd, which is `it`.
 const itCommand = windows && STANDALONE ? 'it.exe' : 'it'
+/**
+ * A command that takes a few seconds and that Codex runs without asking. On Windows Codex asks
+ * before running anything but what It's rules let out, so there it is It's own `it wait`, which
+ * waits that long for a click on the page and prints that none came.
+ */
+const waiting = (seconds) => (windows ? `${itCommand} wait --id ${slug} --timeout ${seconds}` : `sleep ${seconds}`)
 const created = `${itCommand} create "Approve the deploy" --id ${slug} --html '${page}' --open`
 const patching = (patch) => {
   if (!windows) return `it patch ${slug} '${JSON.stringify(patch)}'`
@@ -446,8 +452,8 @@ const model = await standInModel({
     // A turn the person starts, which works for a while: a few seconds, or until it is stopped.
     // Codex hands a command that runs for more than ten seconds back to its model still running,
     // so a long one is many short ones, one after another
-    if (asked.newest.trim() === 'Work on this for a while.') return asked.outputs < 2 ? { run: 'sleep 4' } : { say: 'Done working.' }
-    if (asked.newest.trim() === 'Work on this until you are stopped.') return asked.outputs < 15 ? { run: 'sleep 8' } : { say: 'Done working.' }
+    if (asked.newest.trim() === 'Work on this for a while.') return asked.outputs < 2 ? { run: waiting(4) } : { say: 'Done working.' }
+    if (asked.newest.trim() === 'Work on this until you are stopped.') return asked.outputs < 15 ? { run: waiting(8) } : { say: 'Done working.' }
     return { say: 'OK' }
   },
 })
