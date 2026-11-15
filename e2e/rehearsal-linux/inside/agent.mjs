@@ -54,7 +54,7 @@ export async function answerApp(app, counts = {}) {
       await key('Enter')
       return 'theme'
     }
-    if (/Security notes|Press Enter to continue/i.test(tail) && !/Do you want/i.test(tail)) {
+    if (/Security notes|Press Enter to continue/i.test(tail) && !/Do you want|No, exit|trust this folder/i.test(tail)) {
       step('the app shows its notes; presses Enter')
       await key('Enter')
       return 'notes'
