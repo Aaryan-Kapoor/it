@@ -3958,6 +3958,10 @@ describe.skipIf(process.platform === 'win32')('a picture an action carried', () 
       expect(inCodex).toContain(
         'Where they have this conversation open in Codex in a terminal and Codex said its automatic review refused it, the words are: Codex would not let me save the file you sent. If /permissions in Codex offers “Ask for approval”, choose it and send the file again, and Codex will ask you first. Anywhere else, they say what Codex said.',
       )
+      // And still where Codex may have run it and that cannot be told: a pair another app's add-on
+      // wrote beside Codex's mark, with that app not seen above (as it is not, unless OpenCode runs the tests)
+      const unsure = { ...b.env, CODEX_THREAD_ID: 'thread-1', IT_HARNESS: 'opencode', IT_SESSION: 'conversation-1' }
+      expect(printed(await run(m, ['action', 'k57'], unsure)).saveInCodex).toBe(inCodex)
       // A file of that name that is there already is the person's: it is not written over, and is as it was
       writeFileSync(to, 'the person’s own drawing')
       const over = await run(m, ['save', 'k57', to], b.env)
