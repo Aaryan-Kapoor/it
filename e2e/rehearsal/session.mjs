@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import http from 'node:http'
 import path from 'node:path'
 import { hostTerminal, psAs, startAs, userEnv } from './asuser.mjs'
-import { claudeAccess, codexAuthContent, forget, scrub, shredLedger, shredOnExit } from './credentials.mjs'
+import { claudeAccess, claudeCredentialsContent, codexAuthContent, forget, scrub, shredLedger, shredOnExit } from './credentials.mjs'
 import { leftIn, ownerFingerprint, recorder, RESULTS, sleep, stamp, WORK } from './lib.mjs'
 import { personBrowser, SCREEN, terminalView, terminalWindow } from './stage.mjs'
 
@@ -61,13 +61,43 @@ const log = (name, seen = '', ok = true) => {
 shredOnExit()
 const leftover = shredLedger()
 if (leftover) log('token files from an earlier run could not all be shredded', `${leftover} left`, false)
+// The sign-in files lent into the account are the account's own, closed to all else, so the ledger
+// above cannot reach them: they are shredded as that account, at the start of every session (one
+// a killed run left) and at its end, each overwritten with random bytes of its length and deleted
+const LENT_FILES = [`${UHOME}\\.codex\\auth.json`, `${UHOME}\\.claude\\.credentials.json`]
+async function sweepLent() {
+  const r = await psAs(
+    USER,
+    [
+      `$files = @(${LENT_FILES.map((p) => `'${p}'`).join(', ')})`,
+      'for ($try = 0; $try -lt 5; $try++) {',
+      '  foreach ($f in $files) { if (Test-Path $f) { try { $n = [Math]::Max(64, (Get-Item $f).Length); $b = New-Object byte[] $n; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [IO.File]::WriteAllBytes($f, $b); Remove-Item -Force $f -ErrorAction Stop } catch {} } }',
+      '  if (-not ($files | Where-Object { Test-Path $_ })) { break }',
+      '  Start-Sleep 2',
+      '}',
+      '$left = @($files | Where-Object { Test-Path $_ } | ForEach-Object { Split-Path $_ -Leaf })',
+      '"left: " + $(if ($left.Count) { $left -join "," } else { "none" })',
+    ].join('\n'),
+    userEnv(USER),
+  )
+  return (r.output.split(/\r?\n/).find((l) => l.startsWith('left:')) ?? `left: unknown (${r.output.slice(0, 120)})`).trim()
+}
+const sweptBefore = await sweepLent()
+log('sign-in files an earlier session may have left in the account', sweptBefore, /left: none/.test(sweptBefore))
 const startedAt = stamp()
 const fingerprint0 = ownerFingerprint()
 
 // The account's environment, as a participant's laptop has it, with the agent app on the PATH
 // and the one thing that differs from a participant: the install script and It fetch the build
 // under test from the stand-in for It's releases on this machine.
-const shellEnv = userEnv(USER, { path: [appBin], extra: { IT_INSTALL_BASE: 'http://127.0.0.1:5690' } })
+// --real-site: no stand-in (the published release). --own-apps: the agent app as the account has it
+// itself (npm's own folder, on the account's own PATH; see clean-apps.mjs), not the harness's copy.
+const ownApps = process.argv.includes('--own-apps')
+const realSite = process.argv.includes('--real-site')
+const shellEnv = userEnv(USER, {
+  path: ownApps ? [`${UHOME}\\AppData\\Roaming\\npm`, `${UHOME}\\AppData\\Local\\Microsoft\\WindowsApps`] : [appBin],
+  extra: realSite ? {} : { IT_INSTALL_BASE: 'http://127.0.0.1:5690' },
+})
 
 // The sign-in lent to the run, and the agent app's settings, as a person who chose that model has them
 const files = []
@@ -82,6 +112,11 @@ if (app === 'codex') {
     content: `${existsSync(path.join(top, 'kept-config.toml')) ? readFileSync(path.join(top, 'kept-config.toml'), 'utf8') : ''}`,
     secret: false,
   })
+} else if (process.argv.includes('--claude-file')) {
+  // As a participant's: the sign-in in Claude Code's own file, which a conversation It reopens finds
+  const cred = claudeCredentialsContent()
+  tokenExpiry = new Date(cred.expiresAt).toISOString()
+  files.push({ path: `${UHOME}\\.claude\\.credentials.json`, content: cred.content, secret: true })
 } else {
   const access = claudeAccess()
   tokenExpiry = new Date(access.expiresAt).toISOString()
@@ -225,7 +260,7 @@ log('the terminal is open, as the account', `${USER}, in ${run ? workDir : UHOME
 await tw.page.bringToFront()
 // Focus starts in the terminal, as a terminal window just opened has it
 await tw.page.click('#t').catch(() => {})
-forget()
+// The lent values stay known to `scrub` until the very end of the session (see the end)
 
 // The one step Windows would take for a person signed in at the screen: when `it setup`
 // registers It's task (which runs only while its user is logged on), Windows starts it at once.
@@ -260,7 +295,23 @@ const watchTask = async () => {
         // started: the same cmd.exe line, in the same folder
         const words = args.trim().split(/\s+/)
         const at = words.findIndex((w) => /^cmd(\.exe)?$/i.test(w))
-        const started = await startAs({ user: USER, exe: 'C:\\Windows\\System32\\cmd.exe', args: words.slice(at + 1), cwd: dir, env: userEnv(USER) }).catch((e) => { throw new Error(`starting the task's command: ${e.message}`) })
+        // With the PATH a task's process gets: the machine's and the account's own, from the
+        // registry (as Task Scheduler builds a task's environment), not the harness's
+        const line = words.slice(at + 1).map((w) => `'${w.replace(/'/g, "''")}'`).join(',')
+        const started = await startAs({
+          user: USER,
+          exe: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+          args: [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            `$env:Path = [Environment]::ExpandEnvironmentVariables([Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')); Start-Process -FilePath 'C:\\Windows\\System32\\cmd.exe' -ArgumentList ${line} -WorkingDirectory '${dir.replace(/'/g, "''")}' -WindowStyle Hidden`,
+          ],
+          cwd: dir,
+          env: userEnv(USER),
+        }).catch((e) => {
+          throw new Error(`starting the task's command: ${e.message}`)
+        })
         log(
           'the harness started what the registered task starts, as Windows would for a person signed in at the screen',
           `task state ${state}; ran "${exe} ${args}" in ${dir} as ${USER} (pid ${started.pid}); start number ${taskStarts}`,
@@ -372,8 +423,10 @@ if (run) {
       `Start-Sleep 3`,
       `"task after uninstall: " + ((Get-ScheduledTask -TaskPath '\\' -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'it*' } | ForEach-Object { $_.TaskName }) -join ',')`,
       `"it folder after uninstall: " + (Test-Path '${UHOME}\\.it') + " " + ((Get-ChildItem -Force '${UHOME}\\.it' -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join ',')`,
-      `"token file: " + (Test-Path '${UHOME}\\.codex\\auth.json')`,
-      `if (Test-Path '${UHOME}\\.codex\\auth.json') { Remove-Item -Force '${UHOME}\\.codex\\auth.json' }`,
+      `"token file: " + (Test-Path '${UHOME}\\.codex\\auth.json') + " " + (Test-Path '${UHOME}\\.claude\\.credentials.json')`,
+      // Each lent sign-in file is overwritten with random bytes of its own length, then deleted
+      `foreach ($f in @('${UHOME}\\.codex\\auth.json', '${UHOME}\\.claude\\.credentials.json')) { if (Test-Path $f) { $n = [Math]::Max(64, (Get-Item $f).Length); $b = New-Object byte[] $n; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [IO.File]::WriteAllBytes($f, $b); Remove-Item -Force $f } }`,
+      `"token files left: " + (Test-Path '${UHOME}\\.codex\\auth.json') + " " + (Test-Path '${UHOME}\\.claude\\.credentials.json')`,
     ].join('\n'),
     shellEnv,
   )
@@ -394,6 +447,11 @@ const ended = await psAs(
   shellEnv,
 )
 log("the account's own agent processes left running were ended by their ids", ended.output.trim().replace(/\s+/g, ' ').slice(0, 600))
+// With nothing of the agent app left to hold them, each lent sign-in file is shredded once more,
+// tried a few times, and one that is still there is a failure of the run
+const swept = await sweepLent()
+log("the lent sign-in files in the account were overwritten and deleted", swept, /left: none/.test(swept))
+forget()
 const fingerprint1 = ownerFingerprint()
 const ownerSame = fingerprint0.tasks === fingerprint1.tasks && !fingerprint1.ownerStopAsked
 log("the owner's own It task is as it was, and was not asked to stop", JSON.stringify({ before: fingerprint0, after: fingerprint1 }), ownerSame)
