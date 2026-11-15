@@ -27,7 +27,9 @@ const ROOT = join(HERE, '..', '..')
 const RESULTS = process.env.IT_REHEARSAL_RESULTS ?? join(homedir(), 'it-rehearsal', '2026-11-15-mac')
 const LIVE = process.env.IT_REHEARSAL_LIVE ?? '/tmp/claude-1000/-home-cbak--t3-worktrees-it-t3-a3c24a76-20db2fab89311564/81820fb8-5917-4fab-a8f2-ea80cf68093b/scratchpad/live'
 const BIN = process.env.IT_REHEARSAL_BIN ?? join(ROOT, 'packages', 'cli', 'dist', 'bin')
-const BUDGET = 651
+const BUDGET = 851
+// IT_REHEARSAL_RELEASED=1: no stand-in at all; the Mac installs the published release from the real itcan.do and GitHub
+const RELEASED = process.env.IT_REHEARSAL_RELEASED === '1'
 const PRICE = { '6x14': 0.09, '4x7': 0.06 }
 const MODEL = { codex: 'gpt-6.1-sol at high reasoning effort', claude: `Claude Haiku 5.5 through OpenRouter (${HAIKU})` }
 const GUI = 'sudo launchctl asuser 501 sudo -u runner -H'
@@ -136,12 +138,12 @@ async function wipeAll(id) {
 // ---- preparing a Mac ----
 function upload(id) {
   const files = ['it-darwin-arm64', 'install.sh', 'SHA256SUMS', 'LICENSE.md', 'THIRD_PARTY_NOTICES.md', 'latest.json']
-  for (const f of files) if (!existsSync(join(BIN, f))) throw new Error(`The build has no ${f} in ${BIN}.`)
+  if (!RELEASED) for (const f of files) if (!existsSync(join(BIN, f))) throw new Error(`The build has no ${f} in ${BIN}.`)
   // Staged in one folder (the build's files under bin/, the harness beside them) and sent as one tar
   const stage = join(LIVE, 'upload')
   spawnSync('rm', ['-rf', stage], { env: SAFE_ENV })
   mkdirSync(join(stage, 'bin'), { recursive: true })
-  for (const f of files) copyFileSync(join(BIN, f), join(stage, 'bin', f))
+  if (!RELEASED) for (const f of files) copyFileSync(join(BIN, f), join(stage, 'bin', f))
   for (const f of ['hands.swift', 'prepare.sh', 'releases.mjs', 'site.mjs']) copyFileSync(join(HERE, f), join(stage, f))
   // The guide the person gives the agent, where one is named, without the notes above it
   if (process.env.IT_REHEARSAL_GUIDE) writeFileSync(join(stage, 'install.md'), readFileSync(process.env.IT_REHEARSAL_GUIDE, 'utf8').replace(/^<!--[\s\S]*?-->\s*/, ''))
@@ -204,7 +206,7 @@ async function prepareSteps(id) {
   await upload(id)
   log(`uploaded in ${Math.round((Date.now() - t) / 1000)} s`)
   await step(id, 'tools')
-  await step(id, 'standin')
+  if (!RELEASED) await step(id, 'standin')
   const version = (await step(id, `app ${app}`)).trim().split('\n').at(-1)
   await signIn(id, app)
   await step(id, `desktop ${browser}`)
@@ -260,10 +262,10 @@ async function start(id) {
     browser: browser === 'chrome' ? `Chrome ${machine.facts.chrome ?? ''}`.trim() : `Safari ${machine.facts.safari ?? ''}`.trim(),
     macos: machine.facts.macos ?? null,
     mac: { instance: id, shape: machine.facts.model, cpus: machine.facts.cpus, screen: machine.facts.screen },
-    build: build.commit,
-    buildVersion: build.version,
+    build: RELEASED ? 'the published release (it version on the Mac says which)' : build.commit,
+    buildVersion: RELEASED ? 'published Latest' : build.version,
     person: 'Claude Opus 5.5 at high effort, looking at the screen',
-    installBase: 'IT_INSTALL_BASE=http://127.0.0.1:8765 in ~/.zshenv and the desktop session, before the video starts: the live install script fetches the build under test from a stand-in for the releases on the Mac itself',
+    installBase: RELEASED ? 'none: the Mac reaches the real https://itcan.do and the real release on GitHub, as a participant\'s does' : 'IT_INSTALL_BASE=http://127.0.0.1:8765 in ~/.zshenv and the desktop session, before the video starts: the live install script fetches the build under test from a stand-in for the releases on the Mac itself',
     start: new Date().toISOString(),
     end: null,
     macMinutes: null,
