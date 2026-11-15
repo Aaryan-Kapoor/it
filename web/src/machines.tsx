@@ -203,6 +203,10 @@ function AddMachine({ onClose }: { onClose: () => void }) {
   )
 }
 
+/** What becomes of a Claude Code chat that was open across an update: nothing needs doing in it but where its page says so. */
+const CLAUDE_OPEN =
+  'A Claude Code chat that was already open there goes on with the add-on it loaded, which still takes clicks. Type /reload-plugins only in one whose page says it cannot hear it.'
+
 /**
  * A newer It is out, as this machine has learned: said under its name, with the button that has
  * the machine put it in place. The machine fetches what the place releases are kept says is
@@ -216,9 +220,10 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
   const now = useNow(15_000)
   const out = newer(m.latest, m.connectorVersion) ? (m.latest as string) : null
   const state = m.upgrade?.state
-  // Claude Code has It's add-on there: its conversations that were open have not loaded the new one
+  // Claude Code has It's add-on there: its conversations that were open go on with the add-on they loaded, which still takes
+  // clicks, and only one that never loaded it needs /reload-plugins, which its page says (see RELOAD_OPEN in the program)
   const claude = m.harnesses.some((h) => h.id === 'claude-code' && (h.addon === 'connected' || h.addon === 'needs_approval'))
-  const reload = claude ? ' Type /reload-plugins in any Claude Code chat that was already open there, so that it loads It’s new add-on.' : ''
+  const reload = claude ? ` ${CLAUDE_OPEN}` : ''
   if (state === 'installed')
     return (
       <p className="panel-note newer" data-tone="wait">
@@ -228,7 +233,7 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
         <code>it serve</code>, stop it and start it again. Otherwise run <code>it setup</code> in a terminal on that machine, which starts It again and lets the
         next update start it again by itself. As it starts it brings the add-ons in the agent apps there up to date.
         {claude
-          ? ' Then type /reload-plugins in any Claude Code chat that was already open there, so that it loads It’s new add-on.'
+          ? ` ${CLAUDE_OPEN}`
           : ' An app that is already running goes on with the add-on it loaded until it is restarted, and its line on this page then says so.'}
       </p>
     )
@@ -236,7 +241,7 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
   // An update the site asked for is over: said for a few hours, with what is left to do there, unless something newer waits already
   if (state === 'done' && now - (m.upgrade?.at ?? 0) < DONE_SAID_MS && !out && !behind)
     return (
-      <p className="panel-note newer" data-tone={claude ? 'wait' : undefined}>
+      <p className="panel-note newer">
         It {m.upgrade?.version ?? m.connectorVersion} is running on {m.name}.{reload}
       </p>
     )

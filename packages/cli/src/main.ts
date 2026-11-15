@@ -3733,16 +3733,12 @@ async function main(argv: string[]): Promise<void> {
       if (started === 'failed' || failedAddons.length) process.exitCode = 1
       // Counted: from which version to which, and whether It runs as the new one
       usage.record('upgrade.done', { from: usage.three(done.from), to: usage.three(done.to), by: 'command', result: started === 'failed' ? 'failed' : 'ok' })
-      // Where Claude Code has It's add-on here, its conversations that were open have not loaded the new one
+      // Where Claude Code has It's add-on here, what becomes of its conversations that were open is said
       const claude = claudeFolders().length > 0
       // And what whoever reads this is to do: start It again where it was started by hand and runs the old version still
       const byHand =
         started === 'by hand' && after.running ? 'It is still running as the old version: stop `it serve` where it is running, and start it again.' : undefined
-      const reload = claude
-        ? after.addonsLater
-          ? `Once it runs as the new version, ${RELOAD_OPEN.charAt(0).toLowerCase()}${RELOAD_OPEN.slice(1)}`
-          : RELOAD_OPEN
-        : undefined
+      const reload = claude ? RELOAD_OPEN : undefined
       const hint = [byHand, reload].filter(Boolean).join(' ')
       const result = {
         upgraded: true,
@@ -3753,8 +3749,9 @@ async function main(argv: string[]): Promise<void> {
         ...(after.addons ? { addons: after.addons } : {}),
         ...(after.addonsLater ? { addonsLater: true } : {}),
         ...(hint ? { hint } : {}),
-        // An agent that upgraded It from a Claude Code conversation is in one of those: it tells the person, word for word
-        ...(claude && sessionAsked()?.session.harness === 'claude-code' ? { tell: tellWordForWord(reloadLine(claudeRunning())) } : {}),
+        // An agent that upgraded It from a Claude Code conversation that never loaded the add-on tells the person, word for word.
+        // One that loaded it goes on with it, as every open conversation does, and has nothing to tell
+        ...(claude && sessionAsked()?.session.harness === 'claude-code' && claudeReloadLine() ? { tell: tellWordForWord(claudeReloadLine()!) } : {}),
       }
       if (!forPerson(a)) return out(result)
       return tell([

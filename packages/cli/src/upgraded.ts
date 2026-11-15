@@ -107,19 +107,22 @@ export const restartLine = (names: string[]): string | null =>
     : null
 
 /**
- * What a person is told to do in every Claude Code conversation that was already open, once
- * It's add-on there is a new one: Claude Code loads an add-on as a conversation starts, and
- * one that was open goes on with what it loaded, which may be nothing at all. An It whose
- * add-on Claude Code did not load, as 0.1.36's in a Claude Code of now, left every such
- * conversation without one, and nothing done on their pages reaches them until this is done.
+ * What a person is told of the Claude Code conversations that were already open, once It's
+ * add-on there is a new one. Claude Code keeps the copy of the add-on that a conversation
+ * loaded, and the new It's connector takes clicks from it, so such a conversation goes on
+ * getting them (seen in the rehearsals: the same conversation was listening again two seconds
+ * after the service restarted as the new version, and its next click was answered with nothing
+ * typed). Only a conversation that never loaded the add-on, as one open since before It was
+ * installed, needs /reload-plugins, and its page and `it status` say so. Told to type it in
+ * every open conversation, people were left unsure whether they should have.
  */
 export const RELOAD_OPEN =
-  'Type /reload-plugins in any Claude Code conversation that was already open, so that it loads It’s new add-on: until then, what is done on its pages may not reach it.'
+  'A Claude Code conversation that was already open goes on with the add-on it loaded, which still takes clicks, so nothing needs typing there. Type /reload-plugins only in one whose page says it cannot hear it: that one never loaded It’s add-on.'
 
 /**
  * What a person is told of the add-ons once It is upgraded: which could not be brought up to
- * date, which apps to restart, and, where Claude Code has It's add-on (`claude`), what to type
- * in its conversations that were open.
+ * date, which apps to restart, and, where Claude Code has It's add-on (`claude`), what becomes
+ * of its conversations that were open.
  */
 export function addonsSaid(done: AfterUpgrade, label: (id: Harness) => string, claude = false): string[] {
   const lines: string[] = []
@@ -134,6 +137,6 @@ export function addonsSaid(done: AfterUpgrade, label: (id: Harness) => string, c
   const restart = restartLine((done.addons ?? []).filter((o) => o.did === 'installed' && o.restart && o.id !== 'claude-code').map((o) => label(o.id)))
   if (restart) lines.push(restart)
   if (done.addonsLater) lines.push('Its add-ons in your agent apps are brought up to date when It starts as the new version.')
-  if (claude) lines.push(done.addonsLater ? `Once it has, ${RELOAD_OPEN.charAt(0).toLowerCase()}${RELOAD_OPEN.slice(1)}` : RELOAD_OPEN)
+  if (claude) lines.push(RELOAD_OPEN)
   return lines
 }

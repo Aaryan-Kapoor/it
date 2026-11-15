@@ -370,19 +370,20 @@ describe('what is said of an agent app on a machine', () => {
     expect(said()).toEqual([
       'It 0.1.1 is installed on the laptop. It runs once It is started again there. If you started It in a terminal with it serve, stop it and start it again. Otherwise run it setup in a terminal on that machine, which starts It again and lets the next update start it again by itself. As it starts it brings the add-ons in the agent apps there up to date. An app that is already running goes on with the add-on it loaded until it is restarted, and its line on this page then says so.',
     ])
-    // Where Claude Code has It's add-on there, what to type in its conversations that were open, which have not loaded the new one
+    // Where Claude Code has It's add-on there, that its conversations that were open go on with the add-on they loaded, and only
+    // one whose page says it cannot hear it needs /reload-plugins: an open conversation was seen to go on getting clicks across an update
     const claude = { harnesses: [{ id: 'claude-code', addon: 'connected' }], wanted: ['claude-code'] }
     await showing([
       { ...desk, connectorVersion: '0.1.1' },
       { ...laptop, ...claude, latest: '0.1.1', upgrade: { at: 1, state: 'installed', version: '0.1.1' } },
     ])
     expect(said()[0]).toMatch(
-      /up to date\. Then type \/reload-plugins in any Claude Code chat that was already open there, so that it loads It’s new add-on\.$/,
+      /up to date\. A Claude Code chat that was already open there goes on with the add-on it loaded, which still takes clicks\. Type \/reload-plugins only in one whose page says it cannot hear it\.$/,
     )
     // And once the update the site asked for is over, it says that the new version runs, and the same of Claude Code, for a few hours
     await showing([{ ...desk, connectorVersion: '0.1.1', latest: '0.1.1', ...claude, upgrade: { at: Date.now(), state: 'done', version: '0.1.1' } }])
     expect(said()).toEqual([
-      'It 0.1.1 is running on the desk. Type /reload-plugins in any Claude Code chat that was already open there, so that it loads It’s new add-on.',
+      'It 0.1.1 is running on the desk. A Claude Code chat that was already open there goes on with the add-on it loaded, which still takes clicks. Type /reload-plugins only in one whose page says it cannot hear it.',
     ])
     await showing([{ ...desk, connectorVersion: '0.1.1', latest: '0.1.1', upgrade: { at: Date.now(), state: 'done', version: '0.1.1' } }])
     expect(said()).toEqual(['It 0.1.1 is running on the desk.'])
