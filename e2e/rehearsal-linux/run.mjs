@@ -19,13 +19,15 @@ const arg = (name, fallback) => {
   return i === -1 ? fallback : process.argv[i + 1]
 }
 const has = (name) => process.argv.includes(`--${name}`)
-const flow = arg('flow', 'L1')
+const flow = arg('scenario', arg('flow', 'S1'))
+const person = arg('person', 'model')
 const app = arg('app', 'claude')
 const which = arg('browser', 'chromium')
 const ubuntu = arg('ubuntu', '24')
 const from = arg('from', `it-rehearsal-ubuntu${ubuntu}:base`)
 const snapshot = arg('snapshot')
-const minutes = Number(arg('minutes', flow === 'L8' ? '150' : '90'))
+const minutes = Number(arg('minutes', '45'))
+const RUNS = process.env.IT_REHEARSAL_RUNS ?? '/tmp/it-rehearsal-runs'
 const RESULTS = process.env.IT_REHEARSAL_RESULTS ?? join(homedir(), 'it-rehearsal', '2026-11-15-linux')
 const STAGE = process.env.IT_REHEARSAL_STAGE
 if (!STAGE || !existsSync(join(STAGE, 'BUILD.json'))) throw new Error('Set IT_REHEARSAL_STAGE to a folder made by stage.sh.')
@@ -33,9 +35,12 @@ const build = JSON.parse(readFileSync(join(STAGE, 'BUILD.json'), 'utf8'))
 
 const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-')
 const id = `${stamp}-${flow}-${app}-${which}-u${ubuntu}`.toLowerCase()
+const runHere = join(RUNS, id)
+mkdirSync(runHere, { recursive: true })
 const name = `it-rehearsal-${id}`.replace(/[^a-z0-9-]/g, '-')
 const dir = join(RESULTS, id)
 const FLOW = '/var/lib/rehearsal-flow'
+const MODEL = { codex: { model: 'gpt-6.1-sol', effort: 'high' }, claude: { model: 'claude-sonnet-5-5', effort: 'high' } }
 mkdirSync(dir, { recursive: true })
 const log = (...a) => console.log(`[${new Date().toISOString().slice(11, 19)}] ${a.join(' ')}`)
 
@@ -59,7 +64,9 @@ const result = {
   browser: which,
   ubuntu: `${ubuntu}.04`,
   build: build.commit,
+  harness: build.harness,
   buildVersion: build.version,
+  person: person === 'model' ? 'Claude Opus 5.5 at high effort, looking at the screen' : 'a script',
   start: new Date().toISOString(),
   end: null,
   ok: false,
@@ -102,9 +109,21 @@ async function main() {
   result.appVersion = exec(app === 'claude' ? 'claude --version' : 'codex --version').stdout.trim()
   result.os = exec('. /etc/os-release; echo $PRETTY_NAME').stdout.trim()
 
+  // ---- the agent app, as a participant who chose its model would have it ----
+  if (app === 'codex') asAna(`mkdir -p ~/.codex && printf 'model = "${MODEL.codex.model}"\nmodel_reasoning_effort = "${MODEL.codex.effort}"\n' > ~/.codex/config.toml`)
+  else {
+    asAna(`mkdir -p ~/.claude && printf '{"model":"${MODEL.claude.model}","effortLevel":"${MODEL.claude.effort}"}\n' > ~/.claude/settings.json`)
+    // Claude Code 2.1.325 shows "Medium effort" with effortLevel in its settings alone, and takes
+    // the variable: in ana's own shell, and in her user manager for a conversation It reopens
+    asAna(`printf '\nexport CLAUDE_CODE_EFFORT_LEVEL=${MODEL.claude.effort}\n' >> ~/.bashrc; systemctl --user set-environment CLAUDE_CODE_EFFORT_LEVEL=${MODEL.claude.effort}`)
+  }
+  result.modelSetting = { ...MODEL[app], where: app === 'codex' ? '~/.codex/config.toml' : '~/.claude/settings.json, and CLAUDE_CODE_EFFORT_LEVEL in ~/.bashrc and the user manager' }
+  asAna('mkdir -p ~/work')
+  if (has('prepare')) exec(arg('prepare'))
+
   // ---- the sign-in, and the terminal ----
-  if (flow !== 'L5' && flow !== 'L7') {
-    const t = take(app, flow === 'L8' ? 60 : 40)
+  {
+    const t = take(app, Math.min(minutes + 5, 55))
     held = t.held
     result.tokenMinutesLeftAtStart = t.minutesLeft
     if (app === 'codex') await injectCodex(name, held)
@@ -112,14 +131,34 @@ async function main() {
   await startAgentShell(name, app === 'claude' ? held : null, { IT_INSTALL_BASE: 'http://127.0.0.1:8765' })
   if (app === 'claude' && held && ['L2', 'L3', 'L8'].includes(flow)) await shareWithUserManager(name, held)
   asAna('tmux set -g status off; tmux set -g history-limit 50000')
-  sh(['exec', '-d', name, 'su', '-l', 'ana', '-c', 'DISPLAY=:1 xterm -T rehearsal-terminal -fa "DejaVu Sans Mono" -fs 11 -bg white -fg black -geometry 104x56+0+0 -e tmux attach -t agent'])
+  // What the terminal shows, kept every few seconds where it changed: an app that clears the
+  // screen as it leaves takes its scrollback with it
+  exec(`nohup su ana -c 'p=""; while sleep 4; do c=$(tmux capture-pane -p -J -t agent 2>/dev/null) || continue; [ "$c" = "$p" ] && continue; printf "=== %s\\n%s\\n" "$(date -u +%T)" "$c" >> ${FLOW}/screens.txt; p="$c"; done' >/dev/null 2>&1 &`)
+  // The person's desktop: a terminal on the left, open and empty, and the web browser on the right
+  sh(['exec', '-d', name, 'su', '-l', 'ana', '-c', 'DISPLAY=:1 xfce4-terminal --disable-server --hide-menubar --hide-toolbar --hide-scrollbar --title=Terminal --font="DejaVu Sans Mono 11" --geometry=104x54+0+0 -x tmux attach -t agent'])
   await new Promise((r) => setTimeout(r, 2500))
+  exec('install -m 755 /build/harness/browser.sh /usr/local/bin/browser')
+  if (person === 'script') exec('touch /etc/rehearsal-cdp')
+  if (has('fake-media')) exec('touch /etc/rehearsal-fake-media')
+  sh(['exec', '-d', name, 'su', '-l', 'ana', '-c', 'DISPLAY=:1 browser about:blank'])
+  await new Promise((r) => setTimeout(r, 5000))
+  exec(`DISPLAY=:1 su ana -c "wmctrl -r Terminal -e 0,0,0,960,1080; wmctrl -r Chromium -b remove,maximized_vert,maximized_horz; wmctrl -r Chromium -e 0,960,0,960,1080; wmctrl -a Terminal"`, { quiet: true })
 
   // ---- the recording ----
   exec(`ffmpeg -nostdin -y -loglevel error -f x11grab -framerate 12 -video_size 1920x1080 -i :1 -vf scale=1600:-2 -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p /var/lib/rehearsal-video/video.mp4 > /var/lib/rehearsal-video/ffmpeg.log 2>&1 & echo $! > /run/rehearsal-ffmpeg.pid`)
   result.videoStart = new Date().toISOString()
 
-  // ---- the flow ----
+  writeFileSync(join(runHere, 't0'), `${Math.floor(Date.now() / 1000)}\n`)
+  writeFileSync(join(runHere, 'ready'), name)
+
+  // ---- the person ----
+  if (person === 'model') {
+    log(`ready for the person: PERSON_RUN=${runHere}`)
+    const until = Date.now() + minutes * 60_000
+    while (Date.now() < until && !existsSync(join(runHere, 'finish'))) await new Promise((r) => setTimeout(r, 2000))
+    if (!existsSync(join(runHere, 'finish'))) log('the run ran past its time')
+    return
+  }
   log(`flow ${flow} with ${app} in ${which}`)
   await new Promise((resolve) => {
     const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/flow.mjs ${flow} ${app} ${which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
@@ -155,6 +194,7 @@ async function collect() {
   // saw may be in the recording, so the recording is not kept.
   const expected = app === 'codex' ? ['/home/ana/.codex/auth.json'] : []
   const before = held ? await filesHolding(name, held) : []
+  result.tokenFilesBeforeWipe = redact(before.join(', '), held)
   const elsewhere = before.filter((f) => !expected.includes(f))
   // The terminal as tmux has it, read by root and not from any file the agent could write
   const tmuxText = asAna('tmux capture-pane -p -J -S - -t agent 2>/dev/null', { quiet: true }).stdout
@@ -167,11 +207,16 @@ async function collect() {
   const journal = exec('journalctl -u rehearsal-releases --no-pager -o cat 2>/dev/null | tail -200', { quiet: true }).stdout
   const userJournal = asAna('journalctl --user -u it.service --no-pager -o cat 2>/dev/null | tail -300', { quiet: true }).stdout
   const fromFlow = (f) => exec(`cat ${FLOW}/${f} 2>/dev/null`, { quiet: true }).stdout
+  const screens = fromFlow('screens.txt')
+  if (holdsToken(screens, held)) {
+    videoWithheld = true
+    result.tokenSeenInMachine = { ...(result.tokenSeenInMachine ?? {}), inScreens: true }
+  }
   const flowFiles = { 'steps.jsonl': fromFlow('steps.jsonl'), 'flow.json': fromFlow('flow.json'), 'terminal.txt': fromFlow('terminal.txt') }
   // Every trace of the token out of the machine, before anything is kept
   const left = await wipe(name, held)
   result.tokenFilesLeftAfterWipe = left.length
-  if (left.length) log(`after the wipe ${left.length} file(s) still hold a token value`)
+  if (left.length) log(`after the wipe ${left.length} file(s) still hold a token value: ${redact(left.join(', '), held)}`)
   const keep = (file, text) => {
     const clean = redact(text ?? '', held)
     if (clean !== (text ?? '')) result.redacted = [...(result.redacted ?? []), file]
@@ -183,7 +228,12 @@ async function collect() {
   keep('releases-stand-in.log', journal)
   keep('it-service-journal.txt', userJournal)
   keep('terminal.txt', flowFiles['terminal.txt'] || tmuxText)
-  const term = redact(tmuxText || flowFiles['terminal.txt'], held)
+  keep('terminal-screens.txt', screens)
+  for (const f of ['person-log.txt', 'person-account.txt', 'actions.jsonl']) {
+    if (existsSync(join(runHere, f))) keep(f, readFileSync(join(runHere, f), 'utf8'))
+  }
+  if (existsSync(join(runHere, 'person-log.txt'))) result.personLog = 'person-log.txt'
+  const term = redact(`${screens}\n${tmuxText}`, held)
   const model = /(?:Opus|Sonnet|Haiku|Fable)\s+[0-9.]+|model:\s*([a-z0-9.\-]+(?: (?:low|medium|high|xhigh))?)|gpt-[0-9][a-z0-9.\-]*/i.exec(term)
   if (model) result.model = (model[1] ?? model[0]).trim()
   const steps = keep('steps.jsonl', flowFiles['steps.jsonl'])
@@ -203,8 +253,11 @@ async function collect() {
     const v = JSON.parse(verdictText)
     Object.assign(result, { ok: !!v.ok, reason: v.reason, blame: v.blame, parts: v.parts, counts: v.counts, approvalsDuringTour: v.approvalsDuringTour, lastWords: v.lastWords, observations: v.observations })
   } else {
-    result.reason ??= 'the flow wrote no verdict'
-    result.blame ??= 'harness'
+    if (person === 'model') result.reason ??= 'to be judged by the tester from the video, the terminal and the person\'s account'
+    else {
+      result.reason ??= 'the flow wrote no verdict'
+      result.blame ??= 'harness'
+    }
   }
   // The recording, kept only where nothing says the token was on the screen
   if (!videoWithheld) {

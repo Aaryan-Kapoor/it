@@ -1,0 +1,4 @@
+[Default Applications]
+x-scheme-handler/http=rehearsal-browser.desktop
+x-scheme-handler/https=rehearsal-browser.desktop
+text/html=rehearsal-browser.desktop

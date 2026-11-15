@@ -192,7 +192,12 @@ export async function wipe(container, held) {
     "su -l ana -c 'systemctl --user unset-environment CLAUDE_CODE_OAUTH_TOKEN' >/dev/null 2>&1 || true",
   ].join('; ')
   await docker(['exec', container, 'bash', '-c', script])
-  return held ? filesHolding(container, held) : []
+  if (!held) return []
+  // Any other file that took a copy, such as an app's own log, is overwritten and deleted too,
+  // its name passed on standard input and never printed
+  const found = (await filesHolding(container, held)).filter((f) => f.startsWith('/'))
+  if (found.length) await docker(['exec', '-i', container, 'sh', '-c', 'while IFS= read -r f; do shred -fzu -n 2 -- "$f" 2>/dev/null || rm -f -- "$f"; done'], `${found.join('\n')}\n`)
+  return filesHolding(container, held)
 }
 
 /** `text` with every value of the token, and anything shaped like a credential, put out of sight. */

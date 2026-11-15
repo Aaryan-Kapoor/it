@@ -9,10 +9,12 @@ mkdir -p "$out/bin" "$out/harness"
 for f in it-linux-x64 it-linux-arm64 install.sh SHA256SUMS LICENSE.md THIRD_PARTY_NOTICES.md latest.json; do
   cp "$root/packages/cli/dist/bin/$f" "$out/bin/$f"
 done
-cp "$root"/e2e/rehearsal-linux/inside/*.mjs "$out/harness/"
+cp "$root"/e2e/rehearsal-linux/inside/*.mjs "$root"/e2e/rehearsal-linux/inside/*.sh "$out/harness/"
 ln -sfn /opt/person/node_modules "$out/harness/node_modules"
-commit=$(git -C "$root" rev-parse HEAD)
+# The build's commit is the newest that changed anything but this harness
+commit=$(git -C "$root" log -1 --format=%H -- . ":(exclude)e2e/rehearsal-linux")
+harness=$(git -C "$root" rev-parse HEAD)
 version=$(sed 's/.*"version":"\([^"]*\)".*/\1/' "$root/packages/cli/dist/bin/latest.json")
-printf '{"commit":"%s","version":"%s","staged":"%s"}\n' "$commit" "$version" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$out/BUILD.json"
+printf '{"commit":"%s","harness":"%s","version":"%s","staged":"%s"}\n' "$commit" "$harness" "$version" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$out/BUILD.json"
 chmod -R a+rX "$out"
 cat "$out/BUILD.json"

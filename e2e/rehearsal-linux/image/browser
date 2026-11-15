@@ -1,0 +1,9 @@
+#!/bin/sh
+# The machine's web browser: Playwright's build of Chromium, started as a plain browser (no
+# automation) on the right half of the display, with one profile that outlives a restart. A
+# second start, such as a link opened from the terminal, opens a tab in the running one.
+extra=""
+[ -f /etc/rehearsal-fake-media ] && extra="--use-fake-ui-for-media-stream --use-fake-device-for-media-stream"
+exec /opt/ms-playwright/chromium-1228/chrome-linux64/chrome --user-data-dir=/opt/person-profile/chromium \
+  --no-first-run --no-default-browser-check --password-store=basic --disable-features=Translate \
+  --window-position=960,0 --window-size=960,1080 $extra "$@"

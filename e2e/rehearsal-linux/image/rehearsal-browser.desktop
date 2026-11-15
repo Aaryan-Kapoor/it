@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Web Browser
+Exec=/usr/local/bin/browser %U
+MimeType=x-scheme-handler/http;x-scheme-handler/https;text/html;
+Terminal=false

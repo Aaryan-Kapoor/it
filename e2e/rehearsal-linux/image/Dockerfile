@@ -36,3 +36,12 @@ COPY units/ /etc/systemd/system/
 RUN systemctl enable rehearsal-xvfb.service rehearsal-wm.service
 STOPSIGNAL SIGRTMIN+3
 CMD ["/sbin/init"]
+# The desktop a person uses: a terminal whose links open with Ctrl and a click, and the plain
+# browser as the system's browser for every link.
+RUN apt-get update && apt-get install -y --no-install-recommends xfce4-terminal xdg-utils dbus-x11 at-spi2-core \
+    && rm -rf /var/lib/apt/lists/*
+COPY browser /usr/local/bin/browser
+COPY rehearsal-browser.desktop /usr/share/applications/rehearsal-browser.desktop
+COPY mimeapps.list /etc/xdg/mimeapps.list
+RUN chmod 755 /usr/local/bin/browser && update-desktop-database /usr/share/applications 2>/dev/null || true; \
+    update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/local/bin/browser 300
