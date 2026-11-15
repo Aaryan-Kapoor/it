@@ -71,6 +71,10 @@ const env = profileEnv(f, { port, appBin, guard: true, extra: { IT_INSTALL_BASE:
 // A run that tests an update: the guard passes `it upgrade`, once It says no service is
 // registered for this folder (guard.ts)
 if (process.argv.includes('--allow-upgrade')) env.IT_REHEARSAL_ALLOW_UPGRADE = '1'
+// From the real site, as a participant: no stand-in, the published program from It's releases.
+// IT_INSTALL_NO_PATH stays, since the owner's own PATH may not be changed.
+const realSite = process.argv.includes('--real-site')
+if (realSite) delete env.IT_INSTALL_BASE
 if (agentInstalls)
   Object.assign(env, {
     IT_REHEARSAL_GUARD: 'convert',
