@@ -166,17 +166,51 @@ var Shell = (() => {
   var shown = () => (at >= 0 ? parts[NAMES[at]] : null);
 
   // ── Where the conversation that put the page up cannot hear it yet ──
-  // The page says so, and what to type, until It says that something done here reached the
-  // conversation, or that a turn of it runs, which a conversation without the add-on never has,
-  // or else until the first answer of the agent's arrives. Left up until that answer, it said the
-  // agent could not hear while clicks were reaching it already (seen in rehearsals)
+  // Only on a page put up by a Claude Code conversation that had not loaded It's add-on and can
+  // load it with /reload-plugins, which `asleep` says. There the page says so, and what to type,
+  // only while It has reason to think so. It goes by what the site says It knows now
+  // (`notLoaded`, which comes with the progress), as the site's own notice above the page does:
+  // so it goes as soon as the person has typed /reload-plugins, and it does not show to a person
+  // who typed it before opening the page. Nothing is said before the site has said anything, so
+  // that it never flashes up first; a site that speaks and says nothing of it, as an older one
+  // does, leaves it to `asleep`. The site cannot know it for half a minute after It's service
+  // starts, so where it says nothing, something the person did that is still waiting for It or
+  // for the conversation UNHEARD after it was sent has the page say it as well. That is from the
+  // click in every part but the drums, which send a second and a half after the last tap. A conversation
+  // that hears is handed what was done in a second or two, so that says it only where something
+  // is wrong. Once the site has said that the conversation loaded the add-on, after saying it had
+  // not, nothing that waits says it any more. Once something done here has reached the
+  // conversation, or a turn of it runs, which a conversation without the add-on never has, or an
+  // answer of the agent's has come, it hears, and the page says no more of it
   var asleep = P.asleep === true || P.asleep === "true";
-  $("asleep").hidden = !asleep;
-  function heardFrom() {
-    if (!asleep) return;
-    asleep = false;
-    $("asleep").hidden = true;
+  var UNHEARD = 8000;
+  // What the site says: true while It knows that the conversation has not loaded the add-on, false where it does not know that, and undefined until it has said either
+  var site, spoke = false, loaded = false, heard = false;
+  // Whether something the person did, in any part, has waited that long and is still waiting: not refused, not given back to them unsent, and not answered
+  var waited = () => (boxes || []).some((b) => { var m = b.model; return (m.stage === "sending" || m.stage === "took" || m.stage === "slow") && m.t0 >= 0 && Date.now() - m.t0 >= UNHEARD; });
+  var cannotHear = () => asleep && !heard && spoke && (site !== false || (!loaded && waited()));
+  $("asleep").hidden = true;
+  function hearing() {
+    if ($("asleep").hidden === !cannotHear()) return;
+    $("asleep").hidden = !cannotHear();
     if (shown()) draw(shown().box.model);
+  }
+  /** What the site said, each time it says where things stand. Loaded since it said otherwise, the conversation hears, and what waits is no reason to say that it does not. */
+  function siteSaid(notLoaded) {
+    spoke = true;
+    if (typeof notLoaded === "boolean") {
+      if (site === true && notLoaded === false) loaded = true;
+      site = notLoaded;
+    }
+    hearing();
+  }
+  function heardFrom() {
+    heard = true;
+    hearing();
+  }
+  /** The person did something here: looked at again once it may have waited long enough to say so. */
+  function unheard() {
+    if (asleep && !heard && !loaded) setTimeout(hearing, UNHEARD);
   }
 
   // ── The agent's dock ──
@@ -217,7 +251,7 @@ var Shell = (() => {
     // An agent app may be holding the turn on a question to the person in its own window, as Codex does on an approval: said, since the person is looking here
     if (s === "slow") return ["No answer after " + Math.round((m.long ? m.long.most : SLOW) / 1000) + " s. " + AGENT + " may be waiting for you in its own window. This is yours again" + (m.late ? ", and a late answer is still shown." : "."), ""];
     if (s === "refused") return ["It did not take that. Do it again.", ""];
-    return [m.idle || (asleep ? AGENT + " cannot hear this page yet" : AGENT + " hears what you do here"), ""];
+    return [m.idle || (cannotHear() ? AGENT + " cannot hear this page yet" : AGENT + " hears what you do here"), ""];
   }
   /** How each stage stands: reached with its time, passed, waited for next, going on now, where it stopped, or not yet. */
   function stagesOf(m) {
@@ -267,7 +301,7 @@ var Shell = (() => {
     var m = { stage: "idle", idle: "", did: "", words: "", typed: "", typing: false, hint: "", t0: -1, at: {}, action: null, ended: false, long: null, late: true };
     var tick = 0, quiet = 0, typing = 0;
     var mine = () => shown() !== null && shown().box === box;
-    var show = () => { if (mine()) draw(m); };
+    var show = () => { hearing(); if (mine()) draw(m); };
     var since = () => Date.now() - m.t0;
     function stopClock() { clearTimeout(tick); clearTimeout(quiet); tick = quiet = 0; }
     function clock() { clearTimeout(tick); tick = setTimeout(() => { show(); clock(); }, 1000); }
@@ -304,7 +338,7 @@ var Shell = (() => {
       /** What the person can do here, in the page's words, where the agent has said nothing yet. */
       hint(t) { ++typing; m.words = m.typed = ""; m.typing = false; m.hint = t || ""; show(); },
       idle(t) { stopClock(); m.stage = "idle"; m.idle = t || ""; m.t0 = -1; m.at = {}; m.action = null; m.ended = false; m.long = null; show(); },
-      sending(when) { stopClock(); m.stage = "sending"; m.t0 = typeof when === "number" ? when : Date.now(); m.at = { you: 0 }; m.action = null; m.ended = false; m.long = null; show(); clock(); },
+      sending(when) { stopClock(); m.stage = "sending"; m.t0 = typeof when === "number" ? when : Date.now(); m.at = { you: 0 }; m.action = null; m.ended = false; m.long = null; unheard(); show(); clock(); },
       /**
        * It took what was done: `result` is what `It.action` answered with, which names the action.
        * Where nothing has come a while after, `back` gives the person their part again. That while
@@ -347,6 +381,7 @@ var Shell = (() => {
   }
   if (typeof It.onProgress === "function") It.onProgress((said) => {
     latest = said && typeof said === "object" ? said : null;
+    if (latest) siteSaid(latest.notLoaded);
     if (latest && (latest.working === true || (Array.isArray(latest.actions) && latest.actions.some((a) => a && a.handed === true)))) heardFrom();
     boxes.forEach((b) => b.heard());
   });

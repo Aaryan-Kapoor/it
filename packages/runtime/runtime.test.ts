@@ -319,6 +319,16 @@ describe('the script inside a page', () => {
     await settle()
     expect(heard).toHaveLength(3)
     expect(late[1]).toEqual({ working: false, actions: [{ id: 'a4', handed: true, turn: 'ended' }] })
+    // Whether the conversation has not loaded It's add-on is heard where the site says it, and only as true or false
+    p.fromSite({ type: 'it:progress', working: false, actions: [], notLoaded: true })
+    await settle()
+    expect(late[2]).toEqual({ working: false, actions: [], notLoaded: true })
+    p.fromSite({ type: 'it:progress', working: false, actions: [], notLoaded: false })
+    await settle()
+    expect(late[3]).toEqual({ working: false, actions: [], notLoaded: false })
+    p.fromSite({ type: 'it:progress', working: false, actions: [], notLoaded: 'yes' })
+    await settle()
+    expect(late[4]).toEqual({ working: false, actions: [] })
   })
 
   test('a commit sends what was staged, and clears only that: choices made while it was on its way stay', async () => {

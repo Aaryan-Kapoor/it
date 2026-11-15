@@ -1152,6 +1152,21 @@ describe('the line that moves under a page’s bar', () => {
     expect(progressFor(undefined, running, NOW)).toBeNull()
   })
 
+  test('every page is told whether its conversation has not loaded It’s add-on, by the machine’s word while it stands, as the notice above it goes', async () => {
+    await shown()
+    const { progressFor } = await import('./progress')
+    const work = { turn: null, machineSeenAt: NOW - 20_000 }
+    expect(progressFor([], work, NOW, 'not_loaded')?.notLoaded).toBe(true)
+    // Once the person has typed /reload-plugins, the machine says nothing of it, and the page is told so
+    expect(progressFor([], work, NOW, null)?.notLoaded).toBe(false)
+    // A machine gone quiet is no longer believed of it
+    expect(progressFor([], { ...work, machineSeenAt: NOW - 10 * 60_000 }, NOW, 'not_loaded')?.notLoaded).toBe(false)
+    expect(progressFor([], { ...work, machineSeenAt: null }, NOW, 'not_loaded')?.notLoaded).toBe(false)
+    // Nothing is said of it where It cannot say: functions from before they said it, or It out of reach
+    expect(progressFor([], work, NOW)).not.toHaveProperty('notLoaded')
+    expect(progressFor([], undefined, NOW, 'not_loaded')).not.toHaveProperty('notLoaded')
+  })
+
   test('stops when the turn ends, whether or not the page was changed, and not for a turn that ended before the click was handed over', async () => {
     await shown()
     const { inHand } = await import('./pages')

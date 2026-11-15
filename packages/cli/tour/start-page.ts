@@ -133,9 +133,9 @@ export async function opened(given: Record<string, unknown> = {}, before: (w: an
     /** What the agent said in a part. What the page says there of its own, before the agent has said anything, is not that. */
     said: (step: string) => read(step).said,
     you: (step: string) => read(step).did,
-    /** The site says where the actions it has handed on have got to, as `It.onProgress` hears it. */
-    async progress(actions: { id: string; handed: boolean; turn: 'running' | 'ended' | null }[]) {
-      for (const fn of hearers) fn({ actions })
+    /** The site says where the actions it has handed on have got to, as `It.onProgress` hears it, and, where `notLoaded` is given, whether the conversation has not loaded It's add-on. */
+    async progress(actions: { id: string; handed: boolean; turn: 'running' | 'ended' | null }[], notLoaded?: boolean) {
+      for (const fn of hearers) fn(notLoaded === undefined ? { actions } : { actions, notLoaded })
       await settled()
     },
     sentOf: (name: string) => sent.filter((s) => s.name === name),

@@ -262,6 +262,7 @@ A page can change its own state while you work, and so can another conversation.
 
 - `working` is `true` while a turn of your conversation is running, on this page or anything else, and `false` where none is or that is not known.
 - `actions` are the last eight things done on the page, newest first. Each has the `id` that `It.action` resolved with; `handed`, `true` once it was handed to you, or to the conversation that had the page before; and `turn`, which is `'running'` while a turn of yours runs after that, `'ended'` once one has ended, and `null` where that is not known or you have said with `it ack` that it is done. A later turn makes it `'running'` again until you have said it is done.
+- `notLoaded` is `true` while your conversation is open in Claude Code and has not loaded It's add-on, so that nothing done on the page reaches you yet, and `false` where It does not know that. It is left out where It cannot say.
 
 A turn ending does not mean the action was done: your answer on the page says that. Some agent apps do not say when their turns run: where `turn` stays `null` for something `handed`, say no more than that you have it.
 
