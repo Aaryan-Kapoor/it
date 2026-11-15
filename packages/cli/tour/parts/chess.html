@@ -100,7 +100,7 @@
 // and the page plays it on the board. The rules are the engine's: nothing here decides a move.
 Shell.part("chess", (my) => {
   var $ = Shell.$, NS = Shell.SVG;
-  var box = my.box, C = Chess, AGENT = my.agent, calm = Shell.calm, newId = Shell.newId;
+  var box = my.box, C = Chess, AGENT = my.agent, MID = my.agentMid, calm = Shell.calm, newId = Shell.newId;
   var card = my.el, boardEl = $("chess-board"), arrowEl = $("chess-arrow");
   // The six figures, as the outlines the site's own face of them draws, a thousand units to the
   // size and with `box` the corners of what each paints. A piece is drawn from its outline and
@@ -127,7 +127,7 @@ Shell.part("chess", (my) => {
   var log = [];                                     // the moves of this game, each as a sheet writes it, with whose it was and what it took
   var before = null;                                // how the game before this one ended, for the agent to be told with this one's first move
   var cells = [], shown = [], figures = [], home = 12;
-  var HINT = "You are White. What " + AGENT + " says of its move is written here.";
+  var HINT = "You are White. What " + MID + " says of its move is written here.";
   $("chess-black-name").textContent = AGENT;
 
   // ── Sound answers, for the agent to choose among ──
@@ -285,7 +285,7 @@ Shell.part("chess", (my) => {
     my.line(now.over === "checkmate" ? "Checkmate. " + (pos.turn === "b" ? "You won." : AGENT + " won.")
       : now.over ? "Stalemate. " + (pos.turn === "b" ? AGENT + " has" : "You have") + " no move, so it is a draw."
       : now.check && pos.turn === "w" ? "Your king is in check."
-      : waiting ? "The move is " + AGENT + "’s." : "You play White. Tap a piece and where it goes, and " + AGENT + " answers on the board.");
+      : waiting ? "The move is " + MID + "’s." : "You play White. Tap a piece and where it goes, and " + MID + " answers on the board.");
   }
 
   // A piece drawn over the board, on the square `s`, for as long as it is moving

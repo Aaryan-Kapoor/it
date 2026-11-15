@@ -143,7 +143,10 @@
 var Shell = (() => {
   var It = window.It || { state: {}, revision: 0, onState: () => () => {}, action: () => Promise.resolve() };
   var P = window.__PARAMS || {};
+  // The agent app's name where It knows it, as "Claude Code", which is the same anywhere in a sentence. Where It
+  // does not, the agent is "Your agent" where it begins a sentence or stands as a name, and "your agent" within one
   var AGENT = String(P.agent || "") || "Your agent";
+  var AGENT_MID = String(P.agent || "") || "your agent";
   // How long an agent has to answer before what was asked of it is the person's to do again
   var SLOW = 40000;
   var calm = !!window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -154,7 +157,8 @@ var Shell = (() => {
   var newId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (n) => n.toString(16).padStart(2, "0")).join("");
   var tidy = (v, most) => (typeof v === "string" || typeof v === "number" ? String(v).replace(/\s+/g, " ").trim().slice(0, most) : "");
   var listen = (fn) => { var off = It.onState(fn); return typeof off === "function" ? off : () => {}; };
-  var named = (text) => String(text || "").replace(/\{agent\}/g, AGENT);
+  // {agent} in a sentence of a part's: the name as it begins a sentence, where it begins the text or follows the end of one, and as it is within a sentence anywhere else
+  var named = (text) => String(text || "").replace(/([.!?]\s+)?\{agent\}/g, (_, end, at) => (end !== undefined || at === 0 ? (end || "") + AGENT : AGENT_MID));
 
   var sections = [].slice.call(document.querySelectorAll("#stage > section.part"));
   var NAMES = sections.map((s) => s.getAttribute("data-part"));
@@ -193,7 +197,7 @@ var Shell = (() => {
   // Where what the person did has got to, in a line of the page's own, for as long as it is on its way
   var TEACH = {
     sending: "What you did is on its way to It, the program on your computer that shows this page.",
-    took: "It keeps it for " + AGENT + ", which made this page from a conversation of its own.",
+    took: "It keeps it for " + AGENT_MID + ", which made this page from a conversation of its own.",
     reached: AGENT + " was handed what you did, in its own conversation.",
     working: AGENT + "’s turn is running there now. What it answers is drawn on this page.",
   };
@@ -203,7 +207,7 @@ var Shell = (() => {
   function wordsOf(m) {
     var s = m.stage, since = m.t0 >= 0 ? Date.now() - m.t0 : 0, whole = Math.max(1, Math.round(since / 1000)) + " s";
     if (s === "sending") return ["Sending what you did to It", ""];
-    if (s === "took") return ["It has it. Waiting for " + AGENT, whole];
+    if (s === "took") return ["It has it. Waiting for " + AGENT_MID, whole];
     if (s === "reached") return [m.ended ? AGENT + "’s turn ended, and no answer has come here yet" : AGENT + " has it, in its own conversation", whole];
     if (s === "working") return [AGENT + " is working on it", whole];
     if (s === "answered") return [AGENT + " answered" + (m.at.page === undefined ? "" : " in " + took(m.at.page)), ""];
@@ -424,6 +428,7 @@ var Shell = (() => {
       name: name,
       el: p.el,
       agent: AGENT,
+      agentMid: AGENT_MID,
       $: (selector) => p.el.querySelector(selector),
       /** The agent's answers for this part, as the state has them now. */
       answers: () => answers(name),
@@ -477,7 +482,7 @@ var Shell = (() => {
     at: () => NAMES[at],
     /** What the dock says of a part, whether or not it is the one shown: its stage, its sentence with the seconds, what the person did and what the agent said. */
     read: (name) => { var m = kept(name).box.model, w = wordsOf(m), st = stagesOf(m), stages = {}; KEYS.forEach((k) => { stages[k] = st[k]; }); return { stage: m.stage, state: w[0] + (w[1] ? " " + w[1] : ""), did: m.did, said: m.typed, hint: m.hint, stages: stages }; },
-    agent: AGENT, SLOW: SLOW, calm: calm, SVG: SVG, $: $, newId: newId, tidy: tidy,
+    agent: AGENT, agentMid: AGENT_MID, SLOW: SLOW, calm: calm, SVG: SVG, $: $, newId: newId, tidy: tidy,
   };
 })();
 </script>

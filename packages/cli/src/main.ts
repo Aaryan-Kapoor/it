@@ -166,7 +166,7 @@ import {
 import { printEnv } from './shell-env'
 import { zshDirectory } from './shell-profile'
 import { GUIDE, NAMES, END as TOUR_END, TOUR_PREFIX, START as TOUR_START, STEPS as TOUR_STEPS, tourPage } from './tour'
-import { answerAction, dropPicture, dropPictures, keepPicture, START_SLUG } from './tour-answer'
+import { answerAction, dropPicture, dropPictures, keepPicture, picturesFile, START_SLUG } from './tour-answer'
 import { inUnloadedOpenCode } from './unclaimed'
 import { finishInstallationRemoval, installationFile, removeInstallationFiles, stepOutOf, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
@@ -1165,10 +1165,23 @@ async function tourWhenAsked(a: Args) {
   })
 }
 
-/** The folders a picture of the tour's may have been kept in for this conversation: the one this command runs in, and the one the conversation was last known to work in. */
+/** The folders a picture of the tour's may be in for this conversation, which \`it tour clear\` looks in for any it did not write: the one this command runs in, and the one the conversation was last known to work in. */
 function pictureFolders(): (string | undefined)[] {
   const me = sessionAsked()?.session
   return [process.cwd(), me ? conversationFolder(me) : undefined]
+}
+/**
+ * The folder the picture an action carried is written into by the command that waits for it:
+ * the folder of the conversation the tour's page belongs to, as the connector writes it, and
+ * nowhere where the page belongs to no conversation. Where this command runs in another
+ * conversation than the page's, it writes none. Where it runs in the page's own and It has no
+ * note of where that works, it is the folder the command runs in.
+ */
+function pictureFolderFor(c: { session: { harness: string; id: string } | null }): string | undefined {
+  if (!c.session) return undefined
+  const me = sessionAsked()?.session
+  if (me && (me.harness !== c.session.harness || me.id !== c.session.id)) return undefined
+  return conversationFolder(c.session) ?? (me ? process.cwd() : undefined)
 }
 
 /**
@@ -1221,8 +1234,19 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
     }
     const answer = read === undefined ? undefined : object(read, 'An answer')
     const done = await answerAction(id, answer)
-    dropPicture(done.request, pictureFolders())
-    const answered = { answered: done.part ?? null }
+    // The picture It wrote for the action goes, where it is still what It wrote. Anything else is said, and left
+    const dropped = await dropPicture(done.request)
+    const answered = {
+      answered: done.part ?? null,
+      ...(dropped.left.length || dropped.unread
+        ? {
+            pictureLeft: dropped.left,
+            pictureHint: dropped.unread
+              ? `It's record of the pictures the tour wrote (${picturesFile()}) could not be read, so the picture for this action, if there is one, was left where it is. Say nothing of it during the tour.`
+              : 'This file has changed since It wrote it, so It left it where it is. Say nothing of it during the tour.',
+          }
+        : {}),
+    }
     // Told to end its turn only where It knows that the next thing arrives by itself: anywhere else the command waits for it
     const byItself = a.flags.wait === true ? false : (await arrivalHere(START_SLUG, true))?.byItself === true
     // With --no-wait the agent has something to do first, as setting the ideas after its first
@@ -1247,7 +1271,7 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
   // given to this one by being waited on
   const waiting: Args = { _: [], flags: { timeout: text(a, 'timeout') ?? '100', id: START_SLUG }, many: {} }
   return wait(waiting, counted, async (c) => {
-    const picture = await keepPicture(c, process.cwd())
+    const picture = await keepPicture(c, pictureFolderFor(c))
     return picture ? { picture } : {}
   })
 }
@@ -1270,8 +1294,9 @@ async function tour(a: Args, counted: (code?: string) => void) {
   if (what === 'answer' || what === 'next') return tourAnswer(a, counted)
   if (what === 'clear') {
     const cleared = await call<{ requested: { slug: string; job: string }[]; kept: string[]; seen: number }>('mutation', api.tour.clear, {})
-    // And whatever pictures the tour kept for the agent go with its pages
-    dropPictures(pictureFolders())
+    // And the pictures the tour wrote for the agent go with its pages, where each is still what
+    // It wrote. Anything else named as the tour names them is the person's, and is left
+    const pictures = await dropPictures(pictureFolders())
     if (cleared.requested.length) usage.record('tour.ended', { seen: String(Math.min(cleared.seen, 5)) as '0' | '1' | '2' | '3' | '4' | '5' })
     const results = await Promise.all(cleared.requested.map(({ slug, job }) => deletionStatus(slug, job)))
     const pending = results.filter((r) => r.state !== 'completed')
@@ -1282,6 +1307,15 @@ async function tour(a: Args, counted: (code?: string) => void) {
         ? {
             kept: cleared.kept,
             hint: 'These pages have tour ids but no tour ownership mark, so they were preserved. Older tour pages are preserved too. Ask the person before deleting any of them with it delete.',
+          }
+        : {}),
+      ...(pictures.removed ? { picturesRemoved: pictures.removed } : {}),
+      ...(pictures.left.length || pictures.unread
+        ? {
+            picturesLeft: pictures.left,
+            picturesHint: pictures.unread
+              ? `It's record of the pictures the tour wrote (${picturesFile()}) could not be read, so no picture was removed. These files are named as the tour names its pictures, and are left where they are. Ask the person before deleting any of them.`
+              : 'These files are named as the tour names its pictures, and It did not write them as they are now, so they are left where they are. Ask the person before deleting any of them.',
           }
         : {}),
     })

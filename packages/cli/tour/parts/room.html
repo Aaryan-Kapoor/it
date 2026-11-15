@@ -75,7 +75,7 @@ Shell.part("room", (my) => {
   var lift = chair.querySelector(".lift");
   // The drawing is in centimetres. The room's inside begins MX in and MT down: outside it are the walls, and what is written beside them
   var MX = 16, MT = 30, MB = 44, SIZE = 78, SWING = 100;
-  var HINT = "Drag the armchair anywhere. What " + my.agent + " says of the spot is written here.";
+  var HINT = "Drag the armchair anywhere. What " + my.agentMid + " says of the spot is written here.";
   var R = null, where = { x: 0, y: 0 }, busy = false, grab = null, dropped = null, playing = 0, settle = null;
   var make = (tag, attrs, into) => { var el = document.createElementNS(NS, tag); Object.keys(attrs).forEach((k) => el.setAttribute(k, attrs[k])); return into.appendChild(el); };
   var set = (id, attrs) => { var el = $(id); Object.keys(attrs).forEach((k) => el.setAttribute(k, attrs[k])); return el; };

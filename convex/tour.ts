@@ -192,3 +192,29 @@ export const clear = mutation({
     return { requested, kept: preserved, seen: seen.length }
   },
 })
+
+/**
+ * Whether the picture an action carried may be written into a folder of the person's by the
+ * machine that asks, without the person being asked: only where the action was done on the
+ * tour's first page as that machine itself published it, with `it tour show start`. That page
+ * is It's own, filled in by the machine's own program, and the picture is the person's drawing
+ * on its whiteboard. A page that an agent published under the tour's id is no tour publication,
+ * and one that another machine published, as the tour's or not, is not this machine's: neither
+ * has a picture written. The version is the one the person's screen says it showed.
+ */
+export const picture = query({
+  args: { id: v.string() },
+  handler: async (ctx, { id }) => {
+    const { user, machine } = await requireMachine(ctx)
+    const actionId = ctx.db.normalizeId('actions', id)
+    const x = actionId ? await ctx.db.get(actionId) : null
+    if (!x || x.userId !== user._id) return false
+    const page = await ctx.db.get(x.artifactId)
+    if (!page || page.userId !== user._id || page.slug !== `${TOUR.prefix}${TOUR.start}`) return false
+    const shown = await ctx.db
+      .query('versions')
+      .withIndex('by_artifact_n', (q) => q.eq('artifactId', page._id).eq('n', x.contentVersion))
+      .first()
+    return shown !== null && shown.status !== 'staging' && shown.tour?.name === TOUR.start && shown.by?.machineId === machine._id
+  },
+})

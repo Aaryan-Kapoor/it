@@ -79,6 +79,40 @@ describe('the frame of the tour’s first page', () => {
     page.close()
   })
 
+  test.each([
+    ['an app It knows', 'Claude Code'],
+    ['no app It knows', null],
+  ])('names the agent rightly wherever a sentence names it, with %s', async (_, agent) => {
+    const page = await opened({}, withIdeas, agent)
+    const [start, within] = agent ? [agent, agent] : ['Your agent', 'your agent']
+    const lines: Record<string, string> = {}
+    for (const step of STEPS) {
+      page.w.Shell.go(step)
+      lines[step] = page.$('#line').textContent
+      // Every sentence of the frame and of the dock, as it is shown on this part: the agent's name begins a sentence only where it is said as it begins one
+      const words = [lines[step], page.$('#dock-line').textContent, page.$('#dock-state').textContent].join(' ')
+      if (!agent) expect(words, step).not.toMatch(/[a-z,:] Your agent/)
+      expect(words, step).not.toContain('{agent}')
+    }
+    expect(lines.board).toBe(`Write your answer on the board, and press Check it. ${start} marks it in green.`)
+    expect(lines.chess).toBe(`You play White. Tap a piece and where it goes, and ${within} answers on the board.`)
+    expect(lines.cube).toBe(`It is nearly solved. Drag a row to turn it, or ask ${within} how.`)
+    expect(lines.drums).toBe(`Tap a few pads, and ${within} plays between your hits. Then ask it for more.`)
+    expect(lines.studio).toBe(`Drag on the colour wheel, and ${within} designs this page. Then tap a piece to fix it.`)
+    expect(lines.end).toBe(`${start} can build any of these for you now. Press one, or say what you want.`)
+    // What the parts write of the agent by themselves
+    expect(page.$('#chess-black-name').textContent).toBe(start)
+    expect(page.$('#cube-ask').textContent).toBe(`Ask ${within} how`)
+    expect(page.$('#drums-to').firstChild.textContent).toBe(`ask ${within}`)
+    // And the dock, while what the person did waits on the agent, as a sentence goes on
+    page.w.Shell.go('room')
+    const sent = moved(page)
+    await sent.accept()
+    expect(page.$('#dock-state').textContent).toMatch(new RegExp(`^It has it\\. Waiting for ${within}`))
+    expect(page.errors).toEqual([])
+    page.close()
+  })
+
   test('where the conversation that put it up cannot hear it yet, says so in amber with the line to type, until the first answer', async () => {
     const quiet = await opened()
     expect(quiet.$('#asleep').hidden).toBe(true)

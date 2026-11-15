@@ -182,7 +182,7 @@
       b.setAttribute("aria-checked", item.done ? "true" : "false");
       if (item.by !== "agent") return;
       li.querySelector(".why").textContent = item.why;
-      b.setAttribute("aria-label", item.text + ", added by " + agent + (item.why ? ": " + item.why : ""));
+      b.setAttribute("aria-label", item.text + ", added by " + (P.agent ? agent : "your agent") + (item.why ? ": " + item.why : ""));
     }
     function edges() {
       pane.setAttribute("data-up", list.scrollTop > 2 ? "1" : "0");

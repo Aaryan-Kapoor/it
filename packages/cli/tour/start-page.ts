@@ -33,10 +33,11 @@ const merged = (into: unknown, patch: Record<string, unknown>): Record<string, u
 /**
  * The page in a stand-in browser. `before` is done to the window first, for what a part needs of
  * a browser that the stand-in has not got. The sheet and the room are laid out at the size of
- * their drawings, so that a point on them is a point in the drawing.
+ * their drawings, so that a point on them is a point in the drawing. `agent` is the name of the
+ * agent app the page names, and null where It does not know which app that is.
  */
-export async function opened(given: Record<string, unknown> = {}, before: (w: any) => void = () => {}) {
-  const page = tourPage('start', given, 'Claude Code')
+export async function opened(given: Record<string, unknown> = {}, before: (w: any) => void = () => {}, agent: string | null = 'Claude Code') {
+  const page = tourPage('start', given, agent ?? undefined)
   const sent: Sent[] = []
   const listeners: (() => void)[] = []
   const hearers: ((said: unknown) => void)[] = []
