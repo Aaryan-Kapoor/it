@@ -2161,6 +2161,7 @@ const led = (a: Args): boolean => forPerson(a) && flow.live() && !elsewhere() &&
  * command would stay as it was with nobody at it.
  */
 function answerTo(rl: readline.Interface, question: string): Promise<string> {
+  flow.hearing()
   return new Promise((resolve, reject) => {
     let done = false
     const closed = () => {
