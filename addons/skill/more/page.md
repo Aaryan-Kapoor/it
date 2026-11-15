@@ -41,7 +41,7 @@ Put the file in what the action carries, wherever it fits: `It.action('receipt',
 A page uses the microphone or the camera of the screen it is shown on by calling for them: nothing is said of it when you publish. The page never gets the device itself: It opens it, and passes the page what it gives as it comes. The first time on each screen, It asks the user in its own bar whether this page may, and the browser asks too the first time for It's site; after that the page opens them there without being asked, and It's bar says what is live for as long as it is, with a Stop button. What the user allows lasts until they take it back, or until the page goes 30 days without using it. It asks only while the page is in front, in the window the user is using, and opens nothing while the browser says the page is not shown, so call from something the user did on the page. A call made before the page has finished loading waits until it has, for up to 20 seconds.
 
 - **Show why it failed.** `It.microphone`, `It.camera` and `It.photo` reject with a sentence that says why: the user said no, the page was not in front, the call did not come from a click, the screen reaches It over plain http, the browser refused, or It was updated while that screen had it open, which reloading It there fixes. A browser gives the microphone only to an https address or to the machine It runs on, so on another screen It must be opened at its https address, which `it https on` on that machine sets up.
-- **It can end without the page asking.** The microphone and the camera pause while the browser says the page is not shown, and end when the user presses Stop in It's bar or takes back what they allowed, when another conversation takes the page over, or when the page closes or loads another document, which has to ask again. `onchange` says which, and the stream ends.
+- **It can end without the page asking.** The microphone and the camera stay live while the user looks at another tab, and end when the user presses Stop in It's bar or takes back what they allowed, when another conversation takes the page over, or when the page closes or loads another document, which has to ask again. `onchange` says which, and the stream ends.
 - **It does not record for the page.** A page records the stream it is given with a `MediaRecorder` of its own, as the next section shows. `It.record` is refused with a sentence that says so.
 - **A photo is the user's to take.** `const photo = await It.photo()` opens It's own view of the camera in its bar, the user takes the photo there or closes it, and the page is given a JPEG `File`. `It.photo({ facing: 'environment' })` asks for the camera on the back of a phone. Like the camera, it works only where the screen reaches It at its https address or is the machine It runs on, so it is for a page that wants It's own view of the camera; a file input works anywhere. It is refused while the camera or the microphone is live to the page: take your own picture from `cam.onframe` then, by drawing it on a canvas and using `canvas.toBlob`.
 
@@ -53,7 +53,7 @@ For a call to another screen, live captions, a level meter, a voice note or anyt
 talk.onclick = async () => {
   const mic = await It.microphone() // asks the user first, the first time on each screen
   mic.onsound = (samples, sampleRate) => meter(samples) // each piece: a Float32Array of one channel, from -1 to 1
-  mic.onchange = (state, why) => {} // 'live', 'paused' or 'ended', with why it ended
+  mic.onchange = (state, why) => {} // 'ended', with why
   // mic.stream is a MediaStream: record it, or send its track with RTCPeerConnection
   const parts = []
   const recorder = new MediaRecorder(mic.stream)
@@ -82,7 +82,7 @@ For a call to another screen, reading a QR code, a filter or a live preview, the
 const cam = await It.camera({ facing: 'environment', width: 1280 }) // asks the user first, the first time on each screen
 video.srcObject = cam.stream // a MediaStream: show it, or send its tracks with RTCPeerConnection
 cam.onframe = (picture) => ctx.drawImage(picture, 0, 0) // each picture, an ImageBitmap, closed when this returns
-cam.onchange = (state, why) => {} // 'live', 'paused' or 'ended', with why it ended
+cam.onchange = (state, why) => {} // 'ended', with why
 await cam.stop()
 ```
 
