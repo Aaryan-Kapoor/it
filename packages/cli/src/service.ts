@@ -13,7 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { STORAGE } from '@it/protocol'
 import { cutShort, runSync } from './child'
-import { home, inHome, PROFILE_VARS, psQuote, readJson, rename, writeFlushed } from './lib'
+import { home, inHome, itFirst, PROFILE_VARS, psQuote, readJson, rename, writeFlushed } from './lib'
 import { holderRuns } from './serve/backend'
 import { storageAsked } from './serve/config'
 import { resetStartup, startupStatus } from './serve/startup'
@@ -277,6 +277,9 @@ export function environment(from: NodeJS.ProcessEnv = process.env): Record<strin
   // service stands: It's own, the backend program, and each place the person keeps a harness's
   // settings. Where a backend program is fetched from is an address, and is carried as it was given.
   for (const k of ['IT_HOME', 'IT_BACKEND_BIN', ...PROFILE_VARS]) if (out[k] && !path.isAbsolute(out[k])) out[k] = path.resolve(out[k])
+  // With It's own folder of programs first: the shell that runs setup may have been opened
+  // before It was installed, and an app the service starts runs `it` by its name alone
+  out.PATH = itFirst({ PATH: out.PATH }, process.platform, out.IT_HOME ? path.join(out.IT_HOME, 'bin') : inHome('bin')).PATH!
   return out
 }
 

@@ -1778,8 +1778,36 @@ export function proxiedForClaude(env: NodeJS.ProcessEnv): boolean {
 export function harnessEnv(): NodeJS.ProcessEnv {
   const keep = new Set<string>(PROFILE_VARS)
   const own = Object.fromEntries(Object.entries(process.env).filter(([k]) => keep.has(k) || !/^(CLAUDE|CODEX_|IT_SESSION$|IT_HARNESS$)/.test(k)))
-  // And what the person's shell has that this program was not started with, where it was asked
-  return { ...own, ...fromShell }
+  // And what the person's shell has that this program was not started with, where it was asked.
+  // An app this program starts, as a conversation It reopens, runs `it` by its name alone.
+  return itFirst({ ...own, ...fromShell })
+}
+
+/**
+ * The same environment with It's own folder of programs first on its PATH, once. That folder
+ * holds the installed program, or the launcher that setup writes for the program that set It
+ * up, so the `it` an app started with this environment finds by name is the It that started
+ * it. Nothing else is changed: the PATH keeps the name it is spelled with (Windows spells it
+ * `Path`, and keeps both where both are given), and every other folder stays where it was.
+ * Where this program was started from a shell that was opened before It was installed, as when
+ * an agent installs It and sets it up in one conversation, that shell's PATH does not have the
+ * folder, and neither does anything this program then starts unless it is put there here.
+ */
+export function itFirst(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform, bin: string = inHome('bin')): NodeJS.ProcessEnv {
+  const windows = platform === 'win32'
+  const sep = windows ? ';' : ':'
+  // One folder however its PATH spells it: with a separator after it, and on Windows with
+  // either slash and in any capitals
+  const plain = (dir: string) => (windows ? dir.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase() : dir.replace(/\/+$/, ''))
+  const ours = plain(bin)
+  const names = Object.keys(env).filter((k) => (windows ? k.toUpperCase() === 'PATH' : k === 'PATH'))
+  const out = { ...env }
+  for (const name of names.length ? names : ['PATH']) {
+    const now = out[name] ?? ''
+    // An empty PATH gains no empty folder after It's, which a shell reads as wherever it stands
+    out[name] = now === '' ? bin : [bin, ...now.split(sep).filter((dir) => dir === '' || plain(dir) !== ours)].join(sep)
+  }
+  return out
 }
 
 /** What the person's shell adds for the apps this program runs (see `shell-env`). Nothing until it has been asked. */
