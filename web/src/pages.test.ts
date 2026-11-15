@@ -331,7 +331,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     try {
       await shown()
       expect(said()).toBe(
-        `Couldn’t wake Pi (2): its command ended with an error. It won’t try again until its conversation next runs, and starts deleting them on ${day(NOW - 3 * 86_400_000 + MONTH)} if that hasn’t happened by then`,
+        `Couldn’t wake Pi (2): its command ended with an error. It won’t try again until its conversation next runs, and starts deleting them on ${day(NOW - 3 * 86_400_000 + MONTH)} if that hasn’t happened by then. Open its conversation in Pi yourself, and what you did reaches it there`,
       )
     } finally {
       Object.assign(PAGE, { wakeFailed: null })

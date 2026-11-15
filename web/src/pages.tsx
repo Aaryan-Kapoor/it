@@ -1407,14 +1407,14 @@ function ActionStatus({
     const count = aside.length > 1 ? ` (${aside.length})` : ''
     // The first of them to go is the one said, as the day it goes on, in the person's own way of writing dates
     const goes = Math.min(...aside.map((a) => a.expiresAt ?? Number.POSITIVE_INFINITY))
-    const tried =
-      wakeFailed && wakeFailed.at >= last.at
-        ? `Couldn’t wake ${agent ?? 'your agent'}${count}: ${wakeFailed.why}`
-        : `Couldn’t hand ${them} to ${agent ?? 'your agent'}${count}`
+    const woke = wakeFailed !== null && wakeFailed.at >= last.at
+    const tried = woke
+      ? `Couldn’t wake ${agent ?? 'your agent'}${count}: ${wakeFailed.why.replace(/[.\s]+$/, '')}`
+      : `Couldn’t hand ${them} to ${agent ?? 'your agent'}${count}`
     return (
       <>
         <span className="status" data-tone="bad">
-          {`${tried}. It won’t try again until its conversation next runs${Number.isFinite(goes) ? `, and ${aside.length > 1 ? 'starts deleting them' : 'deletes it'} on ${dayOf(goes)} if that hasn’t happened by then` : ''}`}
+          {`${tried}. It won’t try again until its conversation next runs${Number.isFinite(goes) ? `, and ${aside.length > 1 ? 'starts deleting them' : 'deletes it'} on ${dayOf(goes)} if that hasn’t happened by then` : ''}${woke ? `. ${openItYourself(agent)}` : ''}`}
         </span>
         {retryOffered}
       </>
