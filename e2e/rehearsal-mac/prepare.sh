@@ -50,8 +50,8 @@ standin)
   grep -q IT_INSTALL_BASE ~/.bash_profile 2>/dev/null || echo "export IT_INSTALL_BASE=$BASE" >> ~/.bash_profile
   gui launchctl setenv IT_INSTALL_BASE "$BASE"
   if ! curl -fsS -o /dev/null "$BASE/latest/download/latest.json" 2>/dev/null; then
-    nohup node "$here/releases.mjs" "$HOME/stand-in" 8765 >> /Users/Shared/rehearsal/releases.log 2>&1 &
-    sleep 1
+    bash -c 'trap "" HUP; exec node "$0" "$1" 8765' "$here/releases.mjs" "$HOME/stand-in" >> /Users/Shared/rehearsal/releases.log 2>&1 < /dev/null &
+    for _ in $(seq 20); do curl -fsS -o /dev/null "$BASE/latest/download/latest.json" 2>/dev/null && break; sleep 0.5; done
   fi
   curl -fsS "$BASE/latest/download/latest.json"
   echo
@@ -87,6 +87,11 @@ clear
 exec /opt/homebrew/bin/tmux new-session -A -s agent
 EOF
   chmod 755 ~/Terminal.command
+  # A Terminal left from an earlier step is closed, so that the person meets an empty one
+  /opt/homebrew/bin/tmux kill-server 2>/dev/null || true
+  gui osascript -e 'quit app "Terminal"' 2>/dev/null || true
+  rm -f ~/.zsh_history; rm -rf ~/.zsh_sessions
+  sleep 1
   if [ "$browser" = chrome ]; then
     sudo xattr -dr com.apple.quarantine "/Applications/Google Chrome.app" 2>/dev/null || true
   fi

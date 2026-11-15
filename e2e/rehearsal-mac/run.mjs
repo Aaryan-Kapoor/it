@@ -234,11 +234,14 @@ async function start(id) {
     reason: null,
     steps: [],
   }
+  // The person must meet a live, empty Terminal: a wipe ends the tmux session, and prepare's
+  // desktop step is what opens it again
+  if ((await onMac(id, '/opt/homebrew/bin/tmux has-session -t agent')).code !== 0) throw new Error('The Terminal\'s tmux session is not running: run prepare\'s desktop step again before starting.')
   // What the terminal shows, kept every four seconds where it changed: an app that clears the
   // screen as it leaves takes its scrollback with it
-  await onMac(id, `rm -f ${SHARED}/video.mp4 ${SHARED}/screens.txt; nohup sh -c 'p=""; while sleep 4; do c=$(/opt/homebrew/bin/tmux capture-pane -p -J -t agent 2>/dev/null) || continue; [ "$c" = "$p" ] && continue; printf "=== %s\\n%s\\n" "$(date -u +%T)" "$c" >> ${SHARED}/screens.txt; p="$c"; done' >/dev/null 2>&1 & echo $! > ${SHARED}/screens.pid`)
+  await onMac(id, `rm -f ${SHARED}/video.mp4 ${SHARED}/screens.txt; sh -c 'trap "" HUP; p=""; while sleep 4; do c=$(/opt/homebrew/bin/tmux capture-pane -p -J -t agent 2>/dev/null) || continue; [ "$c" = "$p" ] && continue; printf "=== %s\\n%s\\n" "$(date -u +%T)" "$c" >> ${SHARED}/screens.txt; p="$c"; done' < /dev/null >/dev/null 2>&1 & echo $! > ${SHARED}/screens.pid`)
   // The recording: the whole screen with the pointer and its clicks, 12 frames a second, 1600 wide
-  const rec = await onMac(id, `${GUI} sh -c 'cd ${SHARED} && nohup /usr/local/bin/ffmpeg -nostdin -y -loglevel warning -f avfoundation -capture_cursor 1 -capture_mouse_clicks 1 -framerate 12 -i "Capture screen 0:none" -vf "scale=1600:-2,format=yuv420p" -r 12 -c:v libx264 -preset veryfast -crf 28 -movflags +frag_keyframe+empty_moov+default_base_moof video.mp4 > ffmpeg.log 2>&1 & echo $! > ffmpeg.pid'; sleep 4; ls -la ${SHARED}/video.mp4; cat ${SHARED}/ffmpeg.log`)
+  const rec = await onMac(id, `${GUI} sh -c 'trap "" HUP; cd ${SHARED} || exit 1; /usr/local/bin/ffmpeg -nostdin -y -loglevel warning -f avfoundation -capture_cursor 1 -capture_mouse_clicks 1 -framerate 12 -i "Capture screen 0:none" -vf "scale=1600:-2,format=yuv420p" -r 12 -c:v libx264 -preset veryfast -crf 28 -movflags +frag_keyframe+empty_moov+default_base_moof video.mp4 < /dev/null > ffmpeg.log 2>&1 & echo $! > ffmpeg.pid'; sleep 4; ls -la ${SHARED}/video.mp4; cat ${SHARED}/ffmpeg.log`)
   log(`recording: ${rec.out.trim()}`)
   result.videoStart = new Date().toISOString()
   writeFileSync(join(live, 't0'), `${Math.floor(Date.now() / 1000)}\n`)
@@ -353,6 +356,8 @@ try {
   else if (cmd === 'prepare') await prepare(target)
   else if (cmd === 'sign-in') await signIn(target, arg('app', 'codex'))
   else if (cmd === 'look') await look(target)
+  else if (cmd === 'upload') await upload(target)
+  else if (cmd === 'step') await step(target, argv.slice(2).join(' '))
   else if (cmd === 'start') await start(target)
   else if (cmd === 'finish') await finish(target)
   else if (cmd === 'wipe') await wipeAll(target)

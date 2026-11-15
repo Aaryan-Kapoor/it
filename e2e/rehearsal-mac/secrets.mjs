@@ -186,16 +186,38 @@ export async function inject(id, held, until) {
     `f="$HOME/${held.file}"; [ -L "$f" ] && rm -f "$f"; rm -f "$f.new"`,
     'set -C; cat > "$f.new"; set +C; mv -f "$f.new" "$f"',
     // The watch, detached from this connection
-    `nohup bash -c '${OVERWRITE.replace(/'/g, '')}; while [ $(date +%s) -lt ${until} ]; do sleep 20; done; for f in ${FILES}; do ow "$f"; done' >/dev/null 2>&1 &`,
+    `bash -c 'trap "" HUP; ${OVERWRITE.replace(/'/g, '')}; while [ $(date +%s) -lt ${until} ]; do sleep 20; done; for f in ${FILES}; do ow "$f"; done' </dev/null >/dev/null 2>&1 &`,
     'echo WROTE',
-  ].join('; ')
+  ].join('\n')
   const { code, out } = await onMac(id, `bash -c "$(cat <<'SCRIPT'\n${script}\nSCRIPT\n)"`, { input: held.json, timeout: 120_000 })
   if (code !== 0 || !out.includes('WROTE')) throw new Error(`The sign-in could not be written on the Mac (exit ${code}).`)
 }
 
 // Where on the Mac a copy could land: the user's home (Library too), the harness's own folder,
 // root's home, the temporary folders, and logs
+// Folders by name that hold only toolchains, caches and the build under test, gigabytes that no
+// agent app writes a sign-in into, and that would take the look many minutes
+const SKIP = ['.rustup', '.cargo', '.npm', 'go', 'Developer', 'Caches', 'stand-in', 'rehearsal-upload']
 const LOOK_IN = ['/Users', '/private/var/root', '/tmp', '/private/tmp', '/private/var/folders', '/private/var/log', '/Library/Logs']
+
+/**
+ * Short pieces of each value to look for. macOS's grep is slow with patterns as long as a token
+ * (two of them took minutes over the home folder), and a file that holds any 32 characters of a
+ * value holds a copy of it, whole or in part. The pieces are taken from the second half, so that
+ * the header every token of its kind shares is not among them.
+ */
+function slices(held) {
+  const out = []
+  for (const v of held.values) {
+    if (v.length < 64) {
+      out.push(v)
+      continue
+    }
+    const half = Math.floor(v.length / 2)
+    for (const at of [half, Math.floor((half + v.length - 32) / 2), v.length - 32]) out.push(v.slice(at, at + 32))
+  }
+  return out
+}
 
 /**
  * Lists the files on the Mac that hold any of the held values, by name only. The values go in on
@@ -204,8 +226,8 @@ const LOOK_IN = ['/Users', '/private/var/root', '/tmp', '/private/tmp', '/privat
  */
 export async function filesHolding(id, held) {
   if (!INSTANCE.test(id) || !held?.values?.length) return []
-  const script = `sudo grep -rlsF -f /dev/stdin -- ${LOOK_IN.map((d) => `"${d}"`).join(' ')} 2>/dev/null; c=$?; [ $c -le 1 ] && echo LOOKED-ALL`
-  const { out } = await onMac(id, `sh -c '${script}'`, { input: `${held.values.join('\n')}\n`, timeout: 600_000 })
+  const script = `sudo grep -rlsF -D skip ${SKIP.map((d) => `--exclude-dir=${d}`).join(' ')} -f /dev/stdin -- ${LOOK_IN.map((d) => `"${d}"`).join(' ')} 2>/dev/null; c=$?; [ $c -le 1 ] && echo LOOKED-ALL`
+  const { out } = await onMac(id, `sh -c '${script}'`, { input: `${slices(held).join('\n')}\n`, timeout: 600_000 })
   const lines = out.split('\n').filter(Boolean)
   if (lines.at(-1) !== 'LOOKED-ALL') return ['(the look for the credential did not finish)']
   return lines.slice(0, -1)
