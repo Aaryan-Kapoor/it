@@ -138,7 +138,14 @@ async function main() {
     if (app === 'codex') await injectCodex(name, held)
   }
   await startAgentShell(name, app === 'claude' ? held : null, { IT_INSTALL_BASE: 'http://127.0.0.1:8765' })
-  if (app === 'claude' && held && ['L2', 'L3', 'L8'].includes(flow)) await shareWithUserManager(name, held)
+  // A laptop keeps Claude Code's sign-in on its disk, so a conversation It reopens by itself is
+  // signed in too. Here the token is in memory alone: ana's user manager is given the variable, and
+  // an It already running (on a machine from a snapshot) is started again to take it, all before
+  // the video starts
+  if (app === 'claude' && held) {
+    await shareWithUserManager(name, held)
+    if (!from.endsWith(':base')) asAna('systemctl --user restart it.service', { quiet: true, timeout: 180_000 })
+  }
   asAna('tmux set -g status off; tmux set -g history-limit 50000')
   // What the terminal shows, kept every few seconds where it changed: an app that clears the
   // screen as it leaves takes its scrollback with it
