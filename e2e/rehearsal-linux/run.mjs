@@ -46,7 +46,7 @@ const log = (...a) => console.log(`[${new Date().toISOString().slice(11, 19)}] $
 
 function sh(args, { input, timeout = 120_000, quiet = false } = {}) {
   const r = spawnSync('sudo', ['-n', 'docker', ...args], { encoding: 'utf8', input, timeout, maxBuffer: 64 * 1024 * 1024 })
-  if (r.status !== 0 && !quiet) log(`docker ${args.slice(0, 3).join(' ')} … exited ${r.status}: ${redact((r.stderr ?? '').slice(0, 300), held)}`)
+  if (r.status !== 0 && !quiet) log(`docker ${args.slice(0, 3).join(' ')} … exited ${r.status}: ${redact(r.stderr ?? '', held).slice(0, 300)}`)
   return r
 }
 const exec = (cmd, opts = {}) => sh(['exec', name, 'bash', '-c', cmd], opts)
@@ -176,6 +176,7 @@ async function main() {
     await startAgentShell(name, app === 'claude' ? held : null, { IT_INSTALL_BASE: 'http://127.0.0.1:8765' })
     if (app === 'claude' && held) await shareWithUserManager(name, held)
     asAna('tmux set -g status off')
+    exec(`nohup su ana -c 'p=""; while sleep 4; do c=$(tmux capture-pane -p -J -t agent 2>/dev/null) || continue; [ "$c" = "$p" ] && continue; printf "=== %s\\n%s\\n" "$(date -u +%T)" "$c" >> ${FLOW}/screens.txt; p="$c"; done' >/dev/null 2>&1 &`)
     exec(`ffmpeg -nostdin -y -loglevel error -f x11grab -framerate 12 -video_size 1920x1080 -i :1 -vf scale=1600:-2 -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p /var/lib/rehearsal-video/video.mp4 > /var/lib/rehearsal-video/ffmpeg.log 2>&1 & echo $! > /run/rehearsal-ffmpeg.pid`)
     sh(['exec', '-d', name, 'su', '-l', 'ana', '-c', 'DISPLAY=:1 xfce4-terminal --disable-server --hide-menubar --hide-toolbar --hide-scrollbar --title=Terminal --font="DejaVu Sans Mono 11" --geometry=104x54+0+0 -x tmux attach -t agent'])
     await new Promise((r) => setTimeout(r, 2500))
@@ -183,6 +184,7 @@ async function main() {
     await new Promise((r) => setTimeout(r, 6000))
     exec(`DISPLAY=:1 su ana -c "wmctrl -r Terminal -e 0,0,0,960,1080; wmctrl -r Chromium -e 0,960,0,960,1080"`, { quiet: true })
   }
+  spawnSync('chmod', ['700', runHere])
   writeFileSync(join(runHere, 't0'), `${Math.floor(Date.now() / 1000)}\n`)
   writeFileSync(join(runHere, 'ready'), name)
 
@@ -202,17 +204,18 @@ async function main() {
       exec("pkill -INT -f 'node /build/harness/' || true")
     }, minutes * 60_000)
     // Redacted a whole line at a time, so that a token split across two reads is still found
-    let rest = ''
-    const out = (d) => {
-      rest += d.toString()
-      const lines = rest.split('\n')
-      rest = lines.pop()
+    // Each stream with a buffer of its own, so that one's newline never flushes half a line of the other
+    const rest = { out: '', err: '' }
+    const out = (k) => (d) => {
+      rest[k] += d.toString()
+      const lines = rest[k].split('\n')
+      rest[k] = lines.pop()
       for (const l of lines) process.stdout.write(`${redact(l, held)}\n`)
     }
-    child.stdout.on('data', out)
-    child.stderr.on('data', out)
+    child.stdout.on('data', out('out'))
+    child.stderr.on('data', out('err'))
     child.on('close', () => {
-      if (rest) process.stdout.write(`${redact(rest, held)}\n`)
+      for (const k of ['out', 'err']) if (rest[k]) process.stdout.write(`${redact(rest[k], held)}\n`)
       clearTimeout(kill)
       resolve()
     })
@@ -252,8 +255,16 @@ async function collect() {
   const left = await wipe(name, held)
   result.tokenFilesLeftAfterWipe = left.length
   if (left.length) log(`after the wipe ${left.length} file(s) still hold a token value: ${redact(left.join(', '), held)}`)
-  const keep = (file, text) => {
-    const clean = redact(text ?? '', held)
+  // JSON is read and written again first, so that a value written with \\u escapes is redacted as itself
+  const normal = (file, text) => {
+    if (!text) return ''
+    if (file.endsWith('.jsonl')) return text.split('\n').map((l) => { try { return l.trim() ? JSON.stringify(JSON.parse(l)) : l } catch { return l } }).join('\n')
+    if (file.endsWith('.json')) { try { return JSON.stringify(JSON.parse(text), null, 2) } catch { return text } }
+    return text
+  }
+  const keep = (file, raw) => {
+    const text = normal(file, raw ?? '')
+    const clean = redact(text, held)
     if (clean !== (text ?? '')) result.redacted = [...(result.redacted ?? []), file]
     writeFileSync(join(dir, file), clean, { mode: 0o600 })
     return clean
@@ -310,8 +321,13 @@ async function collect() {
 /** Ends the machine and every trace of the token in it, whatever happened before. */
 async function teardown() {
   await wipe(name, held).catch(() => {})
+  // A withheld recording takes the screenshots and any part kept outside the machine with it
+  if (videoWithheld) spawnSync('sh', ['-c', 'find "$1" -type f \\( -name "*.png" -o -name "*.mp4" \\) -exec shred -u {} +', 'sh', runHere])
+  const used = held !== null
   held = null
-  if (!has('keep')) sh(['rm', '-f', name], { timeout: 120_000, quiet: true })
+  if (has('keep') && !used) return
+  const rm = sh(['rm', '-f', name], { timeout: 120_000, quiet: true })
+  if (rm.status !== 0) log(`THE MACHINE ${name} COULD NOT BE REMOVED: remove it by hand`)
 }
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(sig, async () => {
@@ -343,7 +359,7 @@ if (failure) {
 }
 result.end = new Date().toISOString()
 try {
-  writeFileSync(join(dir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 })
+  writeFileSync(join(dir, 'result.json'), `${redact(JSON.stringify(result, null, 2), held)}\n`, { mode: 0o600 })
 } catch (err) {
   log(`result.json could not be written: ${err?.message}`)
 }
@@ -351,8 +367,10 @@ try {
 // trace of the token was found left after the wipe
 if (snapshot && !failure && collected) {
   log(`keeping the machine as ${snapshot}`)
-  sh(['stop', '-t', '90', name], { timeout: 180_000 })
-  sh(['commit', name, snapshot], { timeout: 600_000 })
+  exec('rm -rf /var/lib/rehearsal-video /var/lib/rehearsal-flow', { quiet: true })
+  const stopped = sh(['stop', '-t', '90', name], { timeout: 180_000 })
+  if (stopped.status === 0) sh(['commit', name, snapshot], { timeout: 600_000 })
+  else log('the machine did not stop, so it is not kept')
 } else if (snapshot) log('the machine is not kept: the run failed, or a trace of the token may be left')
 await teardown()
 try {

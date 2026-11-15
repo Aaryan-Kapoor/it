@@ -21,7 +21,7 @@ const HOME = homedir()
 /** Runs `sudo docker <args>`, with `input` on its standard input, and resolves with its exit code. Its output is dropped. */
 function docker(args, input) {
   return new Promise((resolve) => {
-    const child = spawn('sudo', ['-n', 'docker', ...args], { stdio: ['pipe', 'ignore', 'ignore'] })
+    const child = spawn('sudo', ['-n', 'docker', ...args], { stdio: ['pipe', 'ignore', 'ignore'], timeout: 180_000, killSignal: 'SIGKILL' })
     child.on('error', () => resolve(-1))
     child.on('close', (code) => resolve(code ?? -1))
     child.stdin.on('error', () => {})
@@ -33,7 +33,7 @@ function docker(args, input) {
 function dockerOut(args, input) {
   return new Promise((resolve) => {
     let out = ''
-    const child = spawn('sudo', ['-n', 'docker', ...args], { stdio: ['pipe', 'pipe', 'ignore'] })
+    const child = spawn('sudo', ['-n', 'docker', ...args], { stdio: ['pipe', 'pipe', 'ignore'], timeout: 300_000, killSignal: 'SIGKILL' })
     child.stdout.on('data', (d) => {
       out += d
     })
@@ -169,7 +169,7 @@ export async function filesHolding(container, held, dirs = ['/home', '/root', '/
   if (!CONTAINER.test(container) || !held?.values?.length) return []
   // grep says 0 where it found something and 1 where it found nothing; anything else, or no
   // closing word, means the look did not finish, which is never taken for "nothing there"
-  const script = `grep -rlsF --exclude-dir=proc -f /dev/stdin -- ${dirs.map((d) => `'${d}'`).join(' ')} 2>/dev/null; c=$?; [ $c -le 1 ] && echo LOOKED-ALL`
+  const script = `grep -rlsF -f /dev/stdin -- ${dirs.map((d) => `'${d}'`).join(' ')} 2>/dev/null; c=$?; [ $c -le 1 ] && echo LOOKED-ALL`
   const out = await dockerOut(['exec', '-i', container, 'sh', '-c', script], `${held.values.join('\n')}\n`)
   const lines = out.split('\n').filter(Boolean)
   if (lines.at(-1) !== 'LOOKED-ALL') return ['(the look for the token did not finish)']
@@ -189,6 +189,8 @@ export async function wipe(container, held) {
     "su -l ana -c 'tmux kill-server' >/dev/null 2>&1 || true",
     // Every agent app the person started, and any it started, goes with the variable it holds
     'pkill -TERM -u ana -f "(^|/)(claude|codex)( |$)" >/dev/null 2>&1 || true',
+    // Then every process of ana's, her services among them, which may have inherited the variable
+    'loginctl terminate-user ana >/dev/null 2>&1 || true; systemctl stop user@1000.service >/dev/null 2>&1 || true; sleep 2; pkill -KILL -u ana >/dev/null 2>&1 || true',
     "su -l ana -c 'systemctl --user unset-environment CLAUDE_CODE_OAUTH_TOKEN' >/dev/null 2>&1 || true",
   ].join('; ')
   await docker(['exec', container, 'bash', '-c', script])
