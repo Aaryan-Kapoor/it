@@ -31,8 +31,8 @@ export const BELIEVED = 0.9
 export function unlessCutShort<T extends { error?: Error }>(run: () => T, limit: number | undefined, clock: () => number = () => performance.now()): T {
   const began = clock()
   const first = run()
-  void began, limit
-  return first
+  if (!limit || (first.error as NodeJS.ErrnoException | undefined)?.code !== 'ETIMEDOUT' || clock() - began >= limit * BELIEVED) return first
+  return run()
 }
 
 /** `spawnSync`, given a second run where its limit ended the child before its time (see `unlessCutShort`). */
