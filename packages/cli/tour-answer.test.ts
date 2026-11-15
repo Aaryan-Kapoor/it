@@ -18,33 +18,44 @@ const stand = vi.hoisted(() => ({
   bytes: Buffer.alloc(0),
   /** Whether the backend says the action was done on the tour's first page as this machine published it. */
   ownTour: true,
+  /** Whether writing a private file of It's fails, and what to do as one is written. */
+  failWrite: false,
+  onWrite: null as null | (() => void),
   failAck: false,
   state: {} as Record<string, unknown>,
   revision: 6,
   clashes: 0,
 }))
-vi.mock('./src/lib', async (original) => ({
-  ...(await original<typeof import('./src/lib')>()),
-  call: async (_kind: string, fn: any, args: any) => {
-    const name = getFunctionName(fn)
-    stand.calls.push({ name, args })
-    if (name === 'delivery:get') return stand.action
-    if (name === 'state:get') return { json: JSON.stringify(stand.state), revision: stand.revision }
-    if (name === 'state:patch') {
-      // Held to the revision it was read at, as the backend holds it, and refused as a clash a set number of times
-      if (stand.clashes > 0) {
-        stand.clashes--
-        stand.revision++
-        throw Object.assign(new Error('The state changed since you read it.'), { code: 'conflict' })
+vi.mock('./src/lib', async (original) => {
+  const real = await original<typeof import('./src/lib')>()
+  return {
+    ...real,
+    writePrivate: (file: string, data: unknown) => {
+      stand.onWrite?.()
+      if (stand.failWrite) throw new Error('disk full')
+      return real.writePrivate(file, data)
+    },
+    call: async (_kind: string, fn: any, args: any) => {
+      const name = getFunctionName(fn)
+      stand.calls.push({ name, args })
+      if (name === 'delivery:get') return stand.action
+      if (name === 'state:get') return { json: JSON.stringify(stand.state), revision: stand.revision }
+      if (name === 'state:patch') {
+        // Held to the revision it was read at, as the backend holds it, and refused as a clash a set number of times
+        if (stand.clashes > 0) {
+          stand.clashes--
+          stand.revision++
+          throw Object.assign(new Error('The state changed since you read it.'), { code: 'conflict' })
+        }
+        if (args.baseRevision !== stand.revision) throw Object.assign(new Error('The state changed since you read it.'), { code: 'conflict' })
+        return { revision: 7 }
       }
-      if (args.baseRevision !== stand.revision) throw Object.assign(new Error('The state changed since you read it.'), { code: 'conflict' })
-      return { revision: 7 }
-    }
-    if (name === 'delivery:handedOff' && stand.failAck) throw new Error('offline')
-    if (name === 'tour:picture') return stand.ownTour
-    return null
-  },
-}))
+      if (name === 'delivery:handedOff' && stand.failAck) throw new Error('offline')
+      if (name === 'tour:picture') return stand.ownTour
+      return null
+    },
+  }
+})
 // Reads the file an action carried into a file that is made anew, as the real one does, with what `stand.bytes` holds
 vi.mock('./src/files', () => ({
   saveAttached: async (id: string, number: number, to: string) => {
@@ -107,6 +118,8 @@ beforeEach(() => {
   process.env.IT_HOME = itHome
   stand.bytes = picture()
   stand.ownTour = true
+  stand.failWrite = false
+  stand.onWrite = null
 })
 afterEach(() => {
   rmSync(folder, { recursive: true, force: true })
@@ -452,13 +465,20 @@ test('a file put in the place of a picture It wrote is not taken for it, though 
   expect(existsSync(at())).toBe(true)
 })
 
-test('a picture noted a moment ago and not yet given its name keeps its note, so that it is taken away once it is there', async () => {
-  const coming = { file: at(), bytes: 3, sha256: 'a'.repeat(64), dev: '1', ino: '2', at: Date.now() }
-  const gone = { ...coming, file: at('cd'.repeat(16)), at: Date.now() - 120_000 }
-  writeFileSync(picturesFile(), JSON.stringify({ pictures: [coming, gone] }))
-  expect(await dropPicture(REQUEST)).toEqual({ left: [] })
-  expect(await dropPictures([folder])).toEqual({ removed: 0, left: [] })
-  expect(keptPictures()).toEqual([coming])
+test('a picture that has its name and cannot be noted is taken away again, since nothing could tell it for It’s own', async () => {
+  stand.failWrite = true
+  expect(await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)).toBeUndefined()
+  expect(readdirSync(folder)).toEqual([])
+})
+
+test('the picture is made in a folder of its own beside where it goes, given its name as it is noted, and nothing of that folder stays', async () => {
+  const seen: string[][] = []
+  stand.onWrite = () => seen.push(readdirSync(folder))
+  expect(await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)).toBe(at())
+  // While the record was written the folder beside it was there, and the picture had its name
+  expect(seen.at(-1)!.some((name) => name.startsWith(`${pictureName(REQUEST)}.`) && name.endsWith('.d'))).toBe(true)
+  expect(seen.at(-1)).toContain(pictureName(REQUEST))
+  expect(readdirSync(folder)).toEqual([pictureName(REQUEST)])
 })
 
 test('an answer says which picture it left, and that it could not tell, where the record cannot be read', async () => {

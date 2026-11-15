@@ -147,8 +147,8 @@ function readOwn(file: string, most: number): { bytes: Buffer; dev: string; ino:
 // ── The record of the pictures It wrote ──
 //
 // Each picture the tour writes into a folder of the person's is noted in It's own folder, with
-// where it is, how long it is, its checksum and which file of the disk it is, before it is given
-// its name there. A file is removed only where it is still the one noted: the same file of the
+// where it is, how long it is, its checksum and which file of the disk it is, as it is given its
+// name there. A file is removed only where it is still the one noted: the same file of the
 // disk, not a link, of that length and with that checksum. Anything else in a folder, under
 // whatever name, is the person's.
 
@@ -167,8 +167,6 @@ export interface Kept {
 }
 /** How many pictures are remembered: the ones written last. One the record has let go of is left where it is. */
 const MOST_KEPT = 100
-/** How long a picture that is noted and not yet in its place is taken to be on its way there, and its note kept. */
-const ON_ITS_WAY_MS = 60_000
 const isKept = (k: unknown): k is Kept =>
   typeof k === 'object' &&
   k !== null &&
@@ -235,13 +233,9 @@ function isOurs(k: Kept): 'ours' | 'gone' | 'another' {
   const read = readOwn(k.file, MOST_BYTES)
   return read && read.dev === k.dev && read.ino === k.ino && sha256(read.bytes) === k.sha256 ? 'ours' : 'another'
 }
-/**
- * Removes a picture a note names, where the file there is still that picture. A note of a
- * picture that is not there yet, and was noted a moment ago, is of one on its way to its name.
- */
-function removeIfOurs(k: Kept): 'removed' | 'gone' | 'coming' | 'another' {
+/** Removes a picture a note names, where the file there is still that picture. */
+function removeIfOurs(k: Kept): 'removed' | 'gone' | 'another' {
   const was = isOurs(k)
-  if (was === 'gone' && Date.now() - k.at < ON_ITS_WAY_MS) return 'coming'
   if (was !== 'ours') return was
   rmSync(k.file, { force: true })
   return 'removed'
@@ -301,54 +295,69 @@ export async function keepPicture(c: Carried, folder: string | undefined, ownTou
   return placed(at, bytes, written)
 }
 
-/** Puts bytes that were looked at under the picture's name, as `keepPicture` says. */
+/**
+ * Puts bytes that were looked at under the picture's name, as `keepPicture` says. They are
+ * written in a folder of their own beside where the picture goes, which is made for the
+ * person's account alone before anything is made in it: on Windows a file takes the
+ * permissions of the folder it is made in, and one made straight into the person's folder
+ * could be opened by another account in the moment before It made it private. From there the
+ * picture is given its name, and noted, under the record's lock, so that nothing that takes
+ * pictures away comes between the two.
+ */
 async function placed(at: string, bytes: Buffer, written: () => boolean): Promise<string | undefined> {
-  const temp = `${at}.${randomBytes(4).toString('hex')}.part`
-  let fd: number
+  const own = `${at}.${randomBytes(4).toString('hex')}.d`
   try {
-    fd = openSync(temp, 'wx', 0o600)
+    // Made anew, never followed where something of that name is there
+    mkdirSync(own, { mode: 0o700 })
   } catch {
     return undefined
   }
-  let noted: Kept
   try {
+    if (!(await keepToOwnerAsync(own, true))) return undefined
+    const temp = path.join(own, 'picture.png')
+    const fd = openSync(temp, 'wx', 0o600)
     try {
-      // On Windows a file takes the permissions of the folder it is in, which another account may have
-      if (!(await keepToOwnerAsync(temp))) return undefined
       for (let done = 0; done < bytes.length; ) done += writeSync(fd, bytes, done)
       fsyncSync(fd)
-      const own = fstatSync(fd, { bigint: true })
-      noted = { file: at, bytes: bytes.length, sha256: sha256(bytes), dev: String(own.dev), ino: String(own.ino), at: Date.now() }
     } finally {
       closeSync(fd)
     }
-    const it = noted
-    // Beside any note of the same name: the other of the two that write it may be giving its own picture that name now
-    if (!(await changeKept((kept) => [...kept, it]))) return undefined
-    try {
-      linkSync(temp, at)
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code ?? ''
-      if (code === 'EEXIST' || !['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV', 'EMLINK'].includes(code)) {
-        // Written meanwhile by the other of the two that write it, or there is a file there that It did not write.
-        // Either way this one's note goes, since its file never had the name
-        await changeKept((kept) => kept.filter((k) => !(k.file === it.file && k.ino === it.ino && k.dev === it.dev)))
-        return written() ? at : undefined
-      }
-      // A disk that keeps no second name for a file: copied, made anew, and noted again as the file it is
+    const sum = sha256(bytes)
+    let named: Kept | undefined
+    let there = false
+    const noted = await changeKept((kept) => {
       try {
-        copyFileSync(temp, at, constants.COPYFILE_EXCL)
-      } catch {
-        await changeKept((kept) => kept.filter((k) => !(k.file === it.file && k.ino === it.ino && k.dev === it.dev)))
-        return written() ? at : undefined
+        linkSync(temp, at)
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code ?? ''
+        if (code === 'EEXIST' || !['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV', 'EMLINK'].includes(code)) {
+          there = true
+          return kept
+        }
+        // A disk that keeps no second name for a file: copied, and made anew
+        try {
+          copyFileSync(temp, at, constants.COPYFILE_EXCL)
+        } catch {
+          there = true
+          return kept
+        }
       }
-      const copy = readOwn(at, MOST_BYTES)
-      if (!copy || sha256(copy.bytes) !== it.sha256) return undefined
-      await changeKept((kept) => kept.map((k) => (k.file === it.file && k.ino === it.ino && k.dev === it.dev ? { ...it, dev: copy.dev, ino: copy.ino } : k)))
-    }
-    return at
+      // Noted as the file of the disk that has the name now, whichever way it was given it
+      const read = readOwn(at, MOST_BYTES)
+      if (!read || sha256(read.bytes) !== sum) return kept
+      named = { file: at, bytes: bytes.length, sha256: sum, dev: read.dev, ino: read.ino, at: Date.now() }
+      return [...kept, named]
+    })
+    // Written meanwhile by the other of the two that write it, or there is a file there that It did not write
+    if (there) return written() ? at : undefined
+    if (named && noted) return at
+    // Named and not noted, as where the record could not be written: It takes away what it has just made, which nothing else could tell for its own
+    if (named && isOurs(named) === 'ours') rmSync(at, { force: true })
+    return undefined
+  } catch {
+    return undefined
   } finally {
-    rmSync(temp, { force: true })
+    rmSync(own, { recursive: true, force: true })
   }
 }
 
@@ -371,7 +380,7 @@ export async function dropPicture(request: string | undefined): Promise<Left> {
       if (path.basename(k.file) !== name) return true
       const done = removeIfOurs(k)
       if (done === 'another') left.push(k.file)
-      return done === 'coming'
+      return false
     }),
   )
   return { left, ...(changed ? {} : { unread: true as const }) }
@@ -386,14 +395,12 @@ export async function dropPicture(request: string | undefined): Promise<Left> {
 export async function dropPictures(folders: readonly (string | undefined)[]): Promise<{ removed: number } & Left> {
   let removed = 0
   const left = new Set<string>()
-  const coming = new Set<string>()
   const changed = await changeKept((kept) =>
     kept.filter((k) => {
       const done = removeIfOurs(k)
       if (done === 'removed') removed++
       else if (done === 'another') left.add(k.file)
-      else if (done === 'coming') coming.add(k.file)
-      return done === 'coming'
+      return false
     }),
   )
   for (const folder of new Set(folders)) {
@@ -404,7 +411,7 @@ export async function dropPictures(folders: readonly (string | undefined)[]): Pr
     } catch {
       continue
     }
-    for (const name of names) if (PICTURE.test(name) && !coming.has(path.join(folder, name))) left.add(path.join(folder, name))
+    for (const name of names) if (PICTURE.test(name)) left.add(path.join(folder, name))
   }
   return { removed, left: [...left].sort(), ...(changed ? {} : { unread: true as const }) }
 }
