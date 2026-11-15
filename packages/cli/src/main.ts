@@ -4272,12 +4272,15 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'action':
     case 'save': {
+      // Whether Codex ran this command, and not another agent app started from inside a Codex
+      // conversation, which carries Codex's mark too: what is said of Codex is said to Codex alone
+      const askedInCodex = () => Boolean(process.env.CODEX_THREAD_ID) && sessionAsked()?.session.harness === 'codex'
       // One action in full, by the id an agent was given: for data too long to have been shown, or to check a repeat
       const id = need(a._[0], 'which action', 'action <action-id>')
       const c = await call<Listed & { delivery: string; route: string | null; outcome: string | null }>('query', api.delivery.get, { id }).catch((err) => {
         // Codex asks the person before every `it save`, and runs what they approve inside its
         // sandbox unless the agent asked for it outside: told so, the agent asks that way from then on
-        if (cmd === 'save' && process.env.CODEX_THREAD_ID && err instanceof Problem && err.code === 'blocked')
+        if (cmd === 'save' && askedInCodex() && err instanceof Problem && err.code === 'blocked')
           throw new Problem(err.message, err.code, `${CODEX_SAVE_ESCALATE} ${err.hint ?? ''}`.trim())
         throw err
       })
@@ -4298,7 +4301,7 @@ async function main(argv: string[]): Promise<void> {
       const all = { ...printed(c), delivery: c.delivery, route: c.route, outcome: c.outcome, text: describeClick(click, Number.MAX_SAFE_INTEGER) }
       // In Codex, how to save what it carried with one approval, said where there is something to save
       const carries = Boolean(c.files?.length) || firstFile(click.payload) !== undefined
-      if (cmd === 'action') return out(process.env.CODEX_THREAD_ID && carries ? { ...all, saveInCodex: CODEX_SAVE_ESCALATE } : all)
+      if (cmd === 'action') return out(carries && askedInCodex() ? { ...all, saveInCodex: CODEX_SAVE_ESCALATE } : all)
       const to = a._[1]!
       const number = text(a, 'number') === undefined ? 1 : Number(text(a, 'number'))
       if (c.files?.length) return out({ ...all, saved: await saveAttached(id, number, to) })
