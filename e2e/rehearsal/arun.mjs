@@ -32,7 +32,7 @@ const controlPort = Number(arg('control', 5697))
 const profileName = arg('profile-name', 'rehearsal')
 const person = arg('person', 'model')
 const agentInstalls = process.argv.includes('--agent-installs')
-const build = process.env.IT_REHEARSAL_BUILD || '027c39a03176'
+const build = process.env.IT_REHEARSAL_BUILD || '82c71960cbc6'
 const id = arg('id', `${stamp().slice(0, 16).replace(/[-:T]/g, '').replace(/^(\d{8})/, '$1-')}-s${scenario}-${app}-${channel}-aarya`)
 const MODEL = app === 'codex' ? { model: 'gpt-6.1-sol', effort: 'high' } : { model: 'claude-sonnet-5-5', effort: 'high' }
 const appDir = path.join(WORK, 'apps', `${app === 'codex' ? 'codex' : 'claude'}-${version}`)
@@ -93,12 +93,26 @@ if (app === 'codex') {
   tokenExpiry = new Date(access.expiresAt).toISOString()
   Object.assign(appEnv, access.env)
 }
+// A picture the person has on their laptop, for a page that asks for a photo or a file
+if (process.argv.includes('--picture')) {
+  const pictures = path.join(f.home, 'Pictures')
+  mkdirSync(pictures, { recursive: true })
+  execFileSync(
+    'ffmpeg',
+    [
+      '-v', 'error', '-f', 'lavfi', '-i', 'color=c=0xf3efe6:s=900x600', '-frames:v', '1', '-vf',
+      "drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':fontsize=44:fontcolor=0x1c1a16:x=60:y=60:text='Luigi''s Pizza — tonight',drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':fontsize=36:fontcolor=0x333333:x=60:y=180:text='Margherita   9',drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':fontsize=36:fontcolor=0x333333:x=60:y=250:text='Funghi   11',drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':fontsize=36:fontcolor=0x333333:x=60:y=320:text='Diavola   12',drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':fontsize=36:fontcolor=0x333333:x=60:y=390:text='Tiramisu   6'",
+      '-y', path.join(pictures, 'menu.png'),
+    ],
+    { stdio: 'ignore', windowsHide: true },
+  )
+}
 log('the agent app is set up in the throwaway profile', `${app} ${version}, ${MODEL.model} at ${MODEL.effort}; token valid until ${tokenExpiry}`)
 
 // The windows, kept on top of everything else
 const term = await terminalView({ port: controlPort + 1, title: `${profileName}@laptop — Windows PowerShell`, cols: 104, rows: 50, fontSize: 20 })
 const tw = await terminalWindow({ term, profile: f.viewProfile })
-const browser = await personBrowser({ channel, profile: f.browserProfile, app: `${term.url}blank` })
+const browser = await personBrowser({ channel, profile: f.browserProfile, app: `${term.url}blank`, fakeMedia: process.argv.includes('--fake-media') })
 term.onOpen = async (url) => {
   log('a link in the terminal was clicked, and opened in the browser', url)
   browser.page.goto(url).catch((e) => log('the link could not be opened', e.message, false))
@@ -217,6 +231,33 @@ log('the terminal is open', `in ${f.work}`)
 
 let recording = false
 let stopping = null
+// The bar above the page (#491): whether it says that the agent is working, against whether the
+// agent's terminal shows a turn running ("esc to interrupt"), each change written down with its
+// time in the video, in working.log beside the steps
+const workingLog = path.join(f.results, 'working.log')
+let barWas = null
+let termWas = null
+const watchingWork = setInterval(async () => {
+  if (!recording) return
+  let bar = ''
+  try {
+    bar = await browser.page.evaluate(() => {
+      const m = /(Codex|Claude Code|Your agent) is working/.exec(document.body?.innerText ?? '')
+      return m ? m[0] : ''
+    })
+  } catch {}
+  const screen = await term.screen().catch(() => '')
+  const busy = /esc to interrupt/i.test(screen) ? 'turn running' : ''
+  const t = rec ? rec.at().toFixed(1) : '?'
+  if (bar !== barWas) {
+    writeFileSync(workingLog, `${t}s bar: ${bar || '(no working)'}\n`, { flag: 'a' })
+    barWas = bar
+  }
+  if (busy !== termWas) {
+    writeFileSync(workingLog, `${t}s terminal: ${busy || '(idle)'}\n`, { flag: 'a' })
+    termWas = busy
+  }
+}, 500)
 const meta = {
   id,
   scenario,
@@ -274,6 +315,7 @@ http
 while (!stopping) await sleep(1000)
 
 clearInterval(raising)
+clearInterval(watchingWork)
 clearInterval(browsing)
 const endedAt = stamp()
 if (rec) {
