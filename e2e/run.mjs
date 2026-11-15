@@ -7012,6 +7012,194 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
   } else console.log('  skip  a showing that nothing keeps alive ending by itself: the quick run does not wait ten minutes')
 
   // ------------------------------------------------------------------
+  section('A tab behind another')
+  // What is live to a page stays live while the person looks at another tab: the page goes on
+  // being given the camera's pictures and the microphone's sound, and what it records of them is
+  // whole. It still ends at once when what was allowed is taken back or another conversation takes
+  // the page over, and nothing new is opened for the page while its tab is behind. Playwright keeps
+  // every tab of a browser it starts shown, so this is a Chromium of the run's own, which Playwright
+  // is attached to without that, and whose tabs are hidden as a person's are.
+  if (!/^chrom/.test(BROWSER))
+    console.log('  skip  a page’s camera and microphone in a tab behind another: Playwright’s Firefox shows a tab behind another all the same')
+  else {
+    const { chromium } = await import('playwright')
+    const bslug = `${slug}-behind`
+    const profile = mkdtempSync(path.join(tmp, 'behind-'))
+    const behindBrowser = spawn(
+      chromium.executablePath(),
+      [
+        '--headless=new',
+        '--no-sandbox',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--password-store=basic',
+        '--use-mock-keychain',
+        '--use-fake-device-for-media-stream',
+        '--use-fake-ui-for-media-stream',
+        '--remote-debugging-port=0',
+        `--user-data-dir=${profile}`,
+        'about:blank',
+      ],
+      { stdio: 'ignore' },
+    )
+    let attached = null
+    const behind = { stoppedBy: '' }
+    try {
+      await it(A, ['create', marked('Background'), '--id', bslug, '--dir', path.join(root, 'e2e/fixtures/background')])
+      const port = await until(() => readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0] || undefined, 30_000)
+      attached = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { noDefaults: true })
+      const context = attached.contexts()[0]
+      const tab = context.pages()[0] ?? (await context.newPage())
+      await tab.setViewportSize({ width: 1280, height: 800 })
+      await pairAsOwner(tab)
+      await tab.goto(`${APP}/p/${bslug}`)
+      const shown = await pageIn(tab, { id: bslug })
+      const out = () => tab.frameLocator('.mount iframe').locator('#out')
+      /** Presses one of the page's buttons, allows what It asks about where it `asks`, and says what the page then shows. */
+      const pressed = async (button, shows, asks = true) => {
+        await tab.frameLocator('.mount iframe').locator(button).click()
+        const asked = tab.locator('.media-ask')
+        if (
+          asks &&
+          (await asked.waitFor({ timeout: 5000 }).then(
+            () => true,
+            () => false,
+          ))
+        )
+          await asked.getByRole('button', { name: 'Allow', exact: true }).click()
+        await out().filter({ hasText: shows }).waitFor({ timeout: 30_000 })
+        return out().textContent()
+      }
+      const seen = () => shown.evaluate(() => window.seen)
+      const visibility = () => tab.evaluate(() => document.visibilityState)
+      const between = (times, from, to) => times.filter((t) => t >= from && t < to).length
+      behind.camera = await pressed('#camera', /^(camera live|refused)/)
+      behind.microphone = await pressed('#mic', /^(microphone live|refused)/)
+      behind.recording = await pressed('#record', /^(recording|refused)/, false)
+      await sleep(2000)
+      // The person looks at another tab of the same window for six seconds, and comes back
+      const other = await context.newPage()
+      await other.goto(`${APP}/settings`)
+      await other.bringToFront()
+      const hiddenAt = Date.now()
+      behind.hidden = [await visibility()]
+      await sleep(6000)
+      behind.hidden.push(await visibility())
+      const shownAt = Date.now()
+      await tab.bringToFront()
+      await sleep(3000)
+      behind.hidden.push(await visibility())
+      const at = Date.now()
+      const s = await seen()
+      // What came while the tab was behind, from half a second after it went, and after it was shown again, from a second after
+      const behindFor = (shownAt - hiddenAt - 500) / 1000
+      behind.picturesBehind = Math.round(between(s.pictures, hiddenAt + 500, shownAt) / behindFor)
+      behind.piecesBehind = Math.round(between(s.pieces, hiddenAt + 500, shownAt) / behindFor)
+      behind.picturesAfter = Math.round(between(s.pictures, shownAt + 1000, at) / ((at - shownAt - 1000) / 1000))
+      behind.piecesAfter = Math.round(between(s.pieces, shownAt + 1000, at) / ((at - shownAt - 1000) / 1000))
+      behind.recordedBehind = Object.fromEntries(
+        Object.entries(s.chunks).map(([name, chunks]) => [name, chunks.filter((c) => c.bytes > 0 && c.at >= hiddenAt + 500 && c.at < shownAt).length]),
+      )
+      behind.toldWhileLive = s.told
+      behind.recorderErrors = s.errors
+      behind.bar = [await tab.locator('.page-nav .media-cam').textContent(), await tab.locator('.page-nav .media-mic').textContent()]
+      behind.recorded = await shown.evaluate(() => window.stopRecording())
+      const whole = (made) => typeof made?.seconds === 'number' && made.bytes > 1000 && Math.abs(made.seconds - behind.recorded.recordedFor) < 2
+      check(
+        'a camera and a microphone live to a page are still passed to it while its tab is behind another, and after it is shown again, the page is told nothing, and what it records of each meanwhile plays for the whole time',
+        /^camera live/.test(behind.camera) &&
+          /^microphone live/.test(behind.microphone) &&
+          /^recording/.test(behind.recording) &&
+          behind.hidden.join() === 'hidden,hidden,visible' &&
+          behind.picturesBehind >= 10 &&
+          behind.piecesBehind >= 40 &&
+          behind.picturesAfter >= 10 &&
+          behind.piecesAfter >= 40 &&
+          behind.recordedBehind.cam >= 10 &&
+          behind.recordedBehind.mic >= 10 &&
+          behind.toldWhileLive.length === 0 &&
+          behind.recorderErrors.length === 0 &&
+          behind.bar.join() === 'Camera liveStop,Mic liveStop' &&
+          whole(behind.recorded.cam) &&
+          whole(behind.recorded.mic),
+        JSON.stringify(behind),
+      )
+
+      // With the page's tab behind again, the person takes back what it was allowed, from the other tab
+      await other.bringToFront()
+      const row = other.locator('.row', { hasText: marked('Background') })
+      await row.waitFor({ timeout: 15_000 })
+      const takenBackAt = Date.now()
+      await row.getByRole('button', { name: 'Take back' }).click()
+      const endedThen = await until(
+        async () => ((t) => (t.length >= 2 ? t : undefined))(await seen().then((x) => x.told.filter((t) => t.state === 'ended'))),
+        10_000,
+        100,
+      )
+      // And, still behind, the page asks for the camera again, with nothing clicked
+      const askedBehind = await shown.evaluate(() => window.askAgain())
+      const takenBack = {
+        ended: (endedThen ?? []).map((t) => ({ what: t.what, state: t.state, why: t.why, hidden: t.hidden, afterMs: t.at - takenBackAt })),
+        askedBehind,
+        hidden: await visibility(),
+        askedInOtherTab: await other.locator('.media-ask').count(),
+      }
+      await tab.bringToFront()
+      await sleep(1000)
+      takenBack.askedOnceShown = await tab.locator('.media-ask').count()
+      takenBack.bar = await tab.locator('.page-nav .media-cam, .page-nav .media-mic').count()
+      check(
+        'taking back what a page was allowed, from another tab, ends its camera and microphone at once while its tab is behind, and a page behind another tab is given nothing new and asks nothing',
+        takenBack.ended.length === 2 &&
+          takenBack.ended.every(
+            (t) => t.state === 'ended' && /took back what they had allowed/.test(t.why ?? '') && t.hidden === 'hidden' && t.afterMs < 3000,
+          ) &&
+          /^refused: It uses the microphone and the camera for a page only while this screen shows it/.test(askedBehind) &&
+          takenBack.hidden === 'hidden' &&
+          takenBack.askedInOtherTab === 0 &&
+          takenBack.askedOnceShown === 0 &&
+          takenBack.bar === 0,
+        JSON.stringify(takenBack),
+      )
+
+      // Allowed again and live, then behind another tab while another conversation takes the page over
+      const liveAgain = await pressed('#camera', /^(camera live|refused)/)
+      await other.bringToFront()
+      const toldBefore = (await seen()).told.length
+      const takenOverAt = Date.now()
+      await it(A, ['open', bslug], { extraEnv: { IT_HARNESS: 'claude-code', IT_SESSION: `${slug}-behind-another-conversation` } })
+      const overThen = await until(async () => ((t) => (t.length > toldBefore ? t.at(-1) : undefined))(await seen().then((x) => x.told)), 30_000, 100)
+      const takenOver = {
+        liveAgain,
+        ended: overThen && { what: overThen.what, state: overThen.state, why: overThen.why, hidden: overThen.hidden, afterMs: overThen.at - takenOverAt },
+      }
+      check(
+        'a camera live to a page whose tab is behind another ends when another conversation takes the page over',
+        /^camera live/.test(liveAgain) &&
+          takenOver.ended?.what === 'camera' &&
+          takenOver.ended.state === 'ended' &&
+          /Another conversation took this page over/.test(takenOver.ended.why ?? '') &&
+          takenOver.ended.hidden === 'hidden',
+        JSON.stringify(takenOver),
+      )
+    } catch (err) {
+      behind.stoppedBy = err.message
+      check('a page’s camera and microphone in a tab behind another', false, JSON.stringify(behind))
+    } finally {
+      // Closed whole, as a person closes it, so that nothing of it is left writing in its folder, and ended where it does not close
+      await attached
+        ?.newBrowserCDPSession()
+        .then((session) => session.send('Browser.close'))
+        .catch(() => {})
+      await stopped(behindBrowser, 15_000)
+      try {
+        rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 })
+      } catch {}
+      await it(A, ['delete', bslug]).catch(() => {})
+    }
+  }
+
+  // ------------------------------------------------------------------
   section('The camera with its sound, recorded')
   // This check runs last of everything the run does in a browser, and in a tab that nothing else
   // uses. On GitHub's Windows runner the browser's tab crashes while a page records the stream of
