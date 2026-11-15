@@ -156,12 +156,12 @@ async function main() {
   // The person's desktop: a terminal on the left, open and empty, and the web browser on the right
   sh(['exec', '-d', name, 'su', '-l', 'ana', '-c', 'DISPLAY=:1 xfce4-terminal --disable-server --hide-menubar --hide-toolbar --hide-scrollbar --title=Terminal --font="DejaVu Sans Mono 11" --geometry=104x54+0+0 -x tmux attach -t agent'])
   await new Promise((r) => setTimeout(r, 2500))
-  exec('install -m 755 /build/harness/browser.sh /usr/local/bin/browser')
+  exec(`install -m 755 /build/harness/${which === 'firefox' ? 'firefox' : 'browser'}.sh /usr/local/bin/browser`)
   if (person === 'script') exec('touch /etc/rehearsal-cdp')
   if (has('fake-media')) exec('touch /etc/rehearsal-fake-media')
   sh(['exec', '-d', name, 'su', '-l', 'ana', '-c', 'DISPLAY=:1 browser about:blank'])
   await new Promise((r) => setTimeout(r, 5000))
-  exec(`DISPLAY=:1 su ana -c "wmctrl -r Terminal -e 0,0,0,960,1080; wmctrl -r Chromium -b remove,maximized_vert,maximized_horz; wmctrl -r Chromium -e 0,960,0,960,1080; wmctrl -a Terminal"`, { quiet: true })
+  exec(`DISPLAY=:1 su ana -c "wmctrl -r Terminal -e 0,0,0,960,1080; for w in Chromium Firefox about; do wmctrl -r $w -b remove,maximized_vert,maximized_horz; wmctrl -r $w -e 0,960,0,960,1080; done; wmctrl -a Terminal"`, { quiet: true })
 
   // ---- the recording ----
   exec(`ffmpeg -nostdin -y -loglevel error -f x11grab -framerate 12 -video_size 1920x1080 -i :1 -vf scale=1600:-2 -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p /var/lib/rehearsal-video/video.mp4 > /var/lib/rehearsal-video/ffmpeg.log 2>&1 & echo $! > /run/rehearsal-ffmpeg.pid`)
