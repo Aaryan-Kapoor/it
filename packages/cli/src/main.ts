@@ -356,14 +356,17 @@ async function piped(): Promise<string | undefined> {
  * whole before the command begins, so it is never taken for nothing.
  */
 async function pipedIfAny(grace: number): Promise<string | undefined> {
-  let kind: { isFIFO(): boolean; isFile(): boolean; isSocket(): boolean }
+  let kind: { isFIFO(): boolean; isFile(): boolean; isSocket(): boolean } | undefined
   try {
     kind = fstatSync(0)
   } catch {
-    return undefined
+    kind = undefined
   }
-  if (process.stdin.isTTY || !(kind.isFIFO() || kind.isFile() || kind.isSocket())) return undefined
-  if (kind.isFile()) return piped()
+  if (process.stdin.isTTY) return undefined
+  // Windows does not say of every pipe that it is one, so there whatever is not a terminal is
+  // listened to, and the grace below decides as it does for a pipe anywhere else
+  if (process.platform !== 'win32' && !(kind && (kind.isFIFO() || kind.isFile() || kind.isSocket()))) return undefined
+  if (kind?.isFile()) return piped()
   let heard = false
   const first = () => {
     heard = true
