@@ -152,6 +152,15 @@ test('A service with another CLAUDE_CONFIG_DIR does not hand it to a conversatio
   expect(claudeFolder(env as NodeJS.ProcessEnv)).toBe(path.join(home, '.claude'))
 })
 
+test('Where the service or the person’s own shell names the usual folder too, the person sets it, and it stays named.', () => {
+  const home = homeWithClaude()
+  const usual = path.join(home, '.claude')
+  const profile = profileOf('claude-code', homeIs(home))!
+  expect(profileEnvironment('claude-code', profile, { ...homeIs(home), CLAUDE_CONFIG_DIR: usual })).toEqual({ ...homeIs(home), CLAUDE_CONFIG_DIR: usual })
+  // An empty setting names no folder
+  expect(profileEnvironment('claude-code', profile, { ...homeIs(home), CLAUDE_CONFIG_DIR: '' })).toEqual(homeIs(home))
+})
+
 test('A Claude Code conversation started with another folder is reopened with that folder named, whatever the service has.', () => {
   const home = homeWithClaude()
   const other = folder()

@@ -106,21 +106,21 @@ export function profileEnvironment(harness: string, value: unknown, base: NodeJS
   // Inline configuration belongs to the service, never to the recorded conversation.
   if (harness === 'opencode') delete env.OPENCODE_CONFIG_CONTENT
   // Claude Code started with CLAUDE_CONFIG_DIR naming its usual folder is not the Claude Code a
-  // terminal starts without it: it looks for its sign-in under another name in the macOS
-  // Keychain, and for its own settings file (.claude.json) inside that folder rather than beside
-  // it. The usual folder is recorded both where nothing was set and where the person set the
-  // variable to that folder, and nothing set is by far the more common, so such a conversation
-  // is started again with nothing set, and never with the service's own setting. That is done
-  // only where the home the reopened Claude Code finds for itself is the one the folder is in.
+  // terminal starts without it: it reads its main settings file (.claude.json, which holds a
+  // Console sign-in's key, the servers added for every project and which folders are trusted)
+  // inside that folder rather than beside it, and on macOS looks for its sign-in under another
+  // name in the Keychain. The usual folder is recorded both where nothing was set and where the
+  // person set the variable to that folder, and nothing set is by far the more common, so such
+  // a conversation is started again with nothing set, and never with the service's own setting.
+  // Where what the service was given by the shell that set it up, or by the person's own shell,
+  // names that same folder, the person does set it, and it stays named. All of this only where
+  // the home the reopened Claude Code finds for itself is the one the folder is in.
   const home = homeFor(env)
   const usual = home === undefined ? undefined : path.join(home, '.claude')
+  const same = (a: string, b: string) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b)
   const named = profile.paths.CLAUDE_CONFIG_DIR
-  if (
-    harness === 'claude-code' &&
-    named &&
-    usual !== undefined &&
-    (process.platform === 'win32' ? named.toLowerCase() === usual.toLowerCase() : named === usual)
-  )
+  const given = base.CLAUDE_CONFIG_DIR
+  if (harness === 'claude-code' && named && usual !== undefined && same(named, usual) && !(given && same(path.resolve(given), usual)))
     delete env.CLAUDE_CONFIG_DIR
   return env
 }
