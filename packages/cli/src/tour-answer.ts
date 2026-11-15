@@ -299,6 +299,8 @@ async function placed(at: string, staged: string, read: { bytes: Buffer; dev: st
   const temp = `${at}.${randomBytes(4).toString('hex')}.part`
   let named: Kept | undefined
   let there = false
+  // Whether this made the file beside the picture, which is then its own to take away, and nothing else of that name is
+  let madeTemp = false
   try {
     const noted = await changeKept((kept) => {
       let identity = { dev: read.dev, ino: read.ino }
@@ -311,6 +313,7 @@ async function placed(at: string, staged: string, read: { bytes: Buffer; dev: st
           return kept
         }
         const fd = openSync(temp, 'wx', 0o600)
+        madeTemp = true
         try {
           for (let done = 0; done < read.bytes.length; ) done += writeSync(fd, read.bytes, done)
           fsyncSync(fd)
@@ -336,7 +339,7 @@ async function placed(at: string, staged: string, read: { bytes: Buffer; dev: st
     if (named && isOurs(named) === 'ours') rmSync(at, { force: true })
     return undefined
   } finally {
-    rmSync(temp, { force: true })
+    if (madeTemp) rmSync(temp, { force: true })
   }
 }
 

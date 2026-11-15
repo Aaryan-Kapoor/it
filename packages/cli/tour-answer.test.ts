@@ -18,6 +18,8 @@ const stand = vi.hoisted(() => ({
   bytes: Buffer.alloc(0),
   /** Whether the backend says the action was done on the tour's first page as this machine published it. */
   ownTour: true,
+  /** Whether the name beside a picture is made with no randomness. */
+  fixedSuffix: false,
   /** Whether writing a private file of It's fails, and what to do as one is written. */
   failWrite: false,
   onWrite: null as null | (() => void),
@@ -26,6 +28,11 @@ const stand = vi.hoisted(() => ({
   revision: 6,
   clashes: 0,
 }))
+// The four random bytes the name beside a picture is made with are none where a test says, so that it can put a file of that name there first
+vi.mock('node:crypto', async (original) => {
+  const real = await original<typeof import('node:crypto')>()
+  return { ...real, randomBytes: (size: number) => (size === 4 && stand.fixedSuffix ? Buffer.alloc(4) : real.randomBytes(size)) }
+})
 vi.mock('./src/lib', async (original) => {
   const real = await original<typeof import('./src/lib')>()
   return {
@@ -120,6 +127,7 @@ beforeEach(() => {
   stand.ownTour = true
   stand.failWrite = false
   stand.onWrite = null
+  stand.fixedSuffix = false
 })
 afterEach(() => {
   rmSync(folder, { recursive: true, force: true })
@@ -479,6 +487,15 @@ test('the picture is a second name of the file It looked at in its own folder, g
   expect(seen.at(-1)).toEqual([pictureName(REQUEST)])
   expect(readdirSync(folder)).toEqual([pictureName(REQUEST)])
   expect(readdirSync(path.join(itHome, 'tour-pictures'))).toEqual([])
+})
+
+test('a file that is there under any name the picture might pass through is the person’s, and stays', async () => {
+  // A name of the kind the picture is written under beside where it goes, made by someone else
+  stand.fixedSuffix = true
+  const theirs = path.join(folder, `${pictureName(REQUEST)}.00000000.part`)
+  writeFileSync(theirs, 'theirs')
+  expect(await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)).toBe(at())
+  expect(readFileSync(theirs, 'utf8')).toBe('theirs')
 })
 
 // Where the person's folder is on another disk than It's, which a file cannot have a second name across
