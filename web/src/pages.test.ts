@@ -1104,6 +1104,8 @@ describe('the line that moves under a page’s bar', () => {
     expect(progressFor([recent[1]!], undefined, NOW)).toEqual({ type: 'it:progress', working: false, actions: [{ id: 'b', handed: true, turn: null }] })
     // Nor past a stop the person asked for after the turn began
     expect(progressFor([], { ...running, stoppedAt: at + 3000 }, NOW)?.working).toBe(false)
+    // What a stop dropped was handed to nobody
+    expect(progressFor([{ ...recent[1]!, route: 'stopped' }], running, NOW)?.actions).toEqual([{ id: 'b', handed: false, turn: null }])
     // Only the newest few, since a part of the page waits on one at a time
     const many = Array.from({ length: 30 }, (_, i) => ({ id: `n${i}`, at: at - i, delivery: 'handed_off', outcome: 'succeeded', handedAt: at }))
     expect(progressFor(many, running, NOW)?.actions.map((a) => a.id)).toEqual(['n0', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7'])

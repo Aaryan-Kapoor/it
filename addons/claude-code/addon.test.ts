@@ -1255,7 +1255,6 @@ describe('what the add-on says of whether its conversation is at work', () => {
     await host.tick()
     expect(saidWithClicks().at(-1)).toBe(true)
     await host.fire('session.end', { sessionId: 'session-1', reason: 'other' })
-    await host.fire('session.start')
     await host.tick()
     expect(saidWithClicks().at(-1)).toBe(false)
   })

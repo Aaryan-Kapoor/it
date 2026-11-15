@@ -21,6 +21,11 @@ export function progressFor(
     working: atWorkNow(work, now),
     actions: recent
       .slice(0, NEWEST)
-      .map((a) => ({ id: String(a.id), handed: a.delivery === 'handed_off', turn: a.delivery === 'handed_off' ? turnFor(a, work, now) : null })),
+      // What a stop dropped was handed to nobody, though it is no longer waiting either
+      .map((a) => ({
+        id: String(a.id),
+        handed: a.delivery === 'handed_off' && a.route !== 'stopped',
+        turn: a.delivery === 'handed_off' ? turnFor(a, work, now) : null,
+      })),
   }
 }
