@@ -10,21 +10,7 @@
 // does next does not arrive in the conversation by itself, the command waits for it and prints
 // it. `it tour next` is that wait alone.
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import {
-  closeSync,
-  constants,
-  copyFileSync,
-  fstatSync,
-  fsyncSync,
-  linkSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  readSync,
-  rmSync,
-  writeSync,
-} from 'node:fs'
+import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, rmSync, writeSync } from 'node:fs'
 import path from 'node:path'
 import { parseJson, TOUR } from '@it/protocol'
 import { saveAttached } from './files'
@@ -278,74 +264,69 @@ export async function keepPicture(c: Carried, folder: string | undefined, ownTou
   const written = () => (keptPictures() ?? []).some((k) => k.file === at && isOurs(k) === 'ours')
   if (lstatSync(at, { throwIfNoEntry: false })) return written() ? at : undefined
   if (!(await ownTour(c.id))) return undefined
-  // Read into It's own folder, and looked at there
+  // Read into It's own folder, and looked at there. It's folder is open to the person's account
+  // alone, and a file made in it is too, on Windows as well
   const made = mkdirSync(stagingFolder(), { recursive: true, mode: 0o700 })
   if (made) await keepToOwnerAsync(made, true)
   const staged = path.join(stagingFolder(), `${randomUUID()}.png`)
-  let bytes: Buffer | undefined
   try {
     await saveAttached(c.id, 1, staged)
-    bytes = readOwn(staged, MOST_BYTES)?.bytes
+    const read = readOwn(staged, MOST_BYTES)
+    if (!read || !isPng(read.bytes)) return undefined
+    return await placed(at, staged, read, written)
   } catch {
-    bytes = undefined
+    return undefined
   } finally {
     rmSync(staged, { force: true })
   }
-  if (!bytes || !isPng(bytes)) return undefined
-  return placed(at, bytes, written)
 }
 
+/** The codes with which a system says that it cannot give a file a second name there. */
+const NO_SECOND_NAME = ['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV', 'EMLINK']
+
 /**
- * Puts bytes that were looked at under the picture's name, as `keepPicture` says. They are
- * written in a folder of their own beside where the picture goes, which is made for the
- * person's account alone before anything is made in it: on Windows a file takes the
- * permissions of the folder it is made in, and one made straight into the person's folder
- * could be opened by another account in the moment before It made it private. From there the
- * picture is given its name, and noted, under the record's lock, so that nothing that takes
- * pictures away comes between the two.
+ * Gives a picture that was looked at its name in the person's folder, as `keepPicture` says, and
+ * notes it, under the record's lock, so that nothing that takes pictures away comes between the
+ * two. The name is a second name of the file in It's own folder, which keeps the permissions it
+ * was made with there: a file made in the person's folder would take that folder's on Windows,
+ * which another account may have, and could be opened by it before It made it private. Where the
+ * system cannot give the file a second name there, as on another disk, Linux and macOS write the
+ * picture beside where it goes, for the person's account alone from the moment it is made, and
+ * Windows writes none.
  */
-async function placed(at: string, bytes: Buffer, written: () => boolean): Promise<string | undefined> {
-  const own = `${at}.${randomBytes(4).toString('hex')}.d`
+async function placed(at: string, staged: string, read: { bytes: Buffer; dev: string; ino: string }, written: () => boolean): Promise<string | undefined> {
+  const sum = sha256(read.bytes)
+  const temp = `${at}.${randomBytes(4).toString('hex')}.part`
+  let named: Kept | undefined
+  let there = false
   try {
-    // Made anew, never followed where something of that name is there
-    mkdirSync(own, { mode: 0o700 })
-  } catch {
-    return undefined
-  }
-  try {
-    if (!(await keepToOwnerAsync(own, true))) return undefined
-    const temp = path.join(own, 'picture.png')
-    const fd = openSync(temp, 'wx', 0o600)
-    try {
-      for (let done = 0; done < bytes.length; ) done += writeSync(fd, bytes, done)
-      fsyncSync(fd)
-    } finally {
-      closeSync(fd)
-    }
-    const sum = sha256(bytes)
-    let named: Kept | undefined
-    let there = false
     const noted = await changeKept((kept) => {
+      let identity = { dev: read.dev, ino: read.ino }
       try {
-        linkSync(temp, at)
+        linkSync(staged, at)
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code ?? ''
-        if (code === 'EEXIST' || !['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV', 'EMLINK'].includes(code)) {
-          there = true
+        if (!NO_SECOND_NAME.includes(code) || process.platform === 'win32') {
+          there = code === 'EEXIST'
           return kept
         }
-        // A disk that keeps no second name for a file: copied, and made anew
+        const fd = openSync(temp, 'wx', 0o600)
         try {
-          copyFileSync(temp, at, constants.COPYFILE_EXCL)
-        } catch {
-          there = true
+          for (let done = 0; done < read.bytes.length; ) done += writeSync(fd, read.bytes, done)
+          fsyncSync(fd)
+          const own = fstatSync(fd, { bigint: true })
+          identity = { dev: String(own.dev), ino: String(own.ino) }
+        } finally {
+          closeSync(fd)
+        }
+        try {
+          linkSync(temp, at)
+        } catch (again) {
+          there = (again as NodeJS.ErrnoException).code === 'EEXIST'
           return kept
         }
       }
-      // Noted as the file of the disk that has the name now, whichever way it was given it
-      const read = readOwn(at, MOST_BYTES)
-      if (!read || sha256(read.bytes) !== sum) return kept
-      named = { file: at, bytes: bytes.length, sha256: sum, dev: read.dev, ino: read.ino, at: Date.now() }
+      named = { file: at, bytes: read.bytes.length, sha256: sum, ...identity, at: Date.now() }
       return [...kept, named]
     })
     // Written meanwhile by the other of the two that write it, or there is a file there that It did not write
@@ -354,10 +335,8 @@ async function placed(at: string, bytes: Buffer, written: () => boolean): Promis
     // Named and not noted, as where the record could not be written: It takes away what it has just made, which nothing else could tell for its own
     if (named && isOurs(named) === 'ours') rmSync(at, { force: true })
     return undefined
-  } catch {
-    return undefined
   } finally {
-    rmSync(own, { recursive: true, force: true })
+    rmSync(temp, { force: true })
   }
 }
 

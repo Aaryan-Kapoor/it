@@ -471,15 +471,35 @@ test('a picture that has its name and cannot be noted is taken away again, since
   expect(readdirSync(folder)).toEqual([])
 })
 
-test('the picture is made in a folder of its own beside where it goes, given its name as it is noted, and nothing of that folder stays', async () => {
+test('the picture is a second name of the file It looked at in its own folder, given as it is noted, and nothing else is made in the person’s folder', async () => {
   const seen: string[][] = []
   stand.onWrite = () => seen.push(readdirSync(folder))
   expect(await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)).toBe(at())
-  // While the record was written the folder beside it was there, and the picture had its name
-  expect(seen.at(-1)!.some((name) => name.startsWith(`${pictureName(REQUEST)}.`) && name.endsWith('.d'))).toBe(true)
-  expect(seen.at(-1)).toContain(pictureName(REQUEST))
+  // While the record was written the picture had its name already, and nothing else was there
+  expect(seen.at(-1)).toEqual([pictureName(REQUEST)])
   expect(readdirSync(folder)).toEqual([pictureName(REQUEST)])
+  expect(readdirSync(path.join(itHome, 'tour-pictures'))).toEqual([])
 })
+
+// Where the person's folder is on another disk than It's, which a file cannot have a second name across
+const shm = '/dev/shm'
+const otherDisk = process.platform === 'linux' && existsSync(shm) && lstatSync(shm).dev !== lstatSync(os.tmpdir()).dev
+test.skipIf(!otherDisk)(
+  'on another disk than It’s folder, Linux writes the picture beside where it goes, for the person alone, and notes that file',
+  async () => {
+    const there = mkdtempSync(path.join(shm, 'it-tour-other-'))
+    try {
+      expect(await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), there)).toBe(at(REQUEST, there))
+      expect(readdirSync(there)).toEqual([pictureName(REQUEST)])
+      expect(lstatSync(at(REQUEST, there)).mode & 0o077).toBe(0)
+      expect(readFileSync(at(REQUEST, there))).toEqual(picture())
+      expect(await dropPicture(REQUEST)).toEqual({ left: [] })
+      expect(readdirSync(there)).toEqual([])
+    } finally {
+      rmSync(there, { recursive: true, force: true })
+    }
+  },
+)
 
 test('an answer says which picture it left, and that it could not tell, where the record cannot be read', async () => {
   await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)
