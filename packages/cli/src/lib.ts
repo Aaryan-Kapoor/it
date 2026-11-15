@@ -553,8 +553,30 @@ export function backend(): Backend {
   if (joined) return { api: joined, site: joined }
   throw notSetUp()
 }
-/** What to do about It not running on the machine it runs on. */
-export const NOT_RUNNING = 'Start it with `it serve`, or run `it setup` to keep it running in the background.'
+/**
+ * Whether `it setup` registered a background service for this folder, as `service` tells it.
+ * That module reads this one, so it is told here by `main` rather than read from here, and is
+ * not known where nothing has told it.
+ */
+let registeredHere: () => boolean | 'unknown' = () => 'unknown'
+export const askRegisteredWith = (ask: () => boolean | 'unknown') => {
+  registeredHere = ask
+}
+/** What `it serve` is, said beside every way to start It: an agent told to start It with it ran it in its own session. */
+const SERVE_IS = '`it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.'
+/**
+ * What to do about It not running on the machine it runs on: start again the background service
+ * that `it setup` registered, where it registered one, and run `it setup` where it did not.
+ * Either keeps It running. An agent once told "Start it with `it serve`" ran that in its own
+ * session, which never returns, and It then lived only as long as the session, with the
+ * registered service left stopped.
+ */
+export function notRunningHint(registered: boolean | 'unknown' = registeredHere()): string {
+  if (registered === true)
+    return `It's background service is registered on this machine and is not running: \`it service install\` starts it again and keeps it running. ${SERVE_IS}`
+  if (registered === false) return `Run \`it setup\`, which starts It and keeps it running in the background. ${SERVE_IS}`
+  return `Where \`it setup\` registered It's background service on this machine, \`it service install\` starts it again; where it did not, run \`it setup\`. Either keeps It running in the background. ${SERVE_IS}`
+}
 /**
  * What is said when nothing answered at all. On the machine It runs on, that is It not running,
  * and the person is told how to start it: where its backend listens is nothing they can act on.
@@ -563,7 +585,7 @@ export const NOT_RUNNING = 'Start it with `it serve`, or run `it setup` to keep 
  */
 export const unreachable = (where: string) =>
   !process.env.IT_URL && basePort() !== undefined
-    ? new Problem('It is not running on this machine.', 'offline', NOT_RUNNING)
+    ? new Problem('It is not running on this machine.', 'offline', notRunningHint())
     : new Problem(
         `It could not reach the It at ${where}.`,
         'offline',

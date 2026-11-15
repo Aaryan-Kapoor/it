@@ -72,6 +72,7 @@ import {
   addonHere,
   api,
   askConnectorWith,
+  askRegisteredWith,
   askShell,
   backend,
   backendAt,
@@ -96,11 +97,11 @@ import {
   left,
   machine,
   machineFile,
-  NOT_RUNNING,
   NOT_SET_UP,
   noteLeft,
   noteWas,
   notKnown,
+  notRunningHint,
   notSetUp,
   PROXIED,
   Problem,
@@ -776,7 +777,7 @@ function noMore(cmd: string, a: Args): void {
       : cmd === 'create' && text(a, 'state') !== undefined
         ? ' If your shell split the JSON of --state at a space, write it to a file and give it with `--state-file <path>`.'
         : cmd === 'tour' && a._[0] === 'answer'
-          ? ` If your shell split the JSON at a space or at an apostrophe in it, give it in a here-document: \`it tour answer ${a._[1]} "$(cat <<'EOF'\`, then the JSON on a line of its own, then EOF on a line of its own, then \`)"\`.`
+          ? ` If your shell split the JSON at a space or at an apostrophe in it: ${PLAIN_ANSWER(a._[1] ?? '<action-id>')}`
           : ''
   throw new Problem(`It does not know what to do with "${a._[most]}".`, 'invalid', `Usage: it ${usage}${split}`)
 }
@@ -1195,12 +1196,18 @@ function pictureFolderFor(c: { session: { harness: string; id: string } | null }
  * one command. `it tour next` is that wait by itself.
  */
 /**
- * How an answer is given where nothing in it can end a shell's quoting: in a here-document whose
- * text is the argument. Claude Code refuses a here-document given to a command as its standard
- * input where it holds a brace and a quote, as JSON does, and takes it in this form.
+ * How an answer is given whole, as one plain command: the JSON in single quotes, inside which a
+ * shell takes nothing but the closing quote, with each apostrophe in its words written as ’ or as
+ * \u0027, which JSON reads as one. It used to be a here-document given as `"$(cat <<'EOF' …)"`,
+ * which no apostrophe could end either, but a command so wrapped is not a plain `it …` to Codex,
+ * whose rule lets only that out of its sandbox: every answer then asked the person (seen in the
+ * rehearsals, with Codex in "Ask for approval"). Windows PowerShell 5.1 takes the quotes out of an
+ * argument it hands a program, and sends what it pipes in ASCII, so that × arrived as "?" on the
+ * tour's whiteboard (the Windows rehearsal): there `--%` hands the rest of the line over as it is
+ * written, in a command line that holds every letter.
  */
-const HEREDOC = (id: string) =>
-  `Give the JSON in a here-document, where nothing in it ends anything: \`it tour answer ${id} "$(cat <<'EOF'\`, then the JSON on a line of its own, then EOF on a line of its own, then \`)"\`.`
+export const PLAIN_ANSWER = (id: string) =>
+  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \\u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In Windows PowerShell, put \`--%\` after \`it\` and write the JSON in double quotes with its own written as \`\\"\`: \`it --% tour answer ${id} "{\\"say\\":\\"That’s it.\\"}"\`. Do not pipe it in there, which turns every letter outside ASCII into a question mark.`
 async function tourAnswer(a: Args, counted: (code?: string) => void) {
   const USAGE = "tour answer <action-id> [- | '<json>' | --file <path>] [--wait | --no-wait] [--timeout <seconds>]"
   if (a._[0] === 'answer') {
@@ -1210,8 +1217,8 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
     const file = text(a, 'file')
     if (file !== undefined && a._[2] !== undefined)
       throw new Problem('The answer is given once, on the command line or with --file, and this command was given both.', 'invalid', `Usage: it ${USAGE}`)
-    // The answer is the JSON on the command line, which the guide has the agent write as a
-    // here-document's text, where no apostrophe or quote in its words can end it. With `-` it is
+    // The answer is the JSON on the command line, which the guide has the agent write in single
+    // quotes, with its apostrophes written as ’, so that nothing in its words can end it. With `-` it is
     // read from standard input, as a here-string piped to it in PowerShell is. With neither, a pipe
     // or a here-document given all the same is read, so that an agent that left out the `-` is not
     // taken to have given no answer
@@ -1230,7 +1237,7 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
       read = given === undefined ? undefined : json(given, from)
     } catch (err) {
       // Most often an apostrophe in the agent's words, which ended the quotes round the JSON
-      throw err instanceof Problem && from === 'The answer' ? new Problem(err.message, err.code, HEREDOC(id)) : err
+      throw err instanceof Problem && from === 'The answer' ? new Problem(err.message, err.code, PLAIN_ANSWER(id)) : err
     }
     const answer = read === undefined ? undefined : object(read, 'An answer')
     const done = await answerAction(id, answer)
@@ -1507,15 +1514,15 @@ async function notRunning(found: Answers): Promise<Problem> {
     return new Problem(
       `It is not running on this machine: another program answers at port ${port}, where It’s site would be.`,
       'offline',
-      `Stop whatever is using that port, or choose another first port for It by setting IT_PORT. ${NOT_RUNNING}`,
+      `Stop whatever is using that port, or choose another first port for It by setting IT_PORT. ${notRunningHint()}`,
     )
   return port !== undefined && (await healthy(backendAt(port).site))
     ? new Problem(
         'It is not running on this machine: only its backend program is, as it is while `it setup` is at work.',
         'offline',
-        `If no setup is at work here, one was ended before it had stopped that program, and running \`it setup\` again stops it. ${NOT_RUNNING}`,
+        `If no setup is at work here, one was ended before it had stopped that program, and running \`it setup\` again stops it. ${notRunningHint()}`,
       )
-    : new Problem('It is not running on this machine.', 'offline', NOT_RUNNING)
+    : new Problem('It is not running on this machine.', 'offline', notRunningHint())
 }
 /** What is said on a machine that joined an It when that It does not answer where the machine asks it. */
 const notAnswering = (found: Answers): string => {
@@ -3630,6 +3637,8 @@ they print JSON.
 
 async function main(argv: string[]): Promise<void> {
   const [cmd, ...rest] = argv
+  // What is said where It is not running names the background service where this folder registered one
+  askRegisteredWith(() => service.installedHereOr('unknown'))
   // Run as a script, it is held to the Node it needs before anything else is done. The standalone program has its own runtime.
   if (!('Bun' in globalThis)) {
     const old = nodeTooOld(process.versions.node)
@@ -3730,16 +3739,12 @@ async function main(argv: string[]): Promise<void> {
       if (started === 'failed' || failedAddons.length) process.exitCode = 1
       // Counted: from which version to which, and whether It runs as the new one
       usage.record('upgrade.done', { from: usage.three(done.from), to: usage.three(done.to), by: 'command', result: started === 'failed' ? 'failed' : 'ok' })
-      // Where Claude Code has It's add-on here, its conversations that were open have not loaded the new one
+      // Where Claude Code has It's add-on here, what becomes of its conversations that were open is said
       const claude = claudeFolders().length > 0
       // And what whoever reads this is to do: start It again where it was started by hand and runs the old version still
       const byHand =
         started === 'by hand' && after.running ? 'It is still running as the old version: stop `it serve` where it is running, and start it again.' : undefined
-      const reload = claude
-        ? after.addonsLater
-          ? `Once it runs as the new version, ${RELOAD_OPEN.charAt(0).toLowerCase()}${RELOAD_OPEN.slice(1)}`
-          : RELOAD_OPEN
-        : undefined
+      const reload = claude ? RELOAD_OPEN : undefined
       const hint = [byHand, reload].filter(Boolean).join(' ')
       const result = {
         upgraded: true,
@@ -3750,8 +3755,9 @@ async function main(argv: string[]): Promise<void> {
         ...(after.addons ? { addons: after.addons } : {}),
         ...(after.addonsLater ? { addonsLater: true } : {}),
         ...(hint ? { hint } : {}),
-        // An agent that upgraded It from a Claude Code conversation is in one of those: it tells the person, word for word
-        ...(claude && sessionAsked()?.session.harness === 'claude-code' ? { tell: tellWordForWord(reloadLine(claudeRunning())) } : {}),
+        // An agent that upgraded It from a Claude Code conversation that never loaded the add-on tells the person, word for word.
+        // One that loaded it goes on with it, as every open conversation does, and has nothing to tell
+        ...(claude && sessionAsked()?.session.harness === 'claude-code' && claudeReloadLine() ? { tell: tellWordForWord(claudeReloadLine()!) } : {}),
       }
       if (!forPerson(a)) return out(result)
       return tell([
@@ -3783,12 +3789,7 @@ async function main(argv: string[]): Promise<void> {
       const now = await local<Held>('/runs')
       // Only the system's refusing this command the network altogether says that it is shut in: the connector's not answering does not
       if (!now && (await closedToNetwork())) throw shutIn()
-      if (!now)
-        throw new Problem(
-          'It is not running on this machine, so there is nothing to ask about what it reopened.',
-          'offline',
-          'Start it with `it serve` or `it setup`.',
-        )
+      if (!now) throw new Problem('It is not running on this machine, so there is nothing to ask about what it reopened.', 'offline', notRunningHint())
       if (sub === 'clear') {
         if (!now.unread && !now.held.length) return forPerson(a) ? tell(['Nothing is held back: there is nothing to clear.']) : out({ cleared: 0 })
         if (!a.flags.yes && !flow.live())

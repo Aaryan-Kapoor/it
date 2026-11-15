@@ -1283,9 +1283,14 @@ main:has(.modal-overlay) {
   display: flex;
   align-items: baseline;
   flex: 1;
-  min-width: 0;
   height: var(--nav-h);
   font-size: 13px;
+  /* The title keeps room of its own in the bar's row, so that what the bar says beside it goes
+     below the controls sooner than take that room: with none, a long word of a failed wake was
+     laid out in the title's row at a 960-pixel window, and the words beside the title were
+     drawn over the controls. Nothing in it is drawn outside it */
+  min-width: min(14em, 40%);
+  overflow: hidden;
 }
 .page-nav-titlewrap::before {
   content: "";
@@ -1318,7 +1323,9 @@ main:has(.modal-overlay) {
   font-size: 11.5px;
   color: var(--fg-muted);
   white-space: nowrap;
-  flex-shrink: 0;
+  /* Gives way long before the title does, where the two do not both fit */
+  flex-shrink: 100;
+  min-width: 0;
   overflow: hidden;
 }
 

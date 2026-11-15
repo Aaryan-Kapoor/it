@@ -21,8 +21,12 @@ export type Role = 'owner' | 'screen'
 export interface Session {
   /** Whether the question has been answered yet. Until it has, nothing else here says anything. */
   loaded: boolean
-  /** The door says whether this program's functions loaded. Earlier doors leave this unsaid. */
-  service?: { functions: 'current' | 'retained' }
+  /**
+   * The door says whether this program's functions loaded, and, since 0.1.42, the version of It
+   * that runs, which may be newer than this site where It was updated while the tab was open.
+   * Earlier doors leave these unsaid.
+   */
+  service?: { functions: 'current' | 'retained'; version?: string }
   paired: boolean
   /** The person's id, this browser's session, and what the session may do. All null when not paired. */
   user: string | null
@@ -282,6 +286,8 @@ function askOnce(): Promise<Said> {
       const code = stillToSay(role)
       // What was said of waiting was said of a code that is still offered, or is said no more
       const functions = a.service && typeof a.service === 'object' && 'functions' in a.service ? a.service.functions : undefined
+      const runs = a.service && typeof a.service === 'object' && 'version' in a.service ? a.service.version : undefined
+      const version = typeof runs === 'string' && /^\d+\.\d+\.\d+$/.test(runs) ? runs : undefined
       set({
         loaded: true,
         paired: true,
@@ -290,7 +296,7 @@ function askOnce(): Promise<Said> {
         role,
         code,
         wait: code === 'screen' ? state.wait : null,
-        ...(functions === 'current' || functions === 'retained' ? { service: { functions } } : {}),
+        ...(functions === 'current' || functions === 'retained' ? { service: { functions, ...(version ? { version } : {}) } } : {}),
       })
       return 'paired'
     } catch {

@@ -28,9 +28,9 @@ describe('once the new program is in place, it upgrade', () => {
     const done = await afterUpgrade('/the/new/it', { service: true, againWith: again, env: {}, running: async () => true, run: p.run })
     expect(p.runs).toEqual([{ args: ['setup'], env: again }])
     expect(done).toEqual({ started: 'again', addons: updated })
-    // Claude Code is not told to restart: its conversations that were open load the new add-on with /reload-plugins
+    // Claude Code is not told to restart, nor to type /reload-plugins in every open conversation: each goes on with the add-on it loaded
     expect(addonsSaid(done, label, true)).toEqual([
-      'Type /reload-plugins in any Claude Code conversation that was already open, so that it loads It’s new add-on: until then, what is done on its pages may not reach it.',
+      'A Claude Code conversation that was already open goes on with the add-on it loaded, which still takes clicks, so nothing needs typing there. Type /reload-plugins only in one whose page says it cannot hear it: that one never loaded It’s add-on.',
     ])
     expect(addonsSaid(done, label)).toEqual([])
   })
@@ -65,10 +65,10 @@ describe('once the new program is in place, it upgrade', () => {
     expect(p.runs).toEqual([])
     expect(done).toEqual({ started: 'by hand', running: true, addonsLater: true })
     expect(addonsSaid(done, label)).toEqual(['Its add-ons in your agent apps are brought up to date when It starts as the new version.'])
-    // And where Claude Code has It's add-on, what to type in its conversations once It has started again as the new version
+    // And where Claude Code has It's add-on, that its open conversations go on with the add-on they loaded
     expect(addonsSaid(done, label, true)).toEqual([
       'Its add-ons in your agent apps are brought up to date when It starts as the new version.',
-      'Once it has, type /reload-plugins in any Claude Code conversation that was already open, so that it loads It’s new add-on: until then, what is done on its pages may not reach it.',
+      'A Claude Code conversation that was already open goes on with the add-on it loaded, which still takes clicks, so nothing needs typing there. Type /reload-plugins only in one whose page says it cannot hear it: that one never loaded It’s add-on.',
     ])
   })
 
@@ -108,7 +108,7 @@ describe('once the new program is in place, it upgrade', () => {
     const addons: AddonOutcome[] = ['claude-code', 'codex', 'pi'].map((id) => ({ id: id as AddonOutcome['id'], did: 'installed', restart: true }))
     expect(addonsSaid({ started: 'again', addons }, label, true)).toEqual([
       'Restart Codex and Pi to load their new add-ons. Until then, one that is already running goes on with the add-on it loaded, which still takes clicks.',
-      'Type /reload-plugins in any Claude Code conversation that was already open, so that it loads It’s new add-on: until then, what is done on its pages may not reach it.',
+      'A Claude Code conversation that was already open goes on with the add-on it loaded, which still takes clicks, so nothing needs typing there. Type /reload-plugins only in one whose page says it cannot hear it: that one never loaded It’s add-on.',
     ])
   })
 })

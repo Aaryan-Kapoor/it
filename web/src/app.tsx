@@ -1,6 +1,6 @@
 // The site: pairing, this display's registration, and the frame around everything else.
 
-import { NOUN, TAKES } from '@it/protocol'
+import { NOUN, newer, TAKES } from '@it/protocol'
 import { useConvex, useConvexAuth, useMutation, useQuery } from 'convex/react'
 import { Component, type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { version } from '../package.json'
@@ -345,7 +345,10 @@ function Paired() {
       // Said for the counts of how It is used, and nothing waits for it: that this display has the
       // site open, and whether it reached It at the machine's own address. A backend from before
       // this was asked refuses it, which changes nothing
-      void convex.mutation(api.displays.reached, { key: displayKey(), local: ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) }).catch(() => {})
+      // (Asked once more where it met trouble, as the tabs of one browser that open together meet on a slow machine)
+      void askTwice(convex, (calls) =>
+        calls.mutation(api.displays.reached, { key: displayKey(), local: ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) }),
+      ).catch(() => {})
       if (user) void drain(convex, user)
     })().then(
       () => live && setState({ ready: true, session }),
@@ -550,8 +553,13 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const epoch = display?.epoch
   useEffect(() => {
     if (epoch === undefined || !session) return
+    // A report is counted against the display, which all of the browser's tabs are, and tabs that
+    // report in the same instant on a slow machine are in each other's way there and not after it:
+    // the backend gave up on such a report as a write that kept clashing, and the site wrote that as
+    // an error (seen on the slower Mac runner). Nothing was lost but the report itself, which
+    // the next one put right within a minute, so it is sent once more a moment later, quietly
     return startReports(
-      (r) => convex.mutation(api.displays.report, { key, epoch, expectedSession: session, ...r }),
+      (r) => askTwice(convex, (calls) => calls.mutation(api.displays.report, { key, epoch, expectedSession: session, ...r })),
       () => backendTakes(TAKES.displayReports),
       {
         document,
@@ -964,7 +972,7 @@ function TopBar({
 }) {
   const convex = useConvex()
   const path = usePath()
-  const { code } = useSession()
+  const { code, service } = useSession()
   const [menu, setMenu] = useState(false)
   // Whether the connection to It is up, which is what the dot says
   const live = useSyncExternalStore(
@@ -1033,6 +1041,7 @@ function TopBar({
         </span>
       )}
       <div className={`grid-meta${live ? ' online' : ''}`}>
+        {newer(service?.version, version) && <Updated to={service?.version as string} />}
         {display && <Reminders display={display} />}
         {search && count !== undefined && <span className="grid-meta-count">{`${count} ${count === 1 ? NOUN.one : NOUN.many}`}</span>}
         <span className="grid-meta-live" role="status">
@@ -1073,6 +1082,20 @@ function TopBar({
         </div>
       </div>
     </header>
+  )
+}
+
+/**
+ * It was updated while this tab was open, and the tab still runs the site from before: said as
+ * one quiet ask beside the bar's others, with Reload. Nothing else reloads such a tab, and its
+ * version beside the bar went on naming the old one, which left a person unsure whether the
+ * update had happened at all.
+ */
+function Updated({ to }: { to: string }) {
+  return (
+    <button type="button" className="chip ask" title={`It ${to} is running. This tab still has the site of It ${version}.`} onClick={() => location.reload()}>
+      It was updated · Reload
+    </button>
   )
 }
 

@@ -30,7 +30,7 @@ import os from 'node:os'
 import type { Duplex } from 'node:stream'
 import { createContent, pagePolicy } from '@it/content'
 import { contentPort, httpsPort, onThisMachine, UPLOAD, uploadBudgetMs } from '@it/protocol'
-import { direct, inHome, Problem } from '../lib'
+import { direct, inHome, Problem, VERSION } from '../lib'
 import type { Backend } from './backend'
 import { doorKey, type ServiceConfig, storageAsked } from './config'
 import { recordExports } from './export'
@@ -587,11 +587,15 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
     const says = passedOn(answered.headers, NOT_RETURNED)
     // Only a token that the backend granted to a paired browser carries this word. Retained
     // functions need no new route or argument, and no database or administrator details leave.
+    // With it goes the version of It that runs, which a tab opened before an update compares
+    // with the site it is running, and asks to be reloaded by where it is older
     if (url.pathname === '/session/token' && answered.status === 200 && !answered.headers.has('content-encoding')) {
       try {
         const token = JSON.parse(new TextDecoder().decode(bytes))
         if (token && typeof token.token === 'string' && (token.role === 'owner' || token.role === 'screen')) {
-          bytes = new TextEncoder().encode(JSON.stringify({ ...token, service: { functions: backend.behind ? 'retained' : 'current' } })).buffer
+          bytes = new TextEncoder().encode(
+            JSON.stringify({ ...token, service: { functions: backend.behind ? 'retained' : 'current', version: VERSION } }),
+          ).buffer
           says.set('cache-control', 'no-store')
         }
       } catch {}

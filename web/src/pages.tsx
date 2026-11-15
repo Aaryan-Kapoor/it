@@ -743,11 +743,21 @@ export function atWorkNow(work: Work | undefined, now: number): boolean {
  * room, and on a bar as narrow as a phone's says only "Working", which leaves the page's title room.
  */
 export const workingSaid = (agent: string | null): string => `${agent ?? 'Your agent'} is working`
-function WorkingNow({ agent }: { agent: string | null }) {
+/**
+ * How long a turn that began with something done on a page goes on, with nothing new on the page,
+ * before the bar allows that the agent may be waiting for the person: an agent app may hold its
+ * turn on a question in its own window, as Codex does on an approval, and tells It nothing of that.
+ * Said as "is working" alone, it kept a person waiting at the page for something that waited for
+ * them (seen in a rehearsal). The plain words stay for the first half minute, which is longer than
+ * an answer usually takes.
+ */
+export const MAY_WAIT_MS = 30_000
+export const workingOrWaiting = (agent: string | null): string => `${workingSaid(agent)}, or waiting for you in its own window`
+function WorkingNow({ agent, mayWait = false }: { agent: string | null; mayWait?: boolean }) {
   return (
     <span className="working">
       <span className="working-dot" />
-      <span className="working-long">{workingSaid(agent)}</span>
+      <span className="working-long">{mayWait ? workingOrWaiting(agent) : workingSaid(agent)}</span>
       <span className="working-short">Working</span>
     </span>
   )
@@ -1247,11 +1257,20 @@ function ActionStatus({
     // Left up, "Your agent has it" read as an agent still at work, minutes after it had answered.
     // (Handed over and not yet said to be done is what `running` means: every click an add-on took is that, until its agent says more)
     const changed = answeredAt !== null && answeredAt > last.at
+    // The agent said it could not do it, and has changed the page since it said so: what it put
+    // there is later than the failure, which the bar no longer says. Left up, the red read as out
+    // of date beside the answer the agent had gone on to give (seen with Codex, retrying a photo)
+    const failed = last.outcome === 'failed' && !(last.settledAt != null && answeredAt !== null && answeredAt > last.settledAt)
     // Unless it is still at work, as its machine says: then that is said, since the page looks done and its agent is not
     // A turn of its conversation is running: that is said, whatever became of what was done, but
     // where the agent said it could not do it, which the person may want to do again
-    if (working && last.outcome !== 'failed') return <WorkingNow agent={agent} />
-    if ((last.outcome === null || last.outcome === 'running') && changed) return null
+    // A turn that this click began, still running a while after it was handed over, with nothing on the page since
+    // (Begun by it: between the click and a few seconds after it was handed over, and not a turn the person began later by typing)
+    const handed = last.handedAt ?? last.at
+    const begunByIt = turn !== null && turn.since >= last.at && turn.since <= handed + 10_000
+    const mayWait = atWork === 'running' && begunByIt && !changed && (last.outcome === null || last.outcome === 'running') && now - handed > MAY_WAIT_MS
+    if (working && !failed) return <WorkingNow agent={agent} mayWait={mayWait} />
+    if ((last.outcome === null || last.outcome === 'running' || (last.outcome === 'failed' && !failed)) && changed) return null
     // Its turn ended after it was handed over, and the page is as it was: said as that. Left as
     // "Your agent has it", it read as an agent still at work on something it had finished with
     if (atWork === 'ended') return <span className="status">{`${agent ?? 'Your agent'} finished without changing this ${NOUN.one}`}</span>
@@ -1403,26 +1422,29 @@ function ActionStatus({
     const count = aside.length > 1 ? ` (${aside.length})` : ''
     // The first of them to go is the one said, as the day it goes on, in the person's own way of writing dates
     const goes = Math.min(...aside.map((a) => a.expiresAt ?? Number.POSITIVE_INFINITY))
-    const tried =
-      wakeFailed && wakeFailed.at >= last.at
-        ? `Couldn’t wake ${agent ?? 'your agent'}${count}: ${wakeFailed.why}`
-        : `Couldn’t hand ${them} to ${agent ?? 'your agent'}${count}`
+    const woke = wakeFailed !== null && wakeFailed.at >= last.at
+    const tried = woke
+      ? `Couldn’t wake ${agent ?? 'your agent'}${count}: ${wakeFailed.why.replace(/[.\s]+$/, '')}`
+      : `Couldn’t hand ${them} to ${agent ?? 'your agent'}${count}`
     return (
       <>
         <span className="status" data-tone="bad">
-          {`${tried}. It won’t try again until its conversation next runs${Number.isFinite(goes) ? `, and ${aside.length > 1 ? 'starts deleting them' : 'deletes it'} on ${dayOf(goes)} if that hasn’t happened by then` : ''}`}
+          {`${tried}. It won’t try again until its conversation next runs${Number.isFinite(goes) ? `, and ${aside.length > 1 ? 'starts deleting them' : 'deletes it'} on ${dayOf(goes)} if that hasn’t happened by then` : ''}${woke ? `. ${openItYourself(agent)}` : ''}`}
         </span>
         {retryOffered}
       </>
     )
   }
-  // Tried, and it could not be reopened: said as that, with why where it is asked for. Where an
-  // earlier click of the page's was set aside after such tries, it can be tried again from here
+  // Tried, and it could not be reopened: said as that, with why where it is asked for, and then
+  // what the person can do, which is to open the conversation themselves: what waits is handed to
+  // it there. Said with the app's own last words alone, as "… Please run /login", it named nothing
+  // the person could act on, and they typed that into the page. Where an earlier click of the
+  // page's was set aside after such tries, it can be tried again from here
   if (wakeFailed && wakeFailed.at >= last.at)
     return (
       <>
         <span className="status" data-tone="bad">
-          {`Couldn’t wake ${agent ?? 'your agent'}${waiting > 1 ? ` (${waiting})` : ''}: ${wakeFailed.why}`}
+          {`Couldn’t wake ${agent ?? 'your agent'}${waiting > 1 ? ` (${waiting})` : ''}: ${wakeFailed.why.replace(/[.\s]+$/, '')}. ${openItYourself(agent)}`}
         </span>
         {retryOffered}
       </>
@@ -1471,6 +1493,10 @@ function useUnreachable(): boolean {
   }, [connected])
   return down
 }
+
+/** What the person can do where a conversation could not be reopened for them: open it themselves, where what waits is handed to it. */
+export const openItYourself = (agent: string | null): string =>
+  `Open its conversation in ${agent ?? 'your agent app'} yourself, and what you did reaches it there`
 
 /** How long a click has gone untaken before the owner is offered the reopening of its conversation. */
 const WAKE_OFFER_MS = 3_000

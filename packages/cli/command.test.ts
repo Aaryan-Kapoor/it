@@ -700,7 +700,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(b.asked).toEqual([])
       // An answer whose JSON a shell split at a space is told how to give it whole
       expect(error(await run(m, ['tour', 'answer', 'action-1', '{"say":"two', 'words"}'], b.env)).hint).toContain(
-        "give it in a here-document: `it tour answer action-1 \"$(cat <<'EOF'`",
+        'If your shell split the JSON at a space or at an apostrophe in it: Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \\u0027: `it tour answer action-1 \'{"say":"That’s it."}\'`',
       )
       expect(error(await run(m, ['tour', 'next', 'now'], b.env)).message).toBe('`it tour next` takes nothing after it.')
       expect(error(await run(m, ['tour', 'answer'], b.env)).message).toBe('Say which action.')
@@ -5401,7 +5401,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
     const said = {
       code: 'offline',
       message: 'It is not running on this machine.',
-      hint: 'Start it with `it serve`, or run `it setup` to keep it running in the background.',
+      hint: 'Run `it setup`, which starts It and keeps it running in the background. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.',
     }
     const key = await exportJWK((await generateKeyPair('ES256', { extractable: true })).privateKey)
     writeFileSync(path.join(m.it, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'the desk', key }))
@@ -5424,7 +5424,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       harnesses: [],
       version: expect.any(String),
       protocol: 1,
-      hint: 'It is not running on this machine. Start it with `it serve`, or run `it setup` to keep it running in the background.',
+      hint: 'It is not running on this machine. Run `it setup`, which starts It and keeps it running in the background. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.',
     })
     // Nothing of where the backend listens, which a person can do nothing with
     expect(status.out + status.err).not.toMatch(/127\.0\.0\.1|backend/)
@@ -5598,7 +5598,7 @@ describe.skipIf(process.platform === 'win32')('an It that is not running, under 
         const said = {
           code: 'offline',
           message: 'It is not running on this machine.',
-          hint: 'Start it with `it serve`, or run `it setup` to keep it running in the background.',
+          hint: 'Run `it setup`, which starts It and keeps it running in the background. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.',
         }
         const key = await exportJWK((await generateKeyPair('ES256', { extractable: true })).privateKey)
         writeFileSync(path.join(m.it, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'the desk', key }))
@@ -5743,7 +5743,8 @@ describe.skipIf(process.platform === 'win32')('a command that waits for somethin
 })
 
 describe.skipIf(process.platform === 'win32' || !python)('what a person at a terminal is told', () => {
-  const NOT_RUNNING = 'It is not running on this machine. Start it with `it serve`, or run `it setup` to keep it running in the background.'
+  const NOT_RUNNING =
+    'It is not running on this machine. Run `it setup`, which starts It and keeps it running in the background. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.'
   const NOT_REGISTERED = 'It is not registered to start by itself. `it setup` registers it, and `it serve` runs it in a terminal until then.'
   const NO_SYSTEMD =
     'Nothing starts It by itself on this machine: no systemd for your account can be reached from here. `it serve` runs it, in a terminal or under a supervisor of your own.'
@@ -6026,7 +6027,8 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     }
     expect((await run(m, ['service', 'install'])).code).toBe(0)
     expect((await atTerminal(m, ['service', 'status'])).shown.split('\n')).toEqual([
-      NOT_RUNNING,
+      // Registered and stopped: what starts it again is the service, and not a terminal's `it serve`
+      "It is not running on this machine. It's background service is registered on this machine and is not running: `it service install` starts it again and keeps it running. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.",
       `It is registered with the system to start by itself (${RUNS}).`,
       '',
     ])
@@ -6055,7 +6057,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
         const closed = (server: http.Server) => new Promise<void>((resolve) => void server.close(() => resolve()))
         const alone = await answering(base + PORTS.backendSite)
         const ALONE =
-          'It is not running on this machine: only its backend program is, as it is while `it setup` is at work. If no setup is at work here, one was ended before it had stopped that program, and running `it setup` again stops it. Start it with `it serve`, or run `it setup` to keep it running in the background.'
+          'It is not running on this machine: only its backend program is, as it is while `it setup` is at work. If no setup is at work here, one was ended before it had stopped that program, and running `it setup` again stops it. Run `it setup`, which starts It and keeps it running in the background. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.'
         try {
           const status = await run(m, ['status'], env, runtime)
           expect([status.code, status.code === 0 ? '' : status.err]).toEqual([0, ''])
@@ -6124,7 +6126,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
         const m = await setUp()
         const base = await ports.next()
         const env = { IT_PORT: String(base) }
-        const OTHER = `It is not running on this machine: another program answers at port ${base}, where It’s site would be. Stop whatever is using that port, or choose another first port for It by setting IT_PORT. Start it with \`it serve\`, or run \`it setup\` to keep it running in the background.`
+        const OTHER = `It is not running on this machine: another program answers at port ${base}, where It’s site would be. Stop whatever is using that port, or choose another first port for It by setting IT_PORT. Run \`it setup\`, which starts It and keeps it running in the background. \`it serve\` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.`
         try {
           for (const [what, answer] of Object.entries(OTHERS)) {
             const other = await another(base, answer)
@@ -8131,7 +8133,7 @@ describe('whether what the person does arrives by itself, as a page’s command 
       b.asked.length = 0
       expect(error(await run(m, ['tour', 'answer', 'action-1', '-'], env)).message).toBe('Say the answer, on standard input.')
       // JSON that an apostrophe cut short on the command line is refused, with the way that cannot be cut
-      expect(error(await run(m, ['tour', 'answer', 'action-1', '{"say":"That'], env)).hint).toContain("`it tour answer action-1 \"$(cat <<'EOF'`")
+      expect(error(await run(m, ['tour', 'answer', 'action-1', '{"say":"That'], env)).hint).toContain('`it tour answer action-1 \'{"say":"That’s it."}\'`')
       // And JSON on standard input that is not JSON is said to be that
       expect(error(await run(m, ['tour', 'answer', 'action-1', '-'], env, process.execPath, [], '{"say":')).message).toBe(
         'The answer on standard input is not valid JSON.',

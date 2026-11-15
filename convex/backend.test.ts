@@ -2503,6 +2503,9 @@ describe('clicks and their delivery', () => {
     await m.as.mutation(api.delivery.settle, { id: actionId, outcome: 'succeeded' })
     const [seen] = await alice.browser.query(api.actions.forArtifact, { artifactId: p.artifactId })
     expect(seen).toMatchObject({ delivery: 'handed_off', route: 'addon', outcome: 'succeeded' })
+    // With when the agent said so, which the page's bar weighs an answer on the page against
+    expect(Date.now() - seen.settledAt!).toBeLessThan(60_000)
+    expect(seen.settledAt!).toBeGreaterThanOrEqual(first.at)
     expect(seen).not.toHaveProperty('payload')
     expect((await m.as.query(api.actions.forArtifact, { slug: 'plan' }))[0]).toHaveProperty('payload')
     // An agent told only the action's id can read it, whatever has become of it

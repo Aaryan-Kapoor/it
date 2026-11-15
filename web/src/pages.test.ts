@@ -18,6 +18,7 @@ let recent: {
   outcome?: string | null
   route?: string | null
   handedAt?: number | null
+  settledAt?: number | null
   parked?: boolean
   expiresAt?: number | null
   madeAt?: number
@@ -236,8 +237,20 @@ describe('what the page’s bar says of the last thing the person did', () => {
     host.remove()
     Object.assign(PAGE, { wakeFailed: { at: NOW - 1000, why: 'the folder its conversation was held in is not known on this machine, or is gone' } })
     await shown()
-    expect(said()).toBe('Couldn’t wake Pi: the folder its conversation was held in is not known on this machine, or is gone')
-    Object.assign(PAGE, { wakeFailed: null })
+    // With what the person can do about it last: the app's own words are no help to act on
+    expect(said()).toBe(
+      'Couldn’t wake Pi: the folder its conversation was held in is not known on this machine, or is gone. Open its conversation in Pi yourself, and what you did reaches it there',
+    )
+    // As a Claude Code that is not signed in said it, which sent a person to type /login on the page
+    Object.assign(PAGE, {
+      agent: 'claude-code',
+      wakeFailed: { at: NOW - 1000, why: 'Claude Code exited with 1, and its last words were: Not logged in · Please run /login.' },
+    })
+    await drawnAgain()
+    expect(said()).toBe(
+      'Couldn’t wake Claude Code: Claude Code exited with 1, and its last words were: Not logged in · Please run /login. Open its conversation in Claude Code yourself, and what you did reaches it there',
+    )
+    Object.assign(PAGE, { agent: 'pi', wakeFailed: null })
   })
 
   test('a click its machine holds back is said to be that, with why, for as long as it waits, whatever the machine’s last failure was', async () => {
@@ -321,7 +334,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     try {
       await shown()
       expect(said()).toBe(
-        `Couldn’t wake Pi (2): its command ended with an error. It won’t try again until its conversation next runs, and starts deleting them on ${day(NOW - 3 * 86_400_000 + MONTH)} if that hasn’t happened by then`,
+        `Couldn’t wake Pi (2): its command ended with an error. It won’t try again until its conversation next runs, and starts deleting them on ${day(NOW - 3 * 86_400_000 + MONTH)} if that hasn’t happened by then. Open its conversation in Pi yourself, and what you did reaches it there`,
       )
     } finally {
       Object.assign(PAGE, { wakeFailed: null })
@@ -405,12 +418,12 @@ describe('what the page’s bar says of the last thing the person did', () => {
         { at: NOW - 3_600_000, delivery: 'pending', outcome: null, parked: true, expiresAt: NOW - 3_600_000 + MONTH },
       ]
       await shown()
-      expect(said()).toBe('Couldn’t wake Pi (2): its command ended with an error')
+      expect(said()).toBe('Couldn’t wake Pi (2): its command ended with an error. Open its conversation in Pi yourself, and what you did reaches it there')
       expect(buttons('Retry')).toHaveLength(1)
       // With nothing set aside, It is still trying by itself, and there is nothing to try again
       recent = [recent[0]!]
       await drawnAgain()
-      expect(said()).toBe('Couldn’t wake Pi (2): its command ended with an error')
+      expect(said()).toBe('Couldn’t wake Pi (2): its command ended with an error. Open its conversation in Pi yourself, and what you did reaches it there')
       expect(buttons('Retry')).toHaveLength(0)
       // Set aside after it could not be reopened for, it is said so, and can be tried again
       recent = [{ ...recent[0]!, parked: true }]
@@ -836,6 +849,31 @@ describe('what the page’s bar says of the last thing the person did', () => {
     }
   })
 
+  test('what the agent said it could not do is said no more once it has changed the page after saying so', async () => {
+    // The agent explained on the page and then said it could not do it: the failure is the later news
+    recent = [{ at: NOW - 60_000, delivery: 'handed_off', outcome: 'failed', route: 'addon', handedAt: NOW - 59_000, settledAt: NOW - 40_000 }]
+    Object.assign(PAGE, { answeredAt: NOW - 41_000 })
+    await shown()
+    expect(said()).toBe('Your agent could not do that')
+    await act(async () => root.unmount())
+    host.remove()
+    // It went on and put an answer on the page: that is later than the failure, and is on the page
+    Object.assign(PAGE, { answeredAt: NOW - 5_000 })
+    await shown()
+    expect(said()).toBeNull()
+    await act(async () => root.unmount())
+    host.remove()
+    // A later click that succeeded is said in its place, as the last thing done
+    recent = [
+      { at: NOW - 20_000, delivery: 'handed_off', outcome: 'succeeded', route: 'addon', handedAt: NOW - 19_000, settledAt: NOW - 10_000 },
+      { at: NOW - 60_000, delivery: 'handed_off', outcome: 'failed', route: 'addon', handedAt: NOW - 59_000, settledAt: NOW - 40_000 },
+    ]
+    Object.assign(PAGE, { answeredAt: NOW - 41_000 })
+    await shown()
+    expect(said()).toBe('Done')
+    Object.assign(PAGE, { answeredAt: 0 })
+  })
+
   test('what the agent had already done is not said to have been stopped by a stop that came after it', async () => {
     // Done a minute ago, and the conversation was stopped since, from another of its pages
     recent = [{ at: NOW - 60_000, delivery: 'handed_off', outcome: 'succeeded', route: 'addon', handedAt: NOW - 59_000 }]
@@ -1167,10 +1205,10 @@ describe('the line that moves under a page’s bar', () => {
       expect(host.querySelector('.page-nav .page-progress')).not.toBeNull()
       expect([allSaid(), working()]).toEqual([[], 'Claude Code is working'])
       expect(stops()).toEqual([])
-      // Before the agent has changed the page it is working all the same, as its machine says
+      // Before the agent has changed the page it is working all the same, as its machine says, and a minute on it may be waiting for the person
       Object.assign(PAGE, { answeredAt: 0 })
       await drawnAgain()
-      expect([working(), host.querySelector('.page-progress') !== null]).toEqual(['Claude Code is working', true])
+      expect([working(), host.querySelector('.page-progress') !== null]).toEqual(['Claude Code is working, or waiting for you in its own window', true])
       // The turn ends: the line stops, and with the page changed the bar has nothing to add
       Object.assign(PAGE, { answeredAt: NOW - 55_000, turn: { since: NOW - 58_000, endedAt: NOW - 1000 } })
       await drawnAgain()
@@ -1251,6 +1289,55 @@ describe('the bar while a turn of the page’s conversation runs, which It did n
     }
   }
 
+  test('allows, once a turn a click began has run half a minute with nothing new on the page, that the agent may be waiting for the person in its own window', async () => {
+    // Handed over five seconds ago: working, plainly
+    recent = [{ at: NOW - 6_000, delivery: 'handed_off', outcome: 'running', route: 'queue', handedAt: NOW - 5_000 }]
+    await withTurn({ agent: 'codex', turn: { since: NOW - 5_000, endedAt: null } }, async () => {
+      await shown()
+      expect(working()).toBe('Codex is working')
+    })
+    await act(async () => root.unmount())
+    host.remove()
+    // Forty seconds on and nothing on the page: it may be waiting on an approval in Codex's terminal, which It cannot see
+    recent = [{ at: NOW - 41_000, delivery: 'handed_off', outcome: 'running', route: 'queue', handedAt: NOW - 40_000 }]
+    await withTurn({ agent: 'codex', turn: { since: NOW - 40_000, endedAt: null } }, async () => {
+      await shown()
+      expect(working()).toBe('Codex is working, or waiting for you in its own window')
+      // And in a word on a phone, as ever
+      expect(host.querySelector('.page-nav .working .working-short')?.textContent).toBe('Working')
+    })
+    await act(async () => root.unmount())
+    host.remove()
+    // A turn the person began later, by typing to the agent, is not one the click began, and is said plainly
+    await withTurn({ agent: 'codex', turn: { since: NOW - 15_000, endedAt: null } }, async () => {
+      await shown()
+      expect(working()).toBe('Codex is working')
+    })
+    await act(async () => root.unmount())
+    host.remove()
+    // Where the agent has put something on the page since, it is at work, and plainly said to be
+    await withTurn({ agent: 'codex', turn: { since: NOW - 40_000, endedAt: null }, answeredAt: NOW - 10_000 }, async () => {
+      await shown()
+      expect(working()).toBe('Codex is working')
+    })
+  })
+
+  test('says that the agent is working again after a failure it has since changed the page about, and not before', async () => {
+    recent = [{ at: NOW - 60_000, delivery: 'handed_off', outcome: 'failed', route: 'addon', handedAt: NOW - 59_000, settledAt: NOW - 40_000 }]
+    // Still the failure: the agent has not changed the page since it said so
+    await withTurn({ turn: RUNNING, answeredAt: NOW - 41_000 }, async () => {
+      await shown()
+      expect([working(), allSaid()]).toEqual([null, ['Your agent could not do that']])
+    })
+    await act(async () => root.unmount())
+    host.remove()
+    // It has, and is at work again: that is what is said
+    await withTurn({ turn: RUNNING, answeredAt: NOW - 5_000 }, async () => {
+      await shown()
+      expect([working(), allSaid()]).toEqual(['Claude Code is working', []])
+    })
+  })
+
   test('says that the agent is working, naming its app, with nothing done on the page lately or at all, and offers no Stop', async () => {
     await withTurn({ turn: RUNNING }, async () => {
       recent = []
@@ -1284,7 +1371,11 @@ describe('the bar while a turn of the page’s conversation runs, which It did n
           turn: last.route === 'stopped' ? { since: NOW - 20_000, endedAt: null } : RUNNING,
         })
         await shown()
-        expect([working(), allSaid()]).toEqual(['Claude Code is working', []])
+        // A turn the click began, forty seconds on with nothing on the page, may be waiting for the person
+        expect([working(), allSaid()]).toEqual([
+          last.outcome === 'running' ? 'Claude Code is working, or waiting for you in its own window' : 'Claude Code is working',
+          [],
+        ])
         await act(async () => root.unmount())
         host.remove()
       }
@@ -1369,7 +1460,7 @@ describe('the bar while a turn of the page’s conversation runs, which It did n
       // With nothing of the kind to say, it says that the agent is working
       recent = [{ at: NOW - 40_000, delivery: 'handed_off', outcome: 'running', handedAt: NOW - 39_000 }]
       await shown()
-      expect([working(), said()]).toEqual(['Claude Code is working', null])
+      expect([working(), said()]).toEqual(['Claude Code is working, or waiting for you in its own window', null])
       await act(async () => root.unmount())
       host.remove()
       for (const [last, words] of [

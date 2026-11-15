@@ -388,7 +388,7 @@ describe('the guide for the ending', () => {
   const early = first.slice(first.indexOf('\n### Ideas for the ending'), first.indexOf('\n### The room'))
   const ending = first.slice(first.indexOf('\n### The ending:'))
   const answer = (text: string) =>
-    [...text.matchAll(/^it tour answer <the action's id> "\$\(cat <<'EOF'\n(\{.*\})\nEOF\n\)"$/gm)].map((m) => JSON.parse(m[1]!) as Record<string, unknown>)
+    [...text.matchAll(/^it tour answer <the action's id> '(\{.*\})'$/gm)].map((m) => JSON.parse(m[1]!) as Record<string, unknown>)
 
   test('has the agent set the ideas straight after its first answer, which it gives without waiting, so that neither the page, the link nor that answer waits for them', () => {
     expect(first.indexOf('it tour show start')).toBeLessThan(first.indexOf('**Then say:**'))
@@ -401,12 +401,12 @@ describe('the guide for the ending', () => {
       ),
     )
     expect(early).toContain('Give every later answer without `--no-wait`.')
-    expect(early).toMatch(/^it tour answer <the action's id> --no-wait "\$\(cat <<'EOF'$/m)
+    expect(early).toMatch(/^it tour answer <the action's id> --no-wait '\{.*\}'$/m)
     expect(first).toContain('Your first answer on this page is the one you give with `--no-wait`')
   })
 
   test('sets them with one command, in the shape the page reads, of the kinds the page draws and no others', async () => {
-    const set = /^it patch tour-start "\$\(cat <<'EOF'\n(\{.*\})\nEOF\n\)"$/m.exec(early)
+    const set = /^it patch tour-start '(\{.*\})'$/m.exec(early)
     const given = (JSON.parse(set![1]!) as { end: { ideas: Record<string, unknown>[]; say: string } }).end
     expect(Object.keys(given)).toEqual(['ideas', 'say'])
     expect(given.ideas).toHaveLength(3)
@@ -432,7 +432,9 @@ describe('the guide for the ending', () => {
     expect(early).toContain(
       'its name, its README, the names of its top-level files, the subjects of its recent commits, and what you already have in mind about this person from your own instruction and memory files for this project',
     )
-    expect(early).toContain('That is at most two commands, `ls` and `git log --oneline -8`')
+    expect(early).toContain('That is at most two commands, `ls -a` (in PowerShell, `Get-ChildItem -Force`) and `git log --oneline -8`')
+    // And `git log` only in a repository, where elsewhere it fails in red in front of the person (the Windows rehearsal)
+    expect(early).toContain('Run `git log` only where the first showed a `.git`')
     expect(early).toContain('An idea is a name and a line in the project’s own words, never the contents of a file'.replace('’', "'"))
     expect(early).toContain('say in `say` that you do not know yet what they are working on. Never write as though you knew them.')
   })

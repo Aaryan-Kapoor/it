@@ -812,7 +812,7 @@ export const settle = mutation({
   handler: async (ctx, { id, outcome }) => {
     const { x } = await mine(ctx, id)
     if (x.delivery !== 'handed_off') fail('conflict', 'That action has not been handed to an agent.')
-    await ctx.db.patch(id, { outcome })
+    await ctx.db.patch(id, { outcome, settledAt: Date.now() })
     return null
   },
 })

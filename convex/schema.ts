@@ -529,6 +529,8 @@ export default defineSchema({
     handedAt: v.optional(v.number()),
     /** What became of the work the click started, as far as It can tell. */
     outcome: v.optional(v.union(v.literal('running'), v.literal('succeeded'), v.literal('failed'), v.literal('unknown'))),
+    /** When its agent last said what became of it. The page's bar says no more of a failure once the agent has changed the page after this. */
+    settledAt: v.optional(v.number()),
     /** The files it carried beside what it carried, in order, each received whole, and the record they are kept under. */
     attachment: v.optional(v.id('attachments')),
     files: v.optional(v.array(v.object({ name: v.string(), type: v.string(), size: v.number(), sha256: v.string() }))),
