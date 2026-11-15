@@ -3852,7 +3852,7 @@ syncBuiltinESMExports()
       const said = error(saved)
       expect(said.code).toBe('blocked')
       expect(said.hint).toMatch(
-        /^Codex asks the user before every `it save`, and runs the command they approve inside its sandbox, where `it` cannot reach It, unless you asked for it outside\. Give every `it save` with `sandbox_permissions` set to `"require_escalated"` and a `justification` from the start, and the user is asked once\. It may well be running/,
+        /^Codex asks the user before every `it save`, and runs the command they approve inside its sandbox, where `it` cannot reach It, unless you asked for it outside\. Give every `it save` with `sandbox_permissions` set to `"require_escalated"` and a `justification` from the start, and the user is asked once\. If the user has this conversation open and Codex refuses that without asking them, do not ask again: at once, run `it say <page-id> "Codex would not let me save the file you sent\. In Codex, choose “Ask for approval” under \/permissions, then send it again, and Codex will ask you first\."`, and carry on with the action text\. It may well be running/,
       )
       expect(existsSync(path.join(m.home, 'x.png'))).toBe(false)
       const read = error(await run(m, ['action', 'k1'], env, process.execPath, sandboxed(m, { network: true })))
@@ -3949,8 +3949,11 @@ describe.skipIf(process.platform === 'win32')('a picture an action carried', () 
       expect(printed(await run(m, ['action', 'k57'], b.env)).data).toEqual(carried)
       // In Codex, reading it says how to save it with the one approval Codex asks for, and only there
       expect(printed(await run(m, ['action', 'k57'], b.env))).not.toHaveProperty('saveInCodex')
-      expect(printed(await run(m, ['action', 'k57'], { ...b.env, CODEX_THREAD_ID: 'thread-1' })).saveInCodex).toContain(
-        'Give every `it save` with `sandbox_permissions` set to `"require_escalated"`',
+      const inCodex = printed(await run(m, ['action', 'k57'], { ...b.env, CODEX_THREAD_ID: 'thread-1' })).saveInCodex
+      expect(inCodex).toContain('Give every `it save` with `sandbox_permissions` set to `"require_escalated"`')
+      // Where Codex refuses the save without asking, the agent says above the page what to change in Codex, in these words
+      expect(inCodex).toContain(
+        'If the user has this conversation open and Codex refuses that without asking them, do not ask again: at once, run `it say <page-id> "Codex would not let me save the file you sent. In Codex, choose “Ask for approval” under /permissions, then send it again, and Codex will ask you first."`',
       )
       // A file of that name that is there already is the person's: it is not written over, and is as it was
       writeFileSync(to, 'the person’s own drawing')
