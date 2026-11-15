@@ -551,6 +551,8 @@ describe('the whole site, paired, on plain http', () => {
     await settle()
     expect(heard).toEqual([
       { type: 'it:state', state: { plan: 'A' }, revision: 1 },
+      // Whether its agent is at work, and what became of what was done on it, which is nothing yet
+      { type: 'it:progress', working: false, actions: [] },
       // And whether It is fullscreen, in a browser that has no fullscreen
       { type: 'it:fullscreen', on: false, enabled: false },
     ])
@@ -564,9 +566,9 @@ describe('the whole site, paired, on plain http', () => {
         envelope: { clientActionId: 'click-0001', name: 'approve', payload: { plan: 'B', photo }, contentVersion: 1 },
       })
       port.postMessage({ type: 'it:store', requestId: 'r-2', changes: [['draft', '{"plan":"B"}']] })
-      await vi.waitFor(() => expect(heard).toHaveLength(4))
+      await vi.waitFor(() => expect(heard).toHaveLength(5))
     })
-    expect(heard.slice(2)).toEqual(
+    expect(heard.slice(3)).toEqual(
       expect.arrayContaining([
         { type: 'it:result', requestId: 'r-1', ok: true, actionId: 'action-1' },
         { type: 'it:result', requestId: 'r-2', ok: true, revision: 2 },
