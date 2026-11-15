@@ -306,7 +306,7 @@
         b.classList.toggle("mine", m);
         b.classList.toggle("theirs", t);
         b.setAttribute("aria-pressed", m ? "true" : "false");
-        b.setAttribute("aria-label", NAMES[r] + ", step " + (c + 1) + (t ? ", " + Tour.agent + " plays here" : ""));
+        b.setAttribute("aria-label", NAMES[r] + ", step " + (c + 1) + (t ? ", " + (Tour.P.agent ? Tour.agent : "your agent") + " plays here" : ""));
       }));
       hint.hidden = any;
       key.hidden = !any;

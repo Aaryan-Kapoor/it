@@ -249,7 +249,7 @@ Shell.part("studio", (my) => {
   // The design that goes with a mood, and with a colour alone by how strong it is: a palette, a typeface, a shape and a picture
   var LOOK = { calm: ["tint", "serif", "soft", "sun"], bold: ["flood", "poster", "sharp", "boats"], playful: ["duo", "hand", "round", "flags"], elegant: ["night", "serif", "sharp", "night"], pale: ["tint", "display", "soft", "sun"], soft: ["paper", "display", "round", "boats"], vivid: ["flood", "poster", "sharp", "flags"] };
   var DID = { bigger: "asked for bigger", smaller: "asked for smaller", calmer: "asked for calmer", louder: "asked for louder", "say it differently": "asked to reword", "draw it differently": "asked to redraw", "lose it": "asked to lose it" };
-  var HINT = "Drag on the colour wheel and let go. What " + my.agent + " says of its design is written here.";
+  var HINT = "Drag on the colour wheel and let go. What " + my.agentMid + " says of its design is written here.";
   var own = (o, k) => typeof k === "string" && Object.prototype.hasOwnProperty.call(o, k);
 
   // ── Colour ──

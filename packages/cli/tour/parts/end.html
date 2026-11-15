@@ -116,9 +116,9 @@ Shell.part("end", (my) => {
   var $ = Shell.$, box = my.box, tidy = Shell.tidy;
   // How long the agent has to build a page before the ending is the person's again: a page is minutes of an agent's work, where an answer is seconds
   var LONG = 300000;
-  var HINT = "Press Make this on one, and " + my.agent + " builds it as a real page of yours.";
+  var HINT = "Press Make this on one, and " + my.agentMid + " builds it as a real page of yours.";
   var NONE = "No ideas came. Say what you want built in the box, or ask again.";
-  var TAKES = "This one takes longer than the others: " + my.agent + " builds a real page for it, which opens here by itself.";
+  var TAKES = "This one takes longer than the others: " + my.agentMid + " builds a real page for it, which opens here by itself.";
 
   // ── The drawings: one for each kind of interface an idea may be, which the agent names and the page draws ──
   // Each is a few layers on a sheet of 320 by 200, in the page's own colours. Nothing in them is the agent's

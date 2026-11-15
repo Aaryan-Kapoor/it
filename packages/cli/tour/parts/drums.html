@@ -125,7 +125,7 @@
 // sets one. The person's own hits are never the agent's to take off.
 Shell.part("drums", (my) => {
   var $ = Shell.$, calm = Shell.calm;
-  var box = my.box, AGENT = my.agent, newId = Shell.newId;
+  var box = my.box, AGENT = my.agent, MID = my.agentMid, newId = Shell.newId;
   var ROWS = ["hat", "clap", "snare", "kick"], NAMES = ["Hat", "Clap", "Snare", "Kick"];
   // The bass has five notes, of a scale in which no two sound wrong together: A, C, D, E and G, from the bottom
   var SCALE = ["A", "C", "D", "E", "G"], PITCH = [110, 130.81, 146.83, 164.81, 196];
@@ -142,7 +142,7 @@ Shell.part("drums", (my) => {
   var mine = blank(), theirs = blank(), steps = BAR, bpm = BPM, swing = 0;
   // What is asked of the agent and not yet superseded: its id, how long a loop it is about, and what it was offered
   var req = null, asked = false, sendTimer = 0, trades = 0;
-  var HINT = "Tap a few pads. A moment after you stop, " + AGENT + " plays between your hits, and says here what it added.";
+  var HINT = "Tap a few pads. A moment after you stop, " + MID + " plays between your hits, and says here what it added.";
   // How much has been played so far, kept where it can be counted
   var meter = (window.__drums = { audio: "none", steps: 0, notes: 0 });
 
@@ -383,8 +383,8 @@ Shell.part("drums", (my) => {
     }
   });
   $("drums-theirs").textContent = AGENT;
-  $("drums-to").firstChild.textContent = "ask " + AGENT;
-  asksEl.setAttribute("aria-label", "Ask " + AGENT);
+  $("drums-to").firstChild.textContent = "ask " + MID;
+  asksEl.setAttribute("aria-label", "Ask " + MID);
 
   // ── The asks ──
   // Each has what its button says, what the agent is told, and what the dock says the person did
@@ -481,7 +481,7 @@ Shell.part("drums", (my) => {
       if (!t || m) b.classList.remove("land");
       b.setAttribute("aria-pressed", m ? "true" : "false");
       var c = +b.getAttribute("data-c");
-      b.setAttribute("aria-label", name + ", step " + ((c % BAR) + 1) + (steps > BAR ? " of bar " + (Math.floor(c / BAR) + 1) : "") + (t ? ", " + AGENT + " plays here" : ""));
+      b.setAttribute("aria-label", name + ", step " + ((c % BAR) + 1) + (steps > BAR ? " of bar " + (Math.floor(c / BAR) + 1) : "") + (t ? ", " + MID + " plays here" : ""));
     };
     pad.forEach((row, r) => row.forEach((b, c) => one(b, mine.d[r][c], theirs.d[r][c], NAMES[r])));
     key.forEach((row, i) => row.forEach((b, c) => one(b, mine.b[c] === i + 1, theirs.b[c] === i + 1, "Bass, " + SCALE[i])));

@@ -55,7 +55,7 @@
 // layer, the agent's words beside it, and the turn itself left to the person, or played where
 // they would sooner watch.
 Shell.part("cube", (my) => {
-  var $ = Shell.$, box = my.box, calm = Shell.calm, tidy = Shell.tidy, AGENT = my.agent;
+  var $ = Shell.$, box = my.box, calm = Shell.calm, tidy = Shell.tidy, AGENT = my.agent, MID = my.agentMid;
   var el = my.el, canvas = $("cube-canvas"), fill = my.$(".fill");
 
   // ── The cube ──
@@ -391,7 +391,7 @@ Shell.part("cube", (my) => {
   var asking = false, playing = false, won = false, asked = null;
   var askBtn = $("cube-ask"), autoBtn = $("cube-auto"), mixBtn = $("cube-mix");
   var HINT = "Drag across the cube to turn a row or a column. Drag beside it to look round it.";
-  askBtn.textContent = "Ask " + (AGENT === "Your agent" ? "your agent" : AGENT) + " how";
+  askBtn.textContent = "Ask " + MID + " how";
   var count = (n) => n + (n === 1 ? " turn" : " turns");
   var note = (text) => { $("cube-said").textContent = text; };
   function paint() {
