@@ -9,7 +9,8 @@
 //   they are refused; with IT_REHEARSAL_GUARD=convert, `--no-service` is added, and once setup has
 //   run, `it serve` is started, which is the one thing the background service would have done for
 //   a person on their own account. Both are written down in IT_REHEARSAL_GUARD_LOG.
-// - `service install`, `upgrade` and `uninstall`: refused.
+// - `service install`, `service uninstall`, `upgrade` and `uninstall`: refused, except `upgrade`
+//   where IT_REHEARSAL_ALLOW_UPGRADE=1 and It says no service is registered for this folder.
 import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, openSync } from 'node:fs'
 
@@ -38,8 +39,21 @@ if (mode === 'owner' || mode === 'convert') {
       process.exit(s.status ?? 0)
     }
     refused = 'service install'
+  } else if (cmd === 'service' && words[1] === 'uninstall') refused = 'service uninstall'
+  else if (cmd === 'upgrade' && !flags.has('--check')) {
+    // Only in a run that tests an update, and only once It itself says that no service is
+    // registered for this folder, so that the update restarts no task of the owner's
+    let mine: boolean | null = null
+    if (process.env.IT_REHEARSAL_ALLOW_UPGRADE === '1') {
+      const s = spawnSync(real as string, ['service', 'status', '--json'], { encoding: 'utf8', windowsHide: true, timeout: 90_000 })
+      try {
+        const st = JSON.parse(s.stdout)
+        mine = st && typeof st === 'object' && (st.installed === false || st.registered === false) ? false : null
+      } catch {}
+    }
+    if (mine === false) note('passed: it upgrade (It says no service is registered for this folder)')
+    else refused = 'upgrade'
   }
-  else if (cmd === 'upgrade' && !flags.has('--check')) refused = 'upgrade'
   else if (cmd === 'uninstall') refused = 'uninstall'
 }
 if (refused) {
