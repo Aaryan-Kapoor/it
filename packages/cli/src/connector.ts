@@ -869,6 +869,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   interface Watched {
     names: Set<string>
     told: Set<string>
+    /** Those of them It is being told this moment are running, and has not answered. */
+    telling: Set<string>
     owed: boolean
     behind: boolean
     finished: boolean
@@ -892,12 +894,12 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   const watchedTurns = new Map<string, Watched>()
   /**
    * How many ids It may be told turns under now, in all: those each watch may tell, and those it
-   * has told and not taken back, which a watch that was merged into it while It was being told
-   * may have added without the id being one of its own. A merge never adds to the count.
+   * has told, or is telling, and not taken back, which a watch that was merged into it while It
+   * was being told may have added without the id being one of its own. A merge never adds to the count.
    */
   const idsWatched = (): number => {
     let n = 0
-    for (const w of watchedTurns.values()) n += new Set([...w.names, ...w.told]).size
+    for (const w of watchedTurns.values()) n += new Set([...w.names, ...w.told, ...w.telling]).size
     return n
   }
   /** The conversation each click was handed to, for as long as It has yet to confirm the hand-over. */
@@ -954,6 +956,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     const w = watchedTurns.get(key) ?? {
       names: new Set<string>(),
       told: new Set<string>(),
+      telling: new Set<string>(),
       owed: false,
       behind: false,
       finished: false,
@@ -993,8 +996,9 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     if (there) {
       // Merged names and endings still need reporting, even when both watches already want ended.
       there.generation++
-      for (const name of w.names) if (there.names.size < TURN_IDS_MOST || w.told.has(name)) there.names.add(name)
+      for (const name of w.names) if (there.names.size < TURN_IDS_MOST || w.told.has(name) || w.telling.has(name)) there.names.add(name)
       for (const name of w.told) there.told.add(name)
+      for (const name of w.telling) there.telling.add(name)
       there.owed ||= w.owed
       there.behind ||= w.behind
       there.finished ||= w.finished
@@ -1019,7 +1023,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // The latest few, since a conversation cleared many times is told of under each, as many as there is room for
       const room = Math.min(TURN_NAMES_MOST, TURN_RECORDS_MOST - idsWatched())
       for (const [from] of [...aliases].reverse()) if (names.size < room && follow(from) === key) names.add(from.slice(from.indexOf(':') + 1))
-      w = { names, told: new Set(), owed: false, behind: false, finished: false, generation: 0, idleAt: null, want: 'wait' }
+      w = { names, told: new Set(), telling: new Set(), owed: false, behind: false, finished: false, generation: 0, idleAt: null, want: 'wait' }
       watchedTurns.set(key, w)
     }
     if (!w) return
@@ -1066,8 +1070,13 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         if (w.want === 'running') {
           for (const id of w.names) {
             if (kept(w).told.has(id)) continue
-            await call('mutation', api.turns.say, { for: { harness, id }, running: true })
-            kept(w).told.add(id)
+            kept(w).telling.add(id)
+            try {
+              await call('mutation', api.turns.say, { for: { harness, id }, running: true })
+              kept(w).told.add(id)
+            } finally {
+              kept(w).telling.delete(id)
+            }
           }
           return
         }
