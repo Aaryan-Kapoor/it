@@ -28,7 +28,11 @@ const from = arg('from', `it-rehearsal-ubuntu${ubuntu}:base`)
 const snapshot = arg('snapshot')
 const minutes = Number(arg('minutes', '45'))
 // The released It from its real site and release, as a participant gets it: no stand-in, no IT_INSTALL_BASE
-const released = has('released')
+// A machine set up exactly as a participant's, for Auto-wake: the released It, nothing put into the
+// user manager's environment, Claude Code's sign-in in its own file alone (no variable in the
+// terminal), and lingering left to what `it setup` itself does
+const participant = has('participant')
+const released = has('released') || participant
 const BASE_ENV = released ? {} : { IT_INSTALL_BASE: 'http://127.0.0.1:8765' }
 const RUNS = process.env.IT_REHEARSAL_RUNS ?? '/tmp/it-rehearsal-runs'
 const RESULTS = process.env.IT_REHEARSAL_RESULTS ?? join(homedir(), 'it-rehearsal', '2026-11-15-linux')
@@ -131,7 +135,7 @@ async function main() {
   if (app === 'claude') {
     // Claude Code 2.1.325 shows "Medium effort" with effortLevel in its settings alone, and takes
     // the variable: in ana's own shell, and in her user manager for a conversation It reopens
-    asAna(`grep -q CLAUDE_CODE_EFFORT_LEVEL ~/.bashrc || printf '\\nexport CLAUDE_CODE_EFFORT_LEVEL=${MODEL.claude.effort}\\n' >> ~/.bashrc; systemctl --user set-environment CLAUDE_CODE_EFFORT_LEVEL=${MODEL.claude.effort}`)
+    asAna(`grep -q CLAUDE_CODE_EFFORT_LEVEL ~/.bashrc || printf '\\nexport CLAUDE_CODE_EFFORT_LEVEL=${MODEL.claude.effort}\\n' >> ~/.bashrc${participant ? '' : `; systemctl --user set-environment CLAUDE_CODE_EFFORT_LEVEL=${MODEL.claude.effort}`}`)
   }
   // The owner's ChatGPT account has apps of its own (one named it_dot_test among them), which
   // Codex offers its model as tools; a participant's account has none of those
@@ -155,12 +159,18 @@ async function main() {
       result.alsoCodex = { model: MODEL.codex, tokenMinutesLeftAtStart: c.minutesLeft }
     }
   }
-  await startAgentShell(name, app === 'claude' ? held : null, BASE_ENV)
+  await startAgentShell(name, app === 'claude' && !participant ? held : null, BASE_ENV)
   // A laptop keeps Claude Code's sign-in on its disk, so a conversation It reopens by itself is
   // signed in too. Here the token is in memory alone: ana's user manager is given the variable, and
   // an It already running (on a machine from a snapshot) is started again to take it, all before
   // the video starts
-  if (app === 'claude' && held) {
+  if (participant) {
+    // Lingering as a participant's account has it before It: off, until `it setup` turns it on
+    exec('rm -f /var/lib/systemd/linger/ana')
+    if (app === 'claude') await injectClaudeFile(name, held)
+    result.participant = 'released It from itcan.do; the service as it setup registers it; no variable put into the user manager; Claude Code signed in by its own ~/.claude/.credentials.json alone; Codex by its own ~/.codex/auth.json; lingering removed before setup'
+  }
+  if (app === 'claude' && held && !participant) {
     await shareWithUserManager(name, held)
     // It starts a reopened conversation without the terminal's CLAUDE_* variables, so a run that
     // needs Auto-wake gives Claude Code its sign-in as a laptop keeps it, in its own file
@@ -267,7 +277,7 @@ async function main() {
   }
   log(`flow ${flow} with ${app} in ${which}`)
   await new Promise((resolve) => {
-    const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow} ${app} ${which === 'chromium' && /^(S\d|SOAK)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK|WAKE)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow} ${app} ${which === 'chromium' && /^(S\d|SOAK|WAKE)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
     const kill = setTimeout(() => {
       log('the flow ran past its time')
       exec("pkill -INT -f 'node /build/harness/' || true")
@@ -302,7 +312,7 @@ async function collect() {
   // Where the token is in the machine before it is wiped. Codex's own auth.json is expected; a
   // copy anywhere else (the agent's transcript, a page, a log) means the agent saw it, and what it
   // saw may be in the recording, so the recording is not kept.
-  const expected = [...(app === 'codex' || has('also-codex') ? ['/home/ana/.codex/auth.json'] : []), ...(app === 'claude' && has('claude-file') ? ['/home/ana/.claude/.credentials.json'] : [])]
+  const expected = [...(app === 'codex' || has('also-codex') ? ['/home/ana/.codex/auth.json'] : []), ...(app === 'claude' && (has('claude-file') || participant) ? ['/home/ana/.claude/.credentials.json'] : [])]
   const before = held ? await filesHolding(name, held) : []
   result.tokenFilesBeforeWipe = redact(before.join(', '), held)
   const elsewhere = before.filter((f) => !expected.includes(f))

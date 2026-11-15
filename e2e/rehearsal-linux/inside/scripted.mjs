@@ -349,6 +349,192 @@ async function SOAK2() {
   }
 }
 
+/** The variable NAMES (never a value) of a process of ana's, sorted, or null where it is gone. */
+function envNames(pid) {
+  const out = sh(`tr '\\0' '\\n' < /proc/${Number(pid)}/environ 2>/dev/null | sed -n 's/=.*//p' | sort -u`)
+  const names = out.split('\n').map((l) => l.trim()).filter((l) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(l))
+  return names.length ? names : null
+}
+/** The agent app's processes of ana's: pid and command line, the command line cut short and with no value of any variable. */
+function appProcs(who) {
+  const re = who === 'claude' ? /(^|\/)claude( |$)/ : /(^|\/)codex( |$)/
+  return sh('ps -u ana -o pid=,args=')
+    .split('\n')
+    .map((l) => /^\s*(\d+)\s+(.*)$/.exec(l))
+    .filter((m) => m && re.test(m[2]) && !/app-server|code-mode|ps -u ana/.test(m[2]))
+    .map((m) => ({ pid: Number(m[1]), args: m[2].replace(/\s+--?\S*(token|key)\S*\s+\S+/gi, ' [cut]').slice(0, 140) }))
+}
+
+/**
+ * Auto-wake, on a machine set up as a participant's (run.mjs --participant): a page, then every
+ * way a participant's click can find the conversation closed, quiet or busy, each timed from the
+ * click to the answer on the page, with the variable names of every process It reopened.
+ */
+async function WAKE() {
+  const who = app
+  const label = who === 'claude' ? 'Claude Code' : 'Codex'
+  const resume = who === 'claude' ? 'claude --continue' : 'codex resume --last'
+  const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
+  let p = ctx.pages().find((x) => !x.url().startsWith('devtools')) ?? (await ctx.newPage())
+  const pair = /https?:\/\/localhost:\d+\/pair#[A-Za-z0-9]+/.exec(sh('~/.it/bin/it site --no-open 2>&1'))?.[0]
+  check('it site gives a pairing link', !!pair)
+  if (pair) await p.goto(pair).catch(() => {})
+  await sleep(8000)
+  // What the service and the person's terminal each have, by name
+  const mainPid = sh('systemctl --user show -p MainPID --value it.service').trim()
+  const svc = envNames(mainPid) ?? []
+  const pane = sh("tmux display -p -t agent '#{pane_pid}'").trim()
+  const term = envNames(pane) ?? []
+  step('variable names: It\'s service and the terminal', { service: svc.join(' '), terminal: term.join(' '), onlyService: svc.filter((n) => !term.includes(n)).join(' '), onlyTerminal: term.filter((n) => !svc.includes(n)).join(' ') })
+  step('lingering', { linger: sh('ls /var/lib/systemd/linger/ 2>&1').trim(), note: sh('ls ~/.it/linger-by-it 2>&1').trim() })
+
+  await startApp(who, counts)
+  const ask = 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.'
+  step(`types to ${label}: "${ask}"`)
+  await type(ask)
+  await sleep(5000)
+  await settle(who, counts, 600_000, 8000)
+  let url = null
+  for (let i = 0; i < 40 && !url; i++) {
+    p = ctx.pages().find((x) => x.url().includes('/p/')) ?? p
+    if (PIZZA.test(await shown(p).catch(() => ''))) url = p.url()
+    else await sleep(3000)
+  }
+  if (!check(`${label} put its page on the screen`, !!url)) return
+
+  let nth = 0
+  /** One click on the page, timed to the answer; with the names of any process It reopened for it. */
+  const click = async (what, { open = false, ms = 300_000, reload = true } = {}) => {
+    if (reload) {
+      await p.goto(url).catch(() => {})
+      await sleep(6000)
+    }
+    const had = new Set(appProcs(who).map((x) => x.pid))
+    const before = await shown(p)
+    const t0 = Date.now()
+    const picked = await press(p, PIZZA, nth++ % 3)
+    step(`${what}: picks "${picked}"`, { bar: await bar(p) })
+    let woke = null
+    let ok = false
+    let bars = []
+    while (Date.now() - t0 < ms) {
+      if (open) await answerApp(who, counts).catch(() => {})
+      if (!woke) {
+        const fresh = appProcs(who).filter((x) => !had.has(x.pid))
+        if (fresh.length) {
+          const names = envNames(fresh[0].pid)
+          woke = { pid: fresh[0].pid, args: fresh[0].args, seconds: Math.round((Date.now() - t0) / 1000), names, onlyWoken: names?.filter((n) => !term.includes(n)).join(' '), onlyTerminal: names ? term.filter((n) => !names.includes(n)).join(' ') : null, configDir: names?.includes('CLAUDE_CONFIG_DIR') ? sh(`tr '\\0' '\\n' < /proc/${fresh[0].pid}/environ | sed -n 's/^CLAUDE_CONFIG_DIR=//p'`).trim() : 'not set' }
+        }
+      }
+      const b = await bar(p)
+      if (b && b !== bars.at(-1)) bars.push(b)
+      const now = await shown(p).catch(() => before)
+      const fresh = now.split('\n').filter((l) => l.trim().length > 25 && !before.includes(l) && !/sending|sent\.|waiting|working|thinking|taking a look|picking|choosing/i.test(l)).join(' / ').slice(0, 240)
+      if (now !== before && fresh) {
+        ok = true
+        check(`${what}: answered on the page`, true, { seconds: Math.round((Date.now() - t0) / 1000), fresh, bars: bars.join(' | ').slice(0, 400) })
+        break
+      }
+      await sleep(1000)
+    }
+    if (!ok) check(`${what}: answered on the page`, false, { seconds: Math.round(ms / 1000), bars: bars.join(' | ').slice(0, 600) })
+    step(`${what}: processes`, { reopened: woke ?? 'none new', appProcessesNow: appProcs(who).length })
+    return ok
+  }
+
+  // 1. The conversation open
+  await click('1. conversation open', { open: true })
+  await settle(who, counts, 120_000, 6000)
+  // 2. A click while the person is typing in that conversation, and what became of the typing
+  await type('I was half way through typing this', { enter: false })
+  await click('2. while the person types in the conversation', { open: true })
+  step('2. the typed words after the click', { stillThere: /half way through typing this/.test(screen()) })
+  await key('C-u')
+  await settle(who, counts, 120_000, 6000)
+  // 3. Idle for twenty minutes, then a click: it must arrive in the open conversation
+  const procsBefore = appProcs(who).length
+  step('3. leaves the conversation idle for twenty minutes')
+  const idleUntil = Date.now() + 20 * 60_000
+  while (Date.now() < idleUntil) {
+    await answerApp(who, counts).catch(() => {})
+    await sleep(10_000)
+  }
+  await click('3. after twenty idle minutes, conversation open', { open: true })
+  step('3. a second copy?', { appProcessesBefore: procsBefore, appProcessesAfter: appProcs(who).length })
+  await settle(who, counts, 120_000, 6000)
+  // 4. The app quit, and a click
+  await quitApp(who)
+  await sleep(30_000)
+  await click('4. app quit (Auto-wake)')
+  // 5. Three clicks in a row while the first wake is still starting
+  await sleep(60_000)
+  await p.goto(url).catch(() => {})
+  await sleep(6000)
+  const before5 = await shown(p)
+  const t5 = Date.now()
+  const picks = []
+  for (let i = 0; i < 3; i++) {
+    picks.push(await press(p, PIZZA, i))
+    await sleep(2500)
+  }
+  step('5. three clicks in a row, the app closed', { picks: picks.join(', '), bar: await bar(p) })
+  let seen5 = ''
+  while (Date.now() - t5 < 360_000) {
+    seen5 = await shown(p).catch(() => '')
+    if (seen5 !== before5 && new RegExp(picks.at(-1) ?? 'x', 'i').test(seen5.split('\n').filter((l) => !before5.includes(l)).join(' '))) break
+    await sleep(2000)
+  }
+  check('5. the last of three quick clicks is answered on the page', new RegExp(picks.at(-1) ?? 'x', 'i').test(seen5.split('\n').filter((l) => !before5.includes(l)).join(' ')), { seconds: Math.round((Date.now() - t5) / 1000), bar: await bar(p), answersMention: picks.filter((x) => x && new RegExp(x.split(' ')[0], 'i').test(seen5)).join(', ') })
+  // 6. The terminal window closed with the app open in it (its programs hang up), and a click
+  await sleep(30_000)
+  await type(resume)
+  await sleep(4000)
+  await settle(who, counts, 120_000, 5000)
+  step('6. closes the terminal with the app open in it')
+  sh('tmux kill-server')
+  await sleep(15_000)
+  step('6. app processes after the terminal closed', { left: appProcs(who).length })
+  await click('6. terminal closed (Auto-wake)')
+  // 7. The project folder renamed, and a click
+  await sleep(30_000)
+  sh('mv ~/work ~/work-renamed')
+  step('7. renames the project folder ~/work to ~/work-renamed')
+  await click('7. folder renamed (Auto-wake)')
+  // 8. Auto-wake turned off under Machines, a click, then the conversation opened by hand
+  await sleep(30_000)
+  await p.goto('http://localhost:4700/machines').catch(() => {})
+  await sleep(6000)
+  const sw = p.locator(`[role=switch][aria-label="Auto-wake ${label}"]`).first()
+  const was = await sw.isChecked().catch(() => null)
+  if (was) await sw.click().catch(() => {})
+  await sleep(4000)
+  step('8. Machines: Auto-wake switched off', { wasOn: was, nowOn: await sw.isChecked().catch(() => null), says: (await p.mainFrame().evaluate(() => document.body.innerText).catch(() => '')).split('\n').filter((l) => /auto-wake|click waits|reopens/i.test(l)).slice(0, 3).join(' / ') })
+  await p.goto(url).catch(() => {})
+  await sleep(6000)
+  const before8 = await shown(p)
+  const t8 = Date.now()
+  step(`8. picks "${await press(p, PIZZA, nth++ % 3)}" with Auto-wake off`)
+  await sleep(60_000)
+  step('8. the bar a minute later', { bar: await bar(p), siteSays: (await p.mainFrame().evaluate(() => document.body.innerText).catch(() => '')).split('\n').filter((l) => /listening|waiting|wake|open its conversation|machines/i.test(l)).slice(0, 3).join(' / '), answered: (await shown(p)) !== before8 })
+  sh(`tmux new-session -d -s agent -x 104 -y 56 -c ~/work-renamed`)
+  // A new terminal window, as the person opens one
+  sh('setsid -f env DISPLAY=:1 xfce4-terminal --disable-server --hide-menubar --hide-toolbar --hide-scrollbar --title=Terminal --font="DejaVu Sans Mono 11" --geometry=104x54+0+0 -x tmux attach -t agent >/dev/null 2>&1')
+  await sleep(4000)
+  await type(resume)
+  step(`8. opens the conversation by hand: ${resume} in ~/work-renamed`)
+  let ok8 = false
+  while (Date.now() - t8 < 420_000) {
+    await answerApp(who, counts).catch(() => {})
+    const now = await shown(p).catch(() => before8)
+    if (now !== before8 && now.split('\n').some((l) => l.trim().length > 25 && !before8.includes(l) && !/sending|sent\.|waiting|working/i.test(l))) {
+      ok8 = true
+      break
+    }
+    await sleep(2000)
+  }
+  check('8. opening the conversation by hand delivers the waiting click', ok8, { seconds: Math.round((Date.now() - t8) / 1000) })
+}
+
 async function main() {
   try {
     if (scenario === 'S4') await S4()
@@ -356,6 +542,7 @@ async function main() {
     else if (scenario === 'S7') await S7()
     else if (scenario === 'SOAK') await SOAK()
     else if (scenario === 'SOAK2') await SOAK2()
+    else if (scenario === 'WAKE') await WAKE()
     else check(`no scenario ${scenario}`, false)
     const failed = verdict.checks.filter((c) => !c.ok)
     verdict.ok = failed.length === 0 && verdict.checks.length > 0
