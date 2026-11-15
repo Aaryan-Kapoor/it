@@ -91,6 +91,8 @@ async function main() {
     // No device, no other capability, and nothing of the host's but the build, read-only.
     '--cgroupns=private', '--cap-add', 'SYS_ADMIN', '--security-opt', 'apparmor=unconfined',
     '--security-opt', 'seccomp=unconfined', '--security-opt', 'systempaths=unconfined',
+    // Scenario 11 alone shapes the machine's own network with tc
+    ...(has('net-admin') ? ['--cap-add', 'NET_ADMIN'] : []),
     '--tmpfs', '/run', '--tmpfs', '/run/lock', '--shm-size=1g', '-e', 'container=docker',
     '-v', `${STAGE}:/build:ro`,
     from, 'sh', '-c', 'mount -o remount,rw /sys/fs/cgroup && exec /sbin/init',
