@@ -1903,6 +1903,34 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
   )
 
   test.skipIf(process.platform === 'win32')(
+    'a reopening that fails because the app is signed out says so on the page in It’s own words, and the app’s words are in no line of the log',
+    async () => {
+      // Codex's own command, signed out: it reads what it was given, and fails as Codex does without its sign-in
+      const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(bin, folder)
+      writeFileSync(
+        path.join(bin, 'codex'),
+        `#!/bin/sh\ncat > /dev/null\necho 'ERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, cf-ray: 9a0b1c2d3e4f5a6b-IAD' >&2\nexit 1\n`,
+        { mode: 0o755 },
+      )
+      process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+      await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+      stand.closed.add('thread-1')
+      stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+      offered(click(1))
+      const failures = () => stand.calls.filter((c) => c.name === 'machines:wakeFailed')
+      await until(() => failures().length === 1)
+      await settled()
+      expect(failures()[0]!.args).toEqual({
+        for: { harness: 'codex', id: 'thread-1' },
+        why: 'Codex is signed out on this machine, so it could not run: open Codex and sign in',
+      })
+      expect(said.join('\n')).not.toMatch(/401|Unauthorized|cf-ray/)
+    },
+  )
+
+  test.skipIf(process.platform === 'win32')(
     'a conversation whose last reopened turn a person stopped is told so the next time it is reopened, also by a connector started after the stop',
     async () => {
       // Codex's own command, as a program of its own: it keeps what it was given, and ends well
