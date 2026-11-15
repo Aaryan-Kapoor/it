@@ -120,9 +120,9 @@ describe('the frame of the tour’s first page', () => {
     expect(quiet.state('room')).toBe('Claude Code hears what you do here')
     quiet.close()
     const page = await opened({ asleep: true })
-    // Not before the site has had a moment to say what It knows now, so that it never flashes up
+    // Not before the site has said anything, so that it never flashes up
     expect(page.$('#asleep').hidden).toBe(true)
-    await page.advance(2000)
+    await page.progress([])
     expect(page.$('#asleep').hidden).toBe(false)
     expect(page.$('#asleep').textContent).toContain('/reload-plugins')
     expect(page.$('#asleep').textContent).toContain('What you do here is kept')
@@ -141,7 +141,6 @@ describe('the frame of the tour’s first page', () => {
 
   test('says it no more once It says that something done here reached the conversation, before any answer has come', async () => {
     const page = await opened({ asleep: true })
-    await page.advance(2000)
     const asked = moved(page)
     await asked.accept()
     // Taken by It and waiting: the conversation may still not hear
@@ -156,6 +155,8 @@ describe('the frame of the tour’s first page', () => {
 
   test('never says it to a person whose agent was listening before the page opened, though it could not hear when it put the page up', async () => {
     const page = await opened({ asleep: true })
+    // However long the site takes to say anything
+    await page.advance(10_000)
     expect(page.$('#asleep').hidden).toBe(true)
     // The person typed /reload-plugins before opening the page: the site says It does not know of the conversation as one that has not loaded the add-on
     await page.progress([], false)
@@ -187,6 +188,19 @@ describe('the frame of the tour’s first page', () => {
     await page.progress([{ id: asked.id, handed: false, turn: null }], false)
     expect(page.$('#asleep').hidden).toBe(true)
     page.close()
+    // The same where what was done had waited long enough for the page to say it by itself: the site's word that the add-on has loaded since is believed
+    const late = await opened({ asleep: true })
+    await late.progress([], true)
+    const kept = moved(late)
+    await kept.accept()
+    await late.progress([{ id: kept.id, handed: false, turn: null }], true)
+    await late.advance(20_000)
+    expect(late.$('#asleep').hidden).toBe(false)
+    await late.progress([{ id: kept.id, handed: false, turn: null }], false)
+    expect(late.$('#asleep').hidden).toBe(true)
+    await late.advance(20_000)
+    expect(late.$('#asleep').hidden).toBe(true)
+    late.close()
     // The same on a page nothing was done on yet
     const idle = await opened({ asleep: true })
     await idle.progress([], true)
@@ -214,9 +228,10 @@ describe('the frame of the tour’s first page', () => {
     await page.progress([{ id: asked.id, handed: true, turn: null }], false)
     expect(page.$('#asleep').hidden).toBe(true)
     page.close()
-    // A page whose conversation could hear it when it was put up, as Codex's or a Claude Code one that had loaded the add-on, never says it, however long a click waits
+    // A page whose conversation could hear it when it was put up, as Codex's or a Claude Code one that had loaded the add-on, or could not load it with /reload-plugins, as a Claude Code too old to, never says it, whatever the site says and however long a click waits
     const heard = await opened()
-    await heard.progress([], false)
+    await heard.progress([], true)
+    expect(heard.$('#asleep').hidden).toBe(true)
     const waits = moved(heard)
     await waits.accept()
     await heard.advance(SLOW + 5000)

@@ -166,29 +166,38 @@ var Shell = (() => {
   var shown = () => (at >= 0 ? parts[NAMES[at]] : null);
 
   // ── Where the conversation that put the page up cannot hear it yet ──
-  // The page says so, and what to type, only while It has reason to think so. It goes by what
-  // the site says It knows now (`notLoaded`, which comes with the progress), as the site's own
-  // notice above the page does: so it goes as soon as the person has typed /reload-plugins, and
-  // it never shows to a person who typed it before opening the page. Where the site has said
-  // nothing of it SPEAKS after the page opened, as an older site never does, it goes by
-  // `asleep`, which says that the conversation had not loaded It's add-on when it put the page
-  // up; not sooner, so that it does not flash up before the site has spoken. The site cannot
-  // know it for half a minute after It's service starts, so on a page put up that way, something
-  // done here that has waited UNHEARD without being handed to the conversation has the page say
-  // it as well. Once something done here has reached the conversation, or a turn of it runs,
-  // which a conversation without the add-on never has, or an answer of the agent's has come, it
-  // hears, and the page says no more of it
+  // Only on a page put up by a Claude Code conversation that had not loaded It's add-on and can
+  // load it with /reload-plugins, which `asleep` says. There the page says so, and what to type,
+  // only while It has reason to think so. It goes by what the site says It knows now
+  // (`notLoaded`, which comes with the progress), as the site's own notice above the page does:
+  // so it goes as soon as the person has typed /reload-plugins, and it never shows to a person
+  // who typed it before opening the page. Nothing is said before the site has said anything, so
+  // that it never flashes up first; a site that speaks and says nothing of it, as an older one
+  // does, leaves it to `asleep`. The site cannot know it for half a minute after It's service
+  // starts, so something done here that has waited UNHEARD without being handed to the
+  // conversation has the page say it as well, until the site says that the conversation has
+  // loaded the add-on after saying it had not. Once something done here has reached the
+  // conversation, or a turn of it runs, which a conversation without the add-on never has, or
+  // an answer of the agent's has come, it hears, and the page says no more of it
   var asleep = P.asleep === true || P.asleep === "true";
-  var SPEAKS = 2000, UNHEARD = 8000;
-  // What the site says: true while It knows that the conversation has not loaded the add-on, false where it does not know that, and undefined until it has said
-  var site, early = true, heard = false, waited = false, waiting = 0;
-  var cannotHear = () => !heard && (site === true || (site === undefined && asleep && !early) || (asleep && waited));
-  $("asleep").hidden = !cannotHear();
-  setTimeout(() => { early = false; hearing(); }, SPEAKS);
+  var UNHEARD = 8000;
+  // What the site says: true while It knows that the conversation has not loaded the add-on, false where it does not know that, and undefined until it has said either
+  var site, spoke = false, heard = false, waited = false, waiting = 0;
+  var cannotHear = () => asleep && !heard && (site === true || (site === undefined && spoke) || waited);
+  $("asleep").hidden = true;
   function hearing() {
     if ($("asleep").hidden === !cannotHear()) return;
     $("asleep").hidden = !cannotHear();
     if (shown()) draw(shown().box.model);
+  }
+  /** What the site said, each time it says where things stand. Loaded since it said otherwise, the conversation hears, and what waited before is no reason to say that it does not. */
+  function siteSaid(notLoaded) {
+    spoke = true;
+    if (typeof notLoaded === "boolean") {
+      if (site === true && notLoaded === false) { waited = false; clearTimeout(waiting); waiting = 0; }
+      site = notLoaded;
+    }
+    hearing();
   }
   function heardFrom() {
     heard = true;
@@ -370,7 +379,7 @@ var Shell = (() => {
   }
   if (typeof It.onProgress === "function") It.onProgress((said) => {
     latest = said && typeof said === "object" ? said : null;
-    if (latest && typeof latest.notLoaded === "boolean") { site = latest.notLoaded; hearing(); }
+    if (latest) siteSaid(latest.notLoaded);
     if (latest && (latest.working === true || (Array.isArray(latest.actions) && latest.actions.some((a) => a && a.handed === true)))) heardFrom();
     boxes.forEach((b) => b.heard());
   });
