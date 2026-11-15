@@ -46,7 +46,7 @@ const REFUSED_LOGIN = /Select login method|Sign in with ChatGPT|Please run \/log
  */
 export async function answerApp(app, counts = {}) {
   const s = screen()
-  const tail = s.split('\n').slice(-40).join('\n')
+  const tail = s.replace(/\s+$/, '').split('\n').slice(-40).join('\n')
   if (REFUSED_LOGIN.test(tail)) return 'login'
   if (app === 'claude') {
     if (/Choose the text style|text style that looks best/i.test(tail)) {
@@ -113,7 +113,7 @@ export async function answerApp(app, counts = {}) {
 }
 
 /** Whether the app is working on a turn. */
-export const busy = () => BUSY.test(screen().split('\n').slice(-12).join('\n'))
+export const busy = () => BUSY.test(screen().replace(/\s+$/, '').split('\n').slice(-12).join('\n'))
 
 /**
  * Waits until the app is still: not working, nothing asked, and the screen the same for a few

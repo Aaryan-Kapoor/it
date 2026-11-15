@@ -275,7 +275,7 @@ async function ask(who, text) {
   const ready = /for shortcuts|Ask Codex to do anything|shift\+tab to cycle|auto mode|accept edits|bypass permissions|\? for/i
   for (let i = 0; i < 40; i++) {
     const did = await answerApp(who, counts).catch(() => null)
-    const tail = screen().split('\n').slice(-8).join('\n')
+    const tail = screen().replace(/\s+$/, '').split('\n').slice(-8).join('\n')
     if (!did && ready.test(tail) && !/No, exit|trust this folder|Do you trust|Trust all/i.test(screen())) break
     await sleep(1500)
   }
