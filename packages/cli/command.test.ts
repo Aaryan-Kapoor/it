@@ -2045,9 +2045,11 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(readdirSync(folder)).toHaveLength(1)
       const file = path.join(folder, readdirSync(folder).find((name) => name.endsWith('.json'))!)
       const pending = readFileSync(file, 'utf8')
+      const operation = JSON.parse(pending).operation
       expect((await run(m, args, b.env)).code).toBe(1)
-      expect(readFileSync(file, 'utf8')).toBe(pending)
-      expect(b.asked.filter((x) => x.path === 'publish:begin')).toHaveLength(1)
+      // Recovery found nothing, so the publication was begun again, under the same identity, and that was not known either
+      expect(JSON.parse(readFileSync(file, 'utf8')).operation).toBe(operation)
+      expect(b.asked.filter((x) => x.path === 'publish:begin').map((x) => x.args.operation)).toEqual([operation, operation])
       expect(b.asked.filter((x) => x.path === 'publish:resume')).toHaveLength(3)
       expect(b.uploads).toEqual([])
       writeFileSync(file, JSON.stringify({ ...JSON.parse(pending), at: 0 }))
@@ -2055,6 +2057,119 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(error(await run(m, args, b.env)).code).toBe('conflict')
       expect(b.asked).toHaveLength(calls)
       expect(existsSync(file)).toBe(true)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a publication tried while It was not running is published by the same command once It answers', async () => {
+    const m = machine()
+    const args = ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>', '--state', '{"a":1}']
+    // Nothing listens where It would: the command fails, and leaves its receipt behind
+    const gone = await backend(m)
+    await gone.close()
+    const down = await run(m, args, gone.env)
+    expect([down.code, error(down).code]).toEqual([1, 'offline'])
+    const folder = path.join(m.it, 'publication-pending')
+    const file = path.join(folder, readdirSync(folder).find((name) => name.endsWith('.json'))!)
+    const operation = JSON.parse(readFileSync(file, 'utf8')).operation
+    // It answers now, and knows only the publications that reached it
+    const known = new Set<unknown>()
+    let finished = 0
+    const b = await backend(m, ({ path: fn, args: sent }) => {
+      if (fn === 'publish:resume' && !known.has(sent.operation)) return new Refusal({ code: 'not_found', message: 'That publication is not recorded.' })
+      if (fn === 'publish:begin') known.add(sent.operation)
+      if (fn === 'publish:begin' || fn === 'publish:resume')
+        return { artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') {
+        finished++
+        return { slug: 'plan', version: 1, url: `${b.url}/p/plan` }
+      }
+      return null
+    })
+    try {
+      const up = await run(m, args, b.env)
+      expect([up.code, printed(up).version, b.uploads.length, finished]).toEqual([0, 1, 1, 1])
+      expect(b.asked.filter((x) => x.path === 'publish:begin').map((x) => x.args.operation)).toEqual([operation])
+      expect(b.asked.findLast((x) => x.path === 'publish:begin')!.args).toMatchObject({ slug: 'plan', state: '{"a":1}' })
+      expect(readdirSync(folder)).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a publication begun again after recovery found nothing keeps its receipt where It has that identity for another request', async () => {
+    const m = machine()
+    const args = ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>']
+    const gone = await backend(m)
+    await gone.close()
+    expect((await run(m, args, gone.env)).code).toBe(1)
+    const folder = path.join(m.it, 'publication-pending')
+    const file = path.join(folder, readdirSync(folder).find((name) => name.endsWith('.json'))!)
+    const operation = JSON.parse(readFileSync(file, 'utf8')).operation
+    const b = await backend(m, ({ path: fn }) =>
+      fn === 'publish:begin'
+        ? new Refusal({ code: 'conflict', message: 'That publication identity was used for another request.' })
+        : new Refusal({ code: 'not_found', message: 'That publication is not recorded.' }),
+    )
+    try {
+      const ran = await run(m, args, b.env)
+      expect([ran.code, error(ran).code, error(ran).message]).toEqual([1, 'unavailable', 'The publication could not be confirmed.'])
+      expect(error(ran).hint).toContain('`it list`')
+      expect(JSON.parse(readFileSync(file, 'utf8')).operation).toBe(operation)
+      expect(b.asked.filter((x) => x.path === 'publish:begin').map((x) => x.args.operation)).toEqual([operation])
+      expect(b.uploads).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a begin that reached It and whose answer was lost is resumed, and never begun a second time', async () => {
+    const m = machine()
+    let begun: unknown
+    let lose = 1
+    const b = await backend(m, ({ path: fn, args: sent }) => {
+      if (fn === 'publish:resume' && sent.operation !== begun) return new Refusal({ code: 'not_found', message: 'That publication is not recorded.' })
+      if (fn === 'publish:begin') {
+        begun = sent.operation
+        if (lose-- > 0) return Symbol.for('drop-answer')
+      }
+      if (fn === 'publish:begin' || fn === 'publish:resume')
+        return { artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: 'plan', version: 1, url: `${b.url}/p/plan` }
+      return null
+    })
+    try {
+      const args = ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>']
+      expect((await run(m, args, b.env)).code).toBe(1)
+      const folder = path.join(m.it, 'publication-pending')
+      expect(readdirSync(folder)).toHaveLength(1)
+      const recovered = await run(m, args, b.env)
+      expect([recovered.code, printed(recovered).version, b.uploads.length]).toEqual([0, 1, 1])
+      expect(b.asked.filter((x) => x.path === 'publish:begin')).toHaveLength(1)
+      expect(b.asked.filter((x) => x.path === 'publish:resume').map((x) => x.args.operation)).toEqual([begun])
+      expect(b.asked.filter((x) => x.path === 'publish:finish')).toHaveLength(1)
+      expect(readdirSync(folder)).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a publication receipt that cannot be read stops the command, which asks It nothing and leaves the receipt as it is', async () => {
+    const m = machine()
+    const gone = await backend(m)
+    await gone.close()
+    const args = ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>']
+    expect((await run(m, args, gone.env)).code).toBe(1)
+    const folder = path.join(m.it, 'publication-pending')
+    const file = path.join(folder, readdirSync(folder).find((name) => name.endsWith('.json'))!)
+    writeFileSync(file, '{"operation": "not')
+    const b = await backend(m, () => ({ artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: '' } }))
+    try {
+      const ran = await run(m, args, b.env)
+      expect([ran.code, error(ran).code]).toEqual([1, 'record_unread'])
+      expect(b.asked.filter((x) => x.path.startsWith('publish:'))).toEqual([])
+      expect(readFileSync(file, 'utf8')).toBe('{"operation": "not')
     } finally {
       await b.close()
     }
