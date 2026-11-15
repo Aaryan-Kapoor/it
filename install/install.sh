@@ -686,6 +686,21 @@ if [ -z "${IT_INSTALL_NO_PATH:-}" ] && { [ "${on_path}" = 0 ] || [ "${named}" = 
   fi
 fi
 
+# The terminal that what the person types is read from. On macOS it is the terminal's own
+# device, such as /dev/ttys003, which ps names as this shell's terminal, and not /dev/tty: the
+# program is built with Bun, which on macOS hears nothing from a descriptor opened on /dev/tty,
+# not a key and not Control+C, so setup would wait at its first question for good. Elsewhere,
+# and on a Mac where that device is not named as one or cannot be read, it is /dev/tty, which
+# is the same terminal by another name.
+keys=/dev/tty
+if [ "${os}" = darwin ]; then
+  own="$(/bin/ps -o tty= -p "$$" 2>/dev/null | tr -d ' ')" || own=""
+  case "${own#ttys}" in
+    "${own}"|''|*[!0-9]*) ;;
+    *) if [ -c "/dev/${own}" ] && ( : < "/dev/${own}" ) 2>/dev/null; then keys="/dev/${own}"; fi ;;
+  esac
+fi
+
 # Nothing is said here of the usage counts It reports. The program says that itself, once, at
 # the first command a person runs at a terminal, which the setup is, and records nothing before
 # it has. So this leaves no note that it was said.
@@ -702,7 +717,7 @@ if [ "${join}" = 1 ]; then
   if [ -n "${stage}" ]; then rm -rf -- "${stage}" || true; stage=""; fi
   if [ "${led}" = 1 ] && ( : < /dev/tty ) 2>/dev/null; then
     printf '\n'
-    IT_INSTALL_ON_PATH="${on_path}" PATH="${DIR}:${PATH:-}" "${DIR}/it" "$@" < /dev/tty || exit $?
+    IT_INSTALL_ON_PATH="${on_path}" PATH="${DIR}:${PATH:-}" "${DIR}/it" "$@" < "${keys}" || exit $?
   else
     IT_INSTALL_ON_PATH="${on_path}" PATH="${DIR}:${PATH:-}" "${DIR}/it" "$@" < /dev/null || exit $?
   fi
@@ -744,7 +759,7 @@ fi
 if ( : < /dev/tty ) 2>/dev/null; then
   if [ -n "${stage}" ]; then rm -rf -- "${stage}" || true; stage=""; fi
   printf '\n'
-  IT_INSTALL_FLOW=1 IT_INSTALL_ON_PATH="${on_path}" PATH="${DIR}:${PATH:-}" "${DIR}/it" setup < /dev/tty || exit $?
+  IT_INSTALL_FLOW=1 IT_INSTALL_ON_PATH="${on_path}" PATH="${DIR}:${PATH:-}" "${DIR}/it" setup < "${keys}" || exit $?
 else
   printf '\n  Next:  %s setup\n\n' "${it_quoted}"
 fi

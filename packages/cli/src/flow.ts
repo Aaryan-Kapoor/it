@@ -2,11 +2,27 @@
 // is being done and then that it is done, and where there is something to choose, a list to
 // choose from with the arrow keys. Everything here writes to the terminal's second stream, so
 // that what a command prints for a program to read is never mixed with it.
+import { fstatSync, statSync } from 'node:fs'
 import qrcode from 'qrcode-generator'
 
 const out = process.stderr
 /** Whether there is a person at a terminal to draw for: nothing is redrawn in place, and no key is read, where there is not. */
 export const live = (): boolean => out.isTTY === true && process.stdin.isTTY === true && process.env.TERM !== 'dumb'
+/**
+ * Whether the keys pressed at this terminal can never reach the program. On macOS the runtime
+ * the standalone program is built with, Bun, hears nothing from an input that was opened on
+ * /dev/tty itself rather than on the terminal's own device, such as /dev/ttys003: not a key, and
+ * not Ctrl-C, which a list that reads keys takes as a key. Node hears it, and so does Bun
+ * everywhere else.
+ */
+export function deaf(): boolean {
+  if (process.platform !== 'darwin' || !process.versions.bun || process.stdin.isTTY !== true) return false
+  try {
+    return fstatSync(0).rdev === statSync('/dev/tty').rdev
+  } catch {
+    return false
+  }
+}
 /**
  * Whether the command was run by an agent, which each agent app says with a variable of its
  * own on the commands its agent runs. Some of them give those commands a terminal, and

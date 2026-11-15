@@ -2033,6 +2033,16 @@ async function setup(a: Args, joined = false) {
   }
   const only = text(a, 'only')
   if (only !== undefined && !a.flags.none) appsNamed(only)
+  // A setup that would ask the person something where no key they press can be heard says so
+  // before it asks or does anything, rather than wait at its first question for good
+  if (led(a) && flow.deaf()) {
+    const it = process.env.IT_INSTALL_FLOW && process.env.IT_INSTALL_ON_PATH !== '1' ? `'${process.execPath.replace(/'/g, `'\\''`)}'` : 'it'
+    throw new Problem(
+      'Setup cannot hear the keys you press in this terminal, so it has stopped before asking anything or setting anything up. It was given /dev/tty to read them from, and on macOS It hears nothing from that.',
+      'invalid',
+      `Run \`${it} setup\` again in a terminal, with nothing after it.`,
+    )
+  }
   // Take the folder's setup lock first where one is needed, so concurrent setups keep their
   // usual waiting message and allowance. Every path checks the program before its writes.
   const current = <T>(run: () => Promise<T>) =>
