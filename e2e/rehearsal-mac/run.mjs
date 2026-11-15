@@ -27,7 +27,7 @@ const ROOT = join(HERE, '..', '..')
 const RESULTS = process.env.IT_REHEARSAL_RESULTS ?? join(homedir(), 'it-rehearsal', '2026-11-15-mac')
 const LIVE = process.env.IT_REHEARSAL_LIVE ?? '/tmp/claude-1000/-home-cbak--t3-worktrees-it-t3-a3c24a76-20db2fab89311564/81820fb8-5917-4fab-a8f2-ea80cf68093b/scratchpad/live'
 const BIN = process.env.IT_REHEARSAL_BIN ?? join(ROOT, 'packages', 'cli', 'dist', 'bin')
-const BUDGET = 400
+const BUDGET = 651
 const PRICE = { '6x14': 0.09, '4x7': 0.06 }
 const MODEL = { codex: 'gpt-6.1-sol at high reasoning effort', claude: `Claude Haiku 5.5 through OpenRouter (${HAIKU})` }
 const GUI = 'sudo launchctl asuser 501 sudo -u runner -H'
@@ -339,7 +339,11 @@ async function finish(live) {
     }
   }
   // Every trace of the credential off the Mac, before anything is kept
-  const left = await wipe(id, held)
+  // --keep-signin: the next run goes on on this Mac with the same conversation and settings (Claude
+  // Code's settings.json also holds It's plugin), so the wipe waits for that run's collect, or the destroy
+  const keepSignin = argv.includes('--keep-signin')
+  const left = keepSignin ? [] : await wipe(id, held)
+  if (keepSignin) result.credentialKept = 'kept on the Mac for the next run there, which wipes it when it is collected'
   result.credentialFilesLeftAfterWipe = left.length
   if (left.length) withhold = true
   if (left.length) log(`after the wipe the Mac is not clean: ${redact(left.join(', '), held)}`)
