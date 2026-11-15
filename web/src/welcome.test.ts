@@ -430,6 +430,15 @@ describe('the tour’s first page, for a browser that has just come to its pages
     expect(tourPageToOpen([up[0]!], { doneAt: null }, null)).toBeNull()
   })
 
+  test('is gone to only on a display that agents may use, and not before the display is known', async () => {
+    const { tourMayOpenOn } = await import('./welcome')
+    expect(tourMayOpenOn({ agents: true })).toBe(true)
+    // A browser that has no display yet has kept no agent away
+    expect(tourMayOpenOn(null)).toBe(true)
+    expect(tourMayOpenOn({ agents: false })).toBe(false)
+    expect(tourMayOpenOn(undefined)).toBe(false)
+  })
+
   test('a page under the tour’s id that is not the tour’s own is gone to by nobody: one someone published or took, another of the tour’s pages there, and any from a backend that does not say', async () => {
     const { tourPageToOpen } = await import('./welcome')
     expect(tourPageToOpen([{ id: 'page-2', slug: 'tour-start', version: 1, tour: null }], { doneAt: null }, null)).toBeNull()

@@ -169,14 +169,26 @@ export function tourOpening(
   } catch {}
   return first.slug
 }
+/**
+ * Whether the tour's first page may be gone to by itself on this display. Putting that page up is
+ * an agent showing a page, so a display the person has said agents may not use is left where it
+ * is, as it is for any page an agent asks to bring up there. Nothing is gone to before the display
+ * is known. A browser that has no display yet is one no agent has been kept from.
+ */
+export const tourMayOpenOn = (display: { agents: boolean } | null | undefined): boolean => display !== undefined && display?.agents !== false
 /** Takes a browser that is at its pages to the tour's first page, as `tourOpening` says. */
-export function useTourOpens(pages: { id: string; slug: string; version: number | null; tour?: string | null }[] | undefined, path: string): void {
+export function useTourOpens(
+  pages: { id: string; slug: string; version: number | null; tour?: string | null }[] | undefined,
+  path: string,
+  display: { agents: boolean } | null | undefined,
+): void {
   const tour = useQuery(api.tour.get, {}) as Tour | undefined
+  const may = tourMayOpenOn(display)
   useEffect(() => {
-    if (path !== '/') return
+    if (path !== '/' || !may) return
     const slug = tourOpening(pages, tour, () => localStorage)
     if (slug) navigate(`/p/${slug}`)
-  }, [pages, tour, path])
+  }, [pages, tour, path, may])
 }
 
 /** The way into the tour: a button where an agent is waiting to give it, and the sentence to give an agent where none is. */
