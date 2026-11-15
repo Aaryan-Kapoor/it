@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { BOOLEAN, parse, VALUED } from './src/args'
+import { BOOLEAN, commandLine, parse, VALUED } from './src/args'
 
 /** The code and the sentence a command line is refused with, or nothing where it is taken. */
 const refused = (argv: string[]) => {
@@ -25,6 +25,15 @@ describe('what a command line is read as', () => {
     expect(parse(['create', 'T', '--html=--x', '--open'])).toMatchObject({ _: ['create', 'T'], flags: { html: '--x', open: true } })
     // A lone dash and a negative number are values like any other
     expect(parse(['wait', '--timeout', '-1', '--id', '-'])).toMatchObject({ flags: { timeout: '-1', id: '-' } })
+  })
+
+  test('PowerShell’s `--%` is dropped where it stands first and nowhere else, and changes nothing after it', () => {
+    const words = ['tour', 'answer', 'k57abc', '{"say":"It’s 100%"}']
+    expect(commandLine(['--%', ...words])).toEqual(words)
+    expect(commandLine(words)).toEqual(words)
+    expect(commandLine(['--%', '--%', ...words])).toEqual(['--%', ...words])
+    expect(commandLine(['tour', '--%', 'answer'])).toEqual(['tour', '--%', 'answer'])
+    expect(refused(['answer', '--%'])).toEqual(['invalid', '--% is not something `it` knows.'])
   })
 
   test('every switch a command reads is taken, each as what it is, and what follows two dashes is words', () => {

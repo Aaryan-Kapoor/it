@@ -5169,6 +5169,16 @@ describe.skipIf(process.platform === 'win32')('the background service, as `it se
     expect(help).toMatch(/^ {2}it service install \| uninstall \| status \| logs$/m)
     expect(help).not.toMatch(/it connector/)
   })
+
+  test('a `--%` that a shell other than PowerShell hands on, straight after `it`, is dropped, and only there and only once', async () => {
+    const m = machine()
+    const plain = await run(m, ['version', '--json'])
+    expect(plain.code).toBe(0)
+    const dropped = await run(m, ['--%', 'version', '--json'])
+    expect([dropped.code, dropped.out]).toEqual([0, plain.out])
+    expect(error(await run(m, ['version', '--%', '--json'])).message).toBe('--% is not something `it` knows.')
+    expect(error(await run(m, ['--%', '--%', 'version', '--json'])).message).toBe('No such command: --%')
+  })
 })
 
 describe.skipIf(process.platform === 'win32')(

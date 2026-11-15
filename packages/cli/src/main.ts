@@ -42,7 +42,7 @@ import {
   withoutFiles,
 } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
-import { type Args, fileText, json, loose, need, nested, OPTIONS, optionsFor, outputArgs, parse, setValue, text } from './args'
+import { type Args, commandLine, fileText, json, loose, need, nested, OPTIONS, optionsFor, outputArgs, parse, setValue, text } from './args'
 import {
   type Arrives,
   afterSetupForAgent,
@@ -4353,6 +4353,7 @@ async function main(argv: string[]): Promise<void> {
 // a pipe, what was written is still on its way for a moment after it was written.
 const whileItRuns = setInterval(() => {}, 1000)
 const began = Date.now()
+const words = commandLine(process.argv.slice(2))
 /**
  * Counts that a command was run: which of It's commands, who ran it (a person at a terminal, an
  * agent app in a conversation, or a script), how it ended and how long it took, in bands. Never
@@ -4361,7 +4362,7 @@ const began = Date.now()
  */
 function counted(code?: string): void {
   try {
-    const cmd = process.argv[2]
+    const cmd = words[0]
     if (cmd === 'hook' || cmd === 'shell-env' || cmd === 'shell-profile' || cmd === 'serve' || takenOff) return
     const harness = sessionAsked()?.session.harness
     const by = harness
@@ -4374,13 +4375,13 @@ function counted(code?: string): void {
     usage.record('command.run', { command: usage.commandOf(cmd), by, result: usage.resultOf(code), took: usage.timeBand(Date.now() - began) })
   } catch {}
 }
-main(process.argv.slice(2)).then(
+main(words).then(
   () => {
     clearInterval(whileItRuns)
     // A command that did a part of what it was asked, said which part it did not, and set how it
     // ends has not ended well: it is counted by how it ends, and not by its having come back
     counted(process.exitCode ? (process.exitCode === 2 ? 'invalid' : 'error') : undefined)
-    if (!['wait', 'serve'].includes(process.argv[2] ?? '')) process.exitCode ??= 0
+    if (!['wait', 'serve'].includes(words[0] ?? '')) process.exitCode ??= 0
     return left()
   },
   (err) => {
@@ -4388,7 +4389,7 @@ main(process.argv.slice(2)).then(
     // A write into It's folder that the system refused is a sandbox's doing, and is said as that, never in the system's own words
     const p = err instanceof Problem ? err : writeRefused(err) ? readOnlyHere() : new Problem(String((err as Error)?.message ?? err))
     counted(p.code)
-    failure(p, outputArgs(process.argv.slice(3)))
+    failure(p, outputArgs(words.slice(1)))
     return end(p.code === 'invalid' ? 2 : 1)
   },
 )

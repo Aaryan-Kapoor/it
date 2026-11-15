@@ -131,6 +131,14 @@ export function optionsFor(cmd: string | undefined, a: Args): void {
   }
 }
 
+/**
+ * The words a command was given, without Windows PowerShell's stop-parsing word `--%` where it
+ * stands first. The tour has an agent write `it --% tour answer …` in PowerShell, which takes the
+ * word for itself; cmd and Git Bash hand it on. It is dropped there alone, once, so that the same
+ * line works from any shell, and anywhere else it is refused as any switch It does not know is.
+ */
+export const commandLine = (argv: string[]): string[] => (argv[0] === '--%' ? argv.slice(1) : argv)
+
 /** Finds the output preference even when another option prevents the rest from parsing. */
 export function outputArgs(argv: string[]): Args {
   const a: Args = { _: [], flags: {}, many: {} }
