@@ -269,6 +269,18 @@ async function SOAK() {
  * so Claude Code's clicks go through Auto-wake; in the second half Codex is closed and Claude Code
  * resumed, so Codex's go through Auto-wake. Played on a fresh machine where It is set up for both.
  */
+/** Types a request to the app, and types it again where the app had not taken the words (still drawing its start screen). */
+async function ask(who, text) {
+  for (let i = 0; i < 3; i++) {
+    step(`types to ${who === 'claude' ? 'Claude Code' : 'Codex'}: "${text}"${i ? ' (again: the app had not taken it)' : ''}`)
+    await type(text)
+    await sleep(9000)
+    await answerApp(who, counts).catch(() => {})
+    const s = screen()
+    if (busy() || s.includes(text.slice(0, 40)) || /Working|Thinking|esc to interrupt/i.test(s)) return
+  }
+}
+
 async function SOAK2() {
   const hours = Number(process.env.SOAK_HOURS ?? '8')
   const DRINK = /lemonade|iced tea|cola|tea|drink/i
@@ -290,11 +302,9 @@ async function SOAK2() {
     }
     return check(what, false, { seconds: Math.round(ms / 1000) })
   }
-  const makePage = async (who, ask, re) => {
+  const makePage = async (who, askText, re) => {
     await startApp(who, counts)
-    step(`types to ${who === 'claude' ? 'Claude Code' : 'Codex'}: "${ask}"`)
-    await type(ask)
-    await sleep(5000)
+    await ask(who, askText)
     await settle(who, counts, 600_000, 8000)
     for (let i = 0; i < 40; i++) {
       p = ctx.pages().find((x) => x.url().includes('/p/')) ?? p
@@ -389,10 +399,7 @@ async function WAKE() {
   step('lingering', { linger: sh('ls /var/lib/systemd/linger/ 2>&1').trim(), note: sh('ls ~/.it/linger-by-it 2>&1').trim() })
 
   await startApp(who, counts)
-  const ask = 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.'
-  step(`types to ${label}: "${ask}"`)
-  await type(ask)
-  await sleep(5000)
+  await ask(who, 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.')
   await settle(who, counts, 600_000, 8000)
   let url = null
   for (let i = 0; i < 40 && !url; i++) {
