@@ -21,7 +21,7 @@ const script = [
   '$t0 = Get-Date; "setup pid $($p.Id)"',
   'function Kids($id) { Get-CimInstance Win32_Process -Filter "ParentProcessId=$id" | ForEach-Object { $_; Kids $_.ProcessId } }',
   'while (-not $p.HasExited -and ((Get-Date) - $t0).TotalSeconds -lt 260) {',
-  '  Start-Sleep 10',
+  '  Start-Sleep 3',
   '  $s = [int]((Get-Date) - $t0).TotalSeconds',
   '  $k = @(Kids $p.Id) | ForEach-Object { "{0}#{1} cpu {2:N1}s age {3}s" -f $_.Name, $_.ProcessId, (($_.KernelModeTime + $_.UserModeTime) / 1e7), [int]((Get-Date) - $_.CreationDate).TotalSeconds }',
   '  "t+$s s: " + ($(if ($k) { $k -join "; " } else { "(no children)" }))',
