@@ -354,9 +354,17 @@ export function teller(
  */
 const NOTES = [
   conversationsFile,
-  ...['heard.json', 'aliases.json', 't3-threads.json', 't3-asked.json', 'opencode-unclaimed.json', 'cut-off.json', 'stopped.json', 'journal.jsonl'].map(
-    (name) => () => inHome(name),
-  ),
+  ...[
+    'heard.json',
+    'aliases.json',
+    't3-threads.json',
+    't3-asked.json',
+    'opencode-unclaimed.json',
+    'tour-pictures.json',
+    'cut-off.json',
+    'stopped.json',
+    'journal.jsonl',
+  ].map((name) => () => inHome(name)),
 ]
 /** Removes those notes. Whether there was any of them to remove. */
 function removeNotes(): boolean {

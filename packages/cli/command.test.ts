@@ -8052,8 +8052,13 @@ describe('whether what the person does arrives by itself, as a page’s command 
     // The command runs in the folder the conversation works in
     const folder = m.home
     try {
-      // The picture It kept for the action, and a file of the person's beside it
-      writeFileSync(path.join(folder, `.it-tour-${request}.png`), 'png')
+      // The picture It kept for the action, as its record of the pictures it wrote has it, and a file of the person's beside it
+      const kept = path.join(folder, `.it-tour-${request}.png`)
+      writeFileSync(kept, 'png')
+      writeFileSync(
+        path.join(m.it, 'tour-pictures.json'),
+        JSON.stringify({ pictures: [{ file: kept, bytes: 3, sha256: createHash('sha256').update('png').digest('hex'), at: 1 }] }),
+      )
       writeFileSync(path.join(folder, 'sheet.png'), 'theirs')
       const env = { ...b.env, CLAUDE_CODE_SESSION_ID: claude, IT_HARNESS: 'claude-code', IT_SESSION: claude, CLAUDE_CODE_EXECPATH: '/x/versions/2.1.321' }
       const ran = await run(m, ['tour', 'answer', 'action-1', '{"read":"144","right":true,"say":"Right.","request":"not-this-one"}'], env)

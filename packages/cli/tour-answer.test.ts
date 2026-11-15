@@ -1,6 +1,21 @@
 // What `it tour answer` does with an action of the tour's first page, and the picture It keeps
-// for the agent: where it is written, when, and what takes it away again.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+// for the agent: whose page has one written, what is written, where, and what takes it away
+// again.
+import { randomUUID } from 'node:crypto'
+import {
+  closeSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { deepMerge } from '@it/protocol'
@@ -12,6 +27,10 @@ const stand = vi.hoisted(() => ({
   action: null as any,
   saved: [] as { id: string; number: number; to: string }[],
   save: null as null | ((to: string) => void),
+  /** What the file an action carried holds, as It would hand it over. */
+  bytes: Buffer.alloc(0),
+  /** Whether the backend says the action was done on the tour's first page as this machine published it. */
+  ownTour: true,
   failAck: false,
   state: {} as Record<string, unknown>,
   revision: 6,
@@ -35,29 +54,71 @@ vi.mock('./src/lib', async (original) => ({
       return { revision: 7 }
     }
     if (name === 'delivery:handedOff' && stand.failAck) throw new Error('offline')
+    if (name === 'tour:picture') return stand.ownTour
     return null
   },
 }))
+// As the real one does it: written beside where it is to be under a name of its own, made anew,
+// shown to `accept`, and given its name only where nothing has it, never following a link
 vi.mock('./src/files', () => ({
-  saveAttached: async (id: string, number: number, to: string) => {
+  saveAttached: async (id: string, number: number, to: string, accept?: (fd: number) => void | Promise<void>) => {
     stand.saved.push({ id, number, to })
     if (stand.save) stand.save(to)
-    else writeFileSync(to, 'png', { flag: 'wx' })
-    return { file: to, number, name: 'sheet.png', type: 'image/png', bytes: 3 }
+    const temp = `${to}.${randomUUID().slice(0, 8)}.part`
+    const fd = openSync(temp, 'wx+', 0o600)
+    try {
+      try {
+        writeSync(fd, stand.bytes)
+        await accept?.(fd)
+      } finally {
+        closeSync(fd)
+      }
+      linkSync(temp, to)
+    } finally {
+      rmSync(temp, { force: true })
+    }
+    return { file: to, number, name: 'sheet.png', type: 'image/png', bytes: stand.bytes.length }
   },
 }))
 
-import { answerAction, askedBy, dropPicture, dropPictures, keepPicture, keepPictureFor, pictureName, replacing, START_SLUG } from './src/tour-answer'
+import {
+  answerAction,
+  askedBy,
+  dropPicture,
+  dropPictures,
+  isPng,
+  keepPicture,
+  keepPictureFor,
+  keptPictures,
+  MOST_BYTES,
+  pictureName,
+  picturesFile,
+  replacing,
+  START_SLUG,
+} from './src/tour-answer'
+
+/** A small picture, as the whiteboard makes one begins: the signature, the header chunk, and some of what follows. */
+const picture = (more = 'the drawing') =>
+  Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]), Buffer.from(more)])
 
 const REQUEST = 'ab'.repeat(16)
 const PNG = [{ name: 'sheet.png', type: 'image/png', bytes: 2048 }]
 const action = (data: unknown, more: Record<string, unknown> = {}) => ({ id: 'act1', artifact: START_SLUG, payload: JSON.stringify(data), ...more })
 let folder: string
+let itHome: string
+const wasHome = process.env.IT_HOME
 beforeEach(() => {
   folder = mkdtempSync(path.join(os.tmpdir(), 'it-tour-answer-'))
+  itHome = mkdtempSync(path.join(os.tmpdir(), 'it-tour-home-'))
+  process.env.IT_HOME = itHome
+  stand.bytes = picture()
+  stand.ownTour = true
 })
 afterEach(() => {
   rmSync(folder, { recursive: true, force: true })
+  rmSync(itHome, { recursive: true, force: true })
+  if (wasHome === undefined) delete process.env.IT_HOME
+  else process.env.IT_HOME = wasHome
   stand.calls.length = stand.saved.length = 0
   stand.action = stand.save = null
   stand.failAck = false
@@ -162,43 +223,114 @@ test('with no answer an action is acknowledged alone, and an answer with nowhere
   expect(stand.calls.map((c) => c.name)).toEqual(['delivery:get'])
 })
 
-test('the picture an action carried is written into the folder under the name its request gives it, once', async () => {
-  const carried = action({ part: 'board', request: REQUEST, saved: pictureName(REQUEST) }, { files: PNG })
-  const at = await keepPicture(carried, folder)
-  expect(at).toBe(path.join(folder, `.it-tour-${REQUEST}.png`))
-  expect(stand.saved).toEqual([{ id: 'act1', number: 1, to: at }])
-  // It is there already the second time, whichever of the connector and the agent's command wrote it
-  expect(await keepPicture(carried, folder)).toBe(at)
-  expect(stand.saved).toHaveLength(1)
-  // Where the other wrote it while this was writing, this one's refusal is no failure
-  rmSync(at!)
-  stand.save = (to) => {
-    writeFileSync(to, 'png')
-    throw new Error('there already')
-  }
-  expect(await keepPicture(carried, folder)).toBe(at)
-  // And where it could not be written at all, that is said
-  rmSync(at!)
-  stand.save = () => {
-    throw new Error('disk full')
-  }
-  await expect(keepPicture(carried, folder)).rejects.toThrow('disk full')
+const at = (request = REQUEST, where = folder) => path.join(where, pictureName(request))
+const recorded = () => keptPictures()?.map((k) => ({ file: k.file, bytes: k.bytes }))
+
+test('a picture begins as a PNG does, with its signature and then its header chunk', () => {
+  expect(isPng(picture())).toBe(true)
+  expect(isPng(picture().subarray(0, 16))).toBe(false)
+  expect(isPng(Buffer.from('#!/bin/sh\necho this is no picture\n'))).toBe(false)
+  expect(isPng(Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('anything at all after it')]))).toBe(false)
 })
 
-test('nothing is written for an action that is not the first page’s, has no request of the page’s making, or carries no picture', async () => {
+test('the picture an action carried is written into the folder under the name its request gives it, once, and noted as It’s own', async () => {
+  const carried = action({ part: 'board', request: REQUEST, saved: pictureName(REQUEST) }, { files: PNG })
+  expect(await keepPicture(carried, folder)).toBe(at())
+  expect(readFileSync(at())).toEqual(picture())
+  expect(stand.calls.filter((c) => c.name === 'tour:picture').map((c) => c.args)).toEqual([{ id: 'act1' }])
+  expect(recorded()).toEqual([{ file: at(), bytes: picture().length }])
+  // It is there already the second time, whichever of the connector and the agent's command wrote it
+  expect(await keepPicture(carried, folder)).toBe(at())
+  expect(stand.saved).toHaveLength(1)
+  // And where both write it at once, the one that comes second takes the other's for the picture
+  const other = action({ part: 'board', request: 'cd'.repeat(16) }, { files: PNG })
+  expect(await Promise.all([keepPicture(other, folder), keepPicture(other, folder)])).toEqual([at('cd'.repeat(16)), at('cd'.repeat(16))])
+  expect(readdirSync(folder).sort()).toEqual([pictureName(REQUEST), pictureName('cd'.repeat(16))].sort())
+  expect(recorded()).toHaveLength(2)
+})
+
+test('nothing is written for a page the backend does not say this machine published as the tour’s, as one an agent or another machine published under its id', async () => {
+  stand.ownTour = false
+  expect(await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)).toBeUndefined()
+  expect(stand.saved).toEqual([])
+  expect(readdirSync(folder)).toEqual([])
+  expect(keptPictures()).toEqual([])
+})
+
+test('nothing is written for an action that is not the first page’s, has no request of the page’s making, carries no single PNG, or carries one too large', async () => {
   const good = { part: 'board', request: REQUEST }
   for (const carried of [
     action(good),
     action(good, { files: [] }),
     action(good, { files: [{ name: 'notes.txt', type: 'text/plain', bytes: 10 }] }),
-    action(good, { files: [{ name: 'huge.png', type: 'image/png', bytes: 9 * 1024 * 1024 }] }),
+    action(good, { files: [...PNG, ...PNG] }),
+    action(good, { files: [{ name: 'huge.png', type: 'image/png', bytes: MOST_BYTES + 1 }] }),
     action({ part: 'board' }, { files: PNG }),
     action({ part: 'board', request: '../../escape' }, { files: PNG }),
     { ...action(good, { files: PNG }), artifact: 'my-own-page' },
   ])
     expect(await keepPicture(carried, folder)).toBeUndefined()
+  // Nor into a folder that is not named from the root, or none at all
+  expect(await keepPicture(action(good, { files: PNG }), 'relative/folder')).toBeUndefined()
+  expect(await keepPicture(action(good, { files: PNG }), undefined)).toBeUndefined()
   expect(stand.saved).toEqual([])
   expect(readdirSync(folder)).toEqual([])
+})
+
+test('what is said to be a PNG and is not one, or is longer than the most that is kept, is never given the picture’s name', async () => {
+  const carried = action({ part: 'board', request: REQUEST }, { files: PNG })
+  for (const bytes of [Buffer.from('#!/bin/sh\necho this is no picture\n'), Buffer.alloc(0), Buffer.concat([picture(), Buffer.alloc(MOST_BYTES)])]) {
+    stand.bytes = bytes
+    expect(await keepPicture(carried, folder)).toBeUndefined()
+    // Nothing is left of it, under the picture's name or the one it was written under
+    expect(readdirSync(folder)).toEqual([])
+    expect(keptPictures()).toEqual([])
+  }
+})
+
+test('a file that is there under the picture’s name and that It did not write is never written over, followed or said to be the picture', async () => {
+  const carried = action({ part: 'board', request: REQUEST }, { files: PNG })
+  // A file of the person's
+  writeFileSync(at(), 'the person’s own')
+  expect(await keepPicture(carried, folder)).toBeUndefined()
+  expect(readFileSync(at(), 'utf8')).toBe('the person’s own')
+  rmSync(at())
+  // A link out of the folder, to a file and to nothing, where links can be made
+  const outside = mkdtempSync(path.join(os.tmpdir(), 'it-tour-outside-'))
+  try {
+    const target = path.join(outside, 'target')
+    writeFileSync(target, 'outside')
+    let linked = true
+    try {
+      symlinkSync(target, at())
+    } catch {
+      linked = false
+    }
+    if (linked) {
+      expect(await keepPicture(carried, folder)).toBeUndefined()
+      expect(readFileSync(target, 'utf8')).toBe('outside')
+      rmSync(at())
+      symlinkSync(path.join(outside, 'not-there'), at())
+      expect(await keepPicture(carried, folder)).toBeUndefined()
+      expect(existsSync(path.join(outside, 'not-there'))).toBe(false)
+      expect(readdirSync(outside)).toEqual(['target'])
+      rmSync(at())
+    }
+    // A file that turned up under the name while the picture was on its way, which is not the picture
+    stand.save = (to) => writeFileSync(to, 'came meanwhile')
+    expect(await keepPicture(carried, folder)).toBeUndefined()
+    expect(readFileSync(at(), 'utf8')).toBe('came meanwhile')
+    expect(keptPictures()).toEqual([])
+  } finally {
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test('where the record of the pictures It wrote cannot be read, no picture is written, since none could be told for It’s own', async () => {
+  writeFileSync(picturesFile(), 'not as It writes it')
+  expect(await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)).toBeUndefined()
+  expect(readdirSync(folder)).toEqual([])
+  expect(readFileSync(picturesFile(), 'utf8')).toBe('not as It writes it')
 })
 
 test('the connector has a picture written as it hears of the action, once for an action, into the folder its conversation works in, and holds nothing up for it', async () => {
@@ -211,41 +343,74 @@ test('the connector has a picture written as it hears of the action, once for an
   }
   expect(keepPictureFor(carried, folderOf)).toBeUndefined()
   keepPictureFor(carried, folderOf)
-  await flush()
+  await vi.waitFor(() => expect(existsSync(at())).toBe(true))
   expect(asked).toEqual([session])
-  expect(stand.saved).toEqual([{ id: 'heard-1', number: 1, to: path.join(folder, pictureName(REQUEST)) }])
+  expect(stand.saved).toEqual([{ id: 'heard-1', number: 1, to: at() }])
   // An action with no conversation, of another page, or with no file, asks nothing; and a folder that is not known writes nothing
   keepPictureFor({ ...carried, id: 'heard-2', session: null }, folderOf)
   keepPictureFor({ ...carried, id: 'heard-3', artifact: 'plan' }, folderOf)
   keepPictureFor({ ...carried, id: 'heard-4', files: [] }, folderOf)
   keepPictureFor({ ...carried, id: 'heard-5' }, () => undefined)
+  // Nor for a page that is not the tour's own as this machine published it
+  stand.ownTour = false
+  keepPictureFor({ ...carried, id: 'heard-6', payload: JSON.stringify({ part: 'board', request: 'ef'.repeat(16) }) }, folderOf)
   // One that cannot be written is left for the agent's own command, and throws nothing here
+  stand.ownTour = true
   stand.save = () => {
     throw new Error('disk full')
   }
-  keepPictureFor({ ...carried, id: 'heard-6', payload: JSON.stringify({ part: 'board', request: 'cd'.repeat(16) }) }, folderOf)
+  keepPictureFor({ ...carried, id: 'heard-7', payload: JSON.stringify({ part: 'board', request: 'cd'.repeat(16) }) }, folderOf)
+  await vi.waitFor(() => expect(stand.saved.map((s) => s.id)).toEqual(['heard-1', 'heard-7']))
   await flush()
-  expect(asked).toHaveLength(2)
-  expect(stand.saved.map((s) => s.id)).toEqual(['heard-1', 'heard-6'])
+  expect(asked).toHaveLength(3)
+  expect(readdirSync(folder)).toEqual([pictureName(REQUEST)])
 })
 
-test('an answer takes its own picture away, and clearing the tour takes every picture the tour kept, and neither takes anything else', () => {
+test('an answer takes away only the picture It wrote for its request, and only while that file is still the picture', async () => {
+  const carried = action({ part: 'board', request: REQUEST }, { files: PNG })
+  await keepPicture(carried, folder)
+  await dropPicture('../../sheet')
+  await dropPicture(undefined)
+  expect(existsSync(at())).toBe(true)
+  await dropPicture(REQUEST)
+  expect(existsSync(at())).toBe(false)
+  expect(keptPictures()).toEqual([])
+  // A file of that name that It did not write stays
+  writeFileSync(at(), 'the person’s own')
+  await dropPicture(REQUEST)
+  expect(readFileSync(at(), 'utf8')).toBe('the person’s own')
+  rmSync(at())
+  // And so does the picture once something else has been written in its place
+  await keepPicture(carried, folder)
+  writeFileSync(at(), 'changed since')
+  await dropPicture(REQUEST)
+  expect(readFileSync(at(), 'utf8')).toBe('changed since')
+})
+
+test('clearing the tour takes away every picture It wrote that is still as It wrote it, and leaves anything else, saying what it left', async () => {
   const other = path.join(folder, 'elsewhere')
   mkdirSync(other)
-  const mine = path.join(folder, pictureName(REQUEST))
-  const theirs = path.join(other, pictureName('cd'.repeat(16)))
+  await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)
+  await keepPicture(action({ part: 'board', request: 'cd'.repeat(16) }, { files: PNG }), other)
+  await keepPicture(action({ part: 'board', request: '12'.repeat(16) }, { files: PNG }), other)
+  // Changed since It wrote it
+  writeFileSync(at('12'.repeat(16), other), 'changed since')
+  // Named as the tour names its pictures, and never written by It
+  const theirs = at('ef'.repeat(16))
+  writeFileSync(theirs, 'x')
   const kept = ['sheet.png', '.it-tour-notes.png', `.it-tour-${REQUEST}.png.bak`, `it-tour-${REQUEST}.png`].map((name) => path.join(folder, name))
-  for (const file of [mine, theirs, ...kept]) writeFileSync(file, 'x')
-  // A folder named as a picture is named is no picture
-  mkdirSync(path.join(other, pictureName('ef'.repeat(16))))
-  dropPicture('../../sheet', [folder])
-  dropPicture(undefined, [folder])
-  expect(existsSync(mine)).toBe(true)
-  dropPicture(REQUEST, [folder, undefined, folder])
-  expect(existsSync(mine)).toBe(false)
-  writeFileSync(mine, 'x')
-  dropPictures([folder, other, undefined, path.join(folder, 'not-there')])
-  expect([existsSync(mine), existsSync(theirs)]).toEqual([false, false])
-  for (const file of kept) expect(existsSync(file), file).toBe(true)
-  expect(existsSync(path.join(other, pictureName('ef'.repeat(16))))).toBe(true)
+  for (const file of kept) writeFileSync(file, 'x')
+  const cleared = await dropPictures([folder, undefined, path.join(folder, 'not-there')])
+  expect(cleared).toEqual({ removed: 2, left: [theirs, at('12'.repeat(16), other)].sort() })
+  expect([existsSync(at()), existsSync(at('cd'.repeat(16), other))]).toEqual([false, false])
+  expect(readFileSync(at('12'.repeat(16), other), 'utf8')).toBe('changed since')
+  for (const file of [theirs, ...kept]) expect(existsSync(file), file).toBe(true)
+  expect(keptPictures()).toEqual([])
+})
+
+test('where the record cannot be read, clearing the tour removes no picture, and says so with every file it left', async () => {
+  await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)
+  writeFileSync(picturesFile(), '{"pictures": "not a list"}')
+  expect(await dropPictures([folder])).toEqual({ removed: 0, left: [at()], unread: true })
+  expect(existsSync(at())).toBe(true)
 })

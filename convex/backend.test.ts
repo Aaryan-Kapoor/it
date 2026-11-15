@@ -1906,6 +1906,62 @@ describe('tour page ownership', () => {
     expect(await m.as.query(api.artifacts.get, { slug: 'tour-chess' })).toEqual(before)
   })
 
+  test('a picture is written for an action only where it was done on the tour’s first page as the machine that asks published it', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const other = await machineOf(t, 'alice', 'desk')
+    let clicks = 0
+    const click = async (artifactId: any, contentVersion: number) =>
+      (
+        await alice.browser.mutation(api.actions.submit, {
+          artifactId,
+          displayKey: displayKey('alice'),
+          envelope: envelope(`click-${String(++clicks).padStart(4, '0')}`, { contentVersion }),
+        })
+      ).actionId as string
+    const may = (who: Awaited<ReturnType<typeof machineOf>>, id: string) => who.as.query(api.tour.picture, { id })
+    // It's own first page of the tour, as this machine published it with `it tour show start`
+    const own = await publish(m, 'tour-start', { tour: 'start', state: '{}' })
+    const onOwn = await click(own.artifactId, own.version)
+    expect(await may(m, onOwn)).toBe(true)
+    // Another of the person's machines did not publish it
+    expect(await may(other, onOwn)).toBe(false)
+    // Another machine publishes over it as the tour's: the page stays the tour's and this machine's, and what is done on that version is not this machine's to write
+    const over = await publish(other, 'tour-start', { tour: 'start', state: '{}' })
+    const onOver = await click(own.artifactId, over.version)
+    expect(await may(m, onOver)).toBe(false)
+    expect(await may(other, onOver)).toBe(true)
+    // An agent's own page under the tour's id, published as any page is
+    const agents = await publish(m, 'tour-start')
+    const onAgents = await click(own.artifactId, agents.version)
+    expect(await may(m, onAgents)).toBe(false)
+    expect(await may(other, onAgents)).toBe(false)
+    // What was done on It's own version before then still is
+    expect(await may(m, onOwn)).toBe(true)
+    // A version that the screen says it showed and that is no version of the page
+    expect(await may(m, await click(own.artifactId, 99))).toBe(false)
+    // Another page of the tour, published as the tour's, is not its first page
+    const chess = await publish(m, 'tour-chess', { tour: 'chess', state: '{"reply":"","note":""}' })
+    expect(await may(m, await click(chess.artifactId, chess.version))).toBe(false)
+    // An action of nobody's, and one of another person's
+    expect(await may(m, 'not an id')).toBe(false)
+    const bob = await person(t, 'bob')
+    const bobs = await machineOf(t, 'bob')
+    const theirs = await publish(bobs, 'tour-start', { tour: 'start', state: '{}' })
+    const onTheirs = (
+      await bob.browser.mutation(api.actions.submit, {
+        artifactId: theirs.artifactId,
+        displayKey: displayKey('bob'),
+        envelope: envelope('click-bob1', { contentVersion: theirs.version }),
+      })
+    ).actionId as string
+    expect(await may(bobs, onTheirs)).toBe(true)
+    expect(await may(m, onTheirs)).toBe(false)
+    // And only a machine asks
+    expect(await code(alice.browser.query(api.tour.picture, { id: onOwn }))).toBe('forbidden')
+  })
+
   test('tour ownership rejects unknown names and callers without machine authority', async () => {
     const t = backend()
     const m = await machineOf(t, 'tour-authority')
