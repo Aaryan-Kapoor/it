@@ -2124,6 +2124,34 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('a publication tried with a leading `--%` that another shell handed on is found again by the same line from PowerShell, which takes it', async () => {
+    const m = machine()
+    const args = ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>']
+    const gone = await backend(m)
+    await gone.close()
+    expect((await run(m, ['--%', ...args], gone.env)).code).toBe(1)
+    const folder = path.join(m.it, 'publication-pending')
+    const receipts = () => readdirSync(folder).filter((name) => name.endsWith('.json'))
+    expect(receipts()).toHaveLength(1)
+    const operation = JSON.parse(readFileSync(path.join(folder, receipts()[0]!), 'utf8')).operation
+    const b = await backend(m, ({ path: fn }) =>
+      fn === 'publish:resume'
+        ? new Refusal({ code: 'not_found', message: 'That publication is not recorded.' })
+        : fn === 'publish:begin'
+          ? { artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+          : fn === 'publish:finish'
+            ? { slug: 'plan', version: 1, url: `${b.url}/p/plan` }
+            : null,
+    )
+    try {
+      expect((await run(m, args, b.env)).code).toBe(0)
+      expect(b.asked.filter((x) => x.path === 'publish:begin').map((x) => x.args.operation)).toEqual([operation])
+      expect(receipts()).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
   test('a publication begun again after recovery found nothing reports a refusal of what was asked as it is, and lets its receipt go', async () => {
     const m = machine()
     const args = ['tour', 'show', 'checklist']

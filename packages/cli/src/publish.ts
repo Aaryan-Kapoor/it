@@ -6,6 +6,7 @@ import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, open
 import { type FileHandle, open } from 'node:fs/promises'
 import path from 'node:path'
 import { type FileEntry, isSafePath, LIMITS, NOUN, PUBLICATION, sizeSaid, UPLOAD, uploadBudgetMs } from '@it/protocol'
+import { commandLine } from './args'
 import { claimLock } from './legacy-lock'
 import { addonHere, api, call, direct, doorRefusal, inHome, machine, Problem, readJson, sessionAsked, sessionNote, throughDoor, writePrivate } from './lib'
 import { type Profile, profileOf } from './profiles'
@@ -582,7 +583,8 @@ export async function publish(input: {
       .update(
         JSON.stringify({
           machine: machine().id,
-          command: process.argv.slice(2),
+          // As the command reads it, so that the same line from PowerShell and from another shell finds the same receipt
+          command: commandLine(process.argv.slice(2)),
           slug: input.slug,
           files: request.files,
           session,
