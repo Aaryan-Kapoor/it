@@ -3,7 +3,9 @@
 // - Only an access token is lent. No refresh token is ever copied anywhere.
 // - Claude Code is given its access token in its environment (CLAUDE_CODE_OAUTH_TOKEN), and no
 //   file is written for it.
-// - Codex is given an auth.json in the run's own CODEX_HOME, with the refresh token blank. The
+// - Codex is given an auth.json in the run's own CODEX_HOME, with the refresh token blank and,
+//   unless IT_REHEARSAL_LEND_ID_TOKEN=1, an id token made here in place of the owner's (unsigned,
+//   holding only the account id and the plan's name): the access token alone. The
 //   file is made empty, closed to every user but the one named, and only then written.
 // - Every file written here is overwritten and deleted when the run ends, also when it fails,
 //   and `scrub` takes anything shaped like a token out of what a run keeps.
@@ -21,6 +23,37 @@ const OWNER = process.env.IT_REHEARSAL_OWNER_PROFILE || os.userInfo().homedir
 const lent = new Set()
 /** Every file written here that holds a secret, so that it is shredded at the end, whatever happens. */
 const written = new Set()
+
+/**
+ * Whether Codex is also lent the owner's id token. Off unless asked for: the owner lends the
+ * access token alone, and the id token is lent only where Codex is shown not to sign in without it.
+ */
+const LEND_ID_TOKEN = process.env.IT_REHEARSAL_LEND_ID_TOKEN === '1'
+
+/**
+ * Codex will not read an auth.json whose id token is not a JWT. In place of the owner's, it is
+ * given one made here: unsigned, holding only the account id (lent already) and the plan's name,
+ * read from the owner's id token's claims, and expiring with the access token. Nothing of the
+ * owner's id token itself, its signature, email or name, goes into it.
+ */
+function standInIdToken(ownerIdToken, accountId, expiresAt) {
+  let plan = ''
+  try {
+    const claims = JSON.parse(Buffer.from(String(ownerIdToken).split('.')[1], 'base64url').toString('utf8'))
+    const p = claims?.['https://api.openai.com/auth']?.chatgpt_plan_type
+    if (typeof p === 'string' && /^[a-z_]{1,32}$/.test(p)) plan = p
+  } catch {}
+  const part = (o) => Buffer.from(JSON.stringify(o)).toString('base64url')
+  const auth = { chatgpt_account_id: accountId, ...(plan ? { chatgpt_plan_type: plan } : {}) }
+  // A signature of no meaning (Codex reads the claims and does not check it), and no real email
+  return `${part({ alg: 'none', typ: 'JWT' })}.${part({ email: 'rehearsal@example.invalid', exp: Math.floor(expiresAt / 1000), 'https://api.openai.com/auth': auth })}.${part('rehearsal')}`
+}
+
+/** The id token Codex is given: the owner's only where asked for, else the stand-in. */
+function idTokenFor(t, expiresAt) {
+  if (LEND_ID_TOKEN) return typeof t.id_token === 'string' ? t.id_token : ''
+  return standInIdToken(t.id_token, typeof t.account_id === 'string' ? t.account_id : '', expiresAt)
+}
 
 /** How long a lent token must still have before it expires, for a run to be started with it. */
 const MARGIN_MS = 20 * 60_000
@@ -127,7 +160,7 @@ export function codexAuthContent() {
   const lend = {
     auth_mode: 'chatgpt',
     OPENAI_API_KEY: null,
-    tokens: { id_token: typeof t.id_token === 'string' ? t.id_token : '', access_token: access, refresh_token: '', account_id: typeof t.account_id === 'string' ? t.account_id : '' },
+    tokens: { id_token: idTokenFor(t, expiresAt), access_token: access, refresh_token: '', account_id: typeof t.account_id === 'string' ? t.account_id : '' },
     last_refresh: new Date().toISOString(),
   }
   for (const v of [lend.tokens.id_token, access]) if (v) lent.add(v)
@@ -157,7 +190,7 @@ export function codexAuth(codexHome, user = os.userInfo().username) {
     auth_mode: 'chatgpt',
     OPENAI_API_KEY: null,
     tokens: {
-      id_token: typeof t.id_token === 'string' ? t.id_token : '',
+      id_token: idTokenFor(t, expiresAt),
       access_token: access,
       refresh_token: '',
       account_id: typeof t.account_id === 'string' ? t.account_id : '',
