@@ -140,7 +140,16 @@ function upload(id) {
   spawnSync('rm', ['-rf', stage], { env: SAFE_ENV })
   mkdirSync(join(stage, 'bin'), { recursive: true })
   for (const f of files) copyFileSync(join(BIN, f), join(stage, 'bin', f))
-  for (const f of ['hands.swift', 'prepare.sh', 'releases.mjs']) copyFileSync(join(HERE, f), join(stage, f))
+  for (const f of ['hands.swift', 'prepare.sh', 'releases.mjs', 'site.mjs']) copyFileSync(join(HERE, f), join(stage, f))
+  // A throwaway authority and certificate for the itcan.do stand-in, made fresh for each upload and
+  // never kept: they are trusted only on the rented Mac, which is destroyed after the run
+  mkdirSync(join(stage, 'site'))
+  const ssl = (args) => spawnSync('openssl', args, { cwd: join(stage, 'site'), env: SAFE_ENV, stdio: 'ignore' })
+  ssl(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', '/CN=It rehearsal CA', '-keyout', 'ca.key', '-out', 'ca.pem'])
+  ssl(['req', '-newkey', 'rsa:2048', '-nodes', '-subj', '/CN=itcan.do', '-keyout', 'key.pem', '-out', 'site.csr'])
+  writeFileSync(join(stage, 'site', 'ext'), 'subjectAltName=DNS:itcan.do\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n')
+  ssl(['x509', '-req', '-in', 'site.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-days', '2', '-extfile', 'ext', '-out', 'cert.pem'])
+  rmSync(join(stage, 'site', 'ca.key'))
   const tar = spawn('tar', ['-czf', '-', '-C', stage, '.'], { stdio: ['ignore', 'pipe', 'inherit'], env: SAFE_ENV })
   const ssh = spawn(NSC, ['ssh', '-T', id, 'rm -rf ~/rehearsal-upload && mkdir -p ~/rehearsal-upload && tar -xzf - -C ~/rehearsal-upload && ls ~/rehearsal-upload/bin | wc -l'], { stdio: ['pipe', 'inherit', 'ignore'], env: SAFE_ENV })
   tar.stdout.pipe(ssh.stdin)
@@ -312,7 +321,7 @@ async function finish(live) {
   const tmuxText = await text(`/opt/homebrew/bin/tmux capture-pane -p -J -S - -t agent`, 'terminal')
   const screens = await text(`cat ${SHARED}/screens.txt`, 'terminal-screens')
   let withhold = elsewhere.length > 0 || !sameValues
-  const itLogs = await text('for f in ~/.it/logs/*; do [ -f "$f" ] && { echo "=== $(basename "$f")"; tail -n 400 "$f"; }; done 2>/dev/null; true', 'it-logs')
+  const itLogs = await text(`bash -c 'for f in ~/.it/logs/*; do [ -f "$f" ] && { echo "=== $(basename "$f")"; tail -n 400 "$f"; }; done 2>/dev/null; true'`, 'it-logs')
   const status = await text('~/.it/bin/it status 2>&1 | head -100; true', 'it-status')
   const standIn = await text(`tail -n 200 ${SHARED}/releases.log 2>/dev/null; true`, 'stand-in')
   const service = await text('ls ~/Library/LaunchAgents 2>/dev/null; launchctl print gui/501 2>/dev/null | grep -i " it" | head -20; true', 'service')
@@ -393,6 +402,7 @@ try {
   else if (cmd === 'look') await look(target)
   else if (cmd === 'upload') await upload(target)
   else if (cmd === 'check-claude') await checkClaude(target)
+  else if (cmd === 'site') await step(target, 'site')
   else if (cmd === 'clear') await clearScreen(target, arg('browser', 'safari'))
   else if (cmd === 'step') await step(target, argv.slice(2).join(' '))
   else if (cmd === 'start') {

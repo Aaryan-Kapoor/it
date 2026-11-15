@@ -119,6 +119,16 @@ place)
   gui /usr/local/bin/hands place "$app" "$half" "$top" "$half" $((H - top)) || true
   echo "placed in ${W}x${H}"
   ;;
+site)
+  # itcan.do answered on this Mac: /install.sh from the build, the rest from the real site
+  real=$(dig +short itcan.do | grep -E '^[0-9.]+$' | head -1)
+  grep -q "itcan.do" /etc/hosts || echo "127.0.0.1 itcan.do" | sudo tee -a /etc/hosts >/dev/null
+  grep -q "It rehearsal CA" /etc/ssl/cert.pem || { printf '\n# It rehearsal CA\n' | sudo tee -a /etc/ssl/cert.pem >/dev/null; sudo tee -a /etc/ssl/cert.pem < "$here/site/ca.pem" >/dev/null; }
+  sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder 2>/dev/null || true
+  sudo bash -c "trap '' HUP; exec node '$here/site.mjs' '$HOME/stand-in/install.sh' '$here/site/key.pem' '$here/site/cert.pem' '$real'" </dev/null >> /Users/Shared/rehearsal/site.log 2>&1 &
+  sleep 2
+  echo "served=$(curl -fsSL https://itcan.do/install.sh | shasum -a 256 | cut -c1-16) build=$(shasum -a 256 < "$HOME/stand-in/install.sh" | cut -c1-16) guide=$(curl -fsSL https://itcan.do/install.md | head -1)"
+  ;;
 default-browser)
   gui osascript -l JavaScript -e 'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL($.NSURL.URLWithString("https://example.com")).path.js'
   ;;
