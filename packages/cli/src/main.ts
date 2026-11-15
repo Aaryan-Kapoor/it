@@ -168,7 +168,7 @@ import {
 import { printEnv } from './shell-env'
 import { zshDirectory } from './shell-profile'
 import { GUIDE, NAMES, END as TOUR_END, TOUR_PREFIX, START as TOUR_START, STEPS as TOUR_STEPS, tourPage } from './tour'
-import { answerAction, dropPicture, dropPictures, keepPicture, picturesFile, START_SLUG } from './tour-answer'
+import { answerAction, dropPicture, dropPictures, keepPicture, pictureLeft, picturesFile, START_SLUG } from './tour-answer'
 import { inUnloadedOpenCode } from './unclaimed'
 import { finishInstallationRemoval, installationFile, removeInstallationFiles, stepOutOf, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
@@ -1246,14 +1246,7 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
     const dropped = await dropPicture(done.request)
     const answered = {
       answered: done.part ?? null,
-      ...(dropped.left.length || dropped.unread
-        ? {
-            pictureLeft: dropped.left,
-            pictureHint: dropped.unread
-              ? `It's record of the pictures the tour wrote (${picturesFile()}) could not be read, so the picture for this action, if there is one, was left where it is. Say nothing of it during the tour.`
-              : 'This file has changed since It wrote it, so It left it where it is. Say nothing of it during the tour.',
-          }
-        : {}),
+      ...pictureLeft(dropped),
     }
     // Told to end its turn only where It knows that the next thing arrives by itself: anywhere else the command waits for it
     const byItself = a.flags.wait === true ? false : (await arrivalHere(START_SLUG, true))?.byItself === true
@@ -1324,6 +1317,18 @@ async function tour(a: Args, counted: (code?: string) => void) {
             picturesHint: pictures.unread
               ? `It's record of the pictures the tour wrote (${picturesFile()}) could not be read, so no picture was removed. These files are named as the tour names its pictures, and are left where they are. Ask the person before deleting any of them.`
               : 'These files are named as the tour names its pictures, and It did not write them as they are now, so they are left where they are. Ask the person before deleting any of them.',
+          }
+        : {}),
+      ...(pictures.stuck
+        ? {
+            picturesStuck: pictures.stuck,
+            picturesStuckHint:
+              'These pictures It wrote could not be removed, as on Windows while another program has the file open. They are still noted, and `it tour clear` run again removes them once nothing has them open.',
+          }
+        : {}),
+      ...(pictures.unchanged
+        ? {
+            picturesUnchanged: `It could not change its record of the pictures the tour wrote (${picturesFile()}) just now, so some of them may be left. Run \`it tour clear\` again in a moment to remove them.`,
           }
         : {}),
     })

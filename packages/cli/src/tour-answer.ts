@@ -187,28 +187,29 @@ export function keptPictures(): Kept[] | null {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 /**
  * Changes the record under its lock, which the connector and the agent's own commands share.
- * False where it could not be changed: the record is not as It writes it, or the lock was not
- * had within a few seconds.
+ * `unread` where the record is not as It writes it, and `unchanged` where it could not be
+ * changed otherwise: the lock was not had within a few seconds, or the record could not be
+ * written.
  */
-async function changeKept(change: (kept: Kept[]) => Kept[]): Promise<boolean> {
+async function changeKept(change: (kept: Kept[]) => Kept[]): Promise<'changed' | 'unread' | 'unchanged'> {
   const until = performance.now() + 3000
   while (performance.now() < until) {
     const release = claimLock(`${picturesFile()}.lock`, 10_000, randomBytes(8).toString('hex'))
     if (release) {
       try {
         const kept = keptPictures()
-        if (kept === null) return false
+        if (kept === null) return 'unread'
         writePrivate(picturesFile(), { pictures: change(kept).slice(-MOST_KEPT) })
-        return true
+        return 'changed'
       } catch {
-        return false
+        return 'unchanged'
       } finally {
         release()
       }
     }
     await sleep(5 + Math.random() * 20)
   }
-  return false
+  return 'unchanged'
 }
 
 /** Whether the file a note names is still the picture It wrote there: the same file of the disk, not a link, of the length and checksum noted. */
@@ -219,12 +220,19 @@ function isOurs(k: Kept): 'ours' | 'gone' | 'another' {
   const read = readOwn(k.file, MOST_BYTES)
   return read && read.dev === k.dev && read.ino === k.ino && sha256(read.bytes) === k.sha256 ? 'ours' : 'another'
 }
-/** Removes a picture a note names, where the file there is still that picture. */
-function removeIfOurs(k: Kept): 'removed' | 'gone' | 'another' {
-  const was = isOurs(k)
-  if (was !== 'ours') return was
-  rmSync(k.file, { force: true })
-  return 'removed'
+/**
+ * Removes a picture a note names, where the file there is still that picture. `stuck` where it
+ * could not be looked at or removed, as on Windows while another program has the file open.
+ */
+function removeIfOurs(k: Kept): 'removed' | 'gone' | 'another' | 'stuck' {
+  try {
+    const was = isOurs(k)
+    if (was !== 'ours') return was
+    rmSync(k.file, { force: true })
+    return 'removed'
+  } catch {
+    return 'stuck'
+  }
 }
 
 /**
@@ -334,7 +342,7 @@ async function placed(at: string, staged: string, read: { bytes: Buffer; dev: st
     })
     // Written meanwhile by the other of the two that write it, or there is a file there that It did not write
     if (there) return written() ? at : undefined
-    if (named && noted) return at
+    if (named && noted === 'changed') return at
     // Named and not noted, as where the record could not be written: It takes away what it has just made, which nothing else could tell for its own
     if (named && isOurs(named) === 'ours') rmSync(at, { force: true })
     return undefined
@@ -343,11 +351,21 @@ async function placed(at: string, staged: string, read: { bytes: Buffer; dev: st
   }
 }
 
-/** What was left of the pictures It was to take away: files the record names that have changed since It wrote them, and whether the record could not be read. */
+/**
+ * What was left of the pictures It was to take away: files the record names that have changed
+ * since It wrote them, pictures It wrote that could not be removed and are still noted, so that
+ * `it tour clear` removes them, and whether the record could not be read, or could not be changed.
+ */
 export interface Left {
   left: string[]
+  stuck?: string[]
   unread?: true
+  unchanged?: true
 }
+const told = (changed: 'changed' | 'unread' | 'unchanged', stuck: readonly string[]) => ({
+  ...(stuck.length ? { stuck: [...stuck].sort() } : {}),
+  ...(changed === 'unread' ? { unread: true as const } : changed === 'unchanged' ? { unchanged: true as const } : {}),
+})
 
 /**
  * Takes away the picture kept for a request, wherever the record says It wrote it, where the
@@ -357,15 +375,37 @@ export async function dropPicture(request: string | undefined): Promise<Left> {
   if (!request || !REQUEST.test(request)) return { left: [] }
   const name = pictureName(request)
   const left: string[] = []
+  const stuck: string[] = []
   const changed = await changeKept((kept) =>
     kept.filter((k) => {
       if (path.basename(k.file) !== name) return true
       const done = removeIfOurs(k)
       if (done === 'another') left.push(k.file)
-      return false
+      if (done === 'stuck') stuck.push(k.file)
+      return done === 'stuck'
     }),
   )
-  return { left, ...(changed ? {} : { unread: true as const }) }
+  return { left, ...told(changed, stuck) }
+}
+
+/** What `it tour answer` says of the picture it was to take away, where anything was left. Nothing where all went well. */
+export function pictureLeft(dropped: Left): { pictureLeft: string[]; pictureHint: string } | Record<string, never> {
+  if (!dropped.left.length && !dropped.stuck && !dropped.unread && !dropped.unchanged) return {}
+  const quiet = 'Say nothing of it during the tour.'
+  const hint = dropped.unread
+    ? `It's record of the pictures the tour wrote (${picturesFile()}) could not be read, so the picture for this action, if there is one, was left where it is. ${quiet}`
+    : dropped.unchanged
+      ? `It could not change its record of the pictures the tour wrote (${picturesFile()}) just now, so the picture for this action may have been left where it is, and \`it tour clear\` removes it. ${quiet}`
+      : [
+          dropped.stuck
+            ? 'The picture It wrote for this action could not be removed, as on Windows while another program has the file open, so it is left where it is, and `it tour clear` removes it once nothing has it open.'
+            : '',
+          dropped.left.length ? 'This file has changed since It wrote it, so It left it where it is.' : '',
+          quiet,
+        ]
+          .filter(Boolean)
+          .join(' ')
+  return { pictureLeft: [...dropped.left, ...(dropped.stuck ?? [])], pictureHint: hint }
 }
 
 /**
@@ -377,12 +417,14 @@ export async function dropPicture(request: string | undefined): Promise<Left> {
 export async function dropPictures(folders: readonly (string | undefined)[]): Promise<{ removed: number } & Left> {
   let removed = 0
   const left = new Set<string>()
+  const stuck = new Set<string>()
   const changed = await changeKept((kept) =>
     kept.filter((k) => {
       const done = removeIfOurs(k)
       if (done === 'removed') removed++
       else if (done === 'another') left.add(k.file)
-      return false
+      else if (done === 'stuck') stuck.add(k.file)
+      return done === 'stuck'
     }),
   )
   for (const folder of new Set(folders)) {
@@ -393,9 +435,9 @@ export async function dropPictures(folders: readonly (string | undefined)[]): Pr
     } catch {
       continue
     }
-    for (const name of names) if (PICTURE.test(name)) left.add(path.join(folder, name))
+    for (const name of names) if (PICTURE.test(name) && !stuck.has(path.join(folder, name))) left.add(path.join(folder, name))
   }
-  return { removed, left: [...left].sort(), ...(changed ? {} : { unread: true as const }) }
+  return { removed, left: [...left].sort(), ...told(changed, [...stuck]) }
 }
 
 /** The pictures the connector has begun to keep, by the action each is of, so that each is asked for once. */
