@@ -86,6 +86,34 @@ export function claudeAccess() {
   return { env: { CLAUDE_CODE_OAUTH_TOKEN: token }, expiresAt }
 }
 
+/**
+ * What a throwaway Claude Code's own sign-in file (`<config folder>\.credentials.json`, where
+ * Claude Code on Windows keeps a `/login` sign-in) holds, for a file that another account writes
+ * itself (agent-host.py), closed to all but that account before anything is in it: the access
+ * token, its expiry, its scopes and the subscription's name, and the refresh token blank. Read
+ * in memory from the owner's file like `claudeAccess`; nothing else of it is kept. For a run in
+ * which Claude Code is reopened by It's Auto-wake, which (rightly) does not pass a sign-in given
+ * in an environment variable on to the conversation it reopens.
+ */
+export function claudeCredentialsContent() {
+  let o
+  try {
+    o = JSON.parse(readFileSync(path.join(OWNER, '.claude', '.credentials.json'), 'utf8'))?.claudeAiOauth
+  } catch {
+    throw why("the owner's Claude Code sign-in could not be read")
+  }
+  const token = o?.accessToken
+  const expiresAt = o?.expiresAt
+  if (typeof token !== 'string' || !token) throw why("the owner's Claude Code sign-in has no access token")
+  if (typeof expiresAt !== 'number' || expiresAt - Date.now() < MARGIN_MS)
+    throw why(`the owner's Claude Code access token expires too soon (${typeof expiresAt === 'number' ? new Date(expiresAt).toISOString() : 'no expiry'})`)
+  const scopes = Array.isArray(o.scopes) ? o.scopes.filter((s) => typeof s === 'string' && /^[a-z:_.-]{1,64}$/i.test(s)) : []
+  const subscriptionType = typeof o.subscriptionType === 'string' && /^[a-z_]{1,32}$/i.test(o.subscriptionType) ? o.subscriptionType : undefined
+  o = null
+  lent.add(token)
+  return { content: `${JSON.stringify({ claudeAiOauth: { accessToken: token, refreshToken: '', expiresAt, scopes, ...(subscriptionType ? { subscriptionType } : {}) } })}\n`, expiresAt }
+}
+
 /** The expiry of a JWT, in milliseconds, from its payload: null where it is not one. */
 function jwtExpiry(token) {
   try {
