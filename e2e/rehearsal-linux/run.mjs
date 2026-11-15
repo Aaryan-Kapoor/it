@@ -137,6 +137,15 @@ async function main() {
     held = t.held
     result.tokenMinutesLeftAtStart = t.minutesLeft
     if (app === 'codex') await injectCodex(name, held)
+    // Scenario 13: Codex signed in beside Claude Code, with its own copy; both copies' values are
+    // looked for and redacted, and the wipe takes Codex's file as it always does
+    if (app === 'claude' && has('also-codex')) {
+      const c = take('codex', Math.min(minutes + 5, 55))
+      await injectCodex(name, c.held)
+      asAna(`node /build/harness/settings.mjs codex ${MODEL.codex.model} ${MODEL.codex.effort}`)
+      held = { ...held, values: [...held.values, ...c.held.values] }
+      result.alsoCodex = { model: MODEL.codex, tokenMinutesLeftAtStart: c.minutesLeft }
+    }
   }
   await startAgentShell(name, app === 'claude' ? held : null, { IT_INSTALL_BASE: 'http://127.0.0.1:8765' })
   // A laptop keeps Claude Code's sign-in on its disk, so a conversation It reopens by itself is
@@ -243,7 +252,7 @@ async function collect() {
   // Where the token is in the machine before it is wiped. Codex's own auth.json is expected; a
   // copy anywhere else (the agent's transcript, a page, a log) means the agent saw it, and what it
   // saw may be in the recording, so the recording is not kept.
-  const expected = app === 'codex' ? ['/home/ana/.codex/auth.json'] : []
+  const expected = app === 'codex' || has('also-codex') ? ['/home/ana/.codex/auth.json'] : []
   const before = held ? await filesHolding(name, held) : []
   result.tokenFilesBeforeWipe = redact(before.join(', '), held)
   const elsewhere = before.filter((f) => !expected.includes(f))
