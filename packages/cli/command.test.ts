@@ -2124,6 +2124,32 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('a publication begun again after recovery found nothing reports a refusal of what was asked as it is, and lets its receipt go', async () => {
+    const m = machine()
+    const args = ['tour', 'show', 'checklist']
+    const gone = await backend(m)
+    await gone.close()
+    expect((await run(m, args, gone.env)).code).toBe(1)
+    const folder = path.join(m.it, 'publication-pending')
+    expect(readdirSync(folder).filter((name) => name.endsWith('.json'))).toHaveLength(1)
+    const message = 'This id belongs to a page that the tour does not own, or the page changed while the tour was publishing.'
+    const b = await backend(m, ({ path: fn }) =>
+      fn === 'publish:begin'
+        ? new Refusal({ code: 'conflict', message, settled: true } as never)
+        : fn === 'publish:resume'
+          ? new Refusal({ code: 'not_found', message: 'That publication is not recorded.' })
+          : null,
+    )
+    try {
+      const ran = await run(m, args, b.env)
+      expect([ran.code, error(ran).code, error(ran).message]).toEqual([1, 'conflict', message])
+      expect(readdirSync(folder).filter((name) => name.endsWith('.json'))).toEqual([])
+      expect(b.uploads).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
   test('a begin that reached It and whose answer was lost is resumed, and never begun a second time', async () => {
     const m = machine()
     let begun: unknown

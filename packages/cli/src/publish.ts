@@ -652,8 +652,10 @@ export async function publish(input: {
               writePrivate(file, pending)
               continue
             }
-            // Begun again and refused for a publication It does have of that identity: not known
-            if (resuming && !recovering && err instanceof Problem && err.code === 'conflict') return unresolved()
+            // Begun again and refused for a publication It does have of that identity: not known. A
+            // refusal the backend says is settled is of what was asked, where It has no publication
+            // of this identity, and is said as it is, with the receipt let go as for any refusal.
+            if (resuming && !recovering && err instanceof Problem && err.code === 'conflict' && !err.settled) return unresolved()
             if (missing) return unresolved()
             if (!uncertain(err)) clear()
             throw err
