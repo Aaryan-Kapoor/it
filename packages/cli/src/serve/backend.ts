@@ -1858,10 +1858,15 @@ function interrupt(pid: number): 'no_process' | 'no_console' | 'no_event' | 'no_
     'Start-Sleep -Milliseconds 500',
     'exit 0',
   ].join('\n')
-  const ran = runSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
-    windowsHide: true,
-    timeout: 30_000,
-  })
+  // A helper whose limit ended it before its time may have raised the event already, and the
+  // program may have stopped on it since and its number gone to another program: so it is run
+  // again only where that number is still the backend program's
+  const ran = runSync(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    { windowsHide: true, timeout: 30_000 },
+    () => runsProgram(pid),
+  )
   return ran.status === 0 ? undefined : ran.status === 3 ? 'no_console' : ran.status === 4 ? 'no_event' : 'no_helper'
 }
 

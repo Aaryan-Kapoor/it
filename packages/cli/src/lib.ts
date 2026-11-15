@@ -125,7 +125,9 @@ export function windowsPathCommand(folder: string): string {
  * back as it was kept, in its order, with a name such as %USERPROFILE% left as a name and the
  * value left the kind it was. Nothing is written where the folder is not there. It says `off`
  * where it took the folder off and `absent` where it was not on it, and running programs are
- * told as `windowsPathCommand` tells them.
+ * told as `windowsPathCommand` tells them. The variable that tells them is set before the PATH
+ * is written and removed after, so that where this was ended partway, running it again finishes
+ * what it began: a variable still there is removed, which tells them, and that says `off`.
  */
 export function windowsPathRemoval(folder: string): string {
   const dir = psQuote(folder.replace(/[\\/]+$/, ''))
@@ -134,7 +136,8 @@ export function windowsPathRemoval(folder: string): string {
     "if (-not $k) { 'absent'; exit 0 }",
     "$all = @(([string]$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -split ';')",
     `$keep = @($all | Where-Object { -not ($_ -and [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\\') -eq ${dir}) })`,
-    "if ($keep.Count -eq $all.Count) { 'absent' } else { $k.SetValue('Path', ($keep -join ';'), $k.GetValueKind('Path')); [Environment]::SetEnvironmentVariable('IT_PATH_CHANGED', '1', 'User'); [Environment]::SetEnvironmentVariable('IT_PATH_CHANGED', [NullString]::Value, 'User'); 'off' }",
+    "$begun = $null -ne [Environment]::GetEnvironmentVariable('IT_PATH_CHANGED', 'User')",
+    "if ($keep.Count -eq $all.Count -and -not $begun) { 'absent' } else { [Environment]::SetEnvironmentVariable('IT_PATH_CHANGED', '1', 'User'); if ($keep.Count -ne $all.Count) { $k.SetValue('Path', ($keep -join ';'), $k.GetValueKind('Path')) }; [Environment]::SetEnvironmentVariable('IT_PATH_CHANGED', [NullString]::Value, 'User'); 'off' }",
     '$k.Close()',
   ].join('; ')
 }

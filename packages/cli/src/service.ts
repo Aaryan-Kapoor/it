@@ -12,7 +12,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync
 import os from 'node:os'
 import path from 'node:path'
 import { STORAGE } from '@it/protocol'
-import { BELIEVED, runSync } from './child'
+import { cutShort, runSync } from './child'
 import { home, inHome, PROFILE_VARS, psQuote, readJson, rename, writeFlushed } from './lib'
 import { holderRuns } from './serve/backend'
 import { storageAsked } from './serve/config'
@@ -220,9 +220,9 @@ function run(cmd: string, args: string[], forMs?: number): Ran {
   const ok = r.status === 0 && !r.error
   const ms = Date.now() - began
   const name = path.win32.basename(cmd).replace(/\.exe$/i, '')
-  // Ended at its limit. One that the limit ended long before its time has been run once more by
+  // Ended at its limit. One that the limit ended before its time has been run once more by
   // `runSync`, so a limit that ended this one is believed, and it is not asked again.
-  const timedOut = forMs !== undefined && ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' || (!!r.signal && ms >= forMs * BELIEVED))
+  const timedOut = forMs !== undefined && ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' || (!!r.signal && !cutShort(ms, forMs)))
   return { ok, out, status: r.status, timedOut, why: ok ? '' : failure(name === 'powershell' ? 'PowerShell' : name, { ...r, out }, ms, forMs) }
 }
 /** How long the system is given to answer a question about the service. */
@@ -502,8 +502,9 @@ export type Asked = { ok: boolean; out: string; why?: string }
  * PowerShell, asked something it only has to answer. A question it did not answer is put to it
  * once more, unless it was ended at its time limit, which a second try would only wait out
  * again: a question changes nothing, and one that failed once has been seen to be answered the
- * next time. One that a limit ended long before its time is not counted here, since `runSync`
- * has already run it once more. Where it fails twice, both failures are said.
+ * next time. One that a limit ended before its time is not counted here: `runSync` has already
+ * run it once more, so that one question can start PowerShell three times, and never more.
+ * Where it fails twice, both failures are said.
  */
 export function askedTwice(ask: (script: string) => Ran, script: string): Ran {
   const first = ask(script)

@@ -1529,7 +1529,8 @@ describe('what takes It’s folder off the PATH Windows keeps, when It is taken 
   test('reads the PATH as Windows keeps it and writes back what is left as the kind of value it was, and only where the folder was on it', () => {
     expect(line).toContain("$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')")
     expect(line).toContain("$k.SetValue('Path', ($keep -join ';'), $k.GetValueKind('Path'))")
-    expect(line).toContain("if ($keep.Count -eq $all.Count) { 'absent' } else {")
+    expect(line).toContain("if ($keep.Count -eq $all.Count -and -not $begun) { 'absent' } else {")
+    expect(line).toContain("if ($keep.Count -ne $all.Count) { $k.SetValue('Path'")
     expect(line).not.toContain("GetEnvironmentVariable('Path'")
     expect(line).not.toContain("SetEnvironmentVariable('Path'")
     expect(line).not.toContain('\n')
@@ -1570,7 +1571,15 @@ describe('what takes It’s folder off the PATH Windows keeps, when It is taken 
         expect(after.split('|')[0]!.split(';').filter(Boolean)).toEqual(before.split('|')[0]!.split(';').filter(Boolean))
         if (!before.endsWith('|none')) expect(after).toBe(before)
         expect(ps(windowsPathRemoval(folder)).stdout.trim()).toBe('absent')
+        // Ended partway, after the PATH was written and before running programs were told, it
+        // finishes what it began when it is run again, and leaves the PATH as it was
+        ps("[Environment]::SetEnvironmentVariable('IT_PATH_CHANGED', '1', 'User')")
+        expect(ps(windowsPathRemoval(folder)).stdout.trim()).toBe('off')
+        expect(ps("[Environment]::GetEnvironmentVariable('IT_PATH_CHANGED', 'User') -eq $null").stdout.trim()).toBe('True')
+        expect(kept()).toBe(after)
+        expect(ps(windowsPathRemoval(folder)).stdout.trim()).toBe('absent')
       } finally {
+        ps("[Environment]::SetEnvironmentVariable('IT_PATH_CHANGED', [NullString]::Value, 'User')")
         // Whatever became of the test, the PATH is put back exactly as it was found
         const [value, kind] = [before.slice(0, before.lastIndexOf('|')), before.slice(before.lastIndexOf('|') + 1)]
         if (kind !== 'none')

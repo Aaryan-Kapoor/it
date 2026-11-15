@@ -40,33 +40,47 @@ function stand(...results: [SpawnSyncReturns<string>, number][]) {
 describe('a child that its limit ended before its time', () => {
   test('is run once more, and what the second run gives is given back', () => {
     const child = stand([cut, 25], [fine, 2000])
-    expect(unlessCutShort(child.run, 60_000, child.clock)).toBe(fine)
+    expect(unlessCutShort(child.run, 60_000, undefined, child.clock)).toBe(fine)
     expect(child.runs()).toBe(2)
   })
 
   test('is never run a third time, however the second run ends', () => {
     const child = stand([cut, 25], [cut, 30], [fine, 1])
-    expect(unlessCutShort(child.run, 60_000, child.clock)).toBe(cut)
+    expect(unlessCutShort(child.run, 60_000, undefined, child.clock)).toBe(cut)
     expect(child.runs()).toBe(2)
   })
 
-  test('is run once more where the limit was only shortened, ending it before nine tenths of its time', () => {
-    const child = stand([cut, 20_000], [fine, 25_000])
-    expect(unlessCutShort(child.run, 30_000, child.clock)).toBe(fine)
-    expect(child.runs()).toBe(2)
+  test('is run once more where the limit was only shortened, however little', () => {
+    for (const ms of [20_000, 29_000]) {
+      const child = stand([cut, ms], [fine, 25_000])
+      expect(unlessCutShort(child.run, 30_000, undefined, child.clock)).toBe(fine)
+      expect(child.runs()).toBe(2)
+    }
+  })
+
+  test('is run once more only where what a second run needs still holds', () => {
+    const held = stand([cut, 25], [fine, 2000])
+    expect(unlessCutShort(held.run, 30_000, () => true, held.clock)).toBe(fine)
+    expect(held.runs()).toBe(2)
+    const gone = stand([cut, 25], [fine, 2000])
+    expect(unlessCutShort(gone.run, 30_000, () => false, gone.clock)).toBe(cut)
+    expect(gone.runs()).toBe(1)
   })
 })
 
 describe('a child that is run once', () => {
   test('one that really ran out of its time', () => {
-    const child = stand([cut, 60_004], [fine, 1])
-    expect(unlessCutShort(child.run, 60_000, child.clock)).toBe(cut)
-    expect(child.runs()).toBe(1)
+    // Its clock read a few milliseconds apart from the runtime's, either way
+    for (const ms of [60_004, 59_990]) {
+      const child = stand([cut, ms], [fine, 1])
+      expect(unlessCutShort(child.run, 60_000, () => true, child.clock)).toBe(cut)
+      expect(child.runs()).toBe(1)
+    }
   })
 
   test('one that ended well', () => {
     const child = stand([fine, 5], [fine, 1])
-    expect(unlessCutShort(child.run, 60_000, child.clock)).toBe(fine)
+    expect(unlessCutShort(child.run, 60_000, undefined, child.clock)).toBe(fine)
     expect(child.runs()).toBe(1)
   })
 
@@ -75,14 +89,14 @@ describe('a child that is run once', () => {
     const refused = ran({ status: 1, stderr: 'no' })
     for (const result of [missing, refused]) {
       const child = stand([result, 3], [fine, 1])
-      expect(unlessCutShort(child.run, 60_000, child.clock)).toBe(result)
+      expect(unlessCutShort(child.run, 60_000, undefined, child.clock)).toBe(result)
       expect(child.runs()).toBe(1)
     }
   })
 
   test('one given no limit, which nothing can have cut short', () => {
     const child = stand([cut, 3], [fine, 1])
-    expect(unlessCutShort(child.run, undefined, child.clock)).toBe(cut)
+    expect(unlessCutShort(child.run, undefined, undefined, child.clock)).toBe(cut)
     expect(child.runs()).toBe(1)
   })
 })
