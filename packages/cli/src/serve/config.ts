@@ -1,11 +1,11 @@
 // It's settings on the machine it runs on. They are one file in It's folder, made the first
 // time `it setup` runs: the port everything is counted from, and the secrets the service works
 // with. Whoever can read the file can do anything to It's data, so it is this person's alone.
-import { spawnSync } from 'node:child_process'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { accessSync, constants, existsSync, linkSync, mkdirSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { PORTS, STORAGE, sizeSaid, storageBytes } from '@it/protocol'
+import { runSync } from '../child'
 import { asPort, home, inHome, Problem, portAsked, readJson, settingsFile, writeFlushed, writePrivate as writeWhole } from '../lib'
 
 // How a record is written lives with everything else that writes into It's folder, and is
@@ -154,7 +154,7 @@ function adminKey(instanceSecret: string): string {
       'Make that folder accessible to your user, then run `it setup` again.',
     )
   }
-  const ran = spawnSync(programFile(), ['keygen', 'admin-key', '--instance-name', instanceName(instanceSecret), '--instance-secret', instanceSecret], {
+  const ran = runSync(programFile(), ['keygen', 'admin-key', '--instance-name', instanceName(instanceSecret), '--instance-secret', instanceSecret], {
     cwd,
     encoding: 'utf8',
     windowsHide: true,

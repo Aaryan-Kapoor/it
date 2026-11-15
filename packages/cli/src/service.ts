@@ -8,11 +8,11 @@
 // program itself, last: by asking and by nothing else on Linux and macOS, and on Windows, where
 // that program cannot be counted on to hear, by ending it once it has been asked. What stops
 // the service is held to asking, on every system.
-import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { STORAGE } from '@it/protocol'
+import { BELIEVED, runSync } from './child'
 import { home, inHome, PROFILE_VARS, psQuote, readJson, rename, writeFlushed } from './lib'
 import { holderRuns } from './serve/backend'
 import { storageAsked } from './serve/config'
@@ -210,7 +210,7 @@ function run(cmd: string, args: string[], forMs?: number): Ran {
   // the path it started with unless it is given one, and Node along the path as it is now.
   // Given it, both find the system's command where this program would be told to look.
   const began = Date.now()
-  const r = spawnSync(cmd, args, {
+  const r = runSync(cmd, args, {
     encoding: 'utf8',
     windowsHide: true,
     env: process.env,
@@ -220,8 +220,9 @@ function run(cmd: string, args: string[], forMs?: number): Ran {
   const ok = r.status === 0 && !r.error
   const ms = Date.now() - began
   const name = path.win32.basename(cmd).replace(/\.exe$/i, '')
-  // Ended at its limit, and only where the limit had been reached: one ended sooner is asked again
-  const timedOut = forMs !== undefined && ms >= forMs * 0.9 && ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' || !!r.signal)
+  // Ended at its limit. One that the limit ended long before its time has been run once more by
+  // `runSync`, so a limit that ended this one is believed, and it is not asked again.
+  const timedOut = forMs !== undefined && ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' || (!!r.signal && ms >= forMs * BELIEVED))
   return { ok, out, status: r.status, timedOut, why: ok ? '' : failure(name === 'powershell' ? 'PowerShell' : name, { ...r, out }, ms, forMs) }
 }
 /** How long the system is given to answer a question about the service. */
@@ -500,8 +501,9 @@ export type Asked = { ok: boolean; out: string; why?: string }
 /**
  * PowerShell, asked something it only has to answer. A question it did not answer is put to it
  * once more, unless it was ended at its time limit, which a second try would only wait out
- * again: a question changes nothing, and one that failed once, with nothing printed, has been
- * seen to be answered the next time. Where it fails twice, both failures are said.
+ * again: a question changes nothing, and one that failed once has been seen to be answered the
+ * next time. One that a limit ended long before its time is not counted here, since `runSync`
+ * has already run it once more. Where it fails twice, both failures are said.
  */
 export function askedTwice(ask: (script: string) => Ran, script: string): Ran {
   const first = ask(script)

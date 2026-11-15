@@ -5,10 +5,11 @@
 //
 // A device's addresses on a tailnet are known by their ranges, which Tailscale gives out of and
 // nothing else on a network does: 100.64.0.0/10 under IPv4, and fd7a:115c:a1e0::/48 under IPv6.
-import { execFile, execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { accessSync, constants, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { printed, runSync } from '../child'
 
 type Listed = Pick<os.NetworkInterfaceInfo, 'address' | 'family' | 'internal'>
 type Interfaces = NodeJS.Dict<Listed[]>
@@ -46,12 +47,14 @@ let asked: { at: number; name: string | undefined } | undefined
  */
 export function tailnetName(
   ask: () => string = () =>
-    execFileSync(tailscaleCommand() ?? 'tailscale', ['status', '--json', '--peers=false'], {
-      encoding: 'utf8',
-      timeout: 2000,
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }),
+    printed(
+      runSync(tailscaleCommand() ?? 'tailscale', ['status', '--json', '--peers=false'], {
+        encoding: 'utf8',
+        timeout: 2000,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }),
+    ),
 ): string | undefined {
   if (asked && Date.now() - asked.at < 60_000) return asked.name
   let name: string | undefined

@@ -354,6 +354,13 @@ jobs:
         if: runner.os == 'Windows'
         with:
           bun-version: ${{ env.BUN_VERSION }}
+      # A child waited for after a quiet stretch longer than its limit, under the same Bun. On
+      # Windows that Bun counts the limit from when it last waited for a child, and so ended such
+      # a child at once; every child It waits for goes through `runSync`, which runs it once
+      # more. It needs nothing installed, and so is run before anything is.
+      - name: A child waited for after a quiet stretch is given its whole limit, under Bun
+        if: runner.os == 'Windows'
+        run: bun test ./packages/cli/child.test.ts
       - name: A reopened run on Windows says how it went, under Bun
         if: runner.os == 'Windows'
         run: npm ci && npm run generate && bun test ./packages/cli/wake-windows.test.ts

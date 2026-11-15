@@ -4,7 +4,7 @@
 // stopped by being asked to and waited for. On Windows, where it cannot be counted on to hear,
 // it is ended once nothing more is asked of it. One program at a time has a folder's data, and
 // the service never moves, replaces or removes a database.
-import { type ChildProcess, type SpawnOptions, spawn, spawnSync } from 'node:child_process'
+import { type ChildProcess, type SpawnOptions, spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import {
   chmodSync,
@@ -32,6 +32,7 @@ import path from 'node:path'
 import { STORAGE } from '@it/protocol'
 import { ConvexHttpClient } from 'convex/browser'
 import { Unzip, UnzipInflate, UnzipPassThrough } from 'fflate'
+import { runSync } from '../child'
 import { FUNCTIONS_HASH, functions } from '../functions.generated'
 import { ask, backendAt, direct, inHome, Problem, psQuote, readJson, VERSION } from '../lib'
 import {
@@ -399,7 +400,7 @@ export function startOf(pid: number): string | null | undefined {
     // a lock that was left behind is told to be so at once
     if (!alive(pid)) return null
     const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { $p.StartTime.ToFileTimeUtc() } else { 'none' }`
-    const ran = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+    const ran = runSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
       encoding: 'utf8',
       windowsHide: true,
       timeout: 30_000,
@@ -410,7 +411,7 @@ export function startOf(pid: number): string | null | undefined {
   } else {
     for (const ps of ['/bin/ps', 'ps']) {
       // Asked for in one language and one time zone, so that it is told in the same words whenever it is asked
-      const ran = spawnSync(ps, ['-o', 'stat=', '-o', 'lstart=', '-p', String(pid)], {
+      const ran = runSync(ps, ['-o', 'stat=', '-o', 'lstart=', '-p', String(pid)], {
         encoding: 'utf8',
         env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' },
         timeout: 30_000,
@@ -984,7 +985,7 @@ export function programsHere(name: string, platform: NodeJS.Platform = process.p
         '}',
         "'end'",
       ].join('\n')
-      const ran = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+      const ran = runSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
         encoding: 'utf8',
         windowsHide: true,
         timeout: 60_000,
@@ -1008,7 +1009,7 @@ export function programsHere(name: string, platform: NodeJS.Platform = process.p
       }
     } else {
       for (const ps of ['/bin/ps', 'ps']) {
-        const ran = spawnSync(ps, ['-axww', '-o', 'pid=', '-o', 'uid=', '-o', 'stat=', '-o', 'command='], {
+        const ran = runSync(ps, ['-axww', '-o', 'pid=', '-o', 'uid=', '-o', 'stat=', '-o', 'command='], {
           encoding: 'utf8',
           env: { ...process.env, LC_ALL: LISTED_IN },
           timeout: 30_000,
@@ -1092,7 +1093,7 @@ function runsProgram(pid: number): boolean {
   if (process.platform === 'win32') {
     const coded = (what: string) => `[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]${what}))`
     const script = `$p = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"; if ($p) { 'is {0} {1}' -f ${coded('$p.Name')}, ${coded('$p.ExecutablePath')} } else { 'none' }`
-    const ran = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+    const ran = runSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
       encoding: 'utf8',
       windowsHide: true,
       timeout: 30_000,
@@ -1102,7 +1103,7 @@ function runsProgram(pid: number): boolean {
     return told(plain(file)) || (!file && told(plain(name)))
   }
   for (const ps of ['/bin/ps', 'ps']) {
-    const ran = spawnSync(ps, ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8', env: { ...process.env, LC_ALL: LISTED_IN }, timeout: 30_000 })
+    const ran = runSync(ps, ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8', env: { ...process.env, LC_ALL: LISTED_IN }, timeout: 30_000 })
     if (ran.error) continue
     return ran.status === 0 && told(ran.stdout.trim())
   }
@@ -1857,7 +1858,7 @@ function interrupt(pid: number): 'no_process' | 'no_console' | 'no_event' | 'no_
     'Start-Sleep -Milliseconds 500',
     'exit 0',
   ].join('\n')
-  const ran = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+  const ran = runSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
     windowsHide: true,
     timeout: 30_000,
   })

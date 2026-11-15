@@ -4,7 +4,7 @@
 // own plugin commands, from files this program carries, and removed the same way. Nothing in
 // a harness is patched, wrapped or replaced.
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { execFile, spawnSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import {
   chmodSync,
@@ -31,6 +31,7 @@ import path from 'node:path'
 import { CODEX_MIN_VERSION, HARNESSES, type Harness, newer as newerVersion } from '@it/protocol'
 import type { AddonRuntime } from './addon-runtime'
 import { ADDONS, LICENSE } from './addons.generated'
+import { runSync } from './child'
 import { claudeDefaultFolder } from './claude-open'
 import { CODEX_RULES, CODEX_RULES_REL, codexConfig, codexRulesWarning } from './codex-settings'
 import { harnessEnv, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
@@ -582,7 +583,7 @@ export function shortPath(file: string): string | null {
   if (shortForms.has(file)) return shortForms.get(file)!
   let found: string | null = null
   try {
-    const r = spawnSync(
+    const r = runSync(
       path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe'),
       ['/d /u /v:off /s /c "for %I in ("%IT_SHORT_OF%") do @echo(%~sI"'],
       {
