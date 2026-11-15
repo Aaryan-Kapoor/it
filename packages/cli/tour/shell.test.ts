@@ -134,6 +134,20 @@ describe('the frame of the tour’s first page', () => {
     expect(page.state('board')).toBe('Claude Code hears what you do here')
     page.close()
   })
+
+  test('says it no more once It says that something done here reached the conversation, before any answer has come', async () => {
+    const page = await opened({ asleep: true })
+    const asked = moved(page)
+    await asked.accept()
+    // Taken by It and waiting: the conversation may still not hear
+    await page.progress([{ id: asked.id, handed: false, turn: null }])
+    expect(page.$('#asleep').hidden).toBe(false)
+    // Handed to the conversation, as only one that has loaded the add-on is: it hears, and the amber goes
+    await page.progress([{ id: asked.id, handed: true, turn: null }])
+    expect(page.$('#asleep').hidden).toBe(true)
+    expect(page.state('room')).not.toContain('cannot hear')
+    page.close()
+  })
 })
 
 describe('the agent’s dock', () => {

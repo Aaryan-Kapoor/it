@@ -166,7 +166,10 @@ var Shell = (() => {
   var shown = () => (at >= 0 ? parts[NAMES[at]] : null);
 
   // ── Where the conversation that put the page up cannot hear it yet ──
-  // The page says so, and what to type, until the first answer of the agent's arrives
+  // The page says so, and what to type, until It says that something done here reached the
+  // conversation, or that a turn of it runs, which a conversation without the add-on never has,
+  // or else until the first answer of the agent's arrives. Left up until that answer, it said the
+  // agent could not hear while clicks were reaching it already (seen in rehearsals)
   var asleep = P.asleep === true || P.asleep === "true";
   $("asleep").hidden = !asleep;
   function heardFrom() {
@@ -342,7 +345,11 @@ var Shell = (() => {
     boxes.push(box);
     return box;
   }
-  if (typeof It.onProgress === "function") It.onProgress((said) => { latest = said && typeof said === "object" ? said : null; boxes.forEach((b) => b.heard()); });
+  if (typeof It.onProgress === "function") It.onProgress((said) => {
+    latest = said && typeof said === "object" ? said : null;
+    if (latest && (latest.working === true || (Array.isArray(latest.actions) && latest.actions.some((a) => a && a.handed === true)))) heardFrom();
+    boxes.forEach((b) => b.heard());
+  });
 
   /**
    * One thing at a time that the person asks of the agent in a part of the page, and its answer.
