@@ -282,6 +282,10 @@ const watchingAgents = setInterval(() => {
       const [pid, parent, ...rest] = line.split('|')
       if (seenAgents.has(pid)) continue
       seenAgents.add(pid)
+      // Only the run's own: a process whose command line names the run's folder or the harness's
+      // copy of the app. The owner's own agent apps, which run on the same machine, are never written
+      const said = rest.join('|').toLowerCase()
+      if (!said.includes(f.top.toLowerCase()) && !said.includes(appDir.toLowerCase())) continue
       const words = scrub(rest.join('|')).text.replace(/\s+/g, ' ').slice(0, 260)
       writeFileSync(agentsLog, `${rec ? rec.at().toFixed(1) : '?'}s new ${pid} (parent ${parent}): ${words}\n`, { flag: 'a' })
     }
