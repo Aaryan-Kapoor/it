@@ -447,6 +447,12 @@ describe('the guide for the first page', () => {
   const examples = (text: string) =>
     [...text.matchAll(/^it tour answer <the action's id> '(\{.*\})'$/gm)].map((m) => JSON.parse(m[1]!) as Record<string, unknown>)
 
+  test('has the agent read its instructions again with a bare `it tour`, which changes nothing, and never with `it tour show start`, which put a tour under way back to its start', () => {
+    const rule = GUIDE.split('\n').find((line) => line.startsWith('9. '))!
+    expect(rule).toContain('run `it tour` with nothing after it.** It prints them and changes nothing.')
+    expect(rule).toContain('Never run `it tour show start` again once the tour is up to look something up')
+  })
+
   test('shows the first page before anything else, and before the pairing link where no screen is paired', () => {
     expect([...GUIDE.matchAll(/^it tour show ([a-z]+)/gm)][0]![1]).toBe('start')
     expect(part).toContain('give them the link that `it site --no-open` prints')

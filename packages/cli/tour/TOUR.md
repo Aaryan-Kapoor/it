@@ -14,6 +14,7 @@ The tour is one page, `tour-start`, with the whole first run of It on it: a room
 6. **Never ask a question in the chat, and never go on by yourself.** The person moves through the first page themselves. Never show another page because of where they are on it.
 7. **Never say "step 3 of 5", "this works", or what you are about to do.** No tables of results and no progress reports. The screen is the report.
 8. **If something fails, say so in one plain line and go on.** A tour that stops at a broken part teaches nothing.
+9. **To read these instructions again, run `it tour` with nothing after it.** It prints them and changes nothing. Never run `it tour show start` again once the tour is up to look something up: it puts the tour back to its first part, and what the person did on it is lost.
 
 ## The first page
 
