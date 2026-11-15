@@ -2,6 +2,8 @@
 # hook in the project's own settings, the project trusted at Claude Code's own question; It set up
 su -l ana -c '
 mkdir -p ~/bin ~/work/.claude
+# What /login leaves in ~/.claude.json besides the account: onboarding done (no account details are written here)
+node -e "const f=process.env.HOME+\"/.claude.json\";const fs=require(\"fs\");let j={};try{j=JSON.parse(fs.readFileSync(f,\"utf8\"))}catch{};j.hasCompletedOnboarding=true;fs.writeFileSync(f,JSON.stringify(j,null,2))"
 cat > ~/bin/marker-server <<"S"
 #!/bin/sh
 touch /tmp/it-marker-server-$(date +%s%N)
