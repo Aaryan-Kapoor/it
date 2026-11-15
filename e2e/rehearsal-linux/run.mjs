@@ -161,7 +161,7 @@ async function main() {
   if (has('fake-media')) exec('touch /etc/rehearsal-fake-media')
   sh(['exec', '-d', name, 'su', '-l', 'ana', '-c', 'DISPLAY=:1 browser about:blank'])
   await new Promise((r) => setTimeout(r, 5000))
-  exec(`DISPLAY=:1 su ana -c "wmctrl -r Terminal -e 0,0,0,960,1080; for w in Chromium Firefox about; do wmctrl -r $w -b remove,maximized_vert,maximized_horz; wmctrl -r $w -e 0,960,0,960,1080; done; wmctrl -a Terminal"`, { quiet: true })
+  exec(`DISPLAY=:1 su ana -c "wmctrl -r Terminal -e 0,0,0,960,1080; for w in Chromium Firefox Nightly about; do wmctrl -r $w -b remove,maximized_vert,maximized_horz; wmctrl -r $w -e 0,960,0,960,1080; done; wmctrl -a Terminal"`, { quiet: true })
 
   // ---- the recording ----
   exec(`ffmpeg -nostdin -y -loglevel error -f x11grab -framerate 12 -video_size 1920x1080 -i :1 -vf scale=1600:-2 -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p /var/lib/rehearsal-video/video.mp4 > /var/lib/rehearsal-video/ffmpeg.log 2>&1 & echo $! > /run/rehearsal-ffmpeg.pid`)
