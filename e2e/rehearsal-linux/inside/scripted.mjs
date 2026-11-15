@@ -4,10 +4,10 @@
 //
 //   node scripted.mjs <S4|S6|S7a|S7b> <app> <run folder>
 import { execFileSync } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { chromium } from 'playwright'
 import { answerApp, busy, quitApp, settle, startApp } from './agent.mjs'
-import { saveTerminal, screen, setRunDir, sleep, step, type } from './lib.mjs'
+import { key, saveTerminal, screen, setRunDir, sleep, step, type } from './lib.mjs'
 
 const [scenario, app, dir] = process.argv.slice(2).filter(Boolean)
 setRunDir(dir)
@@ -542,6 +542,85 @@ async function WAKE() {
   check('8. opening the conversation by hand delivers the waiting click', ok8, { seconds: Math.round((Date.now() - t8) / 1000) })
 }
 
+/** Before the restart: both screens paired, a page, a click answered, the app quit. */
+async function WAKEBOOT1() {
+  const who = app
+  const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
+  let p = ctx.pages().find((x) => !x.url().startsWith('devtools')) ?? (await ctx.newPage())
+  const link = () => /https?:\/\/localhost:\d+\/pair#[A-Za-z0-9]+/.exec(sh('~/.it/bin/it site --no-open 2>&1'))?.[0]
+  const pair = link()
+  check('it site gives a pairing link', !!pair)
+  if (pair) await p.goto(pair).catch(() => {})
+  await sleep(8000)
+  // The second screen, a browser of its own, paired by a second link
+  sh('setsid -f env DISPLAY=:1 /opt/ms-playwright/chromium-1228/chrome-linux64/chrome --user-data-dir=/opt/person-profile/screen2 --no-sandbox --test-type --no-first-run --no-default-browser-check --password-store=basic --remote-debugging-port=9223 --window-position=1300,300 --window-size=600,700 about:blank >/dev/null 2>&1')
+  await sleep(6000)
+  const b2 = await chromium.connectOverCDP('http://127.0.0.1:9223')
+  const p2 = b2.contexts()[0].pages()[0] ?? (await b2.contexts()[0].newPage())
+  const pair2 = link()
+  if (pair2) await p2.goto(pair2).catch(() => {})
+  await sleep(8000)
+  check('the second screen is paired', /localhost:4700\/(?!pair)/.test(p2.url()) || !/pair/.test(p2.url()), { url: p2.url().replace(/#.*/, '') })
+  await startApp(who, counts)
+  await ask(who, 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.')
+  await settle(who, counts, 600_000, 8000)
+  let url = null
+  for (let i = 0; i < 40 && !url; i++) {
+    p = ctx.pages().find((x) => x.url().includes('/p/')) ?? p
+    if (PIZZA.test(await shown(p).catch(() => ''))) url = p.url()
+    else await sleep(3000)
+  }
+  if (!check('the page is on the screen', !!url)) return
+  writeFileSync('/var/lib/rehearsal-flow/url.txt', url)
+  const before = await shown(p)
+  step(`picks "${await press(p, PIZZA, 0)}" with the conversation open`)
+  await answered(p, before, 240_000, 'a click with the conversation open is answered')
+  await settle(who, counts, 120_000, 6000)
+  await quitApp(who)
+  await b2.close().catch(() => {})
+  sh("pkill -u ana -f 'user-data-dir=/opt/person-profile/screen2' || true")
+  await sleep(3000)
+}
+
+/** After the restart, nobody signed in: a click from the second screen, timed, with what It reopened. */
+async function WAKEBOOT2() {
+  const who = app
+  try {
+    const prior = JSON.parse(readFileSync(`${dir}/flow.json`, 'utf8'))
+    verdict.checks.push(...(prior.checks ?? []))
+  } catch {}
+  const url = readFileSync('/var/lib/rehearsal-flow/url.txt', 'utf8').trim()
+  step('after the restart', { linger: sh('loginctl show-user ana -p Linger 2>&1').trim(), userManager: sh('systemctl is-active user@1000.service 2>&1').trim(), sessions: sh('loginctl list-sessions --no-legend 2>&1 | wc -l').trim(), itAnswers: sh('curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4700/ 2>&1').trim() })
+  browser = await chromium.connectOverCDP('http://127.0.0.1:9223')
+  const ctx = browser.contexts()[0]
+  const p = ctx.pages()[0] ?? (await ctx.newPage())
+  await p.goto(url).catch(() => {})
+  await sleep(10_000)
+  step('the second screen opens the page', { shows: (await shown(p)).slice(0, 160), site: (await p.mainFrame().evaluate(() => document.body.innerText).catch(() => '')).slice(0, 200) })
+  const had = new Set(appProcs(who).map((x) => x.pid))
+  const before = await shown(p)
+  const t0 = Date.now()
+  step(`after the restart, picks "${await press(p, PIZZA, 1)}" on the second screen`, { bar: await bar(p) })
+  let woke = null
+  let ok = false
+  const bars = []
+  while (Date.now() - t0 < 300_000) {
+    if (!woke) {
+      const fresh = appProcs(who).filter((x) => !had.has(x.pid))
+      if (fresh.length) woke = { pid: fresh[0].pid, seconds: Math.round((Date.now() - t0) / 1000), names: envNames(fresh[0].pid)?.join(' ') }
+    }
+    const b = await bar(p)
+    if (b && b !== bars.at(-1)) bars.push(b)
+    const now = await shown(p).catch(() => before)
+    if (now !== before && now.split('\n').some((l) => l.trim().length > 25 && !before.includes(l) && !/sending|sent\.|waiting|working|picking|choosing/i.test(l))) {
+      ok = true
+      break
+    }
+    await sleep(1000)
+  }
+  check('after the restart, nobody signed in, a click from the second screen is answered', ok, { seconds: Math.round((Date.now() - t0) / 1000), bars: bars.join(' | ').slice(0, 500), reopened: woke ?? 'none seen' })
+}
+
 async function main() {
   try {
     if (scenario === 'S4') await S4()
@@ -550,6 +629,8 @@ async function main() {
     else if (scenario === 'SOAK') await SOAK()
     else if (scenario === 'SOAK2') await SOAK2()
     else if (scenario === 'WAKE') await WAKE()
+    else if (scenario === 'WAKEBOOT1') await WAKEBOOT1()
+    else if (scenario === 'WAKEBOOT2') await WAKEBOOT2()
     else check(`no scenario ${scenario}`, false)
     const failed = verdict.checks.filter((c) => !c.ok)
     verdict.ok = failed.length === 0 && verdict.checks.length > 0

@@ -277,7 +277,7 @@ async function main() {
   }
   log(`flow ${flow} with ${app} in ${which}`)
   await new Promise((resolve) => {
-    const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK|WAKE)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow} ${app} ${which === 'chromium' && /^(S\d|SOAK|WAKE)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK|WAKE)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow === 'WAKEBOOT' ? 'WAKEBOOT1' : flow} ${app} ${which === 'chromium' && /^(S\d|SOAK|WAKE)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
     const kill = setTimeout(() => {
       log('the flow ran past its time')
       exec("pkill -INT -f 'node /build/harness/' || true")
@@ -299,6 +299,48 @@ async function main() {
       resolve()
     })
   })
+  if (flow === 'WAKEBOOT') {
+    // The whole machine restarted, and nobody signs in or opens a terminal: the click comes from a
+    // second screen, a browser of its own that is no login session of the person's
+    if (has('linger-as-desktop')) {
+      // What `it setup` gets on a desktop, where polkit lets a person keep their own services
+      // after logout, and this container's lack of polkit refused it
+      exec('loginctl enable-linger ana')
+      result.lingerAsDesktop = 'loginctl enable-linger ana, by root, standing in for setup on a desktop'
+    }
+    result.lingerBeforeRestart = exec('loginctl show-user ana -p Linger 2>/dev/null; ls /var/lib/systemd/linger/', { quiet: true }).stdout.trim()
+    log('restarting the machine')
+    exec('kill -INT $(cat /run/rehearsal-ffmpeg.pid) 2>/dev/null; sleep 3')
+    sh(['cp', `${name}:/var/lib/rehearsal-video/video.mp4`, join(runHere, 'before-reboot.mp4')], { timeout: 300_000 })
+    sh(['restart', '-t', '90', name], { timeout: 240_000 })
+    for (let i = 0; i < 60; i++) {
+      const st = exec('systemctl is-system-running', { quiet: true }).stdout.trim()
+      if (st === 'running' || st === 'degraded') break
+      await new Promise((r) => setTimeout(r, 1000))
+    }
+    await new Promise((r) => setTimeout(r, 20_000))
+    result.afterBootNobodySignedIn = {
+      userManager: exec('systemctl is-active user@1000.service', { quiet: true }).stdout.trim(),
+      sessions: exec('loginctl list-sessions --no-legend | wc -l', { quiet: true }).stdout.trim(),
+      itService: exec('systemctl --user -M ana@ is-active it.service 2>&1 | head -1', { quiet: true }).stdout.trim(),
+    }
+    log(`after the restart, nobody signed in: ${JSON.stringify(result.afterBootNobodySignedIn)}`)
+    exec(`ffmpeg -nostdin -y -loglevel error -f x11grab -framerate 12 -video_size 1920x1080 -i :1 -vf scale=1600:-2 -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p /var/lib/rehearsal-video/video.mp4 > /var/lib/rehearsal-video/ffmpeg.log 2>&1 & echo $! > /run/rehearsal-ffmpeg.pid`)
+    exec('mkdir -p /var/lib/rehearsal-flow && chown ana:ana /var/lib/rehearsal-flow')
+    // The second screen: started as ana without a login session (docker exec -u, no PAM)
+    sh(['exec', '-d', '-u', 'ana', '-e', 'DISPLAY=:1', '-e', 'HOME=/home/ana', name, '/opt/ms-playwright/chromium-1228/chrome-linux64/chrome', '--user-data-dir=/opt/person-profile/screen2', '--no-sandbox', '--test-type', '--no-first-run', '--no-default-browser-check', '--password-store=basic', '--remote-debugging-port=9223', '--window-position=980,40', '--window-size=900,1000', 'about:blank'])
+    await new Promise((r) => setTimeout(r, 6000))
+    await new Promise((resolve) => {
+      const child = spawn('sudo', ['-n', 'docker', 'exec', '-u', 'ana', '-e', 'HOME=/home/ana', '-e', 'DISPLAY=:1', '-e', 'PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright', '-w', '/home/ana', name, 'node', '/build/harness/scripted.mjs', 'WAKEBOOT2', app, FLOW], { stdio: ['ignore', 'pipe', 'pipe'] })
+      const kill = setTimeout(() => exec("pkill -INT -f 'node /build/harness/' || true"), 20 * 60_000)
+      child.stdout.on('data', (d) => process.stdout.write(redact(d.toString(), held)))
+      child.stderr.on('data', (d) => process.stdout.write(redact(d.toString(), held)))
+      child.on('close', () => {
+        clearTimeout(kill)
+        resolve()
+      })
+    })
+  }
 }
 
 let collected = false
