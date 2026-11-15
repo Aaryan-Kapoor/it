@@ -17,6 +17,6 @@ if [ "$kind" = tmux ]; then echo '[ -z "$TMUX" ] && exec tmux new -A -s main' >>
 # The user manager and It's service started again, with the shell as it now is
 systemctl restart user@1000.service; sleep 3
 # That ended the terminal's session too: the person opens a terminal again, in their own login shell
-su -l ana -c 'tmux new-session -d -s agent -x 104 -y 56 -c /home/ana/work'
+su -l ana -s /bin/bash -c 'tmux new-session -d -s agent -x 104 -y 56 -c /home/ana/work' > /var/lib/rehearsal-flow/prep-shell.log 2>&1
 su -l ana -s /bin/bash -c 'tmux list-sessions; tmux display -p -t agent "pane shell: #{pane_current_command}"'
 su -l ana -s /bin/bash -c 'systemctl --user start it.service; sleep 15; ~/.it/bin/it service logs 2>&1 | grep -i "reopens are given" | tail -1'
