@@ -8,8 +8,9 @@
 // commands runs. Whatever is in the folder and takes its permissions from it is open to them with
 // it. So each of It's files and folders is given permissions of its own, which name the person
 // and the system alone, and is closed to what is added to the folder above it.
-import { execFile, execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import path from 'node:path'
+import { printed, runSync } from './child'
 
 /** One of the system's own programs, by where the system keeps it: one of the same name on PATH (Git's `whoami`, say) is not it. */
 const system = (...parts: string[]) => path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', ...parts)
@@ -22,12 +23,14 @@ let me: string | null | undefined
 export function ownSid(): string | null {
   if (me !== undefined) return me
   try {
-    const said = execFileSync(system('whoami.exe'), ['/user', '/fo', 'csv', '/nh'], {
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: 15_000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
+    const said = printed(
+      runSync(system('whoami.exe'), ['/user', '/fo', 'csv', '/nh'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 15_000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }),
+    )
     me = /"(S-1-[0-9-]+)"\s*$/.exec(said.trim())?.[1] ?? null
   } catch {
     me = null
@@ -59,12 +62,8 @@ export function keepToOwner(target: string, folder = false): boolean {
   if (process.platform !== 'win32') return true
   const sid = ownSid()
   if (!sid) return false
-  try {
-    execFileSync(system('icacls.exe'), ownerOnly(target, sid, folder), { windowsHide: true, timeout: 15_000, stdio: 'ignore' })
-    return true
-  } catch {
-    return false
-  }
+  const ran = runSync(system('icacls.exe'), ownerOnly(target, sid, folder), { windowsHide: true, timeout: 15_000, stdio: 'ignore' })
+  return !ran.error && ran.status === 0
 }
 /** The same, for a writer that must not hold everything else up while it is done. */
 export function keepToOwnerAsync(target: string, folder = false): Promise<boolean> {

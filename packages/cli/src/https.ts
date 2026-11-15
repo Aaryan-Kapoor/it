@@ -2,7 +2,7 @@
 // and what it refuses. It reads what Tailscale serves, adds only its own two entries, and takes
 // those two away again where it cannot confirm that no Tailscale Funnel makes It public. It never
 // changes a Funnel, or anything Tailscale serves for another program.
-import { spawnSync } from 'node:child_process'
+import { runSync } from './child'
 import { Problem } from './lib'
 import { funnelPorts, inspectFunnel, type System, servedAs, tailscaleCommand } from './serve/tailnet'
 
@@ -14,7 +14,7 @@ export type Run = (args: string[]) => Ran
 export const tailscaleRun =
   (system?: System): Run =>
   (args) => {
-    const ran = spawnSync(tailscaleCommand(system) ?? 'tailscale', args, {
+    const ran = runSync(tailscaleCommand(system) ?? 'tailscale', args, {
       encoding: 'utf8',
       timeout: 60_000,
       windowsHide: true,

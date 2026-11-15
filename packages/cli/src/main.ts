@@ -4,7 +4,7 @@
 // five that a person runs to look after It (`it setup`, `it status`, `it site`, `it network`
 // and `it service status`) print a few plain sentences where standard output is a terminal, and
 // the same JSON as ever where it is not, or when `--json` is given.
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import {
   appendFileSync,
   chmodSync,
@@ -59,6 +59,7 @@ import {
   tellWordForWord,
   tooOldToReload,
 } from './arrives'
+import { runSync } from './child'
 import { CODEX_SAVE_ESCALATE } from './codex-settings'
 import { choices, conversationIds, local, type Route, refusedFor } from './connector'
 import { deletePage, deletionStatus } from './delete'
@@ -1600,7 +1601,7 @@ async function pathLine(): Promise<string | undefined> {
 /** PowerShell, given one thing to run, exactly as it is written. What it printed, or nothing where it could not be run or ended as a failure. */
 function inPowerShell(script: string): string | undefined {
   try {
-    const ran = spawnSync(
+    const ran = runSync(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`${service.PS_QUIET}\n${script}`, 'utf16le').toString('base64')],
       {

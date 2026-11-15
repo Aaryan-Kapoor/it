@@ -2,7 +2,7 @@
 // conversation on without a window, how that command is run and stopped, and how often a
 // conversation may be reopened. None of it is done for an app the person has not switched
 // Auto-wake on for, which is the connector's to see to.
-import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import {
   closeSync,
@@ -21,6 +21,7 @@ import {
 import os from 'node:os'
 import path from 'node:path'
 import { WAKE_BACK_MS, WAKES } from '@it/protocol'
+import { printed, runSync } from './child'
 import { harnessEnv } from './lib'
 
 /** Why a reopened conversation ended, where a person stopped it. It is not a failure, and nothing is tried again for it. */
@@ -1102,7 +1103,7 @@ export function bootId(): string | undefined {
             // it is printed as a date in the time zone of the moment, and so reads differently
             // after a change of zone, with the machine never having stopped
             String(
-              spawnSync('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).stdout ??
+              runSync('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).stdout ??
                 '',
             )
           : ''
@@ -1130,7 +1131,7 @@ export const fromAnotherStart = (noted: string | undefined, now: string | undefi
  * not be run, or ended in a way that is none of `ok`.
  */
 function ps(args: string[], ok: number[] = [0]): string | null {
-  const ran = spawnSync(process.platform === 'darwin' ? '/bin/ps' : 'ps', args, {
+  const ran = runSync(process.platform === 'darwin' ? '/bin/ps' : 'ps', args, {
     encoding: 'utf8',
     timeout: 5000,
     maxBuffer: 16 * 1024 * 1024,
@@ -1574,7 +1575,7 @@ export function openBy(file: string): number[] | null {
       // By where macOS keeps it, as `ps` and `sysctl` are run: /usr/sbin is not on every PATH It
       // is started with, and a `lsof` that is not found would leave every open conversation
       // unknown, so that a click for it went neither into Codex's queue nor to a reopening.
-      const said = execFileSync('/usr/sbin/lsof', ['-t', '--', real], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
+      const said = printed(runSync('/usr/sbin/lsof', ['-t', '--', real], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }))
       return [
         ...new Set(
           said

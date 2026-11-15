@@ -734,17 +734,26 @@ describe('whether some Codex has a conversation open', () => {
     const lock = path.join(scratch, 'open.lock')
     writeFileSync(lock, '')
     const platform = process.platform
-    const execFileSync = childProcess.execFileSync
+    const spawnSync = childProcess.spawnSync
     const asked: string[] = []
     try {
       Object.defineProperty(process, 'platform', { value: 'darwin' })
-      childProcess.execFileSync = new Proxy(execFileSync, {
+      childProcess.spawnSync = new Proxy(spawnSync, {
         apply(_target, _self, [file, args]) {
           asked.push(String(file))
           // What macOS has, and a PATH that does not lead to it: only the full path is found
-          if (file !== '/usr/sbin/lsof') throw Object.assign(new Error(`spawnSync ${file} ENOENT`), { code: 'ENOENT' })
+          if (file !== '/usr/sbin/lsof')
+            return {
+              pid: 0,
+              output: [],
+              stdout: '',
+              stderr: '',
+              status: null,
+              signal: null,
+              error: Object.assign(new Error(`spawnSync ${file} ENOENT`), { code: 'ENOENT' }),
+            }
           expect(args).toEqual(['-t', '--', lock])
-          return '4242\n4242\n'
+          return { pid: 1, output: [], stdout: '4242\n4242\n', stderr: '', status: 0, signal: null }
         },
       })
       syncBuiltinESMExports()
@@ -752,7 +761,7 @@ describe('whether some Codex has a conversation open', () => {
       expect(asked).toEqual(['/usr/sbin/lsof'])
     } finally {
       Object.defineProperty(process, 'platform', { value: platform })
-      childProcess.execFileSync = execFileSync
+      childProcess.spawnSync = spawnSync
       syncBuiltinESMExports()
     }
   })

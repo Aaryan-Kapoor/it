@@ -2,9 +2,9 @@
 // app's own process, usually through a shell. So when one app has been started from inside
 // another, the processes above the command say which of the two is the inner one, which the
 // environment cannot: it holds the marks of both, the same whichever way round they are.
-import { execFileSync } from 'node:child_process'
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import type { Harness } from '@it/protocol'
+import { printed, runSync } from './child'
 
 /** A process, as far as this needs to know it: what started it, and the first words of its command line, of which the first is the program itself. */
 export interface Proc {
@@ -198,7 +198,7 @@ export function psWords(table: Map<number, Proc>, text: string): void {
 }
 
 const ps = (...args: string[]) =>
-  execFileSync('/bin/ps', ['-ww', ...args], { encoding: 'utf8', timeout: 2000, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] })
+  printed(runSync('/bin/ps', ['-ww', ...args], { encoding: 'utf8', timeout: 2000, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }))
 /**
  * The processes above one, as `ps` tells them. Each column is asked for by an option of its
  * own: given as one list, the `ps` of macOS takes everything after the first `=` for a heading.

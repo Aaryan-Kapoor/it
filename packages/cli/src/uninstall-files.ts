@@ -1,8 +1,8 @@
-import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { lstatSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, unlinkSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { runSync } from './child'
 import { INSTALLATION_FILE } from './installation'
 import { withInstallerLock } from './installer-lock'
 import { claimLeft, claimLock } from './legacy-lock'
@@ -260,7 +260,7 @@ export function finishInstallationRemoval(folder: string): string[] {
   return lstatSync(folder, { throwIfNoEntry: false }) ? readdirSync(folder) : []
 }
 
-const reg = (args: string[]) => spawnSync('reg.exe', args, { windowsHide: true, timeout: 15_000 }).status === 0
+const reg = (args: string[]) => runSync('reg.exe', args, { windowsHide: true, timeout: 15_000 }).status === 0
 
 /**
  * Asks Windows to delete a file the next time this person signs in, and says whether it was
