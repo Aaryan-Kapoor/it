@@ -8015,8 +8015,8 @@ describe('whether what the person does arrives by itself, as a page’s command 
       // An agent that says which it is to be is taken at its word
       const awake = printed(await run(m, ['tour', 'show', 'start', '--param', 'asleep=false'], env))
       expect(awake.asleep).toBeUndefined()
-      expect(awake.arrives.next).toContain('run `it tour next`, act on what it prints')
-      expect(awake.arrives.next).not.toContain('it wait')
+      expect(awake.arrives.next).toContain(`run \`${itOn(m)} tour next\`, act on what it prints`)
+      expect(awake.arrives.next).not.toContain(`${itOn(m)} wait`)
       // And any other page of the tour is told what a page is told there: to wait for what is done on it
       const other = printed(await run(m, ['tour', 'show', 'button'], env))
       expect(other.asleep).toBeUndefined()
