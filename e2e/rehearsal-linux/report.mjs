@@ -23,6 +23,8 @@ export function runs(folder) {
     .sort((a, b) => String(b.start).localeCompare(String(a.start)))
 }
 
+/** A scenario's name as the owner reads it. */
+const flowName = (r) => (r.flow === 'S1guide' ? 'S1, corrected guide' : r.flow === 'SOAK' ? 'Soak (2 h)' : r.flow) + (String(r.person ?? '').startsWith('a script') ? ' (script)' : '')
 const mins = (r) => (r.start && r.end ? Math.round((Date.parse(r.end) - Date.parse(r.start)) / 60000) : '?')
 const verdict = (r) => (r.ok ? 'PASS' : r.blame === 'harness' ? 'NOT COUNTED (harness)' : 'FAIL')
 
@@ -32,7 +34,7 @@ export function writeReport(folder) {
     .map((r) => {
       const video = existsSync(join(folder, r.dir, 'video.mp4')) ? `<a href="${esc(r.dir)}/video.mp4">play</a>` : 'no video'
       const cls = r.ok ? 'pass' : r.blame === 'harness' ? 'skip' : 'fail'
-      return `<tr class="${cls}"><td>${esc(r.start?.slice(0, 16).replace('T', ' '))}</td><td><b>${esc(verdict(r))}</b></td><td>${esc(r.flow)}</td><td>${esc(r.appVersion ?? r.app)}</td><td>${esc(r.model ?? '')}</td><td>${esc(r.browser)}</td><td>Ubuntu ${esc(r.ubuntu)}</td><td>${esc(String(r.build ?? '').slice(0, 8))}</td><td>${mins(r)} min</td><td>${video} · <a href="${esc(r.dir)}/result.json">result</a> · <a href="${esc(r.dir)}/terminal.txt">terminal</a></td><td>${esc(r.reason ?? '')}${r.blame && !r.ok ? ` <i>(${esc(r.blame)})</i>` : ''}</td></tr>`
+      return `<tr class="${cls}"><td>${esc(r.start?.slice(0, 16).replace('T', ' '))}</td><td><b>${esc(verdict(r))}</b></td><td>${esc(flowName(r))}</td><td>${esc(r.appVersion ?? r.app)}</td><td>${esc(r.model ?? '')}</td><td>${esc(r.browser)}</td><td>Ubuntu ${esc(r.ubuntu)}</td><td>${esc(String(r.build ?? '').slice(0, 8))}</td><td>${mins(r)} min</td><td>${video} · <a href="${esc(r.dir)}/result.json">result</a> · <a href="${esc(r.dir)}/terminal.txt">terminal</a></td><td>${esc(r.reason ?? '')}${r.blame && !r.ok ? ` <i>(${esc(r.blame)})</i>` : ''}</td></tr>`
     })
     .join('\n')
   writeFileSync(
@@ -45,7 +47,7 @@ ${rows}
 </tbody></table></body></html>
 `,
   )
-  const lines = all.map((r) => `- ${r.start?.slice(0, 16).replace('T', ' ')} UTC · **${verdict(r)}** · ${r.flow} · ${r.appVersion ?? r.app} · ${r.model ?? 'model not read'} · ${r.browser} · Ubuntu ${r.ubuntu} · build ${String(r.build ?? '').slice(0, 8)} · ${mins(r)} min · \`${r.dir}\`${r.reason ? ` · ${r.reason}` : ''}`)
+  const lines = all.map((r) => `- ${r.start?.slice(0, 16).replace('T', ' ')} UTC · **${verdict(r)}** · ${flowName(r)} · ${r.appVersion ?? r.app} · ${r.model ?? 'model not read'} · ${r.browser} · Ubuntu ${r.ubuntu} · build ${String(r.build ?? '').slice(0, 8)} · ${mins(r)} min · \`${r.dir}\`${r.reason ? ` · ${r.reason}` : ''}`)
   const block = `${BEGIN}\n## Runs\n\n${lines.join('\n') || '(none yet)'}\n${END}`
   const path = join(folder, 'STATUS.md')
   let text = existsSync(path)
