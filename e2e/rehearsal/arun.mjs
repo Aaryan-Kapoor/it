@@ -113,6 +113,16 @@ log('the agent app is set up in the throwaway profile', `${app} ${version}, ${MO
 const term = await terminalView({ port: controlPort + 1, title: `${profileName}@laptop — Windows PowerShell`, cols: 104, rows: 50, fontSize: 20 })
 const tw = await terminalWindow({ term, profile: f.viewProfile })
 const browser = await personBrowser({ channel, profile: f.browserProfile, app: `${term.url}blank`, fakeMedia: process.argv.includes('--fake-media') })
+// A page that asks for a file never opens Windows's own file dialog here: the browser runs as the
+// owner, and that dialog would show the owner's own folders. The file chooser is answered with
+// the throwaway profile's picture where there is one, and with nothing where there is none.
+browser.context.on('page', (p) => p.on('filechooser', (fc) => answerChooser(fc)))
+browser.page.on('filechooser', (fc) => answerChooser(fc))
+function answerChooser(fc) {
+  const picture = path.join(f.home, 'Pictures', 'menu.png')
+  log('a page asked for a file; the harness gave it the profile\'s picture instead of opening the owner\'s file dialog', existsSync(picture) ? picture : '(none)')
+  fc.setFiles(existsSync(picture) ? [picture] : []).catch(() => {})
+}
 term.onOpen = async (url) => {
   log('a link in the terminal was clicked, and opened in the browser', url)
   browser.page.goto(url).catch((e) => log('the link could not be opened', e.message, false))
