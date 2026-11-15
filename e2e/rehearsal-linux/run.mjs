@@ -115,16 +115,17 @@ async function main() {
   result.os = exec('. /etc/os-release; echo $PRETTY_NAME').stdout.trim()
 
   // ---- the agent app, as a participant who chose its model would have it ----
-  if (app === 'codex') asAna(`mkdir -p ~/.codex && printf 'model = "${MODEL.codex.model}"\nmodel_reasoning_effort = "${MODEL.codex.effort}"\n\n[features]\napps = false\n' > ~/.codex/config.toml`)
+  // Set in ana's own settings, keeping what is there (on a machine from a snapshot, what
+  // `it setup` wrote to turn It's add-on on)
+  asAna(`node /build/harness/settings.mjs ${app} ${MODEL[app].model} ${MODEL[app].effort}`)
+  if (app === 'claude') {
+    // Claude Code 2.1.325 shows "Medium effort" with effortLevel in its settings alone, and takes
+    // the variable: in ana's own shell, and in her user manager for a conversation It reopens
+    asAna(`grep -q CLAUDE_CODE_EFFORT_LEVEL ~/.bashrc || printf '\\nexport CLAUDE_CODE_EFFORT_LEVEL=${MODEL.claude.effort}\\n' >> ~/.bashrc; systemctl --user set-environment CLAUDE_CODE_EFFORT_LEVEL=${MODEL.claude.effort}`)
+  }
   // The owner's ChatGPT account has apps of its own (one named it_dot_test among them), which
   // Codex offers its model as tools; a participant's account has none of those
   if (app === 'codex') result.codexAppsOff = 'features.apps = false in ~/.codex/config.toml, so that the ChatGPT apps on the owner\'s account are not offered to the model'
-  else {
-    asAna(`mkdir -p ~/.claude && printf '{"model":"${MODEL.claude.model}","effortLevel":"${MODEL.claude.effort}"}\n' > ~/.claude/settings.json`)
-    // Claude Code 2.1.325 shows "Medium effort" with effortLevel in its settings alone, and takes
-    // the variable: in ana's own shell, and in her user manager for a conversation It reopens
-    asAna(`printf '\nexport CLAUDE_CODE_EFFORT_LEVEL=${MODEL.claude.effort}\n' >> ~/.bashrc; systemctl --user set-environment CLAUDE_CODE_EFFORT_LEVEL=${MODEL.claude.effort}`)
-  }
   result.modelSetting = { ...MODEL[app], where: app === 'codex' ? '~/.codex/config.toml' : '~/.claude/settings.json, and CLAUDE_CODE_EFFORT_LEVEL in ~/.bashrc and the user manager' }
   asAna('mkdir -p ~/work')
   if (has('prepare')) exec(arg('prepare'))
