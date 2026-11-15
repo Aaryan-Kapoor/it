@@ -1,6 +1,6 @@
 // The site: pairing, this display's registration, and the frame around everything else.
 
-import { NOUN, TAKES } from '@it/protocol'
+import { NOUN, newer, TAKES } from '@it/protocol'
 import { useConvex, useConvexAuth, useMutation, useQuery } from 'convex/react'
 import { Component, type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { version } from '../package.json'
@@ -964,7 +964,7 @@ function TopBar({
 }) {
   const convex = useConvex()
   const path = usePath()
-  const { code } = useSession()
+  const { code, service } = useSession()
   const [menu, setMenu] = useState(false)
   // Whether the connection to It is up, which is what the dot says
   const live = useSyncExternalStore(
@@ -1033,6 +1033,7 @@ function TopBar({
         </span>
       )}
       <div className={`grid-meta${live ? ' online' : ''}`}>
+        {newer(service?.version, version) && <Updated to={service?.version as string} />}
         {display && <Reminders display={display} />}
         {search && count !== undefined && <span className="grid-meta-count">{`${count} ${count === 1 ? NOUN.one : NOUN.many}`}</span>}
         <span className="grid-meta-live" role="status">
@@ -1073,6 +1074,20 @@ function TopBar({
         </div>
       </div>
     </header>
+  )
+}
+
+/**
+ * It was updated while this tab was open, and the tab still runs the site from before: said as
+ * one quiet ask beside the bar's others, with Reload. Nothing else reloads such a tab, and its
+ * version beside the bar went on naming the old one, which left a person unsure whether the
+ * update had happened at all.
+ */
+function Updated({ to }: { to: string }) {
+  return (
+    <button type="button" className="chip ask" title={`It ${to} is running. This tab still has the site of It ${version}.`} onClick={() => location.reload()}>
+      It was updated · Reload
+    </button>
   )
 }
 

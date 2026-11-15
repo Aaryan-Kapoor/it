@@ -86,6 +86,20 @@ describe('whether this browser is paired', () => {
     expect(session.current().service).toBeUndefined()
   })
 
+  test('the door says which version of It runs, which is kept where it is three numbers and nothing else', async () => {
+    let service: unknown = { functions: 'current', version: '0.1.43' }
+    door(() => paired({ service }))
+    const session = await load()
+    await session.begin()
+    expect(session.current().service).toEqual({ functions: 'current', version: '0.1.43' })
+    service = { functions: 'current', version: '0.1.43; reload' }
+    await session.token(true)
+    expect(session.current().service).toEqual({ functions: 'current' })
+    service = { functions: 'current', version: 43 }
+    await session.token(true)
+    expect(session.current().service).toEqual({ functions: 'current' })
+  })
+
   test('a 401 means this browser is not paired, and there is no token to give', async () => {
     door(() => refused)
     const session = await load()

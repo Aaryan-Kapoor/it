@@ -19,7 +19,7 @@ import { AUDIENCE, contentPort, EMBED_HOSTS, SANDBOX, UPLOAD } from '@it/protoco
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
-import { Problem } from './src/lib'
+import { Problem, VERSION } from './src/lib'
 import { doorKey } from './src/serve/config'
 import { type Arrival, boundPort, type DoorParts, inheritable, makeContent, makeDoor, startDoor } from './src/serve/door'
 import { BRIDGE, isPrivate } from './src/serve/network'
@@ -1084,7 +1084,8 @@ describe('What the door passes on to the backend', () => {
       expect(got.headers['cache-control']).toBe('no-store')
       expect(got.cookies).toEqual(SET)
       const current = await ask(door.base, { method: 'POST', path: '/session/token', headers: [own(), ['Cookie', `it_session_good=${role}`]] })
-      expect(JSON.parse(current.body).service).toEqual({ functions: 'current' })
+      // With the version of It that runs, which a tab opened before an update compares with its own site
+      expect(JSON.parse(current.body).service).toEqual({ functions: 'current', version: VERSION })
       const refused = await ask(behind.base, { method: 'POST', path: '/session/token', headers: headers.slice(0, 2) })
       expect(refused.status).toBe(401)
       expect(JSON.parse(refused.body)).not.toHaveProperty('service')

@@ -6,6 +6,7 @@
 import { getFunctionName } from 'convex/server'
 import type { Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { version } from '../package.json'
 
 // ---------- the stand-in backend ----------
 
@@ -50,6 +51,8 @@ const CODES: Record<string, { session: string; role: 'owner' | 'screen' }> = {
   ownercode00000000001: { session: 'session-1', role: 'owner' },
   screencode0000000002: { session: 'session-2', role: 'screen' },
 }
+/** What the door says of the It that runs, beside the token, as it does from 0.1.42. */
+let service: { functions: string; version?: string } | undefined
 /** Set by a test that wants the door to stop answering a sign-out. */
 let endFails = false
 /** Set by a test to the seconds left of the minute in which the door has had ten wrong codes from this browser's address: it tries none until then. */
@@ -57,7 +60,8 @@ let wrongCodesFor: number | null = null
 const door = async (path: string, init: RequestInit = {}) => {
   asked.push({ what: path, ...(init.body ? { args: JSON.parse(init.body as string) } : {}) })
   const answer = (status: number, body: unknown = {}) => new Response(JSON.stringify(body), { status })
-  if (path === '/session/token') return cookie ? answer(200, { token: 'a-token', expiresIn: 300, user: 'user-1', ...cookie }) : answer(401)
+  if (path === '/session/token')
+    return cookie ? answer(200, { token: 'a-token', expiresIn: 300, user: 'user-1', ...cookie, ...(service ? { service } : {}) }) : answer(401)
   if (wrongCodesFor !== null && (path === '/session/code' || path === '/session/redeem'))
     return new Response(JSON.stringify({ error: 'too_many_wrong_codes' }), { status: 429, headers: { 'retry-after': String(wrongCodesFor) } })
   if (path === '/session/code') {
@@ -135,6 +139,7 @@ const listening: Parameters<typeof window.addEventListener>[] = []
 beforeEach(() => {
   asked.length = 0
   cookie = null
+  service = undefined
   endFails = false
   wrongCodesFor = null
   answers = {
@@ -350,6 +355,38 @@ describe('a display key that another paired browser holds', () => {
     expect(names()).not.toContain('/session/end')
     expect(host.textContent).toContain('Say this to your agent')
   })
+})
+
+describe('a tab open since before It was updated', () => {
+  const RELOAD = 'It was updated · Reload'
+  test.each(['owner', 'screen'] as const)(
+    'is asked in the bar, as a %s, to reload where the It that runs is newer than its site, and only then',
+    async (role) => {
+      cookie = role === 'owner' ? CODES.ownercode00000000001! : CODES.screencode0000000002!
+      const [major, minor, patch] = version.split('.').map(Number) as [number, number, number]
+      for (const [runs, asked] of [
+        [`${major}.${minor}.${patch + 1}`, true],
+        [`${major}.${minor + 1}.0`, true],
+        [version, false],
+        [`${major}.${minor}.${Math.max(0, patch - 1)}`, false],
+        ['not a version', false],
+        [undefined, false],
+      ] as const) {
+        service = { functions: 'current', ...(runs === undefined ? {} : { version: runs }) }
+        await start()
+        expect([runs, button(RELOAD) !== undefined]).toEqual([runs, asked])
+        await act(async () => root.unmount())
+        host.remove()
+      }
+      // Pressing it reloads the tab, which then runs the new site
+      service = { functions: 'current', version: `${major + 1}.0.0` }
+      const reload = vi.fn()
+      vi.stubGlobal('location', { ...location, reload, pathname: '/', hash: '', search: '', origin: location.origin, href: location.href })
+      await start()
+      await press(RELOAD)
+      expect(reload).toHaveBeenCalledOnce()
+    },
+  )
 })
 
 describe('what each kind of session is shown', () => {
