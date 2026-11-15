@@ -174,47 +174,42 @@ var Shell = (() => {
   // who typed it before opening the page. Nothing is said before the site has said anything, so
   // that it never flashes up first; a site that speaks and says nothing of it, as an older one
   // does, leaves it to `asleep`. The site cannot know it for half a minute after It's service
-  // starts, so something the person did that has waited UNHEARD from their click without being
-  // handed to the conversation has the page say it as well. A conversation that hears is handed
-  // what was done in a second or two, so that says it only where something is wrong. Once the
-  // site has said that the conversation loaded the add-on, after saying it had not, nothing that
-  // waits says it any more. Once something done here has reached the
-  // conversation, or a turn of it runs, which a conversation without the add-on never has, or
-  // an answer of the agent's has come, it hears, and the page says no more of it
+  // starts, so where it says nothing, something the person did that is still waiting for It or
+  // for the conversation UNHEARD after their click has the page say it as well. A conversation
+  // that hears is handed what was done in a second or two, so that says it only where something
+  // is wrong. Once the site has said that the conversation loaded the add-on, after saying it had
+  // not, nothing that waits says it any more. Once something done here has reached the
+  // conversation, or a turn of it runs, which a conversation without the add-on never has, or an
+  // answer of the agent's has come, it hears, and the page says no more of it
   var asleep = P.asleep === true || P.asleep === "true";
   var UNHEARD = 8000;
   // What the site says: true while It knows that the conversation has not loaded the add-on, false where it does not know that, and undefined until it has said either
-  var site, spoke = false, loaded = false, heard = false, waited = false, waiting = 0;
-  var cannotHear = () => asleep && !heard && (site === true || (site === undefined && spoke) || waited);
+  var site, spoke = false, loaded = false, heard = false;
+  // Whether something the person did, in any part, has waited that long and is still waiting: not refused, not given back to them unsent, and not answered
+  var waited = () => (boxes || []).some((b) => { var m = b.model; return (m.stage === "sending" || m.stage === "took" || m.stage === "slow") && m.t0 >= 0 && Date.now() - m.t0 >= UNHEARD; });
+  var cannotHear = () => asleep && !heard && spoke && (site !== false || (!loaded && waited()));
   $("asleep").hidden = true;
   function hearing() {
     if ($("asleep").hidden === !cannotHear()) return;
     $("asleep").hidden = !cannotHear();
     if (shown()) draw(shown().box.model);
   }
-  /** What the site said, each time it says where things stand. Loaded since it said otherwise, the conversation hears, and what waited before is no reason to say that it does not. */
+  /** What the site said, each time it says where things stand. Loaded since it said otherwise, the conversation hears, and what waits is no reason to say that it does not. */
   function siteSaid(notLoaded) {
     spoke = true;
     if (typeof notLoaded === "boolean") {
-      if (site === true && notLoaded === false) { loaded = true; waited = false; clearTimeout(waiting); waiting = 0; }
+      if (site === true && notLoaded === false) loaded = true;
       site = notLoaded;
     }
     hearing();
   }
   function heardFrom() {
     heard = true;
-    clearTimeout(waiting);
     hearing();
   }
-  /** The person did something here: on a page put up where the conversation could not hear it, it may wait UNHEARD to be handed over before the page says what to type. */
+  /** The person did something here: looked at again once it may have waited long enough to say so. */
   function unheard() {
-    if (!asleep || heard || loaded || waited || waiting) return;
-    waiting = setTimeout(() => { waiting = 0; waited = true; hearing(); }, UNHEARD);
-  }
-  /** What the person did was not taken by It: it is not waiting for the conversation, and says nothing of it. */
-  function untaken() {
-    clearTimeout(waiting);
-    waiting = 0;
+    if (asleep && !heard && !loaded) setTimeout(hearing, UNHEARD);
   }
 
   // ── The agent's dock ──
@@ -305,7 +300,7 @@ var Shell = (() => {
     var m = { stage: "idle", idle: "", did: "", words: "", typed: "", typing: false, hint: "", t0: -1, at: {}, action: null, ended: false, long: null, late: true };
     var tick = 0, quiet = 0, typing = 0;
     var mine = () => shown() !== null && shown().box === box;
-    var show = () => { if (mine()) draw(m); };
+    var show = () => { hearing(); if (mine()) draw(m); };
     var since = () => Date.now() - m.t0;
     function stopClock() { clearTimeout(tick); clearTimeout(quiet); tick = quiet = 0; }
     function clock() { clearTimeout(tick); tick = setTimeout(() => { show(); clock(); }, 1000); }
@@ -376,7 +371,7 @@ var Shell = (() => {
         show();
         heardFrom();
       },
-      refused() { stopClock(); untaken(); m.stage = "refused"; show(); },
+      refused() { stopClock(); m.stage = "refused"; show(); },
       waiting: () => !!WAITING[m.stage],
       heard: heard,
     };
