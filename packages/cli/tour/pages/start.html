@@ -211,7 +211,8 @@ var Shell = (() => {
     if (s === "reached") return [m.ended ? AGENT + "’s turn ended, and no answer has come here yet" : AGENT + " has it, in its own conversation", whole];
     if (s === "working") return [AGENT + " is working on it", whole];
     if (s === "answered") return [AGENT + " answered" + (m.at.page === undefined ? "" : " in " + took(m.at.page)), ""];
-    if (s === "slow") return ["No answer after " + Math.round((m.long ? m.long.most : SLOW) / 1000) + " s. This is yours again" + (m.late ? ", and a late answer is still shown." : "."), ""];
+    // An agent app may be holding the turn on a question to the person in its own window, as Codex does on an approval: said, since the person is looking here
+    if (s === "slow") return ["No answer after " + Math.round((m.long ? m.long.most : SLOW) / 1000) + " s. " + AGENT + " may be waiting for you in its own window. This is yours again" + (m.late ? ", and a late answer is still shown." : "."), ""];
     if (s === "refused") return ["It did not take that. Do it again.", ""];
     return [m.idle || (asleep ? AGENT + " cannot hear this page yet" : AGENT + " hears what you do here"), ""];
   }

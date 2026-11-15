@@ -71,7 +71,7 @@ describe('the chessboard on the first page', () => {
     // The pawn is back where it was, the board is the person's, and the dock says so without promising the late answer
     expect([piece(page, 'e2') !== '', piece(page, 'e4'), waits(page)]).toEqual([true, '', false])
     expect(page.read('chess').stage).toBe('slow')
-    expect(page.state('chess')).toBe('No answer after 40 s. This is yours again.')
+    expect(page.state('chess')).toBe('No answer after 40 s. Claude Code may be waiting for you in its own window. This is yours again.')
     await reply(page, `${slow.data.request}:e7e5`, 'Late.')
     expect([piece(page, 'e7') !== '', piece(page, 'e5')]).toEqual([true, ''])
     expect(page.said('chess')).toBe('')
