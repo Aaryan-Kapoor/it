@@ -7668,7 +7668,7 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
         'Quit Codex and start it again now, then choose “Trust all and continue” when it asks to review hooks. Until then, Codex may ask you to approve every `it` command I run, and It’s hooks don’t run. In a terminal, `codex resume --last` brings this chat back. Once Codex is back, say “Give me the It tour.”'
       // Starting Codex again ends the agent's turn, so the tour is left until it is back
       expect(said.next).toContain(
-        `write the person one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${note}” Then end your turn, and do not run \`it tour --wait\` yet`,
+        `Write the person one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${note}” Then end your turn, and do not run \`it tour\` yet`,
       )
       expect(said.tell).toBe(`Tell the person this in your next message, word for word: “${note}”`)
       expect(Object.keys(said).pop()).toBe('tell')
@@ -8008,7 +8008,7 @@ describe('whether what the person does arrives by itself, as a page’s command 
       expect(said).toMatchObject({ id: 'tour-start', asleep: true, arrives: { byItself: false } })
       expect(said.arrives.next).toContain(`word for word: “${reloadLine('2.1.321')}”`)
       expect(said.arrives.next).toContain('end your turn')
-      expect(said.arrives.next).toContain('do not run `it wait`')
+      expect(said.arrives.next).toContain(`do not run \`${itOn(m)} wait\``)
       // The page itself is told, so that it says so to the person
       const begun = b.asked.filter((x) => x.path === 'publish:begin').at(-1)!.args
       expect(begun.slug).toBe('tour-start')
@@ -8410,8 +8410,8 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
     expect(said.next).toContain(`tells them this, word for word: “${line}”`)
     expect(ran.err.trimEnd().endsWith(`Tell them this in your next message, word for word:\n\n  ${line}`)).toBe(true)
     // Starting Codex again ends the agent's turn, so the tour is left until it is back, and is not run in this turn
-    expect(said.next).toContain('Then end your turn, and do not run `it tour --wait` yet: Codex has to be started again first, which ends this turn anyway.')
-    expect(said.next).not.toContain('in the same turn, run `it tour --wait`')
+    expect(said.next).toContain('Then end your turn, and do not run `it tour` yet: Codex has to be started again first, which ends this turn anyway.')
+    expect(said.next).not.toContain('It has you put a first page up')
     // And what it says in sentences for the person says to start Codex again, and why
     expect(ran.err).toContain(note)
 
@@ -8431,7 +8431,7 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
     )
     const held = printed(inThread.ran)
     expect(held.tell).toBe(`Tell the person this in your next message, word for word: “${T3_CODEX}”`)
-    expect(held.next).toContain(`tells them this, word for word: “${T3_CODEX}” Then, only once that message is written and in the same turn`)
+    expect(held.next).toContain(`tells them this, word for word: “${T3_CODEX}” What showing that page printed under \`arrives\` says whether to end your turn then or to wait.`)
     expect(held.next).not.toContain('Quit Codex')
   })
 })
