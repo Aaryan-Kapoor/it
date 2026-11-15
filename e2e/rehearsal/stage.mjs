@@ -85,8 +85,12 @@ export async function serve({ program, env, cwd, logFile, log }) {
 }
 
 /** The person's browser: the real Edge or Chrome, headed, with a profile of its own, on the right half of the screen. */
-export async function personBrowser({ channel, profile, fakeMedia = false, realMedia = false }) {
+export async function personBrowser({ channel, profile, fakeMedia = false, realMedia = false, app = null }) {
   const args = [`--window-position=${HALF},0`, `--window-size=${HALF + 8},${SCREEN.height + 24}`, '--no-first-run', '--no-default-browser-check', '--disable-features=Translate']
+  // As an app window (one window, no tabs), since Windows keeps an app window of Chromium on top
+  // of the others when asked, and a browser window with tabs not: on the owner's own desktop,
+  // only the rehearsal's windows may ever be on the screen
+  if (app) args.push(`--app=${app}`)
   if (fakeMedia) args.push('--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream')
   if (realMedia) args.push('--use-fake-ui-for-media-stream')
   const context = await chromium.launchPersistentContext(profile, {
@@ -96,7 +100,23 @@ export async function personBrowser({ channel, profile, fakeMedia = false, realM
     args,
     ignoreDefaultArgs: ['--enable-automation', '--no-sandbox'],
   })
-  const page = context.pages()[0] ?? (await context.newPage())
+  let page = context.pages()[0]
+  for (let i = 0; i < 40 && !page; i++) {
+    await sleep(250)
+    page = context.pages()[0]
+  }
+  page = page ?? (await context.newPage())
+  if (app)
+    // A page that would open in a window of its own opens in the one window instead
+    context.on('page', async (p) => {
+      if (p === page) return
+      try {
+        await p.waitForLoadState('commit', { timeout: 10_000 })
+        const url = p.url()
+        await p.close()
+        if (/^https?:\/\//.test(url)) await page.goto(url)
+      } catch {}
+    })
   return { context, page }
 }
 

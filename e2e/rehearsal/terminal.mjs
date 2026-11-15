@@ -52,6 +52,7 @@ export async function terminalView({ port, title, cols = 104, rows = 50, fontSiz
     if (req.url === '/') return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(page(title, cols, rows, fontSize))
     if (req.url === '/xterm.js') return res.writeHead(200, { 'content-type': 'text/javascript' }).end(readFileSync(path.join(xtermDir, 'lib', 'xterm.js')))
     if (req.url === '/xterm.css') return res.writeHead(200, { 'content-type': 'text/css' }).end(readFileSync(path.join(xtermDir, 'css', 'xterm.css')))
+    if (req.url === '/blank') return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!doctype html><title>New tab</title><body style="background:#fff"></body>')
     if (req.url === '/links.js')
       return res.writeHead(200, { 'content-type': 'text/javascript' }).end(readFileSync(path.join(NODE_MODULES, '@xterm', 'addon-web-links', 'lib', 'addon-web-links.js')))
     res.writeHead(404).end()

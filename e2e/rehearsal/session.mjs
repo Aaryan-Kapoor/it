@@ -93,7 +93,8 @@ const settingsFor = async () => {
     const r = await psAs(USER, `'<<<'; if (Test-Path '${UHOME}\\.codex\\config.toml') { Get-Content -Raw '${UHOME}\\.codex\\config.toml' }; '>>>'`, shellEnv)
     const m = /<<<\r?\n([\s\S]*?)>>>/.exec(r.output)
     if (!m) throw new Error(`the settings of Codex in the account could not be read: ${r.output.slice(0, 200)}`)
-    let toml = `${m[1].replace(/^\uFEFF/, '').trimEnd()}\n`
+    // What PowerShell printed has its own line endings: the file is written with plain newlines
+    let toml = `${m[1].replace(/^\uFEFF/, '').replace(/\r/g, '').trimEnd()}\n`
     const set = (k, v) => {
       const re = new RegExp(`^${k}\\s*=.*$`, 'm')
       toml = re.test(toml) ? toml.replace(re, `${k} = ${v}`) : `${k} = ${v}\n${toml}`
@@ -139,13 +140,13 @@ if (run) {
 // The windows: the terminal on the left, the browser on the right
 const term = await terminalView({ port: controlPort + 1, title: `${USER}@laptop — Windows PowerShell`, cols: 104, rows: 50, fontSize: 20 })
 const tw = await terminalWindow({ term, profile: path.join(top, 'terminal-view') })
-const browser = await personBrowser({ channel, profile: path.join(top, 'browser'), fakeMedia: false })
-await browser.page.goto('about:blank')
+const browser = await personBrowser({ channel, profile: path.join(top, 'browser'), fakeMedia: false, app: `${term.url}blank` })
+// The browser starts on an empty page, as a browser just opened does
 term.onOpen = async (url) => {
   log('a link in the terminal was clicked, and opened in the browser', url)
   try {
-    const blank = browser.page.url() === 'about:blank'
-    const p = blank ? browser.page : await browser.context.newPage()
+    const p = browser.page
+    // In the one window, as a click on a link in a terminal opens the browser on it
     await p.goto(url)
     await p.bringToFront()
   } catch (e) {
@@ -184,6 +185,20 @@ const raising = setInterval(() => {
   allowWindows()
   raise()
 }, 5000)
+// An address the person typed into the browser's address bar (hands browse <url>)
+const browseFile = path.join(WORK, 'hands', 'browse.txt')
+rmSync(browseFile, { force: true })
+const browsing = setInterval(async () => {
+  if (!existsSync(browseFile)) return
+  let url = ''
+  try {
+    url = readFileSync(browseFile, 'utf8').trim()
+  } catch {}
+  rmSync(browseFile, { force: true })
+  if (!/^https?:\/\//.test(url)) return
+  log('the person typed an address into the browser', url)
+  browser.page.goto(url).catch((e) => log('the address could not be opened', e.message, false))
+}, 300)
 
 // The recording starts before the person's first word
 if (run) {
@@ -212,8 +227,55 @@ await tw.page.bringToFront()
 await tw.page.click('#t').catch(() => {})
 forget()
 
+// The one step Windows would take for a person signed in at the screen: when `it setup`
+// registers It's task (which runs only while its user is logged on), Windows starts it at once.
+// The account `itrehearsal` is never signed in at the screen, so Windows never does, and the
+// harness starts what the task starts, as that account, the moment the task is there and It is
+// not running, and writes down that it did. Nothing else of It is touched.
+let taskStarts = 0
+let lastStart = 0
+let watching = run || process.argv.includes('--watch')
+const watchTask = async () => {
+  while (watching) {
+    try {
+      const r = await psAs(
+        USER,
+        [
+          '$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+          "$t = Get-ScheduledTask -TaskPath '\\' -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -eq ('it-' + $sid) }",
+          // Only this account's own It, run from its own folder: another account's It is not this one
+          "$serve = @(Get-CimInstance Win32_Process -Filter \"Name='it.exe'\" | Where-Object { ([string]$_.ExecutablePath) -like ($env:USERPROFILE + '\\*') -and ([string]$_.CommandLine) -match '\\sserve(\\s|$)' }).Count",
+          'if ($t) { "task|" + $t.State + "|" + $t.Actions[0].Execute + "|" + $t.Actions[0].Arguments + "|" + $t.Actions[0].WorkingDirectory + "|" + $serve } else { "none|" + $serve }',
+        ].join('\n'),
+        shellEnv,
+      )
+      const line = r.output.split(/\r?\n/).find((l) => /^(task|none)\|/.test(l)) ?? ''
+      const [kind, state, exe, args, dir, serving] = line.split('|')
+      if (kind === 'task' && Number(serving) === 0 && Date.now() - lastStart > 30_000 && /conhost\.exe/i.test(exe)) {
+        lastStart = Date.now()
+        taskStarts++
+        // The task runs `conhost.exe --headless cmd.exe /d /c .\it-service.cmd`: conhost only
+        // hosts the console without a window, which a program started with no window has already,
+        // and Windows refuses to start conhost itself as another account. So what conhost hosts is
+        // started: the same cmd.exe line, in the same folder
+        const words = args.trim().split(/\s+/)
+        const at = words.findIndex((w) => /^cmd(\.exe)?$/i.test(w))
+        const started = await startAs({ user: USER, exe: 'C:\\Windows\\System32\\cmd.exe', args: words.slice(at + 1), cwd: dir, env: userEnv(USER) }).catch((e) => { throw new Error(`starting the task's command: ${e.message}`) })
+        log(
+          'the harness started what the registered task starts, as Windows would for a person signed in at the screen',
+          `task state ${state}; ran "${exe} ${args}" in ${dir} as ${USER} (pid ${started.pid}); start number ${taskStarts}`,
+        )
+      }
+    } catch (e) {
+      log('the task could not be looked at', e.message.slice(0, 200), false)
+    }
+    await sleep(4000)
+  }
+}
+if (watching) watchTask()
+
 let stopping = null
-const meta = { id, mode, scenario, app, appVersion: version, model: MODEL, browser: channel, person, user: USER, build: process.env.IT_REHEARSAL_BUILD || 'db320c788d78', tokenExpiry }
+const meta = { id, mode, scenario, app, appVersion: version, model: MODEL, browser: channel, person, user: USER, build: process.env.IT_REHEARSAL_BUILD || '4488f0c8f19f', tokenExpiry }
 http
   .createServer(async (req, res) => {
     let body = ''
@@ -247,6 +309,8 @@ while (!stopping) await sleep(1000)
 
 // The end: the recording stops after what the person last did
 clearInterval(raising)
+clearInterval(browsing)
+watching = false
 const endedAt = stamp()
 if (rec) {
   await sleep(2000)

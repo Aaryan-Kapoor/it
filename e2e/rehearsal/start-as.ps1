@@ -32,7 +32,11 @@ try {
       if ($a -eq '' -or $a -match '[\s"]') { '"' + ($a -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"' } else { $a }
     }) -join ' '
   # The account's profile is made at its first sign-in, so a folder in it may not be there yet
-  $psi.WorkingDirectory = if ($asked.cwd -and (Test-Path -LiteralPath $asked.cwd)) { $asked.cwd } else { $env:SystemRoot }
+  # A folder in the other account's profile is one this account may not look into at all: it is
+  # then given as it is, since the program started as that account can
+  $there = $false
+  if ($asked.cwd) { try { $there = Test-Path -LiteralPath $asked.cwd -ErrorAction Stop } catch { $there = $true } }
+  $psi.WorkingDirectory = if ($there) { $asked.cwd } else { $env:SystemRoot }
   $psi.UserName = $asked.user
   $psi.Domain = $env:COMPUTERNAME
   $psi.Password = $secure

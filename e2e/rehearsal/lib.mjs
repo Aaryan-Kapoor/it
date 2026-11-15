@@ -20,7 +20,9 @@ export const stamp = () => new Date().toISOString()
 /** The folders of a run: its results (kept) and its throwaway profile (deleted at the end). */
 export function runFolders(id, profileName = 'rehearsal') {
   const results = path.join(RESULTS, id)
-  const top = path.join(WORK, 'runs', id)
+  // A short folder: Codex keeps a socket in its home, and a socket's path may not be longer than
+  // about a hundred characters, which a person's own C:\Users\<name>\.codex never is
+  const top = path.join(process.env.IT_REHEARSAL_RUNS || 'D:\\r', id.replace(/^\d{8}-/, '').slice(0, 4) + id.replace(/[^a-z]/g, '').slice(1, 4))
   const home = path.join(top, profileName)
   const f = {
     id,

@@ -44,6 +44,14 @@ static class Hands {
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+  [StructLayout(LayoutKind.Sequential)] struct RECT { public int L, T, R, B; }
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] static extern IntPtr GetWindowLongPtr(IntPtr h, int i);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
 
   [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
   [StructLayout(LayoutKind.Sequential)] struct KEYBDINPUT { public ushort wVk, wScan; public uint dwFlags, time; public IntPtr extra; }
@@ -71,6 +79,8 @@ static class Hands {
     return new[] { (int)Math.Round(fx * S), (int)Math.Round(fy * S) };
   }
   static void Check(int[] p) {
+    // The windows' own title bars (move, minimise, close) are not the person's to use
+    if (p[1] < 34) Fail("that is the window's own frame; the windows stay where they are");
     if (!Allowed().Contains(PidAt(p[0], p[1]))) Fail("there is nothing of the terminal or the browser at that point");
   }
   static void CheckFront() {
@@ -179,6 +189,35 @@ static class Hands {
         }, IntPtr.Zero);
         Console.WriteLine("raised " + n); return 0;
       }
+      case "windows": {
+        // For the harness: where the visible top-level windows are, which are the rehearsal's, and
+        // which are kept on top. Only the rehearsal's own windows are named
+        var allowed = Allowed();
+        EnumWindows((h, l) => {
+          if (!IsWindowVisible(h)) return true;
+          uint pid; GetWindowThreadProcessId(h, out pid);
+          RECT r; GetWindowRect(h, out r);
+          if (r.R - r.L < 50 || r.B - r.T < 50) return true;
+          long ex = GetWindowLongPtr(h, -20).ToInt64();
+          var sb = new System.Text.StringBuilder(200);
+          if (allowed.Contains(pid)) GetWindowText(h, sb, 200);
+          Console.WriteLine((allowed.Contains(pid) ? "MINE  " : "other ") + "pid " + pid + " rect " + r.L + "," + r.T + "," + r.R + "," + r.B + ((ex & 0x8) != 0 ? " topmost" : "") + (IsIconic(h) ? " minimized" : "") + (allowed.Contains(pid) ? " \"" + sb + "\"" : ""));
+          return true;
+        }, IntPtr.Zero);
+        return 0;
+      }
+      case "front": {
+        // For the harness: brings the rehearsal's windows to the front and gives the first the keyboard
+        var allowed = Allowed();
+        IntPtr first = IntPtr.Zero;
+        EnumWindows((h, l) => {
+          uint pid; GetWindowThreadProcessId(h, out pid);
+          if (allowed.Contains(pid) && IsWindowVisible(h)) { ShowWindow(h, 9); SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002); BringWindowToTop(h); if (first == IntPtr.Zero) first = h; }
+          return true;
+        }, IntPtr.Zero);
+        if (first != IntPtr.Zero) SetForegroundWindow(first);
+        Console.WriteLine("done"); return 0;
+      }
       case "unraise": {
         var allowed = Allowed();
         EnumWindows((h, l) => {
@@ -187,6 +226,14 @@ static class Hands {
           return true;
         }, IntPtr.Zero);
         Console.WriteLine("done"); return 0;
+      }
+      case "browse": {
+        // Typing an address into the browser's address bar and pressing Enter
+        string url = string.Join("", a.Skip(1)).Trim();
+        if (!(url.StartsWith("http://") || url.StartsWith("https://"))) Fail("an address begins with http:// or https://");
+        File.WriteAllText(Path.Combine(Dir, "browse.txt"), url);
+        for (int i = 0; i < 100 && File.Exists(Path.Combine(Dir, "browse.txt")); i++) Thread.Sleep(100);
+        Console.WriteLine(File.Exists(Path.Combine(Dir, "browse.txt")) ? "the browser did not take the address" : "the browser went to " + url); return 0;
       }
       case "wait": {
         double s = Math.Min(120, double.Parse(a[1], System.Globalization.CultureInfo.InvariantCulture));
