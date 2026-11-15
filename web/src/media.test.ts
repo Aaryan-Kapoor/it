@@ -933,6 +933,34 @@ describe('the camera, live to a page', () => {
     expect(workers[1]!.ended).toBe(true)
   })
 
+  test('a camera that says it gives fewer than one picture a second is still looked at once a second while the screen does not show the site', async () => {
+    const told: unknown[] = []
+    vi.stubGlobal(
+      'Worker',
+      class {
+        onmessage = null
+        onerror = null
+        postMessage(m: unknown) {
+          told.push(m)
+        }
+        terminate() {}
+      },
+    )
+    allow('person-1', grant('page-1', ['camera']))
+    standInCamera(undefined, { counts: false, frameRate: 0.25 })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    open = await openCamera(true, false, {
+      ...camera,
+      id: 'cam-1',
+      grant: grantFor('person-1', 'page-1', OWNER, ['camera'])!,
+      still: () => null,
+      picture: () => {},
+      sound: () => {},
+      told: () => {},
+    })
+    expect(told).toEqual([1000])
+  })
+
   test('where the worker cannot run, its pictures are looked for by the site’s own clock while the screen does not show the site', async () => {
     const workers: { ended: boolean; onerror: (() => void) | null; onmessage: (() => void) | null }[] = []
     vi.stubGlobal(

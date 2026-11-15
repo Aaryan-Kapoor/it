@@ -661,7 +661,8 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
   const lookEvery = () => {
     const counts = (view.getVideoPlaybackQuality?.().totalVideoFrames ?? 0) > 0
     const rate = Math.min(LIVE_CAMERA.perSecond, stream.getVideoTracks()[0]?.getSettings().frameRate || LIVE_CAMERA.perSecond)
-    return Math.round(1000 / (counts ? 2 * rate : rate))
+    // And never further apart than a second, however slowly the camera says it gives them
+    return Math.min(1000, Math.round(1000 / (counts ? 2 * rate : rate)))
   }
   const hidden = () => !over && document.visibilityState === 'hidden'
   /** Looks by the site's own clock, where no worker's ticks. */
