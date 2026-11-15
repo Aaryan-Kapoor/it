@@ -18,11 +18,21 @@ export interface Profile {
   configPresent?: boolean
 }
 
+/** The person's own folder in this environment: USERPROFILE on Windows and HOME elsewhere, as the apps find it. */
+function homeOf(env: NodeJS.ProcessEnv): string {
+  return (process.platform === 'win32' ? env.USERPROFILE || env.HOME : env.HOME || env.USERPROFILE) || os.homedir()
+}
+
+/** The folder Claude Code keeps its settings and conversations in, when it is started with this environment. */
+export function claudeFolder(env: NodeJS.ProcessEnv): string {
+  return env.CLAUDE_CONFIG_DIR || path.join(homeOf(env), '.claude')
+}
+
 /** Capture defaults too, so a service's other profile cannot silently replace them. */
 export function profileOf(harness: string, env: NodeJS.ProcessEnv = process.env): Profile | undefined {
   const keys = KEYS[harness]
   if (!keys) return undefined
-  const own = (process.platform === 'win32' ? env.USERPROFILE || env.HOME : env.HOME || env.USERPROFILE) || os.homedir()
+  const own = homeOf(env)
   const defaults: Record<string, string> = {
     CLAUDE_CONFIG_DIR: path.join(own, '.claude'),
     CODEX_HOME: path.join(own, '.codex'),
@@ -91,5 +101,14 @@ export function profileEnvironment(harness: string, value: unknown, base: NodeJS
   }
   // Inline configuration belongs to the service, never to the recorded conversation.
   if (harness === 'opencode') delete env.OPENCODE_CONFIG_CONTENT
+  // Claude Code started with CLAUDE_CONFIG_DIR naming its usual folder is not the Claude Code a
+  // terminal starts without it: it looks for its sign-in under another name in the macOS
+  // Keychain, and for its own settings file (.claude.json) inside that folder rather than beside
+  // it. A conversation recorded with the usual folder is the one a person started with nothing
+  // set, so it is started again with nothing set, and never with the service's own setting.
+  const usual = path.join(homeOf(env), '.claude')
+  const named = profile.paths.CLAUDE_CONFIG_DIR
+  if (harness === 'claude-code' && named && (process.platform === 'win32' ? named.toLowerCase() === usual.toLowerCase() : named === usual))
+    delete env.CLAUDE_CONFIG_DIR
   return env
 }

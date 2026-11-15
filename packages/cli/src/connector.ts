@@ -71,7 +71,7 @@ import {
 } from './lib'
 import { incompatible } from './login'
 import { opencodePlugins, opencodeRefusedAt, unchangedSince } from './opencode-refused'
-import { profileEnvironment, profileOf, readProfile } from './profiles'
+import { claudeFolder, profileEnvironment, profileOf, readProfile } from './profiles'
 import { addonMarks, conversationFolder, conversationProfile, forgetAddonMark, noteConversation, publishedWithoutAddon } from './publish'
 import { alone, lockHeld } from './serve/backend'
 import * as service from './service'
@@ -2619,7 +2619,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         : {}),
       itHome: home(),
       // The mode the person last had the conversation in, and where `it` is installed
-      mode: now.harness === 'claude-code' ? (claudeModeOf(now.id, cwd, env.CLAUDE_CONFIG_DIR) ?? claudeModeOf(session.id, cwd, env.CLAUDE_CONFIG_DIR)) : null,
+      mode: now.harness === 'claude-code' ? (claudeModeOf(now.id, cwd, claudeFolder(env)) ?? claudeModeOf(session.id, cwd, claudeFolder(env))) : null,
       itAt: [
         ...new Set([path.join(home(), 'bin', process.platform === 'win32' ? 'it.exe' : 'it'), process.execPath].filter((p) => /[\\/]it(\.exe)?$/.test(p))),
       ],
@@ -3023,7 +3023,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     if (session.harness !== 'claude-code') return false
     const cwd = conversationFolder(session)
     const env = profileEnvironment(session.harness, conversationProfile(session), harnessEnv())
-    const wrote = cwd && typeof env !== 'string' ? claudeWroteAt(session.id, cwd, env.CLAUDE_CONFIG_DIR) : null
+    const wrote = cwd && typeof env !== 'string' ? claudeWroteAt(session.id, cwd, claudeFolder(env)) : null
     if (wrote === null || now - wrote >= CLAUDE_QUIET_MS) return false
     // What this machine's own reopening of it wrote is not somebody at work in it
     const ours = ranUntil.get(follow(keyOf(session.harness, session.id)))
