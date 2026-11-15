@@ -29,13 +29,13 @@ import { behindMark, MARK, PORTS, TAKES, UPLOAD, WHEN } from '@it/protocol'
 
 // What setup says last to an agent, as the program has it: said here in the program's own words, so that a change of them is a change here
 const AFTER_SETUP =
-  'If you are an agent installing It for someone, one step of the install guide comes after this one: run `it tour` and do what it prints. It has you put a first page up for the person and then give them the link that `it site --no-open` prints, to open on this computer, which opens on that page. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
+  'If you are an agent installing It for someone, one step of the install guide comes after this one: run `it tour` and do what it prints. The tour is part of the install the person asked you for, and how they see what It is for: do not leave it out unless they tell you to. It has you put a first page up for the person and then give them the link that `it site --no-open` prints, to open on this computer, which opens on that page. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
 
 /** What setup says Pi's user is to do once Pi is connected, as the program has it. */
 const PI_NOTE = 'Pi: If Pi is open, restart it or run /reload in it: it reads its extensions when it starts.'
 /** What setup says last to an agent where something is left for the person to do: the words, whole, in the step that gives the pairing link. */
 const AFTER_SETUP_TELLING = (words: string) =>
-  `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`it tour\` and do what it prints. It has you put a first page up for the person, and then write them one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them ${words} What showing that page printed under \`arrives\` says whether to end your turn then or to wait. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
+  `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`it tour\` and do what it prints. The tour is part of the install the person asked you for, and how they see what It is for: do not leave it out unless they tell you to. It has you put a first page up for the person, and then write them one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them ${words} What showing that page printed under \`arrives\` says whether to end your turn then or to wait. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
 
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
