@@ -63,7 +63,7 @@ const result = {
   app,
   browser: which,
   ubuntu: `${ubuntu}.04`,
-  build: build.commit,
+  build: arg('installed') ? `${arg('installed')} (installed in the snapshot ${from}); stand-in serves ${build.commit}` : build.commit,
   harness: build.harness,
   buildVersion: build.version,
   person: person === 'model' ? 'Claude Opus 5.5 at high effort, looking at the screen' : 'a script',
@@ -169,10 +169,10 @@ async function main() {
   }
   log(`flow ${flow} with ${app} in ${which}`)
   await new Promise((resolve) => {
-    const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/flow.mjs ${flow} ${app} ${which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^S\d/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow} ${app} ${which === 'chromium' && /^S\d/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
     const kill = setTimeout(() => {
       log('the flow ran past its time')
-      exec("pkill -INT -f 'node /build/harness/flow.mjs' || true")
+      exec("pkill -INT -f 'node /build/harness/' || true")
     }, minutes * 60_000)
     // Redacted a whole line at a time, so that a token split across two reads is still found
     let rest = ''
