@@ -995,7 +995,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    */
   const turnSeen = (key: string): void => {
     let w = watchedTurns.get(key)
-    if (!w && turnsTaken !== false && turnKnown(key, Date.now()) === true) {
+    // No more conversations than are listened for, so that It has room for every one that is said to be running
+    if (!w && turnsTaken !== false && watchedTurns.size < LISTENING_MOST && turnKnown(key, Date.now()) === true) {
       const names = new Set([key.slice(key.indexOf(':') + 1)])
       // The latest few, since a conversation cleared many times is told of under each
       for (const [from] of [...aliases].reverse()) if (names.size < TURN_NAMES_MOST && follow(from) === key) names.add(from.slice(from.indexOf(':') + 1))

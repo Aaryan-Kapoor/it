@@ -14,8 +14,8 @@ import { requireMachine } from './lib/authz'
 import { rateLimit } from './lib/limits'
 import { session } from './schema'
 
-/** How many of a machine's records are removed in one step. */
-const BATCH = 200
+/** How many of a machine's records are removed in one step: more than it may have, so that one step mostly does. */
+const BATCH = 250
 /**
  * How many conversations a machine may have a record for at once. Its connector listens for
  * forty conversations at a time and tells of each under up to three ids, its own and the ones it
@@ -106,19 +106,22 @@ async function makeRoom(ctx: MutationCtx, machineId: Id<'machines'>): Promise<vo
  * Removes what a machine said of its conversations' turns, a batch at a time: when its
  * connector starts and knows of none of them, and when the machine is revoked.
  */
-export async function forgetTurns(ctx: MutationCtx, machineId: Id<'machines'>): Promise<void> {
+export async function forgetTurns(ctx: MutationCtx, machineId: Id<'machines'>, before = Date.now()): Promise<void> {
   const rows = await ctx.db
     .query('turns')
     .withIndex('by_conversation', (q) => q.eq('machineId', machineId))
     .take(BATCH)
-  for (const row of rows) await ctx.db.delete(row._id)
-  if (rows.length === BATCH) await ctx.scheduler.runAfter(0, internal.turns.forget, { machineId })
+  // Only what was there when the machine said so: what it says after that, before a later step
+  // has run, is of turns it knows of, and stays
+  const old = rows.filter((row) => row.since <= before)
+  for (const row of old) await ctx.db.delete(row._id)
+  if (rows.length === BATCH && old.length > 0) await ctx.scheduler.runAfter(0, internal.turns.forget, { machineId, before })
 }
 
 export const forget = internalMutation({
-  args: { machineId: v.id('machines') },
-  handler: async (ctx, { machineId }) => {
-    await forgetTurns(ctx, machineId)
+  args: { machineId: v.id('machines'), before: v.optional(v.number()) },
+  handler: async (ctx, { machineId, before }) => {
+    await forgetTurns(ctx, machineId, before)
     return null
   },
 })

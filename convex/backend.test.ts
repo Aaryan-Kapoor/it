@@ -5139,6 +5139,23 @@ describe('whether a turn of a page’s conversation is running, as its machine s
     expect(await turn()).toEqual({ since: first + 10_000, endedAt: first + 14_000 })
   })
 
+  test('forgetting a machine’s turns a step at a time never takes away what the machine said after it asked for that', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const of = (n: number) => ({ harness: 'claude-code', id: `sess-${n}` })
+    for (let n = 0; n < 3; n++) {
+      vi.advanceTimersByTime(1_000)
+      await m.as.mutation(api.turns.say, { for: of(n), running: true })
+    }
+    const asked = Date.now()
+    vi.advanceTimersByTime(1_000)
+    await m.as.mutation(api.turns.say, { for: of(9), running: true })
+    // A later step of what was asked then, which runs after the machine has said this
+    await t.mutation(internal.turns.forget, { machineId: m.id as never, before: asked })
+    expect((await turns(t)).map((row) => row.sessionId)).toEqual(['sess-9'])
+  })
+
   test('a machine has room for so many records and no more: one past that takes the place of the turn that ended longest ago, and of the one running longest where none has ended', async () => {
     const t = backend()
     await person(t, 'alice')
@@ -5261,9 +5278,9 @@ describe('whether a turn of a page’s conversation is running, as its machine s
     const m = await machineOf(t, 'alice')
     await publish(m, 'plan', { session: SESSION })
     const said: string[] = []
-    for (let n = 0; n < 121; n++) said.push(await code(m.as.mutation(api.turns.say, { for: SESSION, running: n % 2 === 0 })))
+    for (let n = 0; n < 241; n++) said.push(await code(m.as.mutation(api.turns.say, { for: SESSION, running: n % 2 === 0 })))
     dropWhatAFailedCallScheduled()
-    expect([said.slice(0, 120).every((c) => c === 'ok'), said[120]]).toEqual([true, 'rate_limited'])
+    expect([said.slice(0, 240).every((c) => c === 'ok'), said[240]]).toEqual([true, 'rate_limited'])
     // The download has the machine by its name and its dates, and its pages and what was done on them
     const start = await alice.browser.mutation(api.account.exportStart, {})
     const held = [

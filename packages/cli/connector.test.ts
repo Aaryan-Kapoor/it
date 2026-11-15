@@ -9,7 +9,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { MARK, PROTOCOL_VERSION, TAKES, TURN_ON_MS, WAKE_BACK_MS } from '@it/protocol'
+import { LISTENING_MOST, MARK, PROTOCOL_VERSION, TAKES, TURN_ON_MS, WAKE_BACK_MS } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS } from './src/addons.generated'
@@ -6651,6 +6651,15 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     }
   })
 
+  test('no more conversations are told of than are listened for, so that It has room for every turn said to be running', async () => {
+    standIn()
+    await start('socket', APPS)
+    for (let n = 0; n < LISTENING_MOST + 5; n++) await asks(true, `many-${n}`)
+    await pass(3)
+    const running = told().filter((said) => said.running === true)
+    expect(running.length).toBe(LISTENING_MOST)
+  })
+
   test('a turn that ended is told before turns that began, where It could not be told of either at once', async () => {
     standIn()
     await start('socket', APPS)
@@ -6693,7 +6702,8 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     codexKept(1, 'task_started', 'turn_aborted')
     await pass(3)
     expect(told()[2]).toEqual({ for: codex, running: false })
-    // A hook of the turn that was interrupted runs after all, as one after a command can: it begins no turn
+    // A hook of the turn that was interrupted runs after all, as one after a command can, a moment after Codex wrote of the interruption: it begins no turn
+    await new Promise((r) => setTimeout(r, 30))
     await local('/clicks?harness=codex&session=thread-1', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: true } })
     await pass(3)
     expect(told().length).toBe(3)
