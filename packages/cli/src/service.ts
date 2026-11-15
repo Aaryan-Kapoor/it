@@ -890,10 +890,13 @@ export function install(): ServiceStatus {
     // had it so for reasons of their own, it is left as they had it. It is It's doing only
     // where the system said that the account did not stay, and then let It turn that on. A
     // system that would not say may have had it on for the person's other services, and one
-    // that refused It has it on, if ever, by someone else's hand.
+    // that refused It has it on, if ever, by someone else's hand. Refused where the system said
+    // the account stays already, as where an administrator has it so, It does not stop at
+    // logout, and nothing is said of it.
     const asked = run('loginctl', ['show-user', os.userInfo().username, '--property=Linger'], ASKED_MS)
     const stayedNot = asked.ok && /^Linger=no$/m.test(asked.out)
-    if (!run('loginctl', ['enable-linger', os.userInfo().username]).ok)
+    const stayed = asked.ok && /^Linger=yes$/m.test(asked.out)
+    if (!run('loginctl', ['enable-linger', os.userInfo().username]).ok && !stayed)
       return {
         ...status(),
         note: 'It will stop when you log out of this machine: `loginctl enable-linger` was refused. Ask whoever runs the machine to allow it.',

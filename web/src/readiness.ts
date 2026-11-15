@@ -7,6 +7,21 @@ export interface PageConnection {
   queue: boolean
 }
 
+/**
+ * What a person does so that Codex runs It's hooks, as `it setup` says it: Codex asks to review
+ * them only as it starts, and in its terminal "Trust all and continue" approves them. How its
+ * desktop app asks is not known, and nothing here says that it asks otherwise.
+ */
+export const CODEX_TRUST = 'Start Codex again, and choose “Trust all and continue” when it asks to review hooks'
+/**
+ * Said beside it where T3 Code is on the machine, as setup says it there: Codex never asks in a
+ * thread of T3 Code, and what is done on a page reaches the thread through T3 Code. The machine
+ * says T3 Code is there by the words setup gives the person, which begin this way.
+ */
+export const CODEX_IN_T3 = 'In T3 Code, Codex never asks this, and nothing needs approving there'
+/** The same, said where the machine does not say whether T3 Code is there, as a page's bar does not know: short, since it is said to everyone. */
+export const NOTHING_IN_T3 = 'Nothing needs approving in T3 Code'
+
 /** Older backends expose inventory to owners only. Screens keep their generic waiting status. */
 export function reportedConnection(
   harness: string,

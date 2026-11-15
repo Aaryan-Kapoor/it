@@ -246,7 +246,9 @@ describe('the agent’s dock', () => {
     await page.progress([{ id: move.id, handed: true, turn: null }])
     await page.advance(SLOW)
     expect(page.read('room').stage).toBe('slow')
-    expect(page.state('room')).toBe('No answer after 40 s. This is yours again, and a late answer is still shown.')
+    expect(page.state('room')).toBe(
+      'No answer after 40 s. Claude Code may be waiting for you in its own window. This is yours again, and a late answer is still shown.',
+    )
     // What was reached stays reached, and the stage that never came is where it stopped
     expect(stages(page)).toEqual({ you: 'done', it: 'done', chat: 'done', work: 'off', page: '' })
     expect(page.$('#room-chair').classList.contains('still')).toBe(false)

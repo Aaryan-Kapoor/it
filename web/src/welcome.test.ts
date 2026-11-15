@@ -12,7 +12,7 @@ const NOBODY = { waitingUntil: null, by: null, askedAt: null, takenAt: null, don
 let tour: Record<string, unknown> | undefined
 let machines: {
   wanted?: string[]
-  harnesses: { id: string; addon: string }[]
+  harnesses: { id: string; addon: string; detail?: string }[]
   lastSeenAt?: number
   connectorVersion?: string | null
   off?: boolean
@@ -123,6 +123,15 @@ describe('the way into the tour, for someone with no pages', () => {
     expect(await said({ harnesses: [{ id: 'codex', addon: 'needs_approval' }] })).toBe('It is ready to show pages')
     expect(host.textContent).toContain('needs add-on approval')
     expect(host.textContent).toContain('can still receive queued clicks')
+    // What to do, as a person who runs Codex in a terminal does it, and with no app to look for
+    expect(host.textContent).toContain('Codex needs add-on approval. Start Codex again, and choose “Trust all and continue” when it asks to review hooks.')
+    expect(host.textContent).not.toContain('Open the app')
+    expect(host.textContent).not.toContain('In T3 Code')
+    // Where T3 Code is on that machine too, as setup's words for Codex there say, it is said that nothing needs approving in T3 Code
+    const t3 =
+      'Start Codex again, and choose "Trust all and continue" when it says the hooks need review. In T3 Code, Codex never asks this, and nothing needs approving there: what you do on a page reaches its threads through T3 Code.'
+    await said({ harnesses: [{ id: 'codex', addon: 'needs_approval', detail: t3 }] })
+    expect(host.textContent).toContain('open conversation. In T3 Code, Codex never asks this, and nothing needs approving there.')
   })
 
   test('disconnecting an app takes precedence over its last connected inventory report', async () => {

@@ -24,6 +24,8 @@ const stand = vi.hoisted(() => ({
   /** The apps whose add-on the connector had turned back on, and what turning one on answers where a test says. */
   turnedOn: [] as string[],
   turnOnAnswer: null as null | { ok: false; why: string; code: string },
+  /** Whether Codex has yet to run It's hooks as they are now, as its settings say. */
+  codexPending: true,
   /** What the connector watches the backend for, by the name of the function, and how to tell it something new. */
   watching: new Map<string, (value: any) => void>(),
   /** What it last asked to be told of, for each function it watches. */
@@ -229,6 +231,7 @@ vi.mock('./src/setup', async (original) => {
     claudeFolders: () => stand.claudeFolders,
     detectAll: async () => stand.found,
     newerProgramSeen: () => false,
+    codexHooksPending: () => stand.codexPending,
     turnBackOn: async (id: string) => {
       stand.turnedOn.push(id)
       if (stand.turnOnAnswer) return stand.turnOnAnswer
@@ -464,6 +467,7 @@ afterEach(async () => {
   stand.reconciled.length = 0
   stand.turnedOn.length = 0
   stand.turnOnAnswer = null
+  stand.codexPending = true
   stand.claudeFolders.length = 0
   stand.claudeScans = 0
   stand.claudeKept = []
@@ -4210,6 +4214,25 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     await start('socket', { wanted: ['codex'], found: [{ id: 'codex', version: '1.0.0', addon: 'needs_approval' }] })
     offered(click('codex', 4))
     await until(() => stand.codex.length === 1)
+  })
+
+  test('Codex’s hooks, found waiting for the person’s yes, have the machine looked at again within seconds of being trusted, before any hook of It’s has run', async () => {
+    standIn()
+    await start('socket', { wanted: ['codex'], found: [{ id: 'codex', version: '1.0.0', addon: 'needs_approval' }] })
+    const reportedOfCodex = () =>
+      stand.calls
+        .filter((c) => c.name === 'machines:report')
+        .map((c) => (c.args.harnesses as { id: string; addon: string }[]).find((h) => h.id === 'codex')?.addon)
+    await until(() => reportedOfCodex().length > 0)
+    // Still waiting: nothing is looked at again for it
+    stand.found = [{ id: 'codex', version: '1.0.0', addon: 'connected' }]
+    await pass(4)
+    await settled()
+    expect(new Set(reportedOfCodex())).toEqual(new Set(['needs_approval']))
+    // The person has chosen "Trust all and continue", which Codex notes in its settings, and Codex has run no hook of It’s yet
+    stand.codexPending = false
+    await pass(3)
+    await until(() => reportedOfCodex().at(-1) === 'connected')
   })
 
   test('an add-on that speaks after its app was found waiting for the person’s yes has the machine looked at again at once, and what is found then is reported', async () => {

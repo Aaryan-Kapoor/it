@@ -1073,7 +1073,7 @@ function tourForOneThatWaited(guide: string): string {
  * up, and the browser the person pairs with the link goes to that page.
  */
 export const afterSetup = (it = itForAgent()): string =>
-  `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`${it} tour\` and do what it prints. It has you put a first page up for the person and then give them the link that \`${it} site --no-open\` prints, to open on this computer, which opens on that page. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
+  `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`${it} tour\` and do what it prints. The tour is part of the install the person asked you for, and how they see what It is for: do not leave it out unless they tell you to. It has you put a first page up for the person and then give them the link that \`${it} site --no-open\` prints, to open on this computer, which opens on that page. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
 
 /**
  * The same, where something is left for the person to do and they have to be told it: in the
@@ -1089,7 +1089,7 @@ export const afterSetupTelling = (lines: readonly string[], restart = false, it 
   const guide = ` If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
   return restart
     ? `If you are an agent installing It for someone, one step of the install guide comes after this one, and it waits until Codex has been started again. Write the person one message that gives them the link that \`${it} site --no-open\` prints, to open on this computer, and tells them ${words} Then end your turn, and do not run \`${it} tour\` yet: Codex has to be started again first, which ends this turn anyway. Once it is back and the person asks for the tour, run \`${it} tour\` and do what it prints.${guide}`
-    : `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`${it} tour\` and do what it prints. It has you put a first page up for the person, and then write them one message that gives them the link that \`${it} site --no-open\` prints, to open on this computer, and tells them ${words} What showing that page printed under \`arrives\` says whether to end your turn then or to wait.${guide}`
+    : `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`${it} tour\` and do what it prints. The tour is part of the install the person asked you for, and how they see what It is for: do not leave it out unless they tell you to. It has you put a first page up for the person, and then write them one message that gives them the link that \`${it} site --no-open\` prints, to open on this computer, and tells them ${words} What showing that page printed under \`arrives\` says whether to end your turn then or to wait.${guide}`
 }
 
 /** What a person in a Codex conversation is told after setup: to start Codex again, and to ask for the tour once it is back. */

@@ -29,13 +29,13 @@ import { behindMark, MARK, PORTS, TAKES, UPLOAD, WHEN } from '@it/protocol'
 
 // What setup says last to an agent, as the program has it: said here in the program's own words, so that a change of them is a change here
 const AFTER_SETUP =
-  'If you are an agent installing It for someone, one step of the install guide comes after this one: run `it tour` and do what it prints. It has you put a first page up for the person and then give them the link that `it site --no-open` prints, to open on this computer, which opens on that page. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
+  'If you are an agent installing It for someone, one step of the install guide comes after this one: run `it tour` and do what it prints. The tour is part of the install the person asked you for, and how they see what It is for: do not leave it out unless they tell you to. It has you put a first page up for the person and then give them the link that `it site --no-open` prints, to open on this computer, which opens on that page. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
 
 /** What setup says Pi's user is to do once Pi is connected, as the program has it. */
 const PI_NOTE = 'Pi: If Pi is open, restart it or run /reload in it: it reads its extensions when it starts.'
 /** What setup says last to an agent where something is left for the person to do: the words, whole, in the step that gives the pairing link. */
 const AFTER_SETUP_TELLING = (words: string) =>
-  `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`it tour\` and do what it prints. It has you put a first page up for the person, and then write them one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them ${words} What showing that page printed under \`arrives\` says whether to end your turn then or to wait. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
+  `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`it tour\` and do what it prints. The tour is part of the install the person asked you for, and how they see what It is for: do not leave it out unless they tell you to. It has you put a first page up for the person, and then write them one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them ${words} What showing that page printed under \`arrives\` says whether to end your turn then or to wait. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
 
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
@@ -2792,14 +2792,15 @@ describe.skipIf(process.platform === 'win32' || !python)('the lists a person ask
 describe.skipIf(process.platform === 'win32' || process.platform !== 'linux')('an account that stays after logout because It asked', () => {
   /**
    * A machine whose system answers, notes every asking, and says whether the account stays after
-   * logout as the test has it. `unsaid` is a system that fails to say, and `refused` one that
-   * says it does not stay and will not have it turned on.
+   * logout as the test has it. `unsaid` is a system that fails to say, `refused` one that
+   * says it does not stay and will not have it turned on, and `kept` one that says it stays
+   * already and will not have it turned on all the same, as where an administrator turned it on.
    */
-  const withSystem = (stays: boolean | 'unsaid' | 'refused') => {
+  const withSystem = (stays: boolean | 'unsaid' | 'refused' | 'kept') => {
     const m = machine(true, true)
     const asked = path.join(m.home, 'asked.txt')
-    const says = stays === 'unsaid' ? 'exit 1' : `echo Linger=${stays === true ? 'yes' : 'no'}`
-    const turnsOn = stays === 'refused' ? '*" enable-linger "*) exit 1 ;; ' : ''
+    const says = stays === 'unsaid' ? 'exit 1' : `echo Linger=${stays === true || stays === 'kept' ? 'yes' : 'no'}`
+    const turnsOn = stays === 'refused' || stays === 'kept' ? '*" enable-linger "*) exit 1 ;; ' : ''
     for (const name of ['systemctl', 'loginctl']) {
       writeFileSync(
         path.join(m.bin, name),
@@ -2836,6 +2837,21 @@ describe.skipIf(process.platform === 'win32' || process.platform !== 'linux')('a
     expect(existsSync(path.join(refused.m.it, 'linger-by-it'))).toBe(false)
     expect((await run(refused.m, ['service', 'uninstall'])).code).toBe(0)
     expect(refused.asked()).not.toMatch(/disable-linger/)
+  })
+
+  test('says that It will stop at logout only where the account does not stay after it already', async () => {
+    const NOTE = 'It will stop when you log out of this machine: `loginctl enable-linger` was refused. Ask whoever runs the machine to allow it.'
+    // The account does not stay, and It may not have it stay: It will stop at logout, and the person is told
+    const refused = withSystem('refused')
+    expect(printed(await run(refused.m, ['service', 'install'])).note).toBe(NOTE)
+    // The account stays already, as where an administrator has it so, and turning that on again is refused: It does not stop at logout
+    const kept = withSystem('kept')
+    const ran = await run(kept.m, ['service', 'install'])
+    expect([ran.code, printed(ran).note]).toEqual([0, undefined])
+    expect(kept.asked()).toMatch(/loginctl enable-linger/)
+    expect(existsSync(path.join(kept.m.it, 'linger-by-it'))).toBe(false)
+    expect((await run(kept.m, ['service', 'uninstall'])).code).toBe(0)
+    expect(kept.asked()).not.toMatch(/disable-linger/)
   })
 
   test.each([false, true])('the linger note follows the service to another installation, including an earlier replacement: %s', async (earlier) => {
