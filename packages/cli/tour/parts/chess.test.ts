@@ -109,6 +109,25 @@ describe('the chessboard on the first page', () => {
     page.close()
   })
 
+  test('the answer to a move taken back before another was taken back is not played, and the person is told so', async () => {
+    const page = await chess()
+    const first = moved(page, 'e2', 'e4')
+    await first.accept()
+    await page.advance(40_500)
+    const second = moved(page, 'd2', 'd4')
+    await second.accept()
+    await page.advance(40_500)
+    // Both taken back; the first one's answer comes now, and fits no board there is
+    await reply(page, `${first.data.request}:e7e5`)
+    expect([piece(page, 'e2') !== '', piece(page, 'd2') !== '', piece(page, 'e5'), waits(page)]).toEqual([true, true, '', false])
+    expect(page.$('#chess-note').textContent).toBe('Claude Code’s answer to your earlier move came after you had played on, so it is not on the board.')
+    // The second one's, with nothing played since it was taken back, is played with it
+    await reply(page, `${second.data.request}:d7d5`)
+    expect([piece(page, 'd4') !== '', piece(page, 'd5') !== '', waits(page)]).toEqual([true, true, false])
+    expect(page.errors).toEqual([])
+    page.close()
+  })
+
   test('a reply names the pending move, so an old answer cannot play after a new game or another turn', async () => {
     const page = await chess()
     const old = moved(page, 'e2', 'e4')

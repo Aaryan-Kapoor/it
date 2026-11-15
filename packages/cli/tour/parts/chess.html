@@ -122,7 +122,7 @@ Shell.part("chess", (my) => {
   var picked = -1, goes = {}, last = null;          // the square picked up, where it may go, and the last move
   var waiting = false, sent = false, turn = 0;      // waiting for the agent; whether it has been told; which move this is
   var pendingId = null;
-  var taken = null;                                 // the person's move taken back after forty seconds, with the request it was, until its answer comes
+  var taken = null, behind = [];                                 // the person's move taken back after forty seconds, with the request it was, until its answer comes
   var played = null;                                // the reply that was played last in this game
   var early = null;                                 // what the agent set for this move before it was known to have been told
   var log = [];                                     // the moves of this game, each as a sheet writes it, with whose it was and what it took
@@ -375,6 +375,8 @@ Shell.part("chess", (my) => {
     // is still as it was left, and where the person has played on since, they are told that it came too late (`late`).
     // Thrown away without a word, it reset the board twice in a rehearsal while the agent waited on an approval
     var undo = () => {
+      // A move taken back before this one can never be played now: its answer, if it comes, is said to be too late
+      if (taken) behind.push(taken.request);
       taken = { request: pendingId, move: m };
       pos = was.pos; last = was.last; now = C.state(pos); waiting = false; early = null; pendingId = null; turn++;
       taken.turn = turn;
@@ -422,6 +424,8 @@ Shell.part("chess", (my) => {
   // what is set meanwhile is kept for that move, and played when the move is known to have gone.
   function answer(reply, fresh) {
     if (taken && reply.startsWith(taken.request + ":")) return late(reply);
+    var gone = behind.findIndex((r) => reply.startsWith(r + ":"));
+    if (gone >= 0) { behind.splice(gone, 1); return tooLate(false); }
     if (!waiting || now.over || pos.turn !== "b" || !pendingId) return;
     var prefix = pendingId + ":";
     if (!reply.startsWith(prefix)) return;
@@ -456,6 +460,9 @@ Shell.part("chess", (my) => {
       around();
       render();
     }
+    tooLate(fits);
+  }
+  function tooLate(fits) {
     var said = $("chess-black-name").textContent + "’s answer to your earlier move came " + (fits ? "too late, and could not be played" : "after you had played on, so it is not on the board") + ".";
     $("chess-note").textContent = said;
     box.say(said);
