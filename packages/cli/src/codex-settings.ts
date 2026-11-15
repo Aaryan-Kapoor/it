@@ -50,12 +50,13 @@ export const CODEX_SAVE_RULE =
  * Codex can refuse that asking itself without putting it to the person: its automatic review of
  * approvals did so in the rehearsals, and then `it save` never runs, so It hears nothing of it and
  * only the agent knows. The person is at the page, so the agent is told to say there at once what
- * to change in Codex. `/permissions` is Codex's command in its terminal, so the words are for a
- * conversation open there. They are given only where Codex ran the command and there is a file
- * to save, so an agent in another app, one started from inside Codex among them, is not told them.
+ * to change in Codex. `/permissions` is Codex's command in its terminal, and a setting of Codex's
+ * may keep "Ask for approval" from it, so that step is given only for a conversation open there,
+ * and only as something to choose where it is offered. The words are given only where there is a
+ * file to save, and not to an agent in another app known to have been started from inside Codex.
  */
 export const CODEX_SAVE_ESCALATE =
-  'Codex asks the user before every `it save`, and runs the command they approve inside its sandbox, where `it` cannot reach It, unless you asked for it outside. Give every `it save` with `sandbox_permissions` set to `"require_escalated"` and a `justification` from the start, and the user is asked once. If the user has this conversation open in Codex in a terminal and Codex refuses that without asking them, do not ask again: at once, run `it say <page-id> "Codex would not let me save the file you sent. In Codex, choose “Ask for approval” under /permissions, then send it again, and Codex will ask you first."`, and carry on with the action text. Anywhere else, say above the page in the same way what Codex said.'
+  'Codex asks the user before every `it save`, and runs the command they approve inside its sandbox, where `it` cannot reach It, unless you asked for it outside. Give every `it save` with `sandbox_permissions` set to `"require_escalated"` and a `justification` from the start, and the user is asked once. If Codex refuses that without asking the user, do not ask again: at once, say so above the page with `it say <page-id> "<words>"`, and carry on with the action text. Where they have this conversation open in Codex in a terminal and Codex said its automatic review refused it, the words are: Codex would not let me save the file you sent. If /permissions in Codex offers “Ask for approval”, choose it and send the file again, and Codex will ask you first. Anywhere else, they say what Codex said.'
 /**
  * The commands of `it` that change It on this machine, rather than use it: its installation, its
  * service, whom it answers, what it reports, and the hold it keeps on conversations it cannot tell

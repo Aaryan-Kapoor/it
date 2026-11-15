@@ -82,6 +82,7 @@ import {
   call,
   changeWhole,
   closedToNetwork,
+  codexMayAsk,
   direct,
   doorRefusal,
   elsewhere,
@@ -4272,9 +4273,8 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'action':
     case 'save': {
-      // Whether Codex ran this command, and not another agent app started from inside a Codex
-      // conversation, which carries Codex's mark too: what is said of Codex is said to Codex alone
-      const askedInCodex = () => Boolean(process.env.CODEX_THREAD_ID) && sessionAsked()?.session.harness === 'codex'
+      // Not said to another agent app known to have been started from inside a Codex conversation, which carries Codex's mark too
+      const askedInCodex = () => Boolean(process.env.CODEX_THREAD_ID) && codexMayAsk(sessionAsked())
       // One action in full, by the id an agent was given: for data too long to have been shown, or to check a repeat
       const id = need(a._[0], 'which action', 'action <action-id>')
       const c = await call<Listed & { delivery: string; route: string | null; outcome: string | null }>('query', api.delivery.get, { id }).catch((err) => {
