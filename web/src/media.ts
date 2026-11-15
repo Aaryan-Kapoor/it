@@ -489,13 +489,6 @@ let cameras: LiveCamera[] = []
 export const useCameras = (): LiveCamera[] => useSyncExternalStore(watch, () => cameras)
 /** A page's live camera, if it has one. */
 export const cameraFor = (page: string): LiveCamera | undefined => cameras.find((c) => c.page === page)
-/** Each live camera's and microphone's own word for whether the screen shows the site, by its id. */
-const shown = new Map<string, (hidden: boolean) => void>()
-// While the screen does not show the site the camera and the microphone wait, and the page is given nothing
-if (typeof document !== 'undefined')
-  document.addEventListener('visibilitychange', () => {
-    for (const show of [...shown.values()]) show(document.visibilityState === 'hidden')
-  })
 
 /**
  * What the site holds the live camera to, whatever the page asks of it. `atOnce`: how many
@@ -528,8 +521,8 @@ export interface CameraFor {
   picture: (frame: number, picture: ImageBitmap) => void
   /** One piece of the microphone's sound for the page, where the camera is opened with sound. */
   sound: (chunk: number, sampleRate: number, samples: Float32Array) => void
-  /** The camera paused, went on, or ended without the page asking. */
-  told: (state: 'live' | 'paused' | 'ended', why?: Why) => void
+  /** The camera ended without the page asking, and why. */
+  told: (state: 'ended', why: Why) => void
   /**
    * Given a way to stop the camera while it is made ready, before anything else holds it, and
    * given nothing once it is ready or has failed. Stopped so, its tracks stop at once.
@@ -566,7 +559,6 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
   view.muted = true
   view.playsInline = true
   view.srcObject = stream
-  let state: 'live' | 'paused' = 'live'
   let over = false
   /** The microphone's sound on its way to the page, where the camera was opened with sound. */
   let sound: Relay | null = null
@@ -577,7 +569,6 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
       sound = await readying.during(
         relaySound(stream, {
           still: () => (over ? 'not_shown' : page.still()),
-          waiting: () => state === 'paused',
           sound: page.sound,
           end: (why) => end(why),
         }),
@@ -608,8 +599,10 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
     if (over) return false
     over = true
     clearInterval(watching)
+    clearTimeout(looking)
+    document.removeEventListener('visibilitychange', pace)
+    unask()
     cameras = cameras.filter((c) => c.id !== page.id)
-    shown.delete(page.id)
     sound?.close()
     for (const t of stream.getTracks()) t.stop()
     view.srcObject = null
@@ -619,8 +612,8 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
   const end = (why: Why) => {
     if (close()) page.told('ended', why)
   }
-  // Asked whether the page may still have it whatever is sent, paused or not; and while it may, an
-  // open camera is the page using what it was allowed, noted now and then and not for each picture
+  // Asked whether the page may still have it whatever is sent; and while it may, an open camera
+  // is the page using what it was allowed, noted now and then and not for each picture
   const watching = setInterval(() => {
     const not = page.still()
     if (not) return end(not)
@@ -628,34 +621,65 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
     usedAt = Date.now()
     usedNow(page.user, page.page)
   }, LIVE_CAMERA.checkEveryMs)
-  const show = (hidden: boolean) => {
-    const now = hidden ? 'paused' : 'live'
-    if (over || state === now) return
-    state = now
-    // A camera whose track gives nothing is one the browser lets go of, and says so to the person
-    for (const t of stream.getTracks()) t.enabled = !hidden
-    sound?.wait(hidden)
-    cameras = cameras.map((c) => (c.id === page.id ? { ...c, state: now } : c))
-    changed()
-    page.told(now)
-  }
   // Each new picture where the browser says when there is one, and otherwise each time the screen
-  // is drawn, which is told by the time the video has reached
+  // is drawn, which is told by the frames the browser has counted or the time the video has reached
   const each = typeof view.requestVideoFrameCallback === 'function'
+  /** The browser's call for the next picture or the next drawing of the screen, while one is asked for. */
+  let asked: number | null = null
   let reached = -1
   const next = () => {
-    if (each) view.requestVideoFrameCallback(picture)
-    else requestAnimationFrame(picture)
+    if (over || asked !== null) return
+    asked = each ? view.requestVideoFrameCallback(picture) : requestAnimationFrame(picture)
   }
-  /** A picture the camera gave: sent where the page has room for one, and passed over where it has none. */
+  /** Lets go of the call the browser was asked for, if one was. */
+  function unask() {
+    if (asked === null) return
+    if (each) view.cancelVideoFrameCallback(asked)
+    else cancelAnimationFrame(asked)
+    asked = null
+  }
   function picture() {
+    asked = null
     if (over) return
     next()
-    if (state === 'paused' || sent.size + making >= LIVE_CAMERA.atOnce || view.readyState < 2) return
-    if (!each) {
-      if (view.currentTime === reached) return
-      reached = view.currentTime
+    take(each)
+  }
+  // While the screen does not show the site the browser draws nothing, and calls neither of those
+  // until it does again; the camera goes on all the same, and the video with it. So its pictures
+  // are looked for by the clock then, as often as the camera gives them, or twice as often where
+  // the browser counts its frames and a frame is taken once. Shown again, the browser's own calls
+  // go on, asked for afresh in case it let go of one while nothing was drawn.
+  let looking: ReturnType<typeof setTimeout> | undefined
+  const look = () => {
+    looking = undefined
+    if (over || document.visibilityState !== 'hidden') return
+    const counts = (view.getVideoPlaybackQuality?.().totalVideoFrames ?? 0) > 0
+    const rate = Math.min(LIVE_CAMERA.perSecond, stream.getVideoTracks()[0]?.getSettings().frameRate || LIVE_CAMERA.perSecond)
+    looking = setTimeout(look, 1000 / (counts ? 2 * rate : rate))
+    take(false)
+  }
+  function pace() {
+    if (over) return
+    if (document.visibilityState === 'hidden') {
+      if (looking === undefined) look()
+      return
     }
+    clearTimeout(looking)
+    looking = undefined
+    unask()
+    next()
+  }
+  /**
+   * The picture the camera gives now, sent where the page has room for one and passed over where
+   * it has none. `fresh`: the browser says it is a new one; otherwise it is new only where the
+   * frames the browser counts, or the time the video has reached, moved on since the last one sent.
+   */
+  function take(fresh: boolean) {
+    if (sent.size + making >= LIVE_CAMERA.atOnce || view.readyState < 2) return
+    const counted = view.getVideoPlaybackQuality?.().totalVideoFrames ?? 0
+    const at = counted > 0 ? counted : view.currentTime
+    if (!fresh && at === reached) return
+    reached = at
     // No more in any second than the most, however fast the camera gives them
     const now = performance.now()
     while (begun.length && now - begun[0]! >= 1000) begun.shift()
@@ -672,8 +696,8 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
     ).then(
       (made) => {
         making--
-        // Closed, or the screen stopped showing the site, while it was made
-        if (over || state === 'paused') return made.close()
+        // Closed while it was made
+        if (over) return made.close()
         const not = page.still()
         if (not) {
           made.close()
@@ -701,15 +725,13 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
       grant: page.grant,
       title: page.title,
       since: Date.now(),
-      state,
+      state: 'live',
       end,
     },
   ]
-  shown.set(page.id, show)
   changed()
-  // Opened while the screen does not show the site: it waits at once
-  if (document.visibilityState === 'hidden') show(true)
-  next()
+  document.addEventListener('visibilitychange', pace)
+  pace()
   return {
     id: page.id,
     ...(sound ? { sampleRate: sound.sampleRate } : {}),
@@ -828,18 +850,16 @@ interface Relay {
   sampleRate: number
   /** The page has taken every piece up to this one. */
   heard: (chunk: number) => void
-  /** Waits while the screen does not show the site, and goes on when it does. */
-  wait: (hidden: boolean) => void
   close: () => void
 }
 /**
  * Passes the sound of a stream's microphone on, piece by piece, until it is closed. `still` is
  * asked before each piece is handed on, and where the page may not have it any more, `end` is
- * told why and the piece is not sent. Nothing is sent while `waiting`.
+ * told why and the piece is not sent.
  */
 async function relaySound(
   stream: MediaStream,
-  to: { still: () => Why | null; waiting: () => boolean; sound: (chunk: number, sampleRate: number, samples: Float32Array) => void; end: (why: Why) => void },
+  to: { still: () => Why | null; sound: (chunk: number, sampleRate: number, samples: Float32Array) => void; end: (why: Why) => void },
 ): Promise<Relay> {
   const Context = window.AudioContext
   if (typeof Context !== 'function' || typeof AudioWorkletNode !== 'function') throw new Error(NO_SOUND)
@@ -879,7 +899,7 @@ async function relaySound(
   let taken = 0
   node.port.onmessage = (m: MessageEvent) => {
     const samples: unknown = m.data
-    if (closed || to.waiting() || !(samples instanceof Float32Array) || samples.length === 0 || samples.length > LIVE_MICROPHONE.mostSamples) return
+    if (closed || !(samples instanceof Float32Array) || samples.length === 0 || samples.length > LIVE_MICROPHONE.mostSamples) return
     // A page that has not taken what it was sent is sent no more, and this piece is passed over
     if (sent - taken >= LIVE_MICROPHONE.atOnce) return
     const not = to.still()
@@ -891,9 +911,6 @@ async function relaySound(
     heard: (chunk) => {
       // Of a piece that was never sent, it makes no room
       if (Number.isInteger(chunk) && chunk > taken && chunk <= sent) taken = chunk
-    },
-    wait: (hidden) => {
-      void (hidden ? context.suspend() : context.resume()).catch(() => {})
     },
     close: () => {
       if (closed) return
@@ -946,8 +963,8 @@ export interface MicrophoneFor {
   still: () => Why | null
   /** One piece of sound for the page, numbered in the order it was heard, which is handed on. */
   sound: (chunk: number, sampleRate: number, samples: Float32Array) => void
-  /** The microphone paused, went on, or ended without the page asking. */
-  told: (state: 'live' | 'paused' | 'ended', why?: Why) => void
+  /** The microphone ended without the page asking, and why. */
+  told: (state: 'ended', why: Why) => void
   /**
    * Given a way to stop the microphone while its sound is made ready, before anything else holds
    * it, and given nothing once it is ready or has failed. Stopped so, its track stops at once.
@@ -976,7 +993,6 @@ export async function openMicrophone(audio: true | MediaTrackConstraints, page: 
   const stream = await getDevice({ audio, video: false })
   // Closed again at once, while its sound is made ready, where the page may not have it any more
   const readying = whileReadying(stream, page)
-  let state: 'live' | 'paused' = 'live'
   let over = false
   let usedAt = Date.now()
   let sound: Relay
@@ -988,7 +1004,6 @@ export async function openMicrophone(audio: true | MediaTrackConstraints, page: 
     sound = await readying.during(
       relaySound(stream, {
         still: () => (over ? 'not_shown' : page.still()),
-        waiting: () => state === 'paused',
         sound: page.sound,
         end: (why) => end(why),
       }),
@@ -1011,14 +1026,13 @@ export async function openMicrophone(audio: true | MediaTrackConstraints, page: 
     over = true
     clearInterval(watching)
     microphones = microphones.filter((m) => m.id !== page.id)
-    shown.delete(page.id)
     sound.close()
     for (const t of stream.getTracks()) t.stop()
     changed()
     return true
   }
-  // Asked whether the page may still have it whatever is sent, paused or not; and while it may, an
-  // open microphone is the page using what it was allowed, noted now and then and not for each piece
+  // Asked whether the page may still have it whatever is sent; and while it may, an open
+  // microphone is the page using what it was allowed, noted now and then and not for each piece
   const watching = setInterval(() => {
     const not = page.still()
     if (not) return end(not)
@@ -1026,27 +1040,13 @@ export async function openMicrophone(audio: true | MediaTrackConstraints, page: 
     usedAt = Date.now()
     usedNow(page.user, page.page)
   }, LIVE_MICROPHONE.checkEveryMs)
-  const show = (hidden: boolean) => {
-    const now = hidden ? 'paused' : 'live'
-    if (over || state === now) return
-    state = now
-    // A microphone whose track gives nothing is one the browser lets go of, and says so to the person
-    for (const t of stream.getTracks()) t.enabled = !hidden
-    sound.wait(hidden)
-    microphones = microphones.map((m) => (m.id === page.id ? { ...m, state: now } : m))
-    changed()
-    page.told(now)
-  }
   // A microphone that goes away, or that the person turns off from the browser's own controls, ends it
   for (const t of stream.getTracks()) t.addEventListener('ended', () => end('device'), { once: true })
   microphones = [
     ...microphones,
-    { id: page.id, user: page.user, page: page.page, owner: page.owner, grant: page.grant, title: page.title, since: Date.now(), state, end },
+    { id: page.id, user: page.user, page: page.page, owner: page.owner, grant: page.grant, title: page.title, since: Date.now(), state: 'live', end },
   ]
-  shown.set(page.id, show)
   changed()
-  // Opened while the screen does not show the site: it waits at once
-  if (document.visibilityState === 'hidden') show(true)
   return {
     id: page.id,
     sampleRate: sound.sampleRate,

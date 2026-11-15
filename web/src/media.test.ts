@@ -476,17 +476,21 @@ describe('what It’s bar shows of the microphone and the camera', () => {
 const kept: [string, PropertyDescriptor | undefined][] = []
 function giveBack() {
   for (const [name, was] of kept.splice(0).reverse()) {
-    const on = name === 'readyState' ? HTMLMediaElement.prototype : HTMLVideoElement.prototype
+    const on = name === 'readyState' || name === 'currentTime' ? HTMLMediaElement.prototype : HTMLVideoElement.prototype
     if (was) Object.defineProperty(on, name, was)
     else Reflect.deleteProperty(on, name)
   }
 }
 // A pretend camera for the live picture, as far as the site goes with it: a track that says
 // whether it was stopped or turned off and can go away, a video element whose next picture the
-// test gives when it likes, and pictures that say whether they were closed. The real camera is
-// Chromium's own, in the end-to-end run.
-function standInCamera(size = { width: 640, height: 480 }) {
+// test gives when it likes, which counts the camera's frames as a browser does where `counts`,
+// and pictures that say whether they were closed. The real camera is the browsers' own, in the
+// end-to-end run.
+function standInCamera(size = { width: 640, height: 480 }, { counts = true, frameRate = 30 } = {}) {
   const tracks: { kind: string; enabled: boolean; stopped: boolean; gone: () => void }[] = []
+  /** How many frames the camera has given, and how far its video has played, in seconds. */
+  let frames = 0
+  let played = 0
   Object.defineProperty(navigator, 'mediaDevices', {
     configurable: true,
     value: {
@@ -504,6 +508,7 @@ function standInCamera(size = { width: 640, height: 480 }) {
                 t.stopped = true
               },
               addEventListener: (_type: string, fn: () => void) => listeners.push(fn),
+              getSettings: () => (kind === 'video' ? { frameRate } : {}),
               /** The device goes away, as one unplugged does. */
               gone: () => {
                 for (const fn of listeners) fn()
@@ -512,7 +517,7 @@ function standInCamera(size = { width: 640, height: 480 }) {
             tracks.push(t)
             return t
           })
-        return { getTracks: () => made }
+        return { getTracks: () => made, getVideoTracks: () => made.filter((t) => t.kind === 'video') }
       }),
     },
   })
@@ -525,14 +530,30 @@ function standInCamera(size = { width: 640, height: 480 }) {
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
   kept.push(['readyState', Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'readyState')])
   kept.push(['requestVideoFrameCallback', Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'requestVideoFrameCallback')])
+  kept.push(['cancelVideoFrameCallback', Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'cancelVideoFrameCallback')])
+  kept.push(['getVideoPlaybackQuality', Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'getVideoPlaybackQuality')])
+  kept.push(['currentTime', Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentTime')])
   Object.defineProperty(HTMLMediaElement.prototype, 'readyState', { configurable: true, get: () => 4 })
+  /** How many times the browser was asked for a call at the next picture. */
+  let requests = 0
   Object.defineProperty(HTMLVideoElement.prototype, 'requestVideoFrameCallback', {
     configurable: true,
     value(fn: () => void) {
       waiting = fn
-      return 1
+      return ++requests
     },
   })
+  Object.defineProperty(HTMLVideoElement.prototype, 'cancelVideoFrameCallback', {
+    configurable: true,
+    value() {
+      waiting = null
+    },
+  })
+  Object.defineProperty(HTMLVideoElement.prototype, 'getVideoPlaybackQuality', {
+    configurable: true,
+    value: () => ({ totalVideoFrames: counts ? frames : 0 }),
+  })
+  Object.defineProperty(HTMLMediaElement.prototype, 'currentTime', { configurable: true, get: () => played })
   const made: { closed: boolean; close: () => void; width: number; height: number }[] = []
   /** Holds each picture being made until the test lets it through, where it says so. */
   let hold = false
@@ -561,13 +582,23 @@ function standInCamera(size = { width: 640, height: 480 }) {
     made,
     /** What each picture was asked to be made as. */
     asked: () => (createImageBitmap as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => c[1]),
-    /** The camera gives a picture, and what is made of it is let through. */
+    /** The camera gives a picture, which the browser calls back about, and what is made of it is let through. */
     async picture() {
+      frames++
+      played += 1 / frameRate
       const next = waiting
       waiting = null
       next?.()
       await settle()
     },
+    /** The camera gives a picture, and the browser calls nobody back about it, as while it draws nothing. */
+    frame() {
+      frames++
+      played += 1 / frameRate
+    },
+    /** Whether the browser is waiting to call back at the next picture, and how often it was asked to. */
+    waits: () => waiting !== null,
+    requests: () => requests,
     hold: (on: boolean) => {
       hold = on
     },
@@ -807,22 +838,112 @@ describe('the camera, live to a page', () => {
     expect(cameraFor('page-1')).toBeUndefined()
   })
 
-  test('waits while the screen does not show the site, turning the camera off and sending nothing, and goes on when it does again', async () => {
-    const { device, given, told } = await opened()
+  test('goes on while the screen does not show the site: the camera stays on, each of its pictures is sent once, looked for by the clock while the browser calls back about none, and the page is told nothing', async () => {
+    const { device, given, told } = await opened({ drawAll: true })
+    await device.picture()
+    expect(given).toEqual([1])
+    vi.useFakeTimers()
     let hidden = true
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (hidden ? 'hidden' : 'visible') })
     document.dispatchEvent(new Event('visibilitychange'))
-    expect(told).toHaveBeenLastCalledWith('paused')
-    expect(cameraFor('page-1')?.state).toBe('paused')
-    expect(device.tracks.map((t) => t.enabled)).toEqual([false])
-    await device.picture()
-    expect(given).toEqual([])
+    // The picture already sent is not sent again
+    await vi.advanceTimersByTimeAsync(100)
+    expect(given).toEqual([1])
+    // Each the camera gives is sent, though the browser calls back about none of them
+    for (let n = 0; n < 5; n++) {
+      device.frame()
+      await vi.advanceTimersByTimeAsync(1000 / 30)
+    }
+    expect(given).toEqual([1, 2, 3, 4, 5, 6])
+    // Looked for twice as often as the camera gives them, since the browser counts its frames
+    expect(vi.getTimerCount()).toBeGreaterThan(0)
+    expect(told).not.toHaveBeenCalled()
+    expect(cameraFor('page-1')?.state).toBe('live')
+    expect(device.tracks.map((t) => [t.enabled, t.stopped])).toEqual([[true, false]])
+    // Shown again, the browser is asked afresh to call back at the next picture, and the clock looks no more
+    const asked = device.requests()
     hidden = false
     document.dispatchEvent(new Event('visibilitychange'))
-    expect(told).toHaveBeenLastCalledWith('live')
-    expect(device.tracks.map((t) => t.enabled)).toEqual([true])
+    expect(device.requests()).toBe(asked + 1)
+    expect(device.waits()).toBe(true)
+    device.frame()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(given).toEqual([1, 2, 3, 4, 5, 6])
+    // And the browser's own call, when it comes, sends the picture it is about
+    vi.useRealTimers()
     await device.picture()
+    expect(given).toEqual([1, 2, 3, 4, 5, 6, 7])
+  })
+
+  test('while the screen does not show the site and the browser counts no frames, its pictures are looked for as often as the camera gives them, and one is sent each time the video has moved on', async () => {
+    allow('person-1', grant('page-1', ['camera']))
+    const device = standInCamera(undefined, { counts: false, frameRate: 10 })
+    const given: number[] = []
+    vi.useFakeTimers()
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    // A page that draws each picture the moment it comes, from the first, which can come before the camera's answer
+    const drawn: number[] = []
+    const live = await openCamera(true, false, {
+      ...camera,
+      id: 'cam-1',
+      grant: grantFor('person-1', 'page-1', OWNER, ['camera'])!,
+      still: () => null,
+      picture: (frame) => {
+        given.push(frame)
+        drawn.push(frame)
+      },
+      sound: () => {},
+      told: () => {},
+    })
+    open = live
+    const draw = () => {
+      for (const frame of drawn.splice(0)) live.drawn(frame)
+    }
+    // Opened while the screen does not show the site, the picture there is now is sent at once
+    await vi.advanceTimersByTimeAsync(0)
     expect(given).toEqual([1])
+    draw()
+    // Looked at again after a tenth of a second, the camera's own pace, and not before
+    device.frame()
+    await vi.advanceTimersByTimeAsync(90)
+    expect(given).toEqual([1])
+    await vi.advanceTimersByTimeAsync(10)
+    expect(given).toEqual([1, 2])
+    draw()
+    // And where the video has not moved on, nothing is sent
+    await vi.advanceTimersByTimeAsync(100)
+    expect(given).toEqual([1, 2])
+  })
+
+  test('ends at once while the screen does not show the site, when the person takes back what the page was allowed, and nothing more is looked for', async () => {
+    const { device, given, told } = await opened({ drawAll: true })
+    vi.useFakeTimers()
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    document.dispatchEvent(new Event('visibilitychange'))
+    // The picture there is as the screen stops showing the site, and the next the camera gives
+    device.frame()
+    await vi.advanceTimersByTimeAsync(40)
+    expect(given).toEqual([1, 2])
+    takeBack('person-1', 'page-1')
+    expect(told).toHaveBeenCalledWith('ended', 'taken_back')
+    expect(device.tracks.map((t) => t.stopped)).toEqual([true])
+    expect(cameraFor('page-1')).toBeUndefined()
+    device.frame()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(given).toEqual([1, 2])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  test('ends while the screen does not show the site, with the reason the page may not have it any more, asked as each picture goes', async () => {
+    const { device, told, refuse } = await opened({ drawAll: true })
+    vi.useFakeTimers()
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    document.dispatchEvent(new Event('visibilitychange'))
+    refuse('taken_over')
+    device.frame()
+    await vi.advanceTimersByTimeAsync(40)
+    expect(told).toHaveBeenCalledWith('ended', 'taken_over')
+    expect(device.tracks.map((t) => t.stopped)).toEqual([true])
   })
 
   test('is said in It’s bar as live to the page, with no picture of its own there, and its Stop ends it as the person stopping it', async () => {
@@ -871,7 +992,7 @@ describe('the camera, live to a page', () => {
       expect(device.made[0]!.closed).toBe(true)
     })
 
-    test('is closed and not sent when the screen stops showing the site meanwhile', async () => {
+    test('is sent all the same when the screen stops showing the site meanwhile', async () => {
       const { device, given } = await opened()
       device.hold(true)
       await device.picture()
@@ -879,8 +1000,8 @@ describe('the camera, live to a page', () => {
       document.dispatchEvent(new Event('visibilitychange'))
       device.letThrough()
       await settle()
-      expect(given).toEqual([])
-      expect(device.made[0]!.closed).toBe(true)
+      expect(given).toEqual([1])
+      expect(device.made[0]!.closed).toBe(false)
     })
 
     test('is closed and not sent when the person takes back what the page was allowed meanwhile', async () => {
@@ -1050,14 +1171,18 @@ describe('the camera, live to a page', () => {
       expect(device.tracks.map((t) => t.stopped)).toEqual([true, true])
     })
 
-    test('sends no sound, and makes none, while the screen does not show the site', async () => {
-      const { device, sound, pieces } = await opened({ sound: {} })
+    test('goes on sending its sound while the screen does not show the site, with the microphone on', async () => {
+      const { device, sound, pieces, told } = await opened({ sound: {} })
       Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
       document.dispatchEvent(new Event('visibilitychange'))
-      expect(device.tracks.map((t) => t.enabled)).toEqual([false, false])
-      expect(sound.contexts[0]!.state).toBe('suspended')
+      expect(device.tracks.map((t) => [t.enabled, t.stopped])).toEqual([
+        [true, false],
+        [true, false],
+      ])
+      expect(sound.contexts[0]!.state).toBe('running')
       sound.piece()
-      expect(pieces).toEqual([])
+      expect(pieces).toEqual([[1, 48_000, 960]])
+      expect(told).not.toHaveBeenCalled()
     })
 
     test('ends with the reason the page may not have it any more, asked before a piece of sound is handed on, which is not sent', async () => {
@@ -1271,34 +1396,47 @@ describe('the microphone, live to a page', () => {
     expect(microphoneFor('page-1')).toBeUndefined()
   })
 
-  test('waits while the screen does not show the site, turning the microphone off and sending nothing, and goes on when it does again', async () => {
+  test('goes on while the screen does not show the site, with the microphone on and its sound sent as it comes, and the page is told nothing', async () => {
     const { device, sound, pieces, told } = await opened({ takeAll: true })
     let hidden = true
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (hidden ? 'hidden' : 'visible') })
     document.dispatchEvent(new Event('visibilitychange'))
-    expect(told).toHaveBeenLastCalledWith('paused')
-    expect(microphoneFor('page-1')?.state).toBe('paused')
-    expect(device.tracks.map((t) => t.enabled)).toEqual([false])
-    expect(sound.contexts[0]!.state).toBe('suspended')
-    // What was on its way from the microphone as the screen stopped showing the site is not sent either
-    sound.piece()
-    expect(pieces).toEqual([])
+    expect(microphoneFor('page-1')?.state).toBe('live')
+    expect(device.tracks.map((t) => [t.enabled, t.stopped])).toEqual([[true, false]])
+    expect(sound.contexts[0]!.state).toBe('running')
+    for (let n = 0; n < 20; n++) sound.piece()
+    expect(pieces).toHaveLength(20)
     hidden = false
     document.dispatchEvent(new Event('visibilitychange'))
-    expect(told).toHaveBeenLastCalledWith('live')
+    sound.piece()
+    expect(pieces).toHaveLength(21)
+    expect(told).not.toHaveBeenCalled()
+  })
+
+  test('opened while the screen does not show the site, it is live at once', async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    const { device, sound, pieces, told } = await opened()
+    expect(told).not.toHaveBeenCalled()
     expect(device.tracks.map((t) => t.enabled)).toEqual([true])
-    expect(sound.contexts[0]!.state).toBe('running')
     sound.piece()
     expect(pieces).toHaveLength(1)
   })
 
-  test('opened while the screen does not show the site, it waits at once', async () => {
+  test('ends at once while the screen does not show the site: when the person takes back what the page was allowed, and with the reason the page may not have it any more', async () => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
-    const { device, sound, pieces, told } = await opened()
-    expect(told).toHaveBeenCalledWith('paused')
-    expect(device.tracks.map((t) => t.enabled)).toEqual([false])
-    sound.piece()
-    expect(pieces).toEqual([])
+    const first = await opened()
+    takeBack('person-1', 'page-1')
+    expect(first.told).toHaveBeenCalledWith('ended', 'taken_back')
+    expect(first.device.tracks.map((t) => t.stopped)).toEqual([true])
+    expect(first.sound.contexts[0]!.state).toBe('closed')
+    vi.unstubAllGlobals()
+    giveBack()
+    const second = await opened()
+    second.refuse()
+    second.sound.piece()
+    expect(second.told).toHaveBeenCalledWith('ended', 'taken_over')
+    expect(second.pieces).toEqual([])
+    expect(second.device.tracks.map((t) => t.stopped)).toEqual([true])
   })
 
   test('is said in It’s bar as live to the page, and its Stop ends it as the person stopping it', async () => {
@@ -1320,7 +1458,7 @@ describe('the microphone, live to a page', () => {
     host.remove()
   })
 
-  test('says in It’s bar that it is paused while the screen does not show the site', async () => {
+  test('is said in It’s bar as live while the screen does not show the site, as it is', async () => {
     await opened()
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
     document.dispatchEvent(new Event('visibilitychange'))
@@ -1328,9 +1466,8 @@ describe('the microphone, live to a page', () => {
     const root = createRoot(host)
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     await act(async () => root.render(createElement(MediaBar, { page: 'page-1' })))
-    expect(host.querySelector('.media-mic')?.textContent).toBe('Mic pausedStop')
-    expect(host.querySelector('.media-mic')?.getAttribute('data-state')).toBe('paused')
-    expect(host.querySelector('.media-mic')?.getAttribute('aria-label')).toBe('The microphone is paused to “Page page-1”')
+    expect(host.querySelector('.media-mic')?.textContent).toBe('Mic liveStop')
+    expect(host.querySelector('.media-mic')?.getAttribute('data-state')).toBe('live')
     await act(async () => root.unmount())
     host.remove()
   })
