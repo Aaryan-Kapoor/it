@@ -250,6 +250,15 @@ describe('what is said of an agent app on a machine', () => {
     installed[0]!.runtime = { state: 'active', detail: 'The loaded add-on reports the required delivery APIs.' }
     await act(async () => root.render(createElement(Machines)))
     expect(notes()).toEqual(['Add-on loaded'])
+    // No conversation of the app has spoken lately, as between Codex's turns: said plainly, with no
+    // tone and no paragraph that would move what is under it as the line flips to and from loaded
+    const resting = 'Installed. No loaded add-on has reported its delivery APIs recently. The app may be closed or waiting for its first turn.'
+    installed[0]!.runtime = { state: 'inactive', detail: resting }
+    await act(async () => root.render(createElement(Machines)))
+    expect(notes()).toEqual(['Installed'])
+    const note = host.querySelector('.check-note')!
+    expect([note.getAttribute('data-tone'), note.getAttribute('title')]).toEqual([null, resting])
+    expect(host.querySelector('.row-detail:not(.wake-row)')).toBeNull()
   })
 
   test('an app that runs an earlier build of its add-on is said to want a restart, with why, and Auto-wake is not said to wait for a repair', async () => {

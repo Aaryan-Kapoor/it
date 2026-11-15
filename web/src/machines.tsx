@@ -56,7 +56,7 @@ interface Machine {
  * person has to act on. That its add-on is installed is not the same as a click reaching a
  * conversation, which takes the machine being online as well, so no more is said than is known.
  */
-function standing(h: Harness, wanted: boolean, online: boolean): { word: string; tone?: 'ok' | 'wait' | 'bad'; detail?: string } {
+function standing(h: Harness, wanted: boolean, online: boolean): { word: string; tone?: 'ok' | 'wait' | 'bad'; detail?: string; title?: string } {
   if (h.addon === 'unavailable') return { word: 'Not available yet', detail: h.detail }
   // A fault only for an app the person chose. One they do not use, found on the machine, is said plainly
   if (h.addon === 'too_old') return { word: 'Version too old', ...(wanted ? { tone: 'bad' as const } : {}), detail: h.detail }
@@ -83,6 +83,12 @@ function standing(h: Harness, wanted: boolean, online: boolean): { word: string;
   if (h.runtime?.state === 'active' && h.runtime.outdated) return { word: 'Restart to update the add-on', tone: 'wait', detail: h.runtime.detail }
   if (h.runtime?.state === 'active' && h.runtime.idle === false) return { word: 'Open a conversation', tone: 'wait', detail: h.runtime.detail }
   if (h.runtime?.state === 'active') return { word: 'Add-on loaded', tone: 'ok', detail: h.runtime.detail }
+  // Installed, and no conversation of the app has spoken in the last half minute: how an app
+  // with none running rests, and Codex's between its turns, since its hooks speak only in one.
+  // Nothing is wrong and nothing is asked of the person, so it is said plainly, with why kept to
+  // a pointer: said in amber with a paragraph under it, it read as a fault while the app worked,
+  // and the line flipping to and from "Add-on loaded" moved the switch below it under the pointer
+  if (h.runtime?.state === 'inactive') return { word: 'Installed', title: h.runtime.detail }
   return {
     word: 'Installed, not verified',
     tone: 'wait',
@@ -462,7 +468,7 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                     {h.version && <span className="mono row-version">{h.version}</span>}
                   </span>
                 </label>
-                <span className="status check-note" data-tone={is.tone}>
+                <span className="status check-note" data-tone={is.tone} title={is.title}>
                   {is.word}
                 </span>
                 {/* Why, and what to do about it, in words that can be read without a pointer */}
