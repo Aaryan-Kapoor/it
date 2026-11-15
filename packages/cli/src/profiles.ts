@@ -18,21 +18,25 @@ export interface Profile {
   configPresent?: boolean
 }
 
-/** The person's own folder in this environment: USERPROFILE on Windows and HOME elsewhere, as the apps find it. */
-function homeOf(env: NodeJS.ProcessEnv): string {
-  return (process.platform === 'win32' ? env.USERPROFILE || env.HOME : env.HOME || env.USERPROFILE) || os.homedir()
+/**
+ * The home a program started with this environment finds for itself, as Node and Bun find it:
+ * USERPROFILE on Windows and HOME elsewhere. Undefined where that variable is not set, and the
+ * program would ask the system instead.
+ */
+function homeFor(env: NodeJS.ProcessEnv): string | undefined {
+  return (process.platform === 'win32' ? env.USERPROFILE : env.HOME) || undefined
 }
 
 /** The folder Claude Code keeps its settings and conversations in, when it is started with this environment. */
 export function claudeFolder(env: NodeJS.ProcessEnv): string {
-  return env.CLAUDE_CONFIG_DIR || path.join(homeOf(env), '.claude')
+  return env.CLAUDE_CONFIG_DIR ?? path.join(homeFor(env) ?? os.homedir(), '.claude')
 }
 
 /** Capture defaults too, so a service's other profile cannot silently replace them. */
 export function profileOf(harness: string, env: NodeJS.ProcessEnv = process.env): Profile | undefined {
   const keys = KEYS[harness]
   if (!keys) return undefined
-  const own = homeOf(env)
+  const own = (process.platform === 'win32' ? env.USERPROFILE || env.HOME : env.HOME || env.USERPROFILE) || os.homedir()
   const defaults: Record<string, string> = {
     CLAUDE_CONFIG_DIR: path.join(own, '.claude'),
     CODEX_HOME: path.join(own, '.codex'),
@@ -104,11 +108,19 @@ export function profileEnvironment(harness: string, value: unknown, base: NodeJS
   // Claude Code started with CLAUDE_CONFIG_DIR naming its usual folder is not the Claude Code a
   // terminal starts without it: it looks for its sign-in under another name in the macOS
   // Keychain, and for its own settings file (.claude.json) inside that folder rather than beside
-  // it. A conversation recorded with the usual folder is the one a person started with nothing
-  // set, so it is started again with nothing set, and never with the service's own setting.
-  const usual = path.join(homeOf(env), '.claude')
+  // it. The usual folder is recorded both where nothing was set and where the person set the
+  // variable to that folder, and nothing set is by far the more common, so such a conversation
+  // is started again with nothing set, and never with the service's own setting. That is done
+  // only where the home the reopened Claude Code finds for itself is the one the folder is in.
+  const home = homeFor(env)
+  const usual = home === undefined ? undefined : path.join(home, '.claude')
   const named = profile.paths.CLAUDE_CONFIG_DIR
-  if (harness === 'claude-code' && named && (process.platform === 'win32' ? named.toLowerCase() === usual.toLowerCase() : named === usual))
+  if (
+    harness === 'claude-code' &&
+    named &&
+    usual !== undefined &&
+    (process.platform === 'win32' ? named.toLowerCase() === usual.toLowerCase() : named === usual)
+  )
     delete env.CLAUDE_CONFIG_DIR
   return env
 }
