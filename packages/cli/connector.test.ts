@@ -6667,6 +6667,44 @@ describe.skipIf(process.platform === 'win32')('whether a conversation that was h
     expect(stand.calls.filter((c) => c.name === 'delivery:handedOff').map((c) => c.args.id)).toContain('click-1')
   })
 
+  test('no more ids are told of in all than It keeps records for, however the conversations came to be watched', async () => {
+    standIn()
+    await start('socket', APPS)
+    // Thirty-nine conversations, each heard under its own id and two it had before it was cleared, and then a fortieth: 120 ids, well within the room
+    for (let n = 0; n < 40; n++) {
+      await asks(false, `a-${n}`)
+      await local('/session', { method: 'POST', body: { harness: 'claude-code', session: `b-${n}`, was: `a-${n}` } })
+      await local('/session', { method: 'POST', body: { harness: 'claude-code', session: `c-${n}`, was: `b-${n}` } })
+      await asks(true, `c-${n}`)
+    }
+    await pass(3)
+    expect(told().filter((said) => said.running === true).length).toBe(120)
+    // Clicks handed to each of them for pages made under ids it had before, two more each: 200 in all, which is all the room there is
+    let n = 0
+    for (let k = 0; k < 40; k++)
+      for (const old of [`old-${k}-1`, `old-${k}-2`]) {
+        await local('/session', { method: 'POST', body: { harness: 'claude-code', session: `c-${k}`, was: old } })
+        offered(click(++n, { harness: 'claude-code', id: old }))
+        await until(async () => ((await asks(true, `c-${k}`))?.clicks ?? []).some((c) => c.id === `click-${n}`))
+        await local('/ack', { method: 'POST', body: { ids: [`click-${n}`], woke: false, turn: true } })
+      }
+    await pass(3)
+    const running = () =>
+      new Set(
+        told()
+          .filter((said) => said.running === true)
+          .map((said) => said.for.id),
+      )
+    expect(running().size).toBe(200)
+    // Two of them come to be one, as a conversation heard under another's id is: thirty-nine watches, with all 200 ids still told
+    await local('/session', { method: 'POST', body: { harness: 'claude-code', session: 'c-1', was: 'c-0' } })
+    await pass(2)
+    // A forty-first conversation begins a turn: there is no room left for it, and nothing it would take is pushed out
+    await asks(true, 'fresh')
+    await pass(3)
+    expect([running().size, running().has('fresh')]).toEqual([200, false])
+  }, 60_000)
+
   test('a turn that ended is told before turns that began, where It could not be told of either at once', async () => {
     standIn()
     await start('socket', APPS)

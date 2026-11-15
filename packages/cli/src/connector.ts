@@ -159,7 +159,8 @@ const HOOK_HOLD_MS = 60_000 // and this is how long it is held before Codex's qu
 const TURN_QUIET_MS = 30 * 60_000 // a turn that has run no hook for this long is taken to be over
 const TURN_SAID_MS = 20_000 // an add-on that says whether a turn is running, and has not said so for this long, is no longer known to have one
 const TURN_BEGINS_MS = 30_000 // how long a conversation that was handed a click, and is to begin a turn for it, is watched for that turn to begin
-const TURN_IDS_MOST = 5 // and how many at most where pages made under more of them were handed something: forty conversations of five ids each are as many records as the backend keeps for a machine (TURNS_MOST)
+const TURN_IDS_MOST = 5 // and how many at most where pages made under more of them were handed something
+const TURN_RECORDS_MOST = 200 // how many ids It is told turns under at once, in all: as many records as the backend keeps for a machine (TURNS_MOST), so that none that is running is pushed out
 const TURN_NAMES_MOST = 3 // how many of a conversation's ids It is told its turn under, where nothing was handed to it: its own and its latest earlier ones (TURNS_MOST in the backend leaves room for this many of each conversation listened for)
 const WAIT_MS = 5_000 // an `it wait` that said so this recently is still waiting
 const WAIT_AGAIN_MS = 120_000 // how long after an `it wait` ended its conversation, where it is one never heard from, is taken to be coming to wait again
@@ -889,6 +890,12 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     return now
   }
   const watchedTurns = new Map<string, Watched>()
+  /** How many ids It may be told turns under now, in all: a merge of two watches keeps what each had, and never adds to it. */
+  const idsWatched = (): number => {
+    let n = 0
+    for (const w of watchedTurns.values()) n += w.names.size
+    return n
+  }
   /** The conversation each click was handed to, for as long as It has yet to confirm the hand-over. */
   const handedTo = new Map<string, string>()
   /** Whether It has been told, since this connector started, that none of this machine's turns is known any more. */
@@ -938,6 +945,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     if (!watchedTurns.has(key) && watchedTurns.size >= LISTENING_MOST) return
     const known = watchedTurns.get(key)
     if (known && !known.names.has(click.session.id) && known.names.size >= TURN_IDS_MOST) return
+    if (!known?.names.has(click.session.id) && idsWatched() >= TURN_RECORDS_MOST) return
     handedTo.set(click.id, key)
     const w = watchedTurns.get(key) ?? {
       names: new Set<string>(),
@@ -1002,10 +1010,11 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   const turnSeen = (key: string): void => {
     let w = watchedTurns.get(key)
     // No more conversations than are listened for, so that It has room for every one that is said to be running
-    if (!w && turnsTaken !== false && watchedTurns.size < LISTENING_MOST && turnKnown(key, Date.now()) === true) {
+    if (!w && turnsTaken !== false && watchedTurns.size < LISTENING_MOST && idsWatched() < TURN_RECORDS_MOST && turnKnown(key, Date.now()) === true) {
       const names = new Set([key.slice(key.indexOf(':') + 1)])
-      // The latest few, since a conversation cleared many times is told of under each
-      for (const [from] of [...aliases].reverse()) if (names.size < TURN_NAMES_MOST && follow(from) === key) names.add(from.slice(from.indexOf(':') + 1))
+      // The latest few, since a conversation cleared many times is told of under each, as many as there is room for
+      const room = Math.min(TURN_NAMES_MOST, TURN_RECORDS_MOST - idsWatched())
+      for (const [from] of [...aliases].reverse()) if (names.size < room && follow(from) === key) names.add(from.slice(from.indexOf(':') + 1))
       w = { names, told: new Set(), owed: false, behind: false, finished: false, generation: 0, idleAt: null, want: 'wait' }
       watchedTurns.set(key, w)
     }
