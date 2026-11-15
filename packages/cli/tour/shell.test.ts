@@ -2,7 +2,7 @@
 // agent's dock and what it says at each stage, and how the page is put together from its parts.
 // Each part's own tests are beside it, in parts/<name>.test.ts.
 import { readFileSync } from 'node:fs'
-import { LIMITS } from '@it/protocol'
+import { briefClick, LIMITS } from '@it/protocol'
 import { describe, expect, test } from 'vitest'
 import { GUIDE, tourPage } from '../src/tour'
 import { opened, type Page, pointer, SLOW, STEPS } from './start-page'
@@ -477,6 +477,17 @@ describe('the guide for the first page', () => {
     expect(part).toContain('you never copy `part` or `request` into your answer')
     // Every example is small beside what a state may hold
     for (const example of examples(part)) expect(new TextEncoder().encode(JSON.stringify(example)).length).toBeLessThan(LIMITS.stateBytes / 100)
+  })
+
+  test('has the agent read what an action carried with `it action` where it cannot see that, as in the one short line Claude Code and Codex are given, and still neither acknowledge nor wait on this page', () => {
+    // The short line the guide gives is the very one an agent app is handed for a click that starts a turn
+    const line = briefClick({ id: '<id>', artifact: 'tour-start', title: 'Getting started', name: 'moved', payload: { in_the_way: 'sofa' }, at: 0 })
+    expect(line).toBe('[It] "Getting started" (tour-start): moved, with details [action <id>]')
+    expect(part).toContain(`Where you cannot see that, as where the action arrived as one short line such as \`${line}\`, run \`it action <id>\`, which prints it, and then answer.`)
+    // Nowhere does the guide forbid the one command that shows what an action carried, or tell the agent to run nothing to find it
+    expect(GUIDE).not.toMatch(/never run[^.]*`it action`/)
+    expect(GUIDE).not.toContain('so run nothing to find out more')
+    expect(part).toContain('on this page you never run `it ack` or `it wait`')
   })
 
   test('tells the agent to be quick, and what to do after each answer by what the command printed', () => {

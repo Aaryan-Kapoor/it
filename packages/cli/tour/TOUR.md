@@ -29,7 +29,7 @@ Where showing it printed `"asleep": true`, you are in a Claude Code conversation
 
 ### One command answers, on every part
 
-Each thing the person does on this page arrives as one action, which ends `[action <id>]`. Everything you need to answer is in the action, so run nothing to find out more. Answer with one command, with your answer as one line of JSON between the line that ends `<<'EOF'` and a line that says `EOF`:
+Each thing the person does on this page arrives as one action, which ends `[action <id>]`. Everything you need to answer is in what the action carried. Where you cannot see that, as where the action arrived as one short line such as `[It] "Getting started" (tour-start): moved, with details [action <id>]`, run `it action <id>`, which prints it, and then answer. Run nothing else to find out more. Answer with one command, with your answer as one line of JSON between the line that ends `<<'EOF'` and a line that says `EOF`:
 
 ```sh
 it tour answer <the action's id> "$(cat <<'EOF'
@@ -40,7 +40,7 @@ EOF
 
 Written so, nothing in your words can end the command early, so write them as you would, apostrophes and quotes and all, and give every answer and the ideas in that form. Only leave backticks out, which Claude Code takes for a command inside the command. In PowerShell, which has no such form, pipe the JSON to the command as a here-string: `@'` on a line, the JSON, and `'@ | it tour answer <the action's id> -`.
 
-The command puts your answer on the page under the part the action came from, with the request it answers, in place of your answer before it. It acknowledges the action and clears up after it. So you never copy `part` or `request` into your answer, each answer is the whole of it, since nothing of the one before stays, and on this page you never run `it ack`, `it action` or `it wait`. Then do what it printed:
+The command puts your answer on the page under the part the action came from, with the request it answers, in place of your answer before it. It acknowledges the action and clears up after it. So you never copy `part` or `request` into your answer, each answer is the whole of it, since nothing of the one before stays, and on this page you never run `it ack` or `it wait`. Then do what it printed:
 
 - `"next": "End your turn. …"`: end your turn. What the person does next arrives by itself.
 - Otherwise it has already waited for what the person does next, and printed that action under its first line: answer it in the same way, with its `id`.
