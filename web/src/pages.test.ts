@@ -82,7 +82,11 @@ let root: Root
 let host: HTMLElement
 const said = () => host.querySelector('.status')?.textContent ?? null
 /** What the bar says of the page's agent being at work, in the look of a run It reopened, where it says so. */
-const working = () => host.querySelector('.page-nav .working')?.textContent ?? null
+const working = () => {
+  const said = host.querySelector('.page-nav .working')
+  // Where the bar names the agent app, which it does but on a phone's
+  return said ? (said.querySelector('.working-long')?.textContent ?? said.textContent) : null
+}
 /** Everything the bar says beside whether the agent is working, in the order it says it. */
 const allSaid = () => [...host.querySelectorAll('.status')].map((s) => s.textContent)
 /** The button that stops the page's agent, where it is offered. */
@@ -1240,6 +1244,8 @@ describe('the bar while a turn of the page’s conversation runs, which It did n
       await shown()
       expect([working(), allSaid(), stops()]).toEqual(['Claude Code is working', [], []])
       expect(host.querySelector('.page-nav .working .working-dot')).not.toBeNull()
+      // And in a word, for a bar as narrow as a phone's, where the stylesheet shows that in its place
+      expect(host.querySelector('.page-nav .working .working-short')?.textContent).toBe('Working')
       // Something done an hour ago, long since answered, changes nothing
       recent = [{ at: NOW - 60 * 60_000, delivery: 'handed_off', outcome: 'succeeded', handedAt: NOW - 60 * 60_000 }]
       await drawnAgain()

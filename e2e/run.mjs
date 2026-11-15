@@ -7040,7 +7040,7 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
     await atWork.page.goto(`${APP}/p/${wslug}`)
     await pageIn(atWork.page, { id: wslug })
     const onPage = () => atWork.page.frameLocator('.mount iframe').locator('#working').textContent()
-    const inBar = async () => ((await atWork.page.locator('.page-nav .working').count()) ? await atWork.page.locator('.page-nav .working').textContent() : null)
+    const inBar = async () => ((await atWork.page.locator('.page-nav .working').count()) ? await atWork.page.locator('.page-nav .working').innerText() : null)
     /** What the bar and the page say, once both say what is waited for, or as they are when the time is up. */
     const saying = async (bar, page, ms) => {
       const seen = await until(async () => {

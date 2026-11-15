@@ -733,13 +733,18 @@ export function atWorkNow(work: Work | undefined, now: number): boolean {
   if (work.stoppedAt != null && work.stoppedAt >= turn.since) return false
   return work.machineSeenAt != null && now - work.machineSeenAt < ALIVE.onlineMs
 }
-/** What the bar says while a turn of the page's conversation runs, which It did not start and so cannot stop: the reopened run's look, without its Stop. */
+/**
+ * What the bar says while a turn of the page's conversation runs, which It did not start and so
+ * cannot stop: the reopened run's look, without its Stop. It names the agent app where the bar has
+ * room, and on a bar as narrow as a phone's says only "Working", which leaves the page's title room.
+ */
 export const workingSaid = (agent: string | null): string => `${agent ?? 'Your agent'} is working`
 function WorkingNow({ agent }: { agent: string | null }) {
   return (
     <span className="working">
       <span className="working-dot" />
-      {workingSaid(agent)}
+      <span className="working-long">{workingSaid(agent)}</span>
+      <span className="working-short">Working</span>
     </span>
   )
 }

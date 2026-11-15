@@ -506,7 +506,7 @@ try {
       const end = Date.now() + ms
       let now
       do {
-        now = (await working.count()) ? await working.textContent() : null
+        now = (await working.count()) ? await working.innerText() : null
         if (now === words) return now
         await sleep(250)
       } while (Date.now() < end)
