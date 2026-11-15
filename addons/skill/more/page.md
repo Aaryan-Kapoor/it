@@ -258,7 +258,7 @@ A page can change its own state while you work, and so can another conversation.
 
 ## Showing that you are at work
 
-`It.onProgress(fn)` calls `fn({ working, actions })` as soon as it is known and whenever it changes. `working` is `true` while a turn of your conversation is running. `actions` are the last eight things done on the page, newest first, each with the `id` that `It.action` resolved with, `handed`, which is `true` once you have it, and `turn`, which is `'running'` while the turn that took it runs, `'ended'` once that turn is over, and `null` where that is not known. Show it beside what was pressed. Some agent apps do not say when their turns run: where `turn` stays `null`, say no more than that you have it.
+`It.onProgress(fn)` calls `fn({ working, actions })` as soon as it is known and whenever it changes. `working` is `true` while a turn of your conversation is running, on this page or anything else, and `false` where that is not known. `actions` are the last eight things done on the page, newest first, each with the `id` that `It.action` resolved with, `handed`, which is `true` once you have it, and `turn`: `'running'` while a turn of yours runs after you were handed it, `'ended'` once a turn ended after that, and `null` where that is not known. A turn that ended is not the action done, which only your answer on the page says. Show it beside what was pressed. Some agent apps do not say when their turns run: where `turn` stays `null`, say no more than that you have it.
 
 ```js
 let sent = null
@@ -268,7 +268,7 @@ go.onclick = async () => {
 }
 It.onProgress(({ actions }) => {
   const a = actions.find((x) => x.id === sent)
-  if (a) go.textContent = a.turn === 'running' ? 'Working…' : a.turn === 'ended' ? 'Done' : a.handed ? 'Your agent has it' : 'Sent'
+  if (a) go.textContent = a.turn === 'running' ? 'Working…' : a.turn === 'ended' ? 'Turn ended' : a.handed ? 'Your agent has it' : 'Sent'
 })
 ```
 

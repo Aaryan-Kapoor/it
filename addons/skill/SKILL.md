@@ -36,7 +36,7 @@ Run it by that name alone, `it` (on Windows `it.exe`), every time. One command a
 - **`It.state`** is the page's state, a JSON object you change from the command line: `it set deploy-plan status "Deploying… 3 of 7"`, `it patch deploy-plan '{"steps":{"build":"done"}}'`. It is empty when the page's scripts first run and arrives a moment later: **`It.onState(fn)`** runs `fn(state)` when it arrives and whenever it changes.
 - **`data-it-bind="path"`** puts a value from the state into an element's text (or the value of an input, a text box, a dropdown or a progress bar, or an image's source). **`data-it-show="path"`** shows an element only while the value is truthy, and `"!path"` reverses it.
 - **`It.store.set(key, value)` / `It.store.get(key)`** keep what the page itself changes, such as a draft, with the page and on every display. Read what was saved inside `It.onState`: before the state arrives, `It.store.get` returns `undefined`.
-- **`It.onProgress(fn)`** tells the page whether you have what was done on it and whether you are at work, to show beside it: `it help page`.
+- **`It.onProgress(fn)`** tells the page whether you have what was done on it and whether a turn of yours is running, to show beside it: `it help page`.
 
 A page is shown in a sandbox with no cookies and no storage that lasts, cannot frame its own files, and may hold and send only so much. Before you write a page that stores anything, uses the mic or camera, loads a worker, frames a file, drives a player, is big or busy, or republishes after failing, read `it help page`.
 
