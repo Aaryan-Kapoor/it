@@ -1687,7 +1687,7 @@ describe('what is open or asked for a page, when the page changes hands or is ta
   const FIRST = 'machine-1|claude-code|conversation-1'
   const SECOND = 'machine-1|codex|conversation-2'
   const madeBy = (owner: string) => ({ agent: 'Claude Code', machine: 'studio', owner })
-  let tracks: { kind: string; stopped: boolean; ended: () => void }[] = []
+  let tracks: { kind: string; enabled: boolean; stopped: boolean; ended: () => void }[] = []
   /** What the browser was asked for, each time the site asked it for a device. */
   let wanted: MediaStreamConstraints[] = []
   /** Holds the browser's answer to the site's asking for a device, until the test lets it through. */
@@ -1752,6 +1752,7 @@ describe('what is open or asked for a page, when the page changes hands or is ta
             stopped: false,
             stop: () => (t.stopped = true),
             addEventListener: (_type: string, fn: () => void) => listeners.push(fn),
+            getSettings: () => (kind === 'video' ? { frameRate: 30 } : {}),
             /** The device goes away, as a camera unplugged does. */
             ended: () => {
               for (const fn of listeners) fn()
@@ -1760,7 +1761,7 @@ describe('what is open or asked for a page, when the page changes hands or is ta
           tracks.push(t)
           return t
         })
-      return { getTracks: () => made }
+      return { getTracks: () => made, getVideoTracks: () => made.filter((t) => t.kind === 'video') }
     }
     Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia } })
   })
@@ -2789,6 +2790,86 @@ describe('what is open or asked for a page, when the page changes hands or is ta
     const frames = (heard: any[]) => heard.filter((m) => m.type === 'it:camera-frame')
     const states = (heard: any[]) => heard.filter((m) => m.type === 'it:camera-state')
     const openLive = { type: 'it:camera', requestId: 'c1', camera: 'cam-a', video: { facingMode: 'user' } }
+
+    // While the screen does not show the page, the browser calls back about no picture. The camera
+    // goes on, and so does the count of the frames it gave that a browser keeps
+    describe('while the screen does not show the page', () => {
+      let given = 0
+      beforeEach(() => {
+        given = 0
+        standIn(HTMLVideoElement.prototype, 'getVideoPlaybackQuality', { value: () => ({ totalVideoFrames: given }) })
+        standIn(HTMLVideoElement.prototype, 'cancelVideoFrameCallback', {
+          value() {
+            waiting = null
+          },
+        })
+      })
+      afterEach(() => {
+        Reflect.deleteProperty(document, 'visibilityState')
+      })
+      /** The page's camera and microphone, both live, and then the screen stops showing the page. */
+      const liveThenHidden = async () => {
+        const shown = await shownFor(FIRST, ['mic', 'camera'])
+        await shown.ask(openLive)
+        await shown.ask(openMic)
+        expect([resultOf(shown.heard, 'c1'), resultOf(shown.heard, 'm1')]).toMatchObject([{ ok: true }, { ok: true }])
+        Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+        await act(async () => {
+          document.dispatchEvent(new Event('visibilitychange'))
+          await tick()
+        })
+        return shown
+      }
+      /** The camera gives a picture, which the browser calls nobody back about, and the page says it drew what it was sent. */
+      const givenAndDrawn = async (shown: { heard: any[]; page: { ports: () => MessagePort[] } }) => {
+        given++
+        await act(() => tick(60))
+        for (const m of frames(shown.heard)) shown.page.ports()[0]!.postMessage({ type: 'it:camera-drawn', camera: 'cam-a', frame: m.frame })
+        await act(() => tick(20))
+      }
+
+      test('the camera and the microphone live to the page go on: each picture the camera gives and each piece of sound is passed to the page, the devices stay on, and the page is told nothing', async () => {
+        const shown = await liveThenHidden()
+        for (let n = 0; n < 3; n++) await givenAndDrawn(shown)
+        expect(frames(shown.heard).map((m) => m.frame)).toEqual([1, 2, 3, 4])
+        await piece()
+        await piece()
+        expect(sound(shown.heard)).toHaveLength(2)
+        expect(states(shown.heard)).toEqual([])
+        expect(micStates(shown.heard)).toEqual([])
+        expect(tracks.map((t) => [t.kind, t.enabled, t.stopped])).toEqual([
+          ['video', true, false],
+          ['audio', true, false],
+        ])
+        expect(sounds.at(-1)!.state).toBe('running')
+      })
+
+      test('taking back what the page was allowed ends both at once, and nothing more is passed on', async () => {
+        const shown = await liveThenHidden()
+        const { takeBack } = await import('./media')
+        await act(async () => takeBack('alice', 'page1'))
+        expect(states(shown.heard)).toMatchObject([{ camera: 'cam-a', state: 'ended', why: 'taken_back' }])
+        expect(micStates(shown.heard)).toMatchObject([{ microphone: 'mic-a', state: 'ended', why: 'taken_back' }])
+        expect(tracks.map((t) => t.stopped)).toEqual([true, true])
+        const before = frames(shown.heard).length
+        await givenAndDrawn(shown)
+        await piece()
+        expect(frames(shown.heard)).toHaveLength(before)
+        expect(sound(shown.heard)).toEqual([])
+      })
+
+      test('Stop in It’s bar ends each at once, and so does another conversation taking the page over', async () => {
+        const shown = await liveThenHidden()
+        const { cameraFor, microphoneFor } = await import('./media')
+        await act(async () => cameraFor('page1')!.end('person'))
+        expect(states(shown.heard)).toMatchObject([{ camera: 'cam-a', state: 'ended', why: 'person' }])
+        expect(tracks.map((t) => t.stopped)).toEqual([true, false])
+        expect(microphoneFor('page1')).toBeDefined()
+        await shown.handedTo(SECOND)
+        expect(micStates(shown.heard)).toMatchObject([{ microphone: 'mic-a', state: 'ended', why: 'taken_over' }])
+        expect(tracks.map((t) => t.stopped)).toEqual([true, true])
+      })
+    })
 
     test('a page that calls for the camera is shown it live once the person allows it in the bar, asked about the camera alone, and is given its pictures', async () => {
       const { heard, ask } = await shownFor(FIRST, [])

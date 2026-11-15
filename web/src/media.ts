@@ -634,11 +634,12 @@ export async function openCamera(video: true | MediaTrackConstraints, audio: fal
     if (over || asked !== null) return
     asked = each ? view.requestVideoFrameCallback(picture) : requestAnimationFrame(picture)
   }
-  /** Lets go of the call the browser was asked for, if one was. */
+  /** Lets go of the call the browser was asked for, if one was, where the browser lets it be let go of: otherwise it still comes, and goes on from there. */
   function unask() {
     if (asked === null) return
-    if (each) view.cancelVideoFrameCallback(asked)
-    else cancelAnimationFrame(asked)
+    if (!each) cancelAnimationFrame(asked)
+    else if (typeof view.cancelVideoFrameCallback === 'function') view.cancelVideoFrameCallback(asked)
+    else return
     asked = null
   }
   function picture() {
