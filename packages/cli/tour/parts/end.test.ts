@@ -432,7 +432,9 @@ describe('the guide for the ending', () => {
     expect(early).toContain(
       'its name, its README, the names of its top-level files, the subjects of its recent commits, and what you already have in mind about this person from your own instruction and memory files for this project',
     )
-    expect(early).toContain('That is at most two commands, `ls` and `git log --oneline -8`')
+    expect(early).toContain('That is at most two commands, `ls -a` and `git log --oneline -8`')
+    // And `git log` only in a repository, where elsewhere it fails in red in front of the person (the Windows rehearsal)
+    expect(early).toContain('Run `git log` only where `ls -a` showed a `.git`')
     expect(early).toContain('An idea is a name and a line in the project’s own words, never the contents of a file'.replace('’', "'"))
     expect(early).toContain('say in `say` that you do not know yet what they are working on. Never write as though you knew them.')
   })
