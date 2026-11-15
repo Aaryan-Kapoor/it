@@ -5743,7 +5743,8 @@ describe.skipIf(process.platform === 'win32')('a command that waits for somethin
 })
 
 describe.skipIf(process.platform === 'win32' || !python)('what a person at a terminal is told', () => {
-  const NOT_RUNNING = 'It is not running on this machine. Run `it setup`, which starts It and keeps it running in the background. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.'
+  const NOT_RUNNING =
+    'It is not running on this machine. Run `it setup`, which starts It and keeps it running in the background. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.'
   const NOT_REGISTERED = 'It is not registered to start by itself. `it setup` registers it, and `it serve` runs it in a terminal until then.'
   const NO_SYSTEMD =
     'Nothing starts It by itself on this machine: no systemd for your account can be reached from here. `it serve` runs it, in a terminal or under a supervisor of your own.'
