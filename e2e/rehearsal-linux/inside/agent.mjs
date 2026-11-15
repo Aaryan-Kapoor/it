@@ -59,15 +59,15 @@ export async function answerApp(app, counts = {}) {
       await key('Enter')
       return 'notes'
     }
-    if (/trust the files in this folder|Do you trust|Is this a project you created|Quick safety check|Yes, I trust this folder|Accessing workspace/i.test(tail) && /1\./.test(tail)) {
-      await choose(/Yes|trust/i, 'Claude Code asks whether to trust the folder')
-      return 'trust'
-    }
-    // The same question with unnumbered options ("❯ No, exit" above "Yes, I trust this folder")
-    if (/Yes, I trust this folder/i.test(tail) && /No, exit/i.test(tail)) {
+    // The folder question with unnumbered options ("❯ No, exit" above "Yes, I trust this folder")
+    if (/Yes, I trust this folder/i.test(tail) && /No, exit/i.test(tail) && !/^\s*(?:│\s*)?[❯›>]?\s*1\.\s+\S/m.test(tail)) {
       for (let i = 0; i < 4 && !/[❯›>]\s*Yes, I trust this folder/i.test(screen()); i++) await key('Down')
       step('Claude Code asks whether to trust the folder; chooses "Yes, I trust this folder"')
       await key('Enter')
+      return 'trust'
+    }
+    if (/trust the files in this folder|Do you trust|Is this a project you created|Quick safety check|Yes, I trust this folder|Accessing workspace/i.test(tail) && /^\s*(?:│\s*)?[❯›>]?\s*1\.\s+\S/m.test(tail)) {
+      await choose(/Yes|trust/i, 'Claude Code asks whether to trust the folder')
       return 'trust'
     }
     if (/Do you want to (proceed|make this edit|create|allow)|Allow this|Do you want to run/i.test(tail) && /1\.\s*Yes/.test(tail)) {
