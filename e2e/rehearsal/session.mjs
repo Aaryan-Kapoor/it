@@ -96,7 +96,11 @@ const ownApps = process.argv.includes('--own-apps')
 const realSite = process.argv.includes('--real-site')
 const shellEnv = userEnv(USER, {
   path: ownApps ? [`${UHOME}\\AppData\\Roaming\\npm`, `${UHOME}\\AppData\\Local\\Microsoft\\WindowsApps`] : [appBin],
-  extra: realSite ? {} : { IT_INSTALL_BASE: 'http://127.0.0.1:5690' },
+  extra: {
+    ...(realSite ? {} : { IT_INSTALL_BASE: 'http://127.0.0.1:5690' }),
+    // --test-vars: the user variables set for the account (launcher-path.mjs --vars), as its terminal has them
+    ...(process.argv.includes('--test-vars') ? { CLAUDE_CODE_IT_TEST: '1', CLAUDE_CODE_GIT_BASH_PATH: 'C:\\Program Files\\Git\\bin\\bash.exe' } : {}),
+  },
 })
 
 // The sign-in lent to the run, and the agent app's settings, as a person who chose that model has them
