@@ -890,10 +890,14 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     return now
   }
   const watchedTurns = new Map<string, Watched>()
-  /** How many ids It may be told turns under now, in all: a merge of two watches keeps what each had, and never adds to it. */
+  /**
+   * How many ids It may be told turns under now, in all: those each watch may tell, and those it
+   * has told and not taken back, which a watch that was merged into it while It was being told
+   * may have added without the id being one of its own. A merge never adds to the count.
+   */
   const idsWatched = (): number => {
     let n = 0
-    for (const w of watchedTurns.values()) n += w.names.size
+    for (const w of watchedTurns.values()) n += new Set([...w.names, ...w.told]).size
     return n
   }
   /** The conversation each click was handed to, for as long as It has yet to confirm the hand-over. */
