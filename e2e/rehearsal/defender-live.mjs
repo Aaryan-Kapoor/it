@@ -49,7 +49,7 @@ function envFor(home) {
   // A folder that already holds a file that is not It's: the script refuses it before downloading
   mkdirSync(itHome, { recursive: true })
   writeFileSync(path.join(itHome, 'not-its.txt'), 'keeps the install script from downloading\n')
-  return { PATH: systemPath().join(';'), HOME: home, ...homeOnWindows(home), IT_HOME: itHome, IT_INSTALL_PLAIN: '1', IT_INSTALL_NO_PATH: '1', IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage', USERNAME: process.env.USERNAME, COMPUTERNAME: process.env.COMPUTERNAME, USERDOMAIN: process.env.USERDOMAIN }
+  return { PATH: systemPath().join(';'), HOME: home, ...homeOnWindows(home), IT_HOME: itHome, IT_INSTALL_PLAIN: '1', IT_INSTALL_NO_PATH: '1', IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage', DO_NOT_TRACK: '1', USERNAME: process.env.USERNAME, COMPUTERNAME: process.env.COMPUTERNAME, USERDOMAIN: process.env.USERDOMAIN }
 }
 function events(since) {
   const r = spawnSync(PS, ['-NoProfile', '-NonInteractive', '-Command', `Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Windows Defender/Operational'; Id=1116,1117; StartTime=[datetime]::Parse('${since}').ToLocalTime()} -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{ t=$_.TimeCreated.ToUniversalTime().ToString('o'); id=$_.Id; name=([regex]::Match($_.Message,'Name: (\\S+)').Groups[1].Value); line=([regex]::Match($_.Message,'CmdLine:_\\S+\\\\(\\S+\\.exe .{0,160})').Groups[1].Value) } } | ConvertTo-Json -Compress`], { encoding: 'utf8', windowsHide: true })

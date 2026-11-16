@@ -16,7 +16,7 @@ import { copyFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, re
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { claudeAccess, codexAuth, forget, scrub, shredAll, shredLedger, shredOnExit } from './credentials.mjs'
+import { claudeAccess, claudeFile, codexAuth, forget, scrub, shredAll, shredLedger, shredOnExit } from './credentials.mjs'
 import { killTree, leftIn, ownerFingerprint, ownerSkillsOff, profileEnv, recorder, runFolders, sleep, stamp, WORK } from './lib.mjs'
 import { install, it, personBrowser, SCREEN, setup, terminalView, terminalWindow } from './stage.mjs'
 
@@ -71,6 +71,16 @@ const env = profileEnv(f, { port, appBin, guard: true, extra: { IT_INSTALL_BASE:
 // A run that tests an update: the guard passes `it upgrade`, once It says no service is
 // registered for this folder (guard.ts)
 if (process.argv.includes('--allow-upgrade')) env.IT_REHEARSAL_ALLOW_UPGRADE = '1'
+// With --launcher-path the guard, when it starts `it serve` itself (an agent-led install), gives it
+// the PATH without the guard's folder too (guard.ts)
+if (process.argv.includes('--launcher-path')) env.IT_REHEARSAL_LAUNCHER_PATH = '1'
+// --env NAME=VALUE (repeatable): a variable the person has set for their account, so that the
+// service (from the registry) and their shell both have it, as on a participant's laptop
+process.argv.forEach((a, i) => {
+  if (a !== '--env') return
+  const [k, ...v] = String(process.argv[i + 1] ?? '').split('=')
+  if (k) env[k] = v.join('=')
+})
 // From the real site, as a participant: no stand-in, the published program from It's releases.
 // IT_INSTALL_NO_PATH stays, since the owner's own PATH may not be changed.
 const realSite = process.argv.includes('--real-site')
@@ -97,9 +107,15 @@ if (app === 'codex') {
 } else {
   mkdirSync(path.join(f.home, '.claude'), { recursive: true })
   writeFileSync(path.join(f.home, '.claude', 'settings.json'), `${JSON.stringify({ model: MODEL.model, effortLevel: MODEL.effort }, null, 2)}\n`)
-  const access = claudeAccess()
-  tokenExpiry = new Date(access.expiresAt).toISOString()
-  Object.assign(appEnv, access.env)
+  // --claude-file-signin: the sign-in in Claude Code's own file, as a participant's, so that a
+  // conversation It reopens (which gets no CLAUDE… variable) is signed in too
+  if (process.argv.includes('--claude-file-signin')) {
+    tokenExpiry = new Date(claudeFile(path.join(f.home, '.claude')).expiresAt).toISOString()
+  } else {
+    const access = claudeAccess()
+    tokenExpiry = new Date(access.expiresAt).toISOString()
+    Object.assign(appEnv, access.env)
+  }
 }
 // A picture the person has on their laptop, for a page that asks for a photo or a file
 if (process.argv.includes('--picture')) {
@@ -186,8 +202,15 @@ let swapping = null
 // `setup` event), so that the add-on arrives in a conversation that has begun without it
 let program = path.join(f.itHome, 'bin', 'it.exe')
 const serveLog = createWriteStream(path.join(f.logs, 'serve.log'), { flags: 'a' })
+// --launcher-path: `it serve` gets the PATH that the launcher (`it-service.cmd`) of an install done
+// the guide's way sets, which is the PATH of the agent's shell opened before the install: the
+// agent app's folder, Node and the system's, with neither It's folder nor the harness's guard (which
+// holds an `it.exe`), so that an app It reopens has no `it` on its PATH, as on such a machine
+const launcherPath = process.argv.includes('--launcher-path')
 function startServe() {
-  serveChild = spawn(program, ['serve'], { env: { ...env, ...appEnv }, cwd: f.work, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+  const serveEnv = { ...env, ...appEnv }
+  if (launcherPath) serveEnv.PATH = env.PATH.split(';').filter((d) => d && path.resolve(d).toLowerCase() !== path.join(WORK, 'guard').toLowerCase() && !/\\\.it\\bin\\?$/i.test(d)).join(';')
+  serveChild = spawn(program, ['serve'], { env: serveEnv, cwd: f.work, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   serveChild.stdout.pipe(serveLog, { end: false })
   serveChild.stderr.pipe(serveLog, { end: false })
 }

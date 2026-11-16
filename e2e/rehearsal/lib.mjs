@@ -65,6 +65,9 @@ export function profileEnv(f, { port, appBin, guard = true, extra = {} }) {
     npm_config_prefix: path.join(f.home, 'AppData', 'Roaming', 'npm'),
     // Usage counts of a rehearsal are not the owner's to send
     IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage',
+    // And off altogether, from before It is installed: a test install is not a user. The first
+    // `it` command writes `telemetry-off` into It's folder, which the service obeys too
+    DO_NOT_TRACK: '1',
     USERNAME: os.userInfo().username,
     COMPUTERNAME: process.env.COMPUTERNAME ?? '',
     USERDOMAIN: process.env.USERDOMAIN ?? '',

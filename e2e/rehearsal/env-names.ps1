@@ -42,6 +42,15 @@ foreach ($entry in ($block -split "`0")) {
   if ($at -lt 1) { continue }
   $name = $entry.Substring(0, $at)
   $names += $name
-  if ($name -ieq 'PATH') { $pathHasIt = ($entry.Substring($at + 1) -split ';') -match '\\\.it\\bin\\?$' | Select-Object -First 1 | ForEach-Object { $true } }
+  if ($name -ieq 'PATH') {
+    $dirs = @($entry.Substring($at + 1) -split ';' | Where-Object { $_ })
+    $pathHasIt = $dirs -match '\\\.it\\bin\\?$' | Select-Object -First 1 | ForEach-Object { $true }
+    # What each folder is, never the folder itself where it is under a profile: It's folder, the
+    # harness's guard, the agent app's, a throwaway's, the system's, or another
+    $kinds = @($dirs | ForEach-Object {
+        if ($_ -match '\\\.it\\bin\\?$') { 'IT' } elseif ($_ -match 'it-rehearsal\\work\\guard') { 'GUARD' }
+        elseif ($_ -match 'it-rehearsal\\work\\apps') { 'APP' } elseif ($_ -match '^D:\\r\\') { 'THROWAWAY' }
+        elseif ($_ -match '^C:\\Windows' -or $_ -match '^C:\\Program Files') { 'SYSTEM' } elseif ($_ -match '\\Users\\') { 'PROFILE' } else { 'OTHER' } })
+  }
 }
-[pscustomobject]@{ pid = $ProcessId; names = ($names | Sort-Object -Unique); pathHasItBin = [bool]$pathHasIt } | ConvertTo-Json -Compress
+[pscustomobject]@{ pid = $ProcessId; names = ($names | Sort-Object -Unique); pathHasItBin = [bool]$pathHasIt; pathFirst = ($kinds | Select-Object -First 1); pathKinds = ($kinds -join ',') } | ConvertTo-Json -Compress

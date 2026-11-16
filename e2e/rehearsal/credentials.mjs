@@ -245,6 +245,29 @@ export function codexAuth(codexHome, user = os.userInfo().username) {
   return { file, expiresAt }
 }
 
+/**
+ * A throwaway Claude Code's sign-in kept as a participant's is, in a file (`<configDir>\.credentials.json`,
+ * the access token only), so that a conversation It reopens, which is given no CLAUDE… variable,
+ * is signed in. Owner-only, in the ledger, shredded at the end like Codex's.
+ */
+export function claudeFile(configDir, user = os.userInfo().username) {
+  const { content, expiresAt } = claudeCredentialsContent()
+  const file = path.join(configDir, '.credentials.json')
+  protectDir(configDir, user)
+  if (existsSync(file)) shred(file)
+  ledger(file)
+  closeSync(openSync(file, 'wx', 0o600))
+  written.add(file)
+  try {
+    onlyFor(file, user)
+    writeFileSync(file, content)
+  } catch (err) {
+    shred(file)
+    throw err
+  }
+  return { file, expiresAt }
+}
+
 /** Overwrites a file with random bytes of its own length, flushes that to the disk, and deletes it. */
 export function shred(file) {
   try {
@@ -332,6 +355,12 @@ export function scrub(text) {
       found++
       return '[token-shaped text removed]'
     })
+  // An email address: a Claude Code signed in by a file writes its account's email into the
+  // context it keeps in the transcript ("The user's email address is …")
+  out = out.replace(/[A-Za-z0-9._%+-]+@(?!anthropic\.com|openai\.com|example\.)[A-Za-z0-9-]+\.[A-Za-z0-9.-]*[A-Za-z]/g, () => {
+    found++
+    return '[email removed]'
+  })
   return { text: out, found }
 }
 

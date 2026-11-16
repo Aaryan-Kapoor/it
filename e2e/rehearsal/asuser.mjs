@@ -34,6 +34,9 @@ export function userEnv(user, { path: extraPath = [], extra = {} } = {}) {
     ComSpec: `${system}\\System32\\cmd.exe`,
     PATHEXT: '.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.CPL',
     OS: 'Windows_NT',
+    // A test install is not a user: It's usage reporting off from before It is installed (the
+    // first `it` command then writes `telemetry-off` into It's folder, which the service obeys)
+    DO_NOT_TRACK: '1',
     PSModulePath: `${home}\\Documents\\WindowsPowerShell\\Modules;C:\\Program Files\\WindowsPowerShell\\Modules;${system}\\system32\\WindowsPowerShell\\v1.0\\Modules`,
     ...Object.fromEntries(
       [

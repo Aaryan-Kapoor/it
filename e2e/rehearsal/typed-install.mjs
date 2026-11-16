@@ -88,7 +88,7 @@ function profile(name) {
     IT_INSTALL_BASE: 'http://127.0.0.1:5690',
     IT_INSTALL_PLAIN: '1',
     IT_INSTALL_NO_PATH: '1',
-    IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage',
+    IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage', DO_NOT_TRACK: '1',
     USERNAME: process.env.USERNAME,
     COMPUTERNAME: process.env.COMPUTERNAME,
     USERDOMAIN: process.env.USERDOMAIN,

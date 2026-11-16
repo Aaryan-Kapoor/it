@@ -13,6 +13,7 @@
 //   where IT_REHEARSAL_ALLOW_UPGRADE=1 and It says no service is registered for this folder.
 import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, openSync } from 'node:fs'
+import path from 'node:path'
 
 const real = process.env.IT_REHEARSAL_REAL_IT
 const mode = process.env.IT_REHEARSAL_GUARD
@@ -85,7 +86,15 @@ const running = () => {
 if (!running()) {
   const logFile = process.env.IT_REHEARSAL_SERVE_LOG
   const out = logFile ? openSync(logFile, 'a') : 'ignore'
-  const serve = spawn(real, ['serve'], { detached: true, stdio: ['ignore', out, out], windowsHide: true })
+  // With IT_REHEARSAL_LAUNCHER_PATH=1 (arun --launcher-path), `it serve` gets the PATH of the shell
+  // that ran setup without this guard's own folder, which holds an `it.exe`: the PATH a real
+  // service's launcher would hold, where no guard exists
+  const env = { ...process.env }
+  if (process.env.IT_REHEARSAL_LAUNCHER_PATH === '1') {
+    const own = path.dirname(process.execPath).toLowerCase()
+    for (const k of Object.keys(env)) if (k.toUpperCase() === 'PATH') env[k] = String(env[k]).split(';').filter((d) => d && path.resolve(d).toLowerCase() !== own).join(';')
+  }
+  const serve = spawn(real, ['serve'], { detached: true, stdio: ['ignore', out, out], windowsHide: true, env })
   note(`started it serve (pid ${serve.pid})`)
   if (process.env.IT_REHEARSAL_SERVE_PIDS)
     try {
