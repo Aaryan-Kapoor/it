@@ -228,26 +228,37 @@ export function quotesTakenOut(value: string): boolean {
 const inAFile = (fromFile: string) => `Write the JSON to a file and run \`${fromFile}\`, which works the same in every shell.`
 const SHELL_TOOK = 'as when a shell takes them out of an argument'
 /**
- * Whether JSON text has a backslash that begins none of the escapes JSON has, as a Windows path
- * written with single backslashes does: `{"folder":"D:\work"}`, where `\w` is no escape, and
- * `{"folder":"C:\Users"}`, where `\u` is not followed by four hexadecimal digits.
+ * Whether JSON text has a backslash inside a string that begins none of the escapes JSON has, as
+ * a Windows path written with single backslashes does: `{"folder":"D:\work"}`, where `\w` is no
+ * escape, and `{"folder":"C:\Users"}`, where `\u` is not followed by four hexadecimal digits.
+ * A backslash outside a string is wrong whatever follows it, and writing it twice mends nothing,
+ * so it is not counted. Where the double quotes are gone, as a shell leaves `{folder:D:\work}`,
+ * no string can be told, and a backslash is counted unless it stands where a quote may have
+ * been, before a space, a comma, a colon, a closing bracket or the end: the runtime of a program
+ * on Windows makes the two backslashes of `{"dir":"C:\\"}` one where the quote after them is
+ * taken out, so that a backslash there may be half of two that were written as JSON has them.
  */
 export function strayBackslash(text: string): boolean {
+  const quoted = text.includes('"')
+  let inString = false
   for (let i = 0; i < text.length; i++) {
-    if (text[i] !== '\\') continue
+    const c = text[i]
+    if (quoted && c === '"') inString = !inString
+    if (c !== '\\') continue
     const next = text[i + 1]
+    if (quoted ? !inString : next === undefined || /[\s,:}\]]/.test(next)) continue
     const begins = next === 'u' ? /^[0-9a-fA-F]{4}$/.test(text.slice(i + 2, i + 6)) : next !== undefined && '"\\/bfnrt'.includes(next)
     if (!begins) return true
     i++
   }
   return false
 }
-const TWICE = 'a backslash in JSON is written twice, as in "D:\\\\work"'
+const TWICE = 'a backslash inside a JSON string is written twice, as in "D:\\\\work"'
 /**
  * Reads JSON. `fromFile` is the command that reads the same JSON from a file, where it was given
  * on the command line: a refusal names it, since a file is the way that works in every shell.
- * Where the text has a backslash that begins no escape, the refusal says that a backslash is
- * written twice, which is most often why a path in JSON is refused.
+ * Where the text has a backslash inside a string that begins no escape, the refusal says that
+ * such a backslash is written twice, which is most often why a path in JSON is refused.
  */
 export function json(value: string, what: string, fromFile?: string): unknown {
   try {

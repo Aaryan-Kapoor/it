@@ -46,13 +46,14 @@ describe('what a command line is read as', () => {
 })
 
 describe('JSON with a backslash that begins no escape', () => {
-  test('is found where a backslash is followed by anything JSON does not read after one, and nowhere else', () => {
+  test('is found where a backslash inside a string is followed by anything JSON does not read after one, and nowhere else', () => {
     for (const text of [
       String.raw`{"folder":"D:\work"}`,
       String.raw`{"folder":"C:\Users\ana"}`,
       String.raw`{"a":"\u12"}`,
       '{"a":"x\\',
       String.raw`{folder:D:\work}`,
+      String.raw`{folder:C:\Users\ana}`,
     ])
       expect([text, strayBackslash(text)]).toEqual([text, true])
     for (const text of [
@@ -61,10 +62,15 @@ describe('JSON with a backslash that begins no escape', () => {
       String.raw`{"a":"\/\b\f\n\r\t\u00e9\u2014"}`,
       String.raw`{"dir":"C:\\"}`,
       '{"a":1,}',
+      // Outside a string, where writing it twice would mend nothing
+      String.raw`{"x":\wrong}`,
+      // Without its quotes, where the backslash may be half of the two that \"C:\\\\\" had before its quote was taken out
+      String.raw`{dir:C:\}`,
+      String.raw`{dir:C:\,x:1}`,
     ])
       expect([text, strayBackslash(text)]).toEqual([text, false])
   })
-  test('is refused with a sentence that says a backslash in JSON is written twice, and how the JSON is read is not changed', () => {
+  test('is refused with a sentence that says a backslash inside a JSON string is written twice, and how the JSON is read is not changed', () => {
     const refusal = (text: string, fromFile?: string) => {
       try {
         json(text, 'The patch', fromFile)
@@ -74,7 +80,7 @@ describe('JSON with a backslash that begins no escape', () => {
       }
     }
     expect(refusal(String.raw`{"folder":"D:\work"}`, 'it patch board --file <path>')).toEqual([
-      String.raw`The patch is not valid JSON: a backslash in JSON is written twice, as in "D:\\work".`,
+      String.raw`The patch is not valid JSON: a backslash inside a JSON string is written twice, as in "D:\\work".`,
       undefined,
     ])
     expect(refusal('{"a":1,}', 'it patch board --file <path>')).toEqual([
