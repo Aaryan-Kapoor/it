@@ -5578,6 +5578,34 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     30_000,
   )
 
+  test('a click whose reopening failed after its wait for T3 Code comes back and is reopened again without a second wait, its page not told again that It is checking', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    try {
+      const [claude] = await closedClaude()
+      await until(() => stand.t3.asked.length >= 1)
+      clock.on(6_000)
+      await until(() => holdsBack().some((h) => h.why === T3_CHECKING))
+      clock.on(10_000)
+      await until(() => reopenedFor().length === 1, 5000)
+      // It was away while its reopening ran, and is offered again once that has failed
+      offered()
+      await pause(1100)
+      offered(claude!)
+      await pause(1100)
+      // Its next try is due ten seconds after the last, and is not held back for T3 Code again
+      clock.on(10_500)
+      await until(() => reopenedFor().length === 2, 8000)
+      expect(said.filter((line) => line.includes('(t3_undecided,'))).toHaveLength(1)
+      expect(holdsBack().filter((h) => h.why === T3_CHECKING)).toHaveLength(1)
+      // Telling the page that It is checking writes no line of anything else in the log
+      expect(said.some((line) => line.includes('without It’s add-on'))).toBe(false)
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
   test('clicks whose searches drop each other again and again, as large searches do where they hold more thread ids than they may together, are reopened within fifteen seconds all the same', async () => {
     const { T3_HELD_MOST } = await import('./src/t3')
     withT3Code()

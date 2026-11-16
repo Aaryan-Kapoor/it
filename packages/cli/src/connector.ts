@@ -1234,6 +1234,15 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    * without T3 Code, while the search goes on over the rest for the clicks that come after.
    */
   const t3Near = new Set<string>()
+  /**
+   * When each click's wait for T3 Code before a reopening began, by the clock that only goes
+   * forward. Unlike `t3Waits` it is kept while the click is away from this machine, as while a
+   * reopening for it runs and fails, so that a click that comes back is not given the wait again:
+   * it is let go of a while after the click is no longer offered here.
+   */
+  const t3HoldFrom = new Map<string, number>()
+  /** How long after its wait began a click no longer offered here is let go of. */
+  const T3_HOLD_KEPT_MS = 30 * 60_000
   /** The clicks whose reopening has been said to wait for T3 Code, and those whose wait for it has been said to be over. */
   const t3HeldSaid = new Set<string>()
   const t3OverSaid = new Set<string>()
@@ -1396,8 +1405,9 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   const t3HoldsBack = (click: Offered, key: string): boolean => {
     if (!t3Undecided(key)) return false
     if (t3Only(key)) return true
-    if (!t3Waits.has(click.id)) t3Waits.set(click.id, steady())
-    const waited = steady() - t3Waits.get(click.id)!
+    // From when the click first asked T3 Code, where it did
+    if (!t3HoldFrom.has(click.id)) t3HoldFrom.set(click.id, t3Waits.get(click.id) ?? steady())
+    const waited = steady() - t3HoldFrom.get(click.id)!
     if (waited >= T3_UNDECIDED_MS) {
       if (!t3OverSaid.has(click.id)) {
         t3OverSaid.add(click.id)
@@ -1518,7 +1528,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           if (why)
             seldom(
               't3-session',
-              `T3 Code is running here and gave It no session (${why}): what is done on the pages of its threads waits until it does, and no Claude Code or Codex conversation is reopened outside it meanwhile`,
+              `T3 Code is running here and gave It no session (${why}): what is done on the pages of its threads waits until it does, and a closed Claude Code or Codex conversation is reopened outside it only after a wait of ${T3_UNDECIDED_MS / 1000} seconds meanwhile`,
             )
         } else if (result.status === 'limited') {
           // What the search has read is kept, and it goes on no further by itself. The next
@@ -3038,7 +3048,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
                 `interrupted:${keyOf(first.harness, first.id)}`,
                 `a codex conversation (${short(keyOf(first.harness, first.id))}) is open and its last turn was interrupted, so Codex would keep a click in its queue until the next message there; its page says to send one`,
               )
-            else if (reason !== null)
+            // Said in the log when the reopening was held back for it (`t3HoldsBack`)
+            else if (reason !== null && reason !== T3_CHECKING)
               seldom(
                 `shut:${keyOf(first.harness, first.id)}`,
                 `${a(first.harness)} conversation (${short(keyOf(first.harness, first.id))}) is open without It’s add-on, so it is not reopened; its page says to type ${reloadIn(first.harness)} in it`,
@@ -3883,7 +3894,12 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       now = Date.now()
 
       for (const id of t3Waits.keys()) if (!offeredHere.has(id)) t3Waits.delete(id)
-      for (const said of [t3HeldSaid, t3OverSaid]) for (const id of said) if (!offeredHere.has(id)) said.delete(id)
+      for (const [id, from] of t3HoldFrom)
+        if (!offeredHere.has(id) && steady() - from > T3_HOLD_KEPT_MS) {
+          t3HoldFrom.delete(id)
+          t3HeldSaid.delete(id)
+          t3OverSaid.delete(id)
+        }
       // Before anything is decided about any of them: a click the person asked to have tried
       // again may be one that a click behind it would otherwise wait for, or go with
       for (const click of offeredHere.values()) retried(click)
