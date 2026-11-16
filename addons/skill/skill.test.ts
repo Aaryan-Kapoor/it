@@ -271,6 +271,10 @@ describe('the agent skill', () => {
     expect(more.page).toContain('## On Windows')
     expect(more.page).toContain(`JSON is given on Windows as everywhere, as in \`it.exe patch board '{"order":["c1"]}'\``)
     expect(more.page).toContain('keep `--%` out of it')
+    // What It cannot read back in Windows PowerShell 5.1, said no wider than it is, and how a backslash is written
+    expect(more.page).toContain('as `["1","2"]` is as `[1,2]`, so give an array of such strings in a file')
+    expect(more.page).toContain('put the option before the JSON instead')
+    expect(more.page).toContain('JSON itself writes a backslash as two')
     expect(more.page).toContain('`\\u2014`')
     expect(more.page).toContain('`it.exe patch board --file ')
     expect(more.page).toContain('`--state-file "<path>"` on `it.exe create`')

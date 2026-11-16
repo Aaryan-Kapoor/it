@@ -796,8 +796,9 @@ async function create(a: Args) {
   const title = need(a._[0], `the ${NOUN.one}'s title`, 'create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)')
   const slug = text(a, 'id')
   if (slug !== undefined && !isSlug(slug)) throw new Problem('An id is lowercase letters, digits, dots, dashes and underscores, at most 64.', 'invalid')
-  // The starting state is given on the command line or in a file, which reads the same in every
-  // shell: Windows PowerShell 5.1 takes the double quotes out of the JSON in an argument
+  // The starting state is given on the command line, where JSON that Windows PowerShell 5.1
+  // spoilt was read back whole before the command began, or in a file, which reads the same in
+  // every shell
   const stateFile = text(a, 'state-file')
   if (stateFile !== undefined && text(a, 'state') !== undefined)
     throw new Problem('The starting state is given once, with --state or with --state-file, and this command was given both.', 'invalid')
@@ -3598,10 +3599,12 @@ State
                                  A key may be dotted, and a value that parses as JSON is JSON.
   it patch <id> ('<json>' | --file <path>) [--replace] [--if-revision <n>]
                                  --if-revision changes the state only while it is still at
-                                 that revision, which \`it state\` prints. --file, and
-                                 --state-file on create, read the JSON from a file, which
-                                 reads the same in every shell: Windows PowerShell 5.1 takes
-                                 the double quotes out of the JSON in an argument.
+                                 that revision, which \`it state\` prints. JSON in single
+                                 quotes is read as written in every shell that reads them,
+                                 Windows PowerShell 5.1 among them, but for two cases that
+                                 \`it help page\` names. --file, and --state-file on create,
+                                 read the JSON from a file instead, for JSON that is long or
+                                 awkward to quote.
   it state <id>
   it say <id> "<text>"           A line of your own words above the ${NOUN.one}, where the person is
                                  looking: an answer that has no place on the ${NOUN.one} itself.
@@ -4174,9 +4177,9 @@ async function main(given: string[]): Promise<void> {
     }
     case 'patch': {
       const slug = need(a._[0], `which ${NOUN.one}`, PATCH_USAGE)
-      // The patch is given on the command line, piped in, or in a file, which reads the same in
-      // every shell: Windows PowerShell 5.1 takes the double quotes out of the JSON in an argument,
-      // and writes what it pipes to a program in ASCII
+      // The patch is given on the command line, where JSON that Windows PowerShell 5.1 spoilt was
+      // read back whole before the command began, piped in, which that PowerShell writes in ASCII,
+      // or in a file, which reads the same in every shell
       const file = text(a, 'file')
       if (file !== undefined && a._[1] !== undefined)
         throw new Problem(

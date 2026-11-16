@@ -172,7 +172,7 @@ Build it now, small and whole. The person is watching the seconds count, and the
 it create "<the idea's name>" --id <a-short-id> --open --html '<the whole page>'
 ```
 
-In Windows PowerShell, which takes the double quotes out of an argument, write the page with your own file tool to a file in the temporary folder, and give `--file "<its path, with forward slashes>"` in place of `--html`.
+In Windows PowerShell, which takes the double quotes out of an argument, and where It reads JSON back whole from its own command line but not a page, write the page with your own file tool to a file in the temporary folder, and give `--file "<its path, with forward slashes>"` in place of `--html`.
 
 3. Only then take the tour away. In this order the new page takes the tour's place on their screen and they are never left looking at nothing:
 
