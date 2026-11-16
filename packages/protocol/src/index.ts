@@ -583,6 +583,14 @@ export const TURN_ON_AGAIN_MS = 15_000
  */
 export const CODEX_INTERRUPTED =
   'its last turn in that conversation was interrupted, and Codex starts nothing by itself after that: send it a message there, and what you did reaches it'
+/**
+ * Why a machine holds back, for a few seconds, the reopening of a closed Claude Code or Codex
+ * conversation where T3 Code runs on it: a thread of T3 Code may hold the conversation, and a
+ * reopening would run it a second time beside that thread, so It first asks T3 Code. Kept with
+ * the click (`delivery.holdBack`) and said on its page after "Not handed to Claude Code yet:",
+ * since nothing has failed, for no longer than the machine waits for T3 Code.
+ */
+export const T3_CHECKING = 'It is checking whether a thread of T3 Code holds this conversation, so as not to start it a second time beside that thread'
 /** What a person is told where they would switch reopening on for a machine It does not reopen conversations on. */
 export const noWakeHere = (system: string | null | undefined): string =>
   system === 'win32'

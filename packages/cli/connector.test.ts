@@ -9,7 +9,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { LISTENING_MOST, MARK, PROTOCOL_VERSION, TAKES, TURN_ON_MS, WAKE_BACK_MS } from '@it/protocol'
+import { LISTENING_MOST, MARK, PROTOCOL_VERSION, T3_CHECKING, TAKES, TURN_ON_MS, WAKE_BACK_MS } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS } from './src/addons.generated'
@@ -84,9 +84,10 @@ const stand = vi.hoisted(() => ({
     slow: false,
     asked: [] as {
       ids: string[]
-      answer: (thread: string | null | undefined | Error | { status: 'limited' }, progressed?: boolean) => void
-      /** The search it was asked as part of, with how many thread ids the test says it holds. */
-      search: { held?: number }
+      /** Undefined for a search that goes on, which says whether every thread in the conversation's folder has been read (`near`). */
+      answer: (thread: string | null | undefined | Error | { status: 'limited'; near?: boolean }, progressed?: boolean, near?: boolean) => void
+      /** The search it was asked as part of, with how many thread ids the test says it holds, and whether its folder's threads have all been read. */
+      search: { held?: number; near?: boolean }
     }[],
     sent: [] as { thread: string; text: string }[],
     /** What T3 Code says where it will not take a message, and what it refused. */
@@ -118,15 +119,20 @@ vi.mock('./src/t3', async (original) => ({
   t3Refusal: () => stand.t3.refusal ?? undefined,
   t3Search: () => ({}),
   t3Held: (search: { held?: number }) => search.held ?? 0,
-  t3ThreadOf: (_t3: unknown, of: { ids: readonly string[] }, search: { held?: number }) =>
-    new Promise<{ thread: string | null | undefined | Error | { status: 'limited' }; progressed: boolean }>((resolve) => {
-      const answer = (thread: string | null | undefined | Error | { status: 'limited' }, progressed = true) => resolve({ thread, progressed })
+  t3Counted: (search: { held?: number }) => ({ read: search.held ?? 0, listed: 2 * (search.held ?? 0) }),
+  // Whether the search has read every thread in the conversation's folder, as its last answer said
+  t3NearRead: (search: { near?: boolean }) => search.near === true,
+  t3ThreadOf: (_t3: unknown, of: { ids: readonly string[] }, search: { held?: number; near?: boolean }) =>
+    new Promise<{ thread: string | null | undefined | Error | { status: 'limited'; near?: boolean }; progressed: boolean; near: boolean }>((resolve) => {
+      const answer = (thread: string | null | undefined | Error | { status: 'limited'; near?: boolean }, progressed = true, near = false) =>
+        resolve({ thread, progressed, near })
       stand.t3.asked.push({ ids: [...of.ids], answer, search })
       if (!stand.t3.slow) answer(of.ids.map((id) => stand.t3.threads.get(id)).find((thread) => thread !== undefined) ?? null)
-    }).then(({ thread, progressed }) => {
+    }).then(({ thread, progressed, near }) => {
+      search.near = typeof thread === 'object' && thread !== null && !(thread instanceof Error) ? thread.near === true : near
       if (thread instanceof Error) throw thread
-      if (typeof thread === 'object' && thread !== null) return thread
-      return thread === undefined ? { status: 'incomplete', progressed } : thread === null ? { status: 'absent' } : { status: 'found', thread }
+      if (typeof thread === 'object' && thread !== null) return { near: false, ...thread }
+      return thread === undefined ? { status: 'incomplete', progressed, near } : thread === null ? { status: 'absent' } : { status: 'found', thread }
     }),
   // Whether a thread runs a conversation now: the thread T3 Code holds it in, where the test says one does, and
   // otherwise none, or not known where the test says T3 Code could not say
@@ -5524,29 +5530,488 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     }
   })
 
-  test('a lone click for a closed Claude Code conversation is reopened once the searches that used their reads end in none, with no second click (#348)', async () => {
-    withT3Code()
-    stand.t3.slow = true
+  /**
+   * A click for a closed Claude Code conversation, with Auto-wake on for Claude Code on this
+   * machine. Its reopening fails for want of the conversation's folder, which this machine was
+   * never told, and that it was tried is what shows the click went that way.
+   */
+  const closedClaude = async (...ns: number[]) => {
     await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
     stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
-    offered({ ...click(9), session: { harness: 'claude-code', id: '11111111-2222-4333-8444-555555555555' } })
-    await until(() => stand.t3.asked.length === 1)
-    // Long past the click's own five seconds, as on a workspace of many hundreds of threads: each search
-    // reads so many threads and stops, and the next begins by itself for as long as the click waits
-    const wall = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000)
+    const clicks = (ns.length ? ns : [9]).map((n) => ({
+      ...click(n),
+      session: { harness: 'claude-code', id: `11111111-2222-4333-8444-${String(n).padStart(12, '0')}` },
+    }))
+    offered(...clicks)
+    return clicks
+  }
+  /** The conversations a reopening was tried for, by their ids. */
+  const reopenedFor = () =>
+    stand.calls
+      .filter((c) => c.name === 'machines:wakeFailed' || c.name === 'machines:runBegan')
+      .map((c) => (c.args.for as { id: string } | undefined)?.id ?? '?')
+  const holdsBack = () => stand.calls.filter((c) => c.name === 'delivery:holdBack').map((c) => c.args)
+  /** The clock, which only the test moves on while it is held. */
+  const heldClock = () => {
+    let now = Date.now()
+    const wall = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    return {
+      on: (ms: number) => {
+        now += ms
+      },
+      restore: () => wall.mockRestore(),
+    }
+  }
+
+  test('a click for a closed Claude Code conversation on a machine whose T3 Code has thousands of threads is reopened fifteen seconds after it first asked, though the searches go on, with no second click (#348)', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
     try {
-      stand.t3.asked[0]!.answer({ status: 'limited' })
-      await until(() => stand.t3.asked.length === 2)
-      stand.t3.asked[1]!.answer({ status: 'limited' })
-      await until(() => stand.t3.asked.length === 3)
-      expect(stand.calls.some((c) => c.name === 'machines:wakeFailed' || c.name === 'machines:runBegan')).toBe(false)
-      // Every thread read and none holds it: only then is it reopened, which here fails for want of its folder
-      stand.t3.asked[2]!.answer(null)
-      await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed' || c.name === 'machines:runBegan'))
+      const [claude] = await closedClaude()
+      await until(() => stand.t3.asked.length === 1)
+      // Each search reads so many threads and stops, and the next begins by itself, as on a workspace of thousands
+      let answered = 0
+      const goOn = setInterval(() => {
+        while (answered < stand.t3.asked.length) stand.t3.asked[answered++]!.answer({ status: 'limited' })
+      }, 20)
+      try {
+        await until(() => stand.t3.asked.length >= 3)
+        // For the five seconds a click waits for T3 Code it waits as any click does. Past them, where
+        // it would be reopened, its page says why it waits, and that nothing failed
+        await pause(1100)
+        expect(holdsBack()).toEqual([])
+        clock.on(5_500)
+        await until(() => holdsBack().some((h) => h.why === T3_CHECKING))
+        expect(holdsBack()).toEqual([{ ids: ['click-9'], why: T3_CHECKING }])
+        offered({ ...claude!, heldBack: T3_CHECKING } as ReturnType<typeof click>)
+        clock.on(8_500)
+        await pause(1500)
+        expect(reopenedFor()).toEqual([])
+        expect(said.filter((line) => line.includes('(t3_undecided,'))).toHaveLength(1)
+        // Past fifteen seconds it goes the way it would without T3 Code, and the page no longer says that It is checking
+        clock.on(1_500)
+        await until(() => reopenedFor().length > 0, 5000)
+        expect(reopenedFor()).toEqual([claude!.session.id])
+        await until(() => holdsBack().some((h) => h.why === null))
+        expect(said.filter((line) => line.includes('(t3_wait_over,'))).toHaveLength(1)
+        expect(said.find((line) => line.includes('(t3_wait_over,'))).toMatch(/threads read\)$/)
+        expect(stand.t3.sent).toEqual([])
+      } finally {
+        clearInterval(goOn)
+      }
     } finally {
-      wall.mockRestore()
+      clock.restore()
+    }
+  }, 30_000)
+
+  test.each([
+    ['answers nothing at all', () => {}],
+    ['fails every time it is asked', (asked: (typeof stand.t3.asked)[number]) => asked.answer(undefined, false)],
+    ['fails on every thread', (asked: (typeof stand.t3.asked)[number]) => asked.answer(new Error('refused'))],
+  ] as const)(
+    'a click for a closed Claude Code conversation whose T3 Code %s is reopened fifteen seconds after it first asked, and not before',
+    async (_, answer) => {
+      withT3Code()
+      stand.t3.slow = true
+      const clock = heldClock()
+      let answered = 0
+      const goOn = setInterval(() => {
+        while (answered < stand.t3.asked.length) answer(stand.t3.asked[answered++]!)
+      }, 20)
+      try {
+        const [claude] = await closedClaude()
+        await until(() => stand.t3.asked.length >= 1)
+        // A pass past the five seconds it waits for T3 Code as any click does, and then the rest
+        clock.on(5_500)
+        await pause(1100)
+        clock.on(4_500)
+        await pause(2000)
+        expect(reopenedFor()).toEqual([])
+        clock.on(5_500)
+        await until(() => reopenedFor().length > 0, 5000)
+        expect(reopenedFor()).toEqual([claude!.session.id])
+      } finally {
+        clearInterval(goOn)
+        clock.restore()
+      }
+    },
+    30_000,
+  )
+
+  test('a click whose reopening failed after its wait for T3 Code comes back and is reopened again without a second wait, its page not told again that It is checking', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    try {
+      const [claude] = await closedClaude()
+      await until(() => stand.t3.asked.length >= 1)
+      clock.on(6_000)
+      await until(() => holdsBack().some((h) => h.why === T3_CHECKING))
+      clock.on(10_000)
+      await until(() => reopenedFor().length === 1, 5000)
+      // It was away while its reopening ran, and is offered again once that has failed
+      offered()
+      await pause(1100)
+      offered(claude!)
+      await pause(1100)
+      // Its next try is due ten seconds after the last, and is not held back for T3 Code again
+      clock.on(10_500)
+      await until(() => reopenedFor().length === 2, 8000)
+      expect(said.filter((line) => line.includes('(t3_undecided,'))).toHaveLength(1)
+      expect(holdsBack().filter((h) => h.why === T3_CHECKING)).toHaveLength(1)
+      // Telling the page that It is checking writes no line of anything else in the log
+      expect(said.some((line) => line.includes('without It’s add-on'))).toBe(false)
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
+  test('a click that waited longer than that for another reason, as while Auto-wake was off, is still given ten seconds for T3 Code once it could be reopened', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    try {
+      await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+      // Auto-wake is off for Claude Code on this machine
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [] })
+      const claude = { ...click(9), session: { harness: 'claude-code', id: '11111111-2222-4333-8444-000000000009' } }
+      offered(claude)
+      await until(() => stand.t3.asked.length >= 1)
+      for (let i = 0; i < 6; i++) {
+        clock.on(10_000)
+        await pause(1100)
+      }
+      expect(reopenedFor()).toEqual([])
+      // A minute later the person turns it on, and T3 Code has still not said
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 120_000 }] })
+      await until(() => holdsBack().some((h) => h.why === T3_CHECKING), 5000)
+      clock.on(9_000)
+      await pause(1500)
+      expect(reopenedFor()).toEqual([])
+      clock.on(1_500)
+      await until(() => reopenedFor().length === 1, 5000)
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
+  test('a click for a conversation that was open without It’s add-on is given ten seconds for T3 Code once that is no longer so, however long that took', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    try {
+      const [claude] = await closedClaude()
+      // It published its page while It's add-on did not run in it, so it is not reopened. Its
+      // folder is gone, so that its reopening, once that is tried, fails at once and says so
+      const gone = path.join(home, 'gone')
+      await noteConversation(claude!.session, gone, undefined, false)
+      await until(() => stand.t3.asked.length >= 1)
+      for (let i = 0; i < 6; i++) {
+        clock.on(10_000)
+        await pause(1500)
+      }
+      await until(() => holdsBack().length > 0, 20_000)
+      expect(reopenedFor()).toEqual([])
+      expect(holdsBack().some((h) => h.why === T3_CHECKING)).toBe(false)
+      // Then it is: its add-on was heard in it, and T3 Code has still not said
+      await noteConversation(claude!.session, gone, undefined, true)
+      // Each pass also looks for Claude Code conversations open at a keyboard, which takes longer on a busy machine
+      await until(() => holdsBack().some((h) => h.why === T3_CHECKING), 20_000)
+      clock.on(9_000)
+      await pause(3000)
+      expect(reopenedFor()).toEqual([])
+      clock.on(1_500)
+      await until(() => reopenedFor().length === 1, 20_000)
+    } finally {
+      clock.restore()
+    }
+  }, 90_000)
+
+  test('clicks whose searches drop each other again and again, as large searches do where they hold more thread ids than they may together, are reopened within fifteen seconds all the same', async () => {
+    const { T3_HELD_MOST } = await import('./src/t3')
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    let answered = 0
+    // Each search goes on holding more than half of what all may hold, so each that goes on drops the other
+    const goOn = setInterval(() => {
+      while (answered < stand.t3.asked.length) {
+        const asked = stand.t3.asked[answered++]!
+        asked.search.held = Math.floor(T3_HELD_MOST / 2) + 1
+        asked.answer(undefined)
+      }
+    }, 20)
+    try {
+      const clicks = await closedClaude(9, 10)
+      await until(() => stand.t3.asked.length >= 6)
+      // Begun again from nothing, over and over
+      expect(new Set(stand.t3.asked.map((a) => a.search)).size).toBeGreaterThan(2)
+      expect(reopenedFor()).toEqual([])
+      clock.on(5_500)
+      await pause(1100)
+      clock.on(10_000)
+      await until(() => reopenedFor().length >= 2, 6000)
+      expect(new Set(reopenedFor())).toEqual(new Set(clicks.map((c) => c.session.id)))
+    } finally {
+      clearInterval(goOn)
+      clock.restore()
+    }
+  }, 30_000)
+
+  test('a click for a closed Claude Code conversation is reopened at once where every thread that works in its folder has been read and none holds it, while the search goes on over the rest', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    try {
+      const [claude] = await closedClaude()
+      await until(() => stand.t3.asked.length === 1)
+      stand.t3.asked[0]!.answer(undefined, true, true)
+      // Well within the five seconds a click waits for T3 Code, and the fifteen it is kept from reopening
+      await until(() => reopenedFor().length > 0, 5000)
+      expect(reopenedFor()).toEqual([claude!.session.id])
+      // The search goes on, for the clicks that come after, when its next pass is due
+      clock.on(1000)
+      await until(() => stand.t3.asked.length >= 2)
+      expect(stand.t3.sent).toEqual([])
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
+  test('a reopening that is waiting for its click to be claimed when a thread of T3 Code is found to hold the conversation gives the click back, and the click goes to the thread', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    let claimed: (() => void) | undefined
+    stand.answer = (name) => {
+      // The reopening's claim is answered only once the test says
+      if (name === 'delivery:claim' && !claimed) return new Promise<undefined>((r) => (claimed = () => r(undefined)))
+      return undefined
+    }
+    try {
+      const [claude] = await closedClaude()
+      await until(() => stand.t3.asked.length === 1)
+      // No thread in the conversation's folder holds it, so it is to be reopened, and the search goes on over the rest
+      stand.t3.asked[0]!.answer(undefined, true, true)
+      await until(() => claimed !== undefined)
+      clock.on(1000)
+      await until(() => stand.t3.asked.length === 2)
+      // While the claim is being answered, the search finds the thread that holds it
+      stand.t3.asked[1]!.answer('t3-thread-c')
+      await until(() => existsSync(path.join(home, 't3-threads.json')))
+      claimed!()
+      await until(() => stand.t3.sent.length === 1, 8000)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      expect(reopenedFor()).toEqual([])
+      expect(called('delivery:release')).toContain(claude!.id)
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
+  test('a reopening that is waiting for its click to be claimed when a listing finds a thread of the folder changed gives the click back, and does not run while T3 Code may name that thread', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    let claimed: (() => void) | undefined
+    stand.answer = (name) => {
+      if (name === 'delivery:claim' && !claimed) return new Promise<undefined>((r) => (claimed = () => r(undefined)))
+      return undefined
+    }
+    try {
+      const [claude] = await closedClaude()
+      await until(() => stand.t3.asked.length === 1)
+      stand.t3.asked[0]!.answer(undefined, true, true)
+      await until(() => claimed !== undefined)
+      clock.on(1000)
+      await until(() => stand.t3.asked.length === 2)
+      // The next listing finds one of the folder's threads changed, and its pass has yet to answer
+      stand.t3.asked[1]!.search.near = false
+      claimed!()
+      await until(() => called('delivery:release').includes(claude!.id))
+      await pause(1500)
+      expect(reopenedFor()).toEqual([])
+      stand.t3.asked[1]!.answer('t3-thread-c')
+      await until(() => stand.t3.sent.length === 1, 8000)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      expect(reopenedFor()).toEqual([])
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
+  test('a reopening whose start is being told to It when a thread of T3 Code is found to hold the conversation is not run, and the click goes to the thread', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    let begun: (() => void) | undefined
+    stand.answer = (name) => {
+      // It is told that the run begins, and answers only once the test says
+      if (name === 'machines:runBegan' && !begun) return new Promise<undefined>((r) => (begun = () => r(undefined)))
+      return undefined
+    }
+    try {
+      const [claude] = await closedClaude()
+      // Its folder is known here, so the reopening goes as far as telling It that it begins
+      noteConversation(claude!.session, home)
+      await until(() => stand.t3.asked.length === 1)
+      stand.t3.asked[0]!.answer(undefined, true, true)
+      await until(() => begun !== undefined)
+      clock.on(1000)
+      await until(() => stand.t3.asked.length === 2)
+      stand.t3.asked[1]!.answer('t3-thread-c')
+      await until(() => existsSync(path.join(home, 't3-threads.json')))
+      begun!()
+      await until(() => stand.t3.sent.length === 1, 8000)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      // Nothing was run: the app's own command would have failed here, and said so
+      expect(said.filter((line) => line.includes('was not taken by the reopening'))).toEqual([])
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
+  test('a click claimed for a reopening keeps the wait it began with when it first asked, though it is away from what is offered meanwhile', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    let begun: (() => void) | undefined
+    stand.answer = (name) => {
+      if (name === 'machines:runBegan' && !begun) return new Promise<undefined>((r) => (begun = () => r(undefined)))
+      return undefined
+    }
+    try {
+      const [claude] = await closedClaude()
+      noteConversation(claude!.session, home)
+      await until(() => stand.t3.asked.length === 1)
+      stand.t3.asked[0]!.answer(undefined, true, true)
+      await until(() => begun !== undefined)
+      // Claimed, it is no longer offered here, and a pass goes by
+      offered()
+      await pause(1200)
+      // Long past its fifteen seconds, a listing finds a thread of the folder changed: its wait
+      // is over all the same, and the run goes ahead, which fails here as Claude Code cannot run
+      clock.on(16_000)
+      stand.t3.asked[0]!.search.near = false
+      begun!()
+      await until(() => said.some((line) => line.includes('was not taken by the reopening')), 8000)
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
+  test('a reopening kept from running at the last moment for T3 Code’s word counts nothing against the conversation, so a click no one was at the page for is reopened once T3 Code has said, however often that happened', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    let begun: (() => void) | undefined
+    let begins = 0
+    stand.answer = (name) => {
+      if (name !== 'machines:runBegan') return undefined
+      begins++
+      return new Promise<undefined>((r) => (begun = () => r(undefined)))
+    }
+    try {
+      await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
+      // Made by a timer on the page, with nobody there: such a conversation is reopened three times in five minutes at most
+      const claude = { ...click(9), attended: false, session: { harness: 'claude-code', id: '11111111-2222-4333-8444-000000000009' } }
+      noteConversation(claude.session, home)
+      offered(claude)
+      await until(() => stand.t3.asked.length === 1)
+      stand.t3.asked[0]!.answer(undefined, true, true)
+      const search = stand.t3.asked[0]!.search
+      // Four times over, a listing finds a thread of the folder changed just as the run would begin
+      for (let i = 1; i <= 4; i++) {
+        await until(() => begins === i, 8000)
+        search.near = false
+        begun!()
+        await pause(300)
+        search.near = true
+      }
+      // And then T3 Code has said, and nothing stands in the way: it is reopened once more
+      await until(() => begins === 5, 8000)
+      begun!()
+    } finally {
+      clock.restore()
     }
   }, 60_000)
+
+  test('a search whose next listing finds a thread of the conversation’s folder changed no longer lets a click past the wait, before that listing’s pass is over', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    try {
+      await closedClaude()
+      await until(() => stand.t3.asked.length === 1)
+      stand.t3.asked[0]!.answer(undefined, true, true)
+      // Reopened at once, which fails here for want of its folder, and is tried again ten seconds later
+      await until(() => reopenedFor().length === 1, 5000)
+      clock.on(1000)
+      await until(() => stand.t3.asked.length === 2)
+      // The next pass is under way, and its listing has found a thread of the folder changed since it was read
+      stand.t3.asked[1]!.search.near = false
+      clock.on(10_500)
+      await pause(2500)
+      // The next try is due, and is kept from reopening while T3 Code may still name that thread, though the pass has not answered
+      expect(reopenedFor()).toHaveLength(1)
+      expect(holdsBack().some((h) => h.why === T3_CHECKING)).toBe(true)
+      stand.t3.asked[1]!.answer('t3-thread-c')
+      await until(() => stand.t3.sent.length === 1, 8000)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      expect(reopenedFor()).toHaveLength(1)
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
+  test('a click for a Claude Code conversation that a thread holds goes to the thread when T3 Code says so late within its wait, and is never reopened beside it', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    stand.answer = () => undefined
+    const clock = heldClock()
+    try {
+      const [claude] = await closedClaude()
+      await until(() => stand.t3.asked.length === 1)
+      clock.on(12_000)
+      await pause(1500)
+      expect(reopenedFor()).toEqual([])
+      stand.t3.asked[0]!.answer('t3-thread-c')
+      await until(() => stand.t3.sent.length === 1)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      // And the next click, long after, goes there too, without waiting
+      offered({ ...claude!, id: 'click-9-later' })
+      clock.on(60_000)
+      await until(() => stand.t3.sent.length === 2)
+      expect(reopenedFor()).toEqual([])
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
+  test('a Claude Code conversation that a thread is noted to hold is never reopened, however long T3 Code goes on not taking its click', async () => {
+    withT3Code()
+    stand.t3.refusing = 'T3 Code refused the message'
+    const clock = heldClock()
+    try {
+      await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }, (home) =>
+        writeFileSync(path.join(home, 't3-threads.json'), JSON.stringify({ 'claude-code:11111111-2222-4333-8444-000000000009': 't3-thread-c' })),
+      )
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
+      offered({ ...click(9), session: { harness: 'claude-code', id: '11111111-2222-4333-8444-000000000009' } })
+      await until(() => stand.t3.refused.length === 1)
+      for (let i = 0; i < 4; i++) {
+        clock.on(20_000)
+        await pause(1100)
+      }
+      expect(reopenedFor()).toEqual([])
+      expect(said.some((line) => line.includes('t3_wait_over'))).toBe(false)
+      expect(holdsBack()).toEqual([])
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
 
   test('a search that used its reads after its click went another way is taken up by the next click, which waits for it, and goes to the thread it finds', async () => {
     withT3Code()

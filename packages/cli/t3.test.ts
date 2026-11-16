@@ -2,7 +2,7 @@
 // which threads are looked into first for a conversation, and which thread is the conversation's.
 // The asking and the sending themselves need a T3 Code that is running, and are tried against one.
 import { execFile } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import os from 'node:os'
@@ -12,11 +12,14 @@ import {
   conversationsOf,
   holderIn,
   likeliest,
+  nearby,
   sendEnded,
   sendIds,
   type T3Search,
   t3Command,
+  t3Counted,
   t3Held,
+  t3NearRead,
   t3Refusal,
   t3Running,
   t3RunsNow,
@@ -264,6 +267,39 @@ describe('the threads looked into for a conversation', () => {
     expect(likeliest(windows('C:\\Users\\Jane Doe\\work\\si'), { harness: 'codex', cwd }, 24, 'win32')).not.toContain('in-project')
     // Elsewhere a name in another case is another folder
     expect(likeliest(windows('/home/Someone/site'), { harness: 'codex', cwd: '/home/someone/site/pages' }, 24, 'linux')).not.toContain('in-project')
+  })
+})
+
+describe('the threads that work in a conversation’s folder', () => {
+  test('are those whose worktree or project folder is the conversation’s folder or holds it, archived and deleted ones left out, and are not known where the folder is not', () => {
+    const shell = {
+      projects: [
+        { id: 'site', workspaceRoot: '/home/someone/site' },
+        { id: 'other', workspaceRoot: '/home/someone/other' },
+      ],
+      threads: [
+        { id: 'in-project', projectId: 'site' },
+        { id: 'in-a-worktree', projectId: 'other', worktreePath: '/home/someone/site/pages' },
+        { id: 'elsewhere', projectId: 'other' },
+        { id: 'begins-alike', projectId: 'other', worktreePath: '/home/someone/sit' },
+        { id: 'archived', projectId: 'site', archivedAt: '2026-10-08T14:00:00.000Z' },
+        { id: 'deleted', projectId: 'site', deletedAt: '2026-10-08T14:00:00.000Z' },
+      ],
+    }
+    expect(nearby(shell, { cwd: '/home/someone/site/pages' }, 'linux')).toEqual(['in-project', 'in-a-worktree'])
+    expect(nearby(shell, { cwd: '/home/someone/site' }, 'linux')).toEqual(['in-project'])
+    expect(nearby(shell, { cwd: '/home/someone/its-own-folder' }, 'linux')).toEqual([])
+    expect(nearby(shell, {}, 'linux')).toBeUndefined()
+  })
+
+  test.skipIf(process.platform === 'win32')('include one whose folder T3 Code names by a link, where the agent app names the folder itself', () => {
+    const real = mkdtempSync(path.join(scratch, 'real-'))
+    const link = path.join(scratch, `link-${path.basename(real)}`)
+    symlinkSync(real, link)
+    const shell = { projects: [{ id: 'linked', workspaceRoot: link }], threads: [{ id: 'by-the-link', projectId: 'linked' }] }
+    // The app was started in the folder, and the system names it without the link
+    expect(nearby(shell, { cwd: path.join(real, 'pages') })).toEqual(['by-the-link'])
+    expect(nearby(shell, { cwd: path.join(scratch, 'not-it') })).toEqual([])
   })
 })
 
@@ -633,12 +669,12 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     const found = await server(threads, listed)
     const search = progress()
     try {
-      expect(await t3ThreadOf(found.t3, { ...of, cwd: '/work/site/pages' }, search)).toEqual({ status: 'incomplete', progressed: true })
+      expect(await t3ThreadOf(found.t3, { ...of, cwd: '/work/site/pages' }, search)).toEqual({ status: 'incomplete', progressed: true, near: false })
       expect(found.read).toHaveLength(24)
       // A thread added meanwhile waits for the next search; these passes keep one listing.
       listed.unshift({ id: 'new-thread', worktreePath: '/work/site', providerInstanceId: 'codex', updatedAt: new Date(20_000).toISOString() })
       threads['new-thread'] = 'another'
-      expect(await t3ThreadOf(found.t3, { ...of, cwd: '/work/site/pages' }, search)).toEqual({ status: 'incomplete', progressed: true })
+      expect(await t3ThreadOf(found.t3, { ...of, cwd: '/work/site/pages' }, search)).toEqual({ status: 'incomplete', progressed: true, near: false })
       expect(found.read).toHaveLength(48)
       expect(await t3ThreadOf(found.t3, { ...of, cwd: '/work/site/pages' }, search)).toEqual({ status: 'found', thread: 'thread-52' })
       expect(found.read.filter((id) => id === 'thread-0')).toHaveLength(1)
@@ -666,6 +702,13 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     return { threads, listed, ranked: (n: number) => Array.from({ length: n }, (_, i) => `thread-${i}`) }
   }
   const inSite = { ...of, cwd: '/work/site/pages' }
+  /**
+   * What was read, the likeliest first: a search reads a few threads at once, and in which order
+   * those few reach the server is not the search's to say.
+   */
+  const byRank = (ids: readonly string[]) => [...ids].sort((a, b) => Number(a.split('-')[1]) - Number(b.split('-')[1]))
+  /** Whether a pass that found its thread read only threads of the batch it was found in, that one among them. */
+  const foundAmong = (read: readonly string[], batch: readonly string[], thread: string) => read.includes(thread) && read.every((id) => batch.includes(id))
   /** One search of its passes, until it says something other than that it has more to do. */
   const searched = async (t3: { origin: string; home: string; command: string[] }, search: T3Search) => {
     for (;;) {
@@ -680,16 +723,17 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     const found = await server(threads, listed)
     const search = progress()
     try {
-      expect(await searched(found.t3, search)).toEqual({ status: 'limited' })
-      expect(found.read).toEqual(ranked(96))
+      expect(await searched(found.t3, search)).toEqual({ status: 'limited', near: false })
+      expect(byRank(found.read)).toEqual(ranked(96))
       // Between its searches it holds only the threads it has read, and not the listing
       expect(t3Held(search)).toBe(96)
-      expect(await searched(found.t3, search)).toEqual({ status: 'limited' })
-      expect(found.read).toEqual(ranked(192))
+      expect(await searched(found.t3, search)).toEqual({ status: 'limited', near: false })
+      expect(byRank(found.read)).toEqual(ranked(192))
       expect(t3Held(search)).toBe(192)
       expect(await searched(found.t3, search)).toEqual({ status: 'found', thread: 'thread-250' })
-      // Every thread was read once, the likeliest first, and each search had a listing of its own
-      expect(found.read).toEqual(ranked(251))
+      // Every thread was read once, the likeliest first, four at a time, and each search had a listing of its own
+      expect(byRank(found.read).slice(0, 248)).toEqual(ranked(248))
+      expect(foundAmong(found.read.slice(248), ranked(252).slice(248), 'thread-250')).toBe(true)
       expect(found.listings()).toBe(3)
     } finally {
       found.close()
@@ -702,12 +746,13 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     const found = await server(threads, listed)
     const search = progress()
     try {
-      expect(await searched(found.t3, search)).toEqual({ status: 'limited' })
+      expect(await searched(found.t3, search)).toEqual({ status: 'limited', near: false })
       // It went behind the others of its search, which used its reads on them
-      expect(found.read).toEqual(ranked(96))
+      expect(byRank(found.read)).toEqual(ranked(96))
       threads['thread-50'] = 'conversation-1'
       expect(await t3ThreadOf(found.t3, inSite, search)).toEqual({ status: 'found', thread: 'thread-50' })
-      expect(found.read).toEqual([...ranked(96), 'thread-50'])
+      // The next search read it first, with the next few after the last search's threads
+      expect(foundAmong(found.read.slice(96), ['thread-50', 'thread-96', 'thread-97', 'thread-98'], 'thread-50')).toBe(true)
     } finally {
       found.close()
     }
@@ -721,14 +766,17 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     const found = await server(threads, listed)
     const search = progress()
     try {
-      expect(await t3ThreadOf(found.t3, inSite, search, AbortSignal.timeout(1000))).toEqual({ status: 'incomplete', progressed: true })
-      expect(found.read).toEqual(ranked(11))
+      expect(await t3ThreadOf(found.t3, inSite, search, AbortSignal.timeout(1000))).toEqual({ status: 'incomplete', progressed: true, near: false })
+      // Read four at a time: the pass stopped with the batch that thread was in
+      expect(byRank(found.read)).toEqual(ranked(12))
       threads['thread-10'] = 'other-thread-10'
-      expect(await searched(found.t3, search)).toEqual({ status: 'limited' })
-      expect(found.read).toEqual(ranked(96))
+      expect(await searched(found.t3, search)).toEqual({ status: 'limited', near: false })
+      expect(byRank(found.read)).toEqual(ranked(96))
       expect(await searched(found.t3, search)).toEqual({ status: 'found', thread: 'thread-120' })
       // The next search began with the thread that had not answered, and then went on past the first search's threads
-      expect(found.read.slice(96)).toEqual(['thread-10', ...ranked(121).slice(96)])
+      expect(found.read.slice(96, 100)).toContain('thread-10')
+      expect(byRank(found.read.slice(96)).slice(0, 24)).toEqual(['thread-10', ...ranked(119).slice(96)])
+      expect(foundAmong(found.read.slice(120), ranked(123).slice(119), 'thread-120')).toBe(true)
       expect(found.listings()).toBe(2)
     } finally {
       found.close()
@@ -756,14 +804,14 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     const found = await server(threads, listed)
     const search = progress()
     try {
-      expect(await searched(found.t3, search)).toEqual({ status: 'limited' })
-      expect(await searched(found.t3, search)).toEqual({ status: 'limited' })
+      expect(await searched(found.t3, search)).toEqual({ status: 'limited', near: false })
+      expect(await searched(found.t3, search)).toEqual({ status: 'limited', near: false })
       // The third search reads what is left, and comes back to the thread that could not be
       // read, which says nothing of whether a thread holds the conversation for as long as it cannot be
       let result: Awaited<ReturnType<typeof t3ThreadOf>>
       do result = await t3ThreadOf(found.t3, inSite, search)
       while (result.status === 'incomplete' && result.progressed)
-      expect(result).toEqual({ status: 'incomplete', progressed: false })
+      expect(result).toEqual({ status: 'incomplete', progressed: false, near: false })
       expect(search.pending).toEqual(['thread-150'])
       threads['thread-150'] = 'another'
       expect(await t3ThreadOf(found.t3, inSite, search)).toEqual({ status: 'absent' })
@@ -782,11 +830,90 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     const found = await server(threads, listed)
     const search = progress()
     try {
-      expect(await searched(found.t3, search)).toEqual({ status: 'limited' })
+      expect(await searched(found.t3, search)).toEqual({ status: 'limited', near: false })
       threads['thread-3'] = 'conversation-1'
       listed[3]!.updatedAt = '2026-10-02T00:00:00Z'
       expect(await t3ThreadOf(found.t3, inSite, search)).toEqual({ status: 'found', thread: 'thread-3' })
-      expect(found.read).toEqual([...ranked(96), 'thread-3'])
+      expect(byRank(found.read.slice(0, 96))).toEqual(ranked(96))
+      expect(foundAmong(found.read.slice(96), ['thread-3', 'thread-96', 'thread-97', 'thread-98'], 'thread-3')).toBe(true)
+    } finally {
+      found.close()
+    }
+  })
+
+  test('says, while it goes on, once every thread in the conversation’s folder has been read and none holds it, which comes long before the rest of a large workspace', async () => {
+    // Many threads elsewhere, newer than the few in the conversation's folder
+    const threads: Record<string, string | number | null> = {}
+    const listed: { id: string; worktreePath: string; providerInstanceId: string; updatedAt: string }[] = []
+    for (let i = 0; i < 300; i++) {
+      threads[`elsewhere-${i}`] = `other-${i}`
+      listed.push({
+        id: `elsewhere-${i}`,
+        worktreePath: `/work/other-${i}`,
+        providerInstanceId: 'codex',
+        updatedAt: new Date(Date.UTC(2026, 9, 2) - i * 1000).toISOString(),
+      })
+    }
+    for (let i = 0; i < 6; i++) {
+      threads[`site-${i}`] = `in-site-${i}`
+      listed.push({
+        id: `site-${i}`,
+        worktreePath: '/work/site',
+        providerInstanceId: 'claudeAgent',
+        updatedAt: new Date(Date.UTC(2026, 9, 1) - i * 1000).toISOString(),
+      })
+    }
+    threads['site-4'] = 503
+    const found = await server(threads, listed)
+    const search = progress()
+    try {
+      // One of the folder's threads cannot be read: nothing is said of the folder while it cannot
+      expect(await t3ThreadOf(found.t3, inSite, search)).toEqual({ status: 'incomplete', progressed: true, near: false })
+      expect(found.read.slice(0, 8).filter((id) => id.startsWith('site-'))).toHaveLength(6)
+      expect(t3Counted(search)).toEqual({ read: 23, listed: 306 })
+      threads['site-4'] = 'in-site-4'
+      // It went behind the others of its search, and the next search reads it first. Once it is
+      // read, every one of them has been, and the search still has the rest to read
+      expect(await searched(found.t3, search)).toEqual({ status: 'limited', near: false })
+      expect(await t3ThreadOf(found.t3, inSite, search)).toEqual({ status: 'incomplete', progressed: true, near: true })
+      expect(found.read.slice(96, 100)).toContain('site-4')
+      // And it is so for every pass after, until the search is over
+      expect(await searched(found.t3, search)).toEqual({ status: 'limited', near: true })
+      expect(t3NearRead(search)).toBe(true)
+      // A thread of the folder that changes since is read again before that is said again, and
+      // from the moment the listing shows it changed: here T3 Code does not answer for it in time
+      listed.find((t) => t.id === 'site-2')!.updatedAt = '2026-10-03T00:00:00Z'
+      threads['site-2'] = null
+      const readBefore = found.read.filter((id) => id === 'site-2').length
+      const pass = t3ThreadOf(found.t3, inSite, search, AbortSignal.timeout(3000))
+      // Said while the pass still waits for that thread, and not only once it is over
+      for (let i = 0; i < 200 && found.read.filter((id) => id === 'site-2').length === readBefore; i++) await new Promise((r) => setTimeout(r, 10))
+      expect(found.read.filter((id) => id === 'site-2').length).toBe(readBefore + 1)
+      expect(t3NearRead(search)).toBe(false)
+      expect(await pass).toMatchObject({ status: 'incomplete', near: false })
+      threads['site-2'] = 'in-site-2'
+      // It goes behind the others of its search, and the next search reads it first again, with
+      // the last of the workspace: every thread has been read by then, and none holds it
+      expect(await searched(found.t3, search)).toEqual({ status: 'limited', near: false })
+      expect(await searched(found.t3, search)).toEqual({ status: 'absent' })
+      // A conversation whose folder is not known has no such threads, and is never said to
+      const unknown = progress()
+      expect(await t3ThreadOf(found.t3, of, unknown)).toEqual({ status: 'incomplete', progressed: true, near: false })
+    } finally {
+      found.close()
+    }
+  })
+
+  test('says it of a conversation in a folder no thread works in once it has listed the threads', async () => {
+    const threads = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`thread-${i}`, `other-${i}`]))
+    const listed = Object.keys(threads).map((id) => ({ id, worktreePath: '/work/site', providerInstanceId: 'claudeAgent' }))
+    const found = await server(threads, listed)
+    try {
+      expect(await t3ThreadOf(found.t3, { ...of, cwd: '/home/someone/its-own-folder' }, progress())).toEqual({
+        status: 'incomplete',
+        progressed: true,
+        near: true,
+      })
     } finally {
       found.close()
     }
@@ -797,21 +924,21 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     const found = await server(threads)
     const search = progress()
     try {
-      for (let batch = 0; batch < 3; batch++) expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: true })
-      expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'limited' })
+      for (let batch = 0; batch < 3; batch++) expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: true, near: false })
+      expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'limited', near: false })
       expect(found.read).toHaveLength(96)
       expect(found.listings()).toBe(1)
       // The next search is as limited, and goes on: a thread that could not be read is tried
       // again in its place, and one that could not be read twice waits behind those not yet read
       const next = async () => {
         const from = found.read.length
-        for (let batch = 0; batch < 3; batch++) expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: true })
-        expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'limited' })
+        for (let batch = 0; batch < 3; batch++) expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: true, near: false })
+        expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'limited', near: false })
         return found.read.slice(from)
       }
       const ids = Object.keys(threads)
-      if (unread) expect(await next()).toEqual(ids.slice(0, 96))
-      expect(await next()).toEqual(ids.slice(96, 192))
+      if (unread) expect(byRank(await next())).toEqual(ids.slice(0, 96))
+      expect(byRank(await next())).toEqual(ids.slice(96, 192))
       expect(found.listings()).toBe(unread ? 3 : 2)
     } finally {
       found.close()
@@ -822,8 +949,9 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     const found = await server({ unread: 503 })
     const search = progress()
     try {
-      for (let read = 0; read < 95; read++) expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: read === 0 })
-      expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'limited' })
+      for (let read = 0; read < 95; read++)
+        expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: read === 0, near: false })
+      expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'limited', near: false })
       expect(found.read).toHaveLength(96)
       expect(found.listings()).toBe(1)
     } finally {
@@ -836,12 +964,12 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     const found = await server(threads)
     const search = progress()
     try {
-      for (let batch = 0; batch < 3; batch++) expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: true })
+      for (let batch = 0; batch < 3; batch++) expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: true, near: false })
       expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'absent' })
       expect(found.read).toHaveLength(96)
       expect(found.listings()).toBe(1)
       expect(await t3ThreadOf(found.t3, { ...of, ids: ['conversation-2'] }, search)).toEqual({ status: 'found', thread: 'thread-0' })
-      expect(found.read).toHaveLength(97)
+      expect(foundAmong(found.read.slice(96), ['thread-0', 'thread-1', 'thread-2', 'thread-3'], 'thread-0')).toBe(true)
       expect(found.listings()).toBe(2)
     } finally {
       found.close()
@@ -862,8 +990,8 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     const found = await server(threads, listed)
     const search = progress()
     try {
-      expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: true })
-      expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: true })
+      expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: true, near: false })
+      expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: true, near: false })
       threads['thread-0'] = 'another'
       expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'absent' })
       expect(found.read).not.toContain('archived')
@@ -882,15 +1010,15 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     const found = await server(threads)
     const search = progress()
     try {
-      expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: true })
+      expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: true, near: false })
       expect(new Set(found.read).size).toBe(10)
       for (let retry = 0; retry < 2; retry++) {
-        expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: false })
+        expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: false, near: false })
       }
       // A recovered read makes progress even though the rest still need retries.
       threads[search.pending[0]!] = 'another'
-      expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: true })
-      expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: false })
+      expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: true, near: false })
+      expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: false, near: false })
       const match = search.pending[0]!
       threads[match] = 'conversation-1'
       expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'found', thread: match })
@@ -905,7 +1033,7 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     const search = progress()
     try {
       for (let retry = 0; retry < 2; retry++) {
-        expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: false })
+        expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'incomplete', progressed: false, near: false })
       }
       expect(found.read).toEqual([])
     } finally {
@@ -913,15 +1041,20 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     }
   })
 
-  test('an expired pass leaves its unread candidate retryable and lets the next pass reach other candidates', async () => {
-    const found = await server({ slow: null, match: 'conversation-1' })
+  test('an expired pass leaves its unread candidates retryable and lets the next pass reach other candidates, which a thread that never answers does not hold up', async () => {
+    const found = await server({ 'slow-1': null, 'slow-2': null, 'slow-3': null, 'slow-4': null, match: 'conversation-1' })
     const search = progress()
     try {
-      const started = performance.now()
-      expect(await t3ThreadOf(found.t3, of, search, AbortSignal.timeout(150))).toEqual({ status: 'incomplete', progressed: true })
+      let started = performance.now()
+      expect(await t3ThreadOf(found.t3, of, search, AbortSignal.timeout(150))).toEqual({ status: 'incomplete', progressed: true, near: false })
       expect(performance.now() - started).toBeLessThan(2000)
-      expect(found.read).toEqual(['slow'])
+      expect(byRank(found.read)).toEqual(['slow-1', 'slow-2', 'slow-3', 'slow-4'])
+      expect(search.pending[0]).toBe('match')
+      expect(byRank(search.pending.slice(1))).toEqual(['slow-1', 'slow-2', 'slow-3', 'slow-4'])
+      // Read with three of them, which still do not answer, and found as soon as it answers
+      started = performance.now()
       expect(await t3ThreadOf(found.t3, of, search)).toEqual({ status: 'found', thread: 'match' })
+      expect(performance.now() - started).toBeLessThan(2000)
     } finally {
       found.close()
     }
@@ -932,7 +1065,7 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     writeFileSync(found.program, '#!/bin/sh\nexec sleep 3\n')
     try {
       const started = performance.now()
-      expect(await t3ThreadOf(found.t3, of, progress(), AbortSignal.timeout(150))).toEqual({ status: 'incomplete', progressed: false })
+      expect(await t3ThreadOf(found.t3, of, progress(), AbortSignal.timeout(150))).toEqual({ status: 'incomplete', progressed: false, near: false })
       expect(performance.now() - started).toBeLessThan(2000)
       expect(found.read).toEqual([])
     } finally {
@@ -945,7 +1078,7 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     const runs = path.join(path.dirname(found.program), 'runs')
     writeFileSync(found.program, `#!/bin/sh\necho run >> '${runs}'\nsleep 1\necho '{"token":"a-late-session"}'\n`)
     try {
-      expect(await t3ThreadOf(found.t3, of, progress(), AbortSignal.timeout(150))).toEqual({ status: 'incomplete', progressed: false })
+      expect(await t3ThreadOf(found.t3, of, progress(), AbortSignal.timeout(150))).toEqual({ status: 'incomplete', progressed: false, near: false })
       expect(found.read).toEqual([])
       // A pass that begins while the command is still at work waits on that same command
       const search = progress()
@@ -961,13 +1094,13 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     const program = found.program
     try {
       writeFileSync(program, '#!/bin/sh\nexit 3\n')
-      expect(await t3ThreadOf(found.t3, of, progress())).toEqual({ status: 'incomplete', progressed: false })
+      expect(await t3ThreadOf(found.t3, of, progress())).toEqual({ status: 'incomplete', progressed: false, near: false })
       expect(t3Refusal()).toBe('its own command ended with code 3')
       writeFileSync(program, '#!/bin/sh\necho no session\n')
-      expect(await t3ThreadOf(found.t3, of, progress())).toEqual({ status: 'incomplete', progressed: false })
+      expect(await t3ThreadOf(found.t3, of, progress())).toEqual({ status: 'incomplete', progressed: false, near: false })
       expect(t3Refusal()).toBe('its own command gave no session')
       rmSync(program)
-      expect(await t3ThreadOf(found.t3, of, progress())).toEqual({ status: 'incomplete', progressed: false })
+      expect(await t3ThreadOf(found.t3, of, progress())).toEqual({ status: 'incomplete', progressed: false, near: false })
       expect(t3Refusal()).toBe('its own command was not found')
       writeFileSync(program, '#!/bin/sh\necho \'{"token":"a-session"}\'\n')
       chmodSync(program, 0o755)
@@ -1067,7 +1200,7 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     const unread = await server({ 'thread-a': 'another-conversation', 'thread-b': 503 })
     const readElsewhere = await server({ 'thread-a': 503, 'thread-b': 'conversation-1' })
     try {
-      expect(await t3ThreadOf(unread.t3, of)).toEqual({ status: 'incomplete', progressed: true })
+      expect(await t3ThreadOf(unread.t3, of)).toEqual({ status: 'incomplete', progressed: true, near: false })
       // One thread that cannot be read still says nothing of the others
       expect(await t3ThreadOf(readElsewhere.t3, of)).toEqual({ status: 'found', thread: 'thread-b' })
     } finally {
