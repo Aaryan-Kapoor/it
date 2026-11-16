@@ -840,6 +840,109 @@ async function VENV() {
   await go('the app quit, a reopened turn', false)
 }
 
+/**
+ * Whether It takes a closed Claude Code conversation for open: Claude Code against a stand-in for
+ * its model (no account), a page, an open click; then the app quit with /exit, and later the
+ * terminal closed, each watched for five minutes by what It says of Claude Code, what processes
+ * are left and what It's log says, with a click thirty seconds after each, timed to its answer.
+ */
+async function STANDIN() {
+  const who = 'claude'
+  const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
+  let p = ctx.pages().find((x) => !x.url().startsWith('devtools')) ?? (await ctx.newPage())
+  const pair = /https?:\/\/localhost:\d+\/pair#[A-Za-z0-9]+/.exec(sh('~/.it/bin/it site --no-open 2>&1'))?.[0]
+  if (pair) await p.goto(pair).catch(() => {})
+  await sleep(6000)
+  await startApp(who, counts)
+  await ask(who, 'Make a page with one button')
+  await settle(who, counts, 120_000, 6000)
+  let url = null
+  for (let i = 0; i < 30 && !url; i++) {
+    p = ctx.pages().find((x) => x.url().includes('/p/onebutton')) ?? p
+    if (p.url().includes('/p/onebutton')) url = p.url()
+    else await sleep(2000)
+  }
+  if (!url) {
+    await p.goto('http://localhost:4700/p/onebutton').catch(() => {})
+    await sleep(5000)
+    url = p.url()
+  }
+  check('the stand-in made the page', /onebutton/.test(url), { url })
+  const seen = async () => (await shown(p).catch(() => '')).match(/Pressed:\s*(.*)/)?.[1]?.trim() ?? ''
+  const status = () => {
+    try {
+      const j = JSON.parse(sh('~/.it/bin/it status --json 2>/dev/null'))
+      const h = (j.machine?.harnesses ?? []).find((x) => x.id === 'claude-code')
+      return { addon: h?.addon, state: h?.runtime?.state, idle: h?.runtime?.idle, waiting: j.connector?.waiting ?? j.waiting }
+    } catch {
+      return { unreadable: true }
+    }
+  }
+  let logAt = Number(sh('wc -l < ~/.it/logs/it.log').trim()) || 0
+  const newLog = () => {
+    const lines = sh(`tail -n +${logAt + 1} ~/.it/logs/it.log`).split('\n').filter(Boolean)
+    logAt += lines.length
+    // By what each line is about, its first words, and how many: never anything a page carried
+    return lines.map((l) => l.replace(/^\S+\s+/, '').replace(/\{.*$/, '{…}').replace(/\([0-9a-f]{6,}\)/g, '(…)').slice(0, 90))
+  }
+  let n = 0
+  const click = async (what, ms) => {
+    await p.goto(url).catch(() => {})
+    await sleep(4000)
+    const before = await seen()
+    const t0 = Date.now()
+    const f = await agentFrame(p)
+    await f?.locator('#go').click().catch(() => {})
+    n++
+    step(`${what}: presses the button`, { before, bar: await bar(p) })
+    const bars = []
+    while (Date.now() - t0 < ms) {
+      const b = await bar(p)
+      if (b && b !== bars.at(-1)) bars.push(b)
+      const now = await seen()
+      if (now !== before && /answer/.test(now)) {
+        check(`${what}: answered`, true, { seconds: Math.round((Date.now() - t0) / 1000), now, bars: bars.join(' | ') })
+        return true
+      }
+      await sleep(1000)
+    }
+    check(`${what}: answered`, false, { seconds: Math.round(ms / 1000), bars: bars.join(' | '), status: status() })
+    return false
+  }
+  await click('with the conversation open', 60_000)
+  await settle(who, counts, 60_000, 5000)
+  const watch = async (how) => {
+    const t0 = Date.now()
+    let clicked = false
+    let answered = null
+    let clickAt = null
+    while (Date.now() - t0 < 300_000) {
+      const at = Math.round((Date.now() - t0) / 1000)
+      step(`${how}: ${at} s after`, { status: status(), claudeProcesses: appProcs(who).map((x) => x.args.slice(0, 70)), log: newLog().join(' || ').slice(0, 600), standin: sh('tail -2 /tmp/standin.log').replace(/\n/g, ' | ').slice(0, 200) })
+      if (!clicked && at >= 30) {
+        clicked = true
+        clickAt = at
+        answered = await click(`${how}: a click ${at} s after`, 240_000)
+      }
+      await sleep(10_000)
+    }
+    return { clickAt, answered }
+  }
+  step('quits Claude Code with /exit')
+  await quitApp(who)
+  const a = await watch('after /exit')
+  // Again open, then the terminal closed with Claude Code in it
+  await type('claude --continue')
+  await sleep(4000)
+  await settle(who, counts, 60_000, 5000)
+  await click('the conversation open again', 90_000)
+  await settle(who, counts, 60_000, 5000)
+  step('closes the terminal with Claude Code open in it')
+  sh('tmux kill-server')
+  const b = await watch('after the terminal closed')
+  step('the two quits', { afterExit: a, afterTerminalClosed: b })
+}
+
 async function main() {
   try {
     if (scenario === 'S4') await S4()
@@ -852,6 +955,7 @@ async function main() {
     else if (scenario === 'WAKELITE') await WAKELITE()
     else if (scenario === 'RESTARTCLICK') await RESTARTCLICK()
     else if (scenario === 'VENV') await VENV()
+    else if (scenario === 'STANDIN') await STANDIN()
     else if (scenario === 'WAKEBOOT2') await WAKEBOOT2()
     else check(`no scenario ${scenario}`, false)
     const failed = verdict.checks.filter((c) => !c.ok)

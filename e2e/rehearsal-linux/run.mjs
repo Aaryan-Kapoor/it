@@ -146,10 +146,11 @@ async function main() {
 
   // ---- the sign-in, and the terminal ----
   {
-    const t = take(app, Math.min(minutes + 5, 55))
-    held = t.held
-    result.tokenMinutesLeftAtStart = t.minutesLeft
-    if (app === 'codex') await injectCodex(name, held)
+    // A run against a stand-in for the model takes no sign-in of the owner's at all
+    const t = has('no-sign-in') ? null : take(app, Math.min(minutes + 5, 55))
+    held = t?.held ?? null
+    result.tokenMinutesLeftAtStart = t?.minutesLeft ?? 'no sign-in taken: a stand-in answers for the model'
+    if (app === 'codex' && held) await injectCodex(name, held)
     // Scenario 13: Codex signed in beside Claude Code, with its own copy; both copies' values are
     // looked for and redacted, and the wipe takes Codex's file as it always does
     if (app === 'claude' && has('also-codex')) {
@@ -168,7 +169,7 @@ async function main() {
   if (participant) {
     // Lingering as a participant's account has it before It: off, until `it setup` turns it on
     exec('rm -f /var/lib/systemd/linger/ana')
-    if (app === 'claude') await injectClaudeFile(name, held)
+    if (app === 'claude' && held) await injectClaudeFile(name, held)
     result.participant = 'released It from itcan.do; the service as it setup registers it; no variable put into the user manager; Claude Code signed in by its own ~/.claude/.credentials.json alone; Codex by its own ~/.codex/auth.json; lingering removed before setup'
   }
   if (app === 'claude' && held && !participant) {
@@ -278,7 +279,7 @@ async function main() {
   }
   log(`flow ${flow} with ${app} in ${which}`)
   await new Promise((resolve) => {
-    const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-s', '/bin/bash', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK|WAKE|RESTARTCLICK|VENV)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow === 'WAKEBOOT' ? 'WAKEBOOT1' : flow} ${app} ${which === 'chromium' && /^(S\d|SOAK|WAKE|RESTARTCLICK|VENV)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-s', '/bin/bash', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow === 'WAKEBOOT' ? 'WAKEBOOT1' : flow} ${app} ${which === 'chromium' && /^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
     // A change the flow asks for between two clicks, run as root (an update of the agent app)
     const between = setInterval(() => {
       // The change itself is root's own file, written by the prepare step; the flow (ana) only asks for it
