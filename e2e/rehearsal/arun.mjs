@@ -369,6 +369,24 @@ http
     } catch {}
     const reply = (o) => res.end(typeof o === 'string' ? o : JSON.stringify(o))
     if (q.cmd === 'screen') return reply(await term.screen())
+    // For a test the tester drives (no person, no recording): open a page of It's, press something
+    // on it, and read what the page says
+    if (q.cmd === 'goto' || q.cmd === 'click' || q.cmd === 'pagetext') {
+      if (recording) return reply('refused: the tester does not help the person in a run')
+      if (q.cmd === 'goto') {
+        await browser.page.goto(`http://localhost:${port}/p/${q.page}`).catch((e) => reply(`error ${e.message}`))
+        return reply('done')
+      }
+      if (q.cmd === 'pagetext') return reply(await browser.page.evaluate(() => document.body?.innerText ?? '').catch(() => ''))
+      for (const fr of browser.page.frames()) {
+        const el = await fr.$(q.selector).catch(() => null)
+        if (el) {
+          await el.click().catch(() => {})
+          return reply('clicked')
+        }
+      }
+      return reply('not found')
+    }
     if (q.cmd === 'status') return reply({ id, recording, video: rec?.at() ?? null, url: browser.page.url(), sentence })
     if (q.cmd === 'note') {
       log(q.name || 'note', q.seen || '', q.ok !== false)
