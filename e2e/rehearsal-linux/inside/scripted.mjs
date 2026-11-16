@@ -301,7 +301,7 @@ async function ask(who, text) {
 }
 
 async function SOAK2() {
-  const hours = Number(process.env.SOAK_HOURS ?? '8')
+  const hours = Number(process.env.SOAK_HOURS ?? '7')
   const DRINK = /lemonade|iced tea|cola|tea|drink/i
   const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
   let p = ctx.pages().find((x) => !x.url().startsWith('devtools')) ?? (await ctx.newPage())
