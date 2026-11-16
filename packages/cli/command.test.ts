@@ -5626,7 +5626,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       const accepted = await run(machine(false), [cmd, ...flags, '--help'])
       expect([cmd, flags, accepted.code, accepted.err]).toEqual([cmd, flags, 0, ''])
     }
-    expect(ran.out).toMatch(/^ {2}it setup \[--all \| --only a,b \| --none\] \[--name <name>\] \[--no-service\]$/m)
+    expect(ran.out).toMatch(/^ {2}it setup \[--all \| --only a,b \| --without a,b \| --none\] \[--name <name>\] \[--no-service\]$/m)
     expect(ran.out).toMatch(/^ {2}it site /m)
     expect(ran.out).toMatch(/^ {2}it serve /m)
     expect(ran.out).toMatch(/^ {2}it login --url <address> --code <invite> \[--name <name>\] \[--no-setup\]$/m)
@@ -5637,6 +5637,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       /\[--state '\{…\}' \| --state-file <path>\]/,
       /^ {2}it serve \[--log <file>\] {2,}\S/m,
       /--yes connects\s+every app it would otherwise ask about/,
+      /--only connects\s+the apps named, and --without disconnects them; both\s+leave the other apps as they are/,
       /--no-setup joins and\s+connects no agent app/,
       /With --json,\s+wherever a program reads what they print, and for an agent,\s+they\s+print\s+JSON/,
       /^ {2}it site \[--no-open\] {2,}\S/m,
@@ -7663,7 +7664,7 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
       expect(ran().some((words) => words.startsWith('remove'))).toBe(false)
       expect(second.err).not.toContain('disconnecting Pi')
       expect(second.err).toContain(
-        'Pi stays connected as well: run from an agent’s conversation, `--only` connects what it names and leaves connected what is connected already.',
+        'Pi stays connected, since `--only` and `--without` leave as it is every app they do not name. `it setup --without pi` disconnects it.',
       )
       expect(second.err).not.toContain('no longer connected')
     } finally {
@@ -7830,7 +7831,7 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
     }
   })
 
-  test('an app that could not be looked at after `--only` took it out is not said to be disconnected', async () => {
+  test('an app that could not be looked at after `--without` took it out is not said to be disconnected', async () => {
     const m = machine()
     pi(m)
     writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.18.32\n', { mode: 0o755 })
@@ -7853,7 +7854,8 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
           '',
         ].join('\n'),
       )
-      const narrower = await run(m, ['setup', '--no-service', '--only', 'opencode'], b.env)
+      const narrower = await run(m, ['setup', '--no-service', '--only', 'opencode', '--without', 'pi'], b.env)
+      expect(narrower.err).toContain('disconnecting Pi')
       expect(narrower.err).not.toContain('Pi is no longer connected')
       expect(narrower.out).not.toContain('Pi is no longer connected')
     } finally {
@@ -7861,23 +7863,172 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
     }
   })
 
-  test('run anywhere else, `--only` takes out an app it does not name, and says what that means for the person and how to have it back', async () => {
+  /** A machine with Pi and OpenCode, and a backend that keeps what it is told was chosen. */
+  const twoApps = async () => {
     const m = machine()
     const ran = pi(m)
     writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.18.32\n', { mode: 0o755 })
-    const b = await backend(m, (asked) => (asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted: [] } : null))
+    let wanted: string[] = []
+    const b = await backend(m, (asked) => {
+      if (asked.path === 'machines:choose') wanted = asked.args.harnesses as string[]
+      return asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted } : null
+    })
+    const states = (setup: Awaited<ReturnType<typeof run>>) =>
+      Object.fromEntries(printed(setup).harnesses.map((h: { id: string; addon: string }) => [h.id, h.addon]))
+    return { m, ran, b, states, wanted: () => [...wanted].sort() }
+  }
+
+  test('with one app connected, `--only` the other connects it and leaves the first connected, and says so with how to disconnect it', async () => {
+    const { m, ran, b, states, wanted } = await twoApps()
     try {
       expect((await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)).code).toBe(0)
+      const second = await run(m, ['setup', '--no-service', '--only', 'opencode'], b.env)
+      expect(second.code).toBe(0)
+      expect(states(second)).toEqual({ opencode: 'connected', pi: 'connected' })
+      // It is told of both, so that the service does not take Pi out again by itself, and Pi's add-on was not taken out
+      expect(wanted()).toEqual(['opencode', 'pi'])
+      expect(ran().some((words) => words.startsWith('remove'))).toBe(false)
+      expect(second.err).not.toContain('disconnecting Pi')
+      expect(second.err).toContain(
+        'Pi stays connected, since `--only` and `--without` leave as it is every app they do not name. `it setup --without pi` disconnects it.',
+      )
+      expect(second.err).not.toContain('no longer connected')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('with both apps connected, `--only` one of them leaves both connected', async () => {
+    const { m, ran, b, states, wanted } = await twoApps()
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi,opencode'], b.env)).code).toBe(0)
       const narrower = await run(m, ['setup', '--no-service', '--only', 'opencode'], b.env)
       expect(narrower.code).toBe(0)
-      expect(printed(narrower).harnesses).toContainEqual({ id: 'pi', version: '0.82.0', addon: 'not_connected' })
+      expect(states(narrower)).toEqual({ opencode: 'connected', pi: 'connected' })
+      expect(wanted()).toEqual(['opencode', 'pi'])
+      expect(ran().some((words) => words.startsWith('remove'))).toBe(false)
+      expect(narrower.err).not.toContain('no longer connected')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--only` leaves an app that was not connected as it was', async () => {
+    const { m, ran, b, states, wanted } = await twoApps()
+    try {
+      const setup = await run(m, ['setup', '--no-service', '--only', 'opencode'], b.env)
+      expect(setup.code).toBe(0)
+      expect(states(setup)).toEqual({ opencode: 'connected', pi: 'not_connected' })
+      expect(wanted()).toEqual(['opencode'])
+      expect(ran().some((words) => words.startsWith('install'))).toBe(false)
+      expect(setup.err).not.toContain('stays connected')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--only` another app brings an add-on that it leaves connected up to date, as a plain setup would', async () => {
+    const { m, ran, b, states } = await twoApps()
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)).code).toBe(0)
+      // Pi's add-on as an earlier It put it in
+      const stamp = path.join(m.it, 'addons', 'pi.json')
+      const note = JSON.parse(readFileSync(stamp, 'utf8')) as { installs: { version: string; by?: string }[] }
+      writeFileSync(stamp, JSON.stringify({ ...note, installs: note.installs.map((i) => ({ ...i, version: '0.0.1', by: '0.0.1' })) }))
+      const installs = ran().filter((words) => words.startsWith('install')).length
+      const second = await run(m, ['setup', '--no-service', '--only', 'opencode'], b.env)
+      expect(second.code).toBe(0)
+      expect(states(second)).toEqual({ opencode: 'connected', pi: 'connected' })
+      expect(ran().filter((words) => words.startsWith('install')).length).toBe(installs + 1)
+      expect(ran().some((words) => words.startsWith('remove'))).toBe(false)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--without` disconnects the app it names, leaves the others connected, and says what that means for the person and how to have it back', async () => {
+    const { m, ran, b, states, wanted } = await twoApps()
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi,opencode'], b.env)).code).toBe(0)
+      const without = await run(m, ['setup', '--no-service', '--without', 'pi'], b.env)
+      expect(without.code).toBe(0)
+      expect(states(without)).toEqual({ opencode: 'connected', pi: 'not_connected' })
+      expect(wanted()).toEqual(['opencode'])
       expect(ran().some((words) => words.startsWith('remove'))).toBe(true)
       const GONE =
-        'Pi is no longer connected, since `--only` did not name it: what you do on a page that one of its conversations made no longer reaches that conversation. `it setup --only opencode,pi` connects it again.'
-      expect(narrower.err).toContain(GONE)
+        'Pi is no longer connected: what you do on a page that one of its conversations made no longer reaches that conversation. `it setup --only pi` connects it again.'
+      expect(without.err).toContain(GONE)
+      expect(without.err).toContain('OpenCode stays connected, since `--only` and `--without` leave as it is every app they do not name.')
       // And whoever ran it is told to pass it on, whole, with the rest of what is left for the person
-      expect(printed(narrower).tell).toContain(GONE)
-      expect(printed(narrower).next).toContain(GONE)
+      expect(printed(without).tell).toContain(GONE)
+      expect(printed(without).next).toContain(GONE)
+      // The command it gives connects Pi again, and leaves OpenCode connected
+      const again = await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)
+      expect(states(again)).toEqual({ opencode: 'connected', pi: 'connected' })
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--without` an app that is not connected changes nothing in it', async () => {
+    const { m, ran, b, states, wanted } = await twoApps()
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'opencode'], b.env)).code).toBe(0)
+      const without = await run(m, ['setup', '--no-service', '--without', 'pi'], b.env)
+      expect(without.code).toBe(0)
+      expect(states(without)).toEqual({ opencode: 'connected', pi: 'not_connected' })
+      expect(wanted()).toEqual(['opencode'])
+      expect(ran().some((words) => words.startsWith('install') || words.startsWith('remove'))).toBe(false)
+      expect(without.err).not.toContain('no longer connected')
+      expect(without.err).toContain('Pi was not connected, so `--without` left it as it was.')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--none` disconnects every app', async () => {
+    const { m, b, states, wanted } = await twoApps()
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi,opencode'], b.env)).code).toBe(0)
+      const none = await run(m, ['setup', '--no-service', '--none'], b.env)
+      expect(none.code).toBe(0)
+      expect(states(none)).toEqual({ opencode: 'not_connected', pi: 'not_connected' })
+      expect(wanted()).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--only` an app that is not on this machine connects nothing, and leaves the connected app connected', async () => {
+    const { m, ran, b, states, wanted } = await twoApps()
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)).code).toBe(0)
+      const missing = await run(m, ['setup', '--no-service', '--only', 'codex'], b.env)
+      expect(states(missing)).toEqual({ opencode: 'not_connected', pi: 'connected' })
+      expect(missing.err).toContain('Codex was not found on this machine.')
+      expect(wanted()).toEqual(['codex', 'pi'])
+      expect(ran().some((words) => words.startsWith('remove'))).toBe(false)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--without` is refused, with nothing changed, beside `--all` or `--none`, for an app named by `--only` too, and for an app It does not know', async () => {
+    const { m, ran, b } = await twoApps()
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)).code).toBe(0)
+      const before = ran().length
+      for (const [words, said] of [
+        [['--without', 'pi', '--none'], '--without cannot be given with --none.'],
+        [['--without', 'pi', '--all'], '--without cannot be given with --all.'],
+        [['--only', 'pi', '--without', 'pi'], 'pi cannot be named by both --only and --without.'],
+        [['--without', 'nonesuch'], 'Not an agent app It knows: nonesuch'],
+        [['--without', ''], '--without names the agent apps to disconnect.'],
+      ] as const) {
+        const refused = await run(m, ['setup', '--no-service', ...words], b.env)
+        expect([refused.code, refused.err]).toEqual([2, expect.stringContaining(said)])
+      }
+      expect(ran().length).toBe(before)
     } finally {
       await b.close()
     }

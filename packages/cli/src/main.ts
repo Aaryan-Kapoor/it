@@ -514,7 +514,7 @@ function notTaken(
 ): Problem {
   const which = whichDisplay(target)
   const nothing = what === 'sent' ? 'Nothing was sent.' : 'It was shown nowhere.'
-  // The link as \`it create\` gives it, with why it is not at the place chosen for links where it is not
+  // The link as `it create` gives it, with why it is not at the place chosen for links where it is not
   const link = address.url ? ` Or give the user its link: ${address.url}${address.urlNote ? ` ${address.urlNote}` : ''}` : ''
   const instead = `Leave out --on and --on-id to ${what === 'sent' ? 'send it to' : 'show it on'} the display in use.${link}`
   if (code === 'locked')
@@ -732,7 +732,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   uninstall: [0, 'uninstall [--yes]'],
   whoami: [0, 'whoami'],
   status: [0, 'status'],
-  setup: [0, 'setup [--all | --only a,b | --none] [--name <name>] [--no-service]'],
+  setup: [0, 'setup [--all | --only a,b | --without a,b | --none] [--name <name>] [--no-service]'],
   site: [0, 'site [--no-open]'],
   network: [1, 'network [on | off | tailscale | internet]'],
   https: [1, 'https [on | off]'],
@@ -1581,11 +1581,14 @@ async function pathLine(): Promise<string | undefined> {
  * after the same ports as the person's own. The same where the backend is named by IT_URL and
  * this machine is not one of its machines.
  *
- * Which apps to connect is the person's to say: with `--all`, with `--only`, or by answering
- * for each at a terminal, which `--yes` answers for them. Where there is no terminal to ask
- * at and none of those was given, nothing is connected that was not already: what the person
- * chose before stays chosen, what is connected stays connected, and the command that connects
- * the rest is said.
+ * Which apps to connect is the person's to say: with `--all`, with `--only` and `--without`,
+ * or by answering for each at a terminal, which `--yes` answers for them. `--only` connects the
+ * apps it names and `--without` disconnects them, and both leave every other app as it stands:
+ * one connected or chosen before stays so, and one that was not stays not. A second agent app
+ * that follows the install guide names itself alone, and would otherwise take It out of the
+ * first. Where there is no terminal to ask at and none of those was given, nothing is connected
+ * that was not already: what the person chose before stays chosen, what is connected stays
+ * connected, and the command that connects the rest is said.
  *
  * `joined` says that this machine joined an It a moment ago, with `it login`, which goes on
  * here. That is a first run on this machine whatever is to be connected: with `--none` too the
@@ -2035,12 +2038,11 @@ async function refreshing(a: Args) {
 
 async function setup(a: Args, joined = false) {
   if (a.flags.refresh) {
-    if (a.flags.all || a.flags.none || a.flags.yes || text(a, 'only') !== undefined || text(a, 'name') !== undefined)
+    if (a.flags.all || a.flags.none || a.flags.yes || text(a, 'only') !== undefined || text(a, 'without') !== undefined || text(a, 'name') !== undefined)
       throw new Problem('`it setup --refresh` brings the add-ons up to date and does nothing else, so it takes no other switch.', 'invalid')
     return refreshing(a)
   }
-  const only = text(a, 'only')
-  if (only !== undefined && !a.flags.none) appsNamed(only)
+  appsAsked(a)
   // Take the folder's setup lock first where one is needed, so concurrent setups keep their
   // usual waiting message and allowance. Every path checks the program before its writes.
   const current = <T>(run: () => Promise<T>) =>
@@ -2243,7 +2245,8 @@ async function settingUpLed(a: Args, begunAlready = false) {
   const kept: string[] = []
   const quiet = (line: string) => void kept.push(line)
   // The name is said once: by the install script where that ran, by the question of where It is where that was asked, and else here
-  if (!process.env.IT_INSTALL_FLOW && !(begunAlready && !a.flags.all && text(a, 'only') === undefined && !a.flags.yes)) flow.banner('setup')
+  if (!process.env.IT_INSTALL_FLOW && !(begunAlready && !a.flags.all && text(a, 'only') === undefined && text(a, 'without') === undefined && !a.flags.yes))
+    flow.banner('setup')
   const found = await setupApps(a, true)
   await noneAbandoned()
   const inBackground = !a.flags['no-service']
@@ -2289,8 +2292,8 @@ async function settingUpLed(a: Args, begunAlready = false) {
     // ---------- the agent apps
     const usable = found.filter((h) => supported(h.id) && h.addon !== 'too_old')
     let wanted: Harness[]
-    const only = text(a, 'only')
-    if (only !== undefined) wanted = appsNamed(only)
+    const choice = await namedChoice(a, found, quiet)
+    if (choice) wanted = choice.wanted
     else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
     // Nothing is asked where there is nothing to choose: no app was found, or none that It can connect
     else if (!usable.length) wanted = []
@@ -2313,8 +2316,9 @@ async function settingUpLed(a: Args, begunAlready = false) {
     // Asked only where an app is chosen: with none, reopening comes on for none
     const wokenBefore = wanted.length ? await wokenNow() : null
     let woken = await chosen(wanted).catch(() => null)
-    // A person is leading this setup, so an app they chose that has It's add-on turned off is turned on again: that is them asking
-    const outcomes = await reconcile(wanted, quiet, false, wanted)
+    // A person is leading this setup, so an app they chose that has It's add-on turned off is turned on again: that is them asking.
+    // With `--only` or `--without`, only the apps named are asked for, and one they leave as it is stays turned off
+    const outcomes = await reconcile(wanted, quiet, false, choice?.named ?? wanted)
     woken ??= await chosen(wanted)
     const after = await detectAll()
     await call('mutation', api.machines.inventory, { harnesses: after })
@@ -2329,8 +2333,10 @@ async function settingUpLed(a: Args, begunAlready = false) {
       const why = h.detail ?? said
       left.push(`${KNOWN[h.id].label} could not be connected${why ? `: ${why.replace(/\.$/, '')}.` : '.'}`)
     }
-    // An app that `--only` took out, said as what it means for the person
-    const gone = only !== undefined ? disconnectedSaid(found, after, wanted) : null
+    // What `--only` and `--without` left as it was, and an app that `--without` took out, said as what it means for the person
+    const stayed = choice && kept.find((line) => line.includes('leave as it is every app they do not name'))
+    if (stayed) left.push(stayed)
+    const gone = choice ? disconnectedSaid(found, after, wanted) : null
     if (gone) left.push(gone)
     // What decides whether Codex's first page appears at all is said by itself, and first
     const shut = codexShut(after)
@@ -2496,7 +2502,8 @@ async function settingUpLed(a: Args, begunAlready = false) {
  */
 async function joinedInstead(a: Args): Promise<boolean> {
   // Asked only where nothing is here yet, and of a person who has not already said what they want set up
-  if (existsSync(settingsFile()) || enrolledHere() || a.flags.all || text(a, 'only') !== undefined || a.flags.yes) return false
+  if (existsSync(settingsFile()) || enrolledHere() || a.flags.all || text(a, 'only') !== undefined || text(a, 'without') !== undefined || a.flags.yes)
+    return false
   if (!process.env.IT_INSTALL_FLOW) flow.banner('setup')
   const where = await flow.pick<'here' | 'join'>('Where is your It?', [
     { value: 'here', label: 'On this computer', hint: 'set it up here' },
@@ -2547,32 +2554,63 @@ async function joinedInstead(a: Args): Promise<boolean> {
 const listed = (names: readonly string[]): string => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : (names[0] ?? ''))
 
 /**
- * The apps that an agent's `--only` leaves connected beside the ones it names: each that is
- * connected here, its hooks waiting on the person or not, and each that the person chose and
- * It has on record, as a setup with nobody to ask keeps them, whether or not it was found just
- * now: an app whose command failed this once, or is not on the agent's PATH, stays chosen, and
- * putting its add-on right is left to the connecting, as it is everywhere else. Where It cannot
- * be asked what was chosen, what is connected here is kept.
+ * The apps that `--only` and `--without` leave as they are, beside the ones they name: each that
+ * has It's add-on here, its hooks waiting on the person, turned off in the app or neither, and
+ * each that the person chose and It has on record, as a setup with nobody to ask keeps them,
+ * whether or not it was found just now: an app whose command failed this once, or is not on the
+ * PATH this runs with, stays chosen, and putting its add-on right, or bringing it up to date, is
+ * left to the connecting, as it is everywhere else. Where It cannot be asked what was chosen,
+ * what is here is kept.
  */
 async function keptConnected(found: readonly HarnessStatus[], named: readonly Harness[]): Promise<Harness[]> {
   const chosen = (await call<{ wanted?: string[] } | null>('query', api.machines.me).catch(() => null))?.wanted ?? []
-  const connected = found.filter((h) => h.addon === 'connected' || h.addon === 'needs_approval').map((h) => h.id)
-  return [...new Set([...connected, ...chosen])].filter((id): id is Harness => (HARNESSES as readonly string[]).includes(id) && !named.includes(id as Harness))
+  const here = found.filter((h) => h.addon === 'connected' || h.addon === 'needs_approval' || h.addon === 'disabled').map((h) => h.id)
+  return [...new Set([...here, ...chosen])].filter((id): id is Harness => (HARNESSES as readonly string[]).includes(id) && !named.includes(id as Harness))
 }
 
 /**
- * What a person is told of the apps that were connected before a setup with `--only` and are
- * seen now not to be, since it did not name them: that what they do on a page one of those apps'
- * conversations made no longer reaches it, and the command that connects them all again. An app
- * that could not be looked at afterwards is not said to be disconnected, since its add-on may
- * still be in it: what went wrong with it was said as it happened. Null where none was.
+ * What `--only` and `--without` choose: the apps `--only` names, every app that is connected or
+ * chosen already, and none that `--without` names. Undefined where neither was given. What it
+ * left as it was is said in a sentence, with how to disconnect it.
+ */
+async function namedChoice(
+  a: Args,
+  found: readonly HarnessStatus[],
+  say: (line: string) => void,
+): Promise<{ wanted: Harness[]; named: Harness[] } | undefined> {
+  const asked = appsAsked(a)
+  if (!asked) return undefined
+  const { named, without } = asked
+  const before = await keptConnected(found, named)
+  const kept = before.filter((id) => !without.includes(id))
+  // An app that `--without` names and that was neither connected nor chosen is said to be left so, and nothing is done to it
+  const absent = without.filter((id) => !before.includes(id))
+  if (absent.length)
+    say(
+      `${listed(absent.map((id) => KNOWN[id].label))} ${absent.length === 1 ? 'was' : 'were'} not connected, so \`--without\` left ${absent.length === 1 ? 'it as it was' : 'them as they were'}.`,
+    )
+  if (kept.length) {
+    const one = kept.length === 1
+    say(
+      `${listed(kept.map((id) => KNOWN[id].label))} ${one ? 'stays' : 'stay'} connected, since \`--only\` and \`--without\` leave as it is every app they do not name. \`${itForAgent()} setup --without ${kept.join(',')}\` disconnects ${one ? 'it' : 'them'}.`,
+    )
+  }
+  return { wanted: [...named, ...kept], named }
+}
+
+/**
+ * What a person is told of the apps that were connected before a setup with `--without` and are
+ * seen now not to be: that what they do on a page one of those apps' conversations made no longer
+ * reaches it, and the command that connects them again. An app that could not be looked at
+ * afterwards is not said to be disconnected, since its add-on may still be in it: what went wrong
+ * with it was said as it happened. Null where none was.
  */
 function disconnectedSaid(found: readonly HarnessStatus[], after: readonly HarnessStatus[], wanted: readonly Harness[]): string | null {
-  const on = (h: HarnessStatus) => h.addon === 'connected' || h.addon === 'needs_approval'
+  const on = (h: HarnessStatus) => h.addon === 'connected' || h.addon === 'needs_approval' || h.addon === 'disabled'
   const gone = found.filter((h) => on(h) && !wanted.includes(h.id) && after.some((now) => now.id === h.id && now.addon === 'not_connected')).map((h) => h.id)
   if (!gone.length) return null
   const one = gone.length === 1
-  return `${listed(gone.map((id) => KNOWN[id].label))} ${one ? 'is' : 'are'} no longer connected, since \`--only\` did not name ${one ? 'it' : 'them'}: what you do on a page that one of ${one ? 'its' : 'their'} conversations made no longer reaches that conversation. \`${itForAgent()} setup --only ${[...wanted, ...gone].join(',')}\` connects ${one ? 'it' : 'them'} again.`
+  return `${listed(gone.map((id) => KNOWN[id].label))} ${one ? 'is' : 'are'} no longer connected: what you do on a page that one of ${one ? 'its' : 'their'} conversations made no longer reaches that conversation. \`${itForAgent()} setup --only ${gone.join(',')}\` connects ${one ? 'it' : 'them'} again.`
 }
 
 /**
@@ -2593,13 +2631,42 @@ function appsNamed(only: string): Harness[] {
   return wanted
 }
 
+/**
+ * The agent apps that `--only` and `--without` name, looked at before anything is begun. An app
+ * named by `--without` may be one whose add-on is held back, since one installed before it was
+ * held back can still be taken out, but it must be one It knows. Naming an app in both, or
+ * giving `--without` with `--all` or `--none`, which choose every app or none, is refused.
+ * Undefined where neither was given, or where `--none` is, which chooses for itself.
+ */
+function appsAsked(a: Args): { named: Harness[]; without: Harness[] } | undefined {
+  const only = text(a, 'only')
+  const leave = text(a, 'without')
+  if (leave !== undefined && (a.flags.all || a.flags.none))
+    throw new Problem(
+      `--without cannot be given with --${a.flags.all ? 'all' : 'none'}.`,
+      'invalid',
+      '`it setup --without <app>` disconnects that app and leaves the others as they are.',
+    )
+  if (a.flags.none || (only === undefined && leave === undefined)) return undefined
+  const named = only === undefined ? [] : appsNamed(only)
+  const without = (leave ?? '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean) as Harness[]
+  if (leave !== undefined && !without.length) throw new Problem('--without names the agent apps to disconnect.', 'invalid', `It knows: ${HARNESSES.join(', ')}`)
+  const bad = without.filter((id) => !(HARNESSES as readonly string[]).includes(id))
+  if (bad.length) throw new Problem(`Not an agent app It knows: ${bad.join(', ')}`, 'invalid', `It knows: ${HARNESSES.join(', ')}`)
+  const both = named.filter((id) => without.includes(id))
+  if (both.length) throw new Problem(`${both.join(', ')} cannot be named by both --only and --without.`, 'invalid')
+  return { named, without }
+}
+
 /** The whole of a setup, once it is known that something is to be set up here: see `setup`. */
 async function settingUp(a: Args, joined: boolean) {
   // What `--only` names is looked at before anything is begun. A first run fetches the backend
   // program, makes this machine's settings and starts It, and one that was then refused for
   // what it was asked to connect would have done all of that and changed what it said it had not.
-  const only = text(a, 'only')
-  if (only !== undefined && !a.flags.none) appsNamed(only)
+  appsAsked(a)
   // Said already by the question of where It is, where that was asked
   const asked = !joined && led(a) && !existsSync(settingsFile()) && !enrolledHere()
   if (asked && (await joinedInstead(a))) return settingUp(a, true)
@@ -2635,26 +2702,13 @@ async function settingUp(a: Args, joined: boolean) {
       )
 
     let wanted: Harness[]
+    /** What `--only` and `--without` chose, where one was given and `--none` was not. */
+    const choice = await namedChoice(a, found, say)
     /** What is said of the apps that were found and left unconnected because nobody was there to be asked. */
     let unasked: string | undefined
     if (a.flags.none) wanted = []
-    else if (only !== undefined) {
-      wanted = appsNamed(only)
-      // Run by an agent, `--only` names the app the agent runs in, as the install guide has it,
-      // and leaves the apps that are connected already as they are: an agent installing It into
-      // a second app would otherwise take It out of the first, and the person would learn of it
-      // only from a page that no longer answers. Changing which apps are connected otherwise is
-      // the person's to do, in a terminal.
-      if (sessionAsked()) {
-        const kept = await keptConnected(found, wanted)
-        if (kept.length) {
-          wanted = [...wanted, ...kept]
-          say(
-            `${listed(kept.map((id) => KNOWN[id].label))} ${kept.length === 1 ? 'stays' : 'stay'} connected as well: run from an agent’s conversation, \`--only\` connects what it names and leaves connected what is connected already. \`${itForAgent()} setup\`, run in a terminal, changes which apps are connected.`,
-          )
-        }
-      }
-    } else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
+    else if (choice) wanted = choice.wanted
+    else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
     else if (!process.stdin.isTTY) {
       // Nobody is here to be asked. What the person chose before stays chosen, and what is
       // connected stays connected: It is asked first, so that nothing is changed where it cannot be
@@ -2688,7 +2742,8 @@ async function settingUp(a: Args, joined: boolean) {
     // person runs this at a terminal: never from an agent's conversation, nor where nobody is
     // there to have asked, as when an upgrade runs setup by itself
     const byPerson = sessionAsked() === undefined && process.stdin.isTTY === true
-    const outcomes = await reconcile(wanted, say, false, byPerson ? wanted : [])
+    // and only the apps it names: one that `--only` or `--without` leaves as it is stays turned off
+    const outcomes = await reconcile(wanted, say, false, byPerson ? (choice?.named ?? wanted) : [])
     woken ??= await chosen(wanted)
     const after = await detectAll()
     // The site is told what was found, and no more than that. Whether this machine can hear a
@@ -2754,8 +2809,8 @@ async function settingUp(a: Args, joined: boolean) {
       if (h.addon === 'needs_approval') note(`${KNOWN[h.id].label}: ${h.detail}`, h.id)
       else if (h.addon === 'connected' && wanted.includes(h.id) && AFTER[h.id] && !before.has(h.id)) note(`${KNOWN[h.id].label}: ${AFTER[h.id]}`, h.id)
     }
-    // An app that `--only` took out, said as what it means for the person, and not only as the progress line that took it out
-    const gone = only !== undefined ? disconnectedSaid(found, after, wanted) : null
+    // An app that `--without` took out, said as what it means for the person, and not only as the progress line that took it out
+    const gone = choice ? disconnectedSaid(found, after, wanted) : null
     if (gone) note(gone)
     // The things left for the person to do, unless everything was just taken out again from
     // an It that was already here
@@ -3568,10 +3623,12 @@ What the person did
   it ack <action-id> [--failed]
 
 This machine
-  it setup [--all | --only a,b | --none] [--name <name>] [--no-service]
+  it setup [--all | --only a,b | --without a,b | --none] [--name <name>] [--no-service]
                                  Set It up on this machine, keep it running in the
                                  background, and connect your agent apps. --yes connects
-                                 every app it would otherwise ask about.
+                                 every app it would otherwise ask about. --only connects
+                                 the apps named, and --without disconnects them; both
+                                 leave the other apps as they are.
   it site [--no-open]            Open It's site in a browser on this machine, and pair that browser.
                                  --no-open only prints the address.
   it network [on | off | tailscale | internet]
