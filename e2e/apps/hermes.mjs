@@ -30,8 +30,9 @@
 // by running `it patch`, and the page's state and the page in the browser show the change. A
 // second click must then arrive the same way.
 //
-// Last, the terminal and Hermes's gateway are closed, and the button is pressed once with YOLO
-// chosen for Hermes on the Machines page and once with Approvals. Auto-wake reopens the
+// Last, the terminal and Hermes's gateway are closed, and the button is pressed once with nothing
+// chosen for Hermes, which is YOLO, its starting value, and once with Approvals chosen on the
+// Machines page. Auto-wake reopens the
 // conversation each time, and its turn runs `rm -r` on a folder, which Hermes flags as dangerous:
 // in YOLO the folder goes, and in Approvals Hermes refuses the command. A conversation that
 // Hermes's gateway holds, as from Hermes 0.22.7, keeps its own approvals: in YOLO it is reopened
@@ -552,8 +553,9 @@ try {
 
   // ---------- a conversation that is closed, reopened in each mode chosen for Hermes ----------
   // The terminal is closed, and Hermes's gateway with it, so that nothing of Hermes is listening.
-  // Auto-wake then reopens the conversation with `hermes chat --resume`, in the mode chosen on the
-  // Machines page, and the reopened turn runs `rm -r` on a folder, which Hermes flags as dangerous.
+  // Auto-wake then reopens the conversation with `hermes chat --resume`, first with nothing chosen,
+  // which is YOLO, Hermes's starting value, and then with Approvals chosen on the Machines page, and
+  // the reopened turn runs `rm -r` on a folder, which Hermes flags as dangerous.
   // In YOLO Hermes runs it, and in Approvals it refuses it, since nobody is there to approve it.
   // Either way the turn goes on to change the page. A conversation that Hermes's gateway holds, as
   // from Hermes 0.22.7, keeps the approvals it was started with, Hermes's own for this one: It
@@ -568,16 +570,16 @@ try {
     const inGateway = session.startsWith('local-')
     note(`the conversation is ${inGateway ? 'held by Hermes’s gateway, and keeps its own approvals' : 'Hermes’s own, and takes the mode chosen'}`)
     const stopButton = tab.locator('.page-nav button[aria-label="Stop the agent"]')
-    for (const [mode, label] of [
-      ['yolo', 'YOLO'],
-      ['approvals', 'Approvals'],
+    for (const [mode, label, choose] of [
+      ['yolo', 'YOLO, the starting value, with nothing chosen', false],
+      ['approvals', 'Approvals', true],
     ]) {
       const deletes = mode === 'yolo' && !inGateway
       const reopens = mode === 'yolo' || !inGateway
       const end = Date.now() + 90_000
       while ((await stopButton.count()) > 0 && Date.now() < end) await sleep(250)
       await stopGateway()
-      check(`the Machines page takes ${label} for Hermes`, await chooseWakeMode(tab.context(), pairing, 'hermes', mode))
+      if (choose) check(`the Machines page takes ${label} for Hermes`, await chooseWakeMode(tab.context(), pairing, 'hermes', mode))
       const folder = path.join(folders.work, `woken-${mode}`)
       mkdirSync(folder, { recursive: true })
       wakeDelete = { folder, mode, said: null }

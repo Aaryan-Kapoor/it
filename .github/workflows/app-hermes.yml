@@ -18,7 +18,8 @@ name: Hermes Agent, the real app
 #     click, which the stand-in answers with `it patch`, and the page shows it. Where Hermes
 #     refuses the add-on, the click must wait until the command that allows it has been run;
 #   - closes the terminal and Hermes's gateway, and has Auto-wake reopen the conversation once
-#     with YOLO chosen for Hermes on the Machines page and once with Approvals, each turn running a
+#     with nothing chosen for Hermes, which is YOLO, and once with Approvals chosen on the Machines
+#     page, each turn running a
 #     command Hermes flags as dangerous: YOLO runs it and Approvals refuses it, and a conversation
 #     Hermes's gateway holds is reopened with its own approvals in YOLO and not at all in
 #     Approvals. Hermes before 0.20.5 cannot be reopened, and that part is not run there.
