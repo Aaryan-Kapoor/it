@@ -5567,7 +5567,10 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
       try {
         const [claude] = await closedClaude()
         await until(() => stand.t3.asked.length >= 1)
-        clock.on(10_000)
+        // A pass past the five seconds it waits for T3 Code as any click does, and then the rest
+        clock.on(5_500)
+        await pause(1100)
+        clock.on(4_500)
         await pause(2000)
         expect(reopenedFor()).toEqual([])
         clock.on(5_500)
@@ -5609,6 +5612,35 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     }
   }, 30_000)
 
+  test('a click that waited longer than that for another reason, as while Auto-wake was off, is still given ten seconds for T3 Code once it could be reopened', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    try {
+      await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+      // Auto-wake is off for Claude Code on this machine
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [] })
+      const claude = { ...click(9), session: { harness: 'claude-code', id: '11111111-2222-4333-8444-000000000009' } }
+      offered(claude)
+      await until(() => stand.t3.asked.length >= 1)
+      for (let i = 0; i < 6; i++) {
+        clock.on(10_000)
+        await pause(1100)
+      }
+      expect(reopenedFor()).toEqual([])
+      // A minute later the person turns it on, and T3 Code has still not said
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 120_000 }] })
+      await until(() => holdsBack().some((h) => h.why === T3_CHECKING), 5000)
+      clock.on(9_000)
+      await pause(1500)
+      expect(reopenedFor()).toEqual([])
+      clock.on(1_500)
+      await until(() => reopenedFor().length === 1, 5000)
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
   test('clicks whose searches drop each other again and again, as large searches do where they hold more thread ids than they may together, are reopened within fifteen seconds all the same', async () => {
     const { T3_HELD_MOST } = await import('./src/t3')
     withT3Code()
@@ -5629,7 +5661,9 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
       // Begun again from nothing, over and over
       expect(new Set(stand.t3.asked.map((a) => a.search)).size).toBeGreaterThan(2)
       expect(reopenedFor()).toEqual([])
-      clock.on(15_500)
+      clock.on(5_500)
+      await pause(1100)
+      clock.on(10_000)
       await until(() => reopenedFor().length >= 2, 6000)
       expect(new Set(reopenedFor())).toEqual(new Set(clicks.map((c) => c.session.id)))
     } finally {

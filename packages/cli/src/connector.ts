@@ -1216,7 +1216,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    */
   const T3_ASKED_MS = 5_000
   /**
-   * How long, from when a click first asks, a Claude Code or Codex conversation is kept from
+   * How long, from when a click's wait begins (`t3HoldFrom`), which is when it first asked where
+   * it could be reopened from then on, a Claude Code or Codex conversation is kept from
    * being reopened while T3 Code has yet to say whether one of its threads holds it, and every
    * thread that works in the conversation's folder has not yet been read. Past that the click
    * goes the way it would without T3 Code. T3 Code's real server listed three thousand threads in
@@ -1241,15 +1242,25 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     return search !== undefined && t3NearRead(search)
   }
   /**
-   * When each click first asked T3 Code which thread holds its conversation, by the clock that
-   * only goes forward, which its wait before a reopening is counted from. Unlike `t3Waits` it is
-   * kept while the click is away from this machine, as while it is claimed for a reopening, or a
-   * reopening for it runs and fails, so that a click that comes back is not given the wait again:
-   * it is let go of a while after the click is no longer offered here.
+   * When each click's wait for T3 Code before a reopening began (`from`), and when it was last
+   * offered here (`seen`), by the clock that only goes forward. The wait begins when the click
+   * could first be reopened, counted back to when it first asked T3 Code, but by no more than
+   * the time a click waits for T3 Code to name a thread (`T3_ASKED_MS`): a click that waited for
+   * another reason, as with Auto-wake off, is still given T3 Code's time once it could be
+   * reopened. Unlike `t3Waits` it is kept while the click is away from this machine, as while it
+   * is claimed for a reopening, or a reopening for it runs and fails, so that a click that comes
+   * back is not given the wait again: it is let go of a while after the click was last offered.
    */
-  const t3HoldFrom = new Map<string, number>()
-  /** How long after its wait began a click no longer offered here is let go of. */
+  const t3HoldFrom = new Map<string, { from: number; seen: number }>()
+  /** How long after it was last offered here a click's wait is let go of. */
   const T3_HOLD_KEPT_MS = 30 * 60_000
+  /** When a click's wait for T3 Code before a reopening began, which is now where it has not begun. */
+  const t3HoldStart = (click: Offered): number => {
+    const now = steady()
+    const asked = t3Waits.get(click.id)
+    if (!t3HoldFrom.has(click.id)) t3HoldFrom.set(click.id, { from: Math.max(asked ?? now, now - T3_ASKED_MS), seen: now })
+    return t3HoldFrom.get(click.id)!.from
+  }
   /** The clicks whose reopening has been said to wait for T3 Code, and those whose wait for it has been said to be over. */
   const t3HeldSaid = new Set<string>()
   const t3OverSaid = new Set<string>()
@@ -1409,24 +1420,25 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    * conversation meanwhile, or a listing may have found a thread of its folder changed.
    */
   const t3Unsure = (click: Offered, key: string): boolean => {
+    const from = t3HoldStart(click)
     if (!t3Undecided(key)) return false
     if (t3Only(key)) return true
-    if (!t3HoldFrom.has(click.id)) t3HoldFrom.set(click.id, steady())
-    return steady() - t3HoldFrom.get(click.id)! < T3_UNDECIDED_MS
+    return steady() - from < T3_UNDECIDED_MS
   }
   /**
    * Whether a click is kept from reopening its conversation for now, because T3 Code has yet to
    * say whether one of its threads holds it (`t3Undecided`). One whose clicks go to a thread and
-   * nowhere else always is. Any other is kept for `T3_UNDECIDED_MS` from when the click first
-   * asked, and its page says meanwhile that It is checking: past that it is reopened as it would
-   * be without T3 Code. Each is said once in the log, by code and count.
+   * nowhere else always is. Any other is kept for `T3_UNDECIDED_MS` from when its wait began
+   * (`t3HoldFrom`), which is when it first asked where it could be reopened from then on, and its
+   * page says meanwhile that It is checking: past that it is reopened as it would be without T3
+   * Code. Each is said once in the log, by code and count.
    */
   const t3HoldsBack = (click: Offered, key: string): boolean => {
+    // Begun the first time it could be reopened, whatever T3 Code has said by then
+    const from = t3HoldStart(click)
     if (!t3Undecided(key)) return false
     if (t3Only(key)) return true
-    // From when the click first asked T3 Code, where it did
-    if (!t3HoldFrom.has(click.id)) t3HoldFrom.set(click.id, steady())
-    const waited = steady() - t3HoldFrom.get(click.id)!
+    const waited = steady() - from
     if (waited >= T3_UNDECIDED_MS) {
       if (!t3OverSaid.has(click.id)) {
         t3OverSaid.add(click.id)
@@ -1503,8 +1515,6 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     let until = 0
     if (click !== undefined) {
       if (!t3Waits.has(click)) t3Waits.set(click, steady())
-      // And when it first asked at all, which its wait before a reopening is counted from, kept while the click is away
-      if (!t3HoldFrom.has(click)) t3HoldFrom.set(click, steady())
       until = t3Waits.get(click)! + T3_ASKED_MS
     }
     // Not once every thread in the conversation's folder has been read and none holds it
@@ -3947,8 +3957,9 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       now = Date.now()
 
       for (const id of t3Waits.keys()) if (!offeredHere.has(id)) t3Waits.delete(id)
-      for (const [id, from] of t3HoldFrom)
-        if (!offeredHere.has(id) && steady() - from > T3_HOLD_KEPT_MS) {
+      for (const [id, held] of t3HoldFrom)
+        if (offeredHere.has(id)) held.seen = steady()
+        else if (steady() - held.seen > T3_HOLD_KEPT_MS) {
           t3HoldFrom.delete(id)
           t3HeldSaid.delete(id)
           t3OverSaid.delete(id)
