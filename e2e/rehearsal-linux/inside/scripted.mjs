@@ -1203,11 +1203,11 @@ async function IMAGE() {
   if (pair) await p.goto(pair).catch(() => {})
   await sleep(8000)
   await startApp(who, counts)
-  if (variant === 'full') {
+  if (variant === 'full' || variant === 'approve') {
     await type('/permissions')
     await sleep(4000)
     const menu = screen().replace(/\s+$/, '').split('\n').slice(-20).join('\n')
-    const line = menu.split('\n').find((l) => /full access/i.test(l)) ?? ''
+    const line = menu.split('\n').find((l) => (variant === 'full' ? /full access/i : /approve for me/i).test(l)) ?? ''
     const n = /(\d)\./.exec(line)?.[1]
     step("Codex's /permissions screen", { menu, chose: line.trim() })
     if (n) await type(n, { enter: false })
@@ -1252,8 +1252,9 @@ async function IMAGE() {
     await answerApp(who, counts).catch(() => {})
     const b = await bar(p)
     if (b && b !== bars.at(-1)) bars.push(b)
-    const now = await shown(p).catch(() => before)
-    if (now !== before && /\bred\b|cross|plus sign/i.test(now) && !/\bred\b|cross|plus sign/i.test(before)) {
+    const now = (await shown(p).catch(() => before)).replace(/red\.png/gi, '')
+    const seen = /white cross|red (background|square|field)|\bcross\b|plus sign|flag/i
+    if (now !== before && seen.test(now) && !seen.test(before.replace(/red\.png/gi, ''))) {
       ok = true
       break
     }
