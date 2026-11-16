@@ -566,7 +566,15 @@ export function wakeModeOf(kept: readonly { harness: string; mode: string }[] | 
  */
 export const WAKE_NOTE_WHYS = ['refused', 'unreviewed', 'older', 'raised'] as const
 export type WakeNoteWhy = (typeof WAKE_NOTE_WHYS)[number]
-const APP_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
+const APP_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi', opencode: 'OpenCode', hermes: 'Hermes' }
+/**
+ * The agent apps whose modes a machine's It knows, and so reopens in the mode chosen, from what it
+ * says (`modes`): the apps it names, and Codex alone where it says only that it knows modes, as an
+ * It did that knew Codex's alone. An app it does not name it runs as an It from before the choice.
+ */
+export function modesKnown(said: boolean | readonly string[] | null | undefined): readonly string[] {
+  return said === true ? ['codex'] : Array.isArray(said) ? said : []
+}
 /** Modes a conversation can have been in that are not offered as a choice, by the app's own names for them. */
 const OTHER_MODES: Record<string, string> = { plan: 'Plan' }
 const modeName = (harness: string, mode: string): string =>

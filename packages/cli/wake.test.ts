@@ -20,7 +20,7 @@ import fs, {
 import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
-import { describeClick, WAKE_MODE_LEGACY, WAKE_MODES, wakeModeBelow, wakeModeOf, wakeNoteFits, wakeNoteText } from '@it/protocol'
+import { describeClick, modesKnown, WAKE_MODE_LEGACY, WAKE_MODES, wakeModeBelow, wakeModeOf, wakeNoteFits, wakeNoteText } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import shims from './fixtures/windows-shims.json'
 import { claimLock } from './src/legacy-lock'
@@ -1412,6 +1412,23 @@ describe('the mode a Claude Code conversation is reopened in', () => {
     expect(wakeNoteText('claude-code', 'refused:auto:acceptEdits')).toBe(
       'Claude Code would not run in Auto here, so It reopened it in Accept edits, which allows less.',
     )
+    // Every app It reopens is named as it names itself, ready for an entry of its own
+    WAKE_MODES.opencode = {
+      default: 'a',
+      choices: [
+        { id: 'b', label: 'B', says: 'b' },
+        { id: 'a', label: 'A', says: 'a' },
+      ],
+    }
+    try {
+      expect(wakeNoteText('opencode', 'refused:b:a')).toBe('OpenCode would not run in B here, so It reopened it in A, which allows less.')
+    } finally {
+      delete WAKE_MODES.opencode
+    }
+    // What a machine says it knows: the apps it names, and Codex alone for its old word
+    expect(modesKnown(['codex', 'claude-code'])).toEqual(['codex', 'claude-code'])
+    expect(modesKnown(true)).toEqual(['codex'])
+    expect(modesKnown(undefined)).toEqual([])
   })
 
   test('a conversation reopened in a mode that allows more than the one it was last in is said so on the page, and one reopened in less is not', () => {

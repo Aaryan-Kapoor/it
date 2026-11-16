@@ -64,8 +64,8 @@ interface Machine {
   wanted: string[]
   wakes: { harness: string; since: number }[]
   wakeModes?: { harness: string; mode: string }[]
-  /** Whether its It reopens a conversation in the mode chosen for it: one from before the choice runs each app as it always did. */
-  modes?: boolean
+  /** The apps its It reopens in the mode chosen for them: an app it does not name, it runs as an It from before the choice. */
+  modes?: string[]
 }
 
 /**
@@ -559,7 +559,7 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                     )}
                     {/* One line, for the mode in force now: on a machine whose It is from before the choice, what that It does instead */}
                     <span className="row-sub wake-mode-say">
-                      {m.modes === false
+                      {m.modes !== undefined && !m.modes.includes(h.id)
                         ? chosenHere
                           ? 'This machine runs an older It, which holds to this choice only once it is updated.'
                           : `This machine runs an older It, which reopens ${LABEL[h.id] ?? h.id} as it always did until it is updated.`

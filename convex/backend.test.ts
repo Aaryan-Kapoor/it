@@ -2897,7 +2897,7 @@ describe('clicks and their delivery', () => {
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'codex', on: true })
     const listed = async () =>
       (await alice.browser.query(api.machines.list, {})).find((x: { id: string }) => x.id === m.id) as { wakeModes: { harness: string; mode: string }[] }
-    const begin = (more = {}) => m.as.mutation(api.machines.runBegan, { for: thread, ids: [], modes: true, ...more })
+    const begin = (more = {}) => m.as.mutation(api.machines.runBegan, { for: thread, ids: [], modes: ['codex', 'claude-code'], ...more })
     // Nothing chosen: a run begins in the app's default, as on every machine before there was a choice
     expect((await listed()).wakeModes).toEqual([])
     expect(await begin()).toEqual({ stopped: false, mode: 'approve-for-me' })
@@ -2939,7 +2939,7 @@ describe('clicks and their delivery', () => {
     expect(await m.as.mutation(api.machines.runNoted, note)).toEqual({ noted: true })
     expect((await alice.browser.query(api.artifacts.get, { slug: 'reviewed' })).run).toMatchObject({ note: 'refused:full-access:approve-for-me' })
     // Another app, which has no choice, is told nothing of one
-    expect(await m.as.mutation(api.machines.runBegan, { for: { harness: 'pi', id: 'pi-1' }, modes: true })).toEqual({ stopped: false })
+    expect(await m.as.mutation(api.machines.runBegan, { for: { harness: 'pi', id: 'pi-1' }, modes: ['codex', 'claude-code'] })).toEqual({ stopped: false })
   })
 
   test('the backend does not let a machine whose It is from before the choice of mode run Codex where it may run more than the owner chose, and the page says where it runs less', async () => {
@@ -3013,7 +3013,7 @@ describe('clicks and their delivery', () => {
   test('a reopened Claude Code conversation runs in the mode the owner chose for Claude Code, Auto where none was, and the page says where it ran in less than chosen or more than the conversation was last in', async () => {
     const { t, alice, m } = await setup()
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
-    const begin = (more = {}) => m.as.mutation(api.machines.runBegan, { for: SESSION, ids: [], modes: true, ...more })
+    const begin = (more = {}) => m.as.mutation(api.machines.runBegan, { for: SESSION, ids: [], modes: ['codex', 'claude-code'], ...more })
     const page = async () => (await alice.browser.query(api.artifacts.get, { slug: 'plan' })).run as { note: string | null } | null
     // Nothing chosen: Auto
     expect(await begin()).toEqual({ stopped: false, mode: 'auto' })
@@ -3049,6 +3049,28 @@ describe('clicks and their delivery', () => {
     expect(await page()).toBeNull()
   })
 
+  test('a machine says which apps it reopens in the mode chosen: an app it does not name is run as by an It from before the choice, and its old word that it knows modes is taken for Codex alone', async () => {
+    const { alice, m } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'claude-code', mode: 'default' })
+    const begin = (modes: boolean | string[]) => m.as.mutation(api.machines.runBegan, { for: SESSION, ids: [], modes })
+    // It names Claude Code: Manual chosen holds
+    expect(await begin(['codex', 'claude-code'])).toEqual({ stopped: false, mode: 'default' })
+    // It names Codex alone, or says only that it knows modes, as an It did that knew Codex's alone: Claude Code is run as an older It runs it, so Manual chosen is not let run
+    expect(await begin(['codex'])).toEqual({ stopped: false, off: true })
+    expect(await begin(true)).toEqual({ stopped: false, off: true })
+    // And what it says in its reports is kept, for the Machines page, with the old word read the same way
+    await m.as.mutation(api.machines.report, { connectorVersion: '9.9.9', harnesses: [], modes: true })
+    expect(((await alice.browser.query(api.machines.list, {})) as { id: string; modes: readonly string[] }[]).find((x) => x.id === m.id)?.modes).toEqual([
+      'codex',
+    ])
+    await m.as.mutation(api.machines.report, { connectorVersion: '9.9.9', harnesses: [], modes: ['codex', 'claude-code'] })
+    expect(((await alice.browser.query(api.machines.list, {})) as { id: string; modes: readonly string[] }[]).find((x) => x.id === m.id)?.modes).toEqual([
+      'codex',
+      'claude-code',
+    ])
+  })
+
   test('a machine whose It is from before the choice reopens Claude Code as it always did where the owner chose nothing, and where they chose a mode it may run more than, it is not let, and the page says which machine to update', async () => {
     const { t, alice, m } = await setup()
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
@@ -3082,7 +3104,10 @@ describe('clicks and their delivery', () => {
     }
     // And a connector that knows modes is let run whatever is chosen
     await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'claude-code', mode: 'default' })
-    expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, ids: [], run: 'new-run', modes: true })).toEqual({ stopped: false, mode: 'default' })
+    expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, ids: [], run: 'new-run', modes: ['codex', 'claude-code'] })).toEqual({
+      stopped: false,
+      mode: 'default',
+    })
   })
 
   test('a stop drops what waits for the conversation on the machine it was stopped on, and nothing of a conversation of the same name on another machine', async () => {
@@ -3090,7 +3115,7 @@ describe('clicks and their delivery', () => {
     const other = await machineOf(t, 'alice', 'desktop')
     const theirs = await publish(other, 'elsewhere', { session: SESSION })
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     const here = (await click('click-0001')).actionId
     const there = (
       await alice.browser.mutation(api.actions.submit, { artifactId: theirs.artifactId, displayKey: displayKey('alice'), envelope: envelope('click-0002') })
@@ -3111,7 +3136,7 @@ describe('clicks and their delivery', () => {
     const { t, alice, m, p, click } = await setup()
     const second = await publish(m, 'second', { session: SESSION })
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     const here = (await click('click-0001')).actionId
     const there = (
       await alice.browser.mutation(api.actions.submit, { artifactId: second.artifactId, displayKey: displayKey('alice'), envelope: envelope('click-0002') })
@@ -3190,7 +3215,7 @@ describe('clicks and their delivery', () => {
   test('a stop drops everything that was waiting for the conversation by then, however much that is, and nothing done on the page after it', async () => {
     const { t, alice, m, p } = await setup()
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     // More waiting than one step drops: some that nobody has yet, and some a machine has in hand
     const made = Date.now()
     await t.run(async (ctx) => {
@@ -3259,7 +3284,7 @@ describe('clicks and their delivery', () => {
     const oldest = await publish(m, 'oldest', { session: SESSION })
     const older = await publish(m, 'older', { session: SESSION })
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     const made = Date.now()
     // Each carries as much as an action may
     const payload = JSON.stringify({ text: 'x'.repeat(LIMITS.actionPayloadBytes - 11) })
@@ -3307,7 +3332,7 @@ describe('clicks and their delivery', () => {
     const another = { harness: 'claude-code', id: 'sess-2' }
     const other = await publish(m, 'other', { session: another })
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     const made = Date.now()
     await t.run(async (ctx) => {
       const put = async (artifactId: string, of: { harness: string; id: string }, n: number) => {
@@ -3517,11 +3542,11 @@ describe('clicks and their delivery', () => {
     const first = (await click('click-run-0001')).actionId
     await m.as.mutation(api.delivery.claim, { ids: [first as never], for: SESSION })
     const began = Date.now()
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     expect(await onPage()).toMatchObject({ since: began, stopping: false })
     expect((await m.as.query(api.machines.me, {})).runs).toEqual([{ harness: 'claude-code', sessionId: 'sess-1', since: began }])
     // Said twice, it is one run
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     expect((await m.as.query(api.machines.me, {})).runs.length).toBe(1)
     await vi.advanceTimersByTimeAsync(5000)
     const waiting = (await click('click-run-0002')).actionId
@@ -3564,7 +3589,7 @@ describe('clicks and their delivery', () => {
     const next = (await click('click-run-0003')).actionId
     expect(await offered()).toEqual([next])
     // A machine with nothing named says that nothing it reopened is running
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     await m.as.mutation(api.machines.runEnded, {})
     expect((await m.as.query(api.machines.me, {})).runs).toEqual([])
     // Why a conversation could not be reopened is said on its page, and taken back once it has run
@@ -3583,7 +3608,7 @@ describe('clicks and their delivery', () => {
     expect(await code(alice.browser.mutation(api.machines.wakeFailed, { for: SESSION, why: 'x' }))).toBe('forbidden')
     // Another person can stop nothing of it, and a machine cannot stop for a person
     const bob = await person(t, 'bob')
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     expect(await code(bob.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId }))).toBe('not_found')
     expect(await code(m.as.mutation(api.artifacts.stop, { artifactId: p.artifactId }))).toBe('forbidden')
     expect(await onPage()).toMatchObject({ stopping: false })
@@ -3591,22 +3616,22 @@ describe('clicks and their delivery', () => {
 
   test('a machine that says a stopped run is over is told it was stopped, however often it says so, and of that run alone', async () => {
     const { alice, m, p } = await setup()
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION, run: 'stopped-run' })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION, run: 'stopped-run' })
     expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
     expect(await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'stopped-run' })).toEqual({ stopped: true })
     // Said again, as by a machine that did not hear the answer: the run is gone, and the stop is still told
     expect(await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'stopped-run' })).toEqual({ stopped: true })
     // Another run of the same conversation was not stopped
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION, run: 'next-run' })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION, run: 'next-run' })
     expect(await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'next-run' })).toEqual({ stopped: false })
   })
 
   test('the ending of an earlier run of a conversation, told late, does not take away the run that has begun since, and an ending that names none is never that of a named run', async () => {
     const { m } = await setup()
     const runs = async () => (await m.as.query(api.machines.me, {})).runs.map((r) => (r as { run?: string }).run ?? null)
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION, run: 'first' })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION, run: 'first' })
     // The same conversation is reopened again before the first run's ending has been heard
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION, run: 'second' })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION, run: 'second' })
     expect(await runs()).toEqual(['second'])
     await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'first' })
     await m.as.mutation(api.machines.runEnded, { for: SESSION })
@@ -3614,7 +3639,7 @@ describe('clicks and their delivery', () => {
     await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'second', ok: true })
     expect(await runs()).toEqual([])
     // A run begun with no name, as an earlier It begins them, is ended by an ending with none and by no other
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'second' })
     expect(await runs()).toEqual([null])
     await m.as.mutation(api.machines.runEnded, { for: SESSION })
@@ -3626,7 +3651,7 @@ describe('clicks and their delivery', () => {
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
     const listed = async () => (await m.as.query(api.machines.me, {})).runs.map((r) => [(r as { run?: string }).run ?? null, r.stop ?? false])
     // The run before is over on its machine, and It still has it down as running: its ending has not been heard
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION, run: 'before' })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION, run: 'before' })
     // The next thing done on the page is taken by the machine, which gets a new run ready for it
     const waiting = (await click('click-0001')).actionId
     await m.as.mutation(api.delivery.claim, { ids: [waiting as never], for: SESSION })
@@ -3634,18 +3659,30 @@ describe('clicks and their delivery', () => {
     // The person presses Stop, beside the run that is still listed
     expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
     // Told now that the new run begins for that click, It says the click was stopped, and lists no new run
-    expect(await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION, run: 'next', ids: [waiting] })).toEqual({ stopped: true })
+    expect(await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION, run: 'next', ids: [waiting] })).toEqual({
+      stopped: true,
+    })
     expect(await listed()).toEqual([['before', true]])
     // What is done after the stop is reopened for as before, and a run told of with nothing named begins as it always did
     await vi.advanceTimersByTimeAsync(1000)
     const after = (await click('click-0002')).actionId
-    expect(await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION, run: 'next', ids: [after] })).toEqual({ stopped: false, mode: 'auto' })
+    expect(await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION, run: 'next', ids: [after] })).toEqual({
+      stopped: false,
+      mode: 'auto',
+    })
     expect(await listed()).toEqual([['next', false]])
-    expect(await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION, run: 'another' })).toEqual({ stopped: false, mode: 'auto' })
+    expect(await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION, run: 'another' })).toEqual({
+      stopped: false,
+      mode: 'auto',
+    })
     // A click that is no longer there is not there to be reopened for: its page was deleted meanwhile, and what the stop said of it went with it
-    expect(await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION, run: 'another', ids: ['not an id'] })).toEqual({ stopped: true })
+    expect(await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION, run: 'another', ids: ['not an id'] })).toEqual({
+      stopped: true,
+    })
     await alice.browser.mutation(api.artifacts.remove, { artifactId: p.artifactId })
-    expect(await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION, run: 'another', ids: [after] })).toEqual({ stopped: true })
+    expect(await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION, run: 'another', ids: [after] })).toEqual({
+      stopped: true,
+    })
     expect(await listed()).toEqual([['another', false]])
   })
 
@@ -3656,10 +3693,16 @@ describe('clicks and their delivery', () => {
     await m.as.mutation(api.delivery.claim, { ids: [waiting as never], for: SESSION })
     // The person switches it off, and the machine, which has not heard yet, says the run begins
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: false })
-    expect(await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION, run: 'next', ids: [waiting] })).toEqual({ stopped: false, off: true })
+    expect(await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION, run: 'next', ids: [waiting] })).toEqual({
+      stopped: false,
+      off: true,
+    })
     expect((await m.as.query(api.machines.me, {})).runs).toEqual([])
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
-    expect(await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION, run: 'next', ids: [waiting] })).toEqual({ stopped: false, mode: 'auto' })
+    expect(await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION, run: 'next', ids: [waiting] })).toEqual({
+      stopped: false,
+      mode: 'auto',
+    })
   })
 
   test('clicks that were set aside, or are another machine’s, never hide one a listening machine may take', async () => {
@@ -6243,7 +6286,7 @@ describe('when a click was made', () => {
   test('a click made before Stop and sent after it goes with the stop, however many there are, and one made after Stop is delivered', async () => {
     const { t, alice, m, p, click, row, offered, paged } = await setup()
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     // Ten clicks and a message are made while It cannot be reached, and saved in the browser
     const before = Date.now()
     await vi.advanceTimersByTimeAsync(5 * MINUTE)
@@ -6278,7 +6321,7 @@ describe('when a click was made', () => {
   test('a click made just after Stop is never taken for one made before it, whatever the browser’s idea of the time', async () => {
     const { alice, m, p, click, offered } = await setup()
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     // The browser's own clock, an hour ahead of the backend's, and its clock that only goes forward, as the site tells the backend's time by them
     let mono = 1000
     let wall = Date.now() + HOUR
@@ -6333,7 +6376,7 @@ describe('when a click was made', () => {
   test('a heartbeat the machine slept through is never taken for a short one, so a click made just after Stop is delivered', async () => {
     const { alice, m, p, click, offered } = await setup()
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     // The browser's clocks, of which the one that only goes forward stands still while the machine sleeps, as it does in some browsers
     let mono = 1000
     let wall = Date.now()
@@ -6404,7 +6447,7 @@ describe('when a click was made', () => {
   test('a click is dropped by a Stop only where it was certainly made before it, and one that may have been made after is delivered', async () => {
     const { alice, m, p, click, row } = await setup()
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     // Made a second before Stop, and arriving a second after it: it goes with the stop
     const made = Date.now()
     await vi.advanceTimersByTimeAsync(1000)
@@ -6506,7 +6549,7 @@ describe('when a click was made', () => {
     expect((await row(first.actionId)).madeAt).toBe(made)
     // Made before a stop and sent after it, and then sent again: one click, stopped
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     const before = Date.now()
     await vi.advanceTimersByTimeAsync(MINUTE)
     await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
@@ -6521,7 +6564,7 @@ describe('when a click was made', () => {
     const { t, m, p, row } = await setup()
     const screen = await paired(t, 'alice', 'owner', displayKey('kitchen'))
     await screen.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
-    await m.as.mutation(api.machines.runBegan, { modes: true, for: SESSION })
+    await m.as.mutation(api.machines.runBegan, { modes: ['codex', 'claude-code'], for: SESSION })
     const note = await m.as.mutation(api.notifications.send, { text: 'Deploy?', slug: 'plan', buttons: [{ label: 'Yes', action: 'yes' }] })
     const pressed = Date.now()
     await vi.advanceTimersByTimeAsync(MINUTE)

@@ -31,6 +31,7 @@ import {
   TAKES,
   TURN_ON_MS,
   TURNS_ON,
+  WAKE_MODES,
   WAKE_MOST,
   WAKES,
   wakeModeBelow,
@@ -356,6 +357,9 @@ function claimedAndLeft(): string[] {
   return [...out]
 }
 
+/** The agent apps whose modes this It knows, and reopens in the mode chosen for them: said to It in reports and as each run begins. */
+const MODES_KNOWN = Object.keys(WAKE_MODES)
+
 /**
  * What a machine tells It of itself in a report, fullest first, each to be made in turn where It
  * refuses the one before, as an It older than this program does. The fullest says as well that
@@ -374,7 +378,7 @@ export function reports<T extends object, U extends object>(
   // Each word is let go of by itself: an It that takes the word from Windows and is older than the choice of mode is still told the first
   const windows = platform === 'win32' && !lately.unsaid
   return [
-    ...(lately.unmoded ? [] : [{ ...full, ...(windows ? { reopens: true } : {}), modes: true }]),
+    ...(lately.unmoded ? [] : [{ ...full, ...(windows ? { reopens: true } : {}), modes: MODES_KNOWN }]),
     ...(windows ? [{ ...full, reopens: true }] : []),
     full,
     plainest,
@@ -2969,8 +2973,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         for: session,
         run: runId,
         ids,
-        // This It reopens a conversation in the mode chosen for it
-        modes: true,
+        // The apps this It reopens in the mode chosen for them
+        modes: MODES_KNOWN,
       }).then(
         // Stopped meanwhile, or reopening switched off since this machine last heard: either way nothing is started
         (said) => {

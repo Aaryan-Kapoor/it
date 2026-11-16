@@ -291,7 +291,7 @@ export default defineSchema({
     // The agent apps the person has switched reopening off for on this machine: it is not switched on for them again by anything but the person
     wakesOff: v.optional(v.array(v.string())),
     /** That its connector reopens a conversation in the mode chosen for it, as it says in its reports. */
-    modes: v.optional(v.boolean()),
+    modes: v.optional(v.union(v.boolean(), v.array(v.string()))),
     /**
      * The permission mode the person chose for each agent app's reopened conversations on this
      * machine, by its name (`WAKE_MODES`). An app with none is `automatic` (see `wakeModeOf`). Only

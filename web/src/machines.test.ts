@@ -164,7 +164,7 @@ describe('how a reopened conversation runs, chosen beside an app’s Auto-wake',
         { harness: 'codex', since: NOW },
         { harness: 'pi', since: NOW },
       ],
-      modes: true,
+      modes: ['codex', 'claude-code'],
       ...over,
     })
   const pick = (name: string) => row(name).querySelector<HTMLSelectElement>('.wake-modes select')
@@ -249,34 +249,43 @@ describe('how a reopened conversation runs, chosen beside an app’s Auto-wake',
   })
 
   test('is drawn for any app with an entry, with no code of its own: one mode is shown as its name and its line, not as a drop-down', async () => {
+    // What is there is put back afterwards, so that an entry of Pi's own is left as it was for the tests after
+    const before = WAKE_MODES.pi
     WAKE_MODES.pi = { default: 'only', choices: [{ id: 'only', label: 'As it runs', says: 'Runs as it does in a window.' }] }
     try {
-      machines = [connected()]
+      machines = [connected({ modes: ['codex', 'claude-code', 'pi'] })]
       await shown()
       expect(pick('Pi')).toBeNull()
       expect(row('Pi').querySelector('.wake-mode-one')?.textContent).toBe('As it runs')
       expect(line('Pi')).toBe('Runs as it does in a window.')
       expect(row('Pi').querySelector('.wake-modes label')?.textContent).toBe('How Pi is reopened')
     } finally {
-      delete WAKE_MODES.pi
+      if (before) WAKE_MODES.pi = before
+      else delete WAKE_MODES.pi
     }
   })
 
   test('on a machine whose It is from before the choice, says what that It does in place of the mode’s line', async () => {
-    machines = [connected({ modes: false })]
+    machines = [connected({ modes: ['codex'] })]
     await shown()
     expect(line('Claude Code')).toBe('This machine runs an older It, which reopens Claude Code as it always did until it is updated.')
     act(() => root.unmount())
     host.remove()
-    machines = [connected({ modes: false, wakeModes: [{ harness: 'claude-code', mode: 'default' }] })]
+    machines = [connected({ modes: ['codex'], wakeModes: [{ harness: 'claude-code', mode: 'default' }] })]
     await shown()
     expect(line('Claude Code')).toBe('This machine runs an older It, which holds to this choice only once it is updated.')
   })
 
   test('is shown for no app without an entry, and not where Auto-wake is off', async () => {
-    machines = [connected()]
-    await shown()
-    expect(row('Pi').querySelector('.wake-modes')).toBeNull()
+    const before = WAKE_MODES.pi
+    delete WAKE_MODES.pi
+    try {
+      machines = [connected()]
+      await shown()
+      expect(row('Pi').querySelector('.wake-modes')).toBeNull()
+    } finally {
+      if (before) WAKE_MODES.pi = before
+    }
     act(() => root.unmount())
     host.remove()
     machines = [connected({ wakes: [] })]
