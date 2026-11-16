@@ -198,6 +198,9 @@ async function main() {
     // Lingering as a participant's account has it before It: off, until `it setup` turns it on
     exec('rm -f /var/lib/systemd/linger/ana')
     if (app === 'claude' && held) await injectClaudeFile(name, held)
+    // What /login leaves in ~/.claude.json besides the account: onboarding done (no account details),
+    // so a person run starts at Claude Code's own screens and not at a sign-in
+    if (app === 'claude') asAna(`node -e 'const f=process.env.HOME+"/.claude.json";const fs=require("fs");let j={};try{j=JSON.parse(fs.readFileSync(f,"utf8"))}catch{};j.hasCompletedOnboarding=true;fs.writeFileSync(f,JSON.stringify(j,null,2))'`, { quiet: true })
     result.participant = 'released It from itcan.do; the service as it setup registers it; no variable put into the user manager; Claude Code signed in by its own ~/.claude/.credentials.json alone; Codex by its own ~/.codex/auth.json; lingering removed before setup'
   }
   if (app === 'claude' && held && !participant) {
