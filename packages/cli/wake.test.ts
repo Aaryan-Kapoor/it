@@ -1419,12 +1419,18 @@ describe('the mode a Claude Code conversation is reopened in', () => {
     // Manual widened to Auto, where nothing was chosen: said, and in Claude Code's own names
     expect(note({ mode: 'default' })).toEqual({ why: 'raised', mode: 'default', instead: 'auto' })
     expect(wakeNoteText('claude-code', 'raised:default:auto')).toBe(
-      'This conversation was last in Manual mode, and It reopened it in Auto, which lets it do more without asking you. You can choose another mode beside Auto-wake under Machines.',
+      'This conversation was last in Manual, and It reopened it in Auto. To keep it in Manual, choose Manual beside Claude Code’s Auto-wake under Machines.',
+    )
+    // The conversation's own keeps every mode but Manual, which it reopens in Auto
+    expect(wakeNoteText('claude-code', 'raised:dontAsk:auto')).toBe(
+      'This conversation was last in Don’t Ask, and It reopened it in Auto. To keep it in Don’t Ask, choose Don’t Ask or The conversation’s own beside Claude Code’s Auto-wake under Machines.',
     )
     // And under the conversation's own, which raises Manual to Auto; plan mode, below every other, raised to a chosen mode
     expect(note({ wakeMode: 'conversation', mode: 'default' })).toEqual({ why: 'raised', mode: 'default', instead: 'auto' })
     expect(note({ wakeMode: 'acceptEdits', mode: 'plan' })).toEqual({ why: 'raised', mode: 'plan', instead: 'acceptEdits' })
-    expect(wakeNoteText('claude-code', 'raised:plan:acceptEdits')).toContain('last in Plan mode')
+    expect(wakeNoteText('claude-code', 'raised:plan:acceptEdits')).toBe(
+      'This conversation was last in Plan, and It reopened it in Accept edits. To keep it in Plan, choose The conversation’s own beside Claude Code’s Auto-wake under Machines.',
+    )
     expect(note({ wakeMode: 'bypassPermissions', mode: 'acceptEdits' })).toEqual({ why: 'raised', mode: 'acceptEdits', instead: 'bypassPermissions' })
     // The same mode, less, or a mode It does not know of: nothing to say
     for (const over of [{ mode: 'auto' }, { wakeMode: 'default', mode: 'bypassPermissions' }, { wakeMode: 'conversation', mode: 'dontAsk' }, { mode: null }])

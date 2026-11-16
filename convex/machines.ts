@@ -327,9 +327,9 @@ export const turningOn = mutation({
 /** How many conversations a machine may say it is running at once. Its connector runs only a few commands at a time. */
 const RUNS_MOST = 20
 
-/** Why a machine whose It is from before the choice of mode was not let reopen a conversation, as the page says it. */
-const OLDER_IT =
-  'this machine runs an It from before the choice of mode, which cannot reopen it in the one chosen: update It on that machine, or choose another mode under Machines'
+/** Why a machine whose It is from before the choice of mode was not let reopen a conversation, as the page says it: which machine to update, and how. */
+const olderIt = (name: string) =>
+  `${name} runs an It from before the choice of mode, which cannot reopen this conversation in the mode chosen for it. Run \`it upgrade\` on ${name} for the choice to hold there, or choose another mode under Machines`
 
 /** The machine says that it has reopened a conversation, which is running from now until it says otherwise. */
 export const runBegan = mutation({
@@ -360,16 +360,28 @@ export const runBegan = mutation({
     // a moment ago holds for this run
     const mode = wakeModeOf(machine.wakeModes, s.harness)
     // A machine whose It is from before the choice runs the app in its old mode whatever is chosen.
-    // Where what is chosen allows less than that, it is not let start a run, and says why on the
-    // page; where it allows more, the run goes ahead and the page says the machine runs less
+    // Where the person has chosen a mode that allows less than that, it is not let start a run, and
+    // the page says which machine to update; where it allows more, the run goes ahead and the page
+    // says the machine runs less. Where they have chosen nothing, it runs as that It always ran it,
+    // and nothing is said: an update of the It a machine joined never takes Auto-wake away from it
     const legacy = WAKE_MODE_LEGACY[s.harness as Harness]
+    const chosen = (machine.wakeModes ?? []).some((m) => m.harness === s.harness)
     let said = {}
-    if (mode !== null && legacy && !modes && mode !== legacy) {
+    if (mode !== null && legacy && !modes && chosen && mode !== legacy) {
       if (wakeModeRank(s.harness, mode) > wakeModeRank(s.harness, legacy)) {
         const others = (machine.fails ?? []).filter((f) => f.harness !== s.harness || f.sessionId !== s.id)
         // Kept through that It's word that nothing ran (`runEnded`), which would otherwise take it away
         await ctx.db.patch(machine._id, {
-          fails: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), at: Date.now(), why: OLDER_IT, kept: true }].slice(-RUNS_MOST),
+          fails: [
+            ...others,
+            {
+              harness: s.harness.slice(0, 40),
+              sessionId: s.id.slice(0, 200),
+              at: Date.now(),
+              why: olderIt((machine.name ?? 'This machine').slice(0, 60)),
+              kept: true,
+            },
+          ].slice(-RUNS_MOST),
         })
         return { stopped: false, off: true }
       }

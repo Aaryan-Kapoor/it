@@ -471,6 +471,9 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
             // The mode its reopened conversations run in: only for an app that offers a choice, and only said where Auto-wake is on
             const modes = wakeable && wakes ? WAKE_MODES[h.id as AppName] : undefined
             const mode = wakeModeOf(m.wakeModes, h.id)
+            // Whether the person has chosen a mode for it here, or the app's default is in force only because nothing was chosen.
+            // Showing the choice never chooses: only a click does
+            const chosenHere = (m.wakeModes ?? []).some((w) => w.harness === h.id)
             return (
               <li key={h.id} className="row">
                 <label className="row-main switch-row">
@@ -534,10 +537,15 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                           value={c.id}
                           checked={mode === c.id}
                           onChange={() => act(chooseMode({ machineId, harness: h.id, mode: c.id }))}
+                          // The starting value, clicked, becomes a choice of the person's own, which a machine on an older It then holds to
+                          onClick={() => {
+                            if (!chosenHere && mode === c.id) act(chooseMode({ machineId, harness: h.id, mode: c.id }))
+                          }}
                         />
                         <span className="wake-mode-name">
                           {c.label}
                           {c.recommended && <span className="wake-mode-tag">Recommended</span>}
+                          {!chosenHere && c.id === modes.default && <span className="wake-mode-tag">Starting value</span>}
                         </span>
                         <span className="row-sub wake-mode-say">{c.says}</span>
                       </label>

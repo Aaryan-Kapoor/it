@@ -595,8 +595,15 @@ export function wakeNoteText(harness: string, note: string | null | undefined): 
   const app = APP_NAMES[harness] ?? harness
   if (why === 'refused')
     return `${app} would not run in ${modeName(harness, mode)} here, so It reopened it in ${modeName(harness, instead)}, which allows less.`
-  if (why === 'raised')
-    return `This conversation was last in ${modeName(harness, mode)} mode, and It reopened it in ${modeName(harness, instead)}, which lets it do more without asking you. You can choose another mode beside Auto-wake under Machines.`
+  if (why === 'raised') {
+    // How to keep a conversation in the mode it was in: that mode chosen, where it is a choice, or the conversation's own,
+    // which keeps every mode but one that asks, which it reopens in Auto
+    const keep = [
+      ...(WAKE_MODES[harness as Harness]?.choices.some((c) => c.id === mode) ? [modeName(harness, mode)] : []),
+      ...(mode !== 'default' ? [modeName(harness, CONVERSATIONS_OWN)] : []),
+    ].join(' or ')
+    return `This conversation was last in ${modeName(harness, mode)}, and It reopened it in ${modeName(harness, instead)}. To keep it in ${modeName(harness, mode)}, choose ${keep} beside ${app}’s Auto-wake under Machines.`
+  }
   if (why === 'unreviewed')
     return `${app} was reopened in ${modeName(harness, instead)}, not ${modeName(harness, mode)}, because It could not tell that this ${app} has an automatic reviewer. So whatever would need approval is refused.`
   return `This machine runs an It from before the choice of mode, which does not reopen ${app} in ${modeName(harness, mode)}, and at most in ${modeName(harness, instead)}. Update It on that machine.`

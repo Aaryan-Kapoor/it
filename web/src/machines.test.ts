@@ -175,7 +175,7 @@ describe('how a reopened conversation runs, chosen beside an app’s Auto-wake',
     expect(choices('Codex').map((c) => c.value)).toEqual(['full-access', 'approve-for-me', 'ask', 'read-only'])
     expect([...codex.querySelectorAll('.wake-mode-name')].map((n) => n.textContent)).toEqual([
       'Full AccessRecommended',
-      'Approve for me',
+      'Approve for meStarting value',
       'Ask for approval',
       'Read Only',
     ])
@@ -208,17 +208,35 @@ describe('how a reopened conversation runs, chosen beside an app’s Auto-wake',
     expect(choices('Claude Code').map((c) => c.value)).toEqual(['bypassPermissions', 'auto', 'acceptEdits', 'default', 'dontAsk', 'conversation'])
     expect([...claude.querySelectorAll('.wake-mode-name')].map((n) => n.textContent)).toEqual([
       'Bypass PermissionsRecommended',
-      'Auto',
+      'AutoStarting value',
       'Accept edits',
       'Manual',
       'Don’t Ask',
       'The conversation’s own',
     ])
     expect(chosen('Claude Code')).toBe('auto')
+    // Shown, nothing is chosen: the starting value stays the starting value
+    expect(asked.filter((a) => a.name === 'machines:wakeMode')).toEqual([])
     expect(claude.textContent).toContain('a press on any screen paired with this It, a phone among them, or the words on a page, can lead it to do')
     expect(claude.textContent).toContain('Claude Code’s own safety check, a model, decides in your place')
     await act(async () => choices('Claude Code')[0]!.click())
     expect(asked).toEqual([{ name: 'machines:wakeMode', args: { machineId: 'machine-1', harness: 'claude-code', mode: 'bypassPermissions' } }])
+    act(() => root.unmount())
+    host.remove()
+    // The starting value clicked is a choice of the person's own, and once chosen is no longer called the starting value
+    machines = [connected()]
+    await shown()
+    asked.length = 0
+    await act(async () => choices('Claude Code')[1]!.click())
+    expect(asked).toEqual([{ name: 'machines:wakeMode', args: { machineId: 'machine-1', harness: 'claude-code', mode: 'auto' } }])
+    act(() => root.unmount())
+    host.remove()
+    machines = [connected({ wakeModes: [{ harness: 'claude-code', mode: 'auto' }] })]
+    await shown()
+    expect(row('Claude Code').textContent).not.toContain('Starting value')
+    asked.length = 0
+    await act(async () => choices('Claude Code')[1]!.click())
+    expect(asked).toEqual([])
     act(() => root.unmount())
     host.remove()
     // A name this It does not know reads as the one that allows least, which the conversation's own is not

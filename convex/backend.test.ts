@@ -2950,6 +2950,11 @@ describe('clicks and their delivery', () => {
     // An older connector does not say that it knows modes; it gives Codex the workspace sandbox and leaves who approves to the person's own settings: at most Approve for me
     const olderBegins = () => m.as.mutation(api.machines.runBegan, { for: thread, ids: [], run: 'old-run' })
     const fails = async () => ((await t.run((ctx) => ctx.db.get(m.id as never))) as { fails?: { why: string }[] }).fails ?? []
+    // Nothing chosen, in a record from before there was a choice: it runs as that It always ran it, with nothing said
+    expect(await olderBegins()).toEqual({ stopped: false, mode: 'approve-for-me' })
+    expect(await fails()).toEqual([])
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'older' })).run).toMatchObject({ note: null })
+    await m.as.mutation(api.machines.runEnded, { for: thread, ok: true, run: 'old-run' })
     // Read Only and Ask for approval allow less than that: no run is started, and the page says why
     for (const mode of ['read-only', 'ask']) {
       await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode })
@@ -3042,13 +3047,42 @@ describe('clicks and their delivery', () => {
     )
     await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'run-1', ok: true })
     expect(await page()).toBeNull()
-    // A machine whose It is from before the choice reopens a Claude Code conversation in the mode it was last in, which can be
-    // Bypass Permissions: it is let run where Bypass Permissions or the conversation's own is chosen, and nowhere else
-    expect(await begin({ modes: undefined })).toEqual({ stopped: false, off: true })
+  })
+
+  test('a machine whose It is from before the choice reopens Claude Code as it always did where the owner chose nothing, and where they chose a mode it may run more than, it is not let, and the page says which machine to update', async () => {
+    const { t, alice, m } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    // An older connector does not say that it knows modes; it reopens a conversation in the mode it was last in, which can be Bypass Permissions
+    const olderBegins = (run = 'old-run') => m.as.mutation(api.machines.runBegan, { for: SESSION, ids: [], run })
+    const fails = async () => ((await t.run((ctx) => ctx.db.get(m.id as never))) as { fails?: { why: string }[] }).fails ?? []
+    const page = async () => (await alice.browser.query(api.artifacts.get, { slug: 'plan' })).run as { note: string | null } | null
+    // A record from before there was a choice, and one where the choice was never made: Auto is the starting value only, and
+    // the older It runs it as it always did, with nothing said. An update of the It it joined does not take Auto-wake away from it
+    for (const record of [undefined, [{ harness: 'codex', mode: 'ask' }]]) {
+      await t.run((ctx) => ctx.db.patch(m.id as never, { wakeModes: record }))
+      expect(await olderBegins()).toEqual({ stopped: false, mode: 'auto' })
+      expect(await fails()).toEqual([])
+      expect(await page()).toMatchObject({ note: null })
+      await m.as.mutation(api.machines.runEnded, { for: SESSION, ok: true, run: 'old-run' })
+    }
+    // Auto chosen is not the starting value: the older It may run more than it, so it is not let run, and the page says
+    // which machine to update for the choice to hold
+    for (const mode of ['auto', 'acceptEdits', 'default', 'dontAsk']) {
+      await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'claude-code', mode })
+      expect(await olderBegins()).toEqual({ stopped: false, off: true })
+      expect((await fails()).at(-1)?.why).toBe(
+        'laptop runs an It from before the choice of mode, which cannot reopen this conversation in the mode chosen for it. Run `it upgrade` on laptop for the choice to hold there, or choose another mode under Machines',
+      )
+    }
+    // Bypass Permissions, the most it may run, and the conversation's own, which is what it does, go ahead with nothing said
     for (const mode of ['bypassPermissions', 'conversation']) {
       await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'claude-code', mode })
-      expect(await begin({ modes: undefined })).toEqual({ stopped: false, mode })
+      expect(await olderBegins()).toEqual({ stopped: false, mode })
+      expect(await fails()).toEqual([])
     }
+    // And a connector that knows modes is let run whatever is chosen
+    await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'claude-code', mode: 'default' })
+    expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, ids: [], run: 'new-run', modes: true })).toEqual({ stopped: false, mode: 'default' })
   })
 
   test('a stop drops what waits for the conversation on the machine it was stopped on, and nothing of a conversation of the same name on another machine', async () => {
