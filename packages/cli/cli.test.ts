@@ -26,7 +26,7 @@ import { briefClick, describeClick, LIMITS, PORTS, STORAGE, sizeSaid } from '@it
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { ADDONS, SKILL } from './src/addons.generated'
 import { agentApp, agentAppsAbove, appsFrom, linuxProc, type Proc, psAbove, psTable, psWords } from './src/ancestry'
-import { decoded, loose, nested, parse, quotesTakenOut } from './src/args'
+import { decoded, json, loose, nested, parse, quotesEscaped, quotesTakenOut, setValue } from './src/args'
 import { choices, codexCommand, codexQueue, local, mac, refusedFor, reports } from './src/connector'
 import {
   backend,
@@ -161,6 +161,25 @@ describe('JSON a shell may have changed on the way', () => {
     // JSON, text that does not begin and end as JSON does, and anything with a double quote left in it are not
     for (const other of ['{}', '[]', '[1,2]', '{"a":1}', '{"a":', 'Deploying 3 of 7', '[beta] notes', 'done', '{a:"b"}', '42', ''])
       expect([other, quotesTakenOut(other)]).toEqual([other, false])
+  })
+  test('JSON written for PowerShell, with its double quotes written \\" in single quotes, is read as meant where PowerShell 7 hands the backslashes on', () => {
+    // What PowerShell 7.3 and later hand on of '{\"say\":\"Hi there\"}'; Windows PowerShell 5.1 hands on {"say":"Hi there"}
+    expect(quotesEscaped(String.raw`{\"say\":\"Hi there\"}`)).toBe('{"say":"Hi there"}')
+    // A double quote meant inside a string, written \\\" there, and a backslash before anything else keep what was meant
+    expect(quotesEscaped(String.raw`{\"say\":\"a \\\"b\\\"\",\"path\":\"C:\\Users\"}`)).toBe(String.raw`{"say":"a \"b\"","path":"C:\\Users"}`)
+    // Where a double quote has no backslash before it, or an even run, the value is not written so
+    for (const other of ['{"a":1}', String.raw`{"a":"\"x\""}`, String.raw`{\\"a\\":1}`, String.raw`{\"a":1}`, 'Done', ''])
+      expect([other, quotesEscaped(other)]).toEqual([other, undefined])
+    // On the command line it is read as meant, and only where it is not JSON as it arrived
+    expect(json(String.raw`{\"number\":4,\"words\":\"×, é and ★\"}`, 'The patch', 'it patch dice --file <path>')).toEqual({ number: 4, words: '×, é and ★' })
+    expect(json(String.raw`{"say":"a \"b\""}`, 'The patch', 'it patch dice --file <path>')).toEqual({ say: 'a "b"' })
+    expect(json(String.raw`{\"say\":\"Hi\"}`, 'The answer', undefined, true)).toEqual({ say: 'Hi' })
+    // JSON from a file or a pipe is read only as it is
+    expect(() => json(String.raw`{\"say\":\"Hi\"}`, 'The answer on standard input')).toThrow('The answer on standard input is not valid JSON.')
+    // `it set` takes it as JSON where it is JSON as meant, and as text where it is not JSON either way
+    expect(setValue(String.raw`{\"a\":[1,\"b c\"]}`, 'it set p k --file <path>')).toEqual({ a: [1, 'b c'] })
+    expect(setValue(String.raw`say \"hi\"`, 'it set p k --file <path>')).toBe(String.raw`say \"hi\"`)
+    expect(setValue('{"a":1}', 'it set p k --file <path>')).toEqual({ a: 1 })
   })
   test('a file is read as UTF-8, or as UTF-16 of either order behind its mark, and nothing else is guessed at', () => {
     const said = '{"note":"café 支付 👍"}'

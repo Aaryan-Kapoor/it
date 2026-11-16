@@ -1,6 +1,7 @@
 // Reading a command line, kept apart from the commands so it can be tested by itself.
 import { type BigIntStats, closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs'
 import { sizeSaid, UPLOAD } from '@it/protocol'
+import { POWERSHELL_JSON } from './codex-settings'
 import { Problem } from './lib'
 
 export const BOOLEAN = new Set([
@@ -213,16 +214,61 @@ export function quotesTakenOut(value: string): boolean {
     return true
   }
 }
-/** What a refusal of JSON from the command line says to do instead: give it in a file, which no shell changes. */
-const inAFile = (fromFile: string) => `Write the JSON to a file and run \`${fromFile}\`, which works the same in every shell.`
+/**
+ * A JSON argument as an agent wrote it for PowerShell, where it arrived with that writing still in
+ * it. Windows PowerShell 5.1 takes the double quotes out of an argument it hands a program, unless
+ * each is written `\"`, and splits the argument at a space it takes to be outside quotes, counting
+ * `\"` as a quote too; a space before the JSON is outside them all, and has it hand the argument
+ * on whole in quotes of its own. So in PowerShell an agent gives JSON in single quotes, beginning
+ * with a space, with each of its double quotes written `\"`: `it patch dice ' {\"note\":\"two words\"}'`
+ * (`POWERSHELL_JSON`, in `codex-settings.ts`). Codex reads that as plain words, and so lets its rule for `it` run it, where
+ * it takes a command with `--%`, a pipe or a variable in it for one it cannot read, which is
+ * refused where nobody can approve it, as in a conversation It reopened (the Windows rehearsal).
+ * From Windows PowerShell 5.1, a program reading its command line makes each `\"` a double quote,
+ * so It is given ` {"note":"two words"}`. PowerShell 7.3 and later hand the very same argument on
+ * whole, the backslashes with it, and It is given ` {\"note\":\"two words\"}`, which is never
+ * JSON. Undoing that writing once gives back what was meant: each run of backslashes that ends at
+ * a double quote is an odd number, 2n+1, of which n were meant. Undefined where the value is not
+ * written so, which it is not where any double quote has an even run of backslashes, or none,
+ * before it.
+ */
+export function quotesEscaped(value: string): string | undefined {
+  if (!value.includes('\\"')) return undefined
+  let escaped = true
+  const meant = value.replace(/(\\*)"/g, (_, slashes: string) => {
+    if (slashes.length % 2 === 0) escaped = false
+    return `${'\\'.repeat((slashes.length - 1) / 2)}"`
+  })
+  return escaped ? meant : undefined
+}
+/** JSON given on the command line: as it was written, or else as it was meant where it arrived with PowerShell's writing of its quotes still in it (see `quotesEscaped`). */
+function argumentJson(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch (err) {
+    const meant = quotesEscaped(value)
+    if (meant === undefined) throw err
+    return JSON.parse(meant)
+  }
+}
+/**
+ * What a refusal of JSON from the command line says to do instead: in PowerShell, the form
+ * above, and in any shell, a file, which no shell changes. The PowerShell form comes first,
+ * because in a conversation that It reopened in Codex on Windows nobody can approve the command
+ * that writes the file.
+ */
+const inAFile = (fromFile: string) => `${POWERSHELL_JSON} Or write the JSON to a file and run \`${fromFile}\`, which works the same in every shell.`
 const SHELL_TOOK = 'as when a shell takes them out of an argument, which Windows PowerShell 5.1 does'
 /**
  * Reads JSON. `fromFile` is the command that reads the same JSON from a file, where it was given
  * on the command line: a refusal names it, since a file is the way that works in every shell.
+ * JSON given on the command line (`argument`, which it is wherever `fromFile` is given) is also
+ * read as it was meant where PowerShell's writing of its quotes is still in it; JSON from a file
+ * or a pipe is read only as it is.
  */
-export function json(value: string, what: string, fromFile?: string): unknown {
+export function json(value: string, what: string, fromFile?: string, argument = fromFile !== undefined): unknown {
   try {
-    return JSON.parse(value)
+    return argument ? argumentJson(value) : JSON.parse(value)
   } catch {
     const instead = fromFile === undefined ? undefined : inAFile(fromFile)
     if (fromFile !== undefined && quotesTakenOut(value))
@@ -243,6 +289,10 @@ export function setValue(value: string, fromFile: string): unknown {
       'invalid',
       `${inAFile(fromFile)} To set this very text, write it in the file as a JSON string.`,
     )
+  // Not JSON as it arrived, but JSON as it was meant in PowerShell (see `quotesEscaped`): that
+  // JSON. Anything else that is not JSON is text, and set as it arrived, backslashes and all
+  const meant = quotesEscaped(value)
+  if (meant !== undefined && loose(value) === value && loose(meant) !== meant) return loose(meant)
   return loose(value)
 }
 /**

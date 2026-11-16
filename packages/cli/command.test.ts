@@ -42,6 +42,7 @@ import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { BOOLEAN } from './src/args'
 import { CODEX_RESTART, itForAgent, PI_RELOAD, reloadLine, T3_CODEX, t3ClaudeLine } from './src/arrives'
+import { POWERSHELL_JSON } from './src/codex-settings'
 import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
 import { VERSION } from './src/lib'
 import { aloneAt } from './src/serve/backend'
@@ -701,6 +702,10 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       // An answer whose JSON a shell split at a space is told how to give it whole
       expect(error(await run(m, ['tour', 'answer', 'action-1', '{"say":"two', 'words"}'], b.env)).hint).toContain(
         'If your shell split the JSON at a space or at an apostrophe in it: Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \\u0027: `it tour answer action-1 \'{"say":"That’s it."}\'`',
+      )
+      // And how to give it in PowerShell, in the form Codex lets run where nobody can approve it
+      expect(error(await run(m, ['tour', 'answer', 'action-1', '{"say":"two', 'words"}'], b.env)).hint).toContain(
+        String.raw`it tour answer action-1 ' {\"say\":\"That''s it.\"}'`,
       )
       expect(error(await run(m, ['tour', 'next', 'now'], b.env)).message).toBe('`it tour next` takes nothing after it.')
       expect(error(await run(m, ['tour', 'answer'], b.env)).message).toBe('Say which action.')
@@ -2389,6 +2394,8 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     const b = await backend(m, () => ({ revision: 2 }))
     try {
       const SHELL = 'as when a shell takes them out of an argument, which Windows PowerShell 5.1 does'
+      // The form that Windows PowerShell hands on whole and Codex lets run, given before the file form
+      const PS = `${POWERSHELL_JSON} Or `
       for (const [words, said] of [
         // `it patch plan '{"number":4}'`, as PowerShell 5.1 hands it over
         [
@@ -2396,7 +2403,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
           {
             code: 'invalid',
             message: `The patch is not valid JSON: it has no double quotes, ${SHELL}.`,
-            hint: 'Write the JSON to a file and run `it patch plan --file <path>`, which works the same in every shell.',
+            hint: `${PS}write the JSON to a file and run \`it patch plan --file <path>\`, which works the same in every shell.`,
           },
         ],
         // `it patch plan '{"note":"two words"}'`
@@ -2405,7 +2412,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
           {
             code: 'invalid',
             message: 'It does not know what to do with "words}".',
-            hint: "Usage: it patch <id> ('<json>' | --file <path>) [--replace] [--if-revision <n>] If your shell split the JSON at a space, write it to a file and run `it patch plan --file <path>`.",
+            hint: `Usage: it patch <id> ('<json>' | --file <path>) [--replace] [--if-revision <n>] If your shell split the JSON at a space: ${PS}write it to a file and run \`it patch plan --file <path>\`.`,
           },
         ],
         // `it patch plan '{\"note\":\"two words\"}'`, split at the space and not unquoted
@@ -2414,7 +2421,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
           {
             code: 'invalid',
             message: 'It does not know what to do with "words"}".',
-            hint: "Usage: it patch <id> ('<json>' | --file <path>) [--replace] [--if-revision <n>] If your shell split the JSON at a space, write it to a file and run `it patch plan --file <path>`.",
+            hint: `Usage: it patch <id> ('<json>' | --file <path>) [--replace] [--if-revision <n>] If your shell split the JSON at a space: ${PS}write it to a file and run \`it patch plan --file <path>\`.`,
           },
         ],
         // JSON that is wrong for another reason still names the file form, without blaming the shell
@@ -2423,7 +2430,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
           {
             code: 'invalid',
             message: 'The patch is not valid JSON.',
-            hint: 'Write the JSON to a file and run `it patch plan --file <path>`, which works the same in every shell.',
+            hint: `${PS}write the JSON to a file and run \`it patch plan --file <path>\`, which works the same in every shell.`,
           },
         ],
         [
@@ -2431,7 +2438,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
           {
             code: 'invalid',
             message: `--state is not valid JSON: it has no double quotes, ${SHELL}.`,
-            hint: 'Write the JSON to a file and run `it create … --state-file <path>`, which works the same in every shell.',
+            hint: `${PS}write the JSON to a file and run \`it create … --state-file <path>\`, which works the same in every shell.`,
           },
         ],
         // `it create Plan --state '{\"note\":\"two words\"}'`, split at the space
@@ -2440,7 +2447,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
           {
             code: 'invalid',
             message: 'It does not know what to do with "words"}".',
-            hint: 'Usage: it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe) If your shell split the JSON of --state at a space, write it to a file and give it with `--state-file <path>`.',
+            hint: `Usage: it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe) If your shell split the JSON of --state at a space: ${PS}write it to a file and give it with \`--state-file <path>\`.`,
           },
         ],
         // Text that begins and ends with brackets is refused on every system, and the refusal says how to set it
@@ -2449,7 +2456,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
           {
             code: 'invalid',
             message: `The value [beta] begins and ends as JSON does, but is not JSON and has no double quotes, ${SHELL}. Nothing was changed.`,
-            hint: 'Write the JSON to a file and run `it set plan label --file <path>`, which works the same in every shell. To set this very text, write it in the file as a JSON string.',
+            hint: `${PS}write the JSON to a file and run \`it set plan label --file <path>\`, which works the same in every shell. To set this very text, write it in the file as a JSON string.`,
           },
         ],
         // `it set plan list '["a","b c"]'`, which would otherwise have put the text "[a,b c]" on the page
@@ -2458,7 +2465,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
           {
             code: 'invalid',
             message: `The value [a,b c] begins and ends as JSON does, but is not JSON and has no double quotes, ${SHELL}. Nothing was changed.`,
-            hint: 'Write the JSON to a file and run `it set plan list --file <path>`, which works the same in every shell. To set this very text, write it in the file as a JSON string.',
+            hint: `${PS}write the JSON to a file and run \`it set plan list --file <path>\`, which works the same in every shell. To set this very text, write it in the file as a JSON string.`,
           },
         ],
         [
@@ -2466,7 +2473,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
           {
             code: 'invalid',
             message: `The value {build:done} begins and ends as JSON does, but is not JSON and has no double quotes, ${SHELL}. Nothing was changed.`,
-            hint: 'Write the JSON to a file and run `it set plan steps --file <path>`, which works the same in every shell. To set this very text, write it in the file as a JSON string.',
+            hint: `${PS}write the JSON to a file and run \`it set plan steps --file <path>\`, which works the same in every shell. To set this very text, write it in the file as a JSON string.`,
           },
         ],
       ] as const) {
@@ -2482,6 +2489,15 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
         [['set', 'plan', 'list', '[]'], '{"list":[]}'],
         [['set', 'plan', 'n', '4'], '{"n":4}'],
         [['patch', 'plan', '{"note":"two words"}'], '{"note":"two words"}'],
+        // As PowerShell 7.3 and later hand on JSON written for PowerShell, its quotes written \" inside single quotes
+        [['patch', 'plan', String.raw`{\"note\":\"two words\"}`], '{"note":"two words"}'],
+        [['patch', 'plan', String.raw` {\"note\":\"two words\"}`], '{"note":"two words"}'],
+        // And as Windows PowerShell 5.1 hands it on, the space before it and all
+        [['patch', 'plan', ' {"note":"two words"}'], '{"note":"two words"}'],
+        [['set', 'plan', 'list', String.raw`[\"a\",\"b c\"]`], '{"list":["a","b c"]}'],
+        [['set', 'plan', 'note', String.raw`\"Done\"`], '{"note":"Done"}'],
+        // Text with such quotes in it that is not JSON either way is set as it arrived
+        [['set', 'plan', 'note', String.raw`say \"hi\"`], String.raw`{"note":"say \\\"hi\\\""}`],
       ] as const) {
         b.asked.length = 0
         const ran = await run(m, [...words], b.env)

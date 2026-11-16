@@ -60,7 +60,7 @@ import {
   tooOldToReload,
 } from './arrives'
 import { runSync } from './child'
-import { CODEX_SAVE_ESCALATE } from './codex-settings'
+import { CODEX_SAVE_ESCALATE, POWERSHELL_JSON } from './codex-settings'
 import { choices, conversationIds, local, type Route, refusedFor } from './connector'
 import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
@@ -774,9 +774,9 @@ function noMore(cmd: string, a: Args): void {
   // whose quotes were written \" and that has a space in a value
   const split =
     cmd === 'patch'
-      ? ` If your shell split the JSON at a space, write it to a file and run \`it patch ${a._[0]} --file <path>\`.`
+      ? ` If your shell split the JSON at a space: ${POWERSHELL_JSON} Or write it to a file and run \`it patch ${a._[0]} --file <path>\`.`
       : cmd === 'create' && text(a, 'state') !== undefined
-        ? ' If your shell split the JSON of --state at a space, write it to a file and give it with `--state-file <path>`.'
+        ? ` If your shell split the JSON of --state at a space: ${POWERSHELL_JSON} Or write it to a file and give it with \`--state-file <path>\`.`
         : cmd === 'tour' && a._[0] === 'answer'
           ? ` If your shell split the JSON at a space or at an apostrophe in it: ${PLAIN_ANSWER(a._[1] ?? '<action-id>')}`
           : ''
@@ -1203,12 +1203,16 @@ function pictureFolderFor(c: { session: { harness: string; id: string } | null }
  * which no apostrophe could end either, but a command so wrapped is not a plain `it …` to Codex,
  * whose rule lets only that out of its sandbox: every answer then asked the person (seen in the
  * rehearsals, with Codex in "Ask for approval"). Windows PowerShell 5.1 takes the quotes out of an
- * argument it hands a program, and sends what it pipes in ASCII, so that × arrived as "?" on the
- * tour's whiteboard (the Windows rehearsal): there `--%` hands the rest of the line over as it is
- * written, in a command line that holds every letter.
+ * argument it hands a program unless each is written `\"`, splits it at a space within its
+ * quotes, and sends what it pipes in ASCII, so that × arrived as "?" on the tour's whiteboard (the
+ * Windows rehearsal). So in PowerShell the JSON is in single quotes, beginning with a space, with
+ * its quotes written `\"` (`quotesEscaped` says why), in a command line that holds every letter. Neither `--%` nor ’, “, ” or a long dash is in it there: Codex reads a command
+ * with any of them as one it cannot read, and refuses it where nobody can approve it, as in a
+ * conversation It reopened (the Windows rehearsal). In a single-quoted PowerShell string an
+ * apostrophe is written as two.
  */
 export const PLAIN_ANSWER = (id: string) =>
-  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \\u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In Windows PowerShell, put \`--%\` after \`it\` and write the JSON in double quotes with its own written as \`\\"\`: \`it --% tour answer ${id} "{\\"say\\":\\"That’s it.\\"}"\`. Do not pipe it in there, which turns every letter outside ASCII into a question mark.`
+  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \\u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In PowerShell, begin the JSON with a space inside its single quotes, write each of its double quotes as \`\\"\` and each apostrophe as two, use no ’, “, ” or long dash, and no \`--%\`: \`it tour answer ${id} ' {\\"say\\":\\"That''s it.\\"}'\`. Do not pipe it in there, which turns every letter outside ASCII into a question mark.`
 async function tourAnswer(a: Args, counted: (code?: string) => void) {
   const USAGE = "tour answer <action-id> [- | '<json>' | --file <path>] [--wait | --no-wait] [--timeout <seconds>]"
   if (a._[0] === 'answer') {
@@ -1235,7 +1239,7 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
     const from = file !== undefined ? `The answer in ${file}` : stdin || a._[2] === undefined ? 'The answer on standard input' : 'The answer'
     let read: unknown
     try {
-      read = given === undefined ? undefined : json(given, from)
+      read = given === undefined ? undefined : json(given, from, undefined, from === 'The answer')
     } catch (err) {
       // Most often an apostrophe in the agent's words, which ended the quotes round the JSON
       throw err instanceof Problem && from === 'The answer' ? new Problem(err.message, err.code, PLAIN_ANSWER(id)) : err
