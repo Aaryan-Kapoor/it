@@ -970,8 +970,7 @@ async function OTHERAPP() {
     step(`types to ${who}: a page${i ? ' (again: it had not taken it)' : ''}`)
     await type(askText)
     await sleep(12_000)
-    if (!screen().includes(askText.slice(0, 30)) || /Ask anything/.test(screen())) continue
-    break
+    if (screen().includes(askText.slice(0, 30)) || /esc interrupt|Working|Thinking/i.test(screen())) break
   }
   let url = null
   const t0 = Date.now()
