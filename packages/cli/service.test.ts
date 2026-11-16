@@ -55,6 +55,26 @@ describe('what a service is given of the shell that registered it', () => {
     // A shell that gave no PATH at all
     expect(environment({ IT_HOME: itHome }).PATH).toBe(path.join(itHome, 'bin'))
   })
+  test('on Windows, a PATH the launcher could hold only without It’s folder is written as the shell gave it, and not left out', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    try {
+      const itHome = path.resolve('person', '.it')
+      // Long enough that `set PATH=` with it fits in the 8000 characters cmd.exe reads, and with It's folder in front does not
+      const long = Array.from({ length: 800 }, (_, n) => `C:\\Tools\\t${n}`)
+        .join(';')
+        .slice(0, 7990 - 'set PATH='.length)
+      const env = environment({ Path: long, IT_HOME: itHome })
+      expect(env.PATH).toBe(long)
+      expect(windowsLauncher(['C:\\Users\\a\\.it\\bin\\it.exe', 'serve'], env)).toContain(`\r\nset PATH=${long}\r\n`)
+      // One that fits either way has It's folder first, and one too long either way is left out, as it was
+      expect(environment({ Path: 'C:\\Windows', IT_HOME: itHome }).PATH).toBe(`${path.join(itHome, 'bin')};C:\\Windows`)
+      const longer = `${long};${long}`
+      expect(windowsLauncher(['it.exe', 'serve'], environment({ Path: longer, IT_HOME: itHome }))).not.toContain('set PATH=')
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+    }
+  })
   test.runIf(process.platform === 'win32')('on Windows, from the PATH as Windows spells it, into the launcher the scheduled task runs', () => {
     const itHome = 'C:\\Users\\a\\.it'
     const env = environment({ Path: 'C:\\Windows\\system32;C:\\Windows', IT_HOME: itHome })

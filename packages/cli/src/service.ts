@@ -278,8 +278,11 @@ export function environment(from: NodeJS.ProcessEnv = process.env): Record<strin
   // settings. Where a backend program is fetched from is an address, and is carried as it was given.
   for (const k of ['IT_HOME', 'IT_BACKEND_BIN', ...PROFILE_VARS]) if (out[k] && !path.isAbsolute(out[k])) out[k] = path.resolve(out[k])
   // With It's own folder of programs first: the shell that runs setup may have been opened
-  // before It was installed, and an app the service starts runs `it` by its name alone
-  out.PATH = itFirst({ PATH: out.PATH }, process.platform, out.IT_HOME ? path.join(out.IT_HOME, 'bin') : inHome('bin')).PATH!
+  // before It was installed, and an app the service starts runs `it` by its name alone. A
+  // Windows PATH that the launcher could hold only without it is written as the shell gave it,
+  // rather than not at all: the service puts its folder first for each app it starts anyway.
+  const first = itFirst({ PATH: out.PATH }, process.platform, out.IT_HOME ? path.join(out.IT_HOME, 'bin') : inHome('bin')).PATH!
+  if (process.platform !== 'win32' || launcherHolds('PATH', first) || !launcherHolds('PATH', out.PATH)) out.PATH = first
   return out
 }
 
@@ -357,6 +360,8 @@ ${Object.entries(env)
 // command and begin another, a quote included: a quote would otherwise switch that reading on
 // and off, and a value with one in it could say what is run next.
 const cmdValue = (v: string) => v.replace(/[\^&|<>()"]/g, '^$&').replace(/%/g, '%%')
+/** Whether the launcher can set a variable to this value: cmd.exe reads no line longer than 8000 characters. */
+const launcherHolds = (k: string, v: string) => `set ${k}=${cmdValue(v)}`.length <= 8000
 function cmdWord(w: string): string {
   if (/^[A-Za-z0-9_.-]+$/.test(w)) return w
   // No file on Windows has a quote in its name, so a word with one is not a path this program made
@@ -399,9 +404,8 @@ export function windowsLauncher(cmd: string[], env: Record<string, string>): str
   for (const [k, v] of Object.entries(env)) {
     // Nothing set is left as the task has it: an empty value would take the variable away
     if (!v || /[\r\n]/.test(v)) continue
-    const line = `set ${k}=${cmdValue(v)}`
-    // cmd.exe reads no line longer than this. A PATH that is, is left as the task has it.
-    if (line.length <= 8000) lines.push(line)
+    // cmd.exe reads no line longer than it can hold. A PATH that is, is left as the task has it.
+    if (launcherHolds(k, v)) lines.push(`set ${k}=${cmdValue(v)}`)
   }
   // The program is started again five seconds after it has ended as a failure, as systemd and
   // launchd are told to start it again: ended from outside or fallen over, it comes back by
