@@ -103,6 +103,7 @@ import {
   claudeWroteAt,
   codexHolder,
   codexInterruptedAt,
+  codexReview,
   endTree,
   fromAnotherStart,
   LEFT_ENDED,
@@ -734,6 +735,9 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   let wakesNow = new Map<string, number>()
   // And never on a system It does not reopen conversations on, whatever It says is switched on
   const wakes = (harness: string, at: number) => wakesOn(process.platform, true) && mayWake(wakesNow, harness, at)
+  // The agent apps whose reopened conversations the person runs without the app's own automatic
+  // reviewer on this machine, as It says (see `REVIEWS`). The run itself asks It again as it begins.
+  let reviewOffNow = new Set<string>()
 
   const sessions = new Map<string, { seen: number; busy: boolean; busyAt: number; begunAt?: number }>()
   // A conversation that was cleared carries on under a new id; its pages follow it
@@ -2636,19 +2640,24 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     await shellLearned()
     const env = profileEnvironment(now.harness, conversationProfile(now) ?? conversationProfile(session), harnessEnv())
     if (typeof env === 'string') return env
-    const how = carrying(now.harness, now.id, text, {
-      codex: codexIn(env),
-      // On Windows an app is started by where its program is, which its name alone does not say there
-      ...(process.platform === 'win32' && now.harness !== 'codex'
-        ? { start: windowsProgram(PROGRAM[now.harness] ?? now.harness, env.PATH ?? env.Path ?? '', existsSync, (f) => readFileSync(f, 'utf8')) }
-        : {}),
-      itHome: home(),
-      // The mode the person last had the conversation in, and where `it` is installed
-      mode: now.harness === 'claude-code' ? (claudeModeOf(now.id, cwd, claudeFolder(env)) ?? claudeModeOf(session.id, cwd, claudeFolder(env))) : null,
-      itAt: [
-        ...new Set([path.join(home(), 'bin', process.platform === 'win32' ? 'it.exe' : 'it'), process.execPath].filter((p) => /[\\/]it(\.exe)?$/.test(p))),
-      ],
-    })
+    // Under Codex's automatic reviewer, unless the person turned it off or this Codex may not have one
+    const review = codexReview(found.find((h) => h.id === 'codex')?.version, reviewOffNow.has('codex'))
+    const carryingWith = (reviewed: boolean) =>
+      carrying(now.harness, now.id, text, {
+        codex: codexIn(env),
+        review: reviewed,
+        // On Windows an app is started by where its program is, which its name alone does not say there
+        ...(process.platform === 'win32' && now.harness !== 'codex'
+          ? { start: windowsProgram(PROGRAM[now.harness] ?? now.harness, env.PATH ?? env.Path ?? '', existsSync, (f) => readFileSync(f, 'utf8')) }
+          : {}),
+        itHome: home(),
+        // The mode the person last had the conversation in, and where `it` is installed
+        mode: now.harness === 'claude-code' ? (claudeModeOf(now.id, cwd, claudeFolder(env)) ?? claudeModeOf(session.id, cwd, claudeFolder(env))) : null,
+        itAt: [
+          ...new Set([path.join(home(), 'bin', process.platform === 'win32' ? 'it.exe' : 'it'), process.execPath].filter((p) => /[\\/]it(\.exe)?$/.test(p))),
+        ],
+      })
+    let how = carryingWith(review.review)
     if (typeof how === 'string') return how
     if (reopenedNow.has(key)) return 'it is being reopened already'
     // This connector is stopping, or does not fit the It it joined: nothing is started
@@ -2670,9 +2679,20 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     try {
       // It is told first, and nothing is started where it could not be told: it is by that
       // word that the page says the agent is working, and offers to stop it
-      const told = await call<{ stopped?: boolean; off?: boolean } | null>('mutation', api.machines.runBegan, { for: session, run: runId, ids }).then(
+      // What the page is to say where Codex goes without the reviewer the person left on
+      const note = now.harness === 'codex' && review.note ? { note: review.note } : {}
+      let reviewed = undefined as boolean | undefined
+      const told = await call<{ stopped?: boolean; off?: boolean; review?: boolean } | null>('mutation', api.machines.runBegan, {
+        for: session,
+        run: runId,
+        ids,
+        ...note,
+      }).then(
         // Stopped meanwhile, or reopening switched off since this machine last heard: either way nothing is started
-        (said) => (said?.stopped || said?.off ? ('stopped' as const) : true),
+        (said) => {
+          reviewed = said?.review
+          return said?.stopped || said?.off ? ('stopped' as const) : true
+        },
         () => false,
       )
       if (!told) {
@@ -2702,6 +2722,16 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       ) {
         ended = NOT_STARTED
         return ended
+      }
+      // The person's switch for the reviewer as It has it now: one turned off a moment ago, before
+      // this machine heard of it, holds for this run. (One turned on holds from the next run.)
+      if (now.harness === 'codex' && reviewed === false && review.review) {
+        const again = carryingWith(reviewed)
+        if (typeof again === 'string') {
+          ended = again
+          return ended
+        }
+        how = again
       }
       saidLast.delete(key)
       ended = await carryOn(
@@ -4937,6 +4967,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     (me: {
       wanted: string[]
       wakes?: { harness: string; since: number }[]
+      reviewOff?: string[]
       runs?: { harness: string; sessionId: string; stop?: boolean; run?: string }[]
       upgrade?: { state: string; version?: string } | null
       turnOn?: { harness: string; state: string; at?: number }[]
@@ -4977,6 +5008,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // Read each time, whatever else changed or did not: it changes nothing that is installed
       const before = [...wakesNow.keys()].sort().join(',')
       wakesNow = new Map((me.wakes ?? []).map((w) => [w.harness, w.since]))
+      reviewOffNow = new Set(me.reviewOff ?? [])
       if ([...wakesNow.keys()].sort().join(',') !== before) {
         watch()
         void route()

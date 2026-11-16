@@ -1,4 +1,4 @@
-import { ALIVE, HARNESSES, LIMITS, newer, noWakeHere, QUOTA, TURN_ON_AGAIN_MS, TURN_ON_MS, TURNS_ON, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
+import { ALIVE, HARNESSES, LIMITS, newer, noWakeHere, QUOTA, REVIEWS, TURN_ON_AGAIN_MS, TURN_ON_MS, TURNS_ON, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
@@ -28,6 +28,8 @@ const view = (m: Doc<'machines'>) => ({
   reopens: m.reopens ?? false,
   // Only where It reopens conversations at all: what was switched on for a machine of another system says nothing
   wakes: wakesOn(m.system, m.reopens) ? (m.wakes ?? []) : [],
+  // The apps whose reopened conversations are run without their own automatic reviewer: every other app of `REVIEWS` has it
+  reviewOff: m.reviewOff ?? [],
   runs: m.runs ?? [],
   // How many conversations open there have not loaded It's add-on: `it status` says so
   notLoaded: m.offAt === undefined ? (m.notLoaded ?? []).length : 0,
@@ -156,6 +158,26 @@ export const wake = mutation({
 })
 
 /**
+ * The person says whether a conversation of one agent app that It reopens on a machine runs
+ * under that app's own automatic reviewer (`REVIEWS`), which decides in their place whether a
+ * command that would ask them may run, or with nothing that can approve such a command, so that
+ * it is refused. It is on until they turn it off. Turning it on lets a model approve for them,
+ * so, as with Auto-wake, the switch is theirs alone: from a browser paired as their own, and
+ * never by a machine.
+ */
+export const review = mutation({
+  args: { machineId: v.id('machines'), harness: v.string(), on: v.boolean() },
+  handler: async (ctx, { machineId, harness, on }) => {
+    const { user } = await requireOwner(ctx)
+    const m = await ownMachine(ctx, user._id, machineId)
+    if (!(REVIEWS as readonly string[]).includes(harness)) fail('invalid', 'It reopens no conversation of that agent app under a reviewer of its own.')
+    const off = (m.reviewOff ?? []).filter((h) => h !== harness)
+    await ctx.db.patch(m._id, { reviewOff: on ? off : [...off, harness] })
+    return null
+  },
+})
+
+/**
  * The person asks, from a browser of their own, for a machine to be brought to the newest
  * version of It. Nothing in the asking says which version or where from: the machine fetches
  * what the place releases are kept says is newest, and checks it as an install does, so the most
@@ -268,8 +290,8 @@ const RUNS_MOST = 20
 /** The machine says that it has reopened a conversation, which is running from now until it says otherwise. */
 export const runBegan = mutation({
   /** `run` names this run among all there have been of the conversation, so that the ending of an earlier one, told late, does not take this one's place away. */
-  args: { for: session, run: v.optional(v.string()), ids: v.optional(v.array(v.string())) },
-  handler: async (ctx, { for: s, run, ids }) => {
+  args: { for: session, run: v.optional(v.string()), ids: v.optional(v.array(v.string())), note: v.optional(v.string()) },
+  handler: async (ctx, { for: s, run, ids, note }) => {
     const { machine } = await requireMachine(ctx)
     // What it is reopened for may have been stopped while the machine was getting ready: a
     // person who pressed Stop beside a run that was only still listed stopped that, and
@@ -289,13 +311,20 @@ export const runBegan = mutation({
     // connector that names no clicks is one from before this was asked, and is taken at its word)
     if (ids !== undefined && !(wakesOn(machine.system, machine.reopens) && (machine.wakes ?? []).some((w) => w.harness === s.harness)))
       return { stopped: false, off: true }
+    // Whether it runs under its app's own reviewer is asked here too, where the person's switch
+    // is kept, so that one turned off a moment ago holds for this run. What the machine says of
+    // how it was reopened is kept only where it was to have the reviewer and does not.
+    const reviews = (REVIEWS as readonly string[]).includes(s.harness)
+    const reviewed = reviews && !(machine.reviewOff ?? []).includes(s.harness)
+    const said = reviewed && note ? { note: note.slice(0, 300) } : {}
     const others = (machine.runs ?? []).filter((r) => r.harness !== s.harness || r.sessionId !== s.id)
     await ctx.db.patch(machine._id, {
-      runs: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), since: Date.now(), ...(run ? { run: run.slice(0, 64) } : {}) }].slice(
-        -RUNS_MOST,
-      ),
+      runs: [
+        ...others,
+        { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), since: Date.now(), ...(run ? { run: run.slice(0, 64) } : {}), ...said },
+      ].slice(-RUNS_MOST),
     })
-    return { stopped: false }
+    return { stopped: false, ...(reviews ? { review: reviewed } : {}) }
   },
 })
 

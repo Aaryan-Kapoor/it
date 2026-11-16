@@ -1,7 +1,7 @@
 // The machines where the person's agents run, and which agent apps (harnesses, in the code) on
 // each are connected. The site only records the choice; the connector on the machine does the
 // installing.
-import { ALIVE, HARNESSES, INSTALL, newer, noWakeHere, TURN_ON_MS, TURNS_ON, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
+import { ALIVE, HARNESSES, INSTALL, newer, noWakeHere, REVIEWS, TURN_ON_MS, TURNS_ON, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
@@ -49,6 +49,7 @@ interface Machine {
   harnesses: Harness[]
   wanted: string[]
   wakes: { harness: string; since: number }[]
+  reviewOff?: string[]
 }
 
 /**
@@ -377,6 +378,7 @@ export const pausedFor = (why: string, machine: string): string =>
 function MachineCard({ m, now, host }: { m: Machine; now: number; host: string | null }) {
   const toggle = useMutation(api.machines.toggle)
   const wake = useMutation(api.machines.wake)
+  const review = useMutation(api.machines.review)
   const rename = useMutation(api.machines.rename)
   const [error, setError] = useState('')
   const [name, setName] = useState<string | null>(null)
@@ -451,6 +453,9 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
             // And only on a machine of a system It reopens conversations on
             const wakeable = couldWake && wakesOn(m.system, m.reopens)
             const wakes = m.wakes.some((w) => w.harness === h.id)
+            // Whether a conversation It reopens runs under the app's own automatic reviewer: only for an app that has one, and only said where Auto-wake is on
+            const reviewable = wakeable && wakes && (REVIEWS as readonly string[]).includes(h.id)
+            const reviewed = !(m.reviewOff ?? []).includes(h.id)
             return (
               <li key={h.id} className="row">
                 <label className="row-main switch-row">
@@ -499,6 +504,28 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                           : wakes
                             ? 'On. When you use a page whose conversation is closed, It reopens it and runs this agent here with nobody watching'
                             : 'Off. A click waits until you open its conversation again'}
+                    </span>
+                  </label>
+                )}
+                {reviewable && (
+                  <label
+                    className="row-detail switch-row wake-row"
+                    title={`Lets ${LABEL[h.id] ?? h.id}’s own reviewer, a model, approve in your place what a reopened conversation would otherwise have to ask you.`}
+                  >
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      aria-checked={reviewed}
+                      aria-label={`Approve for me in a reopened ${LABEL[h.id] ?? h.id} conversation`}
+                      checked={reviewed}
+                      onChange={(e) => act(review({ machineId, harness: h.id, on: e.target.checked }))}
+                    />
+                    <span className="wake-name">Approve for me</span>
+                    {/* In Codex's own words for the mode, and what it means with nobody there, said where it can be read */}
+                    <span className="row-sub">
+                      {reviewed
+                        ? `On. In a conversation It reopens, ${LABEL[h.id] ?? h.id}’s automatic reviewer decides in your place whether a command that would ask you may run, and one it allows can run outside the sandbox`
+                        : `Off. A conversation It reopens runs only what ${LABEL[h.id] ?? h.id}’s sandbox and It’s rule let through, and anything that would ask you is refused`}
                     </span>
                   </label>
                 )}

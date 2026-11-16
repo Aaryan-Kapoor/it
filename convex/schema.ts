@@ -290,9 +290,21 @@ export default defineSchema({
     wakes: v.optional(v.array(v.object({ harness: v.string(), since: v.number() }))),
     // The agent apps the person has switched reopening off for on this machine: it is not switched on for them again by anything but the person
     wakesOff: v.optional(v.array(v.string())),
+    /** The agent apps whose reopened conversations the person has run without the app's own automatic reviewer on this machine (`REVIEWS`): only they say so, from a browser of their own. */
+    reviewOff: v.optional(v.array(v.string())),
     /** The conversations this machine is running now because It reopened them, each since when, and whether someone has asked for it to be stopped. */
     runs: v.optional(
-      v.array(v.object({ harness: v.string(), sessionId: v.string(), since: v.number(), stop: v.optional(v.boolean()), run: v.optional(v.string()) })),
+      v.array(
+        v.object({
+          harness: v.string(),
+          sessionId: v.string(),
+          since: v.number(),
+          stop: v.optional(v.boolean()),
+          run: v.optional(v.string()),
+          /** What the bar above its page says of how it was reopened, where that is not as the person chose: see `CODEX_UNREVIEWED`. */
+          note: v.optional(v.string()),
+        }),
+      ),
     ),
     /** The last few conversations a person stopped, and when: what was waiting for one by then is not reopened for. */
     stops: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), run: v.optional(v.string()) }))),

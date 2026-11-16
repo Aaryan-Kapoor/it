@@ -36,7 +36,10 @@ import {
   claudeResume,
   claudeWroteAt,
   codexHolder,
+  CODEX_REVIEWED,
+  CODEX_UNREVIEWED,
   codexInterruptedAt,
+  codexReview,
   codexWroteAt,
   endJob,
   endTree,
@@ -273,6 +276,59 @@ describe('the command each agent app is carried on with', () => {
     expect(codex.join(' ')).not.toContain('writable_roots')
     expect(codex.join(' ')).not.toContain('.it')
     expect(codex.slice(-2)).toEqual(['01a10f7c-062c-7010-8d57-8e1007169551', '-'])
+  })
+
+  test('Codex is reopened under its own automatic reviewer where it is to be, with its sandbox and nothing bypassed, on every system', () => {
+    const thread = '01a10f7c-062c-7010-8d57-8e1007169551'
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      const how = carrying('codex', thread, 'a click', { ...has, platform, review: true })
+      if (typeof how === 'string') throw new Error(how)
+      const at = how.argv.indexOf('approvals_reviewer="auto_review"')
+      // As Codex's own --approve-for-me sets it: the reviewer, and approvals that go to it rather than being refused
+      expect(how.argv[at - 1]).toBe('-c')
+      expect(how.argv.slice(at - 1, at + 3)).toEqual([...CODEX_REVIEWED])
+      expect(how.argv).toContain('sandbox_mode="workspace-write"')
+      expect(how.argv).toContain('sandbox_workspace_write.network_access=true')
+      expect(how.argv.slice(0, 3)).toEqual(['codex', 'exec', 'resume'])
+      expect(how.argv.slice(-2)).toEqual([thread, '-'])
+      expect(how.argv.join(' ')).not.toMatch(/bypass|danger|never/)
+      expect(how.input).toBe('a click')
+    }
+  })
+
+  test('where the reviewer is turned off, or this Codex may not have one, Codex is reopened exactly as it is without it', () => {
+    const thread = '01a10f7c-062c-7010-8d57-8e1007169551'
+    const plain = [
+      'codex',
+      'exec',
+      'resume',
+      '--skip-git-repo-check',
+      '-c',
+      'sandbox_mode="workspace-write"',
+      '-c',
+      'sandbox_workspace_write.network_access=true',
+      '-c',
+      'sandbox_workspace_write.writable_roots=["/home/someone/.it"]',
+      thread,
+      '-',
+    ]
+    for (const off of [codexReview('0.167.2', true), codexReview(undefined, false)]) {
+      expect(off.review).toBe(false)
+      expect((carrying('codex', thread, 'x', { ...has, review: off.review }) as { argv: string[] }).argv).toEqual(plain)
+    }
+    expect((carrying('codex', thread, 'x', has) as { argv: string[] }).argv).toEqual(plain)
+    expect((carrying('codex', thread, 'x', { ...has, review: true }) as { argv: string[] }).argv).not.toEqual(plain)
+  })
+
+  test('the reviewer is used with every Codex It accepts, unless the person turned it off, and where the version is not known the page is told why it was not', () => {
+    for (const version of ['0.160.0', '0.167.2', '0.170.0', '1.0.0']) expect(codexReview(version, false)).toEqual({ review: true, note: null })
+    for (const version of ['0.159.9', '0.120.0', 'unknown', '', null, undefined, '0.167.2-alpha.1'])
+      expect(codexReview(version, false), String(version)).toEqual({ review: false, note: CODEX_UNREVIEWED })
+    // Turned off, it is the person's choice, and nothing is said of it on the page
+    for (const version of ['0.167.2', undefined]) expect(codexReview(version, true)).toEqual({ review: false, note: null })
+    // The sentence fits what the page keeps of it, and says what a reopened Codex may and may not do
+    expect(CODEX_UNREVIEWED.length).toBeLessThanOrEqual(300)
+    expect(CODEX_UNREVIEWED).toMatch(/refused/)
   })
 
   test('an id of a shape the app does not make is never put on its command line, and an app with no such command has none', () => {

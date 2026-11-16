@@ -2890,6 +2890,41 @@ describe('clicks and their delivery', () => {
     expect((await inbox(m, [], ['codex'])).map((c) => c.id)).toEqual(queued.slice(0, 2))
   })
 
+  test('a reopened Codex runs under its own reviewer until the owner turns that off, which only they can, and the page says why where it went without', async () => {
+    const { alice, m } = await setup()
+    const thread = { harness: 'codex', id: 'thr-reviewed' }
+    await publish(m, 'reviewed', { session: thread })
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'codex', on: true })
+    const listed = async () => (await alice.browser.query(api.machines.list, {})).find((x: { id: string }) => x.id === m.id) as { reviewOff: string[] }
+    // On from the start: nothing is turned off, and a run is told so as it begins
+    expect((await listed()).reviewOff).toEqual([])
+    expect(await m.as.mutation(api.machines.runBegan, { for: thread, ids: [] })).toEqual({ stopped: false, review: true })
+    // What the machine says of a run that went without it, though it was on, is said on the page
+    await m.as.mutation(api.machines.runBegan, { for: thread, ids: [], note: 'Codex was reopened without its automatic reviewer.' })
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'reviewed' })).run).toMatchObject({
+      note: 'Codex was reopened without its automatic reviewer.',
+    })
+    // A machine cannot turn it off or on, and nor can anything but the owner's browser
+    expect(await code(m.as.mutation(api.machines.review, { machineId: m.id, harness: 'codex', on: false }))).not.toBe('ok')
+    expect(await code(alice.browser.mutation(api.machines.review, { machineId: m.id, harness: 'claude-code', on: false }))).toBe('invalid')
+    // Turned off by the owner, a run that begins after is told so, whatever its machine had heard, and nothing is said of it on the page
+    await alice.browser.mutation(api.machines.review, { machineId: m.id, harness: 'codex', on: false })
+    expect((await listed()).reviewOff).toEqual(['codex'])
+    expect((await m.as.query(api.machines.me, {})).reviewOff).toEqual(['codex'])
+    expect(await m.as.mutation(api.machines.runBegan, { for: thread, ids: [], note: 'Codex was reopened without its automatic reviewer.' })).toEqual({
+      stopped: false,
+      review: false,
+    })
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'reviewed' })).run).toMatchObject({ note: null })
+    // Turned on again, it is on again, once
+    await alice.browser.mutation(api.machines.review, { machineId: m.id, harness: 'codex', on: true })
+    await alice.browser.mutation(api.machines.review, { machineId: m.id, harness: 'codex', on: true })
+    expect((await listed()).reviewOff).toEqual([])
+    // Only Codex has a reviewer It reopens under: a run of another app is told nothing of one
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, ids: [] })).toEqual({ stopped: false })
+  })
+
   test('a click that another machine handed over is lost to a machine that was at work on it, and one that its own agent said was done is not', async () => {
     const { t, m, click } = await setup()
     const other = await machineOf(t, 'alice', 'desktop')

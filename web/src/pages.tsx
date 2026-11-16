@@ -522,6 +522,7 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
               artifactId={page.id as Id<'artifacts'>}
               stopping={page.run.stopping}
               expectedRun={page.run.identity}
+              note={page.run.note ?? null}
               user={user}
               machine={page.machine}
               machineSeenAt={page.machineSeenAt}
@@ -957,6 +958,7 @@ function Working({
   artifactId,
   stopping,
   expectedRun,
+  note,
   user,
   machine,
   machineSeenAt,
@@ -965,6 +967,8 @@ function Working({
   artifactId: Id<'artifacts'>
   stopping: boolean
   expectedRun: string
+  /** How the run was reopened, where that is not as the person chose, in a plain sentence of It's own: said beside it. */
+  note: string | null
   user: string
   machine: string | null
   machineSeenAt: number | null
@@ -990,6 +994,12 @@ function Working({
   const now = useNow(1_000)
   useSyncExternalStore(watchOutbox, outboxChanges)
   // Something done here that this browser would not store is lost with the tab, whatever the agent is doing: said beside the rest
+  // How it was reopened, where that is not as the person chose: said for as long as it runs
+  const reopenedSo = note && (
+    <span className="status" data-tone="wait">
+      {note.replace(/[.\s]+$/, '')}
+    </span>
+  )
   const keepOpen = unsaved(user, artifactId) > 0 && (
     <span className="status" data-tone="wait">
       Not sent yet. This browser could not save it, so keep this tab open
@@ -1031,6 +1041,7 @@ function Working({
             : `${machine ?? 'Its machine'} is not answering. Whether ${agent ?? 'your agent'} is still at work there is not known`}
         </span>
         {sendingStop}
+        {reopenedSo}
         {keepOpen}
         {/* It can still be asked to stop: It keeps the asking, and the machine acts on it the moment it is back. Not a second time while one is on its way */}
         {!ending && !sending && (
@@ -1063,6 +1074,7 @@ function Working({
         )}
       </span>
       {sendingStop}
+      {reopenedSo}
       {keepOpen}
     </>
   )

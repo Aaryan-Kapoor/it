@@ -411,6 +411,13 @@ export const CODEX_MIN_VERSION = '0.160.0'
  */
 export const WAKES: readonly Harness[] = ['claude-code', 'codex', 'pi', 'opencode', 'hermes']
 /**
+ * The agent apps whose conversations It reopens under the app's own automatic reviewer, which
+ * decides in the person's place whether a command that would ask them may run: Codex's, which
+ * its /permissions calls "Approve for me". It is used unless the person turns it off for the
+ * app on a machine, under Machines, beside Auto-wake.
+ */
+export const REVIEWS: readonly Harness[] = ['codex']
+/**
  * Whether It reopens a closed conversation on a machine of this system, as the machine names
  * its system (`process.platform`), and as the machine says of itself (`reopens`). On Linux and
  * macOS the system is enough. On Windows a machine reopens conversations only where it says it

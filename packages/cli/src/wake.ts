@@ -20,7 +20,7 @@ import {
 } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { WAKE_BACK_MS, WAKES } from '@it/protocol'
+import { CODEX_MIN_VERSION, newer, WAKE_BACK_MS, WAKES } from '@it/protocol'
 import { printed, runSync } from './child'
 import { harnessEnv } from './lib'
 
@@ -103,6 +103,32 @@ export const LEFT_MAY_RUN =
 export const WAS_STOPPED =
   '[It] One thing more. The person stopped this conversation’s last turn, from the page, before it had finished. That cancelled what they had done up to then and you had not finished: what that turn was working on, and anything else that reached this conversation while it worked, even where you see it earlier in this conversation with no answer after it. Leave all of that undone. What is at the top of this message was sent after they stopped it. It is new, and it is what this turn is for: do it, and only it.'
 
+/**
+ * What Codex is given, beside its sandbox, to run a reopened conversation under its automatic
+ * reviewer: exactly what its own `--approve-for-me` adds, in the form every Codex It accepts
+ * reads after `exec resume` as well.
+ */
+export const CODEX_REVIEWED = ['-c', 'approvals_reviewer="auto_review"', '-c', 'approval_policy="on-request"'] as const
+
+/** What the bar above a page says where Codex was reopened without its reviewer though the person left it on. */
+export const CODEX_UNREVIEWED =
+  'Codex was reopened without its automatic reviewer, because It could not tell that this Codex has one. So it may run only what Codex’s sandbox and It’s rule let through, and anything that would need approval is refused.'
+
+/**
+ * Whether a reopened Codex conversation runs under Codex's automatic reviewer, and what the
+ * page is to say where it does not though the person left it on (`off` is their switch under
+ * Machines). The reviewer and the way of choosing it from the command line are in every Codex
+ * It accepts, from `CODEX_MIN_VERSION` on, so it is used where the Codex found on this machine
+ * says it is one of those. One whose version was not read, or that is older, is reopened as it
+ * would be with the switch off, and the page says why.
+ */
+export function codexReview(version: string | null | undefined, off: boolean): { review: boolean; note: string | null } {
+  if (off) return { review: false, note: null }
+  const known = typeof version === 'string' && /^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(version)
+  if (known && !newer(CODEX_MIN_VERSION, version)) return { review: true, note: null }
+  return { review: false, note: CODEX_UNREVIEWED }
+}
+
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {
   argv: string[]
@@ -127,12 +153,23 @@ export interface Carrying {
  *   one they held in the mode that asks is reopened with `it` and whatever their own settings
  *   allow. It does what it could do with them there, and no more.
  * - Codex is run in its sandbox for a workspace, with the network allowed and It's own folder
- *   writable, which is what `it` needs. It can write in the conversation's folder, It's folder
- *   and the system's temporary folders, and nowhere else, and nothing can ask the person for
- *   more, since they are not there. These settings are given on the command line, so they win
- *   over a permissions profile the person chose in their own settings or a project's. On
- *   Windows It's folder is left out of what it may write, and `it` reaches It by the rule that
- *   lets it out of the sandbox.
+ *   writable, which is what `it` needs. Inside the sandbox it can write in the conversation's
+ *   folder, It's folder and the system's temporary folders. These settings are given on the
+ *   command line, so they win over a permissions profile the person chose in their own
+ *   settings or a project's. On Windows It's folder is left out of what it may write, and `it`
+ *   reaches It by the rule that lets it out of the sandbox.
+ *
+ *   With `review` (see `codexReview`), what would ask the person goes to Codex's own automatic
+ *   reviewer instead, the mode Codex's /permissions calls "Approve for me": approvals with
+ *   `on-request`, and `approvals_reviewer` set to `auto_review`, which is all that Codex's
+ *   `--approve-for-me` sets beside the sandbox (Codex 0.160.0 to 0.167.2 alike). Codex's
+ *   reviewer, a model, then decides in the person's place whether a command that the sandbox
+ *   or a rule holds back may run, and one it allows outside the sandbox runs with everything
+ *   the person can do. Without it, `codex exec` takes approvals as "never", and a command that
+ *   would ask is refused. Either way the sandbox and It's rules are as they are, and a rule
+ *   that allows lets its command through first. Given on the command line, the two settings win
+ *   over the person's own; without them, a reviewer the person chose in their own settings is
+ *   still Codex's to use.
  * - Pi, OpenCode and Hermes are run as they are in a window, with whatever their own settings
  *   allow there. Nothing can ask the person for more, since they are not there.
  */
@@ -150,6 +187,8 @@ export function carrying(
     start?: string[] | null
     /** The system the command is for, where it is not this one: only tests say. */
     platform?: NodeJS.Platform
+    /** For Codex: whether what would ask the person goes to Codex's automatic reviewer (see `codexReview`). */
+    review?: boolean
   },
 ): Carrying | string {
   const app = APP[harness] ?? harness
@@ -185,6 +224,7 @@ export function carrying(
         '-c',
         'sandbox_workspace_write.network_access=true',
         ...itsFolder,
+        ...(has.review ? CODEX_REVIEWED : []),
         session,
         '-',
       ],
