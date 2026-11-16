@@ -2559,11 +2559,12 @@ const listed = (names: readonly string[]): string => (names.length > 1 ? `${name
  * each that the person chose and It has on record, as a setup with nobody to ask keeps them,
  * whether or not it was found just now: an app whose command failed this once, or is not on the
  * PATH this runs with, stays chosen, and putting its add-on right, or bringing it up to date, is
- * left to the connecting, as it is everywhere else. Where It cannot be asked what was chosen,
- * what is here is kept.
+ * left to the connecting, as it is everywhere else: the background service would put it right by
+ * itself. It is asked first, so that nothing is changed where it cannot be: an app that was chosen
+ * and is too old or could not be looked at just now would otherwise be taken out.
  */
 async function keptConnected(found: readonly HarnessStatus[], named: readonly Harness[]): Promise<Harness[]> {
-  const chosen = (await call<{ wanted?: string[] } | null>('query', api.machines.me).catch(() => null))?.wanted ?? []
+  const chosen = (await call<{ wanted?: string[] } | null>('query', api.machines.me))?.wanted ?? []
   const here = found.filter((h) => h.addon === 'connected' || h.addon === 'needs_approval' || h.addon === 'disabled').map((h) => h.id)
   return [...new Set([...here, ...chosen])].filter((id): id is Harness => (HARNESSES as readonly string[]).includes(id) && !named.includes(id as Harness))
 }
@@ -2590,9 +2591,16 @@ async function namedChoice(
       `${listed(absent.map((id) => KNOWN[id].label))} ${absent.length === 1 ? 'was' : 'were'} not connected, so \`--without\` left ${absent.length === 1 ? 'it as it was' : 'them as they were'}.`,
     )
   if (kept.length) {
-    const one = kept.length === 1
+    // Said as connected only where it is: one turned off in the app, or chosen and not found just now, is said to stay as it was
+    const on = kept.filter((id) => found.some((h) => h.id === id && (h.addon === 'connected' || h.addon === 'needs_approval')))
+    const rest = kept.filter((id) => !on.includes(id))
+    const stays = (ids: readonly Harness[]) => `${listed(ids.map((id) => KNOWN[id].label))} ${ids.length === 1 ? 'stays' : 'stay'}`
+    const what = [
+      on.length ? `${stays(on)} connected` : undefined,
+      rest.length ? `${stays(rest)} as ${rest.length === 1 ? 'it was' : 'they were'}` : undefined,
+    ].filter(Boolean)
     say(
-      `${listed(kept.map((id) => KNOWN[id].label))} ${one ? 'stays' : 'stay'} connected, since \`--only\` and \`--without\` leave as it is every app they do not name. \`${itForAgent()} setup --without ${kept.join(',')}\` disconnects ${one ? 'it' : 'them'}.`,
+      `${what.join(', and ')}, since \`--only\` and \`--without\` leave as it is every app they do not name. \`${itForAgent()} setup --without ${kept.join(',')}\` disconnects ${kept.length === 1 ? 'it' : 'them'}.`,
     )
   }
   return { wanted: [...named, ...kept], named }
@@ -2616,8 +2624,7 @@ function disconnectedSaid(found: readonly HarnessStatus[], after: readonly Harne
 /**
  * The agent apps that `--only` names. A name It does not know is refused, and so is an app
  * whose add-on is held back and that nobody has asked for: in words, with nothing changed.
- * Carried on with, such a setup would connect nothing and take out every app that was not
- * named, the one asked for among them.
+ * Carried on with, such a setup would connect nothing of what it was asked to connect.
  */
 function appsNamed(only: string): Harness[] {
   const wanted = only

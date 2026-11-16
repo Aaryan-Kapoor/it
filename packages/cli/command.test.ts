@@ -7826,6 +7826,8 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
       expect(setup.code).toBe(0)
       // It is told that Pi is still chosen, so that the service does not take Pi's add-on out
       expect(chose.map((c) => [...c].sort())).toEqual([['opencode', 'pi']])
+      // And Pi, which was not found, is not said to be connected
+      expect(setup.err).toContain('Pi stays as it was, since `--only` and `--without` leave as it is every app they do not name.')
     } finally {
       await b.close()
     }
@@ -8008,6 +8010,36 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
       expect(missing.err).toContain('Codex was not found on this machine.')
       expect(wanted()).toEqual(['codex', 'pi'])
       expect(ran().some((words) => words.startsWith('remove'))).toBe(false)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('where It cannot be asked what was chosen, `--only` and `--without` change nothing', async () => {
+    const m = machine()
+    const ran = pi(m)
+    writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.18.32\n', { mode: 0o755 })
+    let failing = false
+    const chose: string[][] = []
+    const b = await backend(m, (asked) => {
+      if (asked.path === 'machines:choose') chose.push(asked.args.harnesses as string[])
+      if (asked.path !== 'machines:me') return null
+      return failing ? SERVER_ERROR : { id: 'machine-1', name: 'test', wanted: chose.at(-1) ?? [] }
+    })
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)).code).toBe(0)
+      failing = true
+      const choices = chose.length
+      for (const words of [
+        ['--only', 'opencode'],
+        ['--without', 'opencode'],
+      ]) {
+        const refused = await run(m, ['setup', '--no-service', ...words], b.env)
+        expect(refused.code).not.toBe(0)
+      }
+      expect(chose.length).toBe(choices)
+      expect(ran().some((words) => words.startsWith('remove'))).toBe(false)
+      expect(existsSync(path.join(m.home, 'pi-has'))).toBe(true)
     } finally {
       await b.close()
     }
