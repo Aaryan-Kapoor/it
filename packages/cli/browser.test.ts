@@ -1,8 +1,10 @@
 // Whether the address that pairs a browser is opened in the person's browser, and how it is
 // handed to the system's opener. No real browser is opened by any of these: the opener is
 // always stood in for.
+
+import { spawnSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
@@ -179,33 +181,35 @@ describe('what an agent’s commands are held to', () => {
     writeFileSync(blocked, '')
     expect(takeOpening(path.join(blocked, 'browser-opened.json'), Date.now())).toBe(false)
   })
-  test('commands that ask at once take turns: one that finds another holding the lock opens nothing, even with the note long out of date', () => {
+  test('commands that ask at once take turns: one that finds a running command holding the lock opens nothing, even with the note long out of date', () => {
     const file = noteIn()
     const now = 5_000_000_000_000
     expect(takeOpening(file, now)).toBe(true)
     expect(existsSync(`${file}.lock`)).toBe(false)
-    // Another command holds the lock, as it does while it reads and writes the note
-    mkdirSync(`${file}.lock`)
+    // Another command that is still running holds the lock, as it does while it reads and writes the note
+    writeFileSync(`${file}.lock`, JSON.stringify({ pid: process.pid, holder: '0123456789abcdef' }))
     expect(takeOpening(file, now + 10 * OPENED_FOR_MS)).toBe(false)
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ at: now })
-    // A lock older than a minute was left by a command that ended: it is taken away, and that command still opens nothing
-    const later = Date.now() + 2 * 60_000
-    expect(takeOpening(file, now + 10 * OPENED_FOR_MS, () => later)).toBe(false)
-    expect(existsSync(`${file}.lock`)).toBe(false)
-    // The next one may
+    // One that holds it and has ended, as a command that was killed has, is taken over, and the opening is taken
+    const ended = spawnSync(process.execPath, ['-e', '']).pid!
+    writeFileSync(`${file}.lock`, JSON.stringify({ pid: ended, holder: '0123456789abcdef' }))
     expect(takeOpening(file, now + 10 * OPENED_FOR_MS)).toBe(true)
+    expect(existsSync(`${file}.lock`)).toBe(false)
+    // And a lock that is not as such a command writes it is nobody's to take away
+    writeFileSync(`${file}.lock`, 'not a lock record')
+    expect(takeOpening(file, now + 20 * OPENED_FOR_MS)).toBe(false)
   })
 })
 
 describe('whether the pairing address is opened', () => {
-  test('for an agent with no browser open to It, once, and the note says how it went and nothing of the address', async () => {
+  test('for an agent with no browser open to It, once, and the note holds the time and nothing of the address', async () => {
     const file = noteIn()
     const { start, started } = starter()
     const now = 3_000_000_000_000
     expect(await openPairing(URL_, asAgent(), linux(), start, file, now)).toBe(true)
     expect(started.map((s) => [s.cmd, s.args])).toEqual([['xdg-open', [URL_]]])
     const note = readFileSync(file, 'utf8')
-    expect(JSON.parse(note)).toEqual({ at: now, result: 'opened' })
+    expect(JSON.parse(note)).toEqual({ at: now })
     expect(note).not.toContain('pair')
     // Three commands in a row open one tab
     expect(await openPairing(URL_, asAgent(), linux(), start, file, now + 5000)).toBe(false)
@@ -266,11 +270,11 @@ describe('whether the pairing address is opened', () => {
     expect(await openPairing(URL_, asAgent(), mac(), start, file)).toBe(false)
     expect(started).toHaveLength(2)
   })
-  test('a failure to open is said to nobody, and noted by its code', async () => {
+  test('a failure to open is said to nobody', async () => {
     const file = noteIn()
     const now = 4_000_000_000_000
     expect(await openPairing(URL_, asAgent(), windows(), starter({ error: 'ENOENT' }).start, file, now)).toBe(false)
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ at: now, result: 'ENOENT' })
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ at: now })
     // And it counts as the one opening of those ten minutes
     const { start, started } = starter()
     expect(await openPairing(URL_, asAgent(), windows(), start, file, now + 1000)).toBe(false)

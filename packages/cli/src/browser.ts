@@ -2,9 +2,11 @@
 // on: whether to, and how. Kept apart from the commands so that each case can be tried by itself,
 // with the system's opener stood in for.
 import { type ChildProcess, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmdirSync, statSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { claimLock } from './legacy-lock'
 import { inHome, writePrivate } from './lib'
 import { inWsl } from './service'
 
@@ -18,7 +20,7 @@ export const SEEN_LATELY_MS = 600_000
 /** How long the opener is given to fail before it is taken to have done its work. */
 const OPENER_FAILS_WITHIN_MS = 1000
 
-/** The note of when a browser was last opened here, and how that went, by a code. It holds nothing of the address. */
+/** The note of when a browser was last opened here. It holds that time and nothing else, nothing of the address among it. */
 export const openedFile = () => inHome('browser-opened.json')
 
 /** What is looked at of the machine: given by the tests. */
@@ -142,32 +144,28 @@ export function seenLately(displays: unknown, now: number): boolean {
   })
 }
 
-/** How old a lock on the note has to be before it is taken for one that a command which ended left behind. */
+/** How old an empty lock file of an earlier format has to be before it is taken for one that was left, as `claimLock` reads it. */
 const LOCK_LEFT_MS = 60_000
 
 /**
  * Takes the one opening that the ten minutes allow, and says whether it was taken. Commands that
- * ask at the same moment take turns by a lock beside the note, a folder that only one of them can
- * make. A command that finds the lock taken opens nothing. One that finds a lock older than a
- * minute, which a command that ended in the middle left, takes it away and opens nothing either,
- * so that taking away a lock never lets two commands in at once. Holding the lock, it reads the
- * note: one made less than ten minutes ago, either way of the clock, means the opening was taken
- * already, and a note that is there and cannot be read is never taken for no note. Otherwise the
- * note is written anew, whole, before the lock is let go. Where It's folder cannot be written, as
- * in a sandbox that keeps it read-only, nothing is opened.
+ * ask at the same moment take turns by the lock beside the note, taken with `claimLock` as the
+ * notes of conversations are: a command that finds it held by a command that is still running
+ * opens nothing, and one held by a command that has ended is taken over safely. Holding the lock,
+ * it reads the note: one made less than ten minutes ago, either way of the clock, means the
+ * opening was taken already, and a note that is there and cannot be read is never taken for no
+ * note. Otherwise the note is written anew, whole, before the lock is let go. Where It's folder
+ * cannot be written, as in a sandbox that keeps it read-only, nothing is opened.
  */
-export function takeOpening(file: string, now: number, clock: () => number = Date.now): boolean {
-  const lock = `${file}.lock`
+export function takeOpening(file: string, now: number): boolean {
+  let release: (() => void) | undefined
   try {
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-    mkdirSync(lock, { mode: 0o700 })
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'EEXIST')
-      try {
-        if (Math.abs(clock() - statSync(lock).mtimeMs) > LOCK_LEFT_MS) rmdirSync(lock)
-      } catch {}
+    release = claimLock(`${file}.lock`, LOCK_LEFT_MS, randomBytes(8).toString('hex'))
+  } catch {
     return false
   }
+  if (!release) return false
   try {
     let text: string | undefined
     try {
@@ -190,16 +188,9 @@ export function takeOpening(file: string, now: number, clock: () => number = Dat
     return false
   } finally {
     try {
-      rmdirSync(lock)
+      release()
     } catch {}
   }
-}
-
-/** Notes how the opening went, by its code. A note that cannot be written leaves the one made when the opening was taken, which stands as well. */
-function noteHow(file: string, at: number, result: string): void {
-  try {
-    writePrivate(file, { at, result })
-  } catch {}
 }
 
 export interface Asked {
@@ -215,16 +206,6 @@ export interface Asked {
   displays: () => Promise<unknown>
 }
 
-/**
- * Opens the address that pairs a browser in the person's browser on this machine, where that is
- * wanted, and says whether it did. Not with `--no-open`; not for a script, which is a command
- * whose output is no terminal and which no agent ran; not on a machine that joined another's It,
- * nor for any address but one on this machine, such as one that IT_SITE_URL names elsewhere;
- * and not where nobody is taken to be at the screen (`noScreen`). For an agent's command, also
- * not where a paired display has been seen in the last ten minutes, and not more than once in
- * ten minutes, whichever commands ask. A person who runs `it site` at a terminal asked for the
- * browser in so many words, and is not held to those two. Nothing of the address is kept or said.
- */
 /** Whether an address is It's site on this machine itself, by its name for itself, which is the only address opened. */
 export function onThisMachine(url: string): boolean {
   try {
@@ -235,6 +216,16 @@ export function onThisMachine(url: string): boolean {
   }
 }
 
+/**
+ * Opens the address that pairs a browser in the person's browser on this machine, where that is
+ * wanted, and says whether it did. Not with `--no-open`; not for a script, which is a command
+ * whose output is no terminal and which no agent ran; not on a machine that joined another's It,
+ * nor for any address but one on this machine, such as one that IT_SITE_URL names elsewhere;
+ * and not where nobody is taken to be at the screen (`noScreen`). For an agent's command, also
+ * not where a paired display has been seen in the last ten minutes, and not more than once in
+ * ten minutes, whichever commands ask. A person who runs `it site` at a terminal asked for the
+ * browser in so many words, and is not held to those two. Nothing of the address is kept or said.
+ */
 export async function openPairing(
   url: string,
   asked: Asked,
@@ -248,7 +239,11 @@ export async function openPairing(
     const displays = await asked.displays().catch(() => null)
     if (seenLately(displays, now) || !takeOpening(file, now)) return false
   }
-  const result = await launch(url, s, start)
-  noteHow(file, now, result)
-  return result === 'opened'
+  const opened = (await launch(url, s, start)) === 'opened'
+  // What a person opened counts for an agent that asks right after it. A note that cannot be written leaves nothing worse than before
+  if (!asked.agent)
+    try {
+      writePrivate(file, { at: now })
+    } catch {}
+  return opened
 }
