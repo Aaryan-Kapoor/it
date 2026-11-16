@@ -9,7 +9,7 @@ const cj=h+\"/.claude.json\"; let j={}; try{j=JSON.parse(fs.readFileSync(cj,\"ut
 j.hasCompletedOnboarding=true; j.customApiKeyResponses={approved:[k.slice(-20)],rejected:[]};
 j.projects=Object.assign(j.projects||{},{\"/home/ana/work\":{hasTrustDialogAccepted:true}}); fs.writeFileSync(cj,JSON.stringify(j,null,2));
 fs.mkdirSync(h+\"/.claude\",{recursive:true}); const sf=h+\"/.claude/settings.json\"; let s={}; try{s=JSON.parse(fs.readFileSync(sf,\"utf8\"))}catch{}
-s.env=Object.assign(s.env||{},{ANTHROPIC_BASE_URL:\"http://127.0.0.1:8899\",ANTHROPIC_API_KEY:k}); fs.writeFileSync(sf,JSON.stringify(s,null,2));
+s.env=Object.assign(s.env||{},{ANTHROPIC_BASE_URL:\"http://127.0.0.1:8899\",ANTHROPIC_API_KEY:k}); s.permissions={allow:[\"Bash(it:*)\",\"Bash(/home/ana/.it/bin/it:*)\"]}; fs.writeFileSync(sf,JSON.stringify(s,null,2));
 " $K
 mkdir -p ~/work
 systemd-run --user --unit=standin -E STANDIN_PORT=8899 /usr/local/bin/node /build/harness/standin.mjs >/dev/null 2>&1; sleep 2; tail -1 /tmp/standin.log
