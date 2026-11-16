@@ -19,6 +19,7 @@ import {
   t3Command,
   t3Counted,
   t3Held,
+  t3NearRead,
   t3Refusal,
   t3Running,
   t3RunsNow,
@@ -842,7 +843,7 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
 
   test('says, while it goes on, once every thread in the conversation’s folder has been read and none holds it, which comes long before the rest of a large workspace', async () => {
     // Many threads elsewhere, newer than the few in the conversation's folder
-    const threads: Record<string, string | number> = {}
+    const threads: Record<string, string | number | null> = {}
     const listed: { id: string; worktreePath: string; providerInstanceId: string; updatedAt: string }[] = []
     for (let i = 0; i < 300; i++) {
       threads[`elsewhere-${i}`] = `other-${i}`
@@ -878,9 +879,18 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
       expect(found.read.slice(96, 100)).toContain('site-4')
       // And it is so for every pass after, until the search is over
       expect(await searched(found.t3, search)).toEqual({ status: 'limited', near: true })
-      // A thread of the folder that changes since is read again before that is said again
+      expect(t3NearRead(search)).toBe(true)
+      // A thread of the folder that changes since is read again before that is said again, and
+      // from the moment the listing shows it changed: here T3 Code does not answer for it in time
       listed.find((t) => t.id === 'site-2')!.updatedAt = '2026-10-03T00:00:00Z'
-      expect(await t3ThreadOf(found.t3, inSite, search)).toMatchObject({ status: 'incomplete', near: true })
+      threads['site-2'] = null
+      expect(await t3ThreadOf(found.t3, inSite, search, AbortSignal.timeout(500))).toMatchObject({ status: 'incomplete', near: false })
+      expect(t3NearRead(search)).toBe(false)
+      threads['site-2'] = 'in-site-2'
+      // It goes behind the others of its search, and the next search reads it first again, with
+      // the last of the workspace: every thread has been read by then, and none holds it
+      expect(await searched(found.t3, search)).toEqual({ status: 'limited', near: false })
+      expect(await searched(found.t3, search)).toEqual({ status: 'absent' })
       // A conversation whose folder is not known has no such threads, and is never said to
       const unknown = progress()
       expect(await t3ThreadOf(found.t3, of, unknown)).toEqual({ status: 'incomplete', progressed: true, near: false })

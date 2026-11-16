@@ -84,6 +84,7 @@ import {
   type T3Search,
   t3Counted,
   t3Held,
+  t3NearRead,
   t3Refusal,
   t3Running,
   t3RunsNow,
@@ -1228,12 +1229,17 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    */
   const T3_UNDECIDED_MS = 15_000
   /**
-   * The conversations for which the search under way has read every thread that works in the
+   * Whether the search under way for a conversation has read every thread that works in the
    * conversation's folder, as T3 Code last listed them, and found that none holds it. A thread
-   * that holds a conversation is one of those, so a click for one of them goes the way it would
-   * without T3 Code, while the search goes on over the rest for the clicks that come after.
+   * that holds a conversation is one of those, so a click for it goes the way it would without
+   * T3 Code, while the search goes on over the rest for the clicks that come after. Read from
+   * the search as it stands, so that a listing that finds one of those threads changed makes it
+   * untrue at once; a search that has ended or been dropped says nothing.
    */
-  const t3Near = new Set<string>()
+  const t3NearCleared = (key: string): boolean => {
+    const search = t3Searches.get(key)
+    return search !== undefined && t3NearRead(search)
+  }
   /**
    * When each click's wait for T3 Code before a reopening began, by the clock that only goes
    * forward. Unlike `t3Waits` it is kept while the click is away from this machine, as while a
@@ -1385,7 +1391,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     if (!key.startsWith('claude-code:') && !key.startsWith('codex:')) return false
     if (t3Only(key)) return true
     if (!t3Seen?.server) return false
-    if (t3Near.has(key)) return false
+    if (t3NearCleared(key)) return false
     const known = t3Known.get(key)
     return !(known !== undefined && known !== 'asking' && known.thread === null && Date.now() - known.at < T3_AGAIN_MS)
   }
@@ -1444,7 +1450,6 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       if (t3Known.get(key) === 'asking') t3Known.delete(key)
       t3Pending.delete(key)
       t3Retries.delete(key)
-      t3Near.delete(key)
     }
   }
   /**
@@ -1488,7 +1493,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       until = t3Waits.get(click)! + T3_ASKED_MS
     }
     // Not once every thread in the conversation's folder has been read and none holds it
-    const waiting = steady() < until && !t3Near.has(key)
+    const waiting = steady() < until && !t3NearCleared(key)
     const stillAsking = () => (waiting ? 'asking' : otherwise('T3 Code has not yet said which thread holds it'))
     if (known === 'asking') return stillAsking()
     // A click waits for a search that is to go on only where it goes on before the click's wait is over
@@ -1499,7 +1504,6 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       t3Searches.clear()
       t3Pending.clear()
       t3Retries.clear()
-      t3Near.clear()
     }
     t3Known.set(key, 'asking')
     const search = t3Searches.get(key) ?? t3Search()
@@ -1508,12 +1512,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     // By the id its pages name and by the one it has now: T3 Code keeps the one it resumes from
     const ids = [...new Set([session.id, threadOf(key)])]
     void t3ThreadOf(server, { harness: session.harness, ids, cwd: conversationFolder(session) }, search)
-      .catch(() => ({ status: 'incomplete' as const, progressed: false, near: t3Near.has(key) }))
+      .catch(() => ({ status: 'incomplete' as const, progressed: false }))
       .then((result) => {
         if (t3Searches.get(key) !== search) return
         let again = 10
-        if ((result.status === 'incomplete' || result.status === 'limited') && result.near) t3Near.add(key)
-        else t3Near.delete(key)
         if (result.status === 'incomplete') {
           // More candidates, unread answers and expired budgets are not evidence of absence.
           // A click's wait is its own, and later batches do not restart it.
@@ -1528,7 +1530,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           if (why)
             seldom(
               't3-session',
-              `T3 Code is running here and gave It no session (${why}): what is done on the pages of its threads waits until it does, and a closed Claude Code or Codex conversation is reopened outside it only after a wait of ${T3_UNDECIDED_MS / 1000} seconds meanwhile`,
+              `T3 Code is running here and gave It no session (${why}): what is done on the pages of its threads waits until it does, and meanwhile a closed Claude Code or Codex conversation is reopened outside it only after a wait of ${T3_UNDECIDED_MS / 1000} seconds`,
             )
         } else if (result.status === 'limited') {
           // What the search has read is kept, and it goes on no further by itself. The next
@@ -3223,6 +3225,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       if (!stillFor()) return
       // Nor is a conversation reopened once the person has switched that off, or more often than it may be
       if ((reopening && !wakes(harness, click.at)) || (starting && !room(key, someoneThere(click, offered)))) return
+      // Nor once a thread of T3 Code has been found to hold it while the click stood in line,
+      // as a search that went on, or the conversation being heard from, may find: its clicks go
+      // to that thread, and the click is looked at afresh on the next pass
+      if (reopening && t3Only(key)) return
       // Codex's queue is for a conversation some Codex has open. One that was closed while this
       // click stood in line is not given it: the click is looked at afresh on the next pass.
       if (!reopening && !t3 && codexOpen(key) !== true) return
@@ -3250,6 +3256,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         awaited(click, Date.now()) ||
         !stillFor() ||
         (reopening && !wakes(harness, click.at)) ||
+        (reopening && t3Only(key)) ||
         (!reopening && !t3 && codexInterrupted(key))
       ) {
         journal('released', click.id)
@@ -3344,6 +3351,14 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           await release(click.id).catch(() => {})
           return
         }
+      }
+      // And once more just before the conversation is reopened: a thread of T3 Code found to hold
+      // it while the clicks were being claimed has them, and nothing is run beside it
+      if (reopening && t3Only(key)) {
+        await giveBack()
+        journal('released', click.id)
+        await release(click.id).catch(() => {})
+        return
       }
       // The command can take as long as a lease lasts, so the lease is kept up while it runs.
       // Only a renewal the backend confirmed keeps it. Told that a click of this hand-over is

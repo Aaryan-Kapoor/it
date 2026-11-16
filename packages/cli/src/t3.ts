@@ -599,8 +599,12 @@ export function t3Counted(search: T3Search): { read: number; listed: number } {
   return { read: search.cleared.size, listed: search.listedCount ?? 0 }
 }
 
-/** Whether every thread that works in the conversation's folder has been read, and none holds it. */
-const nearRead = (search: T3Search): boolean => search.near !== undefined && [...search.near].every((id) => search.cleared.has(id))
+/**
+ * Whether every thread that works in the conversation's folder has been read, and none holds it,
+ * as the search stands at this moment: a listing that finds one of them changed, or a search
+ * for other ids, makes it untrue at once, before the pass that listed them is over.
+ */
+export const t3NearRead = (search: T3Search): boolean => search.near !== undefined && [...search.near].every((id) => search.cleared.has(id))
 
 /**
  * Reads another batch of the active threads that may hold a conversation, the likeliest first.
@@ -632,7 +636,7 @@ export async function t3ThreadOf(
   }
   if (!search.listed) {
     const shell = await ask<{ threads?: unknown; projects?: unknown }>(t3, 'GET', '/api/orchestration/shell', signal)
-    if (!shell || !Array.isArray(shell.threads)) return { status: 'incomplete', progressed: false, near: nearRead(search) }
+    if (!shell || !Array.isArray(shell.threads)) return { status: 'incomplete', progressed: false, near: t3NearRead(search) }
     const changed = new Map<string, string | undefined>()
     for (const t of shell.threads as ShellThread[]) if (typeof t?.id === 'string') changed.set(t.id, typeof t.updatedAt === 'string' ? t.updatedAt : undefined)
     const listed = new Map(likeliest(shell, of, Number.POSITIVE_INFINITY).map((id) => [id, changed.get(id)]))
@@ -695,9 +699,9 @@ export async function t3ThreadOf(
     search.listed = undefined
     search.pending = []
     search.attempted.clear()
-    return { status: 'limited', near: nearRead(search) }
+    return { status: 'limited', near: t3NearRead(search) }
   }
-  return { status: 'incomplete', progressed, near: nearRead(search) }
+  return { status: 'incomplete', progressed, near: t3NearRead(search) }
 }
 
 /** How many times T3 Code has refused each message It is putting to a thread, by what the message is (see `t3Send`). */

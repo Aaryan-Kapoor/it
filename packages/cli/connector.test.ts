@@ -86,8 +86,8 @@ const stand = vi.hoisted(() => ({
       ids: string[]
       /** Undefined for a search that goes on, which says whether every thread in the conversation's folder has been read (`near`). */
       answer: (thread: string | null | undefined | Error | { status: 'limited'; near?: boolean }, progressed?: boolean, near?: boolean) => void
-      /** The search it was asked as part of, with how many thread ids the test says it holds. */
-      search: { held?: number }
+      /** The search it was asked as part of, with how many thread ids the test says it holds, and whether its folder's threads have all been read. */
+      search: { held?: number; near?: boolean }
     }[],
     sent: [] as { thread: string; text: string }[],
     /** What T3 Code says where it will not take a message, and what it refused. */
@@ -120,13 +120,16 @@ vi.mock('./src/t3', async (original) => ({
   t3Search: () => ({}),
   t3Held: (search: { held?: number }) => search.held ?? 0,
   t3Counted: (search: { held?: number }) => ({ read: search.held ?? 0, listed: 2 * (search.held ?? 0) }),
-  t3ThreadOf: (_t3: unknown, of: { ids: readonly string[] }, search: { held?: number }) =>
+  // Whether the search has read every thread in the conversation's folder, as its last answer said
+  t3NearRead: (search: { near?: boolean }) => search.near === true,
+  t3ThreadOf: (_t3: unknown, of: { ids: readonly string[] }, search: { held?: number; near?: boolean }) =>
     new Promise<{ thread: string | null | undefined | Error | { status: 'limited'; near?: boolean }; progressed: boolean; near: boolean }>((resolve) => {
       const answer = (thread: string | null | undefined | Error | { status: 'limited'; near?: boolean }, progressed = true, near = false) =>
         resolve({ thread, progressed, near })
       stand.t3.asked.push({ ids: [...of.ids], answer, search })
       if (!stand.t3.slow) answer(of.ids.map((id) => stand.t3.threads.get(id)).find((thread) => thread !== undefined) ?? null)
     }).then(({ thread, progressed, near }) => {
+      search.near = typeof thread === 'object' && thread !== null && !(thread instanceof Error) ? thread.near === true : near
       if (thread instanceof Error) throw thread
       if (typeof thread === 'object' && thread !== null) return { near: false, ...thread }
       return thread === undefined ? { status: 'incomplete', progressed, near } : thread === null ? { status: 'absent' } : { status: 'found', thread }
@@ -5650,6 +5653,65 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
       clock.on(1000)
       await until(() => stand.t3.asked.length >= 2)
       expect(stand.t3.sent).toEqual([])
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
+  test('a reopening that is waiting for its click to be claimed when a thread of T3 Code is found to hold the conversation gives the click back, and the click goes to the thread', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    let claimed: (() => void) | undefined
+    stand.answer = (name) => {
+      // The reopening's claim is answered only once the test says
+      if (name === 'delivery:claim' && !claimed) return new Promise<undefined>((r) => (claimed = () => r(undefined)))
+      return undefined
+    }
+    try {
+      const [claude] = await closedClaude()
+      await until(() => stand.t3.asked.length === 1)
+      // No thread in the conversation's folder holds it, so it is to be reopened, and the search goes on over the rest
+      stand.t3.asked[0]!.answer(undefined, true, true)
+      await until(() => claimed !== undefined)
+      clock.on(1000)
+      await until(() => stand.t3.asked.length === 2)
+      // While the claim is being answered, the search finds the thread that holds it
+      stand.t3.asked[1]!.answer('t3-thread-c')
+      await until(() => existsSync(path.join(home, 't3-threads.json')))
+      claimed!()
+      await until(() => stand.t3.sent.length === 1, 8000)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      expect(reopenedFor()).toEqual([])
+      expect(called('delivery:release')).toContain(claude!.id)
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
+  test('a search whose next listing finds a thread of the conversation’s folder changed no longer lets a click past the wait, before that listing’s pass is over', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    try {
+      await closedClaude()
+      await until(() => stand.t3.asked.length === 1)
+      stand.t3.asked[0]!.answer(undefined, true, true)
+      // Reopened at once, which fails here for want of its folder, and is tried again ten seconds later
+      await until(() => reopenedFor().length === 1, 5000)
+      clock.on(1000)
+      await until(() => stand.t3.asked.length === 2)
+      // The next pass is under way, and its listing has found a thread of the folder changed since it was read
+      stand.t3.asked[1]!.search.near = false
+      clock.on(10_500)
+      await pause(2500)
+      // The next try is due, and is kept from reopening while T3 Code may still name that thread, though the pass has not answered
+      expect(reopenedFor()).toHaveLength(1)
+      expect(holdsBack().some((h) => h.why === T3_CHECKING)).toBe(true)
+      stand.t3.asked[1]!.answer('t3-thread-c')
+      await until(() => stand.t3.sent.length === 1, 8000)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      expect(reopenedFor()).toHaveLength(1)
     } finally {
       clock.restore()
     }
