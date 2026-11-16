@@ -1828,7 +1828,8 @@ describe('background service definitions', () => {
     ])
     const [unit, plist, launcher] = [systemdUnit(cmd, env), launchdPlist(cmd, env), windowsLauncher(cmd, env)]
     for (const [k, v] of Object.entries(env)) {
-      expect(unit).toContain(`Environment="${k}=${v}"\n`)
+      // systemd reads a backslash as more than itself, and the unit writes one twice: the PATH on Windows has some
+      expect(unit).toContain(`Environment="${k}=${v.replace(/\\/g, '\\\\')}"\n`)
       expect(plist).toContain(`<key>${k}</key><string>${v}</string>`)
       expect(launcher).toContain(`\r\nset ${k}=${v}\r\n`)
     }
