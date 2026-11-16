@@ -324,6 +324,14 @@ export const CLAUDE_AUTO_UNCHECKED = 'Claude Code ended the turn itself, because
 /** Whether what a reopened Claude Code printed ends as Claude Code ends a turn whose actions auto mode could not check. */
 export const autoCouldNotCheck = (printed: string): boolean => /auto mode could not check some actions/i.test(printed.split(/\r?\n/).slice(-6).join('\n'))
 
+/**
+ * Why a Hermes conversation that Hermes's gateway holds, as from Hermes 0.22.7, is not reopened in
+ * Approvals: it keeps the approvals it was started with, which may be YOLO, and nothing given to one
+ * run changes them. It is reopened where YOLO is chosen, which allows all that it can have.
+ */
+export const HERMES_KEEPS_ITS_OWN =
+  'Hermes keeps this conversation’s own approvals, which It cannot hold to Approvals; to reopen it with them, choose YOLO beside Hermes’s Auto-wake under Machines'
+
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {
   argv: string[]
@@ -386,7 +394,8 @@ export interface Carrying {
  *   own hardline blocklist and the person's `approvals.deny` rules. From Hermes 0.22.7 a
  *   conversation is held by Hermes's gateway, and keeps the approvals it was started with: a run's
  *   `--yolo` does not reach it, and nothing else does short of changing the conversation itself or
- *   the person's settings, which It does not do. There it is reopened as it is, whatever is chosen.
+ *   the person's settings, which It does not do. Such a conversation is reopened, with its own
+ *   approvals, only where YOLO is chosen, and not in Approvals (`HERMES_KEEPS_ITS_OWN`).
  *
  * Each mode is given on the command line of that one run, and nothing is written to the app's own
  * settings. A mode's name that this It does not know is the one that allows least.
@@ -486,9 +495,11 @@ export function carrying(
     if (!inGateway && !/^[0-9]{8}_[0-9]{6}_[0-9a-f]{4,32}$/.test(session)) return odd
     const hermes = starting('hermes')
     if (!hermes) return `${app} was not found`
-    // YOLO where it is chosen, and otherwise Hermes's approvals as the person's settings have them.
     // A conversation Hermes's gateway holds keeps the approvals it was started with, which `--yolo`
-    // does not reach (Hermes 0.22.7 to 0.23.1), so it is not given there
+    // does not reach (Hermes 0.22.7 to 0.23.1), and which may be YOLO. It is reopened only where YOLO
+    // is chosen, which allows all it can have; in Approvals, which It could not hold it to, it is not
+    if (inGateway && has.wakeMode !== 'yolo') return HERMES_KEEPS_ITS_OWN
+    // YOLO where it is chosen, and otherwise Hermes's approvals as the person's settings have them
     const yolo = has.wakeMode === 'yolo' && !inGateway ? ['--yolo'] : []
     return { argv: [...hermes, 'chat', '--resume', session, ...yolo, '--query-file', '-'], input: text, app }
   }

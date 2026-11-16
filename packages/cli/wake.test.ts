@@ -53,6 +53,7 @@ import {
   codexWroteAt,
   endJob,
   endTree,
+  HERMES_KEEPS_ITS_OWN,
   IN_JOB,
   identity,
   jobName,
@@ -362,10 +363,13 @@ describe('the command each agent app is carried on with', () => {
     expect(argvOf('hermes', hs, 'yolo')).toEqual(['hermes', 'chat', '--resume', hs, '--yolo', '--query-file', '-'])
     for (const mode of [undefined, 'approvals', 'made-up', 'auto', 'full-access'])
       expect(argvOf('hermes', hs, mode)).toEqual(['hermes', 'chat', '--resume', hs, '--query-file', '-'])
-    // A conversation Hermes's gateway holds, from Hermes 0.22.7, is reopened by its id too, and
-    // keeps the approvals it was started with, which a run's --yolo does not reach: it is not given
+    // A conversation Hermes's gateway holds, from Hermes 0.22.7, keeps the approvals it was started
+    // with, which may be YOLO and which a run's --yolo does not reach: it is reopened by its id, with
+    // nothing more, only where YOLO is chosen, and in Approvals, nothing chosen, or a name It does not know, not at all
     const gw = `local-${'0f'.repeat(32)}`
-    for (const mode of [undefined, 'yolo', 'approvals']) expect(argvOf('hermes', gw, mode)).toEqual(['hermes', 'chat', '--resume', gw, '--query-file', '-'])
+    expect(argvOf('hermes', gw, 'yolo')).toEqual(['hermes', 'chat', '--resume', gw, '--query-file', '-'])
+    for (const mode of [undefined, 'approvals', 'made-up'])
+      expect(carrying('hermes', gw, 'x', { ...has, ...(mode ? { wakeMode: mode } : {}) })).toBe(HERMES_KEEPS_ITS_OWN)
     for (const odd of [`local-${'0f'.repeat(31)}`, `local-${'0F'.repeat(32)}`, `local-${'0f'.repeat(33)}`, 'local-', '--local-x'])
       expect(carrying('hermes', odd, 'x', has)).toBe('its conversation id is not one Hermes would have made')
     // On Windows, from where the program is, the same words after it
