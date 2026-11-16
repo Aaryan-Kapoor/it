@@ -217,12 +217,23 @@ export interface Asked {
 /**
  * Opens the address that pairs a browser in the person's browser on this machine, where that is
  * wanted, and says whether it did. Not with `--no-open`; not for a script, which is a command
- * whose output is no terminal and which no agent ran; not on a machine that joined another's It;
+ * whose output is no terminal and which no agent ran; not on a machine that joined another's It,
+ * nor for any address but one on this machine, such as one that IT_SITE_URL names elsewhere;
  * and not where nobody is taken to be at the screen (`noScreen`). For an agent's command, also
  * not where a paired display has been seen in the last ten minutes, and not more than once in
  * ten minutes, whichever commands ask. A person who runs `it site` at a terminal asked for the
  * browser in so many words, and is not held to those two. Nothing of the address is kept or said.
  */
+/** Whether an address is It's site on this machine itself, by its name for itself, which is the only address opened. */
+export function onThisMachine(url: string): boolean {
+  try {
+    const { protocol, hostname } = new URL(url)
+    return (protocol === 'http:' || protocol === 'https:') && ['localhost', '127.0.0.1', '[::1]'].includes(hostname)
+  } catch {
+    return false
+  }
+}
+
 export async function openPairing(
   url: string,
   asked: Asked,
@@ -231,7 +242,7 @@ export async function openPairing(
   file: string = openedFile(),
   now: number = Date.now(),
 ): Promise<boolean> {
-  if (asked.noOpen || (!asked.terminal && !asked.agent) || asked.joined || noScreen(s) !== null) return false
+  if (asked.noOpen || (!asked.terminal && !asked.agent) || asked.joined || !onThisMachine(url) || noScreen(s) !== null) return false
   if (asked.agent) {
     const displays = await asked.displays().catch(() => null)
     if (seenLately(displays, now) || !takeOpening(file, now)) return false

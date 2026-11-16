@@ -6,7 +6,19 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
-import { type Asked, launch, noScreen, OPENED_FOR_MS, opener, openPairing, type Start, type Surroundings, seenLately, takeOpening } from './src/browser'
+import {
+  type Asked,
+  launch,
+  noScreen,
+  OPENED_FOR_MS,
+  onThisMachine,
+  opener,
+  openPairing,
+  type Start,
+  type Surroundings,
+  seenLately,
+  takeOpening,
+} from './src/browser'
 
 const dir = mkdtempSync(path.join(os.tmpdir(), 'it-browser-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -102,6 +114,11 @@ describe('where nobody is taken to be at the screen', () => {
 })
 
 describe('how the address is handed to the system', () => {
+  test('only an address of It on this machine itself is opened', () => {
+    for (const url of [URL_, 'http://127.0.0.1:4700/pair#x', 'http://[::1]:4700/pair#x', 'https://localhost:4700/pair#x']) expect(onThisMachine(url)).toBe(true)
+    for (const url of ['http://localhost.example.com/pair#x', 'http://10.0.0.2:4700/pair#x', 'javascript:alert(1)', 'file:///tmp/x', ''])
+      expect(onThisMachine(url)).toBe(false)
+  })
   test('as one word of its own, to the system’s own opener, and never to a shell', () => {
     expect(opener(URL_, mac())).toEqual(['open', [URL_]])
     expect(opener(URL_, linux())).toEqual(['xdg-open', [URL_]])
@@ -227,6 +244,14 @@ describe('whether the pairing address is opened', () => {
     expect(await openPairing(URL_, asPerson(), linux({ CI: 'true' }), start, file)).toBe(false)
     expect(await openPairing(URL_, asAgent(), linux({}, ['/.dockerenv']), start, file)).toBe(false)
     expect(await openPairing(URL_, asAgent(), linux({ WSL_DISTRO_NAME: 'Ubuntu' }), start, file)).toBe(false)
+    // Nor any address but one on this machine
+    for (const other of [
+      'http://it.example.com:4700/pair#Ab3dEf6hIj9kLm2nOp5q',
+      'http://192.168.1.5:4700/pair#Ab3dEf6hIj9kLm2nOp5q',
+      'file:///etc/passwd',
+      'not an address',
+    ])
+      expect(await openPairing(other, asPerson(), linux(), start, file)).toBe(false)
     expect(started).toEqual([])
     expect(existsSync(file)).toBe(false)
   })
