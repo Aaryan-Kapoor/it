@@ -34,7 +34,8 @@ const minutes = Number(arg('minutes', '45'))
 // user manager's environment, Claude Code's sign-in in its own file alone (no variable in the
 // terminal), and lingering left to what `it setup` itself does
 const participant = has('participant')
-const released = has('released') || participant
+// --serve-stage: a participant's machine, with the stage's build (a candidate) served by the stand-in
+const released = has('released') || (participant && !has('serve-stage'))
 const BASE_ENV = released ? {} : { IT_INSTALL_BASE: 'http://127.0.0.1:8765' }
 const RUNS = process.env.IT_REHEARSAL_RUNS ?? '/tmp/it-rehearsal-runs'
 const RESULTS = process.env.IT_REHEARSAL_RESULTS ?? join(homedir(), 'it-rehearsal', '2026-11-15-linux')
@@ -60,7 +61,7 @@ function sh(args, { input, timeout = 120_000, quiet = false } = {}) {
 }
 const exec = (cmd, opts = {}) => sh(['exec', name, 'bash', '-c', cmd], opts)
 // Always bash for the harness's own commands, whatever login shell the person has
-const asAna = (cmd, opts = {}) => sh(['exec', name, 'su', '-l', 'ana', '-s', '/bin/bash', '-c', cmd], opts)
+const asAna = (cmd, opts = {}) => sh(['exec', '-e', 'REHEARSAL_HARNESS=1', name, 'su', '-l', '-w', 'REHEARSAL_HARNESS', 'ana', '-s', '/bin/bash', '-c', cmd], opts)
 
 function freeGB() {
   const s = statfsSync('/home')
@@ -229,12 +230,12 @@ async function main() {
   // screen as it leaves takes its scrollback with it
   exec(`nohup su ana -s /bin/bash -c 'p=""; while sleep 4; do c=$(tmux capture-pane -p -J -t agent 2>/dev/null) || continue; [ "$c" = "$p" ] && continue; printf "=== %s\\n%s\\n" "$(date -u +%T)" "$c" >> ${FLOW}/screens.txt; p="$c"; done' >/dev/null 2>&1 &`)
   // The person's desktop: a terminal on the left, open and empty, and the web browser on the right
-  sh(['exec', '-d', name, 'su', '-l', 'ana', '-s', '/bin/bash', '-c', 'DISPLAY=:1 xfce4-terminal --disable-server --hide-menubar --hide-toolbar --hide-scrollbar --title=Terminal --font="DejaVu Sans Mono 11" --geometry=104x54+0+0 -x tmux attach -t agent'])
+  sh(['exec', '-d', '-e', 'REHEARSAL_HARNESS=1', name, 'su', '-l', '-w', 'REHEARSAL_HARNESS', 'ana', '-s', '/bin/bash', '-c', 'DISPLAY=:1 xfce4-terminal --disable-server --hide-menubar --hide-toolbar --hide-scrollbar --title=Terminal --font="DejaVu Sans Mono 11" --geometry=104x54+0+0 -x tmux attach -t agent'])
   await new Promise((r) => setTimeout(r, 2500))
   exec(`install -m 755 /build/harness/${which === 'firefox' ? 'firefox' : 'browser'}.sh /usr/local/bin/browser`)
   if (person === 'script') exec('touch /etc/rehearsal-cdp')
   if (has('fake-media')) exec('touch /etc/rehearsal-fake-media')
-  sh(['exec', '-d', name, 'su', '-l', 'ana', '-s', '/bin/bash', '-c', 'DISPLAY=:1 browser about:blank'])
+  sh(['exec', '-d', '-e', 'REHEARSAL_HARNESS=1', name, 'su', '-l', '-w', 'REHEARSAL_HARNESS', 'ana', '-s', '/bin/bash', '-c', 'DISPLAY=:1 browser about:blank'])
   // The windows placed side by side, twice, since a browser's window may come up late
   for (const wait of [5000, 6000]) {
     await new Promise((r) => setTimeout(r, wait))
@@ -269,9 +270,9 @@ async function main() {
     asAna('tmux set -g status off')
     exec(`nohup su ana -s /bin/bash -c 'p=""; while sleep 4; do c=$(tmux capture-pane -p -J -t agent 2>/dev/null) || continue; [ "$c" = "$p" ] && continue; printf "=== %s\\n%s\\n" "$(date -u +%T)" "$c" >> ${FLOW}/screens.txt; p="$c"; done' >/dev/null 2>&1 &`)
     exec(`ffmpeg -nostdin -y -loglevel error -f x11grab -framerate 12 -video_size 1920x1080 -i :1 -vf scale=1600:-2 -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p /var/lib/rehearsal-video/video.mp4 > /var/lib/rehearsal-video/ffmpeg.log 2>&1 & echo $! > /run/rehearsal-ffmpeg.pid`)
-    sh(['exec', '-d', name, 'su', '-l', 'ana', '-s', '/bin/bash', '-c', 'DISPLAY=:1 xfce4-terminal --disable-server --hide-menubar --hide-toolbar --hide-scrollbar --title=Terminal --font="DejaVu Sans Mono 11" --geometry=104x54+0+0 -x tmux attach -t agent'])
+    sh(['exec', '-d', '-e', 'REHEARSAL_HARNESS=1', name, 'su', '-l', '-w', 'REHEARSAL_HARNESS', 'ana', '-s', '/bin/bash', '-c', 'DISPLAY=:1 xfce4-terminal --disable-server --hide-menubar --hide-toolbar --hide-scrollbar --title=Terminal --font="DejaVu Sans Mono 11" --geometry=104x54+0+0 -x tmux attach -t agent'])
     await new Promise((r) => setTimeout(r, 2500))
-    sh(['exec', '-d', name, 'su', '-l', 'ana', '-s', '/bin/bash', '-c', 'DISPLAY=:1 browser'])
+    sh(['exec', '-d', '-e', 'REHEARSAL_HARNESS=1', name, 'su', '-l', '-w', 'REHEARSAL_HARNESS', 'ana', '-s', '/bin/bash', '-c', 'DISPLAY=:1 browser'])
     await new Promise((r) => setTimeout(r, 6000))
     exec(`DISPLAY=:1 su ana -c "wmctrl -r Terminal -e 0,0,0,960,1080; wmctrl -r Chromium -e 0,960,0,960,1080"`, { quiet: true })
   }
@@ -289,7 +290,7 @@ async function main() {
   }
   log(`flow ${flow} with ${app} in ${which}`)
   await new Promise((resolve) => {
-    const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-s', '/bin/bash', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN|OTHERAPP|MISC)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow === 'WAKEBOOT' ? 'WAKEBOOT1' : flow} ${app} ${which === 'chromium' && /^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN|OTHERAPP|MISC)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn('sudo', ['-n', 'docker', 'exec', '-e', 'REHEARSAL_HARNESS=1', name, 'su', '-l', '-w', 'REHEARSAL_HARNESS', 'ana', '-s', '/bin/bash', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN|OTHERAPP|MISC)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow === 'WAKEBOOT' ? 'WAKEBOOT1' : flow} ${app} ${which === 'chromium' && /^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN|OTHERAPP|MISC)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
     // A change the flow asks for between two clicks, run as root (an update of the agent app)
     const between = setInterval(() => {
       // The change itself is root's own file, written by the prepare step; the flow (ana) only asks for it

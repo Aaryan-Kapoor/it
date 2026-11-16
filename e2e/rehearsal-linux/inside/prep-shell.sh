@@ -9,11 +9,13 @@ if [ "$kind" = fish ]; then
 fi
 su -l ana -s /bin/bash -c "
 [ $app = claude-code ] && node -e 'const f=process.env.HOME+\"/.claude.json\";const fs=require(\"fs\");let j={};try{j=JSON.parse(fs.readFileSync(f,\"utf8\"))}catch{};j.hasCompletedOnboarding=true;fs.writeFileSync(f,JSON.stringify(j,null,2))'
-SHELL=\$(getent passwd ana | cut -d: -f7) curl -fsSL https://itcan.do/install.sh | SHELL=\$(getent passwd ana | cut -d: -f7) IT_INSTALL_PLAIN=1 sh >/dev/null 2>&1
+SHELL=\$(getent passwd ana | cut -d: -f7) curl -fsSL \${IT_INSTALL_BASE:-https://itcan.do}/install.sh | SHELL=\$(getent passwd ana | cut -d: -f7) IT_INSTALL_PLAIN=1 sh >/dev/null 2>&1
 ~/.it/bin/it setup --only $app 2>&1 | tail -2
 grep -o 'PATH=[^\"]*' ~/.config/systemd/user/it.service | grep -c '.it/bin' | sed 's/^/unit PATH has .it\/bin: /'
 "
 if [ "$kind" = tmux ]; then echo '[ -z "$TMUX" ] && exec tmux new -A -s main' >> /home/ana/.bashrc; fi
+# The line first in ~/.bashrc, as the audit has it; the harness's own shells carry REHEARSAL_HARNESS and pass it by
+if [ "$kind" = tmuxfirst ]; then sed -i '1i [ -z "$TMUX" ] \&\& [ -z "$REHEARSAL_HARNESS" ] \&\& exec tmux new -A -s main' /home/ana/.bashrc; head -1 /home/ana/.bashrc; fi
 # The user manager and It's service started again, with the shell as it now is
 systemctl restart user@1000.service; sleep 3
 # That ended the terminal's session too: the person opens a terminal again, in their own login shell
