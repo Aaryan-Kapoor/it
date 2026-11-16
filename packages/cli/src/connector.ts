@@ -2685,6 +2685,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         ended = NOT_STARTED
         return ended
       }
+      // Written down as it is about to begin and as it ends, by a shortened id, a count and a fixed
+      // word: a reopening that worked otherwise left no line at all, and could not be told from none
+      const who = `${a(agentOf(now.harness))} conversation (${short(now.id)})`
+      say(`${who} is being reopened for ${ids.length} click${ids.length === 1 ? '' : 's'}`)
       // Everything that could have changed while this was being got ready is looked at once
       // more, at the last moment before anything runs: the connector stopping, the machine
       // ceasing to fit, the hold on what it is reopened for being lost, and the person
@@ -2704,10 +2708,6 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         return ended
       }
       saidLast.delete(key)
-      // Written down as it begins and as it ends, by a shortened id, a count and a fixed word:
-      // a reopening that worked otherwise left no line at all, and could not be told from none
-      const who = `${a(agentOf(now.harness))} conversation (${short(now.id)})`
-      say(`${who} is reopened for ${ids.length} click${ids.length === 1 ? '' : 's'}`)
       ended = await carryOn(
         how,
         cwd,

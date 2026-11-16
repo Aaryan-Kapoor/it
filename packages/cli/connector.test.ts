@@ -905,7 +905,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     await until(() => said.some((line) => line.includes('ended its reopened run')))
     const lines = said.filter((line) => /reopened/.test(line))
     expect(lines.map((line) => line.replace(/\(thread-1\)|\([^)]*\)(?= is| ended)/, '(id)'))).toEqual([
-      'a codex conversation (id) is reopened for 1 click',
+      'a codex conversation (id) is being reopened for 1 click',
       'a codex conversation (id) ended its reopened run (done)',
     ])
     expect(lines.join('\n')).not.toContain(home)
