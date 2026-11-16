@@ -345,7 +345,7 @@ it tour show drums
 The `beat` action carries `request`, the id of this beat, `rows` (`hat`, `clap`, `snare`, `kick`, from the top) and `pattern`, one string of eight steps for each row, with `x` where they put a hit. The eight steps are one bar: the first, third, fifth and seventh are its four beats, and the others fall between them. Answer with your own hits in the same form, on steps they left empty, so that the two together make a groove: hats between the beats, a clap on the third or the seventh step if nothing is there, a kick that pushes into the next beat:
 
 ```sh
-it set tour-drums theirs '{"request":"the exact request id","pattern":["..x...x.","....x...","........","...x...."],"note":"I added hats between your hits."}'
+it patch tour-drums '{"theirs":{"request":"the exact request id","pattern":["..x...x.","....x...","........","...x...."],"note":"I added hats between your hits."}}'
 ```
 
 **Say:** one sentence about what you added. They will hear it. Keep the exact `request` id with the pattern and optional note in the same value. The page ignores replies for an earlier beat. `cleared` means the page has emptied both patterns already. Say nothing and send no pattern in response.
