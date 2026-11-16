@@ -929,6 +929,28 @@ async function part3() {
  * the turn goes on to change the page. Ask has OpenCode refuse it, since nobody is there to answer:
  * the file is not written, and OpenCode ends the turn there.
  */
+/**
+ * What OpenCode recorded of a write in the conversation with this id that it refused for want of
+ * permission, as the text of that record, or null where it holds none: a call of its `write` tool
+ * whose state is an error that says the permission was rejected or denied.
+ */
+async function refusedWrite(id) {
+  const route = major >= 2 ? `/api/session/${id}/message?limit=200` : `/session/${id}/message?directory=${encodeURIComponent(WORK)}`
+  const got = await ocApi(route)
+  if (got.status !== 200) return null
+  const found = []
+  const look = (o) => {
+    if (!o || typeof o !== 'object') return
+    if (o.tool === 'write' || o.name === 'write' || o.toolName === 'write') {
+      const said = JSON.stringify(o.state ?? o.error ?? o.result ?? o)
+      if (/error/i.test(said) && /reject|denied/i.test(said)) found.push(said.slice(0, 300))
+    }
+    for (const v of Object.values(o)) look(v)
+  }
+  look(got.body)
+  return found[0] ?? null
+}
+
 async function part4() {
   const frame = shownIn.frameLocator('.mount iframe')
   const stopButton = shownIn.locator('.page-nav button[aria-label="Stop the agent"]')
@@ -968,10 +990,13 @@ async function part4() {
       )
     } else {
       const ended = await runOver()
+      // OpenCode's own record of the conversation holds the write, refused for want of permission
+      await startOpenCode()
+      const refusal = await until(() => refusedWrite(sessionId), 20_000, 500)
       check(
         'in Ask, OpenCode refused to write the file, as nobody was there to answer, and the reopened run ended',
-        ended && !existsSync(file),
-        `ended: ${Boolean(ended)}, the file is ${existsSync(file) ? 'there' : 'not there'}, the write gave: ${wroteSaid}`,
+        ended && !existsSync(file) && refusal,
+        `ended: ${Boolean(ended)}, the file is ${existsSync(file) ? 'there' : 'not there'}, OpenCode recorded: ${refusal || 'no refused write'}`,
       )
     }
   }
