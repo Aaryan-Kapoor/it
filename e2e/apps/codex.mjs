@@ -372,6 +372,41 @@ function ours(which = 'IT_HOME') {
   }
   return found
 }
+// Codex fetches the catalogue of its plugins itself with `git ls-remote` of OpenAI's plugins
+// repository, which ends by itself once GitHub answers, and on Linux It leaves running on purpose
+// what a turn that ended well started. That fetch is no fault of It's, so it alone is let be.
+const CATALOGUE = 'https://github.com/openai/plugins.git'
+/** The process a Linux process says is its parent, or null where that cannot be read. */
+function parentOf(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    return Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1])
+  } catch {
+    return null
+  }
+}
+/**
+ * Of what `ours` found on Linux, the numbers of Codex's fetch of its plugin catalogue: a `git
+ * ls-remote` of that address and of HEAD alone, and the helpers git starts beneath it for that
+ * same address. Codex has ended by then, so the fetch is known by its whole command, and each
+ * helper by being started by the fetch or by another of its helpers.
+ */
+function fetchingCatalogue(list) {
+  const git = (program) => /(^|\/)git$/.test(program ?? '')
+  const fetch = new Set(list.filter(({ command: c }) => git(c[0]) && c.includes('ls-remote') && c.at(-2) === CATALOGUE && c.at(-1) === 'HEAD').map(({ pid }) => pid))
+  const helper = ({ command: c }) =>
+    (git(c[0]) && c[1] === 'remote-https' && c[2] === CATALOGUE && c[3] === CATALOGUE && c.length === 4) ||
+    (/(^|\/)git-remote-https$/.test(c[0] ?? '') && c[1] === CATALOGUE && c[2] === CATALOGUE && c.length === 3)
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const p of list)
+      if (!fetch.has(p.pid) && helper(p) && fetch.has(parentOf(p.pid))) {
+        fetch.add(p.pid)
+        grew = true
+      }
+  }
+  return fetch
+}
 /** Asks each process to stop, waits up to `ms` for all of them, ends those left outright, and says which were. */
 async function ended(list, ms = 10_000) {
   const alive = (pid) => {
@@ -838,8 +873,15 @@ trust_level = "trusted"
   await model.close()
   // Everything the run started has been asked to stop and waited for. Anything still running
   // that was given this run's It folder is a fault: it is said, and ended
-  const left = ours()
-  check('nothing the run started is left running', left.length === 0, JSON.stringify(left))
+  let left = ours()
+  // Codex's own fetch of its plugin catalogue is given half a minute to end by itself, as it
+  // does once GitHub answers, and is let be if it has not; anything else left is a fault still
+  const catalogue = () => (process.platform === 'linux' ? fetchingCatalogue(left) : new Set())
+  for (const end = Date.now() + 30_000; left.length > 0 && catalogue().size === left.length && Date.now() < end; await sleep(500)) left = ours()
+  const fetching = catalogue()
+  if (fetching.size) console.log(`note  Codex's fetch of its plugin catalogue was still running after half a minute, in ${fetching.size} processes, and is let be`)
+  const leftOver = left.filter(({ pid }) => !fetching.has(pid))
+  check('nothing the run started is left running', leftOver.length === 0, JSON.stringify(leftOver))
   await ended(left)
   writeFileSync(path.join(logs, 'model.json'), JSON.stringify({ seen: model.seen, others: model.others }, null, 1))
   if (tui) writeFileSync(path.join(logs, 'terminal.txt'), tui.plain())
