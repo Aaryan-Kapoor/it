@@ -268,7 +268,8 @@ export function carrying(
     // The mode chosen for it under Machines (`WAKE_MODES`), each as Codex itself sets it up: its
     // sandbox, and who approves. `codex exec` takes approvals as "never" unless its reviewer is
     // asked for, so in every mode but Approve for me nothing can approve anything
-    const mode = has.wakeMode ?? 'ask'
+    // A name this It has no mode for is the one that allows least
+    const mode = has.wakeMode === undefined ? 'ask' : ['full-access', 'approve-for-me', 'ask', 'read-only'].includes(has.wakeMode) ? has.wakeMode : 'read-only'
     const sandbox =
       mode === 'full-access'
         ? ['-c', 'sandbox_mode="danger-full-access"']
@@ -320,13 +321,13 @@ function tail(file: string, bytes = 4096): string {
     closeSync(fd)
   }
 }
-/** The beginning of a file, as text: as much as what a program says as it starts could be in. */
-function head(file: string, bytes = 16384): string {
+/** What a file holds from `at` on, up to a megabyte at a time. */
+function from(file: string, at: number, most = 1 << 20): Buffer {
   const fd = openSync(file, 'r')
   try {
-    const buf = Buffer.alloc(bytes)
-    const n = readSync(fd, buf, 0, bytes, 0)
-    return buf.subarray(0, n).toString('utf8')
+    const buf = Buffer.alloc(Math.max(0, Math.min(most, fstatSync(fd).size - at)))
+    const n = buf.length ? readSync(fd, buf, 0, buf.length, at) : 0
+    return buf.subarray(0, n)
   } finally {
     closeSync(fd)
   }
@@ -522,15 +523,21 @@ export function carryOn(
       if (!ending && !stopped) opts.overtime?.()
       quit(`${how.app} had not finished in fifteen minutes`)
     }, patience)
-    // What the app says of how it started is looked at as it is printed, from the beginning of what
-    // it printed, for as long as it runs: where that ends the run, it ends there, before its turn
-    // has got far
+    // What the app says of how it started is looked at as it is printed, all of it, a part at a
+    // time, for as long as it runs: where that ends the run, it ends there. It is a safeguard and
+    // no barrier, since the app may already have begun its turn by the time it says so
     if (opts.noticed && printed) {
+      let read = 0
+      let carry = ''
       const look = setInterval(() => {
         if (over || ending) return clearInterval(look)
         let why: string | undefined
         try {
-          why = opts.noticed?.(head(printed))
+          const fresh = from(printed, read)
+          read += fresh.length
+          const text = carry + fresh.toString('utf8')
+          carry = text.slice(-512)
+          why = text ? opts.noticed?.(text) : undefined
         } catch {}
         if (why) {
           clearInterval(look)

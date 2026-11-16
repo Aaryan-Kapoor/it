@@ -12,10 +12,10 @@ import {
   UPGRADE_MS,
   WAKE_MODE_LEGACY,
   WAKE_MODES,
-  WAKE_NOTE_WHYS,
   WAKES,
   wakeModeOf,
   wakeModeRank,
+  wakeNoteFits,
   wakesOn,
 } from '@it/protocol'
 import { v } from 'convex/values'
@@ -208,8 +208,7 @@ export const runNoted = mutation({
   args: { for: session, run: v.string(), why: v.string(), mode: v.string(), instead: v.string() },
   handler: async (ctx, { for: s, run, why, mode, instead }) => {
     const { machine } = await requireMachine(ctx)
-    if (!(WAKE_NOTE_WHYS as readonly string[]).includes(why) || wakeModeRank(s.harness, mode) < 0 || wakeModeRank(s.harness, instead) < 0)
-      fail('invalid', 'That is not something It says of how a conversation was reopened.')
+    if (!wakeNoteFits(s.harness, why, mode, instead)) fail('invalid', 'That is not something It says of how a conversation was reopened.')
     const runs = machine.runs ?? []
     const its = (r: (typeof runs)[number]) => r.harness === s.harness && r.sessionId === s.id && r.run === run
     if (!runs.some(its)) return { noted: false }
@@ -328,6 +327,10 @@ export const turningOn = mutation({
 /** How many conversations a machine may say it is running at once. Its connector runs only a few commands at a time. */
 const RUNS_MOST = 20
 
+/** Why a machine whose It is from before the choice of mode was not let reopen a conversation, as the page says it. */
+const OLDER_IT =
+  'this machine runs an It from before the choice of mode, which cannot reopen it in the one chosen: update It on that machine, or choose another mode under Machines'
+
 /** The machine says that it has reopened a conversation, which is running from now until it says otherwise. */
 export const runBegan = mutation({
   /** `run` names this run among all there have been of the conversation, so that the ending of an earlier one, told late, does not take this one's place away. */
@@ -364,16 +367,19 @@ export const runBegan = mutation({
     if (mode !== null && legacy && !modes && mode !== legacy) {
       if (wakeModeRank(s.harness, mode) > wakeModeRank(s.harness, legacy)) {
         const others = (machine.fails ?? []).filter((f) => f.harness !== s.harness || f.sessionId !== s.id)
-        const why = `this machine runs an It from before the choice of mode, which cannot reopen it in the one chosen: update It on that machine, or choose another mode under Machines`
+        // Kept through that It's word that nothing ran (`runEnded`), which would otherwise take it away
         await ctx.db.patch(machine._id, {
-          fails: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), at: Date.now(), why }].slice(-RUNS_MOST),
+          fails: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), at: Date.now(), why: OLDER_IT, kept: true }].slice(-RUNS_MOST),
         })
         return { stopped: false, off: true }
       }
       said = { note: `older:${mode}:${legacy}` }
     }
     const others = (machine.runs ?? []).filter((r) => r.harness !== s.harness || r.sessionId !== s.id)
+    // It runs now, so what was kept of its not being let run is over
+    const fails = (machine.fails ?? []).filter((f) => !f.kept || f.harness !== s.harness || f.sessionId !== s.id)
     await ctx.db.patch(machine._id, {
+      ...(fails.length !== (machine.fails ?? []).length ? { fails } : {}),
       runs: [
         ...others,
         { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), since: Date.now(), ...(run ? { run: run.slice(0, 64) } : {}), ...said },
@@ -398,7 +404,8 @@ export const runEnded = mutation({
     // earlier It begins them, and never of one that has a name.
     const left = s ? now.filter((r) => r.harness !== s.harness || r.sessionId !== s.id || r.run !== run) : []
     const fails = machine.fails ?? []
-    const stillFailed = s && ok ? fails.filter((f) => f.harness !== s.harness || f.sessionId !== s.id) : fails
+    // What was said of a machine whose It is too old for the mode chosen stays, though that It says its run went well: it never ran
+    const stillFailed = s && ok ? fails.filter((f) => f.kept || f.harness !== s.harness || f.sessionId !== s.id) : fails
     if (left.length !== now.length || stillFailed.length !== fails.length) await ctx.db.patch(machine._id, { runs: left, fails: stillFailed })
     // Whether a person had asked for that run to be stopped: the connector may not have heard of
     // it yet, and the run that carried the word is gone with this. Asked of the stops kept as

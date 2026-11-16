@@ -450,7 +450,7 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
         id: 'full-access',
         label: 'Full Access',
         recommended: true,
-        says: 'The mode It works best in: a reopened conversation can do everything you can do on this machine, with no sandbox and nothing asked. That is also what a press on any screen paired with this It, a phone among them, or the words on a page, can lead it to do: run any command, read and send your files and secrets, change or delete files, and start things that keep running after the turn. Nothing checks it, and nothing asks you.',
+        says: 'The mode It works best in: a reopened conversation can do everything you can do on this machine, with no sandbox and nothing asked. That is also what a press on any screen paired with this It, a phone among them, or the words on a page, can lead it to do: run any command, read and send your files and secrets, change or delete files, and start things that keep running after the turn. No reviewer checks it, and nothing asks you.',
       },
       {
         id: 'approve-for-me',
@@ -471,12 +471,14 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
   },
 }
 /**
- * The mode an It from before there was a choice runs each app's reopened conversations in. Such
- * an It, on a machine that joined this one, ignores the choice: where what is chosen allows less
- * than this, the backend does not let it start a run, and where it allows more, the page says that
- * the machine runs less (see `runBegan`).
+ * The most an It from before there was a choice may run each app's reopened conversations in.
+ * Such an It, on a machine that joined this one, ignores the choice. For Codex it gives the
+ * workspace sandbox and nothing about who approves, so a reviewer the person chose in their own
+ * Codex settings may approve there: at most Approve for me. Where what is chosen allows less than
+ * this, the backend does not let it start a run, and where it allows more, the page says that the
+ * machine runs less (see `runBegan`).
  */
-export const WAKE_MODE_LEGACY: Partial<Record<Harness, string>> = { codex: 'ask' }
+export const WAKE_MODE_LEGACY: Partial<Record<Harness, string>> = { codex: 'approve-for-me' }
 /** Where a mode stands in its app's order, from 0 for the one that allows most; -1 for none. */
 export function wakeModeRank(harness: string, mode: string): number {
   const list = WAKE_MODES[harness as Harness]
@@ -512,25 +514,34 @@ export function wakeModeOf(kept: readonly { harness: string; mode: string }[] | 
  *   of it forbids it), and It reopened it in `instead`, which allows less.
  * - `unreviewed`: Codex was to run in Approve for me, and It could not tell that it has the
  *   reviewer, so it runs in `instead`.
- * - `older`: the machine runs an It from before the choice, which runs `instead` whatever is chosen.
+ * - `older`: the machine runs an It from before the choice, which runs at most `instead` whatever is chosen.
  */
 export const WAKE_NOTE_WHYS = ['refused', 'unreviewed', 'older'] as const
 export type WakeNoteWhy = (typeof WAKE_NOTE_WHYS)[number]
 const APP_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
 const modeName = (harness: string, mode: string): string => WAKE_MODES[harness as Harness]?.choices.find((c) => c.id === mode)?.label ?? mode
-/** The sentence the bar above a page says beside a run, from its note as kept (`why:mode:instead`), or null for none or one this It cannot read. */
+/**
+ * Whether a note says something It would say: `instead` allows less than `mode`, and Codex's
+ * `unreviewed` is only ever Approve for me become Ask for approval.
+ */
+export function wakeNoteFits(harness: string, why: string, mode: string, instead: string): boolean {
+  if (!(WAKE_NOTE_WHYS as readonly string[]).includes(why)) return false
+  const from = wakeModeRank(harness, mode)
+  const to = wakeModeRank(harness, instead)
+  if (from < 0 || to <= from) return false
+  return why !== 'unreviewed' || (harness === 'codex' && mode === 'approve-for-me' && instead === 'ask')
+}
+/** The sentence the bar above a page says beside a run, from its note as kept (`why:mode:instead`), or null for none or one this It would not say. */
 export function wakeNoteText(harness: string, note: string | null | undefined): string | null {
   if (!note) return null
   const [why, mode, instead] = note.split(':')
+  if (!why || !mode || !instead || !wakeNoteFits(harness, why, mode, instead)) return null
   const app = APP_NAMES[harness] ?? harness
-  if (!why || !mode || !instead || wakeModeRank(harness, mode) < 0 || wakeModeRank(harness, instead) < 0) return null
   if (why === 'refused')
     return `${app} would not run in ${modeName(harness, mode)} here, so It reopened it in ${modeName(harness, instead)}, which allows less.`
   if (why === 'unreviewed')
     return `${app} was reopened in ${modeName(harness, instead)}, not ${modeName(harness, mode)}, because It could not tell that this ${app} has an automatic reviewer. So whatever would need approval is refused.`
-  if (why === 'older')
-    return `This machine runs an It from before the choice of mode, which reopens ${app} in ${modeName(harness, instead)} and not in ${modeName(harness, mode)}. Update It on that machine.`
-  return null
+  return `This machine runs an It from before the choice of mode, which does not reopen ${app} in ${modeName(harness, mode)}, and at most in ${modeName(harness, instead)}. Update It on that machine.`
 }
 /**
  * Whether It reopens a closed conversation on a machine of this system, as the machine names

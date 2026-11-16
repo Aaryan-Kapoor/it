@@ -316,9 +316,9 @@ describe('the command each agent app is carried on with', () => {
       expect(pairs(everyone('read-only').argv)).toEqual(['sandbox_mode="read-only"', 'approvals_reviewer="user"'])
       expect(pairs(everyone('full-access').argv)).toEqual(['sandbox_mode="danger-full-access"', 'approvals_reviewer="user"'])
       expect(everyone('full-access').input).toBe('a click')
-      // Nothing chosen, or a name Codex has no mode for: Ask for approval, as It did before there was a choice
+      // Nothing chosen: Ask for approval, as It did before there was a choice; a name Codex has no mode for: Read Only, the mode that allows least
       expect(everyone(undefined).argv).toEqual(ask.argv)
-      expect(everyone('made-up').argv).toEqual(ask.argv)
+      expect(everyone('made-up').argv).toEqual(everyone('read-only').argv)
     }
     // It's folder is let be written only in the workspace modes, and never on Windows
     expect(pairs(argvOf('ask').argv)).toContain('sandbox_workspace_write.writable_roots=["/home/someone/.it"]')
@@ -485,7 +485,7 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     expect(readdirSync(kept)).toEqual([])
   })
 
-  test('a Codex that will not start in the mode it was given says so, and one whose requirements change the mode is heard saying it and ended there', async () => {
+  test('a Codex that will not start in the mode it was given says so, and one whose requirements change the mode is heard saying it, however much it printed first, and is ended when It reads that', async () => {
     const kept = path.join(scratch, 'kept-mode')
     const script = (name: string, body: string) => {
       const file = path.join(scratch, name)
@@ -512,7 +512,8 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     // Codex whose requirements put their own value in place of one It gave says so as it starts, and is ended there
     const changed = script(
       'mode-changed',
-      'echo "warning: Configured value for \\`approvals_reviewer\\` is disallowed by requirements; falling back to required value AutoReview." >&2\nsleep 30\nexit 0\n',
+      // After more than a page's worth of what it printed first, as Codex prints the whole prompt before it
+      'head -c 40000 /dev/zero | tr "\\\\0" "x"\necho\necho "warning: Configured value for \\`approvals_reviewer\\` is disallowed by requirements; falling back to required value AutoReview." >&2\nsleep 30\nexit 0\n',
     )
     const began = Date.now()
     const heard: string[] = []

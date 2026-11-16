@@ -2742,8 +2742,9 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       }
       // The mode as It has it now, where the person chose another a moment ago, before this machine
       // heard of it: what they chose last is what this run is in
+      // (Read as this It reads a mode: one a newer It names that this one does not know is the one that allows least)
       if (saidMode !== undefined && saidMode !== chosen) {
-        chosen = saidMode
+        chosen = wakeModeOf([{ harness: now.harness, mode: saidMode }], now.harness)
         runMode = runIn(chosen)
         const again = carryingWith(runMode.mode)
         if (typeof again === 'string') {
@@ -2761,6 +2762,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // place of one It gave, which may allow more than was chosen: the run is ended there
       const noticed = now.harness === 'codex' ? (printed: string) => (CODEX_CHANGED_SAID.test(printed) ? CODEX_MODE_REFUSED : undefined) : undefined
       saidLast.delete(key)
+      // Whether an attempt ended without the system saying that all of it was gone: nothing more is started beside it
+      let uncertain = false
       const reopen = (how: Carrying) =>
         carryOn(
           how,
@@ -2772,6 +2775,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
             signal: stop.signal,
             // Ended without the system saying what of it was left: it stays noted, and is looked at again before its conversation is next reopened
             unsure: () => {
+              uncertain = true
               const run = running.get(key)
               if (run) unsettled.set(key, { ...run, unsure: true })
             },
@@ -2812,7 +2816,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // Codex would not run in the mode given, as its administrator's requirements forbid it: it is
       // reopened at once in the next mode down, which allows less, and so on, never in one that
       // allows more, and the page says so. Where there is none below, it is a failure as any is
-      while (ended === CODEX_MODE_REFUSED && !stop.signal.aborted && runMode.mode !== null) {
+      while (ended === CODEX_MODE_REFUSED && !stop.signal.aborted && !uncertain && runMode.mode !== null) {
         const below = wakeModeBelow(now.harness, runMode.mode)
         if (below === null) break
         const refused = runMode.mode
