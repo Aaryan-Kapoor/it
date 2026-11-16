@@ -1042,8 +1042,27 @@ async function SITES() {
   const listed = () => sh("codex plugin list 2>&1 | grep -E '^(sites|pages|visualize|vercel|canva|openai-templates)@' | sed -E 's/ +/ /g'").trim()
   step("the account's plugins (codex plugin list)", { list: listed(), cacheAfterList: cache() })
   if (variant === 'off') {
-    sh(`printf '\n[plugins."sites@openai-curated-remote"]\nenabled = false\n' >> ~/.codex/config.toml`)
-    step('turns the Sites plugin off in ~/.codex/config.toml: [plugins."sites@openai-curated-remote"] enabled = false', { list: listed() })
+    // As a person turns a plugin off: Codex's /plugins screen, the plugin searched for, Tab
+    const cfgBefore = sh('cat ~/.codex/config.toml')
+    await type('clear && tmux clear-history')
+    await startApp('codex', counts)
+    await type('/plugins')
+    await sleep(6000)
+    await type('sites', { enter: false })
+    await sleep(3000)
+    const found = screen().replace(/\s+$/, '').split('\n').slice(-22).join('\n')
+    await key('Tab')
+    await sleep(3000)
+    const toggled = screen().replace(/\s+$/, '').split('\n').slice(-22).join('\n')
+    await key('Escape')
+    await sleep(1500)
+    await key('Escape')
+    await sleep(1500)
+    await quitApp('codex')
+    const cfgAfter = sh('cat ~/.codex/config.toml')
+    step('turns the Sites plugin off on Codex\'s /plugins screen: /plugins, types sites, Tab', { found, toggled, configAdded: cfgAfter.split('\n').filter((l) => !cfgBefore.split('\n').includes(l)).join('\n'), list: listed() })
+    await type('clear && tmux clear-history')
+    await sleep(1500)
   }
   if (variant === 'skill') {
     const f = `${process.env.HOME}/.codex/skills/it/SKILL.md`
@@ -1059,20 +1078,6 @@ async function SITES() {
     const had = new Set(rollouts())
     await type(`mkdir ~/w${i}; cd ~/w${i} && clear && tmux clear-history`)
     await sleep(2000)
-    if (i === 1 && variant === 'off') {
-      // What a person sees on Codex's own plugin screen
-      await startApp('codex', counts)
-      await type('/plugins')
-      await sleep(6000)
-      step('Codex\'s /plugins screen', { screen: screen().replace(/\s+$/, '').split('\n').slice(-40).join('\n') })
-      await key('Escape')
-      await sleep(1500)
-      await key('Escape')
-      await sleep(1500)
-      await quitApp('codex')
-      await type('clear && tmux clear-history')
-      await sleep(1500)
-    }
     await startApp('codex', counts)
     await ask('codex', asks[kind])
     await settle('codex', counts, 540_000, 10_000)
