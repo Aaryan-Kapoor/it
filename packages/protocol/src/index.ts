@@ -410,6 +410,139 @@ export const CODEX_MIN_VERSION = '0.160.0'
  * on a machine where the person has switched that on for it.
  */
 export const WAKES: readonly Harness[] = ['claude-code', 'codex', 'pi', 'opencode', 'hermes']
+/** One permission mode a conversation that It reopens can be run in: its name as kept, its name in the app's own words, and what it lets a reopened conversation do. */
+export interface WakeModeChoice {
+  id: string
+  label: string
+  says: string
+  /** The mode It works best in, which the Machines page marks so. */
+  recommended?: true
+}
+/** The modes an agent app's reopened conversations can be run in, from the one that allows most to the one that allows least, and which is the default. */
+export interface WakeModeList {
+  default: string
+  choices: readonly WakeModeChoice[]
+}
+/**
+ * The choice that is no mode of the app's own: a conversation is reopened in the mode it was last
+ * in. Listed only for an app that can tell which that was. It has no place in the order from most
+ * to least, so it is never stepped down to.
+ */
+export const CONVERSATIONS_OWN = 'conversation'
+/**
+ * The permission mode a conversation that It reopens is run in, for each agent app, chosen on each
+ * machine beside the app's Auto-wake switch under Machines. Each app's choices are the modes the
+ * app itself offers for a run with nobody at the keyboard, by the app's own names, listed from the
+ * one that allows most to the one that allows least. Adding an app, or a mode, is adding to this,
+ * and to the command It starts it with (`carrying`): what is kept is the mode's name, so nothing
+ * kept changes. An app that is not here is offered no choice.
+ *
+ * `default` is the mode where none was chosen, as on every machine before the choice existed: one
+ * line per app, for the owner to change. It only ever steps down this list by itself: a name it
+ * does not know, which a newer It may have written, reads as the last choice, and where the app
+ * refuses a mode, it is reopened in the next one down (`wakeModeBelow`), never in one above.
+ */
+export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
+  codex: {
+    default: 'approve-for-me',
+    choices: [
+      {
+        id: 'full-access',
+        label: 'Full Access',
+        recommended: true,
+        says: 'The mode It works best in: a reopened conversation can do everything you can do on this machine, with no sandbox and nothing asked. That is also what a press on any screen paired with this It, a phone among them, or the words on a page, can lead it to do: run any command, read and send your files and secrets, change or delete files, and start things that keep running after the turn. No reviewer checks it, and nothing asks you.',
+      },
+      {
+        id: 'approve-for-me',
+        label: 'Approve for me',
+        says: 'Codex’s automatic reviewer, a model, decides in your place whether a command that would ask you may run. It allows what it judges to be of low or medium risk even where you never asked for it, and what it allows can run outside the sandbox.',
+      },
+      {
+        id: 'ask',
+        label: 'Ask for approval',
+        says: 'It can write in the conversation’s folder and run commands in Codex’s sandbox, with the network on. Nobody is there to approve, so whatever would ask you is refused. On Windows without Codex’s own sandbox, only plain it commands run.',
+      },
+      {
+        id: 'read-only',
+        label: 'Read Only',
+        says: 'Its commands can read files and cannot write or use the network, and whatever would ask you is refused. It’s own commands still run outside that, so it can still change pages and publish a file it can read.',
+      },
+    ],
+  },
+}
+/**
+ * The most an It from before there was a choice may run each app's reopened conversations in.
+ * Such an It, on a machine that joined this one, ignores the choice. For Codex it gives the
+ * workspace sandbox and nothing about who approves, so a reviewer the person chose in their own
+ * Codex settings may approve there: at most Approve for me. Where what is chosen allows less than
+ * this, the backend does not let it start a run, and where it allows more, the page says that the
+ * machine runs less (see `runBegan`).
+ */
+export const WAKE_MODE_LEGACY: Partial<Record<Harness, string>> = { codex: 'approve-for-me' }
+/** Where a mode stands in its app's order, from 0 for the one that allows most; -1 for none. */
+export function wakeModeRank(harness: string, mode: string): number {
+  const list = WAKE_MODES[harness as Harness]
+  return list ? list.choices.filter((c) => c.id !== CONVERSATIONS_OWN).findIndex((c) => c.id === mode) : -1
+}
+/** The next mode down from `mode` in its app's order, which allows less, or null where there is none. */
+export function wakeModeBelow(harness: string, mode: string): string | null {
+  const list = WAKE_MODES[harness as Harness]
+  if (!list) return null
+  const ordered = list.choices.filter((c) => c.id !== CONVERSATIONS_OWN)
+  const at = ordered.findIndex((c) => c.id === mode)
+  return at >= 0 && at + 1 < ordered.length ? ordered[at + 1]!.id : null
+}
+/**
+ * The mode an app's conversations are reopened in on a machine, from what that machine keeps
+ * (`wakeModes`): the one chosen, the app's default where none was, and the last, which allows
+ * least, for a name it does not list. Null for an app that has no choice.
+ */
+export function wakeModeOf(kept: readonly { harness: string; mode: string }[] | null | undefined, harness: string): string | null {
+  const list = WAKE_MODES[harness as Harness]
+  if (!list) return null
+  const mode = kept?.find((m) => m.harness === harness)?.mode
+  if (mode === undefined) return list.default
+  if (list.choices.some((c) => c.id === mode)) return mode
+  const ordered = list.choices.filter((c) => c.id !== CONVERSATIONS_OWN)
+  return ordered[ordered.length - 1]?.id ?? list.default
+}
+/**
+ * Why a reopened run is not in the mode chosen, as its machine says it with `runNoted` and the
+ * backend keeps it: a code and the modes' names, never words of the machine's own, so that the
+ * page says only what It itself would say (`wakeNoteText`).
+ * - `refused`: the app would not run in `mode` here (for Codex, as what an administrator requires
+ *   of it forbids it), and It reopened it in `instead`, which allows less.
+ * - `unreviewed`: Codex was to run in Approve for me, and It could not tell that it has the
+ *   reviewer, so it runs in `instead`.
+ * - `older`: the machine runs an It from before the choice, which runs at most `instead` whatever is chosen.
+ */
+export const WAKE_NOTE_WHYS = ['refused', 'unreviewed', 'older'] as const
+export type WakeNoteWhy = (typeof WAKE_NOTE_WHYS)[number]
+const APP_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
+const modeName = (harness: string, mode: string): string => WAKE_MODES[harness as Harness]?.choices.find((c) => c.id === mode)?.label ?? mode
+/**
+ * Whether a note says something It would say: `instead` allows less than `mode`, and Codex's
+ * `unreviewed` is only ever Approve for me become Ask for approval.
+ */
+export function wakeNoteFits(harness: string, why: string, mode: string, instead: string): boolean {
+  if (!(WAKE_NOTE_WHYS as readonly string[]).includes(why)) return false
+  const from = wakeModeRank(harness, mode)
+  const to = wakeModeRank(harness, instead)
+  if (from < 0 || to <= from) return false
+  return why !== 'unreviewed' || (harness === 'codex' && mode === 'approve-for-me' && instead === 'ask')
+}
+/** The sentence the bar above a page says beside a run, from its note as kept (`why:mode:instead`), or null for none or one this It would not say. */
+export function wakeNoteText(harness: string, note: string | null | undefined): string | null {
+  if (!note) return null
+  const [why, mode, instead] = note.split(':')
+  if (!why || !mode || !instead || !wakeNoteFits(harness, why, mode, instead)) return null
+  const app = APP_NAMES[harness] ?? harness
+  if (why === 'refused')
+    return `${app} would not run in ${modeName(harness, mode)} here, so It reopened it in ${modeName(harness, instead)}, which allows less.`
+  if (why === 'unreviewed')
+    return `${app} was reopened in ${modeName(harness, instead)}, not ${modeName(harness, mode)}, because It could not tell that this ${app} has an automatic reviewer. So whatever would need approval is refused.`
+  return `This machine runs an It from before the choice of mode, which does not reopen ${app} in ${modeName(harness, mode)}, and at most in ${modeName(harness, instead)}. Update It on that machine.`
+}
 /**
  * Whether It reopens a closed conversation on a machine of this system, as the machine names
  * its system (`process.platform`), and as the machine says of itself (`reopens`). On Linux and

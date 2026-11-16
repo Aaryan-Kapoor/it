@@ -30,7 +30,11 @@
 //    server stopped, the page is clicked again, and It reopens the conversation through the real
 //    Codex (`codex exec resume`, which is Auto-wake), which asks the stand-in in the same
 //    conversation with a newest message from the person that begins `[It]` and holds the
-//    click's line, ending with its `[action <id>]`.
+//    click's line, ending with its `[action <id>]`. It reopens Codex under Codex's automatic
+//    reviewer, so the stand-in then asks for one command that It's rule does not let through,
+//    outside the sandbox. The check passes only when Codex sends that to its reviewer, which is
+//    the stand-in here too and allows it, and then runs it. That shows that Codex consulted its
+//    reviewer and acted on the answer, and nothing of what a real reviewer would decide.
 //
 // It runs on Linux, and on macOS too (where, with Codex 0.160.0 and 0.169.0, the click in step 2
 // was not handed over while Codex's terminal had the conversation open). On Windows, which has
@@ -438,13 +442,30 @@ const clickOf = (asked) => {
   const lines = [asked.newest, ...asked.since.filter((item) => item?.type === 'message').map(textOf)].flatMap((text) => text.split('\n'))
   return lines.map((line) => /^\[It\] .*\[action ([^\]\s]+)\]$/.exec(line.trim())?.[1]).find(Boolean)
 }
+/**
+ * A file the reopened conversation writes by a command that It's rule does not let through, and
+ * that asks to run outside Codex's sandbox: in the run's home, outside the conversation's folder
+ * and It's. Codex runs it only where something approves it, which in a conversation It reopens
+ * is Codex's automatic reviewer, here answered by the stand-in.
+ */
+const outside = path.join(home, 'written-outside-the-sandbox.txt')
+const writeOutside = windows ? `Set-Content -LiteralPath '${outside}' -Value reviewed` : `printf reviewed > '${outside}'`
+/** What Codex's reviewer answers, as its instructions ask: here, always that the command may run. */
+const ALLOWED = JSON.stringify({ risk_level: 'low', user_authorization: 'high', outcome: 'allow', rationale: 'The stand-in for the reviewer allows it.' })
 const model = await standInModel({
   port: modelPort,
   script: (asked) => {
+    // Codex's automatic reviewer, asking in the person's place: allowed, so that the check sees
+    // that Codex asked it and then ran the command. No reviewer's judgement is tried here
+    if (asked.review) return { say: ALLOWED }
     if (asked.newest.startsWith('[It]')) {
       const action = clickOf(asked)
       // A click: the page is answered once, by a patch that names the click it answers
       if (action && asked.outputs === 0) return { run: patching({ answered: action, note: NOTE }) }
+      // And in the conversation It reopened, with `codex exec`, one command more that It's rule
+      // does not let through, asked outside the sandbox: Codex's reviewer decides it there
+      if (action && asked.outputs === 1 && asked.trigger === 'exec')
+        return { run: writeOutside, escalate: 'Writes one note outside the sandbox, which the check looks for.' }
       return { say: 'Answered on the page.' }
     }
     if (asked.newest.trim() === PROMPT) return asked.outputs === 0 ? { run: created } : { say: 'The page is up, and I will wait for you to use it.' }
@@ -787,6 +808,17 @@ trust_level = "trusted"
     'and Codex, reopened, runs the `it patch` the stand-in answered with',
     wokePatched && after?.state?.answered === second?.id && after?.state?.note === NOTE,
     JSON.stringify(after),
+  )
+  // It reopens Codex under Codex's automatic reviewer: a command that It's rule does not let
+  // through and that asks to run outside the sandbox goes to the reviewer, which here is the
+  // stand-in and allows it, and Codex then runs it. What a real reviewer would decide is not tried
+  const askedOutside = await model.until((r) => r.n > beforeWake && r.answered?.escalate, 60_000)
+  const reviewed = await model.until((r) => r.n > (askedOutside?.n ?? Number.POSITIVE_INFINITY) && r.review, 60_000)
+  const ranOutside = await model.until((r) => r.n > (askedOutside?.n ?? Number.POSITIVE_INFINITY) && !r.review && r.outputs >= 2, 60_000)
+  check(
+    'and a command outside It’s rule, asked outside the sandbox, goes to Codex’s automatic reviewer, and runs once it allows it',
+    askedOutside && reviewed && ranOutside && existsSync(outside) && readFileSync(outside, 'utf8').trim() === 'reviewed',
+    JSON.stringify({ askedOutside: askedOutside?.answered, reviewed: reviewed?.n, ranOutside: ranOutside?.n, written: existsSync(outside) }),
   )
   writeFileSync(path.join(logs, 'runs.txt'), (await it(['runs'])).out)
 } catch (err) {

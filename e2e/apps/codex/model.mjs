@@ -6,7 +6,7 @@
 // Each request is kept, by the conversation Codex names in it and the newest thing a person said
 // in it, so that a check can see which conversation asked what, and in what order. The script
 // is given each request as it comes and says what to answer: a command for Codex to run with the
-// shell tool it offers, or words, which end the turn.
+// shell tool it offers, inside its sandbox or asked outside it, or words, which end the turn.
 import http from 'node:http'
 
 /** The text of a message as Codex sends it, its parts joined. */
@@ -37,7 +37,12 @@ export function readRequest(body) {
   }
   const last = input.at(-1)
   const tools = (body.tools ?? []).map((t) => t.name).filter(Boolean)
+  const instructions = typeof body.instructions === 'string' ? body.instructions : ''
   return {
+    // Whether this is Codex's automatic reviewer asking whether a command may run, in place of
+    // the person: it is told to answer with strict JSON, by its instructions and by the shape it
+    // asks the answer in, and asks in a conversation of its own
+    review: /final message must be strict JSON/.test(instructions) || body.text?.format?.type === 'json_schema',
     thread: body.client_metadata?.thread_id ?? null,
     // What started the turn, as Codex says in the metadata it sends with each request: `exec` for
     // a `codex exec` run, which is how It reopens a conversation, and another word for a turn
@@ -58,18 +63,21 @@ export function readRequest(body) {
 /**
  * The arguments of a call to the shell tool Codex offered, for one command line. Codex has
  * offered it under three names over its versions, each with its own way of being given the
- * command.
+ * command. With `escalate`, the reason given, the command is asked to run outside Codex's
+ * sandbox, which Codex runs only once the person, or its reviewer in their place, approves.
  */
-export function shellCall(tools, command) {
-  if (tools.includes('exec_command')) return { name: 'exec_command', arguments: { cmd: command } }
-  if (tools.includes('shell_command')) return { name: 'shell_command', arguments: { command } }
-  if (tools.includes('shell')) return { name: 'shell', arguments: { command: ['bash', '-lc', command] } }
+export function shellCall(tools, command, escalate) {
+  const outside = escalate ? { sandbox_permissions: 'require_escalated', justification: escalate } : {}
+  if (tools.includes('exec_command')) return { name: 'exec_command', arguments: { cmd: command, ...outside } }
+  if (tools.includes('shell_command')) return { name: 'shell_command', arguments: { command, ...outside } }
+  if (tools.includes('shell') && !escalate) return { name: 'shell', arguments: { command: ['bash', '-lc', command] } }
   return null
 }
 
 /**
  * Starts the stand-in on 127.0.0.1 at `port`. `script(request)` is given each request read by
- * `readRequest`, and answers `{ run: '<command line>' }` or `{ say: '<words>' }`. Resolves with
+ * `readRequest`, and answers `{ run: '<command line>' }`, with `escalate: '<why>'` to ask for
+ * it outside the sandbox, or `{ say: '<words>' }`. Resolves with
  * every request kept (`seen`), a way to wait for one (`until`), and `close`.
  */
 export function standInModel({ port, script }) {
@@ -100,8 +108,10 @@ export function standInModel({ port, script }) {
       } catch (err) {
         answer = { say: `The stand-in's script failed: ${err.message}` }
       }
-      const call = answer.run === undefined ? null : shellCall(asked.tools, answer.run)
-      asked.answered = call ? { run: answer.run, tool: call.name } : { say: answer.run === undefined ? answer.say : 'no shell tool was offered' }
+      const call = answer.run === undefined ? null : shellCall(asked.tools, answer.run, answer.escalate)
+      asked.answered = call
+        ? { run: answer.run, tool: call.name, ...(answer.escalate ? { escalate: true } : {}) }
+        : { say: answer.run === undefined ? answer.say : 'no shell tool was offered' }
       seen.push(asked)
       const id = `resp_${n}`
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })

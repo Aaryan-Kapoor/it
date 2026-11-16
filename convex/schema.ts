@@ -290,9 +290,25 @@ export default defineSchema({
     wakes: v.optional(v.array(v.object({ harness: v.string(), since: v.number() }))),
     // The agent apps the person has switched reopening off for on this machine: it is not switched on for them again by anything but the person
     wakesOff: v.optional(v.array(v.string())),
+    /**
+     * The permission mode the person chose for each agent app's reopened conversations on this
+     * machine, by its name (`WAKE_MODES`). An app with none is `automatic` (see `wakeModeOf`). Only
+     * they choose, from a browser of their own.
+     */
+    wakeModes: v.optional(v.array(v.object({ harness: v.string(), mode: v.string() }))),
     /** The conversations this machine is running now because It reopened them, each since when, and whether someone has asked for it to be stopped. */
     runs: v.optional(
-      v.array(v.object({ harness: v.string(), sessionId: v.string(), since: v.number(), stop: v.optional(v.boolean()), run: v.optional(v.string()) })),
+      v.array(
+        v.object({
+          harness: v.string(),
+          sessionId: v.string(),
+          since: v.number(),
+          stop: v.optional(v.boolean()),
+          run: v.optional(v.string()),
+          /** What the bar above its page says of how it was reopened, where that is not as the person chose: see `CODEX_UNREVIEWED`. */
+          note: v.optional(v.string()),
+        }),
+      ),
     ),
     /** The last few conversations a person stopped, and when: what was waiting for one by then is not reopened for. */
     stops: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), run: v.optional(v.string()) }))),
@@ -304,7 +320,8 @@ export default defineSchema({
      */
     notLoaded: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), since: v.number() }))),
     /** The last few conversations that could not be reopened, when, and why in the connector's own words: never what a command printed. */
-    fails: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), why: v.string() }))),
+    // `kept`: said by the backend itself of a machine whose It is too old for the mode chosen, and kept until a run of that conversation begins
+    fails: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), why: v.string(), kept: v.optional(v.boolean()) }))),
     /** When it was last written down that this machine, revoked, asked for a token: said once an hour and not each time. */
     refusalSaidAt: v.optional(v.number()),
     /** The earlier identity of the same computer whose place this one took, if it took one's. */

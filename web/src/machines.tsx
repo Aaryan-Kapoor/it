@@ -1,7 +1,21 @@
 // The machines where the person's agents run, and which agent apps (harnesses, in the code) on
 // each are connected. The site only records the choice; the connector on the machine does the
 // installing.
-import { ALIVE, HARNESSES, INSTALL, newer, noWakeHere, TURN_ON_MS, TURNS_ON, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
+import {
+  ALIVE,
+  type Harness as AppName,
+  HARNESSES,
+  INSTALL,
+  newer,
+  noWakeHere,
+  TURN_ON_MS,
+  TURNS_ON,
+  UPGRADE_MS,
+  WAKE_MODES,
+  WAKES,
+  wakeModeOf,
+  wakesOn,
+} from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
@@ -49,6 +63,7 @@ interface Machine {
   harnesses: Harness[]
   wanted: string[]
   wakes: { harness: string; since: number }[]
+  wakeModes?: { harness: string; mode: string }[]
 }
 
 /**
@@ -377,6 +392,7 @@ export const pausedFor = (why: string, machine: string): string =>
 function MachineCard({ m, now, host }: { m: Machine; now: number; host: string | null }) {
   const toggle = useMutation(api.machines.toggle)
   const wake = useMutation(api.machines.wake)
+  const chooseMode = useMutation(api.machines.wakeMode)
   const rename = useMutation(api.machines.rename)
   const [error, setError] = useState('')
   const [name, setName] = useState<string | null>(null)
@@ -451,6 +467,10 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
             // And only on a machine of a system It reopens conversations on
             const wakeable = couldWake && wakesOn(m.system, m.reopens)
             const wakes = m.wakes.some((w) => w.harness === h.id)
+            // Whether a conversation It reopens runs under the app's own automatic reviewer: only for an app that has one, and only said where Auto-wake is on
+            // The mode its reopened conversations run in: only for an app that offers a choice, and only said where Auto-wake is on
+            const modes = wakeable && wakes ? WAKE_MODES[h.id as AppName] : undefined
+            const mode = wakeModeOf(m.wakeModes, h.id)
             return (
               <li key={h.id} className="row">
                 <label className="row-main switch-row">
@@ -501,6 +521,28 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                             : 'Off. A click waits until you open its conversation again'}
                     </span>
                   </label>
+                )}
+                {modes && (
+                  <fieldset className="row-detail wake-modes">
+                    <legend className="wake-name wake-modes-name">How it is reopened</legend>
+                    {modes.choices.map((c) => (
+                      <label key={c.id} className="wake-mode">
+                        <input
+                          className="wake-mode-pick"
+                          type="radio"
+                          name={`wake-mode-${machineId}-${h.id}`}
+                          value={c.id}
+                          checked={mode === c.id}
+                          onChange={() => act(chooseMode({ machineId, harness: h.id, mode: c.id }))}
+                        />
+                        <span className="wake-mode-name">
+                          {c.label}
+                          {c.recommended && <span className="wake-mode-tag">Recommended</span>}
+                        </span>
+                        <span className="row-sub wake-mode-say">{c.says}</span>
+                      </label>
+                    ))}
+                  </fieldset>
                 )}
                 {couldWake && !wakeable && <span className="row-detail row-sub">{noWakeHere(m.system)}</span>}
               </li>

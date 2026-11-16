@@ -29,6 +29,12 @@ import { addonMarks, conversationFolder, conversationsFile, forgetAddonMark, not
 import {
   Budget,
   bootId,
+  CODEX_CHANGED_SAID,
+  CODEX_MODE_REFUSED,
+  CODEX_NOT_REVIEWED,
+  CODEX_REVIEW_ENDED,
+  CODEX_REVIEWED,
+  CODEX_REVIEWED_NOTE,
   carrying,
   carryOn,
   cgroupOf,
@@ -37,6 +43,7 @@ import {
   claudeWroteAt,
   codexHolder,
   codexInterruptedAt,
+  codexMode,
   codexWroteAt,
   endJob,
   endTree,
@@ -276,6 +283,78 @@ describe('the command each agent app is carried on with', () => {
     expect(codex.slice(-2)).toEqual(['01a10f7c-062c-7010-8d57-8e1007169551', '-'])
   })
 
+  test('Codex is reopened in each mode it offers as Codex itself sets that mode up, with nothing but Full Access outside its sandbox, on every system', () => {
+    const thread = '01a10f7c-062c-7010-8d57-8e1007169551'
+    const argvOf = (wakeMode: string | undefined, platform: NodeJS.Platform = 'linux') => {
+      const how = carrying('codex', thread, 'a click', { ...has, platform, ...(wakeMode ? { wakeMode } : {}) })
+      if (typeof how === 'string') throw new Error(how)
+      return how
+    }
+    const pairs = (argv: string[]) => argv.flatMap((word, i) => (argv[i - 1] === '-c' ? [word] : []))
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      const everyone = (mode: string | undefined) => {
+        const how = argvOf(mode, platform)
+        expect(how.argv.slice(0, 4)).toEqual(['codex', 'exec', 'resume', '--skip-git-repo-check'])
+        expect(how.argv.slice(-2)).toEqual([thread, '-'])
+        // Never Codex's own flag that turns everything off, in any mode
+        expect(how.argv.join(' ')).not.toMatch(/dangerously|bypass/)
+        return how
+      }
+      // Approve for me: the workspace sandbox, and Codex's reviewer where the person would be asked, as its own --approve-for-me sets it
+      const approve = everyone('approve-for-me')
+      expect(pairs(approve.argv)).toEqual(
+        expect.arrayContaining(['sandbox_mode="workspace-write"', 'sandbox_workspace_write.network_access=true', ...CODEX_REVIEWED.filter((w) => w !== '-c')]),
+      )
+      expect(approve.input).toBe(`a click\n\n${CODEX_REVIEWED_NOTE}`)
+      expect((approve as { reviewed?: boolean }).reviewed).toBe(true)
+      // Ask for approval: the same sandbox, and nobody to approve, whatever the person's own settings choose
+      const ask = everyone('ask')
+      expect(pairs(ask.argv)).toContain('sandbox_mode="workspace-write"')
+      expect(pairs(ask.argv)).toContain('approvals_reviewer="user"')
+      expect(pairs(ask.argv)).not.toContain('approval_policy="on-request"')
+      expect(ask.input).toBe('a click')
+      // Read Only, and Full Access: Codex's own sandbox for each, and nobody to approve
+      expect(pairs(everyone('read-only').argv)).toEqual(['sandbox_mode="read-only"', 'approvals_reviewer="user"'])
+      expect(pairs(everyone('full-access').argv)).toEqual(['sandbox_mode="danger-full-access"', 'approvals_reviewer="user"'])
+      expect(everyone('full-access').input).toBe('a click')
+      // Nothing chosen: Ask for approval, as It did before there was a choice; a name Codex has no mode for: Read Only, the mode that allows least
+      expect(everyone(undefined).argv).toEqual(ask.argv)
+      expect(everyone('made-up').argv).toEqual(everyone('read-only').argv)
+    }
+    // It's folder is let be written only in the workspace modes, and never on Windows
+    expect(pairs(argvOf('ask').argv)).toContain('sandbox_workspace_write.writable_roots=["/home/someone/.it"]')
+    expect(argvOf('ask', 'win32').argv.join(' ')).not.toContain('writable_roots')
+  })
+
+  test('Ask for approval is exactly what It ran before there was a choice, but that the person’s own reviewer cannot approve anything there', () => {
+    const thread = '01a10f7c-062c-7010-8d57-8e1007169551'
+    expect((carrying('codex', thread, 'x', { ...has, wakeMode: 'ask' }) as { argv: string[] }).argv).toEqual([
+      'codex',
+      'exec',
+      'resume',
+      '--skip-git-repo-check',
+      '-c',
+      'sandbox_mode="workspace-write"',
+      '-c',
+      'sandbox_workspace_write.network_access=true',
+      '-c',
+      'sandbox_workspace_write.writable_roots=["/home/someone/.it"]',
+      ...CODEX_NOT_REVIEWED,
+      thread,
+      '-',
+    ])
+  })
+
+  test('Approve for me is used with every Codex It accepts, and where the version is not known Codex is reopened in Ask for approval, the mode below, and the page is told why; every other mode is as chosen', () => {
+    for (const version of ['0.160.0', '0.167.2', '0.170.0', '1.0.0'])
+      expect(codexMode(version, 'approve-for-me')).toEqual({ mode: 'approve-for-me', unreviewed: false })
+    for (const version of ['0.159.9', '0.120.0', 'unknown', '', null, undefined, '0.167.2-alpha.1'])
+      expect(codexMode(version, 'approve-for-me'), String(version)).toEqual({ mode: 'ask', unreviewed: true })
+    for (const mode of ['full-access', 'ask', 'read-only'])
+      for (const version of ['0.167.2', undefined]) expect(codexMode(version, mode)).toEqual({ mode, unreviewed: false })
+    expect(CODEX_REVIEWED_NOTE).toMatch(/not the person’s, and allows nothing/)
+  })
+
   test('an id of a shape the app does not make is never put on its command line, and an app with no such command has none', () => {
     for (const [harness, ids] of Object.entries({
       'claude-code': ['--dangerously-skip-permissions', 'abc', ''],
@@ -367,6 +446,97 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     expect(
       await carryOn({ argv: [path.join(scratch, 'never')], input: '', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, { signal: stop.signal }),
     ).toBe(STOPPED)
+  })
+
+  test('a Codex turn that Codex interrupted itself, under its reviewer, ran and is not a failure to try again', async () => {
+    const kept = path.join(scratch, 'kept-review')
+    const script = (name: string, body: string) => {
+      const file = path.join(scratch, name)
+      writeFileSync(file, `#!/bin/sh\ncat > /dev/null\n${body}`)
+      chmodSync(file, 0o755)
+      return file
+    }
+    // As `codex exec` ends such a turn: that it was interrupted, dimmed, then how many tokens it used, and exit 1
+    const refusing = script(
+      'refusing',
+      'echo "exec: a command it ran"\nprintf "\\033[2mturn interrupted\\033[0m\\n\\033[2mtokens used\\033[0m\\n12,345\\n" >&2\nexit 1\n',
+    )
+    const bare = script('refusing-bare', 'printf "turn interrupted\\r\\n" >&2\nexit 1\n')
+    const opts = { keepIn: kept, said: () => {}, brokeOff: vi.fn() }
+    const reviewed = { argv: [refusing], input: 'a click', app: 'Codex', reviewed: true }
+    expect(await carryOn(reviewed, scratch, { harness: 'codex', session: 'x' }, opts)).toBe(CODEX_REVIEW_ENDED)
+    expect(await carryOn({ ...reviewed, argv: [bare] }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe(CODEX_REVIEW_ENDED)
+    // With the count as other languages write it
+    for (const [n, count] of ['12\u202f345', '12\u00a0345', '12’345', '12.345', '987', '১০,০০,০০৭', '١٢٬٣٤٥'].entries()) {
+      const local = script(`refusing-${n}`, `printf "turn interrupted\\ntokens used\\n${count}\\n" >&2\nexit 1\n`)
+      expect(await carryOn({ ...reviewed, argv: [local] }, scratch, { harness: 'codex', session: 'x' }, opts), count).toBe(CODEX_REVIEW_ENDED)
+    }
+    // Not a turn that broke off, so the next one is not told it was cut off
+    expect(opts.brokeOff).not.toHaveBeenCalled()
+    // Without the reviewer, ended otherwise, or with something printed after it, it is a failure as any is, and is tried again
+    expect(await carryOn({ ...reviewed, reviewed: undefined }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe('Codex exited with 1')
+    const failing = script('failing-reviewed', 'echo "ERROR: stream disconnected" >&2\nexit 1\n')
+    expect(await carryOn({ ...reviewed, argv: [failing] }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe('Codex exited with 1')
+    const after = script('after-reviewed', 'echo "turn interrupted"\necho "ERROR: and then this"\nexit 1\n')
+    expect(await carryOn({ ...reviewed, argv: [after] }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe('Codex exited with 1')
+    // Nor where another line follows the count, even one of numbers alone
+    const more = script('more-reviewed', 'printf "turn interrupted\\ntokens used\\n12,345\\n456\\n" >&2\nexit 1\n')
+    expect(await carryOn({ ...reviewed, argv: [more] }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe('Codex exited with 1')
+    expect(opts.brokeOff).toHaveBeenCalledTimes(4)
+    expect(readdirSync(kept)).toEqual([])
+  })
+
+  test('a Codex that will not start in the mode it was given says so, and one whose requirements change the mode is heard saying it, however much it printed first, and is ended when It reads that', async () => {
+    const kept = path.join(scratch, 'kept-mode')
+    const script = (name: string, body: string) => {
+      const file = path.join(scratch, name)
+      writeFileSync(file, `#!/bin/sh\ncat > /dev/null\n${body}`)
+      chmodSync(file, 0o755)
+      return file
+    }
+    const brokeOff = vi.fn()
+    const opts = { keepIn: kept, said: () => {}, brokeOff }
+    // Both of the ways Codex refuses outright, as its config loader words them
+    for (const [n, words] of [
+      'Error loading config: `approval_policy = "never"` cannot be used because requirements do not allow `sandbox_mode = "danger-full-access"`',
+      'configured value for `sandbox_mode` is disallowed by requirements (not allowed); fallback to a requirement-compliant value also failed (not allowed)',
+    ].entries()) {
+      const refused = script(`mode-refused-${n}`, `cat >&2 <<'SAID'\n${words}\nSAID\nexit 1\n`)
+      expect(await carryOn({ argv: [refused], input: 'a click', app: 'Codex' }, scratch, { harness: 'codex', session: 'x' }, opts), words).toBe(
+        CODEX_MODE_REFUSED,
+      )
+      // The same words from another app are its own failure
+      expect(await carryOn({ argv: [refused], input: 'a click', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, opts)).toBe('Pi exited with 1')
+    }
+    // No turn ran, so none is said to have been cut off, but for Pi's own failures
+    expect(brokeOff).toHaveBeenCalledTimes(2)
+    // Codex whose requirements put their own value in place of one It gave says so as it starts, and is ended there
+    const changed = script(
+      'mode-changed',
+      // After more than a page's worth of what it printed first, as Codex prints the whole prompt before it
+      'head -c 40000 /dev/zero | tr "\\\\0" "x"\necho\necho "warning: Configured value for \\`approvals_reviewer\\` is disallowed by requirements; falling back to required value AutoReview." >&2\nsleep 30\nexit 0\n',
+    )
+    const began = Date.now()
+    const heard: string[] = []
+    const noticed = (p: string) => {
+      heard.push(p)
+      return CODEX_CHANGED_SAID.test(p) ? CODEX_MODE_REFUSED : undefined
+    }
+    expect(await carryOn({ argv: [changed], input: 'a click', app: 'Codex' }, scratch, { harness: 'codex', session: 'x' }, { ...opts, noticed })).toBe(
+      CODEX_MODE_REFUSED,
+    )
+    expect(Date.now() - began).toBeLessThan(10_000)
+    // Only the settings It gives are watched: requirements that change, say, web search change no mode
+    expect(CODEX_CHANGED_SAID.test('Configured value for `web_search_mode` is disallowed by requirements; falling back to required value Disabled.')).toBe(
+      false,
+    )
+    expect(
+      CODEX_CHANGED_SAID.test(
+        'Configured value for `permission_profile` is disallowed by requirements; falling back from `:read-only` to required value `:workspace`.',
+      ),
+    ).toBe(true)
+    expect(heard.length).toBeGreaterThan(0)
+    expect(readdirSync(kept)).toEqual([])
   })
 
   test('one that ends badly by itself hands over its last line, for the person whose app it is, and leaves nothing of what it printed', async () => {
