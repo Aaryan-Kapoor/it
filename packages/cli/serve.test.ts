@@ -103,6 +103,17 @@ const until = async (what: () => boolean | Promise<boolean>, ms = 20_000) => {
   return false
 }
 
+/**
+ * What a command says to do where It is not running and this folder registered no service. The
+ * program is run here with a PATH that has no `systemctl`, so on Linux no systemd for the
+ * person can be reached, as in a container, and the command says to keep `it serve` running
+ * rather than send the person back to setup. Elsewhere the system can always keep It running.
+ */
+const NOT_RUNNING_HERE =
+  process.platform === 'linux'
+    ? 'Nothing can keep It running in the background on this machine, which has no systemd for your account that can be reached from here, as in a container. Run `it serve` in a terminal of your own and leave that terminal open, or under a supervisor of your own. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.'
+    : 'Run `it setup`, which starts It and keeps it running in the background. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.'
+
 describe.skipIf(process.platform === 'win32')('the look at whether a port is free, before the service starts', () => {
   /** Where each runtime the program runs under is on this machine. The standalone program runs under Bun, which hands a listener its connections at another moment than Node does. */
   const bun = (process.env.PATH ?? '')
@@ -1392,7 +1403,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     expect(JSON.parse(list.err().trim().split('\n').pop()!).error).toMatchObject({
       code: 'offline',
       message: 'It is not running on this machine.',
-      hint: 'Run `it setup`, which starts It and keeps it running in the background. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.',
+      hint: NOT_RUNNING_HERE,
     })
   }, 120_000)
 
@@ -1504,7 +1515,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
           expect(await well(after)).toBe(0)
           expect(JSON.parse(after.out())).toMatchObject({
             running: false,
-            hint: 'It is not running on this machine. Run `it setup`, which starts It and keeps it running in the background. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.',
+            hint: `It is not running on this machine. ${NOT_RUNNING_HERE}`,
           })
         } finally {
           await stopped(left)
