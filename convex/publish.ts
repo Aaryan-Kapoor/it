@@ -226,13 +226,16 @@ export const _begin = internalMutation({
       ...(own ? { own: true } : {}),
     }
     let artifact = args.slug ? await artifactBySlug(ctx, user._id, args.slug) : null
+    // These two refuse what was asked, and are reached only where It has no publication of this
+    // identity, so nothing is under way or made under it: `settled` says so, and a command that
+    // begins a publication again under its identity reports them as they are and lets go of it
     if (artifact && args.tour !== undefined && !isTourPage(artifact, args.tour)) {
       const adopted = await adoptTourPage(ctx, artifact, args.tour, title, args.state!)
-      if (!adopted) fail('conflict', TOUR_CONFLICT)
+      if (!adopted) fail('conflict', TOUR_CONFLICT, { settled: true })
       artifact = adopted
     }
     if (args.expectedOwner && (!artifact || !ownerMatches(artifact, args.expectedOwner)))
-      fail('conflict', 'The page changed owner. Read it before publishing again.')
+      fail('conflict', 'The page changed owner. Read it before publishing again.', { settled: true })
     // Refused before anything is begun, and again when it is shown, in case two began it together
     if (artifact && own && (await anothers(ctx, artifact, who))) {
       log('publish.refused', { reason: 'anothers', userId: user._id, artifactId: artifact._id }, 'warn')

@@ -24,10 +24,28 @@ const stand = vi.hoisted(() => ({
   failWrite: false,
   onWrite: null as null | (() => void),
   failAck: false,
+  /** A file that cannot be removed, as on Windows while another program has it open. */
+  held: null as null | string,
+  /** A file that cannot be opened to be read, as on Windows while another program keeps others from reading it. */
+  unreadable: null as null | string,
   state: {} as Record<string, unknown>,
   revision: 6,
   clashes: 0,
 }))
+vi.mock('node:fs', async (original) => {
+  const real = await original<typeof import('node:fs')>()
+  return {
+    ...real,
+    rmSync: (file: string, options?: Parameters<typeof real.rmSync>[1]) => {
+      if (stand.held !== null && String(file) === stand.held) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+      return real.rmSync(file, options)
+    },
+    openSync: (file: string, ...rest: unknown[]) => {
+      if (stand.unreadable !== null && String(file) === stand.unreadable) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+      return (real.openSync as (...args: unknown[]) => number)(file, ...rest)
+    },
+  }
+})
 // The four random bytes the name beside a picture is made with are none where a test says, so that it can put a file of that name there first
 vi.mock('node:crypto', async (original) => {
   const real = await original<typeof import('node:crypto')>()
@@ -83,6 +101,7 @@ import {
   keepPictureFor,
   keptPictures,
   MOST_BYTES,
+  pictureLeft,
   pictureName,
   picturesFile,
   replacing,
@@ -128,6 +147,8 @@ beforeEach(() => {
   stand.failWrite = false
   stand.onWrite = null
   stand.fixedSuffix = false
+  stand.held = null
+  stand.unreadable = null
 })
 afterEach(() => {
   rmSync(folder, { recursive: true, force: true })
@@ -517,6 +538,50 @@ test.skipIf(!otherDisk)(
     }
   },
 )
+
+test('a picture that cannot be removed is said to be so, stays noted, and goes when the tour is cleared once it can be', async () => {
+  await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)
+  stand.held = at()
+  const dropped = await dropPicture(REQUEST)
+  expect(dropped).toEqual({ left: [], stuck: [at()] })
+  expect(existsSync(at())).toBe(true)
+  expect(keptPictures()!.map((k) => k.file)).toEqual([at()])
+  const said = pictureLeft(dropped) as { pictureLeft: string[]; pictureHint: string }
+  expect(said.pictureLeft).toEqual([at()])
+  expect(said.pictureHint).toContain('could not be removed')
+  expect(said.pictureHint).toContain('`it tour clear` removes it')
+  expect(said.pictureHint).not.toContain('could not be read')
+  // Clearing the tour while it is still held says so, and keeps the note
+  expect(await dropPictures([folder])).toEqual({ removed: 0, left: [], stuck: [at()] })
+  expect(keptPictures()!.map((k) => k.file)).toEqual([at()])
+  stand.held = null
+  expect(await dropPictures([folder])).toEqual({ removed: 1, left: [] })
+  expect(existsSync(at())).toBe(false)
+  expect(keptPictures()).toEqual([])
+})
+
+test('a picture that cannot be read is not taken for a changed file: it stays noted, and goes when the tour is cleared once it can be read', async () => {
+  await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)
+  stand.unreadable = at()
+  expect(await dropPicture(REQUEST)).toEqual({ left: [], stuck: [at()] })
+  expect(existsSync(at())).toBe(true)
+  expect(keptPictures()!.map((k) => k.file)).toEqual([at()])
+  stand.unreadable = null
+  expect(await dropPictures([folder])).toEqual({ removed: 1, left: [] })
+  expect(existsSync(at())).toBe(false)
+})
+
+test('a record that cannot be written is not said to be one that cannot be read', async () => {
+  await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)
+  stand.failWrite = true
+  const dropped = await dropPicture(REQUEST)
+  expect(dropped).toEqual({ left: [], unchanged: true })
+  const said = pictureLeft(dropped) as { pictureHint: string }
+  expect(said.pictureHint).toContain('could not change its record')
+  expect(said.pictureHint).not.toContain('could not be read')
+  expect(pictureLeft({ left: [] })).toEqual({})
+  expect((pictureLeft({ left: [], unread: true }) as { pictureHint: string }).pictureHint).toContain('could not be read')
+})
 
 test('an answer says which picture it left, and that it could not tell, where the record cannot be read', async () => {
   await keepPicture(action({ part: 'board', request: REQUEST }, { files: PNG }), folder)

@@ -42,7 +42,7 @@ import {
   withoutFiles,
 } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
-import { type Args, fileText, json, loose, need, nested, OPTIONS, optionsFor, outputArgs, parse, setValue, text } from './args'
+import { type Args, commandLine, fileText, json, loose, need, nested, OPTIONS, optionsFor, outputArgs, parse, setValue, text } from './args'
 import {
   type Arrives,
   afterSetupForAgent,
@@ -168,7 +168,7 @@ import {
 import { printEnv } from './shell-env'
 import { zshDirectory } from './shell-profile'
 import { GUIDE, NAMES, END as TOUR_END, TOUR_PREFIX, START as TOUR_START, STEPS as TOUR_STEPS, tourPage } from './tour'
-import { answerAction, dropPicture, dropPictures, keepPicture, picturesFile, START_SLUG } from './tour-answer'
+import { answerAction, dropPicture, dropPictures, keepPicture, pictureLeft, picturesFile, START_SLUG } from './tour-answer'
 import { inUnloadedOpenCode } from './unclaimed'
 import { finishInstallationRemoval, installationFile, removeInstallationFiles, stepOutOf, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
@@ -1249,14 +1249,7 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
     const dropped = await dropPicture(done.request)
     const answered = {
       answered: done.part ?? null,
-      ...(dropped.left.length || dropped.unread
-        ? {
-            pictureLeft: dropped.left,
-            pictureHint: dropped.unread
-              ? `It's record of the pictures the tour wrote (${picturesFile()}) could not be read, so the picture for this action, if there is one, was left where it is. Say nothing of it during the tour.`
-              : 'This file has changed since It wrote it, so It left it where it is. Say nothing of it during the tour.',
-          }
-        : {}),
+      ...pictureLeft(dropped),
     }
     // Told to end its turn only where It knows that the next thing arrives by itself: anywhere else the command waits for it
     const byItself = a.flags.wait === true ? false : (await arrivalHere(START_SLUG, true))?.byItself === true
@@ -1327,6 +1320,18 @@ async function tour(a: Args, counted: (code?: string) => void) {
             picturesHint: pictures.unread
               ? `It's record of the pictures the tour wrote (${picturesFile()}) could not be read, so no picture was removed. These files are named as the tour names its pictures, and are left where they are. Ask the person before deleting any of them.`
               : 'These files are named as the tour names its pictures, and It did not write them as they are now, so they are left where they are. Ask the person before deleting any of them.',
+          }
+        : {}),
+      ...(pictures.stuck
+        ? {
+            picturesStuck: pictures.stuck,
+            picturesStuckHint:
+              'These pictures It wrote could not be removed, as on Windows while another program has the file open. They are still noted, and `it tour clear` run again removes them once nothing has them open.',
+          }
+        : {}),
+      ...(pictures.unchanged
+        ? {
+            picturesUnchanged: `It could not change its record of the pictures the tour wrote (${picturesFile()}) just now, so some of them may be left. Run \`it tour clear\` again in a moment to remove them.`,
           }
         : {}),
     })
@@ -4422,6 +4427,7 @@ async function main(given: string[]): Promise<void> {
 // a pipe, what was written is still on its way for a moment after it was written.
 const whileItRuns = setInterval(() => {}, 1000)
 const began = Date.now()
+const words = commandLine(process.argv.slice(2))
 /**
  * Counts that a command was run: which of It's commands, who ran it (a person at a terminal, an
  * agent app in a conversation, or a script), how it ended and how long it took, in bands. Never
@@ -4430,7 +4436,7 @@ const began = Date.now()
  */
 function counted(code?: string): void {
   try {
-    const cmd = process.argv[2]
+    const cmd = words[0]
     if (cmd === 'hook' || cmd === 'shell-env' || cmd === 'shell-profile' || cmd === 'serve' || takenOff) return
     const harness = sessionAsked()?.session.harness
     const by = harness
@@ -4443,13 +4449,13 @@ function counted(code?: string): void {
     usage.record('command.run', { command: usage.commandOf(cmd), by, result: usage.resultOf(code), took: usage.timeBand(Date.now() - began) })
   } catch {}
 }
-main(process.argv.slice(2)).then(
+main(words).then(
   () => {
     clearInterval(whileItRuns)
     // A command that did a part of what it was asked, said which part it did not, and set how it
     // ends has not ended well: it is counted by how it ends, and not by its having come back
     counted(process.exitCode ? (process.exitCode === 2 ? 'invalid' : 'error') : undefined)
-    if (!['wait', 'serve'].includes(process.argv[2] ?? '')) process.exitCode ??= 0
+    if (!['wait', 'serve'].includes(words[0] ?? '')) process.exitCode ??= 0
     return left()
   },
   (err) => {
@@ -4457,7 +4463,7 @@ main(process.argv.slice(2)).then(
     // A write into It's folder that the system refused is a sandbox's doing, and is said as that, never in the system's own words
     const p = err instanceof Problem ? err : writeRefused(err) ? readOnlyHere() : new Problem(String((err as Error)?.message ?? err))
     counted(p.code)
-    failure(p, outputArgs(process.argv.slice(3)))
+    failure(p, outputArgs(words.slice(1)))
     return end(p.code === 'invalid' ? 2 : 1)
   },
 )
