@@ -2667,6 +2667,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     const runId = randomUUID()
     runNames.set(key, runId)
     let ended: string | null = 'it did not end'
+    /** The conversation as the log named it when it said it was being reopened, so that how that ended is said too. */
+    let begun: string | undefined
     try {
       // It is told first, and nothing is started where it could not be told: it is by that
       // word that the page says the agent is working, and offers to stop it
@@ -2685,10 +2687,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         ended = NOT_STARTED
         return ended
       }
-      // Written down as it is about to begin and as it ends, by a shortened id, a count and a fixed
-      // word: a reopening that worked otherwise left no line at all, and could not be told from none
-      const who = `${a(agentOf(now.harness))} conversation (${short(now.id)})`
-      say(`${who} is being reopened for ${ids.length} click${ids.length === 1 ? '' : 's'}`)
+      // Written down as it is about to begin and, however it ends, as it ends, by a shortened id, a
+      // count and a fixed word: a reopening that worked otherwise left no line at all, and could not be told from none
+      begun = `${a(agentOf(now.harness))} conversation (${short(now.id)})`
+      say(`${begun} is being reopened for ${ids.length} click${ids.length === 1 ? '' : 's'}`)
       // Everything that could have changed while this was being got ready is looked at once
       // more, at the last moment before anything runs: the connector stopping, the machine
       // ceasing to fit, the hold on what it is reopened for being lost, and the person
@@ -2757,7 +2759,6 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       if (ended === null) revive(now.harness, now.id)
       // It ended badly by itself: a key it lacked may be in the person's shell by the next try
       else if (ended !== STOPPED && ended !== NOT_STARTED) shellMayHaveChanged()
-      say(`${who} ended its reopened run (${ended === null ? 'done' : ended === STOPPED ? 'stopped' : ended === NOT_STARTED ? 'not_started' : wakeWhy(ended)})`)
       // Ended because its hold on what it was reopened for was lost: nobody stopped it. Its
       // conversation is told, if it is reopened for the same thing again, that its turn was cut off.
       if (ended === STOPPED && lostHold.has(owner)) {
@@ -2777,6 +2778,11 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       }
       return ended
     } finally {
+      // How the reopening said to be beginning ended, however it ended: a run that threw is `other`
+      if (begun)
+        say(
+          `${begun} ended its reopened run (${ended === null ? 'done' : ended === STOPPED ? 'stopped' : ended === NOT_STARTED ? 'not_started' : wakeWhy(ended)})`,
+        )
       reopenedNow.delete(key)
       runNames.delete(key)
       stoppedRun.delete(key)
