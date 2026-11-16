@@ -965,8 +965,14 @@ async function OTHERAPP() {
   step(`types ${who} in the terminal`)
   await type(who)
   await sleep(15_000)
-  step(`types to ${who}: a page`)
-  await type('Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.')
+  const askText = 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.'
+  for (let i = 0; i < 3; i++) {
+    step(`types to ${who}: a page${i ? ' (again: it had not taken it)' : ''}`)
+    await type(askText)
+    await sleep(12_000)
+    if (!screen().includes(askText.slice(0, 30)) || /Ask anything/.test(screen())) continue
+    break
+  }
   let url = null
   const t0 = Date.now()
   while (Date.now() - t0 < 420_000 && !url) {
