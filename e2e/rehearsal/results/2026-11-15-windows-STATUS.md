@@ -10,6 +10,9 @@
 - **Item 5, on 0.1.43 with the launcher PATH: every case works for both apps.** An idle open conversation gets the click in its window. Three quick clicks never start two copies at once. Auto-wake off holds the click until it is turned on again. A closed terminal is woken.
 - **Usage reporting:** from 03:20 UTC every test install has `DO_NOT_TRACK=1`. The stretches when `itrehearsal` test installs could report are listed under "Usage reporting from test installs on this laptop".
 
+- **New, and it would hurt even on 0.1.43: a woken Codex may run only plain `it …` commands.** `it --% …`, which TOUR.md teaches for PowerShell, and any other command (`Get-Location`) are "rejected: blocked by policy". The page then says "Your agent could not do that" (runs 0415, 0425). Claude Code woken has no such limit.
+- Scenario 11 in part (a folder with a space and accents): the wake works for both apps. The owner's versions: Claude Code 2.1.322 works; Codex 0.167.2's woken turn used `--%` and was refused.
+
 Next: what is left of the earlier list ("Not run, and why"), until about 08:00 UTC.
 
 **Paused 17:47-21:30 UTC for the owner**, right after scenario 3 with Codex on bba16ffc. Run 1745-s6-codex had been set up, but no recording and no person had begun. It was stopped and is not counted, and nothing of it was left running. The stand-in and the keep-awake process were ended by their ids at the pause.
@@ -64,6 +67,18 @@ Set up as a participant's as far as this laptop allows: candidate 0.1.43 from th
 The same set-up as item 5 (0.1.43, launcher PATH, reporting off), the project folder `…\rehearsal\Projets d’été\mon app`. The folder was made from Node: typed through the harness's console, the accents arrive mangled (`Projets d��t�`), which is the harness's typing, not a participant's.
 - **Claude Code (run 0410): works.** Claude Code started in that folder; the page made; `/exit`; a press at 04:07:51.9. The bar: "Sent. Waiting for your agent" → "Working" → "Claude Code is working". The reopened `claude --resume …` was **the same conversation, in the right folder** (one transcript; `cwd` "D:\r\…\Projets d’été\mon app" throughout), ran `basename "$(pwd)"` → "mon app", and `it patch` (revision 2), within 30 s of the press.
 - **Codex 0.169.0 (run 0415): the wake works in that folder.** Every `it.exe` command ran with exit code 0. **But a woken Codex may run nothing but It's own commands:** my page asked for the folder's name, and its `Get-Location` was **"rejected: blocked by policy"** (`CreateProcess … Rejected("…powershell.exe -Command Get-Location")`, the turn being approval "never", sandbox "read-only"). Codex answered with the name it knew from its context, then acknowledged the press **as failed**, so the bar said **"Your agent could not do that"**. This is the same refusal as item 0's `it --% tour answer` in runs 2236/2322. **A page whose answer needs any other command (reading a file, running the project's script) cannot be answered by a woken Codex on Windows; the person sees "Your agent could not do that".** Claude Code woken is in `--permission-mode auto` with `Bash(it:*)` allowed, and ran `basename` without being asked.
+
+## The owner's app versions, Claude Code 2.1.322 and Codex 0.167.2, woken on 0.1.43 (04:17-04:27 UTC)
+
+The same set-up as item 5.
+- **Claude Code 2.1.322 (run 0420): works.** `/exit`, a press at 04:19:29.5. "Sent. Waiting for your agent" → "Working" → "Claude Code is working" → **"Done" by 04:20:21 (52 s)**; the reopened process had It's folder first on its PATH.
+- **Codex 0.167.2 (run 0425): the click is NOT answered; the bar says "Your agent could not do that".** `/quit` 04:23:58, lock gone 04:25:00, a press at 04:25:02.3. The woken turn (approval "never", sandbox "read-only"; It's folder first on the PATH) ran:
+  1. **`it.exe patch lock-test --% "{…}"` → "rejected: blocked by policy"**;
+  2. `it notify "… Updating the page was blocked by the current execution policy." --id lock-test` (shown on the page);
+  3. `it set lock-test status "Pressed at …"` (exit 0, so the answer did reach the page);
+  4. `it ack <id> --failed`.
+
+  The bar ended on "Your agent could not do that". **Why:** It's rule for Codex (`<CODEX_HOME>\rules\it.rules`) allows commands that begin with `it` (`prefix_rule(pattern=["it"], decision="allow")`, some subcommands set to prompt or forbidden). A command with PowerShell's stop-parsing token `--%` does not match the rule, and with approval "never" anything that does not match is refused. **TOUR.md tells an agent in PowerShell to use `it --%` for JSON arguments** (What would hurt, item 5), so **a woken Codex that does what the guide says is refused**. The same refusal is in runs 2236/2322 (`it --% tour answer`). Codex 0.169.0 happened to use `it.exe set` in runs 0207/0235/0320 and got through; this is the model's choice of form, not the version.
 
 ## Usage reporting from test installs on this laptop (for the cleanup of the website's numbers; 03:15 UTC on 16 November)
 
