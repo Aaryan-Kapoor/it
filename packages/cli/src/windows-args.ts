@@ -14,13 +14,11 @@
  * other shell work in Windows PowerShell as well, `--%` and a file not needed.
  *
  * It is done only where an argument that begins as JSON does, with `{` or `[`, is not JSON as the
- * program was given it (or is an array, which can lose its quotes and still be JSON), and before
- * any command has started, so that it decides what the command
+ * program was given it, and before any command has started, so that it decides what the command
  * is given and nothing else. The line is split again by the same rules the runtime split it by,
  * and only where those rules give back exactly the words the program was given is anything taken
- * from it. Then each word that begins with `{` or `[` and is not JSON as it was given (or is an
- * array, which a shell can spoil into other JSON) is replaced by the whole JSON value that begins
- * there on the line, scanned with what JSON says of its strings, where that value can only be
+ * from it. Then each word that begins with `{` or `[` and is not JSON as it was given is replaced
+ * by the whole JSON value that begins there on the line, scanned with what JSON says of its strings, where that value can only be
  * the one argument the shell spoilt (see `wholeJson`). Everything else on the line is read as before. Where nothing can be
  * taken back, the words are left as they were given, and the command says what it says today.
  */
@@ -145,12 +143,8 @@ const parsed = (text: string): { value: unknown } | null => {
     return null
   }
 }
-/**
- * Whether a word may be JSON a shell spoilt: it begins as a JSON object or array does, and is not
- * JSON as it is, or is an array, which can still be JSON once its quotes are gone (`["1","2"]`
- * arrives as `[1,2]`). An object that is JSON as it is kept its quotes, since its keys need them.
- */
-const spoilt = (word: string) => /^[[{]/.test(word) && (word.startsWith('[') || parsed(word) === null)
+/** Whether a word may be JSON a shell spoilt: it begins as a JSON object or array does, and is not JSON as it is. */
+const spoilt = (word: string) => /^[[{]/.test(word) && parsed(word) === null
 
 /**
  * The two ways PowerShell builds a program's command line from an argument without writing its
@@ -196,7 +190,15 @@ const NOT_JSON = new Set([...VALUED].filter((name) => name !== 'state'))
  * PowerShell would have put them; no longer stretch, running on over the words after it, could
  * be one argument PowerShell built, so that nothing written inside one argument is taken for a
  * switch or another word; none of the words it stands in for reads as an option; it is not the
- * value of an option that does not take JSON; and it parses, as other than the word as given.
+ * value of an option that does not take JSON; and it parses.
+ *
+ * Two lines are the same on the line as the one-argument line they are taken for, and so are
+ * taken as it: two arguments that together make one JSON value with a space inside a string
+ * (`'{"x":"a' 'b"}'`), and JSON with a space in it written inside double quotes of its own
+ * (`'"{ "x":1}"'`). Either would otherwise be refused as not JSON, and what is taken is the JSON
+ * as it was typed. An array whose strings Windows PowerShell 5.1 turned into numbers (`'["1"]'`
+ * arrives as `[1]`) is JSON as it arrives, and is left as it is, since cmd hands on `["1"]`
+ * typed bare as that very `[1]`.
  */
 export function wholeJson(line: string, given: readonly string[]): string[] | null {
   if (!given.some(spoilt)) return null
@@ -230,9 +232,7 @@ export function wholeJson(line: string, given: readonly string[]): string[] | nu
         COUNTINGS.some((counting) => rendered(json, counting) === line.slice(at, stop)) &&
         after.slice(k + 1, last + 1).every((w) => !w.value.startsWith('-')) &&
         after.slice(last + 1).every((w) => !oneArgument(line.slice(at, w.end)))
-      const value = fits ? parsed(json) : null
-      const was = parsed(word.value)
-      if (value && (was === null || JSON.stringify(was.value) !== JSON.stringify(value.value))) {
+      if (fits && parsed(json)) {
         out.push(json)
         taken = true
         k = last + 1

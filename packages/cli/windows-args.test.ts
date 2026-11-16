@@ -72,9 +72,8 @@ describe('JSON spoilt by Windows PowerShell 5.1 is read whole from the command l
   test('JSON typed bare in cmd, which cmd hands on as it is, is read whole too', () => {
     expect(run(`"${IT}" patch board {"a":"b c"}`)).toEqual(['patch', 'board', '{"a":"b c"}'])
   })
-  test('an array whose strings Windows PowerShell 5.1 turned into numbers is read with its strings, and one of numbers is left as it is', () => {
-    expect(run(windowsPowerShell(['set', 'board', 'order', '["1","2"]']))).toEqual(['set', 'board', 'order', '["1","2"]'])
-    expect(wholeJson(windowsPowerShell(['set', 'board', 'order', '[1,2]']), ['set', 'board', 'order', '[1,2]'])).toBeNull()
+  test('an array that is JSON as it arrives is left as it is, though Windows PowerShell 5.1 turned its strings into numbers, since cmd hands on the same line for those numbers', () => {
+    expect(wholeJson(windowsPowerShell(['set', 'board', 'order', '["1","2"]']), ['set', 'board', 'order', '[1,2]'])).toBeNull()
   })
   test('under Node, with the script’s name after the runtime’s, the words after both are read', () => {
     const line = `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\ana\\it\\dist\\it.mjs" patch board {"note":"two words"}`
