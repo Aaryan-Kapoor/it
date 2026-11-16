@@ -6210,6 +6210,11 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
         '',
       ])
       expect((await atTerminal(m, ['status'], wsl)).shown.split('\n')).toContain(WSL_SAID('Ubuntu'))
+      // Not where its starting was stopped after it failed, which opening a window does not undo: what is said of that says what would
+      writeFileSync(path.join(m.it, 'startup.json'), JSON.stringify({ key: 'a'.repeat(64), failures: 3, code: 'settings', retryAt: null }))
+      const paused = (await atTerminal(m, ['service', 'status'], wsl)).shown
+      expect(paused).toContain('Automatic startup stopped after 3 failed starts (settings).')
+      expect(paused).not.toContain('WSL')
     }
   })
 

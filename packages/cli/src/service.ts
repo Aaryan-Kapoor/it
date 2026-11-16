@@ -1036,7 +1036,11 @@ export function uninstall(patience = STOP_MS): void {
 export function status(): ServiceStatus {
   const system = systemStatus()
   const startup = startupStatus()
-  return startup ? { ...system, startup } : system
+  // Inside WSL, what Windows does with the Linux It runs in is said beside a service that starts
+  // by itself, and not beside one whose starting was stopped after it failed: opening a window
+  // would not bring that one back, and what is said of its startup says what would
+  const wsl = system.registered && process.platform === 'linux' && inWsl() && !startup?.paused ? { note: wslSaid() } : {}
+  return { ...system, ...wsl, ...(startup ? { startup } : {}) }
 }
 
 function systemStatus(): ServiceStatus {
@@ -1048,7 +1052,7 @@ function systemStatus(): ServiceStatus {
   if (process.platform === 'linux') {
     const r = run('systemctl', ['--user', 'is-active', `${NAME}.service`], ASKED_MS)
     const registered = existsSync(unitPath()) && enabled()
-    return { registered, state: r.out.split('\n')[0] || 'unknown', where: unitPath(), ...(registered && inWsl() ? { note: wslSaid() } : {}) }
+    return { registered, state: r.out.split('\n')[0] || 'unknown', where: unitPath() }
   }
   if (process.platform === 'darwin') {
     const r = run('launchctl', ['print', `${launchdDomain()}/${LABEL}`], ASKED_MS)
