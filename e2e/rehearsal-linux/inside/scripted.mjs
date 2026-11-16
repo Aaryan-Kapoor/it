@@ -1311,6 +1311,17 @@ async function STAR() {
     await sleep(4000)
   }
   check('the ask for a star shows once the other asks are put away', await look('after putting the other asks away'))
+  // The ask is drawn only where the bar has room to spare for it
+  const vis = async () => p.mainFrame().evaluate(() => {
+    const a = document.querySelector('.star-ask')
+    return a ? { visibility: getComputedStyle(a).visibility, words: a.textContent.trim(), windowWidth: window.innerWidth } : 'no star-ask element'
+  }).catch((e) => String(e))
+  step('the star ask as the window is (half the screen)', { ask: await vis() })
+  for (const width of [1400, 1900]) {
+    await p.setViewportSize({ width, height: 1000 }).catch(() => {})
+    await sleep(2500)
+    step(`the star ask in a window ${width} px wide`, { ask: await vis() })
+  }
 }
 
 async function hostDoes(what, ms = 2400_000) {
