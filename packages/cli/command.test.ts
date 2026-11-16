@@ -553,7 +553,9 @@ describe.skipIf(process.platform === 'win32')('setup prerequisites and diagnosti
           expect(said.hint).toContain('setup without --no-service replaces its registration with this folder')
         } else {
           // The person's own It, set up from another port as a background service like any other
-          expect(said.hint).toMatch(/^Nothing was set up\. To set It up on ports nothing else uses, run setup again with IT_PORT before it: `IT_PORT=\d+ it setup`\./)
+          expect(said.hint).toMatch(
+            /^Nothing was set up\. To set It up on ports nothing else uses, run setup again with IT_PORT before it: `IT_PORT=\d+ it setup`\./,
+          )
           expect(said.hint).not.toMatch(/second It|--no-service|it serve/)
         }
         expect(existsSync(path.join(m.it, 'service.json'))).toBe(false)
