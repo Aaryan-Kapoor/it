@@ -1212,7 +1212,7 @@ function pictureFolderFor(c: { session: { harness: string; id: string } | null }
  * apostrophe is written as two.
  */
 export const PLAIN_ANSWER = (id: string) =>
-  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \\u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In PowerShell, begin the JSON with a space inside its single quotes, write each of its double quotes as \`\\"\` and each apostrophe as two, use no ’, “, ” or long dash, and no \`--%\`: \`it tour answer ${id} ' {\\"say\\":\\"That''s it.\\"}'\`. Do not pipe it in there, which turns every letter outside ASCII into a question mark.`
+  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \\u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In PowerShell, begin the JSON with a space inside its single quotes, write each of its double quotes as \`\\"\`, each apostrophe as two and a backslash as \`\\u005c\`, use no ’, “, ” or long dash (– — ―), and no \`--%\`: \`it tour answer ${id} ' {\\"say\\":\\"That''s it.\\"}'\`. Do not pipe it in there, which turns every letter outside ASCII into a question mark.`
 async function tourAnswer(a: Args, counted: (code?: string) => void) {
   const USAGE = "tour answer <action-id> [- | '<json>' | --file <path>] [--wait | --no-wait] [--timeout <seconds>]"
   if (a._[0] === 'answer') {
@@ -4112,7 +4112,7 @@ async function main(argv: string[]): Promise<void> {
         )
       const body = object(
         file === undefined
-          ? json(need(a._[1] ?? (await piped()), 'the patch', PATCH_USAGE), 'The patch', `it patch ${slug} --file <path>`)
+          ? json(need(a._[1] ?? (await piped()), 'the patch', PATCH_USAGE), 'The patch', `it patch ${slug} --file <path>`, a._[1] !== undefined)
           : json(fileText(file, 'the patch'), `The patch in ${file}`),
         'A patch',
       )

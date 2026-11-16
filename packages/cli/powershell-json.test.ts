@@ -2,7 +2,7 @@
 // an argument to a program, as a model of each: the JSON in single quotes, beginning with a space,
 // with each of its double quotes written `\"`. Codex reads that as plain words, so that its rule
 // for `it` lets it run where nobody can approve a command, as in a conversation It reopened, where
-// a command with `--%`, or with any of ’ ‘ “ ” – — in it, is refused (the Windows rehearsal).
+// a command with `--%`, or with any of ’ ‘ “ ” – — ― in it, is refused (the Windows rehearsal).
 // windows-answer.test.ts runs the same lines in the real PowerShells on Windows.
 import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
@@ -112,10 +112,13 @@ describe('JSON given in PowerShell as It says to give it', () => {
     expect(json(` ${value}`, 'The patch', 'it patch p --file <path>')).toEqual({ note: 'two words' })
   })
 
-  test('an apostrophe written as two and a quotation mark written \\u0022 arrive as themselves', () => {
+  test('an apostrophe written as two, and a quotation mark and a backslash written \\u0022 and \\u005c, arrive as themselves', () => {
     const value = singleQuoted(String.raw`' {\"say\":\"It''s a \u0022yes\u0022, café ★\"}'`)
     for (const given of [windowsPowerShell(value), powerShell7(value)])
       expect(json(given[0]!, 'The answer', undefined, true)).toEqual({ say: `It's a "yes", café ★` })
+    // A backslash at the end of a value, written \u005c, where \\ would run into the \" after it
+    const path = singleQuoted(String.raw`' {\"path\":\"C:\u005c\"}'`)
+    for (const given of [windowsPowerShell(path), powerShell7(path)]) expect(json(given[0]!, 'The patch', 'it patch p --file <path>')).toEqual({ path: 'C:\\' })
   })
 
   test('a reopened Codex on Windows is told the form after what every reopened conversation is told, and no other app or system is', () => {

@@ -180,6 +180,8 @@ describe('JSON a shell may have changed on the way', () => {
     expect(setValue(String.raw`{\"a\":[1,\"b c\"]}`, 'it set p k --file <path>')).toEqual({ a: [1, 'b c'] })
     expect(setValue(String.raw`say \"hi\"`, 'it set p k --file <path>')).toBe(String.raw`say \"hi\"`)
     expect(setValue('{"a":1}', 'it set p k --file <path>')).toEqual({ a: 1 })
+    expect(setValue(String.raw`\"Done\"`, 'it set p k --file <path>')).toBe(String.raw`\"Done\"`)
+    expect(setValue(String.raw` [\"a\"]`, 'it set p k --file <path>')).toEqual(['a'])
   })
   test('a file is read as UTF-8, or as UTF-16 of either order behind its mark, and nothing else is guessed at', () => {
     const said = '{"note":"café 支付 👍"}'

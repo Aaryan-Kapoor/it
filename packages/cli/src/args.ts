@@ -222,7 +222,7 @@ export function quotesTakenOut(value: string): boolean {
  * on whole in quotes of its own. So in PowerShell an agent gives JSON in single quotes, beginning
  * with a space, with each of its double quotes written `\"`: `it patch dice ' {\"note\":\"two words\"}'`
  * (`POWERSHELL_JSON`, in `codex-settings.ts`). Codex reads that as plain words, and so lets its rule for `it` run it, where
- * it takes a command with `--%`, a pipe or a variable in it for one it cannot read, which is
+ * it takes a command with `--%`, a value piped into it, or a variable outside single quotes for one it cannot read, which is
  * refused where nobody can approve it, as in a conversation It reopened (the Windows rehearsal).
  * From Windows PowerShell 5.1, a program reading its command line makes each `\"` a double quote,
  * so It is given ` {"note":"two words"}`. PowerShell 7.3 and later hand the very same argument on
@@ -289,10 +289,14 @@ export function setValue(value: string, fromFile: string): unknown {
       'invalid',
       `${inAFile(fromFile)} To set this very text, write it in the file as a JSON string.`,
     )
-  // Not JSON as it arrived, but JSON as it was meant in PowerShell (see `quotesEscaped`): that
-  // JSON. Anything else that is not JSON is text, and set as it arrived, backslashes and all
+  // A JSON object or array as it was meant in PowerShell (see `quotesEscaped`), which is not JSON
+  // as it arrived, is that JSON. Anything else that is not JSON is text, set as it arrived,
+  // backslashes and all, so that text which only has such quotes in it, as `say \"hi\"` or
+  // `\"Done\"` does, is set as it always was
   const meant = quotesEscaped(value)
-  if (meant !== undefined && loose(value) === value && loose(meant) !== meant) return loose(meant)
+  const t = value.trim()
+  const bracketed = (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))
+  if (bracketed && meant !== undefined && loose(value) === value && loose(meant) !== meant) return loose(meant)
   return loose(value)
 }
 /**

@@ -2495,14 +2495,19 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
         // And as Windows PowerShell 5.1 hands it on, the space before it and all
         [['patch', 'plan', ' {"note":"two words"}'], '{"note":"two words"}'],
         [['set', 'plan', 'list', String.raw`[\"a\",\"b c\"]`], '{"list":["a","b c"]}'],
-        [['set', 'plan', 'note', String.raw`\"Done\"`], '{"note":"Done"}'],
-        // Text with such quotes in it that is not JSON either way is set as it arrived
+        // Text with such quotes in it, that is not a JSON object or array as meant, is set as it arrived
+        [['set', 'plan', 'note', String.raw`\"Done\"`], String.raw`{"note":"\\\"Done\\\""}`],
         [['set', 'plan', 'note', String.raw`say \"hi\"`], String.raw`{"note":"say \\\"hi\\\""}`],
       ] as const) {
         b.asked.length = 0
         const ran = await run(m, [...words], b.env)
         expect([words, ran.code, b.asked.find((x) => x.path === 'state:patch')?.args.patch]).toEqual([words, 0, patch])
       }
+      // JSON piped in is read only as it is: the form written for PowerShell is for an argument
+      b.asked.length = 0
+      const piped = await run(m, ['patch', 'plan'], b.env, process.execPath, [], String.raw`{\"a\":1}`)
+      expect([piped.code, error(piped).message]).toEqual([2, 'The patch is not valid JSON.'])
+      expect(b.asked.filter((x) => x.path === 'state:patch')).toEqual([])
     } finally {
       await b.close()
     }
