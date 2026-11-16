@@ -460,7 +460,7 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     expect(await carryOn(reviewed, scratch, { harness: 'codex', session: 'x' }, opts)).toBe(CODEX_REVIEW_ENDED)
     expect(await carryOn({ ...reviewed, argv: [bare] }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe(CODEX_REVIEW_ENDED)
     // With the count as other languages write it
-    for (const [n, count] of ['12\u202f345', '12\u00a0345', '12’345', '12.345', '987'].entries()) {
+    for (const [n, count] of ['12\u202f345', '12\u00a0345', '12’345', '12.345', '987', '১০,০০,০০৭', '١٢٬٣٤٥'].entries()) {
       const local = script(`refusing-${n}`, `printf "turn interrupted\\ntokens used\\n${count}\\n" >&2\nexit 1\n`)
       expect(await carryOn({ ...reviewed, argv: [local] }, scratch, { harness: 'codex', session: 'x' }, opts), count).toBe(CODEX_REVIEW_ENDED)
     }
@@ -472,7 +472,10 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     expect(await carryOn({ ...reviewed, argv: [failing] }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe('Codex exited with 1')
     const after = script('after-reviewed', 'echo "turn interrupted"\necho "ERROR: and then this"\nexit 1\n')
     expect(await carryOn({ ...reviewed, argv: [after] }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe('Codex exited with 1')
-    expect(opts.brokeOff).toHaveBeenCalledTimes(3)
+    // Nor where another line follows the count, even one of numbers alone
+    const more = script('more-reviewed', 'printf "turn interrupted\\ntokens used\\n12,345\\n456\\n" >&2\nexit 1\n')
+    expect(await carryOn({ ...reviewed, argv: [more] }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe('Codex exited with 1')
+    expect(opts.brokeOff).toHaveBeenCalledTimes(4)
     expect(readdirSync(kept)).toEqual([])
   })
 
