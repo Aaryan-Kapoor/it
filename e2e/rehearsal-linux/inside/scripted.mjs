@@ -889,6 +889,7 @@ async function STANDIN() {
     return lines.map((l) => l.replace(/^\S+\s+/, '').replace(/\{.*$/, '{…}').replace(/\([0-9a-f]{6,}\)/g, '(…)').slice(0, 90))
   }
   let n = 0
+  let nthPick = 0
   const click = async (what, ms) => {
     await p.goto(url).catch(() => {})
     await sleep(4000)
@@ -989,7 +990,8 @@ async function OTHERAPP() {
     await sleep(5000)
     const before = await shown(p)
     const c0 = Date.now()
-    const picked = await press(p, PIZZA, 1)
+    // A different pizza each time, so an answer to this click is not the last one again
+    const picked = await press(p, PIZZA, nthPick++ % 3)
     step(`${what}: picks "${picked}"`, { bar: await bar(p) })
     const bars = []
     while (Date.now() - c0 < ms) {
