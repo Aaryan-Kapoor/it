@@ -267,11 +267,13 @@ describe('the agent skill', () => {
     expect(more.page).toContain('in cmd write it in quotes with backslashes')
   })
 
-  test('tells an agent on Windows to give JSON in a file, which Windows PowerShell 5.1 cannot change, and not to pipe it there', () => {
+  test('tells an agent on Windows to give JSON as anywhere, never after `--%`, with what Codex refuses written as escapes, and not to pipe it there', () => {
     expect(more.page).toContain('## On Windows')
+    expect(more.page).toContain(`JSON is given on Windows as everywhere, as in \`it.exe patch board '{"order":["c1"]}'\``)
+    expect(more.page).toContain('keep `--%` out of it')
+    expect(more.page).toContain('`\\u2014`')
     expect(more.page).toContain('`it.exe patch board --file ')
     expect(more.page).toContain('`--state-file "<path>"` on `it.exe create`')
-    expect(more.page).toContain('in double quotes and with forward slashes')
     expect(more.page).toContain('Do not pipe JSON into It from Windows PowerShell 5.1')
     // The program names the same form in what it says when it refuses such JSON
     expect(main).toContain('it patch $' + '{slug} --file <path>')

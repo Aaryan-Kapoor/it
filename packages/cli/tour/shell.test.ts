@@ -637,13 +637,15 @@ describe('the guide for the first page', () => {
     // And the guide says once how words with an apostrophe are written so, and what not to wrap it in
     expect(part).toContain('write every apostrophe in your words as ’, as in `That’s it`')
     expect(part).toContain('Never wrap it in `$(…)`, a here-document, a pipe or a variable')
-    // And in Windows PowerShell, one plain command too, whose letters outside ASCII arrive whole: never a pipe, which PowerShell 5.1 sends in ASCII
-    expect(part).toContain('it --% tour answer <the action\'s id> "{\\"say\\":\\"<one sentence>\\"}"')
+    // And in PowerShell the very same command, whose letters outside ASCII arrive whole: never a pipe, which
+    // PowerShell 5.1 sends in ASCII, and never `--%` or a character Codex refuses, so that a reopened Codex runs it
+    expect(part).toContain('In PowerShell, which is where Codex runs commands on Windows, write the very same command.')
+    expect(part).toContain('`\\u2014`')
+    expect(part).not.toMatch(/^it(\.exe)? --%/m)
     expect(part).toContain('Never pipe the JSON into It there')
     expect(part).not.toMatch(/\| it tour answer/)
-    expect(part).toContain('`it --% patch tour-start "{\\"end\\":…}"`')
     // And so are the later pages' commands that carry JSON, which the menu's section sends there
-    expect(GUIDE).toContain('In Windows PowerShell, write every command below that carries JSON in the form the first page')
+    expect(GUIDE).toContain("In PowerShell, write the words of every command below as the first page's section says for PowerShell.")
     expect(part).not.toMatch(/^it (wait|ack|action|save) /m)
     expect(part).toContain('you never copy `part` or `request` into your answer')
     // Every example is small beside what a state may hold
