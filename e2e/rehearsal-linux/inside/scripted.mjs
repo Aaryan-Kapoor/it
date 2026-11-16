@@ -1377,6 +1377,27 @@ async function PHONE() {
   await sleep(8000)
   const pg = await shown(phone).catch(() => '')
   check('a page shows on the phone', /hello phone/i.test(pg), { shows: pg.replace(/\s+/g, ' ').slice(0, 200), errors: errors.slice(0, 10).join(' | ') })
+  // A second phone pairs as a person does there: the address typed, then the code entered by hand
+  const phone2 = await ctx.newPage()
+  await phone2.setViewportSize({ width: 390, height: 844 }).catch(() => {})
+  const errors2 = []
+  phone2.on('pageerror', (e) => errors2.push(String(e).slice(0, 200)))
+  phone2.on('console', (m) => { if (m.type() === 'error') errors2.push(m.text().slice(0, 200)) })
+  await phone2.goto(base).catch(() => {})
+  await sleep(5000)
+  const code = /pair#([A-Za-z0-9]+)/.exec(sh('~/.it/bin/it site --no-open 2>&1'))?.[1]
+  const input = await phone2.$('input')
+  if (input && code) {
+    await input.fill(code)
+    await sleep(800)
+    const btn = (await phone2.$$('button')).find(async () => true)
+    for (const b of await phone2.$$('button')) {
+      if (/pair/i.test((await b.innerText().catch(() => '')) ?? '')) { await b.click(); break }
+    }
+    await sleep(8000)
+  }
+  const after2 = (await phone2.mainFrame().evaluate(() => document.body.innerText).catch(() => '')).replace(/\s+/g, ' ').slice(0, 300)
+  check('a second phone pairs by typing the code', /pages|machines|displays|ready/i.test(after2) && !/connect this browser/i.test(after2), { codeTyped: !!(input && code), shows: after2, errors: errors2.slice(0, 8).join(' | ') })
   sh('~/.it/bin/it network off 2>&1')
 }
 
