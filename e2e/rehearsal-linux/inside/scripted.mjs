@@ -1054,7 +1054,7 @@ async function SITES() {
   const tally = { it: 0, sites: 0, other: 0, both: 0 }
   for (let i = 1; i <= N; i++) {
     const had = new Set(rollouts())
-    await type(`mkdir -p ~/w${i} && cd ~/w${i} && clear && tmux clear-history`)
+    await type(`mkdir ~/w${i}; cd ~/w${i} && clear && tmux clear-history`)
     await sleep(2000)
     if (i === 1 && variant === 'off') {
       // What a person sees on Codex's own plugin screen

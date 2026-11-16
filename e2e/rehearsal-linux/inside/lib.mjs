@@ -50,7 +50,7 @@ export function history() {
 /** Types `text` as a person would, a few characters at a time, then waits a moment. */
 export async function type(text, { enter = true } = {}) {
   for (let i = 0; i < text.length; i += 6) {
-    tmux('send-keys', '-t', SESSION, '-l', text.slice(i, i + 6))
+    tmux('send-keys', '-t', SESSION, '-l', '--', text.slice(i, i + 6))
     await sleep(35)
   }
   await sleep(600)
