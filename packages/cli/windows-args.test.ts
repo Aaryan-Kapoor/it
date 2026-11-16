@@ -173,6 +173,9 @@ describe('nothing is taken where it is not JSON spoilt on the way, so no command
       `"${IT}" --json set board steps {"x":1}`,
     ])
       expect([line, wholeJson(line, given(line))]).toEqual([line, null])
+    // Of two --state values only the last is read, so the one before it is never taken, nor the title after it
+    const twice = `"${IT}" create --state "{ "x":"a b"}" --state {} --html hi`
+    expect(wholeJson(twice, given(twice))).toBeNull()
     expect(run(`"${IT}" patch board {"a":"b c"} --if-revision=3`)).toEqual(['patch', 'board', '{"a":"b c"}', '--if-revision=3'])
     expect(run(`"${IT}" tour answer k57abc {"say":"a b"} --no-wait`)).toEqual(['tour', 'answer', 'k57abc', '{"say":"a b"}', '--no-wait'])
   })

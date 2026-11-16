@@ -189,6 +189,7 @@ export function jsonPlaces(given: readonly string[]): Map<number, number> {
   // an option `parse` does not know, or one left without its value, stops the command anyway
   const command = given[0]
   const words: number[] = []
+  let state: number | undefined
   for (let k = 1; k < given.length; k++) {
     const word = given[k]!
     if (word === '--') {
@@ -206,9 +207,11 @@ export function jsonPlaces(given: readonly string[]): Map<number, number> {
     const value = given[k + 1]
     if (value === undefined || (value.startsWith('--') && value.length > 2)) return new Map()
     // The value of --state is JSON, and is the whole of it; the value of any other option is not
-    if (name === 'state') places.set(k + 1, k + 1)
+    if (name === 'state') state = k + 1
     k++
   }
+  // Only the last --state, which is the one `parse` keeps: a value given before it is never read, so that taking it would change nothing that fails into what runs
+  if (state !== undefined) places.set(state, state)
   const second = words[0] === undefined ? undefined : given[words[0]]
   const last = words[words.length - 1]!
   // The place where the JSON begins: after the id, after `answer` and the action's id, or after the id and the key
