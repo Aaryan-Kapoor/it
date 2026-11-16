@@ -1378,7 +1378,8 @@ async function PHONE() {
   const pg = await shown(phone).catch(() => '')
   check('a page shows on the phone', /hello phone/i.test(pg), { shows: pg.replace(/\s+/g, ' ').slice(0, 200), errors: errors.slice(0, 10).join(' | ') })
   // A second phone pairs as a person does there: the address typed, then the code entered by hand
-  const phone2 = await ctx.newPage()
+  // A browser of its own, sharing nothing with the first phone
+  const phone2 = await (await browser.newContext()).newPage()
   await phone2.setViewportSize({ width: 390, height: 844 }).catch(() => {})
   const errors2 = []
   phone2.on('pageerror', (e) => errors2.push(String(e).slice(0, 200)))
