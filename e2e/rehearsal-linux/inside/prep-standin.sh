@@ -13,4 +13,4 @@ s.env=Object.assign(s.env||{},{ANTHROPIC_BASE_URL:\"http://127.0.0.1:8899\",ANTH
 " $K
 mkdir -p ~/work
 systemd-run --user --unit=standin -E STANDIN_PORT=8899 /usr/local/bin/node /build/harness/standin.mjs >/dev/null 2>&1; sleep 2; tail -1 /tmp/standin.log
-curl -fsSL https://itcan.do/install.sh | IT_INSTALL_PLAIN=1 sh >/dev/null 2>&1; ~/.it/bin/it setup --only claude-code 2>&1 | tail -1'
+sh /build/harness/install-it.sh >/dev/null 2>&1; ~/.it/bin/it setup --only claude-code 2>&1 | tail -1'

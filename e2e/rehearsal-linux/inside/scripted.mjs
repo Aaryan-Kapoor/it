@@ -678,7 +678,7 @@ async function WAKELITE() {
   await sleep(8000)
   const pane = sh("tmux display -p -t agent '#{pane_pid}'").trim()
   const term = envNames(pane) ?? []
-  step('the app in the terminal', { which: sh(`bash -ic 'command -v ${who}; ${who} --version' 2>/dev/null`).trim().split('\n').slice(-2).join(' / '), serviceFinds: sh(`systemd-run --user --wait --pipe -q sh -c 'command -v ${who} || echo none' 2>&1`).trim() })
+  step('the app in the terminal', { itVersion: sh('~/.it/bin/it version 2>/dev/null | grep -o "0.1.4."').trim(), unitPath: sh("grep -o 'PATH=[^\"]*' ~/.config/systemd/user/it.service").trim(), which: sh(`bash -ic 'command -v ${who}; ${who} --version' 2>/dev/null`).trim().split('\n').slice(-2).join(' / '), serviceFinds: sh(`systemd-run --user --wait --pipe -q sh -c 'command -v ${who} || echo none' 2>&1`).trim() })
   await startApp(who, counts)
   await ask(who, 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.')
   await settle(who, counts, 600_000, 8000)

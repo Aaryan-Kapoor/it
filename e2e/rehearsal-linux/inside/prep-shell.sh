@@ -9,7 +9,7 @@ if [ "$kind" = fish ]; then
 fi
 su -l ana -s /bin/bash -c "
 [ $app = claude-code ] && node -e 'const f=process.env.HOME+\"/.claude.json\";const fs=require(\"fs\");let j={};try{j=JSON.parse(fs.readFileSync(f,\"utf8\"))}catch{};j.hasCompletedOnboarding=true;fs.writeFileSync(f,JSON.stringify(j,null,2))'
-SHELL=\$(getent passwd ana | cut -d: -f7) curl -fsSL \${IT_INSTALL_BASE:-https://itcan.do}/install.sh | SHELL=\$(getent passwd ana | cut -d: -f7) IT_INSTALL_PLAIN=1 sh >/dev/null 2>&1
+SHELL=\$(getent passwd ana | cut -d: -f7) sh /build/harness/install-it.sh >/dev/null 2>&1
 ~/.it/bin/it setup --only $app 2>&1 | tail -2
 grep -o 'PATH=[^\"]*' ~/.config/systemd/user/it.service | grep -c '.it/bin' | sed 's/^/unit PATH has .it\/bin: /'
 "

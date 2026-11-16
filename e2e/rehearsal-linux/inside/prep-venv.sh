@@ -7,4 +7,4 @@ su -l ana -s /bin/bash -c "
 mkdir -p ~/work && cd ~/work && python3 -m venv .venv && .venv/bin/pip install -q cowsay >/dev/null 2>&1
 printf '%s\n' 'import cowsay' 'print(\"venv ok: cowsay\", cowsay.__version__ if hasattr(cowsay, \"__version__\") else \"\")' > check.py
 .venv/bin/python check.py; python3 check.py 2>&1 | tail -1
-curl -fsSL https://itcan.do/install.sh | IT_INSTALL_PLAIN=1 sh >/dev/null 2>&1; ~/.it/bin/it setup --only $app 2>&1 | tail -1"
+sh /build/harness/install-it.sh >/dev/null 2>&1; ~/.it/bin/it setup --only $app 2>&1 | tail -1"

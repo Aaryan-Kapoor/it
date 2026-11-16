@@ -12,4 +12,4 @@ S
 chmod +x ~/bin/marker-server
 claude mcp add --scope user marker -- /home/ana/bin/marker-server >/dev/null 2>&1; claude mcp list 2>&1 | grep -c marker
 printf "%s\n" "{\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"touch /tmp/it-marker-hook-\$(date +%s%N)\"}]}]}}" > ~/work/.claude/settings.json
-curl -fsSL https://itcan.do/install.sh | IT_INSTALL_PLAIN=1 sh >/dev/null 2>&1; ~/.it/bin/it setup --only claude-code 2>&1 | tail -2; ~/.it/bin/it version | grep -o 0.1.42'
+sh /build/harness/install-it.sh >/dev/null 2>&1; ~/.it/bin/it setup --only claude-code 2>&1 | tail -2; ~/.it/bin/it version | grep -o 0.1.42'
