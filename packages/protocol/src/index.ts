@@ -469,12 +469,12 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
       {
         id: 'default',
         label: 'Manual',
-        says: 'It can run it, read files and do what your own Claude Code settings allow, and anything that would ask you is refused.',
+        says: 'It can run It’s own commands, read files and do what your own Claude Code settings allow, and anything that would ask you is refused.',
       },
       {
         id: 'dontAsk',
         label: 'Don’t Ask',
-        says: 'As Manual: it can run it, read files and do what your own Claude Code settings allow, and everything else is refused.',
+        says: 'As Manual: it can run It’s own commands, read files and do what your own Claude Code settings allow, and everything else is refused.',
       },
       {
         id: 'conversation',
