@@ -8,3 +8,7 @@ case $app in
     su -l ana -s /bin/bash -c 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive >/dev/null 2>&1; export PATH=$HOME/.local/bin:$PATH; hermes --version 2>&1 | tail -1; hermes config set model.provider openrouter >/dev/null 2>&1; hermes config set model.default anthropic/claude-haiku-5.5 >/dev/null 2>&1' ;;
 esac
 su -l ana -s /bin/bash -c "sh /build/harness/install-it.sh >/dev/null 2>&1; ~/.it/bin/it setup --only $app 2>&1 | tail -2"
+# Hermes's installer adds ~/.local/bin to ~/.bashrc and asks for a new terminal: the person opens one
+if [ "$app" = hermes ]; then
+  su -l ana -s /bin/bash -c 'tmux kill-server 2>/dev/null; for i in 1 2 3 4 5; do sleep 1; tmux new-session -d -s agent -x 104 -y 56 -c /home/ana/work 2>/dev/null && break; done'
+fi
