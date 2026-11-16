@@ -1,6 +1,6 @@
 // The person's pages: the grid of all of them, and one of them shown.
 
-import { ALIVE, CODEX_INTERRUPTED, LIMITS, NOUN, TAKES, WAKE_BACK_MS } from '@it/protocol'
+import { ALIVE, CODEX_INTERRUPTED, LIMITS, NOUN, T3_CHECKING, TAKES, WAKE_BACK_MS } from '@it/protocol'
 import { useAction, useConvex, useMutation, useQuery } from 'convex/react'
 import { Component, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
@@ -1404,12 +1404,13 @@ function ActionStatus({
   // second copy of. Said for as long as it waits there, since the reason is kept with the click
   // itself. (Backends from before they kept one say none) A Codex conversation whose last turn
   // the person interrupted is open, and nothing failed: Codex takes it with their next message
-  // there, so it is said to be waiting, and not to be something It could not wake
+  // there, so it is said to be waiting, and not to be something It could not wake. So is one whose
+  // machine asks T3 Code, for a few seconds, whether a thread of it holds the conversation
   if (last.delivery === 'pending' && last.heldBack) {
-    const interrupted = last.heldBack === CODEX_INTERRUPTED
+    const nothingFailed = last.heldBack === CODEX_INTERRUPTED || last.heldBack === T3_CHECKING
     return (
-      <span className="status" data-tone={interrupted ? 'wait' : 'bad'}>
-        {`${interrupted ? `Not handed to ${agent ?? 'your agent'} yet` : `Couldn’t wake ${agent ?? 'your agent'}`}${waiting > 1 ? ` (${waiting})` : ''}: ${last.heldBack}`}
+      <span className="status" data-tone={nothingFailed ? 'wait' : 'bad'}>
+        {`${nothingFailed ? `Not handed to ${agent ?? 'your agent'} yet` : `Couldn’t wake ${agent ?? 'your agent'}`}${waiting > 1 ? ` (${waiting})` : ''}: ${last.heldBack}`}
       </span>
     )
   }

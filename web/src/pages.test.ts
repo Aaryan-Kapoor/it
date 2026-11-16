@@ -1,7 +1,7 @@
 // What a page's bar says of the last thing the person did, in a stand-in browser with a stand-in
 // backend. What it must get right: it speaks of the click just made the moment it is made, and
 // never goes on saying what became of the one before.
-import { CODEX_INTERRUPTED } from '@it/protocol'
+import { CODEX_INTERRUPTED, T3_CHECKING } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { act, createElement } from 'react'
@@ -277,6 +277,16 @@ describe('what the page’s bar says of the last thing the person did', () => {
     Object.assign(PAGE, { pending: 0 })
     await shown()
     expect(said()).toBe('Sent. Claude Code is busy, and gets it when it is free')
+    Object.assign(PAGE, { agent: 'pi' })
+  })
+
+  test('a click whose machine is asking T3 Code whether a thread holds its conversation is said to wait for that, and not that Claude Code could not be woken', async () => {
+    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'claude-code', wakeFailed: null })
+    recent = [{ at: NOW - 6000, delivery: 'pending', outcome: null, heldBack: T3_CHECKING }]
+    await shown()
+    expect(said()).toBe(`Not handed to Claude Code yet: ${T3_CHECKING}`)
+    expect(host.querySelector('.status')?.getAttribute('data-tone')).toBe('wait')
+    expect(T3_CHECKING.length).toBeLessThanOrEqual(300)
     Object.assign(PAGE, { agent: 'pi' })
   })
 
