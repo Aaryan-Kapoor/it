@@ -554,6 +554,9 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
               turn={(page as { turn?: Turn | null }).turn ?? null}
               // The page's own script failed, which the bar says first and asks the person to act on
               faulted={fault?.of === `${page.id}:${page.version}`}
+              slug={page.slug}
+              // Backends from before they said a page's conversation say none of any page, and are taken to have one
+              conversation={!('session' in page) || page.session !== null}
             />
           )}
         </span>
@@ -1092,6 +1095,8 @@ function ActionStatus({
   answeredAt,
   turn,
   faulted = false,
+  slug,
+  conversation = true,
 }: {
   artifactId: Id<'artifacts'>
   user: string
@@ -1124,6 +1129,14 @@ function ActionStatus({
   turn: Turn | null
   /** Whether the bar says that the page's own script failed. */
   faulted?: boolean
+  /** The page's id, by which an agent waits on it. */
+  slug: string
+  /**
+   * Whether a conversation of an agent app It knows was recorded as the page's when it was made.
+   * A page made where none was, as by an agent app It has no add-on for, reaches its agent
+   * only when that agent waits on it with `it wait`.
+   */
+  conversation?: boolean
 }) {
   const convex = useConvex()
   const setWake = useMutation(api.machines.wake)
@@ -1455,12 +1468,23 @@ function ActionStatus({
       <span className="status" data-tone="wait">
         {/* Not taken after a while: said as what it is, busy or closed, so that the person knows whether to wait or to do something */}
         {slow && busy
-          ? `Sent. ${agent ?? 'Your agent'} is busy, and gets it when it is free${waiting > 1 ? ` (${waiting})` : ''}`
+          ? // Held for a conversation that was listening a moment ago. Busy where a turn of it is
+            // known to run; otherwise it may as well have just been closed, which looks the same
+            // here for the few seconds until its machine stops trusting what it last heard
+            working
+            ? `Sent. ${agent ?? 'Your agent'} is busy, and gets it when it is free${waiting > 1 ? ` (${waiting})` : ''}`
+            : `Sent. ${agent ?? 'Your agent'} has not taken it yet${waiting > 1 ? ` (${waiting})` : ''}. It may be busy, or its conversation may have just closed`
           : slow && tooOld
             ? `Done more than a day ago${waiting > 1 ? ` (${waiting})` : ''}. ${agent ?? 'Your agent'} gets it when its conversation is next open`
-            : slow && !wakes?.on
-              ? `Sent. ${agent ?? 'Your agent'} is not listening${waiting > 1 ? ` (${waiting})` : ''}. Open its conversation and check the add-on under Machines`
-              : `Sent. Waiting for your agent${waiting > 1 ? ` (${waiting})` : ''}`}
+            : // No conversation of an app It knows has the page, so no add-on is there to check: it reaches an agent that waits on it
+              slow && !conversation
+              ? `Sent${waiting > 1 ? ` (${waiting})` : ''}. Your agent gets this when it next runs \`it wait --id ${slug}\``
+              : // The person turned Auto-wake off for this app on that machine: said as that, and not as a fault of the add-on
+                slow && wakes && !wakes.on
+                ? `Sent${waiting > 1 ? ` (${waiting})` : ''}. Auto-wake is off for ${agent ?? 'its agent app'} on ${machine ?? 'its machine'}, so this waits until its conversation is open. You can turn Auto-wake on under Machines`
+                : slow && !wakes?.on
+                  ? `Sent. ${agent ?? 'Your agent'} is not listening${waiting > 1 ? ` (${waiting})` : ''}. Open its conversation and check the add-on under Machines`
+                  : `Sent. Waiting for your agent${waiting > 1 ? ` (${waiting})` : ''}`}
       </span>
       {offer && (
         <button
