@@ -224,7 +224,10 @@ async function main() {
     if (!from.endsWith(':base')) asAna('systemctl --user restart it.service', { quiet: true, timeout: 180_000 })
   }
   // The state the scenario wants the machine in, after anything above that starts It again
-  if (has('prepare')) result.prepared = exec(arg('prepare')).status
+  // A participant's machine has It only once the guide's steps ran: a run that names no prepare step
+  // of its own gets that one, so no flow ever starts on a machine without It
+  const prepare = has('prepare') ? arg('prepare') : participant && !OTHER && arg('person') === 'script' ? `sh /build/harness/prep-setup.sh ${app}` : null
+  if (prepare) result.prepared = exec(prepare).status
   asAna('tmux set -g status off; tmux set -g history-limit 50000')
   // What the terminal shows, kept every few seconds where it changed: an app that clears the
   // screen as it leaves takes its scrollback with it
