@@ -1035,6 +1035,7 @@ async function SITES() {
     named: 'Make me a page with It where I can pick one of three pizzas',
     plain: 'Make me a page where I can pick one of three pizzas',
     cmd: 'Make me a page where I can pick one of three pizzas. Use the `it` command.',
+    website: 'Make me a website where I can pick one of three pizzas',
   }
   const cache = () => sh('ls -la --time-style=full-iso ~/.codex/plugins/cache/openai-curated-remote 2>&1 | grep -E "total|sites|pages|visualize|cannot" ; ls --time-style=full-iso -la ~/.codex/plugins/cache/openai-curated-remote/sites 2>/dev/null | tail -n +4').trim()
   step('before any conversation: the plugin cache', { cache: cache(), skills: sh('ls ~/.codex/skills 2>&1').trim(), auth: sh('ls -la --time-style=full-iso ~/.codex/auth.json | sed "s/^.* ana ana *//"').trim() })
