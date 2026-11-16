@@ -632,18 +632,21 @@ describe('the guide for the first page', () => {
     // substitution, no pipe and no variable, which made Codex ask the person to approve every answer in the rehearsals
     const commands = [...part.matchAll(/^it tour answer .*$/gm)].map((m) => m[0])
     expect(commands.length).toBeGreaterThan(10)
-    for (const command of commands) expect(command).toMatch(/^it tour answer <the action's id>( --no-wait)? '\{[^'`$]*\}'$/)
+    // The PowerShell form begins its JSON with a space, which has Windows PowerShell 5.1 hand it on whole
+    for (const command of commands) expect(command).toMatch(/^it tour answer <the action's id>( --no-wait)? ' ?\{[^'`$]*\}'$/)
     expect(part).not.toMatch(/<<'EOF'|\$\(cat/)
     // And the guide says once how words with an apostrophe are written so, and what not to wrap it in
     expect(part).toContain('write every apostrophe in your words as ’, as in `That’s it`')
     expect(part).toContain('Never wrap it in `$(…)`, a here-document, a pipe or a variable')
-    // And in Windows PowerShell, one plain command too, whose letters outside ASCII arrive whole: never a pipe, which PowerShell 5.1 sends in ASCII
-    expect(part).toContain('it --% tour answer <the action\'s id> "{\\"say\\":\\"<one sentence>\\"}"')
+    // And in PowerShell, one plain command too, whose letters outside ASCII arrive whole: never a pipe, which PowerShell 5.1 sends in ASCII,
+    // and in the form Codex reads as plain words, so that a reopened Codex is not refused it: never `--%`
+    expect(part).toContain(String.raw`it tour answer <the action's id> ' {\"say\":\"<one sentence>\"}'`)
+    expect(part).not.toMatch(/^it(\.exe)? --%/m)
     expect(part).toContain('Never pipe the JSON into It there')
     expect(part).not.toMatch(/\| it tour answer/)
-    expect(part).toContain('`it --% patch tour-start "{\\"end\\":…}"`')
+    expect(part).toContain('`it patch tour-start \' {\\"end\\":…}\'`')
     // And so are the later pages' commands that carry JSON, which the menu's section sends there
-    expect(GUIDE).toContain('In Windows PowerShell, write every command below that carries JSON in the form the first page')
+    expect(GUIDE).toContain('In PowerShell, write every command below that carries JSON in the form the first page')
     expect(part).not.toMatch(/^it (wait|ack|action|save) /m)
     expect(part).toContain('you never copy `part` or `request` into your answer')
     // Every example is small beside what a state may hold
