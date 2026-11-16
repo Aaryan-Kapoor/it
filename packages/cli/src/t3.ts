@@ -394,13 +394,23 @@ function folderTest(shell: { projects?: unknown }, of: { cwd?: string }, platfor
   // was started in it, does not: on a Mac a folder in /tmp is /private/tmp to the app. So each is
   // also taken as the system names it, where it is on this machine, once for each folder
   const real = new Map<string, string | undefined>()
+  /** The folder as the system names it, by the nearest folder of it that is there, where any is. */
+  const realOf = (folder: string): string | undefined => {
+    const p = windows ? path.win32 : path.posix
+    for (let at = folder, rest = ''; ; ) {
+      try {
+        return p.join(realpathSync.native(at), rest)
+      } catch {}
+      const up = p.dirname(at)
+      if (up === at) return undefined
+      rest = p.join(p.basename(at), rest)
+      at = up
+    }
+  }
   const named = (folder: string): string[] => {
     if (!real.has(folder)) {
-      let to: string | undefined
-      try {
-        to = platform === process.platform ? realpathSync.native(folder) : undefined
-      } catch {}
-      real.set(folder, to !== undefined && to !== folder ? plain(to) : undefined)
+      const to = platform === process.platform ? realOf(folder) : undefined
+      real.set(folder, to !== undefined && plain(to) !== plain(folder) ? plain(to) : undefined)
     }
     const to = real.get(folder)
     return to === undefined ? [plain(folder)] : [plain(folder), to]

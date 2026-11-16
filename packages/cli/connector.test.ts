@@ -5647,8 +5647,10 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     const clock = heldClock()
     try {
       const [claude] = await closedClaude()
-      // It published its page while It's add-on did not run in it, so it is not reopened
-      await noteConversation(claude!.session, home, undefined, false)
+      // It published its page while It's add-on did not run in it, so it is not reopened. Its
+      // folder is gone, so that its reopening, once that is tried, fails at once and says so
+      const gone = path.join(home, 'gone')
+      await noteConversation(claude!.session, gone, undefined, false)
       await until(() => stand.t3.asked.length >= 1)
       for (let i = 0; i < 6; i++) {
         clock.on(10_000)
@@ -5658,7 +5660,7 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
       expect(reopenedFor()).toEqual([])
       expect(holdsBack().some((h) => h.why === T3_CHECKING)).toBe(false)
       // Then it is: its add-on was heard in it, and T3 Code has still not said
-      await noteConversation(claude!.session, home, undefined, true)
+      await noteConversation(claude!.session, gone, undefined, true)
       // Each pass also looks for Claude Code conversations open at a keyboard, which takes longer on a busy machine
       await until(() => holdsBack().some((h) => h.why === T3_CHECKING), 20_000)
       clock.on(9_000)
