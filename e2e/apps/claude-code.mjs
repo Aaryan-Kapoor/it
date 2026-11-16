@@ -286,12 +286,17 @@ try {
 
   // The service is not given It's own folder on its PATH, as a person's service is not after the
   // install the guide describes, where their agent ran `it setup` from a shell opened before It
-  // was installed. It puts its folder first on the PATH of the conversation it reopens, which is
-  // how that conversation runs `it` by its name, as Auto-wake's note to it says it can. The
-  // conversation this run starts itself is not given it either: the add-on puts it there.
+  // was installed. It has another `it` on it instead, as a person may have an older one: a
+  // conversation that runs that one fails. It puts its folder first on the PATH of the
+  // conversation it reopens, which is how that conversation runs It's own `it` by its name, as
+  // Auto-wake's note to it says it can, whatever the add-on adds after it. The conversation this
+  // run starts itself is not given It's folder either: the add-on puts it there.
+  const another = path.join(scratch, 'another-it')
+  mkdirSync(another, { recursive: true })
+  writeFileSync(path.join(another, 'it'), '#!/bin/sh\necho "this is another it, not the It that reopened this conversation" >&2\nexit 1\n', { mode: 0o755 })
   notStopping()
   service = spawn(IT[0], [...IT.slice(1), 'serve'], {
-    env: base,
+    env: { ...base, PATH: `${another}${path.delimiter}${PATH}` },
     cwd: folders.work,
     stdio: ['ignore', openSync(serviceLog, 'w'), openSync(serviceLog, 'a')],
   })
