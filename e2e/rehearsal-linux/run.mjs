@@ -86,6 +86,7 @@ const result = {
 }
 
 let held = null
+let usedNet2 = false
 let refresher = null
 let refreshing = false
 async function main() {
@@ -287,7 +288,7 @@ async function main() {
   }
   log(`flow ${flow} with ${app} in ${which}`)
   await new Promise((resolve) => {
-    const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-s', '/bin/bash', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN|OTHERAPP)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow === 'WAKEBOOT' ? 'WAKEBOOT1' : flow} ${app} ${which === 'chromium' && /^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN|OTHERAPP)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-s', '/bin/bash', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN|OTHERAPP|MISC)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow === 'WAKEBOOT' ? 'WAKEBOOT1' : flow} ${app} ${which === 'chromium' && /^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN|OTHERAPP|MISC)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
     // A change the flow asks for between two clicks, run as root (an update of the agent app)
     const between = setInterval(() => {
       // The change itself is root's own file, written by the prepare step; the flow (ana) only asks for it
@@ -296,6 +297,41 @@ async function main() {
       log('ran the change between the clicks')
     }, 5000)
     child.on('close', () => clearInterval(between))
+    // What the machine cannot do to itself, done from the host when the flow asks by one of a few
+    // names (the flow's file is ana's, so nothing but these names is ever acted on)
+    let hostBusy = false
+    const host = setInterval(() => {
+      if (hostBusy) return
+      const asked = exec('cat /var/lib/rehearsal-flow/host-now 2>/dev/null', { quiet: true }).stdout.trim()
+      if (!asked) return
+      hostBusy = true
+      exec('rm -f /var/lib/rehearsal-flow/host-now', { quiet: true })
+      let did = 'refused'
+      const pause = /^pause:(\d{1,4})$/.exec(asked)
+      if (pause && Number(pause[1]) <= 1800) {
+        log(`pausing the machine for ${pause[1]} s, as a laptop asleep`)
+        sh(['pause', name], { quiet: true })
+        spawnSync('sleep', [pause[1]])
+        sh(['unpause', name], { quiet: true })
+        did = `paused ${pause[1]} s`
+      } else if (asked === 'offline') {
+        sh(['network', 'disconnect', 'bridge', name], { quiet: true })
+        did = 'off every network'
+      } else if (asked === 'online') {
+        sh(['network', 'connect', 'bridge', name], { quiet: true })
+        did = 'back on its network'
+      } else if (asked === 'newaddress') {
+        sh(['network', 'create', 'it-rehearsal-net2'], { quiet: true })
+        sh(['network', 'connect', 'it-rehearsal-net2', name], { quiet: true })
+        sh(['network', 'disconnect', 'bridge', name], { quiet: true })
+        usedNet2 = true
+        did = 'moved to another network'
+      }
+      log(`host action ${asked}: ${did}`)
+      exec(`echo '${did}' > /var/lib/rehearsal-flow/host-done; chown ana:ana /var/lib/rehearsal-flow/host-done`, { quiet: true })
+      hostBusy = false
+    }, 3000)
+    child.on('close', () => clearInterval(host))
     const kill = setTimeout(() => {
       log('the flow ran past its time')
       exec("pkill -INT -f 'node /build/harness/' || true")
@@ -476,6 +512,7 @@ async function teardown() {
   held = null
   if (has('keep') && !used) return
   const rm = sh(['rm', '-f', name], { timeout: 120_000, quiet: true })
+  if (usedNet2) sh(['network', 'rm', 'it-rehearsal-net2'], { quiet: true })
   if (rm.status !== 0) log(`THE MACHINE ${name} COULD NOT BE REMOVED: remove it by hand`)
 }
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {

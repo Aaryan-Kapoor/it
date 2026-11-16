@@ -1009,6 +1009,122 @@ async function OTHERAPP() {
   await click('the app closed', 180_000)
 }
 
+/** Asks the host for one of the few things the machine cannot do to itself, and waits until it is done. */
+async function hostDoes(what, ms = 2400_000) {
+  sh('rm -f /var/lib/rehearsal-flow/host-done')
+  writeFileSync('/var/lib/rehearsal-flow/host-now', what)
+  const t0 = Date.now()
+  while (Date.now() - t0 < ms && sh('cat /var/lib/rehearsal-flow/host-done 2>/dev/null').trim() === '') await sleep(2000)
+  return sh('cat /var/lib/rehearsal-flow/host-done 2>/dev/null').trim()
+}
+const siteSays = async (p) => (await p.mainFrame().evaluate(() => document.body.innerText).catch(() => '')).replace(/\s+/g, ' ').slice(0, 400)
+
+/**
+ * Things going wrong, with Codex and no person: a pairing link opened after it expired; It stopped
+ * by hand and a click; no internet and a click; the laptop asleep half an hour (the machine paused
+ * by the host); the machine's address changed with a second screen paired; It uninstalled and
+ * installed again.
+ */
+async function MISC() {
+  const who = app
+  const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
+  let p = ctx.pages().find((x) => !x.url().startsWith('devtools')) ?? (await ctx.newPage())
+  const link = () => /https?:\/\/[^\s"']+\/pair#[A-Za-z0-9]+/.exec(sh('~/.it/bin/it site --no-open 2>&1'))?.[0]
+  // a. A pairing link opened after its ten minutes
+  const old = link()
+  step('a. a pairing link from it site, opened eleven minutes later')
+  await sleep(660_000)
+  await p.goto(old).catch(() => {})
+  await sleep(6000)
+  step('a. what the expired link shows', { shows: await siteSays(p) })
+  await p.goto(link()).catch(() => {})
+  await sleep(6000)
+  step('a. a fresh link', { shows: (await siteSays(p)).slice(0, 160) })
+  // A page and an open click
+  await startApp(who, counts)
+  await ask(who, 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.')
+  await settle(who, counts, 600_000, 8000)
+  let url = null
+  for (let i = 0; i < 40 && !url; i++) {
+    p = ctx.pages().find((x) => x.url().includes('/p/')) ?? p
+    if (p.url().includes('/p/') && PIZZA.test(await shown(p).catch(() => ''))) url = p.url()
+    else await sleep(3000)
+  }
+  if (!check('the page is on the screen', !!url)) return
+  let k = 0
+  const click = async (what, ms, quiet = 60_000) => {
+    await p.goto(url).catch(() => {})
+    await sleep(5000)
+    const before = await shown(p).catch(() => '')
+    const c0 = Date.now()
+    const picked = await press(p, PIZZA, k++ % 3)
+    step(`${what}: picks "${picked}"`, { bar: await bar(p) })
+    const bars = []
+    let saidAtQuiet = null
+    while (Date.now() - c0 < ms) {
+      await answerApp(who, counts).catch(() => {})
+      const b = await bar(p)
+      if (b && b !== bars.at(-1)) bars.push(b)
+      if (!saidAtQuiet && Date.now() - c0 > quiet) saidAtQuiet = { bar: b, site: (await siteSays(p)).slice(0, 300) }
+      const fresh = answerLine(before, await shown(p).catch(() => before), picked)
+      if (fresh) return check(`${what}: answered on the page`, true, { seconds: Math.round((Date.now() - c0) / 1000), fresh: fresh.slice(0, 150), bars: bars.join(' | ') })
+      await sleep(2000)
+    }
+    return check(`${what}: answered on the page`, false, { seconds: Math.round(ms / 1000), bars: bars.join(' | ').slice(0, 400), atOneMinute: saidAtQuiet })
+  }
+  await click('the conversation open', 180_000)
+  await settle(who, counts, 60_000, 6000)
+  // b. It stopped by hand, a click, and It started again a minute later
+  sh('systemctl --user stop it.service')
+  step('b. It stopped by hand')
+  const pb = click('b. a click while It is stopped (It started again after 70 s)', 240_000)
+  await sleep(75_000)
+  sh('systemctl --user start it.service')
+  await pb
+  await settle(who, counts, 60_000, 6000)
+  // c. No internet: the machine off every network, a click, then back on
+  step('c. the machine off every network', { host: await hostDoes('offline') })
+  const pc = click('c. a click with no internet (back on the network after 2 min)', 360_000, 90_000)
+  await sleep(120_000)
+  step('c. back on the network', { host: await hostDoes('online') })
+  await pc
+  await settle(who, counts, 60_000, 6000)
+  // d. The laptop asleep for half an hour (the host pauses the whole machine), then a click
+  step('d. the laptop asleep for thirty minutes')
+  const slept = await hostDoes('pause:1800')
+  step('d. awake again', { host: slept, itAnswers: sh('curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4700/').trim(), bar: await bar(p) })
+  await click('d. a click after the sleep', 240_000)
+  // e. A second screen paired at the network address, then the machine's address changes
+  step('e. it network on', { said: sh('~/.it/bin/it network on 2>&1 | tail -4').replace(/\s+/g, ' ').slice(0, 300) })
+  sh('setsid -f env DISPLAY=:1 /opt/ms-playwright/chromium-1228/chrome-linux64/chrome --user-data-dir=/opt/person-profile/screen2 --no-sandbox --test-type --no-first-run --no-default-browser-check --password-store=basic --remote-debugging-port=9223 --window-position=1300,300 --window-size=600,700 about:blank >/dev/null 2>&1')
+  await sleep(6000)
+  const b2 = await chromium.connectOverCDP('http://127.0.0.1:9223')
+  const p2 = b2.contexts()[0].pages()[0] ?? (await b2.contexts()[0].newPage())
+  const netLink = link()
+  step('e. the pairing link for the network', { link: (netLink ?? '').replace(/#.*/, '#…') })
+  if (netLink) await p2.goto(netLink).catch(() => {})
+  await sleep(8000)
+  await p2.goto(url.replace('localhost', new URL(netLink ?? 'http://x').hostname)).catch(() => {})
+  await sleep(6000)
+  step('e. the second screen shows the page', { shows: (await shown(p2).catch(() => '')).slice(0, 120) })
+  step('e. the machine moves to another network', { host: await hostDoes('newaddress') })
+  await sleep(10_000)
+  await p2.reload().catch(() => {})
+  await sleep(10_000)
+  step('e. the second screen after the move', { url: p2.url().replace(/#.*/, ''), shows: (await siteSays(p2)).slice(0, 300), itNetwork: sh('~/.it/bin/it network 2>&1 | tail -4').replace(/\s+/g, ' ').slice(0, 300) })
+  await b2.close().catch(() => {})
+  // f. Uninstalled, then installed again from the site
+  await quitApp(who)
+  step('f. it uninstall', { said: sh('printf "y\\n" | ~/.it/bin/it uninstall --yes 2>&1 | tail -6').replace(/\s+/g, ' ').slice(0, 400) })
+  await p.goto(url).catch(() => {})
+  await sleep(6000)
+  step('f. the old page after the uninstall', { shows: (await siteSays(p)).slice(0, 200) })
+  step('f. installed again', { said: sh('curl -fsSL https://itcan.do/install.sh | IT_INSTALL_PLAIN=1 sh 2>&1 | tail -2; ~/.it/bin/it setup --only codex 2>&1 | tail -2').replace(/\s+/g, ' ').slice(0, 400) })
+  await p.goto(url).catch(() => {})
+  await sleep(8000)
+  step('f. the old page after installing again', { shows: (await siteSays(p)).slice(0, 200), pages: sh('~/.it/bin/it list 2>&1 | head -5').replace(/\s+/g, ' ').slice(0, 200) })
+}
+
 async function main() {
   try {
     if (scenario === 'S4') await S4()
@@ -1023,6 +1139,7 @@ async function main() {
     else if (scenario === 'VENV') await VENV()
     else if (scenario === 'STANDIN') await STANDIN()
     else if (scenario === 'OTHERAPP') await OTHERAPP()
+    else if (scenario === 'MISC') await MISC()
     else if (scenario === 'WAKEBOOT2') await WAKEBOOT2()
     else check(`no scenario ${scenario}`, false)
     const failed = verdict.checks.filter((c) => !c.ok)
