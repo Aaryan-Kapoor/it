@@ -539,7 +539,7 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                           {c.label}
                           {c.recommended && <span className="wake-mode-tag">Recommended</span>}
                         </span>
-                        <span className="row-sub">{c.says}</span>
+                        <span className="row-sub wake-mode-say">{c.says}</span>
                       </label>
                     ))}
                   </fieldset>
