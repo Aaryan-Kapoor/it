@@ -363,6 +363,7 @@ const NOTES = [
     'tour-pictures.json',
     'cut-off.json',
     'stopped.json',
+    'claude-runs.json',
     'journal.jsonl',
   ].map((name) => () => inHome(name)),
 ]

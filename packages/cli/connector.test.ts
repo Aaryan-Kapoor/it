@@ -1322,6 +1322,33 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(noted()).toEqual(['pi:conversation-1'])
   })
 
+  test('a Claude Code run the connector before it noted the beginning of, and not the run itself, is taken to have ended once it starts; one that note of runs names is not, until it is made sure of', async () => {
+    const ID = '11111111-2222-4333-8444-555555555555'
+    const HELD = '66666666-7777-4888-8999-000000000000'
+    const noted = () => JSON.parse(readFileSync(path.join(home, 'claude-runs.json'), 'utf8'))
+    await start('socket', {}, (home) => {
+      writeFileSync(
+        path.join(home, 'claude-runs.json'),
+        JSON.stringify({
+          [ID]: [
+            [1000, 2000],
+            [3000, null],
+          ],
+          [HELD]: [[4000, null]],
+        }),
+      )
+      // A run of the other that the system cannot be asked about: it stays held, and so does its open run
+      writeFileSync(
+        path.join(home, 'runs.json'),
+        JSON.stringify({ [`claude-code:${HELD}`]: { pid: 2 ** 22 - 7, since: 'not a start this system gives', unsure: true } }),
+      )
+    })
+    await until(() => noted()[ID][1][1] !== null)
+    expect(noted()[ID][0]).toEqual([1000, 2000])
+    expect(noted()[ID][1][1]).toBeGreaterThan(3000)
+    expect(noted()[HELD]).toEqual([[4000, null]])
+  })
+
   test('with reopening switched on, a closed conversation is reopened with the click itself, and Codex’s queue is never used for it', async () => {
     await start()
     stand.closed.add('thread-1')

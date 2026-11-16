@@ -443,6 +443,46 @@ export const CONVERSATIONS_OWN = 'conversation'
  * refuses a mode, it is reopened in the next one down (`wakeModeBelow`), never in one above.
  */
 export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
+  // Claude Code's permission modes for a run with nobody at the keyboard, by the ids its
+  // `--permission-mode` takes and the titles Claude Code itself shows. Plan mode is not offered:
+  // a run in it may not edit anything, so it can do nothing a page asks beyond `it`, which Manual
+  // already lets it do. A conversation that was last in plan mode keeps it under the conversation's own
+  'claude-code': {
+    default: 'auto',
+    choices: [
+      {
+        id: 'bypassPermissions',
+        label: 'Bypass Permissions',
+        recommended: true,
+        says: 'The mode It works best in: a reopened conversation can do everything you can do on this machine, with nothing asked. That is also what a press on any screen paired with this It, a phone among them, or the words on a page, can lead it to do: run any command, read and send your files and secrets, change or delete files, and start things that keep running after the turn. Nothing checks it and nothing asks you, apart from your own deny and ask rules, your organization’s settings and the few checks Claude Code keeps in every mode.',
+      },
+      {
+        id: 'auto',
+        label: 'Auto',
+        says: 'Ordinary edits in the conversation’s folder, reads, common file commands and what your own rules allow generally run without a check, and for most of what would otherwise ask you Claude Code’s own safety check, a model, decides in your place. It is meant to refuse what goes beyond what was asked or looks driven by what the agent read, and it takes what a page sent for what was asked.',
+      },
+      {
+        id: 'acceptEdits',
+        label: 'Accept edits',
+        says: 'It can edit files in the conversation’s folder and run common file commands there, and any other command that would ask you is refused.',
+      },
+      {
+        id: 'default',
+        label: 'Manual',
+        says: 'It can run it, read files and do what your own Claude Code settings allow, and anything that would ask you is refused.',
+      },
+      {
+        id: 'dontAsk',
+        label: 'Don’t Ask',
+        says: 'As Manual: it can run it, read files and do what your own Claude Code settings allow, and everything else is refused.',
+      },
+      {
+        id: 'conversation',
+        label: 'The conversation’s own',
+        says: 'Each conversation is reopened in the mode it was last in, as Claude Code wrote it down, and one last in Manual is reopened in Auto.',
+      },
+    ],
+  },
   codex: {
     default: 'approve-for-me',
     choices: [
@@ -478,7 +518,12 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
  * this, the backend does not let it start a run, and where it allows more, the page says that the
  * machine runs less (see `runBegan`).
  */
-export const WAKE_MODE_LEGACY: Partial<Record<Harness, string>> = { codex: 'approve-for-me' }
+export const WAKE_MODE_LEGACY: Partial<Record<Harness, string>> = {
+  codex: 'approve-for-me',
+  // A Claude Code conversation is reopened by such an It in the mode it was last in where that
+  // asks nobody, which can be Bypass Permissions, and with no mode otherwise
+  'claude-code': 'bypassPermissions',
+}
 /** Where a mode stands in its app's order, from 0 for the one that allows most; -1 for none. */
 export function wakeModeRank(harness: string, mode: string): number {
   const list = WAKE_MODES[harness as Harness]
@@ -515,17 +560,28 @@ export function wakeModeOf(kept: readonly { harness: string; mode: string }[] | 
  * - `unreviewed`: Codex was to run in Approve for me, and It could not tell that it has the
  *   reviewer, so it runs in `instead`.
  * - `older`: the machine runs an It from before the choice, which runs at most `instead` whatever is chosen.
+ * - `raised`: the conversation was last in `mode`, and It reopened it in `instead`, which lets it
+ *   do more without asking, as the mode chosen, or the default where none was, has it.
  */
-export const WAKE_NOTE_WHYS = ['refused', 'unreviewed', 'older'] as const
+export const WAKE_NOTE_WHYS = ['refused', 'unreviewed', 'older', 'raised'] as const
 export type WakeNoteWhy = (typeof WAKE_NOTE_WHYS)[number]
 const APP_NAMES: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
-const modeName = (harness: string, mode: string): string => WAKE_MODES[harness as Harness]?.choices.find((c) => c.id === mode)?.label ?? mode
+/** Modes a conversation can have been in that are not offered as a choice, by the app's own names for them. */
+const OTHER_MODES: Record<string, string> = { plan: 'Plan' }
+const modeName = (harness: string, mode: string): string =>
+  WAKE_MODES[harness as Harness]?.choices.find((c) => c.id === mode)?.label ?? (harness === 'claude-code' ? OTHER_MODES[mode] : undefined) ?? mode
 /**
  * Whether a note says something It would say: `instead` allows less than `mode`, and Codex's
  * `unreviewed` is only ever Approve for me become Ask for approval.
  */
 export function wakeNoteFits(harness: string, why: string, mode: string, instead: string): boolean {
   if (!(WAKE_NOTE_WHYS as readonly string[]).includes(why)) return false
+  // Raised: the mode it ran in allows more than the one the conversation was last in, which may be plan mode, below every other
+  if (why === 'raised') {
+    const ran = wakeModeRank(harness, instead)
+    const was = wakeModeRank(harness, mode)
+    return harness === 'claude-code' && ran >= 0 && ((was >= 0 && ran < was) || mode === 'plan')
+  }
   const from = wakeModeRank(harness, mode)
   const to = wakeModeRank(harness, instead)
   if (from < 0 || to <= from) return false
@@ -539,6 +595,8 @@ export function wakeNoteText(harness: string, note: string | null | undefined): 
   const app = APP_NAMES[harness] ?? harness
   if (why === 'refused')
     return `${app} would not run in ${modeName(harness, mode)} here, so It reopened it in ${modeName(harness, instead)}, which allows less.`
+  if (why === 'raised')
+    return `This conversation was last in ${modeName(harness, mode)} mode, and It reopened it in ${modeName(harness, instead)}, which lets it do more without asking you. You can choose another mode beside Auto-wake under Machines.`
   if (why === 'unreviewed')
     return `${app} was reopened in ${modeName(harness, instead)}, not ${modeName(harness, mode)}, because It could not tell that this ${app} has an automatic reviewer. So whatever would need approval is refused.`
   return `This machine runs an It from before the choice of mode, which does not reopen ${app} in ${modeName(harness, mode)}, and at most in ${modeName(harness, instead)}. Update It on that machine.`

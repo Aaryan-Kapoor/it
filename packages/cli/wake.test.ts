@@ -20,7 +20,7 @@ import fs, {
 import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
-import { describeClick } from '@it/protocol'
+import { describeClick, WAKE_MODE_LEGACY, WAKE_MODES, wakeModeBelow, wakeModeOf, wakeNoteFits, wakeNoteText } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import shims from './fixtures/windows-shims.json'
 import { claimLock } from './src/legacy-lock'
@@ -29,6 +29,9 @@ import { addonMarks, conversationFolder, conversationsFile, forgetAddonMark, not
 import {
   Budget,
   bootId,
+  CLAUDE_AUTO_NOTE,
+  CLAUDE_AUTO_UNCHECKED,
+  CLAUDE_REFUSED_ROOT,
   CODEX_CHANGED_SAID,
   CODEX_MODE_REFUSED,
   CODEX_NOT_REVIEWED,
@@ -38,8 +41,11 @@ import {
   carrying,
   carryOn,
   cgroupOf,
+  claudeModeNote,
   claudeModeOf,
+  claudeRefusesRoot,
   claudeResume,
+  claudeRunMode,
   claudeWroteAt,
   codexHolder,
   codexInterruptedAt,
@@ -166,9 +172,9 @@ describe.skipIf(process.platform === 'win32')('reopening a Claude Code conversat
     const click = '[It] The page "Chess" (chess) sent this just after someone used it: move {"move":"Qb3"} [action click-1]'
     expect(await claudeResume('3f6c2f0e-1a2b-4c3d-9e8f-000000000001', folder, click, claude.command)).toBeNull()
     const ran = claude.ran()!
-    expect(ran.args).toEqual(['--resume', '3f6c2f0e-1a2b-4c3d-9e8f-000000000001', '--print', '--allowedTools', 'Bash(it:*)'])
+    expect(ran.args).toEqual(['--resume', '3f6c2f0e-1a2b-4c3d-9e8f-000000000001', '--print', '--permission-mode', 'auto', '--allowedTools', 'Bash(it:*)'])
     expect(ran.args.join(' ')).not.toContain('Qb3')
-    expect(ran.input).toBe(click)
+    expect(ran.input).toBe(`${click}\n\n${CLAUDE_AUTO_NOTE}`)
     expect(ran.cwd).toBe(folder)
     // What it runs there says which conversation it is, as the conversation's own commands did
     expect([ran.harness, ran.session]).toEqual(['claude-code', '3f6c2f0e-1a2b-4c3d-9e8f-000000000001'])
@@ -253,10 +259,21 @@ describe('the command each agent app is carried on with', () => {
     }
     for (const how of Object.values(all)) {
       if (typeof how === 'string') throw new Error(how)
-      expect(how.input).toBe(said)
+      // Claude Code's, in auto mode, is told so after it
+      expect(how.input.startsWith(said)).toBe(true)
+      if (how !== all['claude-code']) expect(how.input).toBe(said)
       expect(how.argv.join(' ')).not.toContain('s3cret')
     }
-    expect((all['claude-code'] as { argv: string[] }).argv).toEqual(['claude', '--resume', UUID, '--print', '--allowedTools', 'Bash(it:*)'])
+    expect((all['claude-code'] as { argv: string[] }).argv).toEqual([
+      'claude',
+      '--resume',
+      UUID,
+      '--print',
+      '--permission-mode',
+      'auto',
+      '--allowedTools',
+      'Bash(it:*)',
+    ])
     expect((all.pi as { argv: string[] }).argv).toEqual(['pi', '--print', '--session', UUID])
     expect((all.opencode as { argv: string[] }).argv).toEqual(['opencode', 'run', '--session', 'ses_6f2a9c01ffe4'])
     expect((all.hermes as { argv: string[] }).argv).toEqual(['hermes', 'chat', '--resume', '20261006_005959_a9a014', '--query-file', '-'])
@@ -1318,8 +1335,14 @@ describe('the mode a Claude Code conversation is reopened in', () => {
   const has = { codex: ['codex'], itHome: '/home/someone/.it' }
   const words = (how: unknown) => (how as { argv: string[] }).argv
 
-  test('it is reopened in the mode the person last had it in, where that mode asks nobody, and `it` is allowed by its name and by where it is installed', () => {
-    expect(words(carrying('claude-code', UUID, 'x', { ...has, mode: 'bypassPermissions', itAt: ['/home/someone/.it/bin/it'] }))).toEqual([
+  const MODES = ['default', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions']
+  const started = (how: unknown) => {
+    const argv = words(how)
+    return argv[argv.indexOf('--permission-mode') + 1]
+  }
+
+  test('it is started in the mode the person chose under Machines, whatever mode the conversation was last in, with `it` allowed by its name and by where it is installed', () => {
+    expect(words(carrying('claude-code', UUID, 'x', { ...has, wakeMode: 'bypassPermissions', mode: 'default', itAt: ['/home/someone/.it/bin/it'] }))).toEqual([
       'claude',
       '--resume',
       UUID,
@@ -1330,15 +1353,127 @@ describe('the mode a Claude Code conversation is reopened in', () => {
       'Bash(it:*)',
       'Bash(/home/someone/.it/bin/it:*)',
     ])
-    for (const mode of ['acceptEdits', 'auto', 'dontAsk']) expect(words(carrying('claude-code', UUID, 'x', { ...has, mode }))).toContain(mode)
-    // A mode that asks, one that only plans, one that is not known, and none: reopened as before, with `it` alone
-    for (const mode of ['default', 'plan', 'made-up', '--dangerously-skip-permissions', null, undefined])
-      expect(words(carrying('claude-code', UUID, 'x', { ...has, mode }))).toEqual(['claude', '--resume', UUID, '--print', '--allowedTools', 'Bash(it:*)'])
+    for (const chosen of MODES)
+      for (const own of [...MODES, 'plan', null]) expect(started(carrying('claude-code', UUID, 'x', { ...has, wakeMode: chosen, mode: own }))).toBe(chosen)
+    // Manual is named too: a Claude Code before 2.1.302 started a run that named no mode in auto mode
+    expect(words(carrying('claude-code', UUID, 'x', { ...has, wakeMode: 'default' }))).toContain('--permission-mode')
     // A place whose name could be read as more than a place is not made a rule of
     expect(words(carrying('claude-code', UUID, 'x', { ...has, itAt: ['/home/some one/.it/bin/it', '/x/it:*) Bash(rm', '/ok/it'] })).slice(-2)).toEqual([
       'Bash(it:*)',
       'Bash(/ok/it:*)',
     ])
+  })
+
+  test('where the person chose nothing it is started in auto mode, and so is a conversation whose own mode would ask where they chose the conversation’s own', () => {
+    // Nothing chosen: auto, whatever the conversation was last in. This is what failed on the owner's machine: a
+    // conversation in the mode that asks was reopened with no mode, and every write was refused
+    for (const own of [...MODES, 'plan', 'manual', null, undefined]) expect(started(carrying('claude-code', UUID, 'x', { ...has, mode: own }))).toBe('auto')
+    // The conversation's own: a mode that asks nobody is kept, and plan mode, which was left to change nothing
+    for (const own of ['acceptEdits', 'auto', 'dontAsk', 'bypassPermissions', 'plan'])
+      expect(started(carrying('claude-code', UUID, 'x', { ...has, wakeMode: 'conversation', mode: own }))).toBe(own)
+    // And one that would ask, or is not known, or reads as more than a mode, is started in auto mode
+    for (const own of ['default', 'manual', 'made-up', '--dangerously-skip-permissions', null, undefined])
+      expect(started(carrying('claude-code', UUID, 'x', { ...has, wakeMode: 'conversation', mode: own }))).toBe('auto')
+    // A choice this It does not know is taken for the one that lets a conversation do least, whatever it was last in
+    for (const own of ['bypassPermissions', 'default', null])
+      expect(started(carrying('claude-code', UUID, 'x', { ...has, wakeMode: 'everything', mode: own }))).toBe('dontAsk')
+    // Never bypassed by any other way than the mode chosen: no flag of Claude Code's that skips every check
+    for (const chosen of [...MODES, 'conversation'])
+      expect(words(carrying('claude-code', UUID, 'x', { ...has, wakeMode: chosen, mode: 'bypassPermissions' })).join(' ')).not.toMatch(/dangerously/)
+  })
+
+  test('where Claude Code refuses or lacks the mode chosen, the next one down is used and the page is to say so, and never one above', () => {
+    const how = (over: Record<string, unknown>) => carrying('claude-code', UUID, 'x', { ...has, ...over }) as { argv: string[]; note: unknown }
+    const refused = (mode: string, instead: string) => ({ why: 'refused', mode, instead })
+    // As root, outside a sandbox Claude Code is told of, it refuses Bypass Permissions and starts nothing
+    expect(how({ wakeMode: 'bypassPermissions', root: true }).note).toEqual(refused('bypassPermissions', 'auto'))
+    expect(started(how({ wakeMode: 'bypassPermissions', root: true }))).toBe('auto')
+    expect(how({ wakeMode: 'auto', root: true }).note).toBeNull()
+    // A mode it lately started a run in another mode when asked for is not asked for for a while
+    expect(started(how({ wakeMode: 'auto', refused: new Set(['auto']) }))).toBe('acceptEdits')
+    expect(how({ wakeMode: 'auto', refused: new Set(['auto']) }).note).toEqual(refused('auto', 'acceptEdits'))
+    expect(started(how({ wakeMode: 'bypassPermissions', refused: new Set(['bypassPermissions', 'auto']) }))).toBe('acceptEdits')
+    // And the note names the mode the run is in fact started in
+    expect(how({ wakeMode: 'bypassPermissions', root: true, refused: new Set(['auto']) }).note).toEqual(refused('bypassPermissions', 'acceptEdits'))
+    // Each gives way only to the next one down, and Don't Ask and Plan have nothing below them
+    expect(started(how({ wakeMode: 'default', refused: new Set(['default']) }))).toBe('dontAsk')
+    expect(started(how({ wakeMode: 'dontAsk', refused: new Set(['dontAsk']) }))).toBe('dontAsk')
+    expect(started(how({ wakeMode: 'conversation', mode: 'plan', refused: new Set(['plan']) }))).toBe('plan')
+    // Nothing chosen, nothing refused and nothing known of the conversation's mode: nothing to say
+    expect(how({}).note).toBeNull()
+    // Every note It makes is one the page will say (`wakeNoteFits`), in Claude Code's own names for the modes
+    for (const over of [
+      { wakeMode: 'bypassPermissions', root: true },
+      { wakeMode: 'auto', refused: new Set(['auto']) },
+    ]) {
+      const note = how(over).note as { why: string; mode: string; instead: string }
+      expect(wakeNoteFits('claude-code', note.why, note.mode, note.instead)).toBe(true)
+    }
+    expect(wakeNoteText('claude-code', 'refused:auto:acceptEdits')).toBe(
+      'Claude Code would not run in Auto here, so It reopened it in Accept edits, which allows less.',
+    )
+  })
+
+  test('a conversation reopened in a mode that allows more than the one it was last in is said so on the page, and one reopened in less is not', () => {
+    const note = (over: Record<string, unknown>) => (carrying('claude-code', UUID, 'x', { ...has, ...over }) as { note: unknown }).note
+    // Manual widened to Auto, where nothing was chosen: said, and in Claude Code's own names
+    expect(note({ mode: 'default' })).toEqual({ why: 'raised', mode: 'default', instead: 'auto' })
+    expect(wakeNoteText('claude-code', 'raised:default:auto')).toBe(
+      'This conversation was last in Manual mode, and It reopened it in Auto, which lets it do more without asking you. You can choose another mode beside Auto-wake under Machines.',
+    )
+    // And under the conversation's own, which raises Manual to Auto; plan mode, below every other, raised to a chosen mode
+    expect(note({ wakeMode: 'conversation', mode: 'default' })).toEqual({ why: 'raised', mode: 'default', instead: 'auto' })
+    expect(note({ wakeMode: 'acceptEdits', mode: 'plan' })).toEqual({ why: 'raised', mode: 'plan', instead: 'acceptEdits' })
+    expect(wakeNoteText('claude-code', 'raised:plan:acceptEdits')).toContain('last in Plan mode')
+    expect(note({ wakeMode: 'bypassPermissions', mode: 'acceptEdits' })).toEqual({ why: 'raised', mode: 'acceptEdits', instead: 'bypassPermissions' })
+    // The same mode, less, or a mode It does not know of: nothing to say
+    for (const over of [{ mode: 'auto' }, { wakeMode: 'default', mode: 'bypassPermissions' }, { wakeMode: 'conversation', mode: 'dontAsk' }, { mode: null }])
+      expect(note(over)).toBeNull()
+    // And the page says no raise It would not make
+    expect(wakeNoteFits('claude-code', 'raised', 'auto', 'default')).toBe(false)
+    expect(wakeNoteFits('codex', 'raised', 'ask', 'full-access')).toBe(false)
+  })
+
+  test('Claude Code is taken to refuse Bypass Permissions as root only outside a sandbox it is told of, as its own check has it', () => {
+    expect(claudeRefusesRoot({}, 0)).toBe(true)
+    expect(claudeRefusesRoot({}, 1000)).toBe(false)
+    expect(claudeRefusesRoot({}, undefined)).toBe(false)
+    expect(claudeRefusesRoot({ IS_SANDBOX: '1' }, 0)).toBe(false)
+    expect(claudeRefusesRoot({ CLAUDE_CODE_BUBBLEWRAP: '1' }, 0)).toBe(false)
+  })
+
+  test('the chooser offers every mode Claude Code has for a run with nobody there, but plan, and the conversation’s own, in Claude Code’s own words, with Bypass Permissions recommended and its limit said', () => {
+    const list = WAKE_MODES['claude-code']!
+    expect(list.choices.map((c) => c.id)).toEqual(['bypassPermissions', 'auto', 'acceptEdits', 'default', 'dontAsk', 'conversation'])
+    expect(list.choices.map((c) => c.label)).toEqual(['Bypass Permissions', 'Auto', 'Accept edits', 'Manual', 'Don’t Ask', 'The conversation’s own'])
+    expect(list.choices.filter((c) => c.recommended).map((c) => c.id)).toEqual(['bypassPermissions'])
+    const bypass = list.choices[0]!.says
+    expect(bypass).toContain('a press on any screen paired with this It, a phone among them, or the words on a page, can lead it to do')
+    expect(bypass).toContain('apart from your own deny and ask rules, your organization’s settings and the few checks Claude Code keeps in every mode')
+    expect(list.default).toBe('auto')
+    // An It from before the choice may run a conversation in any mode up to Bypass Permissions
+    expect(WAKE_MODE_LEGACY['claude-code']).toBe('bypassPermissions')
+    // A name this It does not list, as a newer It may keep, is the one that allows least; nothing kept is the default
+    expect(
+      started(carrying('claude-code', UUID, 'x', { ...has, wakeMode: wakeModeOf([{ harness: 'claude-code', mode: 'everything' }], 'claude-code')! })),
+    ).toBe('dontAsk')
+    expect(wakeModeOf([], 'claude-code')).toBe('auto')
+    expect(wakeModeBelow('claude-code', 'auto')).toBe('acceptEdits')
+    expect(wakeModeBelow('claude-code', 'dontAsk')).toBeNull()
+  })
+
+  test('a conversation reopened in a mode that refuses what would ask is told which mode and what it may do, and one in auto mode that Claude Code’s check decides', () => {
+    const input = (wakeMode: string) => (carrying('claude-code', UUID, 'the click', { ...has, wakeMode }) as { input: string }).input
+    expect(input('auto')).toBe(`the click\n\n${CLAUDE_AUTO_NOTE}`)
+    expect(CLAUDE_AUTO_NOTE).toContain('This note is It’s, not the person’s, and allows nothing')
+    expect(CLAUDE_AUTO_NOTE).toContain('Claude Code’s own safety check')
+    expect(input('default')).toBe(`the click\n\n${claudeModeNote('default')}`)
+    expect(claudeModeNote('default')).toContain('Claude Code’s Manual mode')
+    expect(claudeModeNote('acceptEdits')).toContain('you can edit files in this conversation’s folder')
+    expect(claudeModeNote('plan')).toContain('you may not edit anything')
+    expect(input('bypassPermissions')).toBe('the click')
+    // Each says the same thing of a refusal as the rest of It's note does
+    for (const mode of ['default', 'dontAsk', 'acceptEdits', 'plan']) expect(claudeModeNote(mode)).toContain('`it ack <action id> --failed`')
   })
 
   test('the mode is read from what Claude Code wrote of the conversation, and a turn It started itself says nothing of what the person chose', () => {
@@ -1347,20 +1482,21 @@ describe('the mode a Claude Code conversation is reopened in', () => {
     mkdirSync(dir, { recursive: true })
     const file = path.join(dir, `${UUID}.jsonl`)
     const row = (over: Record<string, unknown>) => `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'x'.repeat(400) }, ...over })}\n`
+    const its = (over: Record<string, unknown>) => row({ message: { role: 'user', content: `[It] "Board" (board): press [action a1]\n\n${WOKEN}` }, ...over })
     // Held with full access in an app that drives Claude Code, and then reopened by It, twice, in the mode that asks
     writeFileSync(
       file,
       row({ permissionMode: 'default', entrypoint: 'cli' }) +
         row({ permissionMode: 'bypassPermissions', entrypoint: 'sdk-ts' }) +
         `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'the word "permissionMode" in a reply is not a mode' }] } })}\n` +
-        row({ permissionMode: 'default', entrypoint: 'sdk-cli' }) +
-        row({ permissionMode: 'default', entrypoint: 'sdk-cli' }),
+        its({ permissionMode: 'default', entrypoint: 'sdk-cli' }) +
+        its({ permissionMode: 'auto', entrypoint: 'sdk-cli' }),
     )
     expect(claudeModeOf(UUID, '/home/someone/board', config)).toBe('bypassPermissions')
     // The person opens it again and holds it in another mode: that is the mode from then on
     writeFileSync(
       file,
-      readFileSync(file, 'utf8') + row({ permissionMode: 'acceptEdits', entrypoint: 'cli' }) + row({ permissionMode: 'default', entrypoint: 'sdk-cli' }),
+      readFileSync(file, 'utf8') + row({ permissionMode: 'acceptEdits', entrypoint: 'cli' }) + its({ permissionMode: 'default', entrypoint: 'sdk-cli' }),
     )
     expect(claudeModeOf(UUID, '/home/someone/board', config)).toBe('acceptEdits')
     // A long conversation is read from its end
@@ -1375,10 +1511,114 @@ describe('the mode a Claude Code conversation is reopened in', () => {
     expect(claudeModeOf(UUID, '/home/someone/elsewhere', config)).toBe('bypassPermissions')
     // Nothing written of it, or nothing but It's own turns: not known
     expect(claudeModeOf(UUID.replace(/^./, UUID.startsWith('f') ? 'e' : 'f'), '/home/someone/board', config)).toBeNull()
-    writeFileSync(file, row({ permissionMode: 'default', entrypoint: 'sdk-cli' }))
+    writeFileSync(file, its({ permissionMode: 'default', entrypoint: 'sdk-cli' }))
     expect(claudeModeOf(UUID, '/home/someone/board', config)).toBeNull()
     expect(claudeModeOf('../../etc/passwd', '/home/someone/board', config)).toBeNull()
   })
+
+  test.each(['acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'])(
+    'a conversation that only ever ran without a window, begun by a script in %s mode, keeps that mode',
+    (mode) => {
+      // As on the owner's machine: begun by a script with `claude --print --permission-mode acceptEdits`, so that it could
+      // write its project's files, and every turn written down as `sdk-cli`. It's own reopenings of it pass over
+      const config = path.join(scratch, `claude-${mode}`)
+      const dir = path.join(config, 'projects', '-home-someone-deck')
+      mkdirSync(dir, { recursive: true })
+      const at = (n: number) => new Date(Date.UTC(2026, 10, 11, 9, n)).toISOString()
+      const row = (n: number, over: Record<string, unknown>) =>
+        `${JSON.stringify({ type: 'user', timestamp: at(n), entrypoint: 'sdk-cli', message: { role: 'user', content: 'Rebuild the deck.' }, ...over })}\n`
+      writeFileSync(
+        path.join(dir, `${UUID}.jsonl`),
+        row(0, { permissionMode: mode }) +
+          row(5, { permissionMode: mode }) +
+          // Two of It's own reopenings, in the mode that asks, as on that night
+          row(30, { permissionMode: 'default', message: { role: 'user', content: `[It] "Deck" (deck): Rebuild it [action a2]\n\n${WOKEN}` } }) +
+          row(40, { permissionMode: 'default', message: { role: 'user', content: [{ type: 'text', text: `[It] … [action a3]\n\n${WOKEN}` }] } }),
+      )
+      expect(claudeModeOf(UUID, '/home/someone/deck', config)).toBe(mode)
+      // And where the person chose the conversation's own, it is reopened in that mode, as it was made to run
+      expect(started(carrying('claude-code', UUID, 'x', { ...has, wakeMode: 'conversation', mode: claudeModeOf(UUID, '/home/someone/deck', config) }))).toBe(
+        mode,
+      )
+    },
+  )
+
+  test('a turn begun while It was running the conversation is taken for It’s, and one begun outside those runs for a choice; and where It’s note of its runs could not be read, every such turn is passed over', () => {
+    const config = path.join(scratch, 'claude-mixed')
+    const dir = path.join(config, 'projects', '-home-someone-mixed')
+    mkdirSync(dir, { recursive: true })
+    const at = (n: number) => Date.UTC(2026, 10, 12, 10, n)
+    const row = (n: number, over: Record<string, unknown>) =>
+      `${JSON.stringify({ type: 'user', timestamp: new Date(at(n)).toISOString(), message: { role: 'user', content: 'something' }, ...over })}\n`
+    const file = path.join(dir, `${UUID}.jsonl`)
+    // The person in a window, in the mode that asks; then a script without a window in Accept edits; then It's own run,
+    // during which something the run started resumed the conversation itself with full access, without It's mark
+    writeFileSync(
+      file,
+      row(0, { permissionMode: 'default', entrypoint: 'cli' }) +
+        row(10, { permissionMode: 'acceptEdits', entrypoint: 'sdk-cli' }) +
+        row(20, { permissionMode: 'auto', entrypoint: 'sdk-cli', message: { role: 'user', content: `[It] … [action a1]\n\n${WOKEN}` } }) +
+        row(21, { permissionMode: 'bypassPermissions', entrypoint: 'sdk-cli' }),
+    )
+    const runs = [[at(19), at(25)]] as const
+    expect(claudeModeOf(UUID, '/home/someone/mixed', config, runs)).toBe('acceptEdits')
+    // A run that has not been seen to end holds everything after it
+    expect(claudeModeOf(UUID, '/home/someone/mixed', config, [[at(19), null]])).toBe('acceptEdits')
+    // Without the note of the runs, the turn that resumed it from inside It's run would be taken for a choice
+    expect(claudeModeOf(UUID, '/home/someone/mixed', config, [])).toBe('bypassPermissions')
+    // With a note that could not be read, no turn without a window counts: only the person's own in a window
+    expect(claudeModeOf(UUID, '/home/someone/mixed', config, null)).toBe('default')
+    // The person opens it in a window afterwards: their mode is the one from then on
+    writeFileSync(file, readFileSync(file, 'utf8') + row(30, { permissionMode: 'plan', entrypoint: 'cli' }))
+    expect(claudeModeOf(UUID, '/home/someone/mixed', config, runs)).toBe('plan')
+  })
+
+  test('the mode Claude Code began It’s run in is read from its turn as soon as it has written it', () => {
+    const config = path.join(scratch, 'claude-run')
+    const dir = path.join(config, 'projects', '-home-someone-run')
+    mkdirSync(dir, { recursive: true })
+    const file = path.join(dir, `${UUID}.jsonl`)
+    const since = Date.UTC(2026, 10, 12, 11, 0)
+    const row = (ms: number, over: Record<string, unknown>) =>
+      `${JSON.stringify({ type: 'user', timestamp: new Date(since + ms).toISOString(), entrypoint: 'sdk-cli', message: { role: 'user', content: `[It] … [action a1]\n\n${WOKEN}` }, ...over })}\n`
+    // An earlier run of It's, in auto mode, and nothing yet of this one
+    writeFileSync(file, row(-60_000, { permissionMode: 'auto' }))
+    expect(claudeRunMode(UUID, '/home/someone/run', since, config)).toBeNull()
+    // This one, which Claude Code began in the mode that asks: auto mode was not offered
+    writeFileSync(file, readFileSync(file, 'utf8') + row(800, { permissionMode: 'default' }))
+    expect(claudeRunMode(UUID, '/home/someone/run', since, config)).toBe('default')
+  })
+
+  test.skipIf(process.platform === 'win32')(
+    'a Claude Code run that Claude Code ended itself because auto mode’s check could not be reached is taken as run, and one it refused as root as not started; neither as broken off',
+    async () => {
+      const kept = path.join(scratch, 'kept-auto')
+      const app = (said: string) => {
+        const file = path.join(scratch, `claude-${randomUUID()}`)
+        writeFileSync(file, `#!/bin/sh\ncat > /dev/null\necho "Done."\necho "${said}" >&2\nexit 1\n`)
+        chmodSync(file, 0o755)
+        return file
+      }
+      let brokeOff = 0
+      const opts = { keepIn: kept, brokeOff: () => brokeOff++ }
+      const unchecked = app(
+        'Error: auto mode could not check some actions Claude tried, so they did not run. To run them, use another permission mode. Exiting with code 1.',
+      )
+      expect(
+        await carryOn({ argv: [unchecked], input: '', app: 'Claude Code', auto: true, mode: 'auto' }, scratch, { harness: 'claude-code', session: 'x' }, opts),
+      ).toBe(CLAUDE_AUTO_UNCHECKED)
+      const root = app('--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons')
+      expect(
+        await carryOn({ argv: [root], input: '', app: 'Claude Code', mode: 'bypassPermissions' }, scratch, { harness: 'claude-code', session: 'x' }, opts),
+      ).toBe(CLAUDE_REFUSED_ROOT)
+      expect(brokeOff).toBe(0)
+      // The same words from a run in another mode are an ordinary failure
+      expect(
+        await carryOn({ argv: [unchecked], input: '', app: 'Claude Code', mode: 'acceptEdits' }, scratch, { harness: 'claude-code', session: 'x' }, opts),
+      ).toBe('Claude Code exited with 1')
+      expect(brokeOff).toBe(1)
+    },
+  )
 
   test('a reopened conversation is told that nobody can approve anything, how to run `it`, and to say so on the page where it cannot do what was asked', () => {
     expect(WOKEN).toMatch(/^\[It\] /)

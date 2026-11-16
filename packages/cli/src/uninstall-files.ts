@@ -40,6 +40,7 @@ export const ROOT_FILES = [
   'runs.json.unreadable',
   'cut-off.json',
   'stopped.json',
+  'claude-runs.json',
   'service.stop',
   'telemetry.json',
   'telemetry-off',

@@ -201,11 +201,36 @@ describe('how a reopened conversation runs, chosen beside an app’s Auto-wake',
     expect(chosen('Codex')).toBe('read-only')
   })
 
+  test('offers each mode Claude Code itself offers for a run with nobody there, by its own names, and the conversation’s own, Bypass Permissions marked as recommended, and Auto where none was chosen', async () => {
+    machines = [connected()]
+    await shown()
+    const claude = row('Claude Code')
+    expect(choices('Claude Code').map((c) => c.value)).toEqual(['bypassPermissions', 'auto', 'acceptEdits', 'default', 'dontAsk', 'conversation'])
+    expect([...claude.querySelectorAll('.wake-mode-name')].map((n) => n.textContent)).toEqual([
+      'Bypass PermissionsRecommended',
+      'Auto',
+      'Accept edits',
+      'Manual',
+      'Don’t Ask',
+      'The conversation’s own',
+    ])
+    expect(chosen('Claude Code')).toBe('auto')
+    expect(claude.textContent).toContain('a press on any screen paired with this It, a phone among them, or the words on a page, can lead it to do')
+    expect(claude.textContent).toContain('Claude Code’s own safety check, a model, decides in your place')
+    await act(async () => choices('Claude Code')[0]!.click())
+    expect(asked).toEqual([{ name: 'machines:wakeMode', args: { machineId: 'machine-1', harness: 'claude-code', mode: 'bypassPermissions' } }])
+    act(() => root.unmount())
+    host.remove()
+    // A name this It does not know reads as the one that allows least, which the conversation's own is not
+    machines = [connected({ wakeModes: [{ harness: 'claude-code', mode: 'something-newer' }] })]
+    await shown()
+    expect(chosen('Claude Code')).toBe('dontAsk')
+  })
+
   test('is offered for no app the choice would change nothing for, and not where Auto-wake is off', async () => {
     machines = [connected()]
     await shown()
     expect(choices('Pi')).toEqual([])
-    expect(choices('Claude Code')).toEqual([])
     act(() => root.unmount())
     host.remove()
     machines = [connected({ wakes: [] })]
