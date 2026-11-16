@@ -723,7 +723,7 @@ async function WAKELITE() {
   await quitApp(who)
   await sleep(30_000)
   await click('app quit (Auto-wake)', false)
-  if (sh('test -f /var/lib/rehearsal-flow/between.sh && echo yes').trim() === 'yes') {
+  if (sh('test -f /etc/rehearsal-between.sh && echo yes').trim() === 'yes') {
     sh('touch /var/lib/rehearsal-flow/between-now')
     for (let i = 0; i < 180 && sh('test -f /var/lib/rehearsal-flow/between-done && echo yes').trim() !== 'yes'; i++) await sleep(2000)
     step('between the clicks', { did: sh('cat /var/lib/rehearsal-flow/between.log 2>/dev/null | tail -3').trim().slice(0, 300), appNow: sh(`bash -ic '${who} --version' 2>/dev/null`).trim().split('\n').pop() })
