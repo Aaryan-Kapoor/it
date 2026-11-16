@@ -430,10 +430,7 @@ export function expectations({ linger = 3000 } = {}) {
   }
   /** Whether what a browser said is what was foreseen of it: by the same speaker, in those words, about that address and that showing. */
   const fits = (f, problem) =>
-    f.byScript === !problem.own &&
-    f.says.test(problem.says) &&
-    (!f.of || f.of.test(problem.of)) &&
-    (f.showing === undefined || f.showing === problem.showing)
+    f.byScript === !problem.own && f.says.test(problem.says) && (!f.of || f.of.test(problem.of)) && (f.showing === undefined || f.showing === problem.showing)
   /**
    * Foresees each of several things of a browser for what is done in the statements that
    * follow, and gives the way to say that the doing is over. What is given has a way of its

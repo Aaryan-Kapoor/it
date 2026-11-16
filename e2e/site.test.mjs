@@ -133,7 +133,13 @@ describe('what a run foresees of its browsers', () => {
     const timedOut = 'Error: [CONVEX Q(notifications:list)] [Request ID: 0f603d262c1f6614] Server Error Called by client'
     const before = { ...says(timedOut, { of: SITE, at: Date.now() - 60_000 }), own: false }
     const busy = during(one, [
-      { says: /^Error: \[CONVEX Q\(notifications:list\)\] \[Request ID: [0-9a-f]+\] Server Error\b/, byScript: true, times: 2, may: true, because: 'the backend was busy' },
+      {
+        says: /^Error: \[CONVEX Q\(notifications:list\)\] \[Request ID: [0-9a-f]+\] Server Error\b/,
+        byScript: true,
+        times: 2,
+        may: true,
+        because: 'the backend was busy',
+      },
     ])
     one.problems.push({ ...says(timedOut, { of: SITE }), own: false }, { ...says(timedOut, { of: SITE }), own: false }, says(timedOut, { of: SITE }))
     one.problems.push({ ...says(timedOut.replace('notifications:list', 'pages:list'), { of: SITE }), own: false })

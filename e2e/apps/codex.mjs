@@ -393,7 +393,9 @@ function parentOf(pid) {
  */
 function fetchingCatalogue(list) {
   const git = (program) => /(^|\/)git$/.test(program ?? '')
-  const fetch = new Set(list.filter(({ command: c }) => git(c[0]) && c.includes('ls-remote') && c.at(-2) === CATALOGUE && c.at(-1) === 'HEAD').map(({ pid }) => pid))
+  const fetch = new Set(
+    list.filter(({ command: c }) => git(c[0]) && c.includes('ls-remote') && c.at(-2) === CATALOGUE && c.at(-1) === 'HEAD').map(({ pid }) => pid),
+  )
   const helper = ({ command: c }) =>
     (git(c[0]) && c[1] === 'remote-https' && c[2] === CATALOGUE && c[3] === CATALOGUE && c.length === 4) ||
     (/(^|\/)git-remote-https$/.test(c[0] ?? '') && c[1] === CATALOGUE && c[2] === CATALOGUE && c.length === 3)
@@ -879,7 +881,8 @@ trust_level = "trusted"
   const catalogue = () => (process.platform === 'linux' ? fetchingCatalogue(left) : new Set())
   for (const end = Date.now() + 30_000; left.length > 0 && catalogue().size === left.length && Date.now() < end; await sleep(500)) left = ours()
   const fetching = catalogue()
-  if (fetching.size) console.log(`note  Codex's fetch of its plugin catalogue was still running after half a minute, in ${fetching.size} processes, and is let be`)
+  if (fetching.size)
+    console.log(`note  Codex's fetch of its plugin catalogue was still running after half a minute, in ${fetching.size} processes, and is let be`)
   const leftOver = left.filter(({ pid }) => !fetching.has(pid))
   check('nothing the run started is left running', leftOver.length === 0, JSON.stringify(leftOver))
   await ended(left)

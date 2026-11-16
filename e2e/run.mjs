@@ -7590,7 +7590,12 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
   )
   const { own, neverSaid } = heldToAccount(opened)
   // What was excused while forty tabs asked at once, so that a rise in it shows from run to run
-  console.log(`  note  excused while forty tabs were opened: ${toldToWait.times().map(({ because, said }) => `${said} times ${because}`).join('; ')}`)
+  console.log(
+    `  note  excused while forty tabs were opened: ${toldToWait
+      .times()
+      .map(({ because, said }) => `${said} times ${because}`)
+      .join('; ')}`,
+  )
   check('no browser reported an error of its own', opened.length >= 4 && own.length === 0, own.join(' | '))
   // And nothing is foreseen that does not happen: an excuse for what no browser said is one the
   // run does not need. The words are Chromium's, so it is asked where the run is made in that.
