@@ -25,6 +25,7 @@
  * taken back, the words are left as they were given, and the command says what it says today.
  */
 import path from 'node:path'
+import { VALUED } from './args'
 import { runSync } from './child'
 
 /** The rules a program on Windows splits its command line by: the C runtime's since 2008, or `CommandLineToArgvW`'s, which read `""` inside quotes differently. */
@@ -151,19 +152,35 @@ const parsed = (text: string): { value: unknown } | null => {
  */
 const spoilt = (word: string) => /^[[{]/.test(word) && (word.startsWith('[') || parsed(word) === null)
 
-/** Whether a JSON value on the line has a space or tab outside its strings. */
-function spacedOutsideStrings(json: string): boolean {
-  let inString = false
-  for (let i = 0; i < json.length; i++) {
-    const c = json[i]
-    if (inString) {
-      if (c === '\\') i++
-      else if (c === '"') inString = false
-    } else if (c === '"') inString = true
-    else if (space(c)) return true
+/**
+ * The two ways PowerShell builds a program's command line from an argument without writing its
+ * quotes so that the program keeps them: in quotes of its own where the argument has a space
+ * that its count of double quotes puts outside them, and as it is otherwise. Windows PowerShell
+ * 5.1 counts every double quote; PowerShell 7 in its older way (before 7.3, or where it is asked
+ * for) does not count one just after a backslash.
+ */
+const COUNTINGS = ['every', 'unescaped'] as const
+function rendered(arg: string, counting: (typeof COUNTINGS)[number]): string {
+  let quotes = 0
+  let afterBackslash = false
+  let spaced = arg === ''
+  for (const c of arg) {
+    if (c === '"' && !(counting === 'unescaped' && afterBackslash)) quotes++
+    else if (/\s/.test(c) && quotes % 2 === 0) spaced = true
+    afterBackslash = c === '\\'
   }
-  return false
+  return spaced ? `"${arg}"` : arg
 }
+/** Whether a stretch of the line could be what PowerShell built for one argument, in either way: the argument as it is, or in the quotes PowerShell puts round it. */
+const oneArgument = (stretch: string) =>
+  COUNTINGS.some(
+    (counting) =>
+      rendered(stretch, counting) === stretch ||
+      (stretch.length >= 2 && stretch.startsWith('"') && stretch.endsWith('"') && rendered(stretch.slice(1, -1), counting) === stretch),
+  )
+
+/** The options whose value is not JSON, after which nothing is taken from the line, however it looks. */
+const NOT_JSON = new Set([...VALUED].filter((name) => name !== 'state'))
 
 /**
  * The words after the program's name (and the script's, under Node) with each JSON value the
@@ -172,14 +189,14 @@ function spacedOutsideStrings(json: string): boolean {
  * whole on the line. `given` is what the program was given after its own name (and the
  * script's), in order.
  *
- * A value is taken only where it can be nothing but one argument that a shell spoilt. It begins
- * at the start of a word, or just inside the quotes Windows PowerShell put round the word, and
- * ends where that word ends, or at the closing one of those quotes. Where there are no such
- * quotes, it has no space outside its strings, since Windows PowerShell puts quotes round any
- * argument that has one, and where it has a backslash just before a quote, it is the last thing
- * on the line, since there PowerShell 7's older way of counting quotes can leave a space that was
- * inside the argument outside its quotes. And it parses, as something other than what the word
- * was as given.
+ * A value is taken only where the line can be read in no other way than as that one JSON
+ * argument, spoilt by PowerShell. It begins where a word begins (or just inside the quotes
+ * PowerShell put round it) and ends where that word ends (or at those quotes); the stretch of the
+ * line it takes is exactly what PowerShell builds for it as one argument, in quotes only where
+ * PowerShell would have put them; no longer stretch, running on over the words after it, could
+ * be one argument PowerShell built, so that nothing written inside one argument is taken for a
+ * switch or another word; none of the words it stands in for reads as an option; it is not the
+ * value of an option that does not take JSON; and it parses, as other than the word as given.
  */
 export function wholeJson(line: string, given: readonly string[]): string[] | null {
   if (!given.some(spoilt)) return null
@@ -187,37 +204,42 @@ export function wholeJson(line: string, given: readonly string[]): string[] | nu
     const words = commandLineWords(line, rules)
     const lead = words.length - given.length
     if (lead < 1 || words.slice(lead).some((w, k) => w.value !== given[k])) continue
+    const after = words.slice(lead)
     // Read again from the first word after the program's own, taking each spoilt JSON value whole
     const out: string[] = []
     let taken = false
-    let i = words[lead]!.start
-    for (;;) {
-      while (space(line[i])) i++
-      if (i >= line.length) break
-      const word = wordAt(line, i, rules)
-      const wrapped = line[i] === '"'
-      const from = i + (wrapped ? 1 : 0)
-      if (spoilt(word.value) && (line[from] === '{' || line[from] === '[')) {
-        const end = jsonEnd(line, from)
-        const after = end === -1 ? -1 : end + (wrapped ? 1 : 0)
-        const json = end === -1 ? '' : line.slice(from, end)
-        const ends = after >= line.length || line.slice(after).trim() === ''
-        const whole =
-          end !== -1 &&
-          (!wrapped || line[end] === '"') &&
-          (after >= line.length || space(line[after])) &&
-          (wrapped || (!spacedOutsideStrings(json) && (!/\\"/.test(json) || ends)))
-        const value = whole ? parsed(json) : null
-        const was = parsed(word.value)
-        if (value && (was === null || JSON.stringify(was.value) !== JSON.stringify(value.value))) {
-          out.push(json)
-          taken = true
-          i = after
-          continue
-        }
+    let k = 0
+    while (k < after.length) {
+      const word = after[k]!
+      const option = /^--?([a-z][a-z-]*)$/.exec(after[k - 1]?.value ?? '')?.[1]
+      const at = word.start
+      const wrapped = line[at] === '"'
+      const from = at + (wrapped ? 1 : 0)
+      const candidate = spoilt(word.value) && (line[from] === '{' || line[from] === '[') && !(option && NOT_JSON.has(option))
+      const end = candidate ? jsonEnd(line, from) : -1
+      const stop = end === -1 ? -1 : end + (wrapped ? 1 : 0)
+      // The words the value would stand in for: from this one to the last that begins inside it
+      let last = k
+      while (stop !== -1 && last + 1 < after.length && after[last + 1]!.start < stop) last++
+      const json = end === -1 ? '' : line.slice(from, end)
+      const fits =
+        end !== -1 &&
+        (!wrapped || line[end] === '"') &&
+        (stop >= line.length || space(line[stop])) &&
+        after[last]!.end === stop &&
+        COUNTINGS.some((counting) => rendered(json, counting) === line.slice(at, stop)) &&
+        after.slice(k + 1, last + 1).every((w) => !w.value.startsWith('-')) &&
+        after.slice(last + 1).every((w) => !oneArgument(line.slice(at, w.end)))
+      const value = fits ? parsed(json) : null
+      const was = parsed(word.value)
+      if (value && (was === null || JSON.stringify(was.value) !== JSON.stringify(value.value))) {
+        out.push(json)
+        taken = true
+        k = last + 1
+        continue
       }
       out.push(word.value)
-      i = word.end
+      k++
     }
     return taken ? out : null
   }

@@ -90,7 +90,8 @@ const JSONS = [
   { a: 1 },
   { note: 'two words', more: 'and three more' },
   { say: 'she said "hi" twice' },
-  { path: 'C:\\Users\\ana\\', n: 'a\\b' },
+  // A backslash, but none just before a quote with a switch after it, which PowerShell 7's older way could have built from one argument
+  { path: 'C:\\Users\\ana', n: 'a\\b' },
   { say: 'Café 12×12 — ★ 支付' },
   { say: 'a } and a ] and a {' },
   { steps: { build: 'done' }, list: ['c1', 'c 2'] },
