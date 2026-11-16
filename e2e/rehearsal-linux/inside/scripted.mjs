@@ -943,6 +943,72 @@ async function STANDIN() {
   step('the two quits', { afterExit: a, afterTerminalClosed: b })
 }
 
+/**
+ * Pi, OpenCode or Hermes through OpenRouter, played by a script: the app started in the terminal,
+ * a page asked for, a click with the app open, then the app quit and a click, with what the page
+ * and its bar say. The app's own questions are answered as a willing person would.
+ */
+async function OTHERAPP() {
+  const who = app
+  const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
+  let p = ctx.pages().find((x) => !x.url().startsWith('devtools')) ?? (await ctx.newPage())
+  const pair = /https?:\/\/localhost:\d+\/pair#[A-Za-z0-9]+/.exec(sh('~/.it/bin/it site --no-open 2>&1'))?.[0]
+  if (pair) await p.goto(pair).catch(() => {})
+  await sleep(6000)
+  const allow = async () => {
+    const s = screen().replace(/\s+$/, '').split('\n').slice(-25).join('\n')
+    if (/allow once/i.test(s)) { step(`${who} asks to allow something; allows once`); await key('Enter'); return true }
+    if (/\[o\]nce/i.test(s)) { step(`${who} asks to approve a command; once`); await type('o'); return true }
+    if (/\(y\/n\)|\[y\/N\]|\[Y\/n\]/i.test(s)) { step(`${who} asks yes or no; yes`); await type('y'); return true }
+    return false
+  }
+  step(`types ${who} in the terminal`)
+  await type(who)
+  await sleep(15_000)
+  step(`types to ${who}: a page`)
+  await type('Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.')
+  let url = null
+  const t0 = Date.now()
+  while (Date.now() - t0 < 420_000 && !url) {
+    await allow()
+    p = ctx.pages().find((x) => x.url().includes('/p/')) ?? p
+    if (p.url().includes('/p/') && PIZZA.test(await shown(p).catch(() => ''))) url = p.url()
+    else await sleep(3000)
+  }
+  if (!check(`${who} put its page on the screen`, !!url, { seconds: Math.round((Date.now() - t0) / 1000), screen: url ? undefined : screen().replace(/\s+$/, '').split('\n').slice(-12).join(' | ').slice(0, 600) })) return
+  const click = async (what, ms) => {
+    await p.goto(url).catch(() => {})
+    await sleep(5000)
+    const before = await shown(p)
+    const c0 = Date.now()
+    const picked = await press(p, PIZZA, 1)
+    step(`${what}: picks "${picked}"`, { bar: await bar(p) })
+    const bars = []
+    while (Date.now() - c0 < ms) {
+      await allow()
+      const b = await bar(p)
+      if (b && b !== bars.at(-1)) bars.push(b)
+      const fresh = answerLine(before, await shown(p).catch(() => before), picked)
+      if (fresh) return check(`${what}: answered on the page`, true, { seconds: Math.round((Date.now() - c0) / 1000), fresh, bars: bars.join(' | ') })
+      await sleep(2000)
+    }
+    return check(`${what}: answered on the page`, false, { seconds: Math.round(ms / 1000), bars: bars.join(' | ').slice(0, 400), site: (await p.mainFrame().evaluate(() => document.body.innerText).catch(() => '')).split('\n').filter((l) => /listen|wake|open its|waiting|sent/i.test(l)).slice(0, 3).join(' / ') })
+  }
+  await click('the app open', 240_000)
+  step(`leaves ${who}`)
+  await type('/exit')
+  await sleep(3000)
+  await key('C-c')
+  await sleep(1000)
+  await key('C-c')
+  await sleep(2000)
+  await key('C-d')
+  await sleep(5000)
+  step('after leaving', { shell: /\$\s*$/.test(screen().replace(/\s+$/, '')), processes: sh(`ps -u ana -o args= | grep -c '${who}'`).trim() })
+  await sleep(25_000)
+  await click('the app closed', 180_000)
+}
+
 async function main() {
   try {
     if (scenario === 'S4') await S4()
@@ -956,6 +1022,7 @@ async function main() {
     else if (scenario === 'RESTARTCLICK') await RESTARTCLICK()
     else if (scenario === 'VENV') await VENV()
     else if (scenario === 'STANDIN') await STANDIN()
+    else if (scenario === 'OTHERAPP') await OTHERAPP()
     else if (scenario === 'WAKEBOOT2') await WAKEBOOT2()
     else check(`no scenario ${scenario}`, false)
     const failed = verdict.checks.filter((c) => !c.ok)

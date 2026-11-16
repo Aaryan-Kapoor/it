@@ -129,6 +129,76 @@ export function take(app, minutes) {
 
 const CONTAINER = /^it-rehearsal-[a-z0-9-]+$/
 
+// ---- OpenRouter, for Pi, OpenCode and Hermes (the owner allowed the key for the Mac runs) ----
+const ENV_FILE = '/home/cbak/programming/it/.env'
+export const OPENROUTER_MODEL = 'anthropic/claude-haiku-5.5'
+
+/** The OpenRouter key from the .env file, held in memory as `held`, or an error that names no part of it. */
+export function takeOpenRouter() {
+  let text
+  try {
+    text = readFileSync(ENV_FILE, 'utf8')
+  } catch {
+    throw new Error('The .env file with the OpenRouter key could not be read.')
+  }
+  try {
+    const line = text.split(/\r?\n/).find((l) => /^\s*(?:export\s+)?OPENROUTER_API_KEY\s*=/.test(l))
+    if (!line) throw new Error('The .env file has no OPENROUTER_API_KEY line.')
+    let value = line.slice(line.indexOf('=') + 1).trim()
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1)
+    if (!/^[A-Za-z0-9_\-]{20,200}$/.test(value)) throw new Error('The OpenRouter key is not shaped as a key.')
+    return { app: 'openrouter', key: value, values: [value] }
+  } finally {
+    text = null
+  }
+}
+
+/** What OpenRouter says this key has spent, in dollars, asked with the key in a header from memory; null where it could not be told. */
+export async function openRouterSpent(held) {
+  try {
+    const r = await fetch('https://openrouter.ai/api/v1/key', { headers: { authorization: `Bearer ${held.key}` } })
+    const j = await r.json()
+    return typeof j?.data?.usage === 'number' ? j.data.usage : null
+  } catch {
+    return null
+  }
+}
+
+/** The files each app keeps its model and key in, built in memory, with the key inside. */
+function otherAppFiles(app, held) {
+  const m = OPENROUTER_MODEL
+  if (app === 'pi')
+    return [
+      { path: '.pi/agent/models.json', text: `${JSON.stringify({ providers: { openrouter: { baseUrl: 'https://openrouter.ai/api/v1', api: 'openai-completions', apiKey: held.key, models: [{ id: m, name: m }] } } }, null, 2)}\n` },
+      { path: '.pi/agent/settings.json', text: `${JSON.stringify({ defaultProvider: 'openrouter', defaultModel: m }, null, 2)}\n` },
+    ]
+  if (app === 'opencode')
+    return [
+      {
+        path: '.config/opencode/opencode.json',
+        text: `${JSON.stringify({ $schema: 'https://opencode.ai/config.json', autoupdate: false, share: 'disabled', provider: { or: { npm: '@ai-sdk/openai-compatible', name: 'OpenRouter', options: { baseURL: 'https://openrouter.ai/api/v1', apiKey: held.key }, models: { [m]: { name: m, tool_call: true } } } }, model: `or/${m}`, small_model: `or/${m}` }, null, 2)}\n`,
+      },
+    ]
+  if (app === 'hermes') return [{ path: '.hermes/.env', text: `OPENROUTER_API_KEY=${held.key}\n` }]
+  throw new Error(`No files are made for ${app}.`)
+}
+export const OTHER_APP_FILES = ['/home/ana/.pi/agent/models.json', '/home/ana/.config/opencode/opencode.json', '/home/ana/.hermes/.env']
+
+/**
+ * Writes `app`'s model and key into ana's home, each file readable by her alone and made fresh by
+ * mktemp (an older copy is overwritten before it is replaced), the text by standard input only.
+ */
+export async function injectOtherApp(container, held, app) {
+  if (!CONTAINER.test(container) || held?.app !== 'openrouter') throw new Error('injectOtherApp: not a rehearsal container or not the OpenRouter key.')
+  for (const f of otherAppFiles(app, held)) {
+    if (!/^[.a-z/]+\.?[a-z]*$/.test(f.path)) throw new Error('injectOtherApp: an unexpected path.')
+    const dir = f.path.replace(/\/[^/]+$/, '')
+    const script = `set -e; umask 077; mkdir -p "$HOME/${dir}"; chmod 700 "$HOME/${dir}"; t=$(mktemp "$HOME/${f.path}.XXXXXX"); cat > "$t"; o="$HOME/${f.path}"; if [ -f "$o" ] && [ ! -L "$o" ]; then shred -fz -n 1 "$o"; fi; mv -f "$t" "$o"`
+    const code = await docker(['exec', '-i', '-u', 'ana', '-e', 'HOME=/home/ana', container, 'sh', '-c', script], f.text)
+    if (code !== 0) throw new Error(`The ${app} settings could not be written into the container (exit ${code}).`)
+  }
+}
+
 /** Writes the Codex copy into the container as ana's ~/.codex/auth.json, readable by her alone. */
 export async function injectCodex(container, held) {
   if (!CONTAINER.test(container) || held?.app !== 'codex') throw new Error('injectCodex: not a rehearsal container or not a Codex token.')
@@ -214,7 +284,7 @@ export async function wipe(container, held) {
   if (!CONTAINER.test(container)) return []
   const script = [
     // The files and any half-written copy beside them (a symlink is unlinked, never followed)
-    'for f in /home/ana/.codex/auth.json /home/ana/.codex/auth.json.* /home/ana/.claude/.credentials.json /home/ana/.claude/.credentials.json.*; do if [ -L "$f" ]; then rm -f "$f"; elif [ -e "$f" ]; then shred -fzu -n 2 "$f" 2>/dev/null || rm -f "$f"; fi; done',
+    'for f in /home/ana/.codex/auth.json /home/ana/.codex/auth.json.* /home/ana/.claude/.credentials.json /home/ana/.claude/.credentials.json.* /home/ana/.pi/agent/models.json /home/ana/.pi/agent/models.json.* /home/ana/.config/opencode/opencode.json /home/ana/.config/opencode/opencode.json.* /home/ana/.hermes/.env /home/ana/.hermes/.env.*; do if [ -L "$f" ]; then rm -f "$f"; elif [ -e "$f" ]; then shred -fzu -n 2 "$f" 2>/dev/null || rm -f "$f"; fi; done',
     "su -l ana -c 'tmux kill-server' >/dev/null 2>&1 || true",
     // Every agent app the person started, and any it started, goes with the variable it holds
     'pkill -TERM -u ana -f "(^|/)(claude|codex)( |$)" >/dev/null 2>&1 || true',

@@ -11,7 +11,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, statfsSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { filesHolding, holdsToken, injectClaudeFile, injectCodex, redact, shareWithUserManager, startAgentShell, take, wipe } from './secrets.mjs'
+import { OPENROUTER_MODEL, OTHER_APP_FILES, filesHolding, holdsToken, injectClaudeFile, injectCodex, injectOtherApp, openRouterSpent, redact, takeOpenRouter, shareWithUserManager, startAgentShell, take, wipe } from './secrets.mjs'
 import { writeReport } from './report.mjs'
 
 const arg = (name, fallback) => {
@@ -22,6 +22,8 @@ const has = (name) => process.argv.includes(`--${name}`)
 const flow = arg('scenario', arg('flow', 'S1'))
 const person = arg('person', 'model')
 const app = arg('app', 'claude')
+// Agent apps other than Claude Code and Codex, which reach their model through OpenRouter
+const OTHER = ['pi', 'opencode', 'hermes'].includes(app)
 const which = arg('browser', 'chromium')
 const ubuntu = arg('ubuntu', '24')
 const from = arg('from', `it-rehearsal-ubuntu${ubuntu}:base`)
@@ -126,13 +128,13 @@ async function main() {
     result.installBase = 'IT_INSTALL_BASE=http://127.0.0.1:8765 in /etc/environment, before the video starts: the install script fetches the build under test from a stand-in for the releases inside the machine'
     exec('systemd-run --unit=rehearsal-releases --property=User=nobody node /build/harness/releases.mjs /build/bin 8765')
   }
-  result.appVersion = exec(app === 'claude' ? 'claude --version' : 'codex --version').stdout.trim()
+  result.appVersion = OTHER ? `${app}, installed by the prepare step` : exec(app === 'claude' ? 'claude --version' : 'codex --version').stdout.trim()
   result.os = exec('. /etc/os-release; echo $PRETTY_NAME').stdout.trim()
 
   // ---- the agent app, as a participant who chose its model would have it ----
   // Set in ana's own settings, keeping what is there (on a machine from a snapshot, what
   // `it setup` wrote to turn It's add-on on)
-  asAna(`node /build/harness/settings.mjs ${app} ${MODEL[app].model} ${MODEL[app].effort}`)
+  if (!OTHER) asAna(`node /build/harness/settings.mjs ${app} ${MODEL[app].model} ${MODEL[app].effort}`)
   if (app === 'claude') {
     // Claude Code 2.1.325 shows "Medium effort" with effortLevel in its settings alone, and takes
     // the variable: in ana's own shell, and in her user manager for a conversation It reopens
@@ -141,14 +143,20 @@ async function main() {
   // The owner's ChatGPT account has apps of its own (one named it_dot_test among them), which
   // Codex offers its model as tools; a participant's account has none of those
   if (app === 'codex') result.codexAppsOff = 'features.apps = false in ~/.codex/config.toml, so that the ChatGPT apps on the owner\'s account are not offered to the model'
-  result.modelSetting = { ...MODEL[app], where: app === 'codex' ? '~/.codex/config.toml' : '~/.claude/settings.json, and CLAUDE_CODE_EFFORT_LEVEL in ~/.bashrc and the user manager' }
+  result.modelSetting = OTHER ? { model: `${OPENROUTER_MODEL} through OpenRouter`, where: 'the app\'s own settings file, with the key, mode 600' } : { ...MODEL[app], where: app === 'codex' ? '~/.codex/config.toml' : '~/.claude/settings.json, and CLAUDE_CODE_EFFORT_LEVEL in ~/.bashrc and the user manager' }
   asAna('mkdir -p ~/work')
 
   // ---- the sign-in, and the terminal ----
   {
     // A run against a stand-in for the model takes no sign-in of the owner's at all
-    const t = has('no-sign-in') ? null : take(app, Math.min(minutes + 5, 55))
-    held = t?.held ?? null
+    if (OTHER) {
+      // Pi, OpenCode and Hermes reach a model through OpenRouter, with the key the owner allowed
+      held = takeOpenRouter()
+      result.openRouterSpentBefore = await openRouterSpent(held)
+      await injectOtherApp(name, held, app)
+    }
+    const t = has('no-sign-in') || OTHER ? null : take(app, Math.min(minutes + 5, 55))
+    held = OTHER ? held : (t?.held ?? null)
     result.tokenMinutesLeftAtStart = t?.minutesLeft ?? 'no sign-in taken: a stand-in answers for the model'
     if (app === 'codex' && held) await injectCodex(name, held)
     // Scenario 13: Codex signed in beside Claude Code, with its own copy; both copies' values are
@@ -279,7 +287,7 @@ async function main() {
   }
   log(`flow ${flow} with ${app} in ${which}`)
   await new Promise((resolve) => {
-    const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-s', '/bin/bash', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow === 'WAKEBOOT' ? 'WAKEBOOT1' : flow} ${app} ${which === 'chromium' && /^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn('sudo', ['-n', 'docker', 'exec', name, 'su', '-l', 'ana', '-s', '/bin/bash', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN|OTHERAPP)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow === 'WAKEBOOT' ? 'WAKEBOOT1' : flow} ${app} ${which === 'chromium' && /^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN|OTHERAPP)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
     // A change the flow asks for between two clicks, run as root (an update of the agent app)
     const between = setInterval(() => {
       // The change itself is root's own file, written by the prepare step; the flow (ana) only asks for it
@@ -366,7 +374,8 @@ async function collect() {
   // Where the token is in the machine before it is wiped. Codex's own auth.json is expected; a
   // copy anywhere else (the agent's transcript, a page, a log) means the agent saw it, and what it
   // saw may be in the recording, so the recording is not kept.
-  const expected = [...(app === 'codex' || has('also-codex') ? ['/home/ana/.codex/auth.json'] : []), ...(app === 'claude' && (has('claude-file') || participant) ? ['/home/ana/.claude/.credentials.json'] : [])]
+  if (OTHER && held) result.openRouterSpentAfter = await openRouterSpent(held)
+  const expected = [...(OTHER ? OTHER_APP_FILES : []), ...(app === 'codex' || has('also-codex') ? ['/home/ana/.codex/auth.json'] : []), ...(app === 'claude' && (has('claude-file') || participant) ? ['/home/ana/.claude/.credentials.json'] : [])]
   const before = held ? await filesHolding(name, held) : []
   result.tokenFilesBeforeWipe = redact(before.join(', '), held)
   const elsewhere = before.filter((f) => !expected.includes(f))
