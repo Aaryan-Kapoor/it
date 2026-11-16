@@ -82,7 +82,7 @@ const must = (name, ok, detail) => {
 // write nothing there
 const scratch = realpathSync.native(mkdtempSync(path.join(runRoot(os.tmpdir()), 'it-cc-')))
 const folders = Object.fromEntries(
-  Object.entries({ home: 'home', claude: 'claude', it: 'it', work: 'work', none: 'no-t3-code', browser: 'browser' }).map(([k, v]) => [
+  Object.entries({ home: 'home', claude: 'claude', it: path.join('home', '.it'), work: 'work', none: 'no-t3-code', browser: 'browser' }).map(([k, v]) => [
     k,
     path.join(scratch, v),
   ]),
@@ -241,6 +241,8 @@ const clickTurns = []
 const wokenSteps = {}
 /** The number of the reopened turn whose first answer the stand-in keeps waiting, so that the bar can be looked at while it runs. */
 let slowTurn = 2
+/** The number of the reopened turn that runs It by `~/.it/bin/it`, as the guide that installs It writes it. */
+let tildeTurn = 0
 /** What a reopened turn sets the page's state to: the first as before, and each after it by its number. */
 const pressedBy = (n) => (n === 2 ? 'again' : `woken-${n}`)
 
@@ -263,6 +265,9 @@ try {
       clickTurns.push(turn)
       const n = clickTurns.length
       if (n === 1) return runs(`it patch ${PAGE} '{"pressed":"yes"}'`, 'Marking the page as pressed.')
+      // It run as the conversation that installed It learned to run it, from `~`
+      if (n === tildeTurn)
+        return runs(`~/.it/bin/${windows ? 'it.exe' : 'it'} patch ${PAGE} '{"pressed":"${pressedBy(n)}"}'`, 'Marking the page as pressed.', `toolu_tilde_${n}`)
       // A reopened turn does what the owner's did not get to do: it writes a file in its project's
       // folder with Claude Code's own Write tool, runs an ordinary command there, and then changes the page
       const reply = writes(path.join(folders.work, `woken-${n}.txt`), `written by reopened turn ${n}\n`, `toolu_wake_write_${n}`)
@@ -739,6 +744,40 @@ try {
       if (settingsBefore === null) rmSync(settingsFile, { force: true })
       else writeFileSync(settingsFile, settingsBefore)
     }
+
+    // Manual chosen beside Claude Code's Auto-wake: the reopened turn runs It as `~/.it/bin/it`, as the guide that installs It
+    // writes it, which Claude Code matches against no rule but one written from `~` too. It must run, and the page show it
+    must('the last fallback run ends by itself', await runOver())
+    await tab.goto(new URL('/machines', pairing).href)
+    const choice = tab.locator('.wake-modes select').first()
+    await choice.waitFor({ timeout: 30_000 })
+    await choice.selectOption('default')
+    const chose = await until(
+      async () => choice.inputValue().catch(() => ''),
+      (v) => v === 'default',
+      patience(15_000),
+    )
+    check('Manual is chosen in the drop-down beside Claude Code’s Auto-wake', chose === 'default', chose)
+    await tab.goto(new URL(`/p/${PAGE}`, pairing).href)
+    await frame.locator('#go').waitFor({ timeout: 30_000 })
+    tildeTurn = 5
+    await frame.locator('#go').click()
+    const tilde = await until(
+      (ms) => it('state', PAGE, { ms }),
+      (r) => r.json?.state?.pressed === pressedBy(5),
+      patience(90_000),
+    )
+    check(
+      'in Manual, a reopened turn that runs It as `~/.it/bin/it` is let run it, and the page shows it',
+      tilde.json?.state?.pressed === pressedBy(5),
+      JSON.stringify({
+        state: tilde.json?.state,
+        results: model.turns
+          .slice(-3)
+          .flatMap((t) => t.results)
+          .map((r) => String(typeof r.content === 'string' ? r.content : JSON.stringify(r.content)).slice(0, 200)),
+      }),
+    )
     if (model.faults.length) check('the stand-in for the model answered every request', false, model.faults.join('; '))
   }
 } catch (err) {

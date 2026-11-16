@@ -55,6 +55,7 @@ import {
   endTree,
   IN_JOB,
   identity,
+  itRules,
   jobName,
   KEPT_NOT,
   keeper,
@@ -1458,6 +1459,31 @@ describe('the mode a Claude Code conversation is reopened in', () => {
     // And the page says no raise It would not make
     expect(wakeNoteFits('claude-code', 'raised', 'auto', 'default')).toBe(false)
     expect(wakeNoteFits('codex', 'raised', 'ask', 'full-access')).toBe(false)
+  })
+
+  test('It’s own program may run in every mode by each spelling Claude Code can match against a rule: its name, each place it is installed, and that place from `~`, and nothing wider', () => {
+    // As the guide installs it, in the home folder: the name, the whole path (which also covers `$HOME/…`, which Claude Code expands), and `~/…`
+    expect(itRules(['/home/ana/.it/bin/it'], '/home/ana', 'linux')).toEqual(['Bash(it:*)', 'Bash(/home/ana/.it/bin/it:*)', 'Bash(~/.it/bin/it:*)'])
+    // Elsewhere in the home folder, as `IT_HOME` may put it
+    expect(itRules(['/home/ana/tools/it/bin/it'], '/home/ana', 'linux')).toContain('Bash(~/tools/it/bin/it:*)')
+    // Outside it, no `~` spelling names it, and none is made up
+    expect(itRules(['/opt/it/bin/it'], '/home/ana', 'linux')).toEqual(['Bash(it:*)', 'Bash(/opt/it/bin/it:*)'])
+    expect(itRules(['/home/anabel/.it/bin/it'], '/home/ana', 'linux')).toEqual(['Bash(it:*)', 'Bash(/home/anabel/.it/bin/it:*)'])
+    // A home folder with a space in its path: Claude Code would read the whole path as two rules, so only the name and `~/…` are given
+    expect(itRules(['/home/ana lee/.it/bin/it'], '/home/ana lee', 'linux')).toEqual(['Bash(it:*)', 'Bash(~/.it/bin/it:*)'])
+    // No home folder known: the name and the place alone, as before
+    expect(itRules(['/home/ana/.it/bin/it'], undefined, 'linux')).toEqual(['Bash(it:*)', 'Bash(/home/ana/.it/bin/it:*)'])
+    // On Windows the program's name with its ending too, which Claude Code does not take for `it`
+    expect(itRules([], undefined, 'win32')).toEqual(['Bash(it:*)', 'Bash(it.exe:*)'])
+    // And the reopened command carries them
+    expect(words(carrying('claude-code', UUID, 'x', { ...has, wakeMode: 'default', itAt: ['/home/ana/.it/bin/it'], homeDir: '/home/ana' }))).toContain(
+      'Bash(~/.it/bin/it:*)',
+    )
+  })
+
+  test('a conversation reopened in a mode that refuses is told to run It as `it` alone, since another spelling may be refused there', () => {
+    for (const mode of ['default', 'dontAsk', 'acceptEdits', 'plan'])
+      expect(claudeModeNote(mode)).toContain('Run It as `it`, by that name alone, even where you ran it another way before')
   })
 
   test('Claude Code is taken to refuse Bypass Permissions as root only outside a sandbox it is told of, as its own check has it', () => {

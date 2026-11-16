@@ -239,7 +239,7 @@ export function claudeModeNote(mode: string): string | null {
           ? 'you can run `it`, read files and do what their own Claude Code settings allow, and anything that would ask them is refused'
           : null
   if (!may) return null
-  return `[It] It reopened this conversation in Claude Code’s ${claudeTitle(mode)} mode: ${may}. Where something the work needs is refused, do not look for another way round it: say on the page what was refused, and run \`it ack <action id> --failed\`.`
+  return `[It] It reopened this conversation in Claude Code’s ${claudeTitle(mode)} mode: ${may}. Run It as \`it\`, by that name alone, even where you ran it another way before: spelled with a folder in front of it, it may be refused here. Where something the work needs is refused, do not look for another way round it: say on the page what was refused, and run \`it ack <action id> --failed\`.`
 }
 
 /** Why a reopened Claude Code run is in another mode than the one chosen, as its machine tells It with `runNoted` (`WAKE_NOTE_WHYS`). */
@@ -324,6 +324,30 @@ export const CLAUDE_AUTO_UNCHECKED = 'Claude Code ended the turn itself, because
 /** Whether what a reopened Claude Code printed ends as Claude Code ends a turn whose actions auto mode could not check. */
 export const autoCouldNotCheck = (printed: string): boolean => /auto mode could not check some actions/i.test(printed.split(/\r?\n/).slice(-6).join('\n'))
 
+/**
+ * The rules by which a reopened Claude Code may run It's own program without asking, whatever
+ * mode it runs in: by its name, `it` (and `it.exe` on Windows, which Claude Code does not take
+ * for `it`); by each place it is installed (`itAt`); and, where that place is inside the person's
+ * home folder, by the same place written from `~`, as the guide that installs It writes it. Claude
+ * Code matches `~/…` in a command against a rule only where the rule says `~/…` too, and expands
+ * `$HOME/…` before it matches, so the whole path covers that spelling. Nothing wider: each names
+ * It's own program and no other, and a place with a space or a bracket in it is left out, since
+ * Claude Code would read the rule as two or as something else. (Claude Code 2.1.325, tried.)
+ */
+export function itRules(itAt: readonly string[], homeDir: string | undefined, platform: NodeJS.Platform): string[] {
+  const plain = (p: string) => /^[^\s()*]+$/.test(p)
+  const places = itAt.filter(plain)
+  const tilde = homeDir
+    ? itAt
+        .map((p) => {
+          const rel = path.relative(homeDir, p)
+          return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? `~/${rel.split(path.sep).join('/')}` : null
+        })
+        .filter((p): p is string => p !== null && plain(p))
+    : []
+  return [...new Set(['it', ...(platform === 'win32' ? ['it.exe'] : []), ...places, ...tilde])].map((p) => `Bash(${p}:*)`)
+}
+
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {
   argv: string[]
@@ -399,6 +423,8 @@ export function carrying(
     refused?: ReadonlySet<string>
     /** For Claude Code: whether it would refuse Bypass Permissions here, as run by root (`claudeRefusesRoot`). */
     root?: boolean
+    /** For Claude Code: the person's home folder, as the reopened app has it, by which `~` names It's program (see `itRules`). */
+    homeDir?: string
   },
 ): Carrying | string {
   const app = APP[harness] ?? harness
@@ -408,9 +434,7 @@ export function carrying(
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(session)) return odd
     const claude = starting('claude')
     if (!claude) return `${app} was not found`
-    // `it` by its name, and by each place it is installed: an agent that learned to run it by
-    // its whole path, when its window had no PATH for it, is not refused for that
-    const it = ['Bash(it:*)', ...(has.itAt ?? []).filter((p) => /^[^\s()*]+$/.test(p)).map((p) => `Bash(${p}:*)`)]
+    const it = itRules(has.itAt ?? [], has.homeDir, has.platform ?? process.platform)
     const { mode, note } = claudeReopening(has.wakeMode, has.mode, { refused: has.refused, root: has.root })
     const auto = mode === 'auto'
     return {
