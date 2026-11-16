@@ -452,14 +452,14 @@ async function WAKE() {
     const had = new Set(appProcs(who).map((x) => x.pid))
     const before = await shown(p)
     const t0 = Date.now()
+    // Markers left by a server added for every project and by a hook in the project's settings, counted before the press: a woken app starts them within seconds of it
+    const marks = () => ({ server: Number(sh('ls /tmp/it-marker-server-* 2>/dev/null | wc -l').trim()), projectHook: Number(sh('ls /tmp/it-marker-hook-* 2>/dev/null | wc -l').trim()) })
+    const marksBefore = marks()
     const picked = await press(p, PIZZA, nth++ % 3)
     step(`${what}: picks "${picked}"`, { bar: await bar(p) })
     let woke = null
     let ok = false
     let bars = []
-    // Markers left by a server added for every project and by a hook in the project's settings
-    const marks = () => ({ server: Number(sh('ls /tmp/it-marker-server-* 2>/dev/null | wc -l').trim()), projectHook: Number(sh('ls /tmp/it-marker-hook-* 2>/dev/null | wc -l').trim()) })
-    const marksBefore = marks()
     while (Date.now() - t0 < ms) {
       if (open) await answerApp(who, counts).catch(() => {})
       if (!woke) {
