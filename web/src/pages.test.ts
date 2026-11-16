@@ -684,6 +684,13 @@ describe('what the page’s bar says of the last thing the person did', () => {
       expect(said()).toBe('Sent (2). Your agent gets this when it next waits on this page: it wait --id plan')
       await act(async () => root.unmount())
       host.remove()
+      // However long ago it was done: there is no conversation to be next open
+      recent = [{ at: NOW - 2 * 24 * 60 * 60_000, delivery: 'pending', outcome: null }]
+      Object.assign(PAGE, { pending: 1 })
+      await shown()
+      expect(said()).toBe('Sent. Your agent gets this when it next waits on this page: it wait --id plan')
+      await act(async () => root.unmount())
+      host.remove()
       // A page that has a conversation is spoken of as before
       Object.assign(PAGE, { agent: 'pi', session: { harness: 'pi', id: 'conversation-1' }, pending: 1 })
       recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
@@ -746,10 +753,11 @@ describe('what the page’s bar says of the last thing the person did', () => {
     host.remove()
     // Off: the person turned it off, which is said as that, and not as a fault of the add-on
     Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'claude-code', on: false } })
-    const OFF = 'Sent. Auto-wake is off for Claude Code on the laptop, so this waits until its conversation is open. You can turn Auto-wake on under Machines'
+    // A screen cannot open Machines, and is told where it can be done
+    const OFF = 'Sent. Auto-wake is off for Claude Code on the laptop, so this waits until its conversation is open.'
     expect(await each()).toEqual([
-      [OFF, true],
-      [OFF, false],
+      [`${OFF} You can turn Auto-wake on under Machines`, true],
+      [`${OFF} It can be turned on under Machines, in a browser paired as yours`, false],
     ])
     Object.assign(PAGE, { wake: null, pending: 0 })
   })

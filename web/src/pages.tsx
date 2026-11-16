@@ -1474,14 +1474,14 @@ function ActionStatus({
             working
             ? `Sent. ${agent ?? 'Your agent'} is busy, and gets it when it is free${waiting > 1 ? ` (${waiting})` : ''}`
             : `Sent. ${agent ?? 'Your agent'} has not taken it yet${waiting > 1 ? ` (${waiting})` : ''}. It may be busy, or its conversation may have just closed`
-          : slow && tooOld
-            ? `Done more than a day ago${waiting > 1 ? ` (${waiting})` : ''}. ${agent ?? 'Your agent'} gets it when its conversation is next open`
-            : // No conversation of an app It knows has the page, so no add-on is there to check: it reaches an agent that waits on it
-              slow && !conversation
-              ? `Sent${waiting > 1 ? ` (${waiting})` : ''}. Your agent gets this when it next waits on this page: it wait --id ${slug}`
+          : // No conversation of an app It knows has the page, so no add-on is there to check: it reaches an agent that waits on it, however long ago it was done
+            slow && !conversation
+            ? `Sent${waiting > 1 ? ` (${waiting})` : ''}. Your agent gets this when it next waits on this page: it wait --id ${slug}`
+            : slow && tooOld
+              ? `Done more than a day ago${waiting > 1 ? ` (${waiting})` : ''}. ${agent ?? 'Your agent'} gets it when its conversation is next open`
               : // The person turned Auto-wake off for this app on that machine: said as that, and not as a fault of the add-on
                 slow && wakes && !wakes.on
-                ? `Sent${waiting > 1 ? ` (${waiting})` : ''}. Auto-wake is off for ${agent ?? 'its agent app'} on ${machine ?? 'its machine'}, so this waits until its conversation is open. You can turn Auto-wake on under Machines`
+                ? `Sent${waiting > 1 ? ` (${waiting})` : ''}. Auto-wake is off for ${agent ?? 'its agent app'} on ${machine ?? 'its machine'}, so this waits until its conversation is open. ${mayWake ? 'You can turn Auto-wake on under Machines' : 'It can be turned on under Machines, in a browser paired as yours'}`
                 : slow && !wakes?.on
                   ? `Sent. ${agent ?? 'Your agent'} is not listening${waiting > 1 ? ` (${waiting})` : ''}. Open its conversation and check the add-on under Machines`
                   : `Sent. Waiting for your agent${waiting > 1 ? ` (${waiting})` : ''}`}
