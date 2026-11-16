@@ -1957,6 +1957,16 @@ export function sessionAsked(
 }
 
 /**
+ * Whether Codex may be the agent app that ran this command: the app whose conversation it was
+ * taken to be in, or one whose mark was on it too where which app ran it could not be told.
+ * What is said to an agent in Codex alone is withheld only where another app is known to have
+ * run the command, as one started from inside a Codex conversation, which carries Codex's mark.
+ */
+export function codexMayAsk(asked: Asking | undefined): boolean {
+  return asked !== undefined && (asked.session.harness === 'codex' || asked.unsettled.includes('codex'))
+}
+
+/**
  * Whether It's add-on runs in the Claude Code conversation this command was started from.
  * Claude Code says which conversation a command is run in with CLAUDE_CODE_SESSION_ID, and
  * It's add-on, once it runs there, sets IT_HARNESS and IT_SESSION for the conversation's
