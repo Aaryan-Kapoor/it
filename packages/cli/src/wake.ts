@@ -168,16 +168,19 @@ export function codexMode(version: string | null | undefined, chosen: string): {
 /**
  * Why a reopened Codex run went no further: Codex would not run in the mode it was given exactly,
  * because what an administrator requires of it forbids that mode (Codex 0.167.2,
- * `core/src/config/mod.rs`). Either it refused to start, or it said, as it started, that it put a
- * required value in place of one It gave, which may allow more than was chosen as well as less,
- * and It ended it there, before its turn could do anything. The conversation is then reopened in
- * the next mode down, and the page says so (see `carry`).
+ * `core/src/config/mod.rs`). Either it refused to start, or it said that it put a required value
+ * in place of one It gave, which may allow more than was chosen as well as less, and It ended it
+ * as soon as it read that, which may be after the turn has begun. The conversation is then
+ * reopened in the next mode down, and the page says so (see `carry`). Both are read from what Codex
+ * printed, which also holds what the page sent and what commands printed, so they are a safeguard
+ * that can be fooled, though only into a mode that allows less.
  */
 export const CODEX_MODE_REFUSED = 'Codex would not run in the mode it was to be reopened in, as what its administrator requires forbids it'
 /** What Codex prints where its requirements forbid a mode outright, as `codex exec` ends without a turn. */
 const REFUSED_SAID = /cannot be used because requirements do not allow|fallback to a requirement-compliant value also failed/
-/** What Codex prints as it starts where its requirements put a value of their own in place of one It gave. */
-export const CODEX_CHANGED_SAID = /is disallowed by requirements; falling back to required value/
+/** What Codex prints where its requirements put a value of their own in place of one of the settings It gives (and not, say, of web search). */
+export const CODEX_CHANGED_SAID =
+  /Configured value for `(sandbox_mode|approval_policy|approvals_reviewer|permission_profile|default_permissions)` is disallowed by requirements; falling back/
 
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {
@@ -577,12 +580,31 @@ export function carryOn(
         byCodex = signal === null && how.reviewed === true && printed !== null && interruptedByCodex(tail(printed))
       } catch {}
       if (byCodex) return end(CODEX_REVIEW_ENDED)
-      // Codex would not start in the mode it was given: no turn ran, and nothing of one is to be ended
+      // Codex would not start in the mode it was given. That is read from what it printed, which could
+      // hold those words for another reason, so what it may have left running is ended all the same,
+      // before another mode is tried, and the run is answered for only once nothing of it is left
       let refusedMode = false
       try {
         refusedMode = signal === null && how.app === 'Codex' && printed !== null && REFUSED_SAID.test(tail(printed))
       } catch {}
-      if (refusedMode) return end(CODEX_MODE_REFUSED)
+      if (refusedMode) {
+        ending = true
+        if (!child.pid || since === undefined) {
+          opts.unsure?.()
+          return end(CODEX_MODE_REFUSED)
+        }
+        void endLeft().then(
+          (outcome) => {
+            if (outcome === 'unknown') opts.unsure?.()
+            end(CODEX_MODE_REFUSED)
+          },
+          () => {
+            opts.unsure?.()
+            end(CODEX_MODE_REFUSED)
+          },
+        )
+        return
+      }
       // Ended badly by itself, killed or failing, in the middle of its turn: what it was asked
       // is tried again, and nothing it left running is to be there beside that. What it left
       // is ended as a run that is stopped is, and the run is answered for only once nothing
