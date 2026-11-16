@@ -38,13 +38,7 @@ it tour answer <the action's id> '{"say":"<one sentence>"}'
 
 That is one plain `it` command, which your agent app lets you run without stopping to ask the person, so give every answer and the ideas in exactly that form. Never wrap it in `$(…)`, a here-document, a pipe or a variable: some apps, Codex among them, then ask the person to approve every answer. Inside single quotes nothing ends the command but a single quote, so write every apostrophe in your words as ’, as in `That’s it`, and the rest as JSON has it, with a double quote as `\"`. Keep it on one line, and leave backticks out, which Claude Code takes for a command inside the command.
 
-In Windows PowerShell, which is where Codex runs commands on Windows, the answer is one plain command as well, written another way, since PowerShell takes the double quotes out of an argument it hands a program. Put `--%` straight after `it`, write the JSON in double quotes with each of its own double quotes written as `\"`, and in your words use ’ for an apostrophe and “ ” for quotation marks, and no `%` sign:
-
-```powershell
-it --% tour answer <the action's id> "{\"say\":\"<one sentence>\"}"
-```
-
-`--%` has PowerShell hand the rest to It as it is written, with letters outside ASCII such as × and ★ whole. Never pipe the JSON into It there: Windows PowerShell 5.1 sends what it pipes in ASCII, and every such letter arrives as a question mark. Write every answer below in that way in PowerShell, and the ideas too, as `it --% patch tour-start "{\"end\":…}"`. Where a bare `it` runs another command there, as Pester's `It` does, write `it.exe --%` in its place.
+In PowerShell, which is where Codex runs commands on Windows, write the very same command. There an apostrophe in your words is written as two (`''`), and ’ ‘ “ ” – — ― as `\u2019`, `\u2018`, `\u201c`, `\u201d`, `\u2013`, `\u2014` and `\u2015`, since Codex refuses a command with any of those in it, and with `--%`. Never pipe the JSON into It there: Windows PowerShell 5.1 sends what it pipes in ASCII, and every letter outside ASCII arrives as a question mark. Where a bare `it` runs another command, as Pester's `It` does, write `it.exe` in its place.
 
 The command puts your answer on the page under the part the action came from, with the request it answers, in place of your answer before it. It acknowledges the action and clears up after it. So you never copy `part` or `request` into your answer, each answer is the whole of it, since nothing of the one before stays, and on this page you never run `it ack` or `it wait`. Then do what it printed:
 
@@ -212,7 +206,7 @@ it displays
 
 If the list is empty, or every display in it has `"paired": false`, the person has no screen paired. Tell them to run `it site`, which opens the site in a browser and pairs that browser, and wait for them. Each `it tour show` below brings its page up on the display the person is using, which It chooses by itself, so name none. What `it tour show` prints says which display was asked to bring the page up, in `shownOn`: if that is empty, nobody is looking at the page, so say that in place of the page's line.
 
-Each page of the tour has a fixed id, `tour-` and its name, so every command below can be run as it is written. Keep the `id` and `version` printed by each `it tour show`: together they identify the showing now on the screen. In Windows PowerShell, write every command below that carries JSON in the form the first page's section gives for PowerShell, with `--%` after `it` and the JSON in double quotes with its own written as `\"`, as in `it --% patch tour-button "{\"status\":\"done\"}"`.
+Each page of the tour has a fixed id, `tour-` and its name, so every command below can be run as it is written. Keep the `id` and `version` printed by each `it tour show`: together they identify the showing now on the screen. In PowerShell, write the words of every command below as the first page's section says for PowerShell.
 
 Every page from here on has the buttons that go on, **Next** and **All of them**, which goes back to the menu: you move when one of them arrives, and not before. Each has a line under **Then say**.
 

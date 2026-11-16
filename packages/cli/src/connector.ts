@@ -116,9 +116,9 @@ import {
   STOPPED,
   WAS_CUT_OFF,
   WAS_STOPPED,
-  WOKEN,
   windowsProgram,
   windowsPrograms,
+  wokenNote,
 } from './wake'
 import { wakeWhy } from './wake-why'
 
@@ -3344,7 +3344,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           // not the same note every time.
           await carry(
             click.session!,
-            `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.has(key) ? `\n\n${WAS_STOPPED}` : ''}${toldCutOff ? `\n\n${WAS_CUT_OFF} ${toldLeft}` : ''}`,
+            `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${wokenNote(harness)}${stoppedByPerson.has(key) ? `\n\n${WAS_STOPPED}` : ''}${toldCutOff ? `\n\n${WAS_CUT_OFF} ${toldLeft}` : ''}`,
             // Still wanted at the moment it would start: the app connected, and reopening switched on for it
             () => connected(harness) && wakes(harness, click.at),
             [click, ...withIt].map((c) => c.id),

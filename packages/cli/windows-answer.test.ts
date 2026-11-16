@@ -1,9 +1,10 @@
-// What Windows PowerShell 5.1 hands a program from the line the tour has an agent write there for
-// an answer: `it --% tour answer <id> "{\"say\":\"…\"}"`. The tour once had the JSON piped in, and
-// PowerShell 5.1 sends what it pipes in ASCII, so that × arrived on the whiteboard as "?" (seen in
-// the Windows rehearsal). A command line is UTF-16 on Windows, and `--%` hands the rest of it over
-// as it is written. A program stands in for It here, which prints what it was given: the JSON It
-// would read. Run on Windows alone, where that PowerShell is.
+// What Windows PowerShell 5.1 hands a program from `--%` and JSON in double quotes with its own
+// written `\"`: `it --% tour answer <id> "{\"say\":\"…\"}"`, which agents were taught there and
+// It still takes, and which hands the rest of the line over as it is written, letters outside
+// ASCII whole, where what is piped arrives in ASCII (so that × arrived as "?" on the whiteboard in
+// the Windows rehearsal). JSON in single quotes, which the guide teaches now, is checked through
+// the real shells and the real program by e2e/windows-json.mjs. A program stands in for It here,
+// which prints what it was given. Run on Windows alone, where that PowerShell is.
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
