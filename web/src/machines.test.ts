@@ -292,5 +292,14 @@ describe('how a reopened conversation runs, chosen beside an app’s Auto-wake',
     await shown()
     expect(pick('Codex')).toBeNull()
     expect(pick('Claude Code')).toBeNull()
+    expect(row('Pi').querySelector('.wake-modes')).toBeNull()
+  })
+
+  test('shows Pi’s one way to run, which is all Pi has, as its name and its line, with nothing to choose', async () => {
+    machines = [connected({ modes: ['codex', 'claude-code', 'pi'] })]
+    await shown()
+    expect(pick('Pi')).toBeNull()
+    expect(row('Pi').querySelector('.wake-mode-one')?.textContent).toBe('Full access')
+    expect(line('Pi')).toContain('Pi has no permission modes')
   })
 })
