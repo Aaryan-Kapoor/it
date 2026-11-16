@@ -1406,8 +1406,10 @@ export function machine(): Machine {
 }
 /** Whether this machine holds an identity: it is enrolled where It runs, or has joined an It on another computer. */
 export const enrolledHere = () => existsSync(machineFile())
+/** Whether this machine joined an It that runs on another computer. */
+export const joinedAnother = () => Boolean(readJson<Machine>(machineFile())?.at)
 /** Whether the backend is one this machine does not run itself: the one IT_URL names, or the one on the machine it joined. */
-export const elsewhere = () => Boolean(process.env.IT_URL) || Boolean(readJson<Machine>(machineFile())?.at)
+export const elsewhere = () => Boolean(process.env.IT_URL) || joinedAnother()
 /**
  * The identity this machine had at each It it has left: the id it had there, and nothing else
  * of it. Joining the same It again names that identity, so that the pages its conversations

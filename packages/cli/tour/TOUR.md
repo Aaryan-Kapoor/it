@@ -22,11 +22,11 @@ The tour is one page, `tour-start`, with the whole first run of It on it: a room
 it tour show start
 ```
 
-Show it before anything else, even where the person has no screen paired yet, as when you have just installed It for them. What it prints says in `shownOn` which display was asked to bring it up. Where that is empty because no screen is paired, give them the link that `it site --no-open` prints, to open on this computer: the browser they pair with it opens on this page by itself.
+Show it before anything else, even where the person has no screen paired yet, as when you have just installed It for them. What it prints says in `shownOn` which display was asked to bring it up. Where that is empty because no screen is paired, run `it site`, which opens this page in a browser on this computer where it can, and give them the link it prints: the browser they pair with it opens on this page by itself.
 
 Where showing it printed `"asleep": true`, you are in a Claude Code conversation that has not loaded It's add-on. The page says so to the person in amber, with the line to type, and keeps what they do. Do what `arrives.next` says: give the link and that line in one message, and end your turn.
 
-**Then say:** "It's on your screen. Move the armchair, and I'll answer there." Where you gave them a link, say this in its place, with the link: "Open this to start, and move the armchair: <the link>".
+**Then say:** "It's on your screen. Move the armchair, and I'll answer there." Where you gave them a link, say this in its place, with the link: "Open this to start, and move the armchair: <the link>". Where `it site` also printed `"opened": true`, say this instead: "It's opening in your browser. Move the armchair, and I'll answer there. If no tab appeared, open this: <the link>".
 
 ### One command answers, on every part
 

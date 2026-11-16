@@ -36,6 +36,7 @@ export const ROOT_FILES = [
   't3-asked.json',
   'opencode-unclaimed.json',
   'tour-pictures.json',
+  'browser-opened.json',
   'runs.json',
   'runs.json.unreadable',
   'cut-off.json',
