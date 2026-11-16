@@ -1301,7 +1301,63 @@ try {
     await page.getByRole('button', { name: 'Pair this browser' }).click()
     check('a wrong code is refused, and the browser is told so', (await until(() => page.getByText(SAYS_NO).isVisible())) && !(await paired(page)))
   })
-  const pairs = await ownerAddress()
+  // An agent's `it site`, with no browser paired yet, opens the pairing address in a browser on
+  // this machine. The run names a stand-in for the system's opener, which writes down the words it
+  // was given, so that no real browser is opened. Where this machine is one It takes to have
+  // nobody at its screen, as a container or WSL is, nothing is to be opened.
+  const opener = path.join(tmp, 'opener.mjs')
+  const handedTo = path.join(tmp, 'opener-given.jsonl')
+  writeFileSync(
+    opener,
+    `import { appendFileSync } from 'node:fs'\nappendFileSync(${JSON.stringify(handedTo)}, JSON.stringify(process.argv.slice(2)) + '\\n')\n`,
+  )
+  const asAnAgent = {
+    CODEX_THREAD_ID: 'e2e-opens-a-browser',
+    IT_BROWSER_OPENER: JSON.stringify([process.execPath, opener]),
+    // A run in CI is still to be taken for a person's machine here, and one started over SSH for one with a person at it
+    CI: '',
+    GITHUB_ACTIONS: '',
+    SSH_CONNECTION: '',
+    SSH_TTY: '',
+    SSH_CLIENT: '',
+    ...(process.platform === 'linux' ? { DISPLAY: ':0' } : {}),
+  }
+  const screenless =
+    process.platform === 'linux' &&
+    Boolean(
+      existsSync('/.dockerenv') ||
+        existsSync('/run/.containerenv') ||
+        process.env.container ||
+        process.env.WSL_DISTRO_NAME ||
+        /microsoft/i.test(os.release()) ||
+        process.env.CODESPACES ||
+        process.env.REMOTE_CONTAINERS,
+    )
+  const opening = await patiently(() => it(STACK.home, ['site'], { extraEnv: asAnAgent }))
+  const askedAgain = await patiently(() => it(STACK.home, ['site'], { extraEnv: asAnAgent }))
+  const openerGiven = () =>
+    existsSync(handedTo)
+      ? readFileSync(handedTo, 'utf8')
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+      : []
+  if (!screenless) await until(() => openerGiven().length > 0, 10_000)
+  check(
+    screenless
+      ? 'an agent’s `it site` opens no browser where nobody is taken to be at the screen'
+      : 'an agent’s `it site`, with no browser paired, opens the pairing address once, handed to the opener as one word, and says so, and asked again at once it opens nothing',
+    screenless
+      ? opening.opened === undefined && openerGiven().length === 0
+      : opening.opened === true &&
+          askedAgain.opened === undefined &&
+          JSON.stringify(openerGiven()) === JSON.stringify([[opening.url]]) &&
+          typeof opening.tell === 'string' &&
+          opening.tell.includes('has just been opened at this url'),
+    JSON.stringify({ opened: [opening.opened, askedAgain.opened], handed: openerGiven().map((words) => words.length) }),
+  )
+  // The browser opens the address it was given, as the person's browser would
+  const pairs = screenless ? await ownerAddress() : opening.url
   await page.goto(pairs)
   check(
     'the address `it site` prints pairs the browser as the owner’s, and the code is gone from its address bar',
