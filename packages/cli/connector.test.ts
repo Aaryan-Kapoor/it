@@ -5751,6 +5751,72 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     }
   }, 30_000)
 
+  test('a click claimed for a reopening keeps the wait it began with when it first asked, though it is away from what is offered meanwhile', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    let begun: (() => void) | undefined
+    stand.answer = (name) => {
+      if (name === 'machines:runBegan' && !begun) return new Promise<undefined>((r) => (begun = () => r(undefined)))
+      return undefined
+    }
+    try {
+      const [claude] = await closedClaude()
+      noteConversation(claude!.session, home)
+      await until(() => stand.t3.asked.length === 1)
+      stand.t3.asked[0]!.answer(undefined, true, true)
+      await until(() => begun !== undefined)
+      // Claimed, it is no longer offered here, and a pass goes by
+      offered()
+      await pause(1200)
+      // Long past its fifteen seconds, a listing finds a thread of the folder changed: its wait
+      // is over all the same, and the run goes ahead, which fails here as Claude Code cannot run
+      clock.on(16_000)
+      stand.t3.asked[0]!.search.near = false
+      begun!()
+      await until(() => said.some((line) => line.includes('was not taken by the reopening')), 8000)
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
+  test('a reopening kept from running at the last moment for T3 Code’s word counts nothing against the conversation, so a click no one was at the page for is reopened once T3 Code has said, however often that happened', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    let begun: (() => void) | undefined
+    let begins = 0
+    stand.answer = (name) => {
+      if (name !== 'machines:runBegan') return undefined
+      begins++
+      return new Promise<undefined>((r) => (begun = () => r(undefined)))
+    }
+    try {
+      await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
+      // Made by a timer on the page, with nobody there: such a conversation is reopened three times in five minutes at most
+      const claude = { ...click(9), attended: false, session: { harness: 'claude-code', id: '11111111-2222-4333-8444-000000000009' } }
+      noteConversation(claude.session, home)
+      offered(claude)
+      await until(() => stand.t3.asked.length === 1)
+      stand.t3.asked[0]!.answer(undefined, true, true)
+      const search = stand.t3.asked[0]!.search
+      // Four times over, a listing finds a thread of the folder changed just as the run would begin
+      for (let i = 1; i <= 4; i++) {
+        await until(() => begins === i, 8000)
+        search.near = false
+        begun!()
+        await pause(300)
+        search.near = true
+      }
+      // And then T3 Code has said, and nothing stands in the way: it is reopened once more
+      await until(() => begins === 5, 8000)
+      begun!()
+    } finally {
+      clock.restore()
+    }
+  }, 60_000)
+
   test('a search whose next listing finds a thread of the conversation’s folder changed no longer lets a click past the wait, before that listing’s pass is over', async () => {
     withT3Code()
     stand.t3.slow = true

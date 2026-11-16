@@ -1054,6 +1054,18 @@ describe('how often a conversation is reopened', () => {
     expect(c.has(t + 19_000)).toBe(false)
     expect(c.has(t + 20_000)).toBe(true)
   })
+
+  test('one taken for a reopening that never started is given back, and never past what it holds', () => {
+    const t = 1_800_000_000_000
+    const b = new Budget(2, 60_000, t)
+    expect([b.take(t), b.take(t), b.take(t)]).toEqual([true, true, false])
+    b.giveBack(t + 1)
+    expect([b.take(t + 2), b.take(t + 3)]).toEqual([true, false])
+    const full = new Budget(1, 60_000, t)
+    full.giveBack(t)
+    full.giveBack(t)
+    expect([full.take(t), full.take(t)]).toEqual([true, false])
+  })
 })
 
 describe('when Codex last wrote of a conversation', () => {

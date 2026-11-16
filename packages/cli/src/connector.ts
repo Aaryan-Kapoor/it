@@ -1241,8 +1241,9 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     return search !== undefined && t3NearRead(search)
   }
   /**
-   * When each click's wait for T3 Code before a reopening began, by the clock that only goes
-   * forward. Unlike `t3Waits` it is kept while the click is away from this machine, as while a
+   * When each click first asked T3 Code which thread holds its conversation, by the clock that
+   * only goes forward, which its wait before a reopening is counted from. Unlike `t3Waits` it is
+   * kept while the click is away from this machine, as while it is claimed for a reopening, or a
    * reopening for it runs and fails, so that a click that comes back is not given the wait again:
    * it is let go of a while after the click is no longer offered here.
    */
@@ -1410,8 +1411,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   const t3Unsure = (click: Offered, key: string): boolean => {
     if (!t3Undecided(key)) return false
     if (t3Only(key)) return true
-    const from = t3HoldFrom.get(click.id) ?? t3Waits.get(click.id)
-    return from === undefined || steady() - from < T3_UNDECIDED_MS
+    if (!t3HoldFrom.has(click.id)) t3HoldFrom.set(click.id, steady())
+    return steady() - t3HoldFrom.get(click.id)! < T3_UNDECIDED_MS
   }
   /**
    * Whether a click is kept from reopening its conversation for now, because T3 Code has yet to
@@ -1424,7 +1425,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     if (!t3Undecided(key)) return false
     if (t3Only(key)) return true
     // From when the click first asked T3 Code, where it did
-    if (!t3HoldFrom.has(click.id)) t3HoldFrom.set(click.id, t3Waits.get(click.id) ?? steady())
+    if (!t3HoldFrom.has(click.id)) t3HoldFrom.set(click.id, steady())
     const waited = steady() - t3HoldFrom.get(click.id)!
     if (waited >= T3_UNDECIDED_MS) {
       if (!t3OverSaid.has(click.id)) {
@@ -1502,6 +1503,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     let until = 0
     if (click !== undefined) {
       if (!t3Waits.has(click)) t3Waits.set(click, steady())
+      // And when it first asked at all, which its wait before a reopening is counted from, kept while the click is away
+      if (!t3HoldFrom.has(click)) t3HoldFrom.set(click, steady())
       until = t3Waits.get(click)! + T3_ASKED_MS
     }
     // Not once every thread in the conversation's folder has been read and none holds it
@@ -2690,6 +2693,15 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     }
     return true
   }
+  /** Gives back the reopening `room` counted, for one that was not started after all. */
+  function unroom(key: string, attended: boolean): void {
+    const now = Date.now()
+    machineBudget.giveBack(now)
+    const b = budgets.get(key)
+    if (!b) return
+    b.all.giveBack(now)
+    if (!attended) b.unattended.giveBack(now)
+  }
   /**
    * Runs an app's own command that carries a conversation on, in the folder the conversation
    * was held in, and says so to It for as long as it runs, so that the person sees it and can
@@ -3210,6 +3222,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     const key = follow(keyOf(harness, line))
     /** The other clicks waiting for the same conversation, which go with this one in the same message. */
     let withIt: Offered[] = []
+    /** Whether a reopening was counted against the conversation (`room`), and for clicks someone was at the page for. */
+    let counted: { attended: boolean } | undefined
+    /** Whether the reopening was not started because T3 Code may yet name a thread that holds the conversation. */
+    let forT3 = false
     const giveBack = async () => {
       for (const c of withIt) {
         journal('released', c.id)
@@ -3337,6 +3353,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           await release(click.id).catch(() => {})
           return
         }
+        if (reopening) counted = { attended: [click, ...withIt].some((c) => c.attended !== false) }
       }
       // Getting this far may have taken most of the time the hold is good for (a slow answer,
       // twice over). Then it is made good again before anything is started on the strength of
@@ -3367,6 +3384,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // And once more before the conversation is reopened: a thread of T3 Code found to hold it
       // while the clicks were being claimed has them, and nothing is run beside it
       if (reopening && t3Unsure(click, key)) {
+        // Nothing was started, so nothing is counted against the conversation for it
+        if (counted) unroom(key, counted.attended)
         await giveBack()
         journal('released', click.id)
         await release(click.id).catch(() => {})
@@ -3477,7 +3496,11 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
             `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.has(key) ? `\n\n${WAS_STOPPED}` : ''}${toldCutOff ? `\n\n${WAS_CUT_OFF} ${toldLeft}` : ''}`,
             // Still wanted at the moment it would start: the app connected, reopening switched on
             // for it, and no thread of T3 Code found to hold it, or about to be, meanwhile
-            () => connected(harness) && wakes(harness, click.at) && !t3Unsure(click, key),
+            () => {
+              if (!connected(harness) || !wakes(harness, click.at)) return false
+              forT3 = t3Unsure(click, key)
+              return !forT3
+            },
             [click, ...withIt].map((c) => c.id),
             mine,
           ).then((ended) => {
@@ -3525,6 +3548,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // connector that starts next: nobody stopped it, and nothing is counted against it
       // Never started: given back as it was, with nothing counted against the conversation and no note used up
       if (refused === NOT_STARTED) {
+        // Kept from running for T3 Code's word at the last moment: nothing is counted against the conversation for it
+        if (forT3 && counted) unroom(key, counted.attended)
         lostHold.delete(mine)
         await giveBack()
         journal('released', click.id)

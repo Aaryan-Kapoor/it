@@ -1473,6 +1473,11 @@ export class Budget {
     this.left--
     return true
   }
+  /** Gives back one that was taken for something that never started. */
+  giveBack(now = Date.now()): void {
+    this.fill(now)
+    this.left = Math.min(this.most, this.left + 1)
+  }
 }
 
 const heldAsked = new Map<string, { at: number; held: 'elsewhere' | 'it' | false | null }>()
