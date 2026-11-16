@@ -74,6 +74,10 @@ if (process.argv.includes('--allow-upgrade')) env.IT_REHEARSAL_ALLOW_UPGRADE = '
 // With --launcher-path the guard, when it starts `it serve` itself (an agent-led install), gives it
 // the PATH without the guard's folder too (guard.ts)
 if (process.argv.includes('--launcher-path')) env.IT_REHEARSAL_LAUNCHER_PATH = '1'
+// --pwsh <folder>: PowerShell 7 on the PATH, where its installer puts it (after the system's own
+// folders, as `C:\Program Files\PowerShell\7` is), unpacked from Microsoft's zip; nothing installed
+const pwshDir = arg('pwsh', '')
+if (pwshDir) env.PATH = `${env.PATH};${pwshDir}`
 // --env NAME=VALUE (repeatable): a variable the person has set for their account, so that the
 // service (from the registry) and their shell both have it, as on a participant's laptop
 process.argv.forEach((a, i) => {
@@ -97,10 +101,13 @@ let tokenExpiry = null
 const appEnv = {}
 if (app === 'codex') {
   mkdirSync(f.codexHome, { recursive: true })
-  // Under the owner's account Codex's own Windows sandbox stays off (it changes folder permissions)
+  // Under the owner's account Codex's own Windows sandbox stays off (it changes folder permissions).
+  // --codex-plain: no sandbox_mode at all, as a participant who never changed it has, so Codex
+  // chooses for itself (the sign-in store and the owner's skills turned off are the harness's own)
+  const plain = process.argv.includes('--codex-plain')
   writeFileSync(
     path.join(f.codexHome, 'config.toml'),
-    `model = "${MODEL.model}"\nmodel_reasoning_effort = "${MODEL.effort}"\nsandbox_mode = "danger-full-access"\ncli_auth_credentials_store = "file"\n${ownerSkillsOff()}`,
+    `model = "${MODEL.model}"\nmodel_reasoning_effort = "${MODEL.effort}"\n${plain ? '' : 'sandbox_mode = "danger-full-access"\n'}cli_auth_credentials_store = "file"\n${ownerSkillsOff()}`,
   )
   const auth = codexAuth(f.codexHome)
   tokenExpiry = new Date(auth.expiresAt).toISOString()
