@@ -26,9 +26,18 @@ describe('what is said of an update of the machine It runs on', () => {
     [
       'failed',
       asked('failed', 0, { why: 'The newest release of It could not be fetched (it-linux-x64).' }),
-      { kind: 'failed', tone: 'bad', press: 'Try again', words: 'The update to It 0.1.44 did not finish: The newest release of It could not be fetched (it-linux-x64).' },
+      {
+        kind: 'failed',
+        tone: 'bad',
+        press: 'Try again',
+        words: 'The update to It 0.1.44 did not finish: The newest release of It could not be fetched (it-linux-x64).',
+      },
     ],
-    ['failed without a reason', asked('failed'), { kind: 'failed', tone: 'bad', press: 'Try again', words: 'The update to It 0.1.44 did not finish: it is not known why.' }],
+    [
+      'failed without a reason',
+      asked('failed'),
+      { kind: 'failed', tone: 'bad', press: 'Try again', words: 'The update to It 0.1.44 did not finish: it is not known why.' },
+    ],
     [
       'cut short',
       asked('working', UPGRADE_MS + 1),
@@ -60,7 +69,11 @@ describe('what is said of an update of the machine It runs on', () => {
 
   test('done, said for a few hours with the word for Claude Code, and then nothing', () => {
     const done = { ...desk, connectorVersion: '0.1.44', latest: '0.1.44' }
-    expect(said({ ...done, ...asked('done', 0, { version: '0.1.44' }) }, '0.1.44')).toEqual({ kind: 'done', press: null, words: 'It 0.1.44 is running on the desk.' })
+    expect(said({ ...done, ...asked('done', 0, { version: '0.1.44' }) }, '0.1.44')).toEqual({
+      kind: 'done',
+      press: null,
+      words: 'It 0.1.44 is running on the desk.',
+    })
     expect(said({ ...done, harnesses: [{ id: 'claude-code', addon: 'connected' }], ...asked('done', 0, { version: '0.1.44' }) }, '0.1.44')?.words).toBe(
       'It 0.1.44 is running on the desk. A Claude Code chat that was already open there goes on with the add-on it loaded, which still takes clicks. Type /reload-plugins only in one whose page says it cannot hear it.',
     )
@@ -72,7 +85,11 @@ describe('what is said of an update of the machine It runs on', () => {
 
 describe('what is said of an update of a machine that joined this It', () => {
   test('it waits for the machine It runs on, whatever state its own asking is in, and has no button until then', () => {
-    expect(said(laptop, '0.1.41')).toEqual({ kind: 'first', press: null, words: 'It 0.1.44 is out. This machine runs 0.1.41. Update the machine It runs on first.' })
+    expect(said(laptop, '0.1.41')).toEqual({
+      kind: 'first',
+      press: null,
+      words: 'It 0.1.44 is out. This machine runs 0.1.41. Update the machine It runs on first.',
+    })
     expect(said({ ...laptop, ...asked('failed', 0, { why: 'No room.' }) }, '0.1.41')).toMatchObject({
       kind: 'failed',
       press: null,

@@ -1466,7 +1466,12 @@ describe('a newer It', () => {
   test.each([
     ['at work', { state: 'working', at: NOW }, ['Updating to It 0.1.44…'], 'updating'],
     ['starting again', { state: 'restarting', at: NOW, version: '0.1.44' }, ['Starting again as It 0.1.44…'], 'updating'],
-    ['failed', { state: 'failed', at: NOW, why: 'No room is left on the disk.' }, ['The update to It 0.1.44 did not finish: No room is left on the disk. Try again'], 'update'],
+    [
+      'failed',
+      { state: 'failed', at: NOW, why: 'No room is left on the disk.' },
+      ['The update to It 0.1.44 did not finish: No room is left on the disk. Try again'],
+      'update',
+    ],
     ['cut short', { state: 'working', at: NOW - 16 * 60_000 }, ['The update to It 0.1.44 did not finish. This machine still runs 0.1.41. Try again'], 'update'],
   ])('%s, it says so in the banner and under the machine’s name in the same words', async (_, upgrade, expected, marked) => {
     watched['machines:list'] = [{ ...desk, upgrade }]
@@ -1525,7 +1530,10 @@ describe('a newer It', () => {
   })
 
   test('where nothing is out, there is no banner and no mark', async () => {
-    watched['machines:list'] = [{ ...desk, latest: '0.1.41' }, { ...laptop, latest: null }]
+    watched['machines:list'] = [
+      { ...desk, latest: '0.1.41' },
+      { ...laptop, latest: null },
+    ]
     await start()
     expect(banner()).toBeNull()
     expect(mark()).toBeNull()
@@ -1555,7 +1563,9 @@ describe('a newer It', () => {
 
   test('where the backend refuses the machines for a moment, the pages are shown without the banner or the mark', async () => {
     const { ConvexError } = await import('convex/values')
-    watched['artifacts:list'] = [{ id: 'page-1', slug: 'plan', title: 'Plan', version: 1, updatedAt: NOW, agent: 'pi', machine: 'here', pending: 0, pinned: false }]
+    watched['artifacts:list'] = [
+      { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, updatedAt: NOW, agent: 'pi', machine: 'here', pending: 0, pinned: false },
+    ]
     watched['machines:list'] = () => {
       throw new ConvexError({ code: 'limit', message: 'Too much is being asked at once. Try again in a moment.' })
     }
