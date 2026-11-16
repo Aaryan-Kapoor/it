@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { BOOLEAN, commandLine, parse, VALUED } from './src/args'
+import { BOOLEAN, commandLine, json, parse, strayBackslash, VALUED } from './src/args'
 
 /** The code and the sentence a command line is refused with, or nothing where it is taken. */
 const refused = (argv: string[]) => {
@@ -42,5 +42,45 @@ describe('what a command line is read as', () => {
     expect([...BOOLEAN].filter((name) => VALUED.has(name))).toEqual([])
     expect(parse(['create', '--', '--not-a-switch'])._).toEqual(['create', '--not-a-switch'])
     expect(parse(['notify', 'x', '--button', 'A=a', '--button', 'B=b']).many.button).toEqual(['A=a', 'B=b'])
+  })
+})
+
+describe('JSON with a backslash that begins no escape', () => {
+  test('is found where a backslash is followed by anything JSON does not read after one, and nowhere else', () => {
+    for (const text of [
+      String.raw`{"folder":"D:\work"}`,
+      String.raw`{"folder":"C:\Users\ana"}`,
+      String.raw`{"a":"\u12"}`,
+      '{"a":"x\\',
+      String.raw`{folder:D:\work}`,
+    ])
+      expect([text, strayBackslash(text)]).toEqual([text, true])
+    for (const text of [
+      String.raw`{"folder":"D:\\work"}`,
+      String.raw`{"say":"she said \"hi\""}`,
+      String.raw`{"a":"\/\b\f\n\r\t\u00e9\u2014"}`,
+      String.raw`{"dir":"C:\\"}`,
+      '{"a":1,}',
+    ])
+      expect([text, strayBackslash(text)]).toEqual([text, false])
+  })
+  test('is refused with a sentence that says a backslash in JSON is written twice, and how the JSON is read is not changed', () => {
+    const refusal = (text: string, fromFile?: string) => {
+      try {
+        json(text, 'The patch', fromFile)
+        return undefined
+      } catch (err) {
+        return [(err as Error).message, (err as { hint?: string }).hint]
+      }
+    }
+    expect(refusal(String.raw`{"folder":"D:\work"}`, 'it patch board --file <path>')).toEqual([
+      String.raw`The patch is not valid JSON: a backslash in JSON is written twice, as in "D:\\work".`,
+      undefined,
+    ])
+    expect(refusal('{"a":1,}', 'it patch board --file <path>')).toEqual([
+      'The patch is not valid JSON.',
+      'Write the JSON to a file and run `it patch board --file <path>`, which works the same in every shell.',
+    ])
+    expect(json(String.raw`{"folder":"D:\\work"}`, 'The patch')).toEqual({ folder: String.raw`D:\work` })
   })
 })

@@ -2458,11 +2458,11 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
-  test('JSON that Windows PowerShell 5.1 took the double quotes out of is refused, never guessed back, and the refusal names the file form', async () => {
+  test('JSON that a shell took the double quotes out of is refused, never guessed back, and the refusal names the file form', async () => {
     const m = machine()
     const b = await backend(m, () => ({ revision: 2 }))
     try {
-      const SHELL = 'as when a shell takes them out of an argument, which Windows PowerShell 5.1 does'
+      const SHELL = 'as when a shell takes them out of an argument'
       for (const [words, said] of [
         // `it patch plan '{"number":4}'`, as PowerShell 5.1 hands it over
         [
@@ -2498,6 +2498,28 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
             code: 'invalid',
             message: 'The patch is not valid JSON.',
             hint: 'Write the JSON to a file and run `it patch plan --file <path>`, which works the same in every shell.',
+          },
+        ],
+        // A Windows path written with single backslashes, which JSON does not read: the refusal says why, and names no file, where it would be as wrong
+        [
+          ['patch', 'plan', String.raw`{"folder":"D:\work"}`],
+          { code: 'invalid', message: String.raw`The patch is not valid JSON: a backslash in JSON is written twice, as in "D:\\work".` },
+        ],
+        // The same, as Windows PowerShell 5.1 hands it on where It cannot read it back whole, since it is not JSON on the line either
+        [
+          ['patch', 'plan', String.raw`{folder:D:\work}`],
+          {
+            code: 'invalid',
+            message: String.raw`The patch is not valid JSON: a backslash in JSON is written twice, as in "D:\\work", and it has no double quotes, ${SHELL}.`,
+            hint: 'Write the JSON to a file and run `it patch plan --file <path>`, which works the same in every shell.',
+          },
+        ],
+        [
+          ['set', 'plan', 'cfg', String.raw`{folder:C:\Users\ana}`],
+          {
+            code: 'invalid',
+            message: String.raw`The value {folder:C:\Users\ana} begins and ends as JSON does, but is not JSON: a backslash in JSON is written twice, as in "D:\\work", and it has no double quotes, ${SHELL}. Nothing was changed.`,
+            hint: 'Write the JSON to a file and run `it set plan cfg --file <path>`, which works the same in every shell. To set this very text, write it in the file as a JSON string.',
           },
         ],
         [

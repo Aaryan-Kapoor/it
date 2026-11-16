@@ -134,8 +134,8 @@ export function optionsFor(cmd: string | undefined, a: Args): void {
 
 /**
  * The words a command was given, without Windows PowerShell's stop-parsing word `--%` where it
- * stands first. The tour has an agent write `it --% tour answer …` in PowerShell, which takes the
- * word for itself; cmd and Git Bash hand it on. It is dropped there alone, once, so that the same
+ * stands first. An agent may write `it --% tour answer …` in PowerShell, which takes the word for
+ * itself; cmd and Git Bash hand it on. It is dropped there alone, once, so that the same
  * line works from any shell, and anywhere else it is refused as any switch It does not know is.
  */
 export const commandLine = (argv: string[]): string[] => (argv[0] === '--%' ? argv.slice(1) : argv)
@@ -207,10 +207,12 @@ export function need(value: string | undefined, what: string, usage: string): st
 }
 /**
  * Whether a value is what a shell leaves of a JSON object or array once it has taken every
- * double quote out of it. Windows PowerShell 5.1 does that to each argument it hands to a
- * program, so that `{"number":4}` arrives as `{number:4}`. Such a value is never made back into
- * JSON, since where the quotes were cannot be known: `{note:a,b}` was `{"note":"a,b"}` as
- * easily as `{"note":"a","b":…}`.
+ * double quote out of it. Windows PowerShell 5.1 hands a program `{"number":4}` as `{number:4}`,
+ * and on Windows It reads such JSON back whole from its own command line before any command
+ * begins (`windows-args.ts`), so that a value like this one reaches a command only where that
+ * could not be done, or where the quotes were gone from the line too. Such a value is never made
+ * back into JSON here, since where the quotes were cannot be known: `{note:a,b}` was
+ * `{"note":"a,b"}` as easily as `{"note":"a","b":…}`.
  */
 export function quotesTakenOut(value: string): boolean {
   const t = value.trim()
@@ -224,19 +226,39 @@ export function quotesTakenOut(value: string): boolean {
 }
 /** What a refusal of JSON from the command line says to do instead: give it in a file, which no shell changes. */
 const inAFile = (fromFile: string) => `Write the JSON to a file and run \`${fromFile}\`, which works the same in every shell.`
-const SHELL_TOOK = 'as when a shell takes them out of an argument, which Windows PowerShell 5.1 does'
+const SHELL_TOOK = 'as when a shell takes them out of an argument'
+/**
+ * Whether JSON text has a backslash that begins none of the escapes JSON has, as a Windows path
+ * written with single backslashes does: `{"folder":"D:\work"}`, where `\w` is no escape, and
+ * `{"folder":"C:\Users"}`, where `\u` is not followed by four hexadecimal digits.
+ */
+export function strayBackslash(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '\\') continue
+    const next = text[i + 1]
+    const begins = next === 'u' ? /^[0-9a-fA-F]{4}$/.test(text.slice(i + 2, i + 6)) : next !== undefined && '"\\/bfnrt'.includes(next)
+    if (!begins) return true
+    i++
+  }
+  return false
+}
+const TWICE = 'a backslash in JSON is written twice, as in "D:\\\\work"'
 /**
  * Reads JSON. `fromFile` is the command that reads the same JSON from a file, where it was given
  * on the command line: a refusal names it, since a file is the way that works in every shell.
+ * Where the text has a backslash that begins no escape, the refusal says that a backslash is
+ * written twice, which is most often why a path in JSON is refused.
  */
 export function json(value: string, what: string, fromFile?: string): unknown {
   try {
     return JSON.parse(value)
   } catch {
-    const instead = fromFile === undefined ? undefined : inAFile(fromFile)
-    if (fromFile !== undefined && quotesTakenOut(value))
-      throw new Problem(`${what} is not valid JSON: it has no double quotes, ${SHELL_TOOK}.`, 'invalid', instead)
-    throw new Problem(`${what} is not valid JSON.`, 'invalid', instead)
+    const stray = strayBackslash(value)
+    const taken = fromFile !== undefined && quotesTakenOut(value)
+    // A file is no way round a backslash written once, which is as wrong there, so it is named only where the quotes are gone as well
+    const instead = fromFile === undefined || (stray && !taken) ? undefined : inAFile(fromFile)
+    const why = [stray ? TWICE : '', taken ? `it has no double quotes, ${SHELL_TOOK}` : ''].filter(Boolean).join(', and ')
+    throw new Problem(`${what} is not valid JSON${why ? `: ${why}` : ''}.`, 'invalid', instead)
   }
 }
 /**
@@ -248,7 +270,7 @@ export function json(value: string, what: string, fromFile?: string): unknown {
 export function setValue(value: string, fromFile: string): unknown {
   if (quotesTakenOut(value))
     throw new Problem(
-      `The value ${value} begins and ends as JSON does, but is not JSON and has no double quotes, ${SHELL_TOOK}. Nothing was changed.`,
+      `The value ${value} begins and ends as JSON does, but is not JSON${strayBackslash(value) ? `: ${TWICE}, and it` : ' and'} has no double quotes, ${SHELL_TOOK}. Nothing was changed.`,
       'invalid',
       `${inAFile(fromFile)} To set this very text, write it in the file as a JSON string.`,
     )
