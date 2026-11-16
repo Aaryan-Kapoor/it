@@ -108,6 +108,18 @@ function machine(enrolled = true, here = false) {
   return { home, it, bin }
 }
 
+/** The machine's system answers when asked, and knows of no service of It's. Whether the machine the tests run on has a systemd that can be reached is not what is being tried. */
+const systemAnswers = (m: { bin: string }) => {
+  for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+    writeFileSync(path.join(m.bin, name), `#!/bin/sh\ncase " $* " in *" show-environment "*) exit 0 ;; esac\nexit 1\n`)
+    chmodSync(path.join(m.bin, name), 0o755)
+  }
+}
+
+/** What is said of the background service inside WSL, where Windows stops the Linux it runs in with its last window. */
+const WSL_SAID = (name: string) =>
+  `This Linux runs in WSL, and Windows stops it, and It with it, within a minute of its last window closing. Keep one ${name} window open while you use It: opening one again brings It back.`
+
 interface Ran {
   code: number | null
   /** The signal that ended the command, where one did. */
@@ -528,7 +540,7 @@ describe.skipIf(process.platform === 'win32')('setup prerequisites and diagnosti
     expect(ran.shown).toContain('The backend program could not make the key')
   })
 
-  test('taken ports name the manual second-instance command and the single background service', async () => {
+  test('taken ports name setup again from a free port where another program has them, and the manual second-instance command and the single background service where another It has them', async () => {
     for (const another of [false, true]) {
       const m = machine(false)
       const held = await holdBase(25_000, 10)
@@ -539,9 +551,17 @@ describe.skipIf(process.platform === 'win32')('setup prerequisites and diagnosti
         const said = error(ran)
         expect([ran.code, said.code]).toEqual([1, 'port_taken'])
         expect(said.message).toContain(another ? 'Another It is already running' : `Port ${held.base} is in use`)
-        expect(said.hint).toMatch(/IT_PORT=\d+ it setup --none --no-service/)
-        expect(said.hint).toContain('keep IT_HOME set to this folder')
-        expect(said.hint).toContain('setup without --no-service replaces its registration with this folder')
+        if (another) {
+          expect(said.hint).toMatch(/IT_PORT=\d+ it setup --none --no-service/)
+          expect(said.hint).toContain('keep IT_HOME set to this folder')
+          expect(said.hint).toContain('setup without --no-service replaces its registration with this folder')
+        } else {
+          // The person's own It, set up from another port as a background service like any other
+          expect(said.hint).toMatch(
+            /^Nothing was set up\. To set It up on ports nothing else uses, run setup again with IT_PORT before it: `IT_PORT=\d+ it setup`\./,
+          )
+          expect(said.hint).not.toMatch(/second It|--no-service|it serve/)
+        }
         expect(existsSync(path.join(m.it, 'service.json'))).toBe(false)
         expect(existsSync(path.join(m.it, 'machine.json'))).toBe(false)
       } finally {
@@ -5278,6 +5298,34 @@ describe.skipIf(process.platform === 'win32')(
     })
 
     test.skipIf(process.platform !== 'linux')(
+      'says inside WSL that Windows stops this Linux, and It with it, when its last window closes, and that one window has to stay open',
+      async () => {
+        const m = machine()
+        command(m, 'systemctl', 0)
+        command(m, 'loginctl', 0)
+        const b = await backend(m)
+        const answers = http.createServer((_req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}'))
+        try {
+          const socket = path.join(m.it, 'connector.sock')
+          await new Promise<void>((r) => answers.listen(socket, r))
+          writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'ef'.repeat(24), pid: process.pid, version: 'x', startedAt: 0 }))
+          const ran = await run(m, ['setup', '--yes'], { ...b.env, WSL_DISTRO_NAME: 'Ubuntu-24.04' })
+          expect([ran.code, printed(ran).service]).toEqual([0, expect.objectContaining({ registered: true, note: WSL_SAID('Ubuntu-24.04') })])
+          expect(ran.err.split('\n')).toContain(WSL_SAID('Ubuntu-24.04'))
+          // Not where this Linux is not in WSL, unless the machine running the tests is
+          if (!/microsoft/i.test(os.release())) {
+            const plain = await run(m, ['setup', '--yes'], b.env)
+            expect(plain.err).not.toContain('WSL')
+            expect(printed(plain).service.note).toBeUndefined()
+          }
+        } finally {
+          await new Promise((r) => answers.close(r))
+          await b.close()
+        }
+      },
+    )
+
+    test.skipIf(process.platform !== 'linux')(
       'says that It will stop when the person logs out, where the system would not keep it running past that, at a terminal as in what a program reads',
       async () => {
         const m = machine()
@@ -5587,6 +5635,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
   test('on the machine It runs on, when It is not running, every command says that and how to start it, and `it status` says it with what is known from this machine alone', async () => {
     // Set up and enrolled, and nothing is listening: the service is stopped
     const m = machine(true, true)
+    systemAnswers(m)
     const said = {
       code: 'offline',
       message: 'It is not running on this machine.',
@@ -5785,6 +5834,7 @@ describe.skipIf(process.platform === 'win32')('an It that is not running, under 
       `under ${name}, a command on the machine It runs on says that It is not running and how to start it, whether it holds a token or has to ask for one`,
       async () => {
         const m = machine(true, true)
+        systemAnswers(m)
         const said = {
           code: 'offline',
           message: 'It is not running on this machine.',
@@ -5938,13 +5988,9 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
   const NOT_REGISTERED = 'It is not registered to start by itself. `it setup` registers it, and `it serve` runs it in a terminal until then.'
   const NO_SYSTEMD =
     'Nothing starts It by itself on this machine: no systemd for your account can be reached from here. `it serve` runs it, in a terminal or under a supervisor of your own.'
-  /** The machine's system answers when asked, and knows of no service of It's. Whether the machine the tests run on has a systemd that can be reached is not what is being tried. */
-  const systemAnswers = (m: { bin: string }) => {
-    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
-      writeFileSync(path.join(m.bin, name), `#!/bin/sh\ncase " $* " in *" show-environment "*) exit 0 ;; esac\nexit 1\n`)
-      chmodSync(path.join(m.bin, name), 0o755)
-    }
-  }
+  /** What is said of It not running where nothing could keep it running: to run `it serve` and leave it, and not to go back to setup, which has said that already. */
+  const NOT_RUNNING_UNKEPT =
+    'It is not running on this machine. Nothing can keep It running in the background on this machine, which has no systemd for your account that can be reached from here, as in a container. Run `it serve` in a terminal of your own and leave that terminal open, or under a supervisor of your own. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.'
   /** A machine It is set up on, as far as a command can tell from its folder: its settings, whole, and its identity. Nothing runs there. */
   const setUp = async () => {
     const m = machine(true, true)
@@ -6207,8 +6253,15 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     // Where no systemd can be reached for this person, as in a container, that is said, and `it setup` is not offered as the way to register it
     if (process.platform === 'linux') {
       writeFileSync(path.join(m.bin, 'systemctl'), '#!/bin/sh\nexit 1\n')
-      expect((await atTerminal(m, ['service', 'status'])).shown.split('\n')).toEqual([NOT_RUNNING, NO_SYSTEMD, ''])
+      expect((await atTerminal(m, ['service', 'status'])).shown.split('\n')).toEqual([NOT_RUNNING_UNKEPT, NO_SYSTEMD, ''])
       expect((await atTerminal(m, ['status'])).shown).toContain(NO_SYSTEMD)
+      // And a command that needs It says the same, with nothing that sends the person back to setup
+      const offline = await run(m, ['list'])
+      expect(error(offline)).toEqual({
+        code: 'offline',
+        message: 'It is not running on this machine.',
+        hint: NOT_RUNNING_UNKEPT.replace('It is not running on this machine. ', ''),
+      })
     }
     // Registered, with a stand-in for the system's own command that says the service is active
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {
@@ -6223,6 +6276,21 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
       '',
     ])
     expect(JSON.parse((await atTerminal(m, ['service', 'status', '--json'])).shown)).toMatchObject({ registered: true, running: false })
+    // Inside WSL, where Windows stops this Linux and It with it once its last window closes, that is said beside the service
+    if (process.platform === 'linux') {
+      const wsl = { WSL_DISTRO_NAME: 'Ubuntu' }
+      expect((await atTerminal(m, ['service', 'status'], wsl)).shown.split('\n').slice(1)).toEqual([
+        `It is registered with the system to start by itself (${RUNS}).`,
+        WSL_SAID('Ubuntu'),
+        '',
+      ])
+      expect((await atTerminal(m, ['status'], wsl)).shown.split('\n')).toContain(WSL_SAID('Ubuntu'))
+      // Not where its starting was stopped after it failed, which opening a window does not undo: what is said of that says what would
+      writeFileSync(path.join(m.it, 'startup.json'), JSON.stringify({ key: 'a'.repeat(64), failures: 3, code: 'settings', retryAt: null }))
+      const paused = (await atTerminal(m, ['service', 'status'], wsl)).shown
+      expect(paused).toContain('Automatic startup stopped after 3 failed starts (settings).')
+      expect(paused).not.toContain('WSL')
+    }
   })
 
   for (const [name, runtime] of RUNTIMES)

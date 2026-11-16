@@ -901,6 +901,33 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(readFileSync(path.join(home, 'given'), 'utf8')).toContain('[action click-1]')
     expect(stand.codex).toEqual([])
     expect(conversationProfile({ harness: 'codex', id: 'thread-1' })).toBeUndefined()
+    // Written down as it began and as it ended, by a shortened id, a count and a word, and nothing of where it ran
+    await until(() => said.some((line) => line.includes('ended its reopened run')))
+    const lines = said.filter((line) => /reopened/.test(line))
+    expect(lines.map((line) => line.replace(/\(thread-1\)|\([^)]*\)(?= is| ended)/, '(id)'))).toEqual([
+      'a codex conversation (id) is being reopened for 1 click',
+      'a codex conversation (id) ended its reopened run (done)',
+    ])
+    expect(lines.join('\n')).not.toContain(home)
+  })
+
+  test('Auto-wake writes down a reopening that came to nothing, by the word for how it ended and never the app’s own words.', async () => {
+    stand.profiles = false
+    await start('socket', {}, (home) => {
+      writeFileSync(path.join(home, 'conversations.json'), JSON.stringify({ 'codex:thread-1': { cwd: home, at: Date.now() } }))
+      const bin = path.join(home, 'bin')
+      mkdirSync(bin)
+      writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\ncat > /dev/null\necho "a secret of the person\'s" >&2\nexit 3\n', { mode: 0o755 })
+      process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    })
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await until(() => said.some((line) => line.includes('ended its reopened run')))
+    expect(said.filter((line) => line.includes('ended its reopened run')).map((line) => line.replace(/\([^)]*\)(?= ended)/, '(id)'))).toEqual([
+      'a codex conversation (id) ended its reopened run (exited)',
+    ])
+    expect(said.join('\n')).not.toContain('a secret of the person')
   })
 
   test.each(['open', 'closed'])('A Codex conversation that is %s and whose recorded profile is gone is neither queued nor reopened.', async (state) => {

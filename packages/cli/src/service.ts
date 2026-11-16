@@ -31,6 +31,21 @@ export interface ServiceStatus {
   startup?: ReturnType<typeof startupStatus>
 }
 
+/** Whether this Linux runs inside WSL, where Windows starts it and stops it. */
+export function inWsl(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, release: string = os.release()): boolean {
+  return platform === 'linux' && (Boolean(env.WSL_DISTRO_NAME) || /microsoft/i.test(release))
+}
+/**
+ * What a person is told of a background service inside WSL. Windows stops a WSL distribution a
+ * little while after its last window closes, and the service with it, however the service is
+ * registered, and starts it again when a window is opened. It does nothing to keep WSL running.
+ */
+export function wslSaid(env: NodeJS.ProcessEnv = process.env): string {
+  const name = (env.WSL_DISTRO_NAME ?? '').trim()
+  const window = /^[\w .-]{1,40}$/.test(name) ? `${name} window` : 'WSL window'
+  return `This Linux runs in WSL, and Windows stops it, and It with it, within a minute of its last window closing. Keep one ${window} open while you use It: opening one again brings It back.`
+}
+
 /** The command the service runs: this program, by the address it was started from. */
 export function command(): string[] {
   const script = process.argv[1]
@@ -907,11 +922,15 @@ export function install(): ServiceStatus {
     const asked = run('loginctl', ['show-user', os.userInfo().username, '--property=Linger'], ASKED_MS)
     const stayedNot = asked.ok && /^Linger=no$/m.test(asked.out)
     const stayed = asked.ok && /^Linger=yes$/m.test(asked.out)
-    if (!run('loginctl', ['enable-linger', os.userInfo().username]).ok && !stayed)
+    if (!run('loginctl', ['enable-linger', os.userInfo().username]).ok && !stayed) {
+      const now = status()
       return {
-        ...status(),
-        note: 'It will stop when you log out of this machine: `loginctl enable-linger` was refused. Ask whoever runs the machine to allow it.',
+        ...now,
+        note: ['It will stop when you log out of this machine: `loginctl enable-linger` was refused. Ask whoever runs the machine to allow it.', now.note]
+          .filter(Boolean)
+          .join(' '),
       }
+    }
     try {
       if (stayedNot && !existsSync(lingerNote())) writeFileSync(lingerNote(), '', { mode: 0o600 })
       const previous = before === null ? undefined : systemdHome(before)
@@ -1017,7 +1036,11 @@ export function uninstall(patience = STOP_MS): void {
 export function status(): ServiceStatus {
   const system = systemStatus()
   const startup = startupStatus()
-  return startup ? { ...system, startup } : system
+  // Inside WSL, what Windows does with the Linux It runs in is said beside a service that starts
+  // by itself, and not beside one whose starting was stopped after it failed: opening a window
+  // would not bring that one back, and what is said of its startup says what would
+  const wsl = system.registered && process.platform === 'linux' && inWsl() && !startup?.paused ? { note: wslSaid() } : {}
+  return { ...system, ...wsl, ...(startup ? { startup } : {}) }
 }
 
 function systemStatus(): ServiceStatus {
@@ -1028,7 +1051,8 @@ function systemStatus(): ServiceStatus {
     return { registered: false, state: 'not installed', where: process.platform === 'darwin' ? plistPath() : unitPath() }
   if (process.platform === 'linux') {
     const r = run('systemctl', ['--user', 'is-active', `${NAME}.service`], ASKED_MS)
-    return { registered: existsSync(unitPath()) && enabled(), state: r.out.split('\n')[0] || 'unknown', where: unitPath() }
+    const registered = existsSync(unitPath()) && enabled()
+    return { registered, state: r.out.split('\n')[0] || 'unknown', where: unitPath() }
   }
   if (process.platform === 'darwin') {
     const r = run('launchctl', ['print', `${launchdDomain()}/${LABEL}`], ASKED_MS)

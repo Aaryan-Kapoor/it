@@ -409,13 +409,26 @@ describe('where a page is shown', () => {
     })
     // The address was refused, or nothing answered at it: either way no page is there to say hello
     expect(host.querySelector('iframe')?.getAttribute('src')).toBe(`${PAGES}/open/ticket-for-mount-1`)
-    await act(() => vi.advanceTimersByTimeAsync(20_000))
+    // For the first seconds it is opening, as a page usually is
+    await act(() => vi.advanceTimersByTimeAsync(7_000))
+    expect(host.textContent).toBe('Opening…')
+    // Then where pages come from is said, with what to do where only the site's port reaches this browser, as over SSH
+    const port = new URL(PAGES).port
+    await act(() => vi.advanceTimersByTimeAsync(1_000))
+    expect(host.textContent).toBe(
+      `Opening…Pages are shown from port ${port} of the machine It runs on. If this browser reaches It through a forwarded port, forward port ${port} too, under the same number.`,
+    )
+    await act(() => vi.advanceTimersByTimeAsync(12_000))
     expect(host.querySelector('iframe')).toBeNull()
-    expect(host.textContent).toContain('The page did not load.')
+    expect(host.textContent).toContain(
+      `The page did not load from port ${port}. Check the connection, and if this browser reaches It through a forwarded port, forward port ${port} too, under the same number.`,
+    )
     expect(asked('mounts:create').length).toBe(1)
     await act(() => vi.advanceTimersByTimeAsync(5_000))
     expect(asked('mounts:create').length).toBe(2)
     expect(host.querySelector('iframe')?.getAttribute('src')).toBe(`${PAGES}/open/ticket-for-mount-2`)
+    // The new showing begins as any does, opening, with nothing said yet of where pages come from
+    expect(host.textContent).toBe('Opening…')
   })
 })
 
