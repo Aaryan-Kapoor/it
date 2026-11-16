@@ -18,6 +18,20 @@ export interface Profile {
   configPresent?: boolean
 }
 
+/**
+ * The home a program started with this environment finds for itself, as Node and Bun find it:
+ * USERPROFILE on Windows and HOME elsewhere. Undefined where that variable is not set, and the
+ * program would ask the system instead.
+ */
+function homeFor(env: NodeJS.ProcessEnv): string | undefined {
+  return (process.platform === 'win32' ? env.USERPROFILE : env.HOME) || undefined
+}
+
+/** The folder Claude Code keeps its settings and conversations in, when it is started with this environment. */
+export function claudeFolder(env: NodeJS.ProcessEnv): string {
+  return env.CLAUDE_CONFIG_DIR ?? path.join(homeFor(env) ?? os.homedir(), '.claude')
+}
+
 /** Capture defaults too, so a service's other profile cannot silently replace them. */
 export function profileOf(harness: string, env: NodeJS.ProcessEnv = process.env): Profile | undefined {
   const keys = KEYS[harness]
@@ -91,5 +105,22 @@ export function profileEnvironment(harness: string, value: unknown, base: NodeJS
   }
   // Inline configuration belongs to the service, never to the recorded conversation.
   if (harness === 'opencode') delete env.OPENCODE_CONFIG_CONTENT
+  // Claude Code started with CLAUDE_CONFIG_DIR naming its usual folder is not the Claude Code a
+  // terminal starts without it: it reads its main settings file (.claude.json, which holds a
+  // Console sign-in's key, the servers added for every project and which folders are trusted)
+  // inside that folder rather than beside it, and on macOS looks for its sign-in under another
+  // name in the Keychain. The usual folder is recorded both where nothing was set and where the
+  // person set the variable to that folder, and nothing set is by far the more common, so such
+  // a conversation is started again with nothing set, and never with the service's own setting.
+  // Where what the service was given by the shell that set it up, or by the person's own shell,
+  // names that same folder, the person does set it, and it stays named. All of this only where
+  // the home the reopened Claude Code finds for itself is the one the folder is in.
+  const home = homeFor(env)
+  const usual = home === undefined ? undefined : path.join(home, '.claude')
+  const same = (a: string, b: string) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b)
+  const named = profile.paths.CLAUDE_CONFIG_DIR
+  const given = base.CLAUDE_CONFIG_DIR
+  if (harness === 'claude-code' && named && usual !== undefined && same(named, usual) && !(given && same(path.resolve(given), usual)))
+    delete env.CLAUDE_CONFIG_DIR
   return env
 }

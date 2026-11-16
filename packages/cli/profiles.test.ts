@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, expect, test } from 'vitest'
-import { profileEnvironment, profileOf, readProfile } from './src/profiles'
+import { claudeFolder, profileEnvironment, profileOf, readProfile } from './src/profiles'
 import { carryOn } from './src/wake'
 
 const made: string[] = []
@@ -110,4 +110,139 @@ test('OpenCode with no global config directory can restore its intact data profi
   expect(typeof profileEnvironment('opencode', profile, {})).toBe('object')
   rmSync(path.join(first, 'data', 'opencode'), { recursive: true })
   expect(profileEnvironment('opencode', profile, {})).toMatch(/profile is gone/)
+})
+
+/** Runs what is given as if on another system, which is what decides the person's own folder. */
+function on<T>(platform: NodeJS.Platform, run: () => T): T {
+  const was = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { ...was, value: platform })
+  try {
+    return run()
+  } finally {
+    Object.defineProperty(process, 'platform', was)
+  }
+}
+/** What names a home on every system: HOME, and USERPROFILE, which Windows goes by. */
+const homeIs = (home: string) => ({ HOME: home, USERPROFILE: home })
+/** A home of its own with Claude Code's usual folder in it. */
+const homeWithClaude = () => {
+  const home = folder()
+  mkdirSync(path.join(home, '.claude'))
+  return home
+}
+
+test('A Claude Code conversation started with no CLAUDE_CONFIG_DIR is reopened with none, as a terminal starts it.', () => {
+  const home = homeWithClaude()
+  const profile = profileOf('claude-code', { ...homeIs(home), PATH: '/bin' })!
+  // What is recorded is what 0.1.42 records too: the usual folder, named
+  expect(profile.paths).toEqual({ CLAUDE_CONFIG_DIR: path.join(home, '.claude') })
+  const env = profileEnvironment('claude-code', profile, { ...homeIs(home), PATH: '/bin' })
+  expect(env).toEqual({ ...homeIs(home), PATH: '/bin' })
+  expect(Object.hasOwn(env as object, 'CLAUDE_CONFIG_DIR')).toBe(false)
+  // Its transcript and It's add-on are looked for in the folder Claude Code itself then uses
+  expect(claudeFolder(env as NodeJS.ProcessEnv)).toBe(path.join(home, '.claude'))
+})
+
+test('A service with another CLAUDE_CONFIG_DIR does not hand it to a conversation that used the usual folder.', () => {
+  const home = homeWithClaude()
+  const other = folder()
+  const profile = profileOf('claude-code', homeIs(home))!
+  const env = profileEnvironment('claude-code', profile, { ...homeIs(home), CLAUDE_CONFIG_DIR: other, PATH: '/bin' })
+  expect(env).toEqual({ ...homeIs(home), PATH: '/bin' })
+  expect(claudeFolder(env as NodeJS.ProcessEnv)).toBe(path.join(home, '.claude'))
+})
+
+test('Where the service or the person’s own shell names the usual folder too, the person sets it, and it stays named.', () => {
+  const home = homeWithClaude()
+  const usual = path.join(home, '.claude')
+  const profile = profileOf('claude-code', homeIs(home))!
+  expect(profileEnvironment('claude-code', profile, { ...homeIs(home), CLAUDE_CONFIG_DIR: usual })).toEqual({ ...homeIs(home), CLAUDE_CONFIG_DIR: usual })
+  // An empty setting names no folder
+  expect(profileEnvironment('claude-code', profile, { ...homeIs(home), CLAUDE_CONFIG_DIR: '' })).toEqual(homeIs(home))
+})
+
+test('A Claude Code conversation started with another folder is reopened with that folder named, whatever the service has.', () => {
+  const home = homeWithClaude()
+  const other = folder()
+  const profile = profileOf('claude-code', { ...homeIs(home), CLAUDE_CONFIG_DIR: other })!
+  expect(profile.paths).toEqual({ CLAUDE_CONFIG_DIR: other })
+  expect(profileEnvironment('claude-code', profile, homeIs(home))).toEqual({ ...homeIs(home), CLAUDE_CONFIG_DIR: other })
+  expect(profileEnvironment('claude-code', profile, { ...homeIs(home), CLAUDE_CONFIG_DIR: path.join(home, '.claude') })).toEqual({
+    ...homeIs(home),
+    CLAUDE_CONFIG_DIR: other,
+  })
+  // A usual folder of another home is not this home's usual folder, and is named as it was recorded
+  const elsewhere = homeWithClaude()
+  const theirs = profileOf('claude-code', homeIs(elsewhere))!
+  expect(profileEnvironment('claude-code', theirs, homeIs(home))).toEqual({ ...homeIs(home), CLAUDE_CONFIG_DIR: path.join(elsewhere, '.claude') })
+})
+
+test('The usual folder is the one under USERPROFILE on Windows and under HOME elsewhere.', () => {
+  const profileHome = homeWithClaude()
+  const shellHome = homeWithClaude()
+  const base = { USERPROFILE: profileHome, HOME: shellHome }
+  // Recorded on Windows with nothing set: the folder under USERPROFILE
+  const windows = on('win32', () => profileOf('claude-code', base))!
+  expect(windows.paths.CLAUDE_CONFIG_DIR).toBe(path.join(profileHome, '.claude'))
+  expect(on('win32', () => profileEnvironment('claude-code', windows, base))).toEqual(base)
+  // Windows does not tell the case of a folder's name apart
+  const shouted = { ...base, USERPROFILE: profileHome.toUpperCase() }
+  expect(on('win32', () => profileEnvironment('claude-code', windows, shouted))).toEqual(shouted)
+  // On Linux or macOS that folder is not the usual one, and is named, and there case counts
+  expect(on('linux', () => profileEnvironment('claude-code', windows, base))).toEqual({ ...base, CLAUDE_CONFIG_DIR: path.join(profileHome, '.claude') })
+  // Recorded on Linux or macOS with nothing set: the folder under HOME
+  const posix = on('darwin', () => profileOf('claude-code', base))!
+  expect(posix.paths.CLAUDE_CONFIG_DIR).toBe(path.join(shellHome, '.claude'))
+  expect(on('darwin', () => profileEnvironment('claude-code', posix, base))).toEqual(base)
+  expect(on('darwin', () => profileEnvironment('claude-code', posix, { ...base, HOME: shellHome.toUpperCase() }))).toEqual({
+    ...base,
+    HOME: shellHome.toUpperCase(),
+    CLAUDE_CONFIG_DIR: path.join(shellHome, '.claude'),
+  })
+  // Where the variable the reopened app finds its home by is not set, it would ask the system for
+  // its home, which may be another: the recorded folder stays named
+  const alone = { USERPROFILE: profileHome }
+  expect(on('linux', () => profileEnvironment('claude-code', windows, alone))).toEqual({ ...alone, CLAUDE_CONFIG_DIR: path.join(profileHome, '.claude') })
+  const shellOnly = { HOME: shellHome }
+  expect(on('win32', () => profileEnvironment('claude-code', posix, shellOnly))).toEqual({ ...shellOnly, CLAUDE_CONFIG_DIR: path.join(shellHome, '.claude') })
+})
+
+test('Only Claude Code is reopened without its variable: the other apps keep their usual folder named.', () => {
+  const home = folder()
+  for (const dir of ['.codex', '.hermes', path.join('.pi', 'agent')]) mkdirSync(path.join(home, dir), { recursive: true })
+  for (const [app, key] of [
+    ['codex', 'CODEX_HOME'],
+    ['pi', 'PI_CODING_AGENT_DIR'],
+    ['hermes', 'HERMES_HOME'],
+  ] as const) {
+    const env = profileEnvironment(app, profileOf(app, { HOME: home }), { HOME: home }) as NodeJS.ProcessEnv
+    expect(env[key]).toBe(profileOf(app, { HOME: home })!.paths[key])
+  }
+})
+
+test('The reopened Claude Code process is given no CLAUDE_CONFIG_DIR where the conversation had none.', async () => {
+  const home = homeWithClaude()
+  const work = folder()
+  const env = profileEnvironment('claude-code', profileOf('claude-code', homeIs(home)), { ...process.env, ...homeIs(home), CLAUDE_CONFIG_DIR: folder() })
+  if (typeof env === 'string') throw new Error(env)
+  const output = path.join(work, 'received.json')
+  const result = await carryOn(
+    {
+      app: 'The profile test process',
+      argv: [process.execPath, '-e', 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify(process.env.CLAUDE_CONFIG_DIR ?? null))', output],
+      input: 'a test message',
+    },
+    work,
+    { harness: 'claude-code', session: 'test-session' },
+    { env },
+  )
+  expect(result).toBeNull()
+  expect(JSON.parse(readFileSync(output, 'utf8'))).toBeNull()
+})
+
+test('Claude Code’s folder is the one CLAUDE_CONFIG_DIR names, even empty, and otherwise the usual one of the home it is given.', () => {
+  const home = folder()
+  expect(claudeFolder({ ...homeIs(home), CLAUDE_CONFIG_DIR: '' })).toBe('')
+  expect(claudeFolder({ ...homeIs(home), CLAUDE_CONFIG_DIR: path.join(home, 'other') })).toBe(path.join(home, 'other'))
+  expect(claudeFolder(homeIs(home))).toBe(path.join(home, '.claude'))
 })
