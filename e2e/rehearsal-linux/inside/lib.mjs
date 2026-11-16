@@ -27,7 +27,9 @@ export function step(name, seen = {}, ok = true) {
 }
 
 // ---------- the terminal ----------
-export const SESSION = 'agent'
+export let SESSION = 'agent'
+/** Which tmux session the person's typing and looking go to (a second terminal is another session). */
+export const useSession = (s) => { SESSION = s }
 export function tmux(...args) {
   return execFileSync('tmux', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 }

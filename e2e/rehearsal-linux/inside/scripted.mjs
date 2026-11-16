@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { chromium } from 'playwright'
 import { answerApp, busy, quitApp, settle, startApp } from './agent.mjs'
-import { key, saveTerminal, screen, setRunDir, sleep, step, type } from './lib.mjs'
+import { key, saveTerminal, screen, setRunDir, sleep, step, type, useSession } from './lib.mjs'
 
 const [scenario, app, dir] = process.argv.slice(2).filter(Boolean)
 setRunDir(dir)
@@ -1123,6 +1123,66 @@ async function SITES() {
   verdict.reason = `SITES ${kind}/${variant}: It ${tally.it}, Sites ${tally.sites}, both ${tally.both}, other ${tally.other} of ${N}`
 }
 
+/**
+ * Two conversations of the same app, each in its own terminal and folder, each with its own page:
+ * every click is answered by the conversation that made the page, and with one of them quit, a click
+ * on its page reopens that one and not the other.
+ */
+async function TWOSAME() {
+  const who = app
+  const COIN = /flip|coin|heads|tails/i
+  const one = await freshPage(who, 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.', PIZZA)
+  if (!one.url) return
+  const ctx = browser.contexts()[0]
+  // The second terminal, in a folder of its own
+  sh('mkdir -p ~/work2; tmux new-session -d -s agent2 -x 104 -y 56 -c /home/ana/work2')
+  useSession('agent2')
+  await sleep(2000)
+  await startApp(who, counts)
+  await ask(who, 'Make me a page with It with one button, Flip a coin. When I press it, flip a coin and tell me on the page what came up and one word of advice.')
+  await settle(who, counts, 600_000, 8000)
+  let two = null
+  for (let i = 0; i < 40 && !two; i++) {
+    for (const pg of ctx.pages()) if (pg.url().includes('/p/') && pg.url() !== one.url && COIN.test(await shown(pg).catch(() => ''))) two = pg
+    if (!two) await sleep(3000)
+  }
+  if (!check('the second conversation put its own page on the screen', !!two)) return
+  const url2 = two.url()
+  const marks = (sess) => sh(`tmux capture-pane -p -J -S - -t ${sess}`)
+  const clickOn = async (p, url, re, nth, what, who2, ms = 240_000) => {
+    await p.goto(url).catch(() => {})
+    await sleep(5000)
+    const before = await shown(p)
+    const t0 = Date.now()
+    const a1 = marks('agent').length, a2 = marks('agent2').length
+    const picked = await press(p, re, nth)
+    step(`${what}: presses "${picked}"`, { bar: await bar(p) })
+    while (Date.now() - t0 < ms) {
+      const now = await shown(p).catch(() => before)
+      if (now !== before && answerLine(before, now, picked ?? '')) {
+        const grew1 = marks('agent').length - a1, grew2 = marks('agent2').length - a2
+        return check(`${what}: answered on its own page`, true, { seconds: Math.round((Date.now() - t0) / 1000), fresh: answerLine(before, now, picked ?? ''), terminalThatMoved: who2 ? undefined : (grew1 > grew2 ? 'the first' : grew2 > grew1 ? 'the second' : 'neither'), firstGrew: grew1, secondGrew: grew2 })
+      }
+      await sleep(2000)
+    }
+    return check(`${what}: answered on its own page`, false, { seconds: Math.round(ms / 1000), bars: await bar(p) })
+  }
+  await clickOn(two, url2, COIN, 0, 'both open: the coin page (the second conversation\'s)')
+  await clickOn(one.p, one.url, PIZZA, 1, 'both open: the pizza page (the first conversation\'s)')
+  // The second one quit: its page's click reopens it, and the first stays as it is
+  useSession('agent2')
+  await quitApp(who)
+  await sleep(20_000)
+  const had = new Set(appProcs(who).map((x) => x.pid))
+  const r = await clickOn(two, url2, COIN, 0, 'the second conversation quit, the first open: the coin page', 'quit')
+  const woke = appProcs(who).filter((x) => !had.has(x.pid))
+  step('what was reopened', { reopened: woke.map((x) => x.args).join(' | ') || 'none seen (Codex answers from its app-server)', first: appProcs(who).filter((x) => had.has(x.pid)).map((x) => x.args).join(' | ') })
+  useSession('agent')
+  verdict.ok = verdict.checks.every((c) => c.ok)
+  verdict.reason = verdict.ok ? null : `does not hold: ${verdict.checks.filter((c) => !c.ok).map((c) => c.what).join('; ')}`
+  return r
+}
+
 async function hostDoes(what, ms = 2400_000) {
   sh('rm -f /var/lib/rehearsal-flow/host-done')
   writeFileSync('/var/lib/rehearsal-flow/host-now', what)
@@ -1253,6 +1313,7 @@ async function main() {
     else if (scenario === 'STANDIN') await STANDIN()
     else if (scenario.startsWith('OTHERAPP')) await OTHERAPP()
     else if (scenario.startsWith('SITES')) await SITES()
+    else if (scenario === 'TWOSAME') await TWOSAME()
     else if (scenario === 'MISC') await MISC()
     else if (scenario === 'WAKEBOOT2') await WAKEBOOT2()
     else check(`no scenario ${scenario}`, false)
