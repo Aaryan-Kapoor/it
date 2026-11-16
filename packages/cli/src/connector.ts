@@ -180,9 +180,21 @@ const CLAUDE_QUIET_MS = 20_000
  * reopened: a moment, so that a few things done in quick succession go in the one message. No
  * longer than that. A conversation that is open asks for its clicks every second, and one that
  * has not asked for five is not listening, which is known the instant the click arrives: there
- * is nothing more to wait for.
+ * is nothing more to wait for. Except just after this connector began to listen (`ADDONS_HEARD_MS`).
  */
 const SETTLE_MS = 300
+/**
+ * How long after this connector began to listen nothing is reopened, except a Codex
+ * conversation. Until then a conversation that has not asked has not been silent: it may be
+ * open, with an add-on that has yet to find this connector. Every add-on of an app whose
+ * conversations are taken to be open by their add-on's asking (Claude Code, Pi, OpenCode and
+ * Hermes) reads the connector's note again at most every three seconds while none answers it,
+ * asks once a second, and gives up on a question after three seconds: so the add-on of every
+ * open conversation has asked within seven seconds of the note being written. Reopened before
+ * that, an open conversation would run a second copy of itself beside the person's own, with
+ * the click. Codex says by its own lock whether a conversation is open, which is known at once.
+ */
+export const ADDONS_HEARD_MS = 7_000
 /** How far ahead of It's clock this machine's may be and still be let in: a proof made further ahead is refused at `/bridge/token`. */
 const CLOCK_SLACK_MS = 60_000
 const SERVE_MOST = 8 // how many clicks one answer to an add-on carries
@@ -525,7 +537,11 @@ const lockLost = () => new Problem('Another connector has taken this folder’s 
  * anything is done as the folder's connector that another could not undo: before it listens,
  * and before it writes down where it listens.
  */
-export async function runConnector(say: (line: string) => void): Promise<void> {
+export async function runConnector(
+  say: (line: string) => void,
+  /** How long after it begins to listen it reopens nothing: `ADDONS_HEARD_MS`, which only a test that is about something else shortens. */
+  addonsHeardMs = ADDONS_HEARD_MS,
+): Promise<void> {
   const other = await alreadyRunning()
   if (other) throw alreadyThere(other)
   const left = lockHolder()
@@ -537,7 +553,7 @@ export async function runConnector(say: (line: string) => void): Promise<void> {
       () => {
         mine = true
         if (left !== undefined && left !== process.pid) say(`took over from a connector that is gone and left its lock behind (pid ${left})`)
-        return connecting(say, discovery)
+        return connecting(say, discovery, addonsHeardMs)
       },
       0,
     )
@@ -644,7 +660,7 @@ const FITS_EVERY_MS = 60_000
 const REFUSED_EVERY_MS = 5_000
 
 /** Everything the connector does once the folder's lock is its own. */
-async function connecting(say: (line: string) => void, discovery: ClaudeDiscovery): Promise<void> {
+async function connecting(say: (line: string) => void, discovery: ClaudeDiscovery, addonsHeardMs: number): Promise<void> {
   // Something that goes wrong again and again (the backend cannot be reached, say) is said once
   // every ten minutes for each thing it is about, however many other lines come in between
   const saidAt = new Map<string, number>()
@@ -2181,6 +2197,11 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     clockSeen = now
     return now + setBack
   }
+  /** When this connector began to listen to add-ons, by the clock that only goes forward: once its note says where it is (`ADDONS_HEARD_MS`). */
+  let listeningSince: number | undefined
+  /** How long a conversation of this app that is not listening must wait yet before it may be reopened, since the add-ons of open ones may not have found this connector yet. */
+  const heardLeft = (harness: string): number =>
+    harness === 'codex' ? 0 : listeningSince === undefined ? addonsHeardMs : Math.max(0, listeningSince + addonsHeardMs - performance.now())
   /** When this machine first saw each click that waits for a closed conversation, by the clock that is never set back. */
   const firstSeen = new Map<string, number>()
   /**
@@ -3923,7 +3944,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           // that the click waits, and goes with the next reopening. Nor while it is at work in a
           // window It cannot see into: it is looked at again once it is quiet. Never where It
           // knows it is open without It's add-on (`keptShut`): that click waits for /reload-plugins, or /reload in Pi.
-          const left = SETTLE_MS - beenThere(click, now)
+          // Nor in the first seconds after this connector began to listen, when an open
+          // conversation's add-on may not have found it yet (`ADDONS_HEARD_MS`): heard by then,
+          // the conversation is given the click by its add-on instead.
+          const left = Math.max(SETTLE_MS - beenThere(click, now), heardLeft(session.harness))
           if (left > 0) {
             waitingBehind.add(key)
             soon(left + 10)
@@ -4431,6 +4455,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   }
   try {
     writePrivate(infoFile(), info)
+    listeningSince = performance.now()
   } catch (err) {
     // Where the note cannot be written, on a disk that is full say, nothing can find this
     // connector. What it opened is closed, so that the next try, half a minute on, does not

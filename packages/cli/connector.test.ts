@@ -328,6 +328,7 @@ vi.mock('./src/lib', async (original) => {
 })
 
 import {
+  ADDONS_HEARD_MS,
   CODEX_INTERRUPTED,
   type ConnectorInfo,
   infoFile,
@@ -401,7 +402,13 @@ const CONNECTED = [
  */
 async function start(
   over: 'socket' | 'port' = 'socket',
-  apps: { wanted?: string[]; found?: typeof stand.found; deferSettings?: boolean } = {},
+  apps: {
+    wanted?: string[]
+    found?: typeof stand.found
+    deferSettings?: boolean
+    /** How long after it starts it reopens nothing: none, unless a test is about that wait. */
+    addonsHeardMs?: number
+  } = {},
   /** What is put into the folder before the connector starts in it. */
   first: (home: string) => void = () => {},
   existing?: string,
@@ -419,7 +426,7 @@ async function start(
   if (over === 'port') process.env.IT_CONNECTOR_PORT = '1'
   else delete process.env.IT_CONNECTOR_PORT
   const had = { SIGTERM: new Set(process.listeners('SIGTERM')), SIGINT: new Set(process.listeners('SIGINT')) }
-  const running = runConnector((line) => said.push(line))
+  const running = runConnector((line) => said.push(line), apps.addonsHeardMs ?? 0)
   // It is up once it answers, watches the backend, and can be told to stop
   const stopper = () => process.listeners('SIGTERM').find((l) => !had.SIGTERM.has(l)) as ((signal: string) => void) | undefined
   await until(() => existsSync(infoFile()) && stand.watching.has('delivery:inboxPage') && stand.watching.has('machines:me') && stopper() !== undefined)
@@ -1302,8 +1309,8 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
   })
 
   /** A connector that reopens conversations of `harness`, with what is noted of the conversation `id` written in its folder before it starts. */
-  const reopensFor = async (harness: string, id: string, note: Record<string, unknown> | null, heard = false) => {
-    await start('socket', { wanted: [harness], found: [...CONNECTED, { id: harness, version: '2.1.300', addon: 'connected' }] }, (home) => {
+  const reopensFor = async (harness: string, id: string, note: Record<string, unknown> | null, heard = false, addonsHeardMs = 0) => {
+    await start('socket', { wanted: [harness], found: [...CONNECTED, { id: harness, version: '2.1.300', addon: 'connected' }], addonsHeardMs }, (home) => {
       if (note)
         writeFileSync(
           path.join(home, 'conversations.json'),
@@ -1547,6 +1554,61 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(said.some((line) => line.includes('was not taken by the reopening of its conversation'))).toBe(true)
     await until(() => stand.recorded.some((r) => r.name === 'agent.woken'))
     expect(stand.recorded.find((r) => r.name === 'agent.woken')!.properties).toEqual({ result: 'declined', agent: 'claude-code', why: 'no_folder' })
+  })
+
+  describe('a click that waited while It was stopped, for a conversation that may be open', () => {
+    const ask = (harness: string, id: string) =>
+      local<{ clicks: { id: string }[] }>(`/clicks?harness=${harness}&session=${encodeURIComponent(id)}`, { method: 'POST', body: {} })
+    const reopenings = () => failures().length + stand.calls.filter((c) => c.name === 'machines:runBegan').length
+
+    test.each([
+      ['claude-code', CLAUDE_ID],
+      ['pi', 'conversation-1'],
+      ['opencode', 'conversation-1'],
+      ['hermes', 'conversation-1'],
+    ])(
+      'is given to the open %s conversation whose add-on finds the connector a few seconds after it starts, and that conversation is not reopened beside it',
+      async (harness, id) => {
+        await reopensFor(harness, id, null, false, ADDONS_HEARD_MS)
+        offered({ ...click(1), session: { harness, id } })
+        // An add-on reads the connector's note again every three seconds while no connector answers it, and asks every second
+        await pause(3500)
+        expect(reopenings()).toBe(0)
+        await ask(harness, id)
+        await until(async () => ((await ask(harness, id))?.clicks ?? []).some((c) => c.id === 'click-1'))
+        await pause(500)
+        expect(reopenings()).toBe(0)
+      },
+      20_000,
+    )
+
+    test('is reopened for once the add-ons have had their time, where its conversation is closed, and a click that comes after that is reopened for at once', async () => {
+      await reopensFor('claude-code', CLAUDE_ID, null, false, ADDONS_HEARD_MS)
+      offered({ ...click(1), session: { harness: 'claude-code', id: CLAUDE_ID } })
+      await pause(1000)
+      expect(reopenings()).toBe(0)
+      const real = performance.now.bind(performance)
+      const later = vi.spyOn(performance, 'now').mockImplementation(() => real() + ADDONS_HEARD_MS)
+      try {
+        await until(() => failures().length > 0, 3000)
+        expect(failures()[0]!.args).toEqual({ for: { harness: 'claude-code', id: CLAUDE_ID }, why: GONE })
+        // Long after the connector started, nothing waits for an add-on that is silent: the click is reopened for after the usual moment
+        const asked = real()
+        offered({ ...click(2), session: { harness: 'claude-code', id: '22222222-2222-4333-8444-555555555555' } })
+        await until(() => failures().length > 1, 3000)
+        expect(real() - asked).toBeLessThan(1500)
+      } finally {
+        later.mockRestore()
+      }
+    })
+
+    test('for Codex is reopened for at once, since Codex says by its own lock whether a conversation is open', async () => {
+      await reopensFor('codex', 'thread-1', null, false, ADDONS_HEARD_MS)
+      stand.closed.add('thread-1')
+      offered(click(1))
+      await until(() => failures().length > 0, 3000)
+      expect(failures()[0]!.args).toEqual({ for: { harness: 'codex', id: 'thread-1' }, why: GONE })
+    })
   })
 
   test('a Pi conversation that published its page without It’s add-on, and has not been heard from since, is never reopened, and its page says to type /reload in it', async () => {
