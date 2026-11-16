@@ -460,7 +460,7 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
       {
         id: 'auto',
         label: 'Auto',
-        says: 'Claude Code’s own safety check decides what would have asked you.',
+        says: 'Edits in its folder run freely; Claude Code’s safety check decides most of the rest.',
       },
       {
         id: 'acceptEdits',
@@ -470,12 +470,12 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
       {
         id: 'default',
         label: 'Manual',
-        says: 'Runs It’s commands and reads files; anything that would ask you is refused.',
+        says: 'Runs It’s commands, reads files and what your settings allow; the rest is refused.',
       },
       {
         id: 'dontAsk',
         label: 'Don’t Ask',
-        says: 'Like Manual: runs It’s commands and reads files, and refuses everything else.',
+        says: 'As Manual: It’s commands, reads and what your settings allow; the rest is refused.',
       },
       {
         id: 'conversation',

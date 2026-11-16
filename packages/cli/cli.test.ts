@@ -933,17 +933,17 @@ describe('what a machine tells It of itself, to an It that may be older', () => 
   const full = { connectorVersion: '0.2.0', harnesses: [], system: 'win32', paused: '' }
   const plainest = { connectorVersion: '0.2.0', harnesses: [] }
 
-  test('on Windows the fullest report says too that the machine reopens closed conversations there, and each refused is made again with less', () => {
-    expect(reports('win32', full, plainest, { plain: false, unsaid: false })).toEqual([{ ...full, reopens: true }, full, plainest])
+  test('on Windows the fullest report says too that the machine reopens closed conversations there, and in the mode chosen, and each refused is made again with less', () => {
+    expect(reports('win32', full, plainest, { plain: false, unsaid: false })).toEqual([{ ...full, reopens: true, modes: true }, full, plainest])
     // An It that refused the word from Windows lately is given the rest, and one that refused the fuller report the plainest
     expect(reports('win32', full, plainest, { plain: false, unsaid: true })).toEqual([full, plainest])
     expect(reports('win32', full, plainest, { plain: true, unsaid: false })).toEqual([plainest])
   })
 
-  test('on Linux and macOS it says nothing of it, since the system is enough there', () => {
+  test('on Linux and macOS it says nothing of reopening there, since the system is enough, and on every system that it reopens in the mode chosen', () => {
     for (const platform of ['linux', 'darwin']) {
       const said = { ...full, system: platform }
-      expect(reports(platform, said, plainest, { plain: false, unsaid: false })).toEqual([said, plainest])
+      expect(reports(platform, said, plainest, { plain: false, unsaid: false })).toEqual([{ ...said, modes: true }, said, plainest])
       expect(reports(platform, said, plainest, { plain: true, unsaid: false })).toEqual([plainest])
     }
   })

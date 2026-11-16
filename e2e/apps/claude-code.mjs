@@ -24,7 +24,7 @@
 // asked of the same stand-in, changes the page again. `--setup-only` stops before the loop.
 import { spawn, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
@@ -240,7 +240,7 @@ const clickTurns = []
 /** What Claude Code gave back of each step of each reopened turn, by the turn's number among the clicks and the step's name. */
 const wokenSteps = {}
 /** The number of the reopened turn whose first answer the stand-in keeps waiting, so that the bar can be looked at while it runs. */
-let slowTurn = 0
+let slowTurn = 2
 /** What a reopened turn sets the page's state to: the first as before, and each after it by its number. */
 const pressedBy = (n) => (n === 2 ? 'again' : `woken-${n}`)
 
@@ -590,6 +590,45 @@ try {
       'a click on the page of the closed conversation reopens it through Claude Code’s own command, as a new turn asked of the model',
       woken !== undefined,
       JSON.stringify({ action: second, turns: model.turns.map((t) => t.text.slice(0, 120) || `(${t.results.length} results)`) }),
+    )
+    // The conversation was begun without a window and with no mode, which Claude Code 2.1.302 and later start in Manual, and
+    // earlier ones in Auto. Reopened in Auto, the starting value, a Manual conversation is said on the bar to run in more than
+    // it was in, once Claude Code has written down that it does; one that was in Auto is said nothing of
+    const firstMode = (() => {
+      for (const folder of readdirSync(path.join(folders.claude, 'projects'))) {
+        const file = path.join(folders.claude, 'projects', folder, `${session}.jsonl`)
+        if (!existsSync(file)) continue
+        for (const row of readFileSync(file, 'utf8').split('\n')) {
+          try {
+            const r = JSON.parse(row)
+            if (r.type === 'user' && r.permissionMode) return r.permissionMode
+          } catch {}
+        }
+      }
+      return null
+    })()
+    const raised =
+      'This conversation was last in Manual, and It reopened it in Auto. To keep it in Manual, choose Manual beside Claude Code’s Auto-wake under Machines'
+    const barNow = async (ms) => {
+      const end = Date.now() + ms
+      let said = ''
+      while (Date.now() < end) {
+        said = await tab
+          .locator('.page-nav')
+          .innerText({ timeout: 1000 })
+          .catch(() => '')
+        if (said.includes(raised)) return said
+        await sleep(250)
+      }
+      return said
+    }
+    const barThen = await barNow(firstMode === 'default' ? patience(20_000) : 4000)
+    check(
+      firstMode === 'default'
+        ? 'reopened in Auto, a conversation last in Manual is said on the bar to run in more, and how to keep it in Manual'
+        : 'reopened in Auto, a conversation last in Auto is said nothing of on the bar',
+      firstMode === 'default' ? barThen.includes(raised) : !barThen.includes('This conversation was last in'),
+      JSON.stringify({ firstMode, barThen }),
     )
     check(
       'its newest user message is that click in It’s wording, `[It] … [action <id>]`, with It’s note on reopening after it',

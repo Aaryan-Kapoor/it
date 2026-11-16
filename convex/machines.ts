@@ -45,6 +45,8 @@ const view = (m: Doc<'machines'>) => ({
   harnesses: m.harnesses ?? [],
   wanted: m.wanted ?? [],
   reopens: m.reopens ?? false,
+  // Whether its It reopens a conversation in the mode chosen for it, as it says in its reports: one from before the choice runs each app as it always did
+  modes: m.modes ?? false,
   // Only where It reopens conversations at all: what was switched on for a machine of another system says nothing
   wakes: wakesOn(m.system, m.reopens) ? (m.wakes ?? []) : [],
   // The permission mode each app's reopened conversations run in, where one was chosen: any other is `automatic` (see `wakeModeOf`)
@@ -617,8 +619,10 @@ export const report = mutation({
     system: v.optional(v.string()),
     paused: v.optional(v.string()),
     reopens: v.optional(v.boolean()),
+    /** That its It reopens a conversation in the mode chosen for it: one from before the choice does not say so. */
+    modes: v.optional(v.boolean()),
   },
-  handler: async (ctx, { connectorVersion, harnesses, latest, system, paused, reopens }) => {
+  handler: async (ctx, { connectorVersion, harnesses, latest, system, paused, reopens, modes }) => {
     const { machine } = await requireMachine(ctx)
     const clean = kept(harnesses)
     // The newest version it has learned of is kept until it learns of another: a report made before it has looked says nothing of it
@@ -636,6 +640,8 @@ export const report = mutation({
     // That it reopens closed conversations on Windows, likewise: kept from a report that does not
     // say, as the plainer report does not, and only where it comes from the same version
     const can = reopens === undefined ? (moved ? undefined : machine.reopens) : reopens || undefined
+    // That it reopens a conversation in the mode chosen for it, likewise
+    const chooses = modes === undefined ? (moved ? undefined : machine.modes) : modes || undefined
     const first = firstWord(machine, on, can)
     // Turning an add-on back on is over, done or not, once the machine no longer has it turned off: nothing is left to say of it
     const turns = (machine.turnOn ?? []).filter(
@@ -649,6 +655,7 @@ export const report = mutation({
       machine.system === on &&
       machine.paused === held &&
       machine.reopens === can &&
+      machine.modes === chooses &&
       !first
     // Written each time it says so, less a little for a report that comes a moment early: the
     // site calls a machine off once it has been quiet for a few of these
@@ -662,6 +669,7 @@ export const report = mutation({
         system: on,
         paused: held,
         reopens: can,
+        modes: chooses,
         turnOn: turns.length ? turns : undefined,
         ...(first ?? {}),
         // An upgrade that was asked for on the site is over once the machine runs another version:

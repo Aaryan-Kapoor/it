@@ -164,6 +164,7 @@ describe('how a reopened conversation runs, chosen beside an app’s Auto-wake',
         { harness: 'codex', since: NOW },
         { harness: 'pi', since: NOW },
       ],
+      modes: true,
       ...over,
     })
   const pick = (name: string) => row(name).querySelector<HTMLSelectElement>('.wake-modes select')
@@ -227,7 +228,7 @@ describe('how a reopened conversation runs, chosen beside an app’s Auto-wake',
       ['dontAsk', 'Don’t Ask'],
       ['conversation', 'The conversation’s own'],
     ])
-    expect(line('Claude Code')).toBe('Claude Code’s own safety check decides what would have asked you.')
+    expect(line('Claude Code')).toBe('Edits in its folder run freely; Claude Code’s safety check decides most of the rest.')
     expect(asked.filter((a) => a.name === 'machines:wakeMode')).toEqual([])
     // Auto picked is a choice of the person's own, which a machine on an older It then holds to
     await choose('Claude Code', 'auto')
@@ -259,6 +260,17 @@ describe('how a reopened conversation runs, chosen beside an app’s Auto-wake',
     } finally {
       delete WAKE_MODES.pi
     }
+  })
+
+  test('on a machine whose It is from before the choice, says what that It does in place of the mode’s line', async () => {
+    machines = [connected({ modes: false })]
+    await shown()
+    expect(line('Claude Code')).toBe('This machine runs an older It, which reopens Claude Code as it always did until it is updated.')
+    act(() => root.unmount())
+    host.remove()
+    machines = [connected({ modes: false, wakeModes: [{ harness: 'claude-code', mode: 'default' }] })]
+    await shown()
+    expect(line('Claude Code')).toBe('This machine runs an older It, which holds to this choice only once it is updated.')
   })
 
   test('is shown for no app without an entry, and not where Auto-wake is off', async () => {

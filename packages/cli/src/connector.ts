@@ -335,14 +335,15 @@ function claimedAndLeft(): string[] {
 
 /**
  * What a machine tells It of itself in a report, fullest first, each to be made in turn where It
- * refuses the one before, as an It older than this program does. On Windows the fullest says as
- * well that the machine reopens closed conversations there (see `wakesOn`). Where It refused the
- * fuller report lately (`plain`), it is given the plainest alone, and where it refused the word
- * from Windows lately (`unsaid`), it is given the rest.
+ * refuses the one before, as an It older than this program does. The fullest says as well that
+ * this It reopens a conversation in the mode chosen for its app (`modes`, see `runBegan`), and on
+ * Windows that the machine reopens closed conversations there (see `wakesOn`). Where It refused the
+ * fuller report lately (`plain`), it is given the plainest alone, and where it refused those words
+ * lately (`unsaid`), it is given the rest.
  */
 export function reports<T extends object, U extends object>(platform: string, full: T, plainest: U, lately: { plain: boolean; unsaid: boolean }): (T | U)[] {
   if (lately.plain) return [plainest]
-  return platform === 'win32' && !lately.unsaid ? [{ ...full, reopens: true }, full, plainest] : [full, plainest]
+  return lately.unsaid ? [full, plainest] : [{ ...full, ...(platform === 'win32' ? { reopens: true } : {}), modes: true }, full, plainest]
 }
 /** Whether It refused a call for what it said, as an It that is older than this program refuses a field it does not know, and not because the call did not reach it or was not answered. */
 export const refusedFor = (err: unknown): boolean => ['error', 'invalid'].includes((err as { code?: string })?.code ?? '')
@@ -2485,14 +2486,35 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     return new Map(Object.entries(kept as Record<string, [number, number | null][]>))
   })()
   /** Writes that note down, as it stands: the last twenty runs of each of the last three hundred conversations. */
-  const keepClaudeRuns = () => {
-    if (!claudeRuns || over) return
+  /**
+   * Writes that note down, as it stands, and says whether it was written. It is kept small without
+   * ever letting a turn of one of It's runs count as anyone's choice: the oldest two runs of a
+   * conversation with more than twenty are kept as one, from the first one's beginning to the
+   * second one's end, and a conversation let go of where there are more than three hundred leaves
+   * its last end behind under `*`, before which every turn written down as `sdk-cli` is taken
+   * for one that may be It's, in every conversation.
+   */
+  const keepClaudeRuns = (): boolean => {
+    if (!claudeRuns || over) return true
     try {
-      while (claudeRuns.size > 300) claudeRuns.delete(claudeRuns.keys().next().value!)
+      for (const [id, runs] of claudeRuns)
+        while (id !== '*' && runs.length > 20) {
+          const [first, second] = runs.splice(0, 2) as [[number, number | null], [number, number | null]]
+          runs.unshift([first[0], second[1]])
+        }
+      while ([...claudeRuns.keys()].filter((id) => id !== '*').length > 300) {
+        const id = [...claudeRuns.keys()].find((k) => k !== '*')!
+        const ends = claudeRuns.get(id)!.map(([, to]) => to ?? Date.now())
+        claudeRuns.delete(id)
+        const before = claudeRuns.get('*')?.[0]?.[1] ?? 0
+        claudeRuns.set('*', [[0, Math.max(before, ...ends)]])
+      }
       if (claudeRuns.size) writePrivate(claudeRunsFile(), Object.fromEntries(claudeRuns))
       else rmSync(claudeRunsFile(), { force: true })
+      return true
     } catch (err) {
       seldom('claude-runs', `the note of when It ran each Claude Code conversation could not be written (${(err as NodeJS.ErrnoException).code ?? 'error'})`)
+      return false
     }
   }
   /**
@@ -2517,7 +2539,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    */
   const endUnnotedClaudeRuns = () => {
     if (!claudeRuns || unread) return
-    for (const [id, runs] of claudeRuns) if (runs.some(([, to]) => to === null) && !unsettled.has(`claude-code:${id}`)) endClaudeRuns(`claude-code:${id}`)
+    for (const [id, runs] of claudeRuns)
+      if (id !== '*' && runs.some(([, to]) => to === null) && !unsettled.has(`claude-code:${id}`)) endClaudeRuns(`claude-code:${id}`)
   }
   const running = new Map<string, Run>()
   /**
@@ -2818,7 +2841,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   /** The last line a reopened app printed where it ended badly, by conversation, until its next reopening. */
   const saidLast = new Map<string, string>()
   /** It's runs of a Claude Code conversation, as `claudeModeOf` takes them. */
-  const claudeRunsOf = (id: string): ClaudeRuns | null => (claudeRuns ? (claudeRuns.get(id) ?? []) : null)
+  const claudeRunsOf = (id: string): ClaudeRuns | null => (claudeRuns ? [...(claudeRuns.get(id) ?? []), ...(claudeRuns.get('*') ?? [])] : null)
   /**
    * The permission modes Claude Code lately started a reopened run in another mode when asked
    * for, and when, for each folder of Claude Code's settings: for an hour after, a run with the
@@ -2886,7 +2909,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
             : null,
         // Which modes this Claude Code would not give lately, and whether it refuses Bypass Permissions here
         ...(now.harness === 'claude-code'
-          ? { refused: refusedNow(claudeFolder(env)), root: process.platform !== 'win32' && claudeRefusesRoot(env, process.getuid?.()) }
+          ? { refused: refusedNow(`${claudeFolder(env)}\0${cwd}`), root: process.platform !== 'win32' && claudeRefusesRoot(env, process.getuid?.()) }
           : {}),
         itAt: [
           ...new Set([path.join(home(), 'bin', process.platform === 'win32' ? 'it.exe' : 'it'), process.execPath].filter((p) => /[\\/]it(\.exe)?$/.test(p))),
@@ -2981,8 +3004,9 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // and the modes' names: the page says it in It's words (`wakeNoteText`)
       const noted = (why: 'refused' | 'unreviewed' | 'raised', mode: string, instead: string) =>
         call('mutation', api.machines.runNoted, { for: session, run: runId, why, mode, instead }).catch(() => {})
-      // For Claude Code: where the mode it is started in is less than chosen, or more than the conversation was last in
-      if (how.note) void noted(how.note.why, how.note.mode, how.note.instead)
+      // For Claude Code, where the mode it is started in is less than chosen, as It knows before it starts: said
+      // before it starts, and waited for, so that nothing said once Claude Code has written down its mode comes before it
+      if (how.note?.why === 'refused') await noted(how.note.why, how.note.mode, how.note.instead)
       if (runMode.unreviewed && chosen) void noted('unreviewed', chosen, runMode.mode ?? '')
       // Codex saying, as it starts, that its administrator's requirements put a value of their own in
       // place of one It gave, which may allow more than was chosen: the run is ended there
@@ -3046,7 +3070,12 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       if (ofRuns && claudeRuns) {
         claudeRuns.delete(now.id)
         claudeRuns.set(now.id, ofRuns)
-        keepClaudeRuns()
+        // Not written down, it is not to run: a turn something in it began could be taken, after a restart, for a choice of anyone's
+        if (!keepClaudeRuns()) {
+          claudeRuns.get(now.id)?.pop()
+          ended = 'It could not write down that it was reopening this conversation, so it was not reopened'
+          return ended
+        }
       }
       // And the mode Claude Code began it in is looked for as soon as it has written it down. Where
       // that is not the mode It asked for, Claude Code would not give that one, as where Auto is not
@@ -3061,10 +3090,12 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
             const given = claudeRunMode(now.id, cwd, runFrom, claudeFolder(env))
             if (given === null) continue
             if (given !== asked.mode && asked.mode) {
-              claudeRefused.set(refusedKey(claudeFolder(env), asked.mode), Date.now())
+              claudeRefused.set(refusedKey(`${claudeFolder(env)}\0${cwd}`, asked.mode), Date.now())
               say(`${a(now.harness)} conversation (${short(key)}) was reopened, and Claude Code started it in another permission mode than It asked for`)
               await noted('refused', asked.mode, given)
             }
+            // Where it runs in more than the conversation was last in, that is said once Claude Code has written down that it does
+            else if (asked.note?.why === 'raised') await noted('raised', asked.note.mode, asked.note.instead)
             return
           }
         })()
@@ -3079,7 +3110,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // Claude Code refused Bypass Permissions as it began, because it runs as root, and started
       // nothing: it is reopened at once in the next mode down, and later runs ask for that one first
       if (ended === CLAUDE_REFUSED_ROOT && !stop.signal.aborted && !uncertain) {
-        claudeRefused.set(refusedKey(claudeFolder(env), 'bypassPermissions'), Date.now())
+        claudeRefused.set(refusedKey(`${claudeFolder(env)}\0${cwd}`, 'bypassPermissions'), Date.now())
         const instead = carryingWith(runMode.mode)
         if (typeof instead !== 'string' && instead.mode && instead.mode !== 'bypassPermissions') {
           say(
@@ -4676,7 +4707,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           unread = false
           unreadWhereItWas = false
           // The person says that nothing It reopened before is running: nothing of a run with no end is either
-          if (claudeRuns) for (const id of claudeRuns.keys()) endClaudeRuns(`claude-code:${id}`)
+          if (claudeRuns) for (const id of claudeRuns.keys()) if (id !== '*') endClaudeRuns(`claude-code:${id}`)
         }
         for (const [id, { for: tried }] of [...toPark]) if (tried && back.has(keyOf(tried.harness, tried.id))) toPark.delete(id)
         for (const key of back) revive(key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1))
@@ -5357,7 +5388,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           // The word from Windows is left out only where It refused the report for what it said. A
           // report that did not reach It, or was not answered, says nothing of that, and made again
           // without the word just after an update, it would have It take the word away
-          if ('reopens' in args) {
+          if ('modes' in args) {
             if (!refusedFor(err)) throw err
             unsaidUntil = Date.now() + 10 * 60_000
           } else plainUntil = Date.now() + 10 * 60_000

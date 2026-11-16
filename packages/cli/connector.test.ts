@@ -5973,11 +5973,6 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
       // And then T3 Code has said, and nothing stands in the way: it is reopened once more
       await until(() => begins === 5, 8000)
       begun!()
-      // And that run, which goes ahead, is said to run in more than the conversation was last in
-      await until(() => stand.calls.some((c) => c.name === 'machines:runNoted'), 8000)
-      expect(stand.calls.filter((c) => c.name === 'machines:runNoted').map((c) => [c.args.why, c.args.mode, c.args.instead])).toEqual([
-        ['raised', 'default', 'auto'],
-      ])
     } finally {
       clock.restore()
     }
