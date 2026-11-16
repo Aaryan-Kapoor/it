@@ -919,7 +919,7 @@ async function STANDIN() {
     while (Date.now() - t0 < 300_000) {
       const at = Math.round((Date.now() - t0) / 1000)
       step(`${how}: ${at} s after`, { status: status(), claudeProcesses: appProcs(who).map((x) => x.args.slice(0, 70)), log: newLog().join(' || ').slice(0, 600), standin: sh('tail -2 /tmp/standin.log').replace(/\n/g, ' | ').slice(0, 200) })
-      if (!clicked && at >= 30) {
+      if (!clicked && at >= Number((process.env.STANDIN_CLICK_AT ?? sh('cat /etc/rehearsal-click-at 2>/dev/null').trim()) || 30)) {
         clicked = true
         clickAt = at
         answered = await click(`${how}: a click ${at} s after`, 240_000)
