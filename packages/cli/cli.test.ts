@@ -35,7 +35,9 @@ import {
   currentSession,
   forgetMachine,
   harnessEnv,
+  inHome,
   home as installationFolder,
+  itFirst,
   joinLine,
   notReached,
   overClashes,
@@ -1626,6 +1628,43 @@ describe('running a harness’s own commands', () => {
   })
 })
 
+describe('It’s own folder of programs, first on the PATH of an app It starts', () => {
+  test('on Linux and macOS it is put first, and nothing else is changed', () => {
+    expect(itFirst({ PATH: '/usr/bin:/bin', HOME: '/home/a' }, 'linux', '/home/a/.it/bin')).toEqual({ PATH: '/home/a/.it/bin:/usr/bin:/bin', HOME: '/home/a' })
+  })
+  test('a PATH that has it already has it once, and first, so that another `it` on the PATH is not the one found', () => {
+    for (const given of ['/opt/other:/home/a/.it/bin:/bin', '/opt/other:/home/a/.it/bin/:/bin:/home/a/.it/bin', '/home/a/.it/bin:/opt/other:/bin'])
+      expect(itFirst({ PATH: given }, 'darwin', '/home/a/.it/bin').PATH).toBe('/home/a/.it/bin:/opt/other:/bin')
+  })
+  test('an empty PATH, or none, is It’s folder alone, with no empty folder after it to stand for wherever a shell is', () => {
+    expect(itFirst({ PATH: '' }, 'linux', '/home/a/.it/bin')).toEqual({ PATH: '/home/a/.it/bin' })
+    expect(itFirst({}, 'linux', '/home/a/.it/bin')).toEqual({ PATH: '/home/a/.it/bin' })
+    // Away from Windows a variable's name is spelled as it is, and `Path` is some other variable
+    expect(itFirst({ Path: '/x' }, 'linux', '/home/a/.it/bin')).toEqual({ Path: '/x', PATH: '/home/a/.it/bin' })
+  })
+  test('on Windows the PATH keeps the name it is spelled with, and It’s folder is known however its PATH spells it', () => {
+    const bin = 'C:\\Users\\a\\.it\\bin'
+    expect(itFirst({ Path: 'C:\\Windows\\system32;C:\\Windows' }, 'win32', bin)).toEqual({ Path: `${bin};C:\\Windows\\system32;C:\\Windows` })
+    expect(itFirst({ PATH: 'C:\\Windows' }, 'win32', bin)).toEqual({ PATH: `${bin};C:\\Windows` })
+    // Both spellings, as a plain object can have: each has It's folder first
+    expect(itFirst({ PATH: 'C:\\Windows', Path: 'C:\\Tools' }, 'win32', bin)).toEqual({ PATH: `${bin};C:\\Windows`, Path: `${bin};C:\\Tools` })
+    expect(itFirst({ Path: 'C:\\Windows;c:/users/A/.IT/bin/;C:\\Tools' }, 'win32', bin)).toEqual({ Path: `${bin};C:\\Windows;C:\\Tools` })
+    expect(itFirst({ Path: '' }, 'win32', bin)).toEqual({ Path: bin })
+  })
+  test('what an app this program starts is given has this It’s folder first, though this program’s own PATH does not have it', () => {
+    const before = process.env.PATH
+    try {
+      process.env.PATH = ['/opt/other', '/usr/bin'].join(path.delimiter)
+      const env = harnessEnv()
+      const named = Object.keys(env).filter((k) => (process.platform === 'win32' ? k.toUpperCase() === 'PATH' : k === 'PATH'))
+      expect(named.length).toBeGreaterThan(0)
+      for (const k of named) expect(env[k]).toBe([inHome('bin'), '/opt/other', '/usr/bin'].join(path.delimiter))
+    } finally {
+      process.env.PATH = before
+    }
+  })
+})
+
 describe('reaching the connector over a port', () => {
   const TOKEN = 'ab'.repeat(24)
   let home: string
@@ -1698,6 +1737,8 @@ describe('reaching the connector over a port', () => {
 
 describe('background service definitions', () => {
   const cmd = ['/usr/bin/node', '/home/a user/it.mjs', 'serve', '--log', '/tmp/log']
+  // The PATH a service is given: It's own folder of programs first, then the shell's
+  const withIt = (given: string, itHome = installationFolder()) => [path.join(itHome, 'bin'), given].join(path.delimiter)
   test('systemd: every word quoted, percent signs escaped, restarts always', () => {
     const unit = systemdUnit(cmd, { PATH: '/bin:/usr/bin', IT_HOME: '/tmp/100%/it' })
     expect(unit).toContain('ExecStart="/usr/bin/node" "/home/a user/it.mjs" "serve" "--log" "/tmp/log"')
@@ -1743,7 +1784,13 @@ describe('background service definitions', () => {
       HERMES_HOME: '/work/hermes',
       OTHER: 'x',
     })
-    expect(env).toEqual({ PATH: '/bin', IT_HOME: '/h', CODEX_HOME: '/work/codex', CLAUDE_CONFIG_DIR: '/work/claude', HERMES_HOME: '/work/hermes' })
+    expect(env).toEqual({
+      PATH: withIt('/bin', '/h'),
+      IT_HOME: '/h',
+      CODEX_HOME: '/work/codex',
+      CLAUDE_CONFIG_DIR: '/work/claude',
+      HERMES_HOME: '/work/hermes',
+    })
   })
   test('launchd: values are escaped for XML', () => {
     const plist = launchdPlist(['/bin/it', 'a<b>&c'], { PATH: '/bin' })
@@ -1781,7 +1828,8 @@ describe('background service definitions', () => {
     ])
     const [unit, plist, launcher] = [systemdUnit(cmd, env), launchdPlist(cmd, env), windowsLauncher(cmd, env)]
     for (const [k, v] of Object.entries(env)) {
-      expect(unit).toContain(`Environment="${k}=${v}"\n`)
+      // systemd reads a backslash as more than itself, and the unit writes one twice: the PATH on Windows has some
+      expect(unit).toContain(`Environment="${k}=${v.replace(/\\/g, '\\\\')}"\n`)
       expect(plist).toContain(`<key>${k}</key><string>${v}</string>`)
       expect(launcher).toContain(`\r\nset ${k}=${v}\r\n`)
     }
@@ -1790,7 +1838,7 @@ describe('background service definitions', () => {
   })
   test('the service keeps how much It keeps on the disk, as the shell that installed it said, and is never given an amount It would refuse', () => {
     const env = environment({ PATH: '/bin', IT_PAGES_GB: '500', IT_ACTION_FILES_GB: '0.5', IT_KEEP_FREE_GB: '10' })
-    expect(env).toEqual({ PATH: '/bin', IT_PAGES_GB: '500', IT_ACTION_FILES_GB: '0.5', IT_KEEP_FREE_GB: '10' })
+    expect(env).toEqual({ PATH: withIt('/bin'), IT_PAGES_GB: '500', IT_ACTION_FILES_GB: '0.5', IT_KEEP_FREE_GB: '10' })
     expect(storageAsked(env)).toEqual({ pages: 500 * 1024 ** 3, actionFiles: 512 * 1024 ** 2, keepFree: 10 * 1024 ** 3 })
     // Where none is given, what It keeps by itself
     expect(storageAsked({})).toEqual({ pages: STORAGE.pages.bytes, actionFiles: STORAGE.actionFiles.bytes, keepFree: STORAGE.keepFree.bytes })
@@ -1813,12 +1861,12 @@ describe('background service definitions', () => {
   })
   test('and fetches a backend program from where that shell was told to, which is an address and is carried as it was given', () => {
     for (const address of ['https://mirror.example/convex-backend/releases', 'http://127.0.0.1:23390/releases', 'releases'])
-      expect(environment({ PATH: '/bin', IT_BACKEND_RELEASES: address })).toEqual({ PATH: '/bin', IT_BACKEND_RELEASES: address })
+      expect(environment({ PATH: '/bin', IT_BACKEND_RELEASES: address })).toEqual({ PATH: withIt('/bin'), IT_BACKEND_RELEASES: address })
   })
   test('and for each harness’s settings where that same shell did, when the person named the place from where they stood', () => {
     const env = environment({ PATH: '/bin', CODEX_HOME: 'profiles/codex', CLAUDE_CONFIG_DIR: '/work/claude', XDG_CONFIG_HOME: '.config' })
     expect(env).toEqual({
-      PATH: '/bin',
+      PATH: withIt('/bin'),
       CODEX_HOME: path.resolve('profiles/codex'),
       CLAUDE_CONFIG_DIR: '/work/claude',
       XDG_CONFIG_HOME: path.resolve('.config'),

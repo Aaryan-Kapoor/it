@@ -13,7 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { STORAGE } from '@it/protocol'
 import { cutShort, runSync } from './child'
-import { home, inHome, PROFILE_VARS, psQuote, readJson, rename, writeFlushed } from './lib'
+import { home, inHome, itFirst, PROFILE_VARS, psQuote, readJson, rename, writeFlushed } from './lib'
 import { holderRuns } from './serve/backend'
 import { storageAsked } from './serve/config'
 import { resetStartup, startupStatus } from './serve/startup'
@@ -277,6 +277,13 @@ export function environment(from: NodeJS.ProcessEnv = process.env): Record<strin
   // service stands: It's own, the backend program, and each place the person keeps a harness's
   // settings. Where a backend program is fetched from is an address, and is carried as it was given.
   for (const k of ['IT_HOME', 'IT_BACKEND_BIN', ...PROFILE_VARS]) if (out[k] && !path.isAbsolute(out[k])) out[k] = path.resolve(out[k])
+  // With It's own folder of programs first: the shell that runs setup may have been opened
+  // before It was installed, and an app the service starts runs `it` by its name alone. A
+  // Windows PATH that the launcher could hold only without it is written as the shell gave it,
+  // rather than not at all: the service puts its folder first for each app it starts anyway.
+  const given = out.PATH ?? ''
+  const first = itFirst({ PATH: given }, process.platform, out.IT_HOME ? path.join(out.IT_HOME, 'bin') : inHome('bin')).PATH!
+  if (process.platform !== 'win32' || launcherHolds('PATH', first) || !launcherHolds('PATH', given)) out.PATH = first
   return out
 }
 
@@ -354,6 +361,8 @@ ${Object.entries(env)
 // command and begin another, a quote included: a quote would otherwise switch that reading on
 // and off, and a value with one in it could say what is run next.
 const cmdValue = (v: string) => v.replace(/[\^&|<>()"]/g, '^$&').replace(/%/g, '%%')
+/** Whether the launcher sets a variable to this value: it writes no line longer than 8000 characters, which keeps within the 8191 that cmd.exe reads. */
+const launcherHolds = (k: string, v: string) => `set ${k}=${cmdValue(v)}`.length <= 8000
 function cmdWord(w: string): string {
   if (/^[A-Za-z0-9_.-]+$/.test(w)) return w
   // No file on Windows has a quote in its name, so a word with one is not a path this program made
@@ -396,9 +405,8 @@ export function windowsLauncher(cmd: string[], env: Record<string, string>): str
   for (const [k, v] of Object.entries(env)) {
     // Nothing set is left as the task has it: an empty value would take the variable away
     if (!v || /[\r\n]/.test(v)) continue
-    const line = `set ${k}=${cmdValue(v)}`
-    // cmd.exe reads no line longer than this. A PATH that is, is left as the task has it.
-    if (line.length <= 8000) lines.push(line)
+    // A value too long for a line of the launcher is left as the task has it, as a very long PATH may be.
+    if (launcherHolds(k, v)) lines.push(`set ${k}=${cmdValue(v)}`)
   }
   // The program is started again five seconds after it has ended as a failure, as systemd and
   // launchd are told to start it again: ended from outside or fallen over, it comes back by

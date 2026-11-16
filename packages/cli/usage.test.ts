@@ -10,6 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { build } from 'esbuild'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { inHome } from './src/lib'
 import { environment } from './src/service'
 
 type Usage = typeof import('./src/usage')
@@ -311,8 +312,10 @@ describe('turning it off', () => {
   })
   test('the service is given where to report when it is installed, and never an off switch of its own to undo a later `it telemetry on`', () => {
     const env = environment({ PATH: '/bin', IT_TELEMETRY_ENABLED: 'false', IT_TELEMETRY_URL: 'http://127.0.0.1:1/x', DO_NOT_TRACK: '1' })
-    expect(env).toEqual({ PATH: '/bin', IT_TELEMETRY_URL: 'http://127.0.0.1:1/x' })
-    expect(environment({ PATH: '/bin' })).toEqual({ PATH: '/bin' })
+    // The PATH it is given has It's own folder of programs first
+    const withIt = [inHome('bin'), '/bin'].join(path.delimiter)
+    expect(env).toEqual({ PATH: withIt, IT_TELEMETRY_URL: 'http://127.0.0.1:1/x' })
+    expect(environment({ PATH: '/bin' })).toEqual({ PATH: withIt })
   })
   test('`it telemetry off` is remembered, discards what was waiting and forgets the id; `on` starts a new one', () => {
     told()
