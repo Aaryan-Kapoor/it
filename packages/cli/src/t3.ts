@@ -28,7 +28,7 @@
 // - and that a message be put to that thread, which is what a person typing into it does.
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, readlinkSync } from 'node:fs'
+import { existsSync, readFileSync, readlinkSync, realpathSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { direct, directWebSocket, readJson } from './lib'
@@ -40,6 +40,12 @@ const PROTOCOL = '2'
 const ANSWER_MS = 20_000
 /** How many threads are looked into in one pass, the likeliest first. */
 const LOOKED_INTO = 24
+/**
+ * How many threads a search reads at once. Against the real server, with three thousand threads,
+ * 96 reads took about a second one at a time and about 0.4 seconds four at a time, and more at
+ * once gained little more, so a busy T3 Code is asked for no more than this.
+ */
+const READ_AT_ONCE = 4
 /**
  * How many threads one search reads at most, failed reads included, so that one click does not
  * read every thread of a large workspace. The next search goes on over the threads it has not
@@ -339,6 +345,41 @@ export function likeliest(
   most = LOOKED_INTO,
   platform: string = process.platform,
 ): string[] {
+  const inFolder = folderTest(shell, of, platform)
+  return openThreads(shell)
+    .map((t) => ({
+      id: t.id,
+      score: (inFolder(t) ? 2 : 0) + (DRIVER[of.harness] !== undefined && t.providerInstanceId === DRIVER[of.harness] ? 1 : 0),
+      at: typeof t.updatedAt === 'string' ? Date.parse(t.updatedAt) || 0 : 0,
+    }))
+    .sort((a, b) => b.score - a.score || b.at - a.at)
+    .slice(0, most)
+    .map((t) => t.id)
+}
+
+/** The threads of a list that are neither archived nor deleted. */
+const openThreads = (shell: { threads?: unknown }): (ShellThread & { id: string })[] =>
+  (Array.isArray(shell.threads) ? (shell.threads as ShellThread[]) : []).filter(
+    (t): t is ShellThread & { id: string } => typeof t?.id === 'string' && !t.deletedAt && !t.archivedAt,
+  )
+
+/**
+ * The threads of a list that work in a conversation's folder: those whose worktree, or the folder
+ * of whose project, is that folder or holds it. T3 Code runs a thread's agent app in the thread's
+ * worktree, or in its project's folder where it has none, and Claude Code and Codex each keep a
+ * conversation under the folder it was begun in, so a thread that holds a conversation is one of
+ * these. Nothing where the conversation's folder is not known: then any thread may be the one.
+ */
+export function nearby(shell: { threads?: unknown; projects?: unknown }, of: { cwd?: string }, platform: string = process.platform): string[] | undefined {
+  if (of.cwd === undefined) return undefined
+  const inFolder = folderTest(shell, of, platform)
+  return openThreads(shell)
+    .filter(inFolder)
+    .map((t) => t.id)
+}
+
+/** Whether a thread of a list works in a conversation's folder, as `nearby` says. */
+function folderTest(shell: { projects?: unknown }, of: { cwd?: string }, platform: string): (t: ShellThread) => boolean {
   const roots = new Map<string, string>()
   for (const p of Array.isArray(shell.projects) ? (shell.projects as { id?: unknown; workspaceRoot?: unknown }[]) : [])
     if (typeof p?.id === 'string' && typeof p.workspaceRoot === 'string') roots.set(p.id, p.workspaceRoot)
@@ -348,24 +389,27 @@ export function likeliest(
   const windows = platform === 'win32'
   const stroke = windows ? '\\' : path.sep
   const plain = (folder: string) => (windows ? folder.replaceAll('/', '\\').toLowerCase() : folder)
-  const cwd = of.cwd === undefined ? undefined : plain(of.cwd)
-  const within = (root: unknown) => {
-    if (typeof root !== 'string' || !root || cwd === undefined) return false
-    const under = plain(root)
-    return cwd === under || (cwd.startsWith(under) && (under.endsWith(stroke) || cwd[under.length] === stroke))
+  // A folder may also be named by a link to it, which T3 Code may keep and the agent app, which
+  // was started in it, does not: on a Mac a folder in /tmp is /private/tmp to the app. So each is
+  // also taken as the system names it, where it is on this machine, once for each folder
+  const real = new Map<string, string | undefined>()
+  const named = (folder: string): string[] => {
+    if (!real.has(folder)) {
+      let to: string | undefined
+      try {
+        to = platform === process.platform ? realpathSync.native(folder) : undefined
+      } catch {}
+      real.set(folder, to !== undefined && to !== folder ? plain(to) : undefined)
+    }
+    const to = real.get(folder)
+    return to === undefined ? [plain(folder)] : [plain(folder), to]
   }
-  return (Array.isArray(shell.threads) ? (shell.threads as ShellThread[]) : [])
-    .filter((t): t is ShellThread & { id: string } => typeof t?.id === 'string' && !t.deletedAt && !t.archivedAt)
-    .map((t) => ({
-      id: t.id,
-      score:
-        (within(t.worktreePath) || within(roots.get(String(t.projectId))) ? 2 : 0) +
-        (DRIVER[of.harness] !== undefined && t.providerInstanceId === DRIVER[of.harness] ? 1 : 0),
-      at: typeof t.updatedAt === 'string' ? Date.parse(t.updatedAt) || 0 : 0,
-    }))
-    .sort((a, b) => b.score - a.score || b.at - a.at)
-    .slice(0, most)
-    .map((t) => t.id)
+  const cwds = of.cwd === undefined ? [] : named(of.cwd)
+  const within = (root: unknown) => {
+    if (typeof root !== 'string' || !root) return false
+    return named(root).some((under) => cwds.some((cwd) => cwd === under || (cwd.startsWith(under) && (under.endsWith(stroke) || cwd[under.length] === stroke))))
+  }
+  return (t) => within(t.worktreePath) || within(roots.get(String(t.projectId)))
 }
 
 /**
@@ -521,6 +565,13 @@ export interface T3Search {
   cleared: Map<string, string | undefined>
   /** The threads that could not be read when last asked for, and how many times in a row they could not. */
   unread: Map<string, number>
+  /**
+   * The threads that work in the conversation's folder (`nearby`), as the last listing said, which
+   * a search reads first: nothing where the folder is not known, or before anything was listed.
+   */
+  near?: Set<string>
+  /** How many threads the last listing named, archived and deleted ones left out. */
+  listedCount?: number
 }
 
 /** The looking for a conversation's thread before it has begun. */
@@ -533,7 +584,23 @@ export function t3Held(search: T3Search): number {
   return (search.listed?.size ?? 0) + search.pending.length + search.attempted.size + search.cleared.size + search.unread.size
 }
 
-export type T3ThreadResult = { status: 'found'; thread: string } | { status: 'absent' | 'limited' } | { status: 'incomplete'; progressed: boolean }
+/**
+ * What a search said. `near`, where a search goes on, is whether every thread that works in the
+ * conversation's folder has been read and none holds it, as the last listing named them.
+ */
+export type T3ThreadResult =
+  | { status: 'found'; thread: string }
+  | { status: 'absent' }
+  | { status: 'limited'; near: boolean }
+  | { status: 'incomplete'; progressed: boolean; near: boolean }
+
+/** How many threads a search has read and found not to hold its conversation, and how many the last listing named. */
+export function t3Counted(search: T3Search): { read: number; listed: number } {
+  return { read: search.cleared.size, listed: search.listedCount ?? 0 }
+}
+
+/** Whether every thread that works in the conversation's folder has been read, and none holds it. */
+const nearRead = (search: T3Search): boolean => search.near !== undefined && [...search.near].every((id) => search.cleared.has(id))
 
 /**
  * Reads another batch of the active threads that may hold a conversation, the likeliest first.
@@ -544,7 +611,9 @@ export type T3ThreadResult = { status: 'found'; thread: string } | { status: 'ab
  * tries it again in its place, and once it could not be read twice in a row, behind every thread
  * not yet read, so that threads that cannot be read never keep a search from the rest. Only
  * where every thread of the listing has been read, and none holds the conversation, does a
- * search say that it is absent.
+ * search say that it is absent. The threads that work in the conversation's folder come first,
+ * a few are read at once, and a search that goes on says whether every one of those has been
+ * read and found not to hold it, which a large workspace reaches long before the rest.
  */
 export async function t3ThreadOf(
   t3: T3,
@@ -556,12 +625,14 @@ export async function t3ThreadOf(
   if (search.scope !== scope) {
     search.scope = scope
     search.listed = undefined
+    search.near = undefined
+    search.listedCount = undefined
     search.cleared.clear()
     search.unread.clear()
   }
   if (!search.listed) {
     const shell = await ask<{ threads?: unknown; projects?: unknown }>(t3, 'GET', '/api/orchestration/shell', signal)
-    if (!shell || !Array.isArray(shell.threads)) return { status: 'incomplete', progressed: false }
+    if (!shell || !Array.isArray(shell.threads)) return { status: 'incomplete', progressed: false, near: nearRead(search) }
     const changed = new Map<string, string | undefined>()
     for (const t of shell.threads as ShellThread[]) if (typeof t?.id === 'string') changed.set(t.id, typeof t.updatedAt === 'string' ? t.updatedAt : undefined)
     const listed = new Map(likeliest(shell, of, Number.POSITIVE_INFINITY).map((id) => [id, changed.get(id)]))
@@ -571,34 +642,52 @@ export async function t3ThreadOf(
     const left = [...listed.keys()].filter((id) => !search.cleared.has(id))
     const behind = (id: string) => (search.unread.get(id) ?? 0) >= 2
     search.listed = listed
+    search.listedCount = listed.size
+    const near = nearby(shell, of)
+    search.near = near === undefined ? undefined : new Set(near)
     search.pending = [...left.filter((id) => !behind(id)), ...left.filter(behind)]
     search.read = 0
     search.attempted.clear()
   }
   let progressed = false
-  const count = Math.min(LOOKED_INTO, search.pending.length, SEARCH_READS - search.read)
-  for (let i = 0; i < count && !signal.aborted; i++) {
-    const id = search.pending.shift()!
-    if (!search.attempted.has(id)) progressed = true
-    search.attempted.add(id)
-    search.read++
-    const snapshot = await ask<{ projection?: { providerThreads?: unknown } }>(
-      t3,
-      'GET',
-      `/api/orchestration/threads/${encodeURIComponent(id)}/bounded`,
-      signal,
-    )
-    if (!Array.isArray(snapshot?.projection?.providerThreads)) {
-      search.unread.set(id, (search.unread.get(id) ?? 0) + 1)
-      search.pending.push(id)
-    } else {
-      // Found in a thread's snapshot, it is the thread the snapshot says holds it, which may be another one
-      const holder = holderIn(snapshot, id, of.ids)
-      if (holder) return { status: 'found', thread: holder }
-      progressed = true
-      search.unread.delete(id)
-      search.cleared.set(id, search.listed.get(id))
+  let left = Math.min(LOOKED_INTO, search.pending.length, SEARCH_READS - search.read)
+  while (left > 0 && !signal.aborted) {
+    // A few at a time, in the order of the search
+    const batch = search.pending.splice(0, Math.min(READ_AT_ONCE, left))
+    left -= batch.length
+    for (const id of batch) {
+      if (!search.attempted.has(id)) progressed = true
+      search.attempted.add(id)
+      search.read++
     }
+    // One thread holds a conversation, so the first answer that names it ends the batch, and the
+    // others are not waited for. What they say after that is not taken into the search
+    const holder = await new Promise<string | undefined>((resolve) => {
+      let over = false
+      let answering = batch.length
+      for (const id of batch)
+        void ask<{ projection?: { providerThreads?: unknown } }>(t3, 'GET', `/api/orchestration/threads/${encodeURIComponent(id)}/bounded`, signal).then(
+          (snapshot) => {
+            if (over) return
+            if (!Array.isArray(snapshot?.projection?.providerThreads)) {
+              search.unread.set(id, (search.unread.get(id) ?? 0) + 1)
+              search.pending.push(id)
+            } else {
+              // Found in a thread's snapshot, it is the thread the snapshot says holds it, which may be another one
+              const holder = holderIn(snapshot, id, of.ids)
+              if (holder) {
+                over = true
+                return resolve(holder)
+              }
+              progressed = true
+              search.unread.delete(id)
+              search.cleared.set(id, search.listed!.get(id))
+            }
+            if (--answering === 0) resolve(undefined)
+          },
+        )
+    })
+    if (holder) return { status: 'found', thread: holder }
   }
   if (!search.pending.length) return { status: 'absent' }
   if (search.read >= SEARCH_READS) {
@@ -606,9 +695,9 @@ export async function t3ThreadOf(
     search.listed = undefined
     search.pending = []
     search.attempted.clear()
-    return { status: 'limited' }
+    return { status: 'limited', near: nearRead(search) }
   }
-  return { status: 'incomplete', progressed }
+  return { status: 'incomplete', progressed, near: nearRead(search) }
 }
 
 /** How many times T3 Code has refused each message It is putting to a thread, by what the message is (see `t3Send`). */
