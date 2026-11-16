@@ -2925,6 +2925,19 @@ describe('clicks and their delivery', () => {
     expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, ids: [] })).toEqual({ stopped: false })
   })
 
+  test('a computer that takes the place of another takes the word that its reopened Codex runs without the reviewer, as it stands when the place is given up', async () => {
+    const { t, alice, m } = await setup()
+    const rows = async () => t.run((ctx) => ctx.db.query('machines').collect())
+    // A second identity of the same computer asks for its place while the first is still live
+    const heir = await machineOf(t, 'alice', 'the laptop again')
+    await t.run((ctx) => ctx.db.patch(heir.id as never, { replaces: m.id as never }))
+    // The owner turns the reviewer off on the first after that, and then gives its place up
+    await alice.browser.mutation(api.machines.review, { machineId: m.id, harness: 'codex', on: false })
+    await alice.browser.mutation(api.machines.revoke, { machineId: m.id })
+    await settle(t)
+    expect((await rows()).find((x) => x._id === heir.id)?.reviewOff).toEqual(['codex'])
+  })
+
   test('a click that another machine handed over is lost to a machine that was at work on it, and one that its own agent said was done is not', async () => {
     const { t, m, click } = await setup()
     const other = await machineOf(t, 'alice', 'desktop')

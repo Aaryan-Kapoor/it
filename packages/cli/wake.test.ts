@@ -29,7 +29,10 @@ import { addonMarks, conversationFolder, conversationsFile, forgetAddonMark, not
 import {
   Budget,
   bootId,
+  CODEX_NOT_REVIEWED,
+  CODEX_REVIEW_ENDED,
   CODEX_REVIEWED,
+  CODEX_REVIEWED_NOTE,
   CODEX_UNREVIEWED,
   carrying,
   carryOn,
@@ -292,11 +295,11 @@ describe('the command each agent app is carried on with', () => {
       expect(how.argv.slice(0, 3)).toEqual(['codex', 'exec', 'resume'])
       expect(how.argv.slice(-2)).toEqual([thread, '-'])
       expect(how.argv.join(' ')).not.toMatch(/bypass|danger|never/)
-      expect(how.input).toBe('a click')
+      expect(how.input).toBe(`a click\n\n${CODEX_REVIEWED_NOTE}`)
     }
   })
 
-  test('where the reviewer is turned off, or this Codex may not have one, Codex is reopened exactly as it is without it', () => {
+  test('where the reviewer is turned off, or this Codex may not have one, Codex is reopened as before, and nothing can approve anything there whatever its own settings say', () => {
     const thread = '01a10f7c-062c-7010-8d57-8e1007169551'
     const plain = [
       'codex',
@@ -309,15 +312,26 @@ describe('the command each agent app is carried on with', () => {
       'sandbox_workspace_write.network_access=true',
       '-c',
       'sandbox_workspace_write.writable_roots=["/home/someone/.it"]',
+      // And the reviewer said to be the person, who is not there: a reviewer chosen in their own
+      // Codex settings would otherwise still approve, since `codex exec` keeps "never" only for another
+      '-c',
+      'approvals_reviewer="user"',
       thread,
       '-',
     ]
+    expect(plain.slice(-4, -2)).toEqual([...CODEX_NOT_REVIEWED])
     for (const off of [codexReview('0.167.2', true), codexReview(undefined, false)]) {
       expect(off.review).toBe(false)
-      expect((carrying('codex', thread, 'x', { ...has, review: off.review }) as { argv: string[] }).argv).toEqual(plain)
+      const how = carrying('codex', thread, 'x', { ...has, review: off.review }) as { argv: string[]; input: string }
+      expect(how.argv).toEqual(plain)
+      expect(how.input).toBe('x')
     }
     expect((carrying('codex', thread, 'x', has) as { argv: string[] }).argv).toEqual(plain)
-    expect((carrying('codex', thread, 'x', { ...has, review: true }) as { argv: string[] }).argv).not.toEqual(plain)
+    const reviewed = carrying('codex', thread, 'x', { ...has, review: true }) as { argv: string[]; input: string }
+    expect(reviewed.argv).not.toContain('approvals_reviewer="user"')
+    // Told, after the click and everything else, that the reviewer stands in for the person, and what to do where it refuses
+    expect(reviewed.input).toBe(`x\n\n${CODEX_REVIEWED_NOTE}`)
+    expect(CODEX_REVIEWED_NOTE).toMatch(/it ack <action id> --failed/)
   })
 
   test('the reviewer is used with every Codex It accepts, unless the person turned it off, and where the version is not known the page is told why it was not', () => {
@@ -422,6 +436,21 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     expect(
       await carryOn({ argv: [path.join(scratch, 'never')], input: '', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, { signal: stop.signal }),
     ).toBe(STOPPED)
+  })
+
+  test('a Codex turn that Codex ended because its reviewer refused too much is said to be that, and not a failure to try again', async () => {
+    const kept = path.join(scratch, 'kept-review')
+    const refusing = path.join(scratch, 'refusing')
+    writeFileSync(
+      refusing,
+      '#!/bin/sh\ncat > /dev/null\necho "Automatic approval review rejected too many approval requests for this turn (3 consecutive, 3 in the last 50 reviews); interrupting the turn." >&2\nexit 1\n',
+    )
+    chmodSync(refusing, 0o755)
+    const opts = { keepIn: kept, said: () => {} }
+    expect(await carryOn({ argv: [refusing], input: 'a click', app: 'Codex' }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe(CODEX_REVIEW_ENDED)
+    // The same words from another app are its own failure, and are tried again as any is
+    expect(await carryOn({ argv: [refusing], input: 'a click', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, opts)).toBe('Pi exited with 1')
+    expect(readdirSync(kept)).toEqual([])
   })
 
   test('one that ends badly by itself hands over its last line, for the person whose app it is, and leaves nothing of what it printed', async () => {

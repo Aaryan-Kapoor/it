@@ -109,6 +109,31 @@ export const WAS_STOPPED =
  * reads after `exec resume` as well.
  */
 export const CODEX_REVIEWED = ['-c', 'approvals_reviewer="auto_review"', '-c', 'approval_policy="on-request"'] as const
+/**
+ * What Codex is given where the reviewer is not to be used. `codex exec` keeps approvals as
+ * "never" unless the reviewer it settles on is `auto_review`, and a person may have chosen that
+ * reviewer in their own settings: said here on the command line, which ranks above them, so that
+ * nothing approves anything in such a run, whatever their settings say.
+ */
+export const CODEX_NOT_REVIEWED = ['-c', 'approvals_reviewer="user"'] as const
+
+/**
+ * What a conversation reopened under Codex's reviewer is told after `WOKEN`, whose words about
+ * approving are true of every other app and not of this one: a command that would ask the
+ * person goes to the reviewer instead. It is told too what to do where the reviewer refuses, so
+ * that it says so on the page rather than trying another way round.
+ */
+export const CODEX_REVIEWED_NOTE =
+  '[It] In this conversation, which It reopened under Codex’s automatic reviewer, a command that would have asked the person, such as one outside the sandbox or `it save`, is put to that reviewer instead, which decides in their place and may allow it. So, where the work needs such a command, run it as you would with them there, saying why. Where the reviewer refuses one, do not look for another way round it: say on the page that it was refused, and run `it ack <action id> --failed`.'
+
+/**
+ * Why a reopened run is not tried again by itself: Codex ended its turn because its reviewer had
+ * refused too many of the commands in it. Tried again, the same request would only be put to the
+ * reviewer again, at the cost of a model's turn each time, so it waits for the person instead.
+ */
+export const CODEX_REVIEW_ENDED = 'Codex’s automatic reviewer refused too many of its commands, so Codex ended the turn'
+/** What Codex prints as it ends a turn for that (Codex 0.167.2, `ext/guardian-reviewer/src/reporting.rs`). */
+const REVIEW_ENDED_SAID = /Automatic approval review rejected too many approval requests/i
 
 /** What the bar above a page says where Codex was reopened without its reviewer though the person left it on. */
 export const CODEX_UNREVIEWED =
@@ -167,9 +192,9 @@ export interface Carrying {
  *   or a rule holds back may run, and one it allows outside the sandbox runs with everything
  *   the person can do. Without it, `codex exec` takes approvals as "never", and a command that
  *   would ask is refused. Either way the sandbox and It's rules are as they are, and a rule
- *   that allows lets its command through first. Given on the command line, the two settings win
- *   over the person's own; without them, a reviewer the person chose in their own settings is
- *   still Codex's to use.
+ *   that allows lets its command through first. Without it, `approvals_reviewer` is said to be
+ *   `user` (`CODEX_NOT_REVIEWED`), so that a reviewer the person chose in their own settings
+ *   does not approve anything either. Given on the command line, these win over the person's own.
  * - Pi, OpenCode and Hermes are run as they are in a window, with whatever their own settings
  *   allow there. Nothing can ask the person for more, since they are not there.
  */
@@ -224,11 +249,11 @@ export function carrying(
         '-c',
         'sandbox_workspace_write.network_access=true',
         ...itsFolder,
-        ...(has.review ? CODEX_REVIEWED : []),
+        ...(has.review ? CODEX_REVIEWED : CODEX_NOT_REVIEWED),
         session,
         '-',
       ],
-      input: text,
+      input: has.review ? `${text}\n\n${CODEX_REVIEWED_NOTE}` : text,
       app,
     }
   }
@@ -394,13 +419,16 @@ export function carryOn(
       clearTimeout(timer)
       opts.signal?.removeEventListener('abort', stop)
       // Ended by itself and badly: what it printed last is the only word there is of why
-      if (itsOwn && printed && opts.said)
+      let reason = why
+      if (itsOwn && printed)
         try {
-          const words = lastWords(tail(printed))
-          if (words) opts.said(words)
+          const last = tail(printed)
+          if (how.app === 'Codex' && REVIEW_ENDED_SAID.test(last)) reason = CODEX_REVIEW_ENDED
+          const words = opts.said ? lastWords(last) : null
+          if (words) opts.said?.(words)
         } catch {}
       forget()
-      resolve(why)
+      resolve(reason)
     }
     let stopped = false
     // The identity is captured while this child is ours. Every later signal checks it again.

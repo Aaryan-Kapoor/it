@@ -103,6 +103,7 @@ import {
   claudeWroteAt,
   codexHolder,
   codexInterruptedAt,
+  CODEX_REVIEW_ENDED,
   codexReview,
   endTree,
   fromAnotherStart,
@@ -3514,7 +3515,9 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         if (stalled.get(line) === click.id) stalled.delete(line)
         await confirmAll()
       } else {
-        const n = (queueTries.get(tag(click))?.n ?? 0) + 1
+        // A turn that Codex ended because its reviewer refused too much of it is not tried again by
+        // itself: it would only be put to the reviewer again. It is set aside at once, for the person
+        const n = refused === CODEX_REVIEW_ENDED ? QUEUE_WAITS.length : (queueTries.get(tag(click))?.n ?? 0) + 1
         queueTries.set(tag(click), { n, at: Date.now(), reopening, retry: click.retriedAt ?? 0 })
         stalled.set(line, click.id)
         stalledAt.set(click.id, Date.now())
