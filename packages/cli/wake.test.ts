@@ -306,6 +306,38 @@ describe('the command each agent app is carried on with', () => {
   })
 })
 
+describe.skipIf(process.platform === 'win32')('the `it` a reopened conversation runs by its name alone', () => {
+  test('is the It that reopened it, though It was started from a shell whose PATH did not have It’s folder', async () => {
+    const before = { PATH: process.env.PATH, IT_HOME: process.env.IT_HOME }
+    const itHome = path.join(scratch, 'it-home')
+    const other = path.join(scratch, 'other')
+    for (const [folder, says] of [
+      [path.join(itHome, 'bin'), 'the It that reopened it'],
+      [other, 'another it'],
+    ] as const) {
+      mkdirSync(folder, { recursive: true })
+      writeFileSync(path.join(folder, 'it'), `#!/bin/sh\necho "${says}"\n`)
+      chmodSync(path.join(folder, 'it'), 0o755)
+    }
+    const said = path.join(scratch, 'said')
+    // The app, standing in for one that runs `it` in its turn, by that name alone
+    const app = ['/bin/sh', '-c', `it > "${said}" 2>&1`]
+    try {
+      process.env.IT_HOME = itHome
+      for (const PATH of ['/usr/bin:/bin', `${other}:/usr/bin:/bin`]) {
+        process.env.PATH = PATH
+        rmSync(said, { force: true })
+        expect(await carryOn({ argv: app, input: '', app: 'Codex' }, scratch, { harness: 'codex', session: 'x' })).toBeNull()
+        expect(readFileSync(said, 'utf8')).toBe('the It that reopened it\n')
+      }
+    } finally {
+      for (const [k, v] of Object.entries(before))
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+    }
+  })
+})
+
 describe.skipIf(process.platform === 'win32')('a reopened conversation that is stopped', () => {
   test('is ended at once, says that it was stopped, and is not taken for a failure', async () => {
     const command = path.join(scratch, 'slow')
@@ -1177,6 +1209,17 @@ describe('the mode a Claude Code conversation is reopened in', () => {
     expect(WOKEN).toContain('You can do here what you could do while they were with you')
     expect(WOKEN).toContain('Try what the work needs before you conclude that you may not')
     expect(WOKEN).not.toMatch(/not already allowed|is refused\. Run/)
+  })
+  test('a reopened conversation is told that It started it and not the person’s terminal, so that it switches on the project’s own tools itself', () => {
+    expect(WOKEN).toContain(
+      'And It started you here, and not their terminal, so what that terminal had switched on may not be here: an activated virtual environment, a version chosen with a version manager, a variable they typed or exported there.',
+    )
+    expect(WOKEN).toContain(
+      'Check, and run the project’s own tools by their paths or switch them on yourself before you run its commands, and if you cannot, say so on the page.',
+    )
+    // Still one note: two differences are named, and nothing says there is only one
+    expect(WOKEN).toContain('Two things differ.')
+    expect(WOKEN).not.toContain('The one difference')
   })
 })
 

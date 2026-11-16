@@ -284,12 +284,20 @@ try {
   const connected = setup.json?.harnesses?.find((h) => h.id === 'claude-code')
   must('`it setup --only claude-code` connects Claude Code', setup.code === 0 && connected?.addon === 'connected', setup.out + setup.err)
 
-  // The service has It's own folder on its PATH, as a service started from a shell that the install
-  // script has put it on has, and as Auto-wake's note to a reopened conversation says it is. The
-  // conversation this run starts itself is not given it: the add-on puts it there.
+  // The service is started without It's own folder on its PATH, as a shell opened before It was
+  // installed has it: an `it serve` started by hand from such a shell, or a service whose
+  // definition was written from one by an It that did not put its folder there itself. It has
+  // another `it` on it instead, as a person may have an older one: a
+  // conversation that runs that one fails. It puts its folder first on the PATH of the
+  // conversation it reopens, which is how that conversation runs It's own `it` by its name, as
+  // Auto-wake's note to it says it can, whatever the add-on adds after it. The conversation this
+  // run starts itself is not given It's folder either: the add-on puts it there.
+  const another = path.join(scratch, 'another-it')
+  mkdirSync(another, { recursive: true })
+  writeFileSync(path.join(another, 'it'), '#!/bin/sh\necho "this is another it, not the It that reopened this conversation" >&2\nexit 1\n', { mode: 0o755 })
   notStopping()
   service = spawn(IT[0], [...IT.slice(1), 'serve'], {
-    env: { ...base, PATH: `${PATH}${path.delimiter}${path.join(folders.it, 'bin')}` },
+    env: { ...base, PATH: `${another}${path.delimiter}${PATH}` },
     cwd: folders.work,
     stdio: ['ignore', openSync(serviceLog, 'w'), openSync(serviceLog, 'a')],
   })

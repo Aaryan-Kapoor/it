@@ -51,12 +51,16 @@ export const PROGRAM: Record<string, string> = { 'claude-code': 'claude', codex:
  * refused, which is to say so where the person will see it. A woken conversation that is
  * refused a command and says so only in its own reply has told nobody.
  *
+ * It says that It started the app, and not the person's terminal: a reopened Claude Code whose
+ * project had an activated virtual environment in that terminal ran `python`, found none, and
+ * said so on the page without trying the project's own.
+ *
  * It must not read as a rule that only `it` may run. An earlier wording did, to a real agent:
  * "a command you are not already allowed to run is refused. Run `it` … it is allowed" had a
  * woken Pi, which may run anything, decline three times to try anything else.
  */
 export const WOKEN =
-  '[It] It reopened this conversation for what is above, which a page of yours sent while the conversation was closed: each part of it says whether someone had just used the page. You can do here what you could do while they were with you: the same commands, run the same way. The one difference is that nobody is watching, so nobody can answer a question or approve anything, and what you would have asked them about first still waits for them: say on the page that it does. Run `it` by that name alone, with no folder in front of it and no `export` before it: it is on your PATH, and in that form it is never held for approval. Do what was asked and nothing more, show on the page that you have, and then end your turn: do not wait for anything else to be done, since It reopens this conversation for whatever is done next. Try what the work needs before you conclude that you may not. Only if a command is in fact refused, say so where they will see it, with `it notify` or the page’s state, and run `it ack <action id> --failed`.'
+  '[It] It reopened this conversation for what is above, which a page of yours sent while the conversation was closed: each part of it says whether someone had just used the page. You can do here what you could do while they were with you: the same commands, run the same way. Two things differ. Nobody is watching, so nobody can answer a question or approve anything, and what you would have asked them about first still waits for them: say on the page that it does. And It started you here, and not their terminal, so what that terminal had switched on may not be here: an activated virtual environment, a version chosen with a version manager, a variable they typed or exported there. Check, and run the project’s own tools by their paths or switch them on yourself before you run its commands, and if you cannot, say so on the page. Run `it` by that name alone, with no folder in front of it and no `export` before it: it is on your PATH, and in that form it is never held for approval. Do what was asked and nothing more, show on the page that you have, and then end your turn: do not wait for anything else to be done, since It reopens this conversation for whatever is done next. Try what the work needs before you conclude that you may not. Only if a command is in fact refused, say so where they will see it, with `it notify` or the page’s state, and run `it ack <action id> --failed`.'
 
 /**
  * What a conversation is told when it is reopened for something a second time, because It

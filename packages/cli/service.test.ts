@@ -6,6 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, test, vi } from 'vitest'
+import { inHome } from './src/lib'
 import { alone, nothingLeft, startBackend } from './src/serve/backend'
 import {
   againWith,
@@ -32,12 +33,61 @@ import {
 
 vi.mock('node:child_process', async (original) => ({ ...(await original<typeof import('node:child_process')>()) }))
 
+/** The PATH a service is given: It's own folder of programs first, then the shell's. */
+const withIt = (given: string, itHome?: string) => [itHome ? path.join(itHome, 'bin') : inHome('bin'), given].join(path.delimiter)
+
 describe('what a service is given of the shell that registered it', () => {
+  test('It’s own folder of programs is first on its PATH on every system, though the shell that registered it did not have it', () => {
+    // As when an agent installs It and runs setup from a shell that was opened before the install
+    const itHome = path.resolve('person', '.it')
+    const shell = [path.resolve('usr', 'bin'), path.resolve('bin')].join(path.delimiter)
+    const env = environment({ PATH: shell, IT_HOME: itHome })
+    expect(env.PATH).toBe(withIt(shell, itHome))
+    const cmd = [path.join(itHome, 'bin', 'it'), 'serve']
+    expect(systemdUnit(cmd, env)).toContain(`\nEnvironment="PATH=${withIt(shell, itHome).replace(/\\/g, '\\\\')}"\n`)
+    expect(launchdPlist(cmd, env)).toContain(`<key>PATH</key><string>${withIt(shell, itHome)}</string>`)
+    expect(windowsLauncher(cmd, env)).toContain(`\r\nset PATH=${withIt(shell, itHome)}\r\n`)
+    // Once, where that shell had it already, and first, where it had it after another folder
+    expect(environment({ PATH: withIt(shell, itHome), IT_HOME: itHome }).PATH).toBe(withIt(shell, itHome))
+    expect(environment({ PATH: [shell, path.join(itHome, 'bin')].join(path.delimiter), IT_HOME: itHome }).PATH).toBe(withIt(shell, itHome))
+    // Where It's folder is the one this program found by itself, it is that folder's
+    expect(environment({ PATH: shell }).PATH).toBe(withIt(shell))
+    // A shell that gave no PATH at all
+    expect(environment({ IT_HOME: itHome }).PATH).toBe(path.join(itHome, 'bin'))
+  })
+  test('on Windows, a PATH the launcher could hold only without It’s folder is written as the shell gave it, and not left out', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    try {
+      const itHome = path.resolve('person', '.it')
+      // Long enough that `set PATH=` with it fits in the 8000 characters a line of the launcher may have, and with It's folder in front does not
+      const long = Array.from({ length: 800 }, (_, n) => `C:\\Tools\\t${n}`)
+        .join(';')
+        .slice(0, 7990 - 'set PATH='.length)
+      const env = environment({ Path: long, IT_HOME: itHome })
+      expect(env.PATH).toBe(long)
+      expect(windowsLauncher(['C:\\Users\\a\\.it\\bin\\it.exe', 'serve'], env)).toContain(`\r\nset PATH=${long}\r\n`)
+      // One that fits either way has It's folder first, and one too long either way is left out, as it was
+      expect(environment({ Path: 'C:\\Windows', IT_HOME: itHome }).PATH).toBe(`${path.join(itHome, 'bin')};C:\\Windows`)
+      const longer = `${long};${long}`
+      expect(windowsLauncher(['it.exe', 'serve'], environment({ Path: longer, IT_HOME: itHome }))).not.toContain('set PATH=')
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+    }
+  })
+  test.runIf(process.platform === 'win32')('on Windows, from the PATH as Windows spells it, into the launcher the scheduled task runs', () => {
+    const itHome = 'C:\\Users\\a\\.it'
+    const env = environment({ Path: 'C:\\Windows\\system32;C:\\Windows', IT_HOME: itHome })
+    expect(env.PATH).toBe('C:\\Users\\a\\.it\\bin;C:\\Windows\\system32;C:\\Windows')
+    expect(windowsLauncher(['C:\\Users\\a\\.it\\bin\\it.exe', 'serve'], env)).toContain(
+      '\r\nset PATH=C:\\Users\\a\\.it\\bin;C:\\Windows\\system32;C:\\Windows\r\n',
+    )
+  })
   test('that the person’s shell is not to be asked is said to the service, which is what would ask it', () => {
-    expect(environment({ PATH: '/bin', IT_SHELL_ENV: 'off' })).toEqual({ PATH: '/bin', IT_SHELL_ENV: 'off' })
+    expect(environment({ PATH: '/bin', IT_SHELL_ENV: 'off' })).toEqual({ PATH: withIt('/bin'), IT_SHELL_ENV: 'off' })
   })
   test('that It is not to look for a newer version is not, since `it updates on` could then never turn it back on', () => {
-    expect(environment({ PATH: '/bin', IT_UPDATE_CHECK: 'false' })).toEqual({ PATH: '/bin' })
+    expect(environment({ PATH: '/bin', IT_UPDATE_CHECK: 'false' })).toEqual({ PATH: withIt('/bin') })
   })
   test('marks the command that the supervisor launches without passing the marker to child commands', () => {
     expect(command()).toContain('--supervised')
