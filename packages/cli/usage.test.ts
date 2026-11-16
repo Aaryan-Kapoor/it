@@ -1861,7 +1861,7 @@ describe('sending', () => {
     const events = sent(posts).flatMap((b) => b.events)
     // The one It wrote, and the last, whose extra field is left behind
     expect(events).toHaveLength(2)
-    // Each dropped line by a whole value of its own, never by a few digits that a random id sent with the rest may hold by chance (one held 1987)
+    // Each dropped line is looked for by a whole value of its own, and never by a few digits that a random id sent with the rest may hold by chance, as one once held 1987
     expect(posts.join('')).not.toMatch(/acme|Deploy plan|deploy-plan|616c6963-6540-6578-616d-706c652e636f|1987-06-05|:13:27|tag/)
   })
   test('an event taken from the file is sent under an id made as it is taken, and never under what the line gave as its id', async () => {
