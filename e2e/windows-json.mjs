@@ -128,6 +128,21 @@ for (const [name, run] of shells) {
       `exit ${done.status}, sent ${JSON.stringify(sent)}, said ${done.stderr.trim().slice(0, 400)}`,
     )
   }
+  // JSON as models write it, with a space after each colon and comma, which Windows PowerShell
+  // puts in quotes of its own, so that the runtime splits it inside its strings, a dash after a
+  // space among them. cmd hands JSON on bare, and reads a space outside its strings as the end of
+  // a word, so these are not written there
+  if (name !== 'cmd')
+    for (const written of ['{"title": "Plan - draft", "n": 1}', '{"note": "run with --verbose", "n": -1}', '{"steps": ["build - test", "ship -now"]}']) {
+      calls.length = 0
+      const done = await run(['patch', 'board', written, '--if-revision', '3'])
+      const sent = calls.find((c) => c.path === 'state:patch')?.args
+      check(
+        `${name}: it patch board ${written} --if-revision 3`,
+        done.status === 0 && sent?.patch === JSON.stringify(JSON.parse(written)) && sent?.baseRevision === 3,
+        `exit ${done.status}, sent ${JSON.stringify(sent)}, said ${done.stderr.trim().slice(0, 400)}`,
+      )
+    }
   calls.length = 0
   const set = await run(['set', 'board', 'order', '["c1","c 2"]'])
   const setSent = calls.find((c) => c.path === 'state:patch')?.args
