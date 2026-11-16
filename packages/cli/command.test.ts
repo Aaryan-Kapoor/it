@@ -42,6 +42,7 @@ import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { BOOLEAN } from './src/args'
 import { CODEX_RESTART, itForAgent, PI_RELOAD, reloadLine, T3_CODEX, t3ClaudeLine } from './src/arrives'
+import { noScreen } from './src/browser'
 import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
 import { VERSION } from './src/lib'
 import { aloneAt } from './src/serve/backend'
@@ -49,6 +50,14 @@ import { instanceName } from './src/serve/config'
 import { afterHermes } from './src/setup'
 import { bases, holdBase } from './test-ports'
 import { standInZsh, zsh } from './test-zsh'
+
+/**
+ * Whether the machine the tests run on is one where It never opens a browser, whatever a test
+ * names: a container or WSL, which It tells by files and the kernel that a test cannot stand in
+ * for. The tests that see a browser opened are left out there.
+ */
+const screenless =
+  noScreen({ platform: process.platform, env: { DISPLAY: ':0', IT_BROWSER_OPENER: '["stand-in"]' }, exists: existsSync, release: os.release() }) !== null
 
 // Every test here starts the program, and some start it a dozen times over. Each is given the
 // time that takes on a machine that is busy with other things as well.
@@ -6111,7 +6120,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     }
   })
 
-  test('`it site` says that the site is opening, or how to open it, with the address on a line of its own', async () => {
+  test.skipIf(screenless)('`it site` says that the site is opening, or how to open it, with the address on a line of its own', async () => {
     const m = machine(true, true)
     const opened = path.join(m.home, 'opened')
     for (const name of ['xdg-open', 'open']) {
@@ -6836,31 +6845,34 @@ describe.skipIf(process.platform === 'win32')('`it site`', () => {
     (asked: Asked) =>
       asked.path === 'sessions:inviteOwner' ? { code: codes.shift() } : asked.path === 'displays:list' ? displays() : null
 
-  test('asks, as this machine, for an invite that signs the person in, prints the address that carries it and, for an agent, opens it', async () => {
-    const m = machine(true, true)
-    const opened = opener(m)
-    const b = await backend(m, inviting(['Ab3dEf6hIj9kLm2nOp5q']))
-    try {
-      // With a screen to open a browser on, which the test names whatever the machine it runs on has
-      const ran = await run(m, ['site'], { ...b.env, DISPLAY: ':0', ...AGENT })
-      const url = `${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q`
-      expect([ran.code, printed(ran).url, printed(ran).opened]).toEqual([0, url, true])
-      expect(printed(ran).tell).toContain(
-        'A tab of the browser on this computer has just been opened at this url, so tell them in that message that it has opened',
-      )
-      expect(b.asked.filter((x) => x.path === 'sessions:inviteOwner')).toEqual([{ path: 'sessions:inviteOwner', args: {} }])
-      expect(await waitFor(opened)).toBe(url)
-      // What is kept of it is when, and how it went, and nothing of the address
-      const note = readFileSync(path.join(m.it, 'browser-opened.json'), 'utf8')
-      expect(Object.keys(JSON.parse(note)).sort()).toEqual(['at', 'result'])
-      expect(JSON.parse(note).result).toBe('opened')
-      expect(note).not.toContain('Ab3dEf6hIj9kLm2nOp5q')
-    } finally {
-      await b.close()
-    }
-  })
+  test.skipIf(screenless)(
+    'asks, as this machine, for an invite that signs the person in, prints the address that carries it and, for an agent, opens it',
+    async () => {
+      const m = machine(true, true)
+      const opened = opener(m)
+      const b = await backend(m, inviting(['Ab3dEf6hIj9kLm2nOp5q']))
+      try {
+        // With a screen to open a browser on, which the test names whatever the machine it runs on has
+        const ran = await run(m, ['site'], { ...b.env, DISPLAY: ':0', ...AGENT })
+        const url = `${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q`
+        expect([ran.code, printed(ran).url, printed(ran).opened]).toEqual([0, url, true])
+        expect(printed(ran).tell).toContain(
+          'A tab of the browser on this computer has just been opened at this url, so tell them in that message that it has opened',
+        )
+        expect(b.asked.filter((x) => x.path === 'sessions:inviteOwner')).toEqual([{ path: 'sessions:inviteOwner', args: {} }])
+        expect(await waitFor(opened)).toBe(url)
+        // What is kept of it is when, and how it went, and nothing of the address
+        const note = readFileSync(path.join(m.it, 'browser-opened.json'), 'utf8')
+        expect(Object.keys(JSON.parse(note)).sort()).toEqual(['at', 'result'])
+        expect(JSON.parse(note).result).toBe('opened')
+        expect(note).not.toContain('Ab3dEf6hIj9kLm2nOp5q')
+      } finally {
+        await b.close()
+      }
+    },
+  )
 
-  test('with `--no-open`, over SSH, and from a script that no agent runs, the address is printed and no browser is started', async () => {
+  test.skipIf(screenless)('with `--no-open`, over SSH, and from a script that no agent runs, the address is printed and no browser is started', async () => {
     const m = machine(true, true)
     const opened = opener(m, true)
     // Each asking is given an invite of its own, so that an address says which run it was printed by
@@ -6887,37 +6899,40 @@ describe.skipIf(process.platform === 'win32')('`it site`', () => {
     }
   })
 
-  test('an agent that asks for the link again and again opens one tab in ten minutes, and none where a paired browser was seen lately', async () => {
-    const m = machine(true, true)
-    const opened = path.join(m.home, 'opened')
-    // The stand-in the tests name for the system's opener, which writes down every address it is given, one to a line
-    const standIn = path.join(m.home, 'stand-in.mjs')
-    writeFileSync(standIn, `import { appendFileSync } from 'node:fs'\nappendFileSync(${JSON.stringify(opened)}, process.argv.slice(2).join(' ') + '\\n')\n`)
-    const env = { DISPLAY: ':0', ...AGENT, IT_BROWSER_OPENER: JSON.stringify([process.execPath, standIn]) }
-    const codes = ['Ab3dEf6hIj9kLm2nOp5q', 'Bc4eFg7iJk0lMn3oPq6r', 'Cd5fGh8jKl1mNo4pQr7s', 'De6gHi9kLm2nOp5qRs8t', 'Ef7hIj0lMn3oPq6rSt9u']
-    let displays: unknown = []
-    const b = await backend(
-      m,
-      inviting(codes, () => displays),
-    )
-    try {
-      const said: { opened?: boolean }[] = []
-      for (let n = 0; n < 3; n++) said.push(printed(await run(m, ['site'], { ...b.env, ...env })))
-      expect(said.map((one) => one.opened)).toEqual([true, undefined, undefined])
-      // The address is handed over as one word, and only the first run's
-      expect(await waitFor(opened)).toBe(`${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q\n`)
-      // Ten minutes on, a paired browser seen a minute ago is open to It already, and none is opened
-      writeFileSync(path.join(m.it, 'browser-opened.json'), JSON.stringify({ at: Date.now() - 11 * 60_000, result: 'opened' }))
-      displays = [{ id: 'd1', name: 'Firefox on Linux', paired: true, lastSeenAt: Date.now() - 60_000 }]
-      expect(printed(await run(m, ['site'], { ...b.env, ...env })).opened).toBeUndefined()
-      // Nor where It could not say which displays there are
-      displays = null
-      expect(printed(await run(m, ['site'], { ...b.env, ...env })).opened).toBeUndefined()
-      expect(readFileSync(opened, 'utf8')).toBe(`${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q\n`)
-    } finally {
-      await b.close()
-    }
-  })
+  test.skipIf(screenless)(
+    'an agent that asks for the link again and again opens one tab in ten minutes, and none where a paired browser was seen lately',
+    async () => {
+      const m = machine(true, true)
+      const opened = path.join(m.home, 'opened')
+      // The stand-in the tests name for the system's opener, which writes down every address it is given, one to a line
+      const standIn = path.join(m.home, 'stand-in.mjs')
+      writeFileSync(standIn, `import { appendFileSync } from 'node:fs'\nappendFileSync(${JSON.stringify(opened)}, process.argv.slice(2).join(' ') + '\\n')\n`)
+      const env = { DISPLAY: ':0', ...AGENT, IT_BROWSER_OPENER: JSON.stringify([process.execPath, standIn]) }
+      const codes = ['Ab3dEf6hIj9kLm2nOp5q', 'Bc4eFg7iJk0lMn3oPq6r', 'Cd5fGh8jKl1mNo4pQr7s', 'De6gHi9kLm2nOp5qRs8t', 'Ef7hIj0lMn3oPq6rSt9u']
+      let displays: unknown = []
+      const b = await backend(
+        m,
+        inviting(codes, () => displays),
+      )
+      try {
+        const said: { opened?: boolean }[] = []
+        for (let n = 0; n < 3; n++) said.push(printed(await run(m, ['site'], { ...b.env, ...env })))
+        expect(said.map((one) => one.opened)).toEqual([true, undefined, undefined])
+        // The address is handed over as one word, and only the first run's
+        expect(await waitFor(opened)).toBe(`${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q\n`)
+        // Ten minutes on, a paired browser seen a minute ago is open to It already, and none is opened
+        writeFileSync(path.join(m.it, 'browser-opened.json'), JSON.stringify({ at: Date.now() - 11 * 60_000, result: 'opened' }))
+        displays = [{ id: 'd1', name: 'Firefox on Linux', paired: true, lastSeenAt: Date.now() - 60_000 }]
+        expect(printed(await run(m, ['site'], { ...b.env, ...env })).opened).toBeUndefined()
+        // Nor where It could not say which displays there are
+        displays = null
+        expect(printed(await run(m, ['site'], { ...b.env, ...env })).opened).toBeUndefined()
+        expect(readFileSync(opened, 'utf8')).toBe(`${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q\n`)
+      } finally {
+        await b.close()
+      }
+    },
+  )
 
   test('an answer that is no invite is put in no address and opened nowhere', async () => {
     const m = machine(true, true)
