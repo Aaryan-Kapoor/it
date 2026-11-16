@@ -87,7 +87,18 @@ async function press(p, re, nth = 0) {
       break
     }
   }
-  return one.t.split('\n')[0].slice(0, 60)
+  return one.t.replace(/\s+/g, ' ').trim().slice(0, 80)
+}
+
+/** A line of the agent's answer to a pick: new, naming what was picked, and not the page's own "sent" note. */
+const NOT_ANSWER = /sending|sent\b|on its way|waiting|working|thinking|taking a look|picking|choosing|got it\b|preparing/i
+function answerLine(before, now, picked) {
+  const name = (String(picked ?? '').match(PIZZA) ?? [])[0]
+  return now
+    .split('\n')
+    .filter((l) => l.trim().length > 25 && !before.includes(l) && !NOT_ANSWER.test(l) && (!name || new RegExp(name, 'i').test(l) || /order|pair|with (it|your)|i.d (have|go|order)/i.test(l)))
+    .join(' / ')
+    .slice(0, 240)
 }
 
 /** Waits until the page shows words it did not show before, for up to `ms`. */
@@ -98,7 +109,7 @@ async function answered(p, before, ms, what) {
     const now = await shown(p).catch(() => before)
     if (now !== before && now.length > 0) {
       // A new line of the agent's that says more than that the pick is on its way
-      const fresh = now.split('\n').filter((l) => l.trim().length > 25 && !before.includes(l) && !/sending|sent\.|waiting|working|thinking|taking a look|picking|choosing/i.test(l)).join(' / ').slice(0, 300)
+      const fresh = answerLine(before, now, null)
       if (fresh) return check(what, true, { seconds: Math.round((Date.now() - start) / 1000), fresh })
     }
     await sleep(2000)
@@ -304,7 +315,7 @@ async function SOAK2() {
     while (Date.now() - start < ms) {
       await answerApp(who, counts).catch(() => {})
       const now = await shown(p).catch(() => before)
-      const fresh = now.split('\n').filter((l) => l.trim().length > 25 && !before.includes(l) && !/sending|sent\.|waiting|working|thinking|taking a look|picking|choosing/i.test(l)).join(' / ').slice(0, 300)
+      const fresh = answerLine(before, now, null)
       if (now !== before && fresh) return check(what, true, { seconds: Math.round((Date.now() - start) / 1000), fresh })
       await sleep(2000)
     }
@@ -458,7 +469,7 @@ async function WAKE() {
       const b = await bar(p)
       if (b && b !== bars.at(-1)) bars.push(b)
       const now = await shown(p).catch(() => before)
-      const fresh = now.split('\n').filter((l) => l.trim().length > 25 && !before.includes(l) && !/sending|sent\.|waiting|working|thinking|taking a look|picking|choosing/i.test(l)).join(' / ').slice(0, 240)
+      const fresh = answerLine(before, now, picked)
       if (now !== before && fresh) {
         ok = true
         check(`${what}: answered on the page`, true, { seconds: Math.round((Date.now() - t0) / 1000), fresh, bars: bars.join(' | ').slice(0, 400) })
@@ -510,12 +521,14 @@ async function WAKE() {
   }
   step('5. three clicks in a row, the app closed', { picks: picks.join(', '), bar: await bar(p) })
   let seen5 = ''
+  const last5 = (String(picks.at(-1) ?? '').match(PIZZA) ?? ['(none)'])[0]
+  const got5 = () => answerLine(before5, seen5, picks.at(-1)).match(new RegExp(last5, 'i'))
   while (Date.now() - t5 < 360_000) {
     seen5 = await shown(p).catch(() => '')
-    if (seen5 !== before5 && new RegExp(picks.at(-1) ?? 'x', 'i').test(seen5.split('\n').filter((l) => !before5.includes(l)).join(' '))) break
+    if (got5()) break
     await sleep(2000)
   }
-  check('5. the last of three quick clicks is answered on the page', new RegExp(picks.at(-1) ?? 'x', 'i').test(seen5.split('\n').filter((l) => !before5.includes(l)).join(' ')), { seconds: Math.round((Date.now() - t5) / 1000), bar: await bar(p), answersMention: picks.filter((x) => x && new RegExp(x.split(' ')[0], 'i').test(seen5)).join(', ') })
+  check('5. the last of three quick clicks is answered on the page', !!got5(), { seconds: Math.round((Date.now() - t5) / 1000), bar: await bar(p), lastPick: last5, answer: answerLine(before5, seen5, picks.at(-1)).slice(0, 200) })
   // 6. The terminal window closed with the app open in it (its programs hang up), and a click
   await sleep(30_000)
   await type(resume)
@@ -557,7 +570,7 @@ async function WAKE() {
   while (Date.now() - t8 < 420_000) {
     await answerApp(who, counts).catch(() => {})
     const now = await shown(p).catch(() => before8)
-    if (now !== before8 && now.split('\n').some((l) => l.trim().length > 25 && !before8.includes(l) && !/sending|sent\.|waiting|working/i.test(l))) {
+    if (now !== before8 && answerLine(before8, now, null)) {
       ok8 = true
       break
     }
@@ -637,7 +650,7 @@ async function WAKEBOOT2() {
     const b = await bar(p)
     if (b && b !== bars.at(-1)) bars.push(b)
     const now = await shown(p).catch(() => before)
-    if (now !== before && now.split('\n').some((l) => l.trim().length > 25 && !before.includes(l) && !/sending|sent\.|waiting|working|picking|choosing/i.test(l))) {
+    if (now !== before && answerLine(before, now, null)) {
       ok = true
       break
     }
@@ -695,7 +708,7 @@ async function WAKELITE() {
       const b = await bar(p)
       if (b && b !== bars.at(-1)) bars.push(b)
       const now = await shown(p).catch(() => before)
-      const fresh = now.split('\n').filter((l) => l.trim().length > 25 && !before.includes(l) && !/sending|sent\.|waiting|working|thinking|picking|choosing/i.test(l)).join(' / ').slice(0, 200)
+      const fresh = answerLine(before, now, null)
       if (now !== before && fresh) {
         check(`${what}: answered on the page`, true, { seconds: Math.round((Date.now() - t0) / 1000), fresh, bars: bars.join(' | ').slice(0, 400), reopened: woke ?? 'none new', codexServer: who === 'codex' ? codexServer() : undefined })
         return true

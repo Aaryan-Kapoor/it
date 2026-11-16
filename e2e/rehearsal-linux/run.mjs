@@ -336,6 +336,8 @@ async function main() {
       itService: exec('systemctl --user -M ana@ is-active it.service 2>&1 | head -1', { quiet: true }).stdout.trim(),
     }
     log(`after the restart, nobody signed in: ${JSON.stringify(result.afterBootNobodySignedIn)}`)
+    // The display is back before the recording starts again
+    exec('for i in $(seq 1 60); do [ -e /tmp/.X11-unix/X1 ] && systemctl is-active -q rehearsal-wm.service && break; sleep 1; done; sleep 3', { timeout: 120_000 })
     exec(`ffmpeg -nostdin -y -loglevel error -f x11grab -framerate 12 -video_size 1920x1080 -i :1 -vf scale=1600:-2 -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p /var/lib/rehearsal-video/video.mp4 > /var/lib/rehearsal-video/ffmpeg.log 2>&1 & echo $! > /run/rehearsal-ffmpeg.pid`)
     exec('mkdir -p /var/lib/rehearsal-flow && chown ana:ana /var/lib/rehearsal-flow')
     // The second screen: started as ana without a login session (docker exec -u, no PAM)
