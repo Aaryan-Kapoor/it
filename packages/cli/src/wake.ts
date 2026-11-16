@@ -67,13 +67,14 @@ export const WOKEN =
  * Codex runs its commands there in PowerShell, and lets one out of its sandbox, where alone `it`
  * reaches It, only where its rule for `it` matches it. It matches only a command it reads as
  * plain words, and it cannot read one with `--%` in it or any of ’ ‘ “ ” – — ―, which it then
- * refuses where nobody can approve it, as here. A woken Codex that wrote JSON with `--%`, as it
+ * refuses where nobody can approve it, as in a conversation reopened in Ask for approval or Read
+ * Only (in Approve for me its reviewer decides it, and in Full Access it runs). A woken Codex that wrote JSON with `--%`, as it
  * had been told to in PowerShell, was refused, and the page said only "Your agent could not do
  * that" (the Windows rehearsal, Codex 0.167.2). JSON in single quotes is read whole however
  * PowerShell hands it on (`windows-args.ts`), so it is told to write JSON as it would anywhere.
  */
 export const WOKEN_POWERSHELL =
-  "[It] Codex runs your commands here in PowerShell, and runs an `it` command in this turn only where it can read it as plain words: write JSON in single quotes as you would anywhere, with an apostrophe as two (`''`), never after `--%`, and with ’ ‘ “ ” – — ― written as `\\u2019`, `\\u2018`, `\\u201c`, `\\u201d`, `\\u2013`, `\\u2014` and `\\u2015`, since any of those in a command has Codex refuse it."
+  "[It] Codex runs your commands here in PowerShell, and in the modes in which it asks before a command, it lets an `it` command through without asking only where it can read it as plain words: write JSON in single quotes as you would anywhere, with an apostrophe as two (`''`), never after `--%`, and with ’ ‘ “ ” – — ― written as `\\u2019`, `\\u2018`, `\\u201c`, `\\u201d`, `\\u2013`, `\\u2014` and `\\u2015`, since any of those in a command can have Codex refuse it."
 
 /** What a conversation of an app is told when It reopens it on a system: `WOKEN`, and for Codex on Windows `WOKEN_POWERSHELL` after it. */
 export const wokenNote = (harness: string, platform: NodeJS.Platform = process.platform): string =>
