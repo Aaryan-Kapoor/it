@@ -343,6 +343,54 @@ describe('the command each agent app is carried on with', () => {
     expect(argvOf('ask', 'win32').argv.join(' ')).not.toContain('writable_roots')
   })
 
+  test('Pi, OpenCode and Hermes are reopened in each mode they offer by that run’s own flag, and as they always were where nothing is chosen', () => {
+    const argvOf = (harness: string, session: string, wakeMode?: string) => {
+      const how = carrying(harness, session, 'a click', { ...has, ...(wakeMode === undefined ? {} : { wakeMode }) })
+      if (typeof how === 'string') throw new Error(how)
+      expect(how.input).toBe('a click')
+      return how.argv
+    }
+    const before = { pi: ['pi', '--print', '--session', UUID] }
+    // Pi has one way to run, whatever is chosen or kept
+    for (const mode of [undefined, 'full-access', 'made-up']) expect(argvOf('pi', UUID, mode)).toEqual(before.pi)
+    // OpenCode: --auto for Auto-approve and nothing else; nothing for Ask, for nothing chosen, and for a name it has no mode for
+    const oc = 'ses_6f2a9c01ffe4'
+    expect(argvOf('opencode', oc, 'auto')).toEqual(['opencode', 'run', '--auto', '--session', oc])
+    for (const mode of [undefined, 'ask', 'made-up', 'yolo', 'full-access']) expect(argvOf('opencode', oc, mode)).toEqual(['opencode', 'run', '--session', oc])
+    // Hermes: --yolo for YOLO and nothing else, before the query is read from the input
+    const hs = '20261006_005959_a9a014'
+    expect(argvOf('hermes', hs, 'yolo')).toEqual(['hermes', 'chat', '--resume', hs, '--yolo', '--query-file', '-'])
+    for (const mode of [undefined, 'approvals', 'made-up', 'auto', 'full-access'])
+      expect(argvOf('hermes', hs, mode)).toEqual(['hermes', 'chat', '--resume', hs, '--query-file', '-'])
+    // On Windows, from where the program is, the same words after it
+    const start = ['C:\\Program Files\\nodejs\\node.exe', 'C:\\npm\\node_modules\\opencode-ai\\bin\\opencode']
+    expect((carrying('opencode', oc, 'x', { ...has, start, wakeMode: 'auto' }) as { argv: string[] }).argv).toEqual([
+      ...start,
+      'run',
+      '--auto',
+      '--session',
+      oc,
+    ])
+  })
+
+  test('the modes of Pi, OpenCode and Hermes are listed from most to least, the one that allows everything recommended, and where nothing is chosen they are what It always ran', () => {
+    expect(WAKE_MODES.pi?.choices.map((c) => c.id)).toEqual(['full-access'])
+    expect(WAKE_MODES.opencode?.choices.map((c) => c.id)).toEqual(['auto', 'ask'])
+    expect(WAKE_MODES.hermes?.choices.map((c) => c.id)).toEqual(['yolo', 'approvals'])
+    for (const harness of ['pi', 'opencode', 'hermes'] as const) {
+      const list = WAKE_MODES[harness]!
+      expect(list.choices[0]?.recommended).toBe(true)
+      expect(list.choices.filter((c) => c.recommended)).toHaveLength(1)
+      // One short line each, under the choice
+      for (const c of list.choices) expect(c.says.length).toBeLessThanOrEqual(95)
+      // Nothing chosen is what an It from before the choice runs, so that an update changes nothing
+      expect(wakeModeOf([], harness)).toBe(list.default)
+      expect(WAKE_MODE_LEGACY[harness]).toBe(list.default)
+      // A name this It does not know is the mode that allows least
+      expect(wakeModeOf([{ harness, mode: 'from-a-newer-it' }], harness)).toBe(list.choices.at(-1)!.id)
+    }
+  })
+
   test('Ask for approval is exactly what It ran before there was a choice, but that the person’s own reviewer cannot approve anything there', () => {
     const thread = '01a10f7c-062c-7010-8d57-8e1007169551'
     expect((carrying('codex', thread, 'x', { ...has, wakeMode: 'ask' }) as { argv: string[] }).argv).toEqual([

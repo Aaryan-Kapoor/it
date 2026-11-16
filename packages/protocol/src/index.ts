@@ -514,20 +514,75 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
       },
     ],
   },
+  // Pi has no permission modes: it asks before nothing, and runs every tool it has as you. One way
+  // to run is no choice, and the Machines page shows it as plain text with its line
+  pi: {
+    default: 'full-access',
+    choices: [
+      {
+        id: 'full-access',
+        label: 'Full access',
+        recommended: true,
+        says: 'Pi has no permission modes: a reopened conversation can do all you can on this machine.',
+      },
+    ],
+  },
+  // OpenCode's `opencode run --auto`, which its terminal calls auto-approving permissions, or not.
+  // Without it, `opencode run` refuses every permission your settings would ask about, as nobody
+  // is there to answer, which is how It always reopened OpenCode
+  opencode: {
+    default: 'ask',
+    choices: [
+      {
+        id: 'auto',
+        label: 'Auto-approve',
+        recommended: true,
+        says: 'Whatever your OpenCode settings would ask about is approved; only what they deny is refused.',
+      },
+      {
+        id: 'ask',
+        label: 'Ask',
+        says: 'Only what your OpenCode settings allow runs; whatever they would ask about is refused.',
+      },
+    ],
+  },
+  // Hermes's `--yolo`, or its approvals, under which a one-shot run refuses a command Hermes flags
+  // as dangerous unless the person's settings approve it there, which is how It always reopened Hermes
+  hermes: {
+    default: 'approvals',
+    choices: [
+      {
+        id: 'yolo',
+        label: 'YOLO',
+        recommended: true,
+        says: 'Hermes approves every command but its hardline blocklist and your approvals.deny rules.',
+      },
+      {
+        id: 'approvals',
+        label: 'Approvals',
+        says: 'Commands Hermes flags as dangerous are refused, unless your Hermes settings approve them.',
+      },
+    ],
+  },
 }
 /**
  * The most an It from before there was a choice may run each app's reopened conversations in.
  * Such an It, on a machine that joined this one, ignores the choice. For Codex it gives the
  * workspace sandbox and nothing about who approves, so a reviewer the person chose in their own
- * Codex settings may approve there: at most Approve for me. Where what is chosen allows less than
- * this, the backend does not let it start a run, and where it allows more, the page says that the
- * machine runs less (see `runBegan`).
+ * Codex settings may approve there: at most Approve for me. Pi, OpenCode and Hermes it runs as they
+ * are, with nothing on the command line about permissions: Pi in its one way, OpenCode in Ask and
+ * Hermes in Approvals, which are the modes where nothing is chosen. Where what is chosen allows less
+ * than this, the backend does not let it start a run, and where it allows more, the page says that
+ * the machine runs less (see `runBegan`).
  */
 export const WAKE_MODE_LEGACY: Partial<Record<Harness, string>> = {
   codex: 'approve-for-me',
   // A Claude Code conversation is reopened by such an It in the mode it was last in where that
   // asks nobody, which can be Bypass Permissions, and with no mode otherwise
   'claude-code': 'bypassPermissions',
+  pi: 'full-access',
+  opencode: 'ask',
+  hermes: 'approvals',
 }
 /** Where a mode stands in its app's order, from 0 for the one that allows most; -1 for none. */
 export function wakeModeRank(harness: string, mode: string): number {

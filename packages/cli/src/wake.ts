@@ -376,8 +376,17 @@ export interface Carrying {
  *   that allows lets its command through first. Without it, `approvals_reviewer` is said to be
  *   `user` (`CODEX_NOT_REVIEWED`), so that a reviewer the person chose in their own settings
  *   does not approve anything either. Given on the command line, these win over the person's own.
- * - Pi, OpenCode and Hermes are run as they are in a window, with whatever their own settings
- *   allow there. Nothing can ask the person for more, since they are not there.
+ * - Pi has no permission modes, and runs every tool it has as the person, as it does in a window.
+ * - OpenCode is run as `opencode run`, which refuses whatever the person's OpenCode settings would
+ *   ask about, since nobody is there to answer, unless the mode chosen is Auto-approve, given as
+ *   `--auto`, under which it approves all that and refuses only what those settings deny.
+ * - Hermes is run with its approvals as the person's Hermes settings have them for a one-shot run,
+ *   which refuse a command Hermes flags as dangerous unless those settings approve it there, unless
+ *   the mode chosen is YOLO, given as `--yolo`, under which Hermes approves every command but its
+ *   own hardline blocklist and the person's `approvals.deny` rules.
+ *
+ * Each mode is given on the command line of that one run, and nothing is written to the app's own
+ * settings. A mode's name that this It does not know is the one that allows least.
  */
 export function carrying(
   harness: string,
@@ -455,13 +464,16 @@ export function carrying(
     if (!/^[0-9a-f][0-9a-f-]{7,63}$/i.test(session)) return odd
     const pi = starting('pi')
     if (!pi) return `${app} was not found`
+    // Pi has one way to run, whatever mode is chosen
     return { argv: [...pi, '--print', '--session', session], input: text, app }
   }
   if (harness === 'opencode') {
     if (!/^ses_[A-Za-z0-9]{1,120}$/.test(session)) return odd
     const opencode = starting('opencode')
     if (!opencode) return `${app} was not found`
-    return { argv: [...opencode, 'run', '--session', session], input: text, app }
+    // Auto-approve where it is chosen, and otherwise none, which refuses what would ask
+    const auto = has.wakeMode === 'auto' ? ['--auto'] : []
+    return { argv: [...opencode, 'run', ...auto, '--session', session], input: text, app }
   }
   if (harness === 'hermes') {
     // Hermes names a conversation by when it began and a few hex digits. Any other word is not
@@ -469,7 +481,9 @@ export function carrying(
     if (!/^[0-9]{8}_[0-9]{6}_[0-9a-f]{4,32}$/.test(session)) return odd
     const hermes = starting('hermes')
     if (!hermes) return `${app} was not found`
-    return { argv: [...hermes, 'chat', '--resume', session, '--query-file', '-'], input: text, app }
+    // YOLO where it is chosen, and otherwise Hermes's approvals as the person's settings have them
+    const yolo = has.wakeMode === 'yolo' ? ['--yolo'] : []
+    return { argv: [...hermes, 'chat', '--resume', session, ...yolo, '--query-file', '-'], input: text, app }
   }
   return `It has no way to reopen a conversation of ${app}`
 }
