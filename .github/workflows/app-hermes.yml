@@ -16,7 +16,12 @@ name: Hermes Agent, the real app
 #     button, a paired browser presses it, and the job passes only when Hermes then asks the model
 #     for a new turn of that conversation whose newest user message is It's wording for that
 #     click, which the stand-in answers with `it patch`, and the page shows it. Where Hermes
-#     refuses the add-on, the click must wait until the command that allows it has been run.
+#     refuses the add-on, the click must wait until the command that allows it has been run;
+#   - closes the terminal and Hermes's gateway, and has Auto-wake reopen the conversation once
+#     with YOLO chosen for Hermes on the Machines page and once with Approvals, each turn running a
+#     command Hermes flags as dangerous: YOLO runs it, Approvals refuses it, and a conversation
+#     Hermes's gateway holds keeps its own approvals in both. Hermes before 0.20.5 cannot be
+#     reopened, and that part is not run there.
 #
 # It runs on every pull request, on every push to master, once a night and by hand. It is a
 # workflow of its own and blocks no merge: when Hermes publishes a version that It does not work
@@ -56,7 +61,7 @@ jobs:
   hermes:
     name: Hermes Agent, ${{ matrix.which }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -110,5 +115,5 @@ jobs:
             bash "$RUNNER_TEMP/install-hermes.sh" ${args[@]+"${args[@]}"} --non-interactive --skip-browser < /dev/null
           env -i HOME="$RUNNER_TEMP/hermes" PATH=/usr/bin:/bin "$RUNNER_TEMP/hermes/.local/bin/hermes" --version
       - name: It's add-on in the real Hermes Agent, and a click that comes back as a turn
-        timeout-minutes: 8
+        timeout-minutes: 12
         run: node e2e/apps/hermes.mjs "$RUNNER_TEMP/hermes"
