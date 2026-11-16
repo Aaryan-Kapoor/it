@@ -111,14 +111,15 @@ const REFUSED_LOAD_MS = 2000
  * Where pages are shown from: the port after the site's own, on the machine the site itself was
  * reached at and by the same name, so that a page is reached wherever the site is.
  */
-const pages = () => `${location.protocol}//${location.hostname}:${contentPort(Number(location.port) || (location.protocol === 'https:' ? 443 : 80))}`
+const pagesPort = () => contentPort(Number(location.port) || (location.protocol === 'https:' ? 443 : 80))
+const pages = () => `${location.protocol}//${location.hostname}:${pagesPort()}`
 /**
  * Where pages come from, said to a person whose page has not come: the port after the site's own
  * is reached as the site is, and a browser that reaches the site through a port forwarded to it
  * alone, as over SSH, reaches no page and is told nothing by the frame. A connection that is
- * only slow is told the same, which is why it is said as what to do where that is so.
+ * only slow is told the same, which is why it is said as what to do where that is so. The port
+ * is said as a number, which an address leaves out where it is the protocol's own, as 443 is.
  */
-const pagesPort = () => new URL(pages()).port
 export const notReached = () =>
   `Pages are shown from port ${pagesPort()} of the machine It runs on. If this browser reaches It through a forwarded port, forward port ${pagesPort()} too, under the same number.`
 export const didNotLoad = () =>
