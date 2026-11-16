@@ -31,6 +31,7 @@ import { NOT_LOADED_MOST } from './lib/listening'
 import { log } from './lib/log'
 import { addonRuntime, session } from './schema'
 import { lineOf, pairedOf, revokeMachine } from './sessions'
+import { endedTurn } from './turns'
 
 const view = (m: Doc<'machines'>) => ({
   id: m._id,
@@ -414,9 +415,11 @@ export const runBegan = mutation({
  * could not be reopened is taken back. Answers whether what it took away had been asked to stop.
  */
 export const runEnded = mutation({
-  args: { for: v.optional(session), ok: v.optional(v.boolean()), run: v.optional(v.string()) },
-  handler: async (ctx, { for: s, ok, run }) => {
-    const { machine } = await requireMachine(ctx)
+  /** `ran` says that the run ran to its end, as its machine saw: the conversation's turn is over then, and is said so (see `endedTurn`). */
+  args: { for: v.optional(session), ok: v.optional(v.boolean()), run: v.optional(v.string()), ran: v.optional(v.boolean()) },
+  handler: async (ctx, { for: s, ok, run, ran }) => {
+    const { user, machine } = await requireMachine(ctx)
+    if (s && ran) await endedTurn(ctx, user._id, machine._id, s)
     const now = machine.runs ?? []
     // Only the run that is named is over: another of the same conversation that has begun since
     // stays as it is. An ending that names none is of a run that was begun with no name, as an

@@ -1914,6 +1914,8 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       // reopened for both at once, in the order they were made
       await hook(false)
       writeFileSync(path.join(bin, 'go-0'), '')
+      // The run ran to its end, as this machine saw: said so, so that its page says its turn is over
+      await until(() => stand.calls.some((c) => c.name === 'machines:runEnded' && c.args.ran === true))
       await until(() => given(bin, 1).length > 0)
       const second = given(bin, 1)
       expect(second).not.toContain('[action click-1]')
@@ -2133,6 +2135,8 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(gone()).toBe(true)
     await until(() => said.some((line) => line.includes('hold on what it was reopened for was lost')))
     await until(() => stand.calls.some((c) => c.name === 'machines:runEnded'))
+    // Ended by It before its turn was over: not said to have run to its end, so its turn is not said to be over for it
+    expect(stand.calls.filter((c) => c.name === 'machines:runEnded' && c.args.ran)).toEqual([])
     // It is not this machine's any more: not said to be handed over. Giving it back is asked, which It answers by doing nothing where the click is another's
     expect(called('delivery:handedOff')).toEqual([])
     await until(() => called('delivery:release').includes('click-1'))
@@ -5986,8 +5990,10 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
         await pause(300)
         search.near = true
       }
-      // None of those ran, so nothing was said of a mode it ran in, and no run of It's was noted in the conversation's record
+      // None of those ran, so nothing was said of a mode it ran in, no run of It's was noted in the conversation's record,
+      // and none was said to have run to its end
       expect(stand.calls.filter((c) => c.name === 'machines:runNoted')).toEqual([])
+      expect(stand.calls.filter((c) => c.name === 'machines:runEnded' && c.args.ran)).toEqual([])
       expect(existsSync(path.join(home, 'claude-runs.json'))).toBe(false)
       // And then T3 Code has said, and nothing stands in the way: it is reopened once more
       await until(() => begins === 5, 8000)

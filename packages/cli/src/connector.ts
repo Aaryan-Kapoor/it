@@ -2742,7 +2742,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     for (const run of [running.get(key), unsettled.get(key)]) if (run) run.stopped = true
     keepRuns()
   }
-  const pendingEnds = new Map<string, { for: { harness: string; id: string }; run?: string; ok?: true }>()
+  const pendingEnds = new Map<string, { for: { harness: string; id: string }; run?: string; ok?: true; ran?: true }>()
   let finishing = false
   const finishRuns = async () => {
     if (finishing || over) return
@@ -2767,18 +2767,22 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           // by number, and a note that told a process's start another way cannot be compared: both stay as they were)
           if (now === null || still.told !== SINCE_TOLD || now.get(still.pid) === still.since) continue
         }
-        await call<{ stopped?: boolean } | null>('mutation', api.machines.runEnded, ended).then(
-          (said) => {
-            if (pendingEnds.get(key) === ended) pendingEnds.delete(key)
-            // A person stopped it just before It was told it was over, and the word of that went
-            // with it: its conversation is told it was stopped, as it would have been on hearing it
-            if (said?.stopped && !reopenedNow.has(key)) {
-              rememberStopped(key)
-              if (!pendingStops.has(key) && cutOff.delete(key)) keepCutOff()
-            }
-          },
-          () => {},
-        )
+        const told = (said: { stopped?: boolean } | null) => {
+          if (pendingEnds.get(key) === ended || pendingEnds.get(key)?.run === ended.run) pendingEnds.delete(key)
+          // A person stopped it just before It was told it was over, and the word of that went
+          // with it: its conversation is told it was stopped, as it would have been on hearing it
+          if (said?.stopped && !reopenedNow.has(key)) {
+            rememberStopped(key)
+            if (!pendingStops.has(key) && cutOff.delete(key)) keepCutOff()
+          }
+        }
+        await call<{ stopped?: boolean } | null>('mutation', api.machines.runEnded, ended).then(told, async (err) => {
+          // An It older than the word that the run ran, and its turn is over, takes the rest
+          if (!ended.ran || !refusedFor(err)) return
+          const { ran: _ran, ...plain } = ended
+          pendingEnds.set(key, plain)
+          await call<{ stopped?: boolean } | null>('mutation', api.machines.runEnded, plain).then(told, () => {})
+        })
       }
     } finally {
       finishing = false
@@ -3253,6 +3257,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         for: session,
         run: runId,
         ...(ended === null || ended === STOPPED || ended === NOT_STARTED ? { ok: true } : {}),
+        // It ran, to its end, as It saw: its turn is over, which its page says where nothing else
+        // said so. Not of one that was not started, as for a conversation open meanwhile or held
+        // for T3 Code at the last moment, nor of one the person stopped
+        ...(ended === null ? { ran: true as const } : {}),
       })
       await finishRuns()
     }

@@ -3049,6 +3049,27 @@ describe('clicks and their delivery', () => {
     expect(await page()).toBeNull()
   })
 
+  test('a reopened run that ran to its end has its conversation’s turn said to be over, so the page says its agent finished, and one that was not started does not', async () => {
+    const { alice, m } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    const turn = async () => (await alice.browser.query(api.artifacts.get, { slug: 'plan' })).turn as { since: number; endedAt: number | null } | null
+    // Not started, as for a conversation open meanwhile or held for T3 Code at the last moment: nothing is said of its turn
+    await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'not-started', ids: [], modes: ['codex', 'claude-code'] })
+    await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'not-started', ok: true })
+    expect(await turn()).toBeNull()
+    // Ran to its end, its add-on having said nothing of the turn: the turn is said to be over, from now
+    await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'ran', ids: [], modes: ['codex', 'claude-code'] })
+    const before = Date.now()
+    await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'ran', ok: true, ran: true })
+    expect((await turn())?.endedAt).toBeGreaterThanOrEqual(before)
+    // And one its add-on said was running is ended
+    await m.as.mutation(api.turns.say, { for: SESSION, running: true })
+    expect((await turn())?.endedAt).toBeNull()
+    await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'ran-again', ids: [], modes: ['codex', 'claude-code'] })
+    await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'ran-again', ok: true, ran: true })
+    expect((await turn())?.endedAt).not.toBeNull()
+  })
+
   test('a machine says which apps it reopens in the mode chosen: an app it does not name is run as by an It from before the choice, and its old word that it knows modes is taken for Codex alone', async () => {
     const { alice, m } = await setup()
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
