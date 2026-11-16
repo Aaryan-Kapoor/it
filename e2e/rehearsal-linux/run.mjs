@@ -389,7 +389,7 @@ async function main() {
     sh(['exec', '-d', '-u', 'ana', '-e', 'DISPLAY=:1', '-e', 'HOME=/home/ana', name, '/opt/ms-playwright/chromium-1228/chrome-linux64/chrome', '--user-data-dir=/opt/person-profile/screen2', '--no-sandbox', '--test-type', '--no-first-run', '--no-default-browser-check', '--password-store=basic', '--remote-debugging-port=9223', '--window-position=980,40', '--window-size=900,1000', 'about:blank'])
     await new Promise((r) => setTimeout(r, 6000))
     await new Promise((resolve) => {
-      const child = spawn('sudo', ['-n', 'docker', 'exec', '-u', 'ana', '-e', 'HOME=/home/ana', '-e', 'DISPLAY=:1', '-e', 'PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright', '-w', '/home/ana', name, 'node', '/build/harness/scripted.mjs', 'WAKEBOOT2', app, FLOW], { stdio: ['ignore', 'pipe', 'pipe'] })
+      const child = spawn('sudo', ['-n', 'docker', 'exec', '-u', 'ana', '-e', 'REHEARSAL_HARNESS=1', '-e', 'HOME=/home/ana', '-e', 'DISPLAY=:1', '-e', 'PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright', '-w', '/home/ana', name, 'node', '/build/harness/scripted.mjs', 'WAKEBOOT2', app, FLOW], { stdio: ['ignore', 'pipe', 'pipe'] })
       const kill = setTimeout(() => exec("pkill -INT -f 'node /build/harness/' || true"), 20 * 60_000)
       child.stdout.on('data', (d) => process.stdout.write(redact(d.toString(), held)))
       child.stderr.on('data', (d) => process.stdout.write(redact(d.toString(), held)))
