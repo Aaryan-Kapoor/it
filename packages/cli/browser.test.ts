@@ -2,7 +2,7 @@
 // handed to the system's opener. No real browser is opened by any of these: the opener is
 // always stood in for.
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
@@ -161,6 +161,22 @@ describe('what an agent’s commands are held to', () => {
     const blocked = path.join(dir, `file-${n++}`)
     writeFileSync(blocked, '')
     expect(takeOpening(path.join(blocked, 'browser-opened.json'), Date.now())).toBe(false)
+  })
+  test('commands that ask at once take turns: one that finds another holding the lock opens nothing, even with the note long out of date', () => {
+    const file = noteIn()
+    const now = 5_000_000_000_000
+    expect(takeOpening(file, now)).toBe(true)
+    expect(existsSync(`${file}.lock`)).toBe(false)
+    // Another command holds the lock, as it does while it reads and writes the note
+    mkdirSync(`${file}.lock`)
+    expect(takeOpening(file, now + 10 * OPENED_FOR_MS)).toBe(false)
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ at: now })
+    // A lock older than a minute was left by a command that ended: it is taken away, and that command still opens nothing
+    const later = Date.now() + 2 * 60_000
+    expect(takeOpening(file, now + 10 * OPENED_FOR_MS, () => later)).toBe(false)
+    expect(existsSync(`${file}.lock`)).toBe(false)
+    // The next one may
+    expect(takeOpening(file, now + 10 * OPENED_FOR_MS)).toBe(true)
   })
 })
 

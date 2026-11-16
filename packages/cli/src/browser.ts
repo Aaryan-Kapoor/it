@@ -2,8 +2,7 @@
 // on: whether to, and how. Kept apart from the commands so that each case can be tried by itself,
 // with the system's opener stood in for.
 import { type ChildProcess, spawn } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmdirSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { inHome, writePrivate } from './lib'
@@ -142,49 +141,56 @@ export function seenLately(displays: unknown, now: number): boolean {
   })
 }
 
+/** How old a lock on the note has to be before it is taken for one that a command which ended left behind. */
+const LOCK_LEFT_MS = 60_000
+
 /**
- * Takes the one opening that the ten minutes allow, by making the note of it, and says whether
- * it was taken. A note made less than ten minutes ago, either way of the clock, means it was
- * taken already. A note that is there and cannot be read is never taken for no note: it may be
- * one that another command is writing at this moment. An older note is put aside first by a
- * rename, which only one command can do, and the new one is made only where no file has the name.
- * So of commands run together, at most one opens a browser, and where It's folder cannot be
- * written, as in a sandbox that keeps it read-only, none does.
+ * Takes the one opening that the ten minutes allow, and says whether it was taken. Commands that
+ * ask at the same moment take turns by a lock beside the note, a folder that only one of them can
+ * make. A command that finds the lock taken opens nothing. One that finds a lock older than a
+ * minute, which a command that ended in the middle left, takes it away and opens nothing either,
+ * so that taking away a lock never lets two commands in at once. Holding the lock, it reads the
+ * note: one made less than ten minutes ago, either way of the clock, means the opening was taken
+ * already, and a note that is there and cannot be read is never taken for no note. Otherwise the
+ * note is written anew, whole, before the lock is let go. Where It's folder cannot be written, as
+ * in a sandbox that keeps it read-only, nothing is opened.
  */
-export function takeOpening(file: string, now: number): boolean {
-  let text: string | undefined
-  try {
-    text = readFileSync(file, 'utf8')
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return false
-  }
-  if (text !== undefined) {
-    let at: unknown
-    try {
-      at = (JSON.parse(text) as { at?: unknown } | null)?.at
-    } catch {
-      return false
-    }
-    if (typeof at !== 'number' || !Number.isFinite(at) || Math.abs(now - at) < OPENED_FOR_MS) return false
-    const aside = `${file}.${randomBytes(8).toString('hex')}.old`
-    try {
-      renameSync(file, aside)
-    } catch {
-      return false
-    }
-    rmSync(aside, { force: true })
-  }
+export function takeOpening(file: string, now: number, clock: () => number = Date.now): boolean {
+  const lock = `${file}.lock`
   try {
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-    const fd = openSync(file, 'wx', 0o600)
+    mkdirSync(lock, { mode: 0o700 })
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST')
+      try {
+        if (Math.abs(clock() - statSync(lock).mtimeMs) > LOCK_LEFT_MS) rmdirSync(lock)
+      } catch {}
+    return false
+  }
+  try {
+    let text: string | undefined
     try {
-      writeSync(fd, JSON.stringify({ at: now }))
-    } finally {
-      closeSync(fd)
+      text = readFileSync(file, 'utf8')
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return false
     }
+    if (text !== undefined) {
+      let at: unknown
+      try {
+        at = (JSON.parse(text) as { at?: unknown } | null)?.at
+      } catch {
+        return false
+      }
+      if (typeof at !== 'number' || !Number.isFinite(at) || Math.abs(now - at) < OPENED_FOR_MS) return false
+    }
+    writePrivate(file, { at: now })
     return true
   } catch {
     return false
+  } finally {
+    try {
+      rmdirSync(lock)
+    } catch {}
   }
 }
 
