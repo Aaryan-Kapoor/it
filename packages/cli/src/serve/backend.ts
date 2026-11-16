@@ -757,6 +757,64 @@ const DATABASE = 'db.sqlite3'
  */
 const LISTED_IN = process.platform === 'darwin' ? 'en_US.UTF-8' : 'C.UTF-8'
 
+/**
+ * How Windows is asked for the list of what runs. PowerShell, and Windows behind it, can be slow
+ * or fail once on a machine that is busy, on battery or just woken, so a list that does not come
+ * is asked for again: three times in all at most, a moment apart, and within two minutes
+ * together. A try is begun only while there is time enough left for it to be of use, so two
+ * tries that each ran out of time are the last.
+ */
+const LIST_TRIES = 3
+const LIST_MS = 120_000
+const LIST_EACH_MS = 60_000
+const LIST_LEAST_MS = 10_000
+const LIST_PAUSE_MS = 1_500
+
+/**
+ * The rows of what PowerShell printed for `script`, once it has printed the list whole: it
+ * ended as asked, with its last word and the word for this very program among the rows. Where
+ * it would not, after as many tries as it is given, that is what is said and thrown, with why
+ * in a code: `timed_out`, `exit_<n>` for the code PowerShell ended with, or `unreadable` for
+ * anything else, such as a list that came without its last word. Nothing PowerShell printed is
+ * said, here or in the log.
+ */
+function listedByWindows(script: string, say?: (line: string) => void): string[] {
+  const until = Date.now() + LIST_MS
+  let why = 'unreadable'
+  for (let tries = 1; ; tries++) {
+    const ran = runSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: Math.max(1, Math.min(LIST_EACH_MS, until - Date.now())),
+      maxBuffer: 64 * 1024 * 1024,
+    })
+    if (!ran.error && ran.status === 0) {
+      const rows = String(ran.stdout)
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+      if (rows.includes('end') && rows.includes('self')) return rows
+    }
+    why =
+      (ran.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT'
+        ? 'timed_out'
+        : typeof ran.status === 'number' && ran.status !== 0
+          ? `exit_${ran.status}`
+          : 'unreadable'
+    if (tries >= LIST_TRIES || until - Date.now() - LIST_PAUSE_MS < LIST_LEAST_MS) {
+      say?.(
+        `backend: the list of what runs on this machine could not be had (${why}, ${tries} ${tries === 1 ? 'try' : 'tries'}), and no backend program is started`,
+      )
+      throw new Problem(
+        `It could not look through the programs running on this machine for a backend program left on its folder (${why}, after ${tries} ${tries === 1 ? 'try' : 'tries'}), so it starts none.`,
+        'cannot_list_processes',
+        'It asks Windows through PowerShell, with `Get-CimInstance Win32_Process`, which has to be allowed to run. Where Windows was only slow or busy for a moment, as it can be on a laptop that is on battery or has just woken, run the same command again.',
+      )
+    }
+    say?.(`backend: the list of what runs on this machine could not be had (${why}, try ${tries} of ${LIST_TRIES}), and is asked for again`)
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LIST_PAUSE_MS)
+  }
+}
+
 /** What tells a file or a folder from every other on this machine, by whatever name it is reached. Nothing where there is no such file, or the system does not tell files apart so. */
 function identity(file: string): string | undefined {
   try {
@@ -903,7 +961,9 @@ function couldBeProgram(shown: string): boolean {
  * give its backend, may be this folder's or a copy's: it is asked nothing, and nothing is
  * started beside it. The same goes on Linux for a process of which the system shows neither
  * the folder nor the files. Where the system cannot be asked at all, that is said, and nothing
- * is started: nothing else tells that the folder is free.
+ * is started: nothing else tells that the folder is free. Windows is asked again where it gives
+ * no list, as `listedByWindows` says, and only a list it gives whole is gone by. `say` is where
+ * that is written down.
  *
  * The list says that the folder is free only where it could have shown a backend program on
  * it. A process of this account's own of which the system would not say what it was started
@@ -915,7 +975,7 @@ function couldBeProgram(shown: string): boolean {
  * that is hidden is looked for again before it counts. And a list that does not show this
  * very program is not taken for whole.
  */
-export function programsHere(name: string, platform: NodeJS.Platform = process.platform): number[] {
+export function programsHere(name: string, platform: NodeJS.Platform = process.platform, say?: (line: string) => void): number[] {
   const found: number[] = []
   if (platform === 'linux' && existsSync('/proc/self/stat')) {
     let listed: string[] | undefined
@@ -985,28 +1045,20 @@ export function programsHere(name: string, platform: NodeJS.Platform = process.p
         '}',
         "'end'",
       ].join('\n')
-      const ran = runSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
-        encoding: 'utf8',
-        windowsHide: true,
-        timeout: 60_000,
-        maxBuffer: 64 * 1024 * 1024,
-      })
-      if (!ran.error && ran.status === 0) {
-        const rows = ran.stdout.split(/\r?\n/).map((line) => line.trim())
-        const here: number[] = []
-        for (const row of rows) {
-          const [, pid, coded] = /^seen (\d+) ([A-Za-z0-9+/=]+)$/.exec(row) ?? []
-          if (pid !== undefined && coded !== undefined) take(Number(pid), Buffer.from(coded, 'base64').toString('utf8'), here)
-          const [, unseen, whose, near] = /^unseen (\d+) (mine|other|unknown) ([01])$/.exec(row) ?? []
-          // Its own account's, or nobody's that Windows will name and in this very session, where another account's is not
-          if (unseen !== undefined && (whose === 'mine' || (whose === 'unknown' && near === '1')))
-            hidden ??= untold(
-              Number(unseen),
-              'It has the backend program’s name, and Windows keeps back what it was started with, as it does of a program started as an administrator. If it is a backend program, end it, then start It again.',
-            )
-        }
-        if (!hidden && rows.includes('end') && rows.includes('self')) return here
+      const rows = listedByWindows(script, say)
+      const here: number[] = []
+      for (const row of rows) {
+        const [, pid, coded] = /^seen (\d+) ([A-Za-z0-9+/=]+)$/.exec(row) ?? []
+        if (pid !== undefined && coded !== undefined) take(Number(pid), Buffer.from(coded, 'base64').toString('utf8'), here)
+        const [, unseen, whose, near] = /^unseen (\d+) (mine|other|unknown) ([01])$/.exec(row) ?? []
+        // Its own account's, or nobody's that Windows will name and in this very session, where another account's is not
+        if (unseen !== undefined && (whose === 'mine' || (whose === 'unknown' && near === '1')))
+          hidden ??= untold(
+            Number(unseen),
+            'It has the backend program’s name, and Windows keeps back what it was started with, as it does of a program started as an administrator. If it is a backend program, end it, then start It again.',
+          )
       }
+      if (!hidden) return here
     } else {
       for (const ps of ['/bin/ps', 'ps']) {
         const ran = runSync(ps, ['-axww', '-o', 'pid=', '-o', 'uid=', '-o', 'stat=', '-o', 'command='], {
@@ -1047,9 +1099,7 @@ export function programsHere(name: string, platform: NodeJS.Platform = process.p
   throw new Problem(
     'It could not look through the programs running on this machine for a backend program left on its folder, so it starts none.',
     'cannot_list_processes',
-    platform === 'win32'
-      ? 'It asks Windows through PowerShell, with `Get-CimInstance Win32_Process`, which has to be allowed to run.'
-      : 'It reads them with `ps`, which has to be on this machine.',
+    'It reads them with `ps`, which has to be on this machine.',
   )
 }
 
@@ -1191,7 +1241,7 @@ async function noneLeft(config: ServiceConfig, say: (line: string) => void, sign
   let again = left !== undefined && typeof left.api === 'string' && left.program === undefined
   const name = instanceName(config.instanceSecret)
   for (let round = 0; ; round++) {
-    const found = programsHere(name)
+    const found = programsHere(name, process.platform, say)
     if (!found.length && again) {
       again = false
       await sleep(1000)

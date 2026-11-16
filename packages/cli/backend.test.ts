@@ -704,7 +704,12 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     // system no PowerShell is to be had: asked to list what runs, it says what `POWERSHELL_SAYS`
     // holds, and the helper that asks a program on Windows to stop answers as it does of a
     // program with no console. With `PS_SAYS`, that is what `ps` says when it is asked to
-    // list what runs. Either says what its `_NEXT` holds from the second asking on.
+    // list what runs. Either says what its `_NEXT` holds from the second asking on. Before
+    // that, PowerShell fails once for each word in `POWERSHELL_FAILS`, in order: `timeout` runs
+    // out of time, `exit` ends with code 5 having printed words of its own, and `cut` prints a
+    // list without its last word. Where `POWERSHELL_LOG` names a file, each time PowerShell is
+    // asked writes a line there: when, and how long it was given. A try that runs out of time
+    // is run a second time at once by runSync, as one cut short is, and that run runs out too.
     // The fault is in what the service is given as the system's own files and processes, and
     // nothing of the service itself is other than it is.
     const faults: Plugin = {
@@ -740,6 +745,7 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
               `
               : `
                 import * as real from 'node:child_process'
+                import { appendFileSync } from 'node:fs'
                 export * from 'node:child_process'
                 export { default } from 'node:child_process'
                 export const spawn = (file, args, options) => {
@@ -756,8 +762,28 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
                   return child
                 }
                 let asked = 0
+                let failed = 0
+                let timedOut = false
                 const said = (first, next) => (asked++ === 0 || next === undefined ? first : next)
+                const timeout = () => ({ error: Object.assign(new Error('spawnSync powershell.exe ETIMEDOUT'), { code: 'ETIMEDOUT' }), status: null, signal: 'SIGTERM', stdout: '', stderr: '' })
                 export const spawnSync = (file, args, ...rest) => {
+                  // A time limit that ran out at once looks like the runtime's fault that runSync runs a child again for: that second run is part of the same try
+                  if (file === 'powershell.exe' && timedOut) {
+                    timedOut = false
+                    return timeout()
+                  }
+                  if (file === 'powershell.exe' && process.env.POWERSHELL_LOG)
+                    appendFileSync(process.env.POWERSHELL_LOG, Date.now() + ' ' + rest[0]?.timeout + '\\n')
+                  const fails = (process.env.POWERSHELL_FAILS ?? '').split(',').filter(Boolean)
+                  if (file === 'powershell.exe' && failed < fails.length) {
+                    const fault = fails[failed++]
+                    if (fault === 'timeout') {
+                      timedOut = true
+                      return timeout()
+                    }
+                    if (fault === 'exit') return { status: 5, stdout: 'Get-CimInstance : Access denied at C:\\\\Users\\\\a person\\\\it', stderr: 'Access denied' }
+                    return { status: 0, stdout: 'self\\r\\n', stderr: '' }
+                  }
                   if (file === 'powershell.exe')
                     return process.env.POWERSHELL_SAYS === undefined
                       ? { status: 3, stdout: '', stderr: '' }
@@ -785,8 +811,9 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
       `
         import { programsHere } from './src/serve/backend'
         try {
-          console.log(JSON.stringify(programsHere(process.env.NAMED, process.env.AS)))
+          console.log(JSON.stringify(programsHere(process.env.NAMED, process.env.AS, (line) => console.error('SAID ' + line))))
         } catch (err) {
+          console.error('PROBLEM ' + err.message)
           console.log('ERROR ' + err.code)
         }
       `,
@@ -1434,6 +1461,66 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     expect(listed(['self', 'unseen 77 unknown 1', 'end'])).toBe('ERROR cannot_list_processes')
     // One that is so only for the moment it takes to end is gone when Windows is asked again
     expect(listed(['self', backend, 'unseen 77 mine 1', 'end'], ['self', backend, 'end'])).toBe('[4242]')
+  }, 180_000)
+
+  test('a list of what runs that Windows does not give is asked for again, three times in all, and nothing is started on the folder until one is given whole', async () => {
+    const config = makeConfig()
+    const coded = (line: string) => Buffer.from(line).toString('base64')
+    const backend = `seen 4242 ${coded(`"${program}" --port 1 --instance-name ${instanceName(config.instanceSecret)} --instance-secret x "${database()}"`)}`
+    const asked = (fails: string[]) => {
+      const log = path.join(scratch, `powershell-${randomBytes(4).toString('hex')}.log`)
+      const ran = spawnSync(process.execPath, [listing], {
+        env: {
+          PATH: process.env.PATH,
+          IT_HOME: folder,
+          IT_BACKEND_BIN: program!,
+          AS: 'win32',
+          NAMED: instanceName(config.instanceSecret),
+          POWERSHELL_SAYS: ['self', backend, 'end'].join('\r\n'),
+          POWERSHELL_FAILS: fails.join(','),
+          POWERSHELL_LOG: log,
+        },
+        encoding: 'utf8',
+      })
+      const calls = existsSync(log)
+        ? readFileSync(log, 'utf8')
+            .trim()
+            .split('\n')
+            .map((line) => line.split(' ').map(Number))
+        : []
+      return { found: ran.stdout.trim(), said: ran.stderr.trim().split('\n').filter(Boolean), calls }
+    }
+    // Given whole the first time: asked once, given a minute, and nothing waited for
+    const first = asked([])
+    expect([first.found, first.said, first.calls.map(([, within]) => within)]).toEqual(['[4242]', [], [60_000]])
+    // Not given once, it is asked for again a moment later, and the list it then gives is gone by
+    const once = asked(['timeout'])
+    expect([once.found, once.said]).toEqual([
+      '[4242]',
+      ['SAID backend: the list of what runs on this machine could not be had (timed_out, try 1 of 3), and is asked for again'],
+    ])
+    expect(once.calls).toHaveLength(2)
+    expect(once.calls[1]![0]! - once.calls[0]![0]!).toBeGreaterThanOrEqual(1_400)
+    // Not given three times, whether it ran out of time, ended with a code or came without its last word: nothing is started, and why is said in a code
+    const codeOf = (fault: string) => ({ timeout: 'timed_out', exit: 'exit_5', cut: 'unreadable' })[fault]
+    for (const fails of [
+      ['timeout', 'cut', 'exit'],
+      ['exit', 'exit', 'timeout'],
+      ['cut', 'cut', 'cut'],
+    ]) {
+      const why = codeOf(fails[2]!)
+      const refused = asked(fails)
+      expect(refused.found).toBe('ERROR cannot_list_processes')
+      expect(refused.calls).toHaveLength(3)
+      expect(refused.said).toEqual([
+        `SAID backend: the list of what runs on this machine could not be had (${codeOf(fails[0]!)}, try 1 of 3), and is asked for again`,
+        `SAID backend: the list of what runs on this machine could not be had (${codeOf(fails[1]!)}, try 2 of 3), and is asked for again`,
+        `SAID backend: the list of what runs on this machine could not be had (${why}, 3 tries), and no backend program is started`,
+        `PROBLEM It could not look through the programs running on this machine for a backend program left on its folder (${why}, after 3 tries), so it starts none.`,
+      ])
+      // Nothing PowerShell printed is said, and no folder's name
+      expect(refused.said.join('\n')).not.toMatch(/Access|denied|Users|person/)
+    }
   }, 180_000)
 
   test('a backend program that was started is stopped again, and only then is the lock let go, when what is to be noted of it cannot be written', async () => {
