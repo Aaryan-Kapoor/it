@@ -64,6 +64,7 @@ import { ServiceNotice } from './service'
 import { codeSeen, current, signOut as endSession, heldToken, pair, pairAsScreen, recheck, useSession } from './session'
 import { Displays, Settings } from './settings'
 import { StarAsk } from './star'
+import { Quietly, UpdateBanner, UpdateMark } from './update'
 import { TourDialog, useTourOpens } from './welcome'
 
 export function App() {
@@ -883,6 +884,12 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
               </span>
             </p>
           )}
+          {/* A newer It, at the top of the home page: only the owner's browser may read the machines and ask for one */}
+          {owner && (
+            <Quietly>
+              <UpdateBanner />
+            </Quietly>
+          )}
           <Grid pages={pages} owner={owner} query={query} onQuery={setQuery} />
         </>
       )}
@@ -1050,6 +1057,12 @@ function TopBar({
         <span className="grid-version">{`v${version}`}</span>
       </div>
       <div className="grid-actions">
+        {/* Beside the version, and kept on a phone, where the version is not shown */}
+        {owner && (
+          <Quietly>
+            <UpdateMark />
+          </Quietly>
+        )}
         <Bell />
         {!locked && (
           <button type="button" className="grid-icon-btn" title="Take the tour" aria-label="Take the tour" onClick={onTour}>
