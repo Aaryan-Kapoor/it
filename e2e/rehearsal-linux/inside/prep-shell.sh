@@ -4,7 +4,7 @@
 kind=$1; app=$2
 [ "$app" = claude ] && app=claude-code
 if [ "$kind" = fish ]; then
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fish >/dev/null 2>&1
+  apt-get update -qq >/dev/null 2>&1; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fish >/dev/null 2>&1
   chsh -s /usr/bin/fish ana
 fi
 su -l ana -s /bin/bash -c "
