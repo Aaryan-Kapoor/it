@@ -671,7 +671,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
       host.remove()
       recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
       await shown()
-      expect(said()).toBe('Sent. Your agent gets this when it next runs `it wait --id plan`')
+      expect(said()).toBe('Sent. Your agent gets this when it next waits on this page: it wait --id plan')
       expect(buttons('Wake it')).toEqual([])
       await act(async () => root.unmount())
       host.remove()
@@ -681,7 +681,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
       ]
       Object.assign(PAGE, { pending: 2 })
       await shown()
-      expect(said()).toBe('Sent (2). Your agent gets this when it next runs `it wait --id plan`')
+      expect(said()).toBe('Sent (2). Your agent gets this when it next waits on this page: it wait --id plan')
       await act(async () => root.unmount())
       host.remove()
       // A page that has a conversation is spoken of as before

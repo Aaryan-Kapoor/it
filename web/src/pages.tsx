@@ -1478,7 +1478,7 @@ function ActionStatus({
             ? `Done more than a day ago${waiting > 1 ? ` (${waiting})` : ''}. ${agent ?? 'Your agent'} gets it when its conversation is next open`
             : // No conversation of an app It knows has the page, so no add-on is there to check: it reaches an agent that waits on it
               slow && !conversation
-              ? `Sent${waiting > 1 ? ` (${waiting})` : ''}. Your agent gets this when it next runs \`it wait --id ${slug}\``
+              ? `Sent${waiting > 1 ? ` (${waiting})` : ''}. Your agent gets this when it next waits on this page: it wait --id ${slug}`
               : // The person turned Auto-wake off for this app on that machine: said as that, and not as a fault of the add-on
                 slow && wakes && !wakes.on
                 ? `Sent${waiting > 1 ? ` (${waiting})` : ''}. Auto-wake is off for ${agent ?? 'its agent app'} on ${machine ?? 'its machine'}, so this waits until its conversation is open. You can turn Auto-wake on under Machines`
