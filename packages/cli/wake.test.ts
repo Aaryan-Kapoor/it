@@ -362,6 +362,12 @@ describe('the command each agent app is carried on with', () => {
     expect(argvOf('hermes', hs, 'yolo')).toEqual(['hermes', 'chat', '--resume', hs, '--yolo', '--query-file', '-'])
     for (const mode of [undefined, 'approvals', 'made-up', 'auto', 'full-access'])
       expect(argvOf('hermes', hs, mode)).toEqual(['hermes', 'chat', '--resume', hs, '--query-file', '-'])
+    // A conversation Hermes's gateway holds, from Hermes 0.22.7, is reopened by its id too, and
+    // keeps the approvals it was started with, which a run's --yolo does not reach: it is not given
+    const gw = `local-${'0f'.repeat(32)}`
+    for (const mode of [undefined, 'yolo', 'approvals']) expect(argvOf('hermes', gw, mode)).toEqual(['hermes', 'chat', '--resume', gw, '--query-file', '-'])
+    for (const odd of [`local-${'0f'.repeat(31)}`, `local-${'0F'.repeat(32)}`, `local-${'0f'.repeat(33)}`, 'local-', '--local-x'])
+      expect(carrying('hermes', odd, 'x', has)).toBe('its conversation id is not one Hermes would have made')
     // On Windows, from where the program is, the same words after it
     const start = ['C:\\Program Files\\nodejs\\node.exe', 'C:\\npm\\node_modules\\opencode-ai\\bin\\opencode']
     expect((carrying('opencode', oc, 'x', { ...has, start, wakeMode: 'auto' }) as { argv: string[] }).argv).toEqual([

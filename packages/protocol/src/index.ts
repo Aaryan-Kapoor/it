@@ -547,7 +547,9 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
     ],
   },
   // Hermes's `--yolo`, or its approvals, under which a one-shot run refuses a command Hermes flags
-  // as dangerous unless the person's settings approve it there, which is how It always reopened Hermes
+  // as dangerous unless the person's settings approve it there, which is how It always reopened Hermes.
+  // From Hermes 0.22.7 its gateway holds a conversation, which keeps the approvals it was started
+  // with, and a run's `--yolo` does not reach it
   hermes: {
     default: 'approvals',
     choices: [
@@ -555,12 +557,12 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
         id: 'yolo',
         label: 'YOLO',
         recommended: true,
-        says: 'Hermes approves every command but its hardline blocklist and your approvals.deny rules.',
+        says: 'Hermes approves all but its hardline blocklist; Hermes 0.22.7 and later cannot take it.',
       },
       {
         id: 'approvals',
         label: 'Approvals',
-        says: 'Commands Hermes flags as dangerous are refused, unless your Hermes settings approve them.',
+        says: 'Hermes refuses what it flags as dangerous, unless your settings or the conversation allow it.',
       },
     ],
   },

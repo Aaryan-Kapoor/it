@@ -383,7 +383,10 @@ export interface Carrying {
  * - Hermes is run with its approvals as the person's Hermes settings have them for a one-shot run,
  *   which refuse a command Hermes flags as dangerous unless those settings approve it there, unless
  *   the mode chosen is YOLO, given as `--yolo`, under which Hermes approves every command but its
- *   own hardline blocklist and the person's `approvals.deny` rules.
+ *   own hardline blocklist and the person's `approvals.deny` rules. From Hermes 0.22.7 a
+ *   conversation is held by Hermes's gateway, and keeps the approvals it was started with: a run's
+ *   `--yolo` does not reach it, and nothing else does short of changing the conversation itself or
+ *   the person's settings, which It does not do. There it is reopened as it is, whatever is chosen.
  *
  * Each mode is given on the command line of that one run, and nothing is written to the app's own
  * settings. A mode's name that this It does not know is the one that allows least.
@@ -476,13 +479,17 @@ export function carrying(
     return { argv: [...opencode, 'run', ...auto, '--session', session], input: text, app }
   }
   if (harness === 'hermes') {
-    // Hermes names a conversation by when it began and a few hex digits. Any other word is not
-    // put there: it would be read as a title to look for, or as `latest`.
-    if (!/^[0-9]{8}_[0-9]{6}_[0-9a-f]{4,32}$/.test(session)) return odd
+    // Hermes names a conversation by when it began and a few hex digits, and from 0.22.7, where its
+    // gateway holds the conversation, `local-` and 64 hex digits. Any other word is not put there:
+    // it would be read as a title to look for, or as `latest`.
+    const inGateway = /^local-[0-9a-f]{64}$/.test(session)
+    if (!inGateway && !/^[0-9]{8}_[0-9]{6}_[0-9a-f]{4,32}$/.test(session)) return odd
     const hermes = starting('hermes')
     if (!hermes) return `${app} was not found`
-    // YOLO where it is chosen, and otherwise Hermes's approvals as the person's settings have them
-    const yolo = has.wakeMode === 'yolo' ? ['--yolo'] : []
+    // YOLO where it is chosen, and otherwise Hermes's approvals as the person's settings have them.
+    // A conversation Hermes's gateway holds keeps the approvals it was started with, which `--yolo`
+    // does not reach (Hermes 0.22.7 to 0.23.1), so it is not given there
+    const yolo = has.wakeMode === 'yolo' && !inGateway ? ['--yolo'] : []
     return { argv: [...hermes, 'chat', '--resume', session, ...yolo, '--query-file', '-'], input: text, app }
   }
   return `It has no way to reopen a conversation of ${app}`
