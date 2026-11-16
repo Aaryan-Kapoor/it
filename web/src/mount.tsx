@@ -103,6 +103,8 @@ const siteTouched = () => {
 for (const kind of ['pointerdown', 'pointerup', 'mouseup', 'touchend', 'click', 'keydown', 'keyup']) window.addEventListener(kind, siteTouched, true)
 /** How long a page has to load and say hello. */
 const READY_MS = 20_000
+/** How long a page may take to say hello before the person is told where pages come from, which a page usually does in a second or two. */
+const SLOW_MS = 8_000
 /** How close together the browser refuses to show another site in a page's frame and the frame loads what it shows instead, the browser's error page, in either order. */
 const REFUSED_LOAD_MS = 2000
 /**
@@ -110,6 +112,17 @@ const REFUSED_LOAD_MS = 2000
  * reached at and by the same name, so that a page is reached wherever the site is.
  */
 const pages = () => `${location.protocol}//${location.hostname}:${contentPort(Number(location.port) || (location.protocol === 'https:' ? 443 : 80))}`
+/**
+ * Where pages come from, said to a person whose page has not come: the port after the site's own
+ * is reached as the site is, and a browser that reaches the site through a port forwarded to it
+ * alone, as over SSH, reaches no page and is told nothing by the frame. A connection that is
+ * only slow is told the same, which is why it is said as what to do where that is so.
+ */
+const pagesPort = () => new URL(pages()).port
+export const notReached = () =>
+  `Pages are shown from port ${pagesPort()} of the machine It runs on. If this browser reaches It through a forwarded port, forward port ${pagesPort()} too, under the same number.`
+export const didNotLoad = () =>
+  `The page did not load from port ${pagesPort()}. Check the connection, and if this browser reaches It through a forwarded port, forward port ${pagesPort()} too, under the same number.`
 /** What a page is told when it asked for fullscreen other than on the person's own click or key in it. */
 const NOT_FROM_THE_PAGE =
   'It goes fullscreen for a page only on a click or a key in the page itself, and not just after a click on It or just after fullscreen was left. Ask again on the next click in the page.'
@@ -164,6 +177,8 @@ export function Mount({
   const [attempt, setAttempt] = useState(0)
   const [mount, setMount] = useState<{ address: string; mountId: string; version: number } | null>(null)
   const [phase, setPhase] = useState<Phase>({ is: 'loading' })
+  /** The frame has had longer than a page usually takes to say hello, and has not. */
+  const [slow, setSlow] = useState(false)
   /** The one channel to whatever document the frame is showing now. */
   const port = useRef<MessagePort | null>(null)
   /** These outlive a remount, so a page cannot reset them by asking to be shown again. */
@@ -204,6 +219,7 @@ export function Mount({
   useEffect(() => {
     let live = true
     setMount(null)
+    setSlow(false)
     setPhase({ is: 'loading' })
     void attempt
     // A showing that met trouble on the way is begun afresh, once, before the person is told of
@@ -245,7 +261,9 @@ export function Mount({
     let actionFilled = Date.now()
     let storeTokens = STORE_BURST
     let storeFilled = Date.now()
-    const timer = setTimeout(() => live && setPhase({ is: 'failed', why: 'The page did not load. Check the connection.' }), READY_MS)
+    setSlow(false)
+    const slowly = setTimeout(() => live && setSlow(true), SLOW_MS)
+    const timer = setTimeout(() => live && setPhase({ is: 'failed', why: didNotLoad() }), READY_MS)
     /** The framing again that a showing which ran out too soon after the last one is waiting for. */
     let later: ReturnType<typeof setTimeout> | undefined
 
@@ -1254,6 +1272,7 @@ export function Mount({
     framed?.addEventListener('load', loaded)
     return () => {
       live = false
+      clearTimeout(slowly)
       clearTimeout(timer)
       clearTimeout(later)
       clearInterval(looking)
@@ -1331,6 +1350,7 @@ export function Mount({
       {phase.is === 'loading' && (
         <div className="mount-note" role="status">
           Opening…
+          {mount && slow && <p>{notReached()}</p>}
         </div>
       )}
       {phase.is === 'failed' && (
