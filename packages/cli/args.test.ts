@@ -80,7 +80,7 @@ describe('JSON with a backslash that begins no escape', () => {
       }
     }
     expect(refusal(String.raw`{"folder":"D:\work"}`, 'it patch board --file <path>')).toEqual([
-      String.raw`The patch is not valid JSON: a backslash inside a JSON string is written twice, as in "D:\\work".`,
+      'The patch is not valid JSON: a backslash inside a JSON string is written twice, and this arrived with one: write two, or forward slashes, as in "D:/work".',
       undefined,
     ])
     expect(refusal('{"a":1,}', 'it patch board --file <path>')).toEqual([

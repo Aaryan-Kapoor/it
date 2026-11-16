@@ -253,7 +253,8 @@ export function strayBackslash(text: string): boolean {
   }
   return false
 }
-const TWICE = 'a backslash inside a JSON string is written twice, as in "D:\\\\work"'
+// Shown with no backslash in it, since a refusal reaches an agent as JSON, where each backslash is written twice again, and a shell may halve them
+const TWICE = 'a backslash inside a JSON string is written twice, and this arrived with one: write two, or forward slashes, as in "D:/work"'
 /**
  * Reads JSON. `fromFile` is the command that reads the same JSON from a file, where it was given
  * on the command line: a refusal names it, since a file is the way that works in every shell.
@@ -268,8 +269,8 @@ export function json(value: string, what: string, fromFile?: string): unknown {
     const taken = fromFile !== undefined && quotesTakenOut(value)
     // A file is no way round a backslash written once, which is as wrong there, so it is named only where the quotes are gone as well
     const instead = fromFile === undefined || (stray && !taken) ? undefined : inAFile(fromFile)
-    const why = [stray ? TWICE : '', taken ? `it has no double quotes, ${SHELL_TOOK}` : ''].filter(Boolean).join(', and ')
-    throw new Problem(`${what} is not valid JSON${why ? `: ${why}` : ''}.`, 'invalid', instead)
+    const why = taken ? `: it has no double quotes, ${SHELL_TOOK}.${stray ? ` Its backslash is wrong too: ${TWICE}.` : ''}` : stray ? `: ${TWICE}.` : '.'
+    throw new Problem(`${what} is not valid JSON${why}`, 'invalid', instead)
   }
 }
 /**
@@ -281,7 +282,7 @@ export function json(value: string, what: string, fromFile?: string): unknown {
 export function setValue(value: string, fromFile: string): unknown {
   if (quotesTakenOut(value))
     throw new Problem(
-      `The value ${value} begins and ends as JSON does, but is not JSON${strayBackslash(value) ? `: ${TWICE}, and it` : ' and'} has no double quotes, ${SHELL_TOOK}. Nothing was changed.`,
+      `The value ${value} begins and ends as JSON does, but is not JSON and has no double quotes, ${SHELL_TOOK}.${strayBackslash(value) ? ` Its backslash is wrong too: ${TWICE}.` : ''} Nothing was changed.`,
       'invalid',
       `${inAFile(fromFile)} To set this very text, write it in the file as a JSON string.`,
     )
