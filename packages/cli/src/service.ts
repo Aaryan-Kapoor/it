@@ -281,8 +281,9 @@ export function environment(from: NodeJS.ProcessEnv = process.env): Record<strin
   // before It was installed, and an app the service starts runs `it` by its name alone. A
   // Windows PATH that the launcher could hold only without it is written as the shell gave it,
   // rather than not at all: the service puts its folder first for each app it starts anyway.
-  const first = itFirst({ PATH: out.PATH }, process.platform, out.IT_HOME ? path.join(out.IT_HOME, 'bin') : inHome('bin')).PATH!
-  if (process.platform !== 'win32' || launcherHolds('PATH', first) || !launcherHolds('PATH', out.PATH)) out.PATH = first
+  const given = out.PATH ?? ''
+  const first = itFirst({ PATH: given }, process.platform, out.IT_HOME ? path.join(out.IT_HOME, 'bin') : inHome('bin')).PATH!
+  if (process.platform !== 'win32' || launcherHolds('PATH', first) || !launcherHolds('PATH', given)) out.PATH = first
   return out
 }
 
