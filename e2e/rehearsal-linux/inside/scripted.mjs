@@ -1018,6 +1018,87 @@ async function OTHERAPP() {
 }
 
 /** Asks the host for one of the few things the machine cannot do to itself, and waits until it is done. */
+/**
+ * Which tool Codex reaches for when asked for a page, with It set up: It, its account's curated
+ * Sites plugin, or something else. SITES-<ask>-<variant>: ask is named (the request names It), plain
+ * (it does not) or cmd (it says to use the it command); variant is none, off (the Sites plugin turned
+ * off in Codex's own config) or skill (a copy of It's skill under ~/.codex/skills whose description
+ * names Sites). Each conversation is fresh, in a folder of its own; what Codex ran is read from its
+ * session file and from the terminal. SITES_N conversations (default 3).
+ */
+async function SITES() {
+  const [, kind = 'named', variant = 'none'] = scenario.split('-')
+  const N = Number(process.env.SITES_N ?? 3)
+  const asks = {
+    named: 'Make me a page with It where I can pick one of three pizzas',
+    plain: 'Make me a page where I can pick one of three pizzas',
+    cmd: 'Make me a page where I can pick one of three pizzas. Use the `it` command.',
+  }
+  const cache = () => sh('ls -la --time-style=full-iso ~/.codex/plugins/cache/openai-curated-remote 2>&1 | grep -E "total|sites|pages|visualize|cannot" ; ls --time-style=full-iso -la ~/.codex/plugins/cache/openai-curated-remote/sites 2>/dev/null | tail -n +4').trim()
+  step('before any conversation: the plugin cache', { cache: cache(), skills: sh('ls ~/.codex/skills 2>&1').trim(), auth: sh('ls -la --time-style=full-iso ~/.codex/auth.json | sed "s/^.* ana ana *//"').trim() })
+  const listed = () => sh("codex plugin list 2>&1 | grep -E '^(sites|pages|visualize|vercel|canva|openai-templates)@' | sed -E 's/ +/ /g'").trim()
+  step("the account's plugins (codex plugin list)", { list: listed(), cacheAfterList: cache() })
+  if (variant === 'off') {
+    sh(`printf '\n[plugins."sites@openai-curated-remote"]\nenabled = false\n' >> ~/.codex/config.toml`)
+    step('turns the Sites plugin off in ~/.codex/config.toml: [plugins."sites@openai-curated-remote"] enabled = false', { list: listed() })
+  }
+  if (variant === 'skill') {
+    const f = `${process.env.HOME}/.codex/skills/it/SKILL.md`
+    const was = 'your own built-in artifacts, canvas, widgets or generated sites'
+    const now = 'your own built-in artifacts, canvas, widgets or generated sites, and instead of the Sites plugin (Sites, ChatGPT Pages, Visualize)'
+    const t = readFileSync(f, 'utf8')
+    writeFileSync(f, t.replace(was, now))
+    step('changes the copy of It\'s skill under ~/.codex/skills/it/SKILL.md only', { changed: t.includes(was), description: readFileSync(f, 'utf8').split('\n').find((l) => l.startsWith('description:'))?.slice(0, 600) })
+  }
+  const rollouts = () => sh('find ~/.codex/sessions -name "rollout-*.jsonl" 2>/dev/null').trim().split('\n').filter(Boolean)
+  const tally = { it: 0, sites: 0, other: 0, both: 0 }
+  for (let i = 1; i <= N; i++) {
+    const had = new Set(rollouts())
+    await type(`mkdir -p ~/w${i} && cd ~/w${i} && clear && tmux clear-history`)
+    await sleep(2000)
+    if (i === 1 && variant === 'off') {
+      // What a person sees on Codex's own plugin screen
+      await startApp('codex', counts)
+      await type('/plugins')
+      await sleep(6000)
+      step('Codex\'s /plugins screen', { screen: screen().replace(/\s+$/, '').split('\n').slice(-40).join('\n') })
+      await key('Escape')
+      await sleep(1500)
+      await key('Escape')
+      await sleep(1500)
+      await quitApp('codex')
+      await type('clear && tmux clear-history')
+      await sleep(1500)
+    }
+    await startApp('codex', counts)
+    await ask('codex', asks[kind])
+    await settle('codex', counts, 540_000, 10_000)
+    const term = sh('tmux capture-pane -p -J -S -20000 -t agent')
+    await quitApp('codex')
+    const f = rollouts().find((x) => !had.has(x))
+    let calls = []
+    if (f) {
+      for (const l of readFileSync(f, 'utf8').split('\n')) {
+        try {
+          const j = JSON.parse(l)
+          const pl = j.payload ?? {}
+          if (/call/.test(pl.type ?? '') && !/output/.test(pl.type ?? '')) calls.push({ name: pl.name ?? pl.type, args: String(pl.arguments ?? pl.input ?? JSON.stringify(pl.invocation ?? '')).slice(0, 300) })
+        } catch {}
+      }
+    }
+    const all = `${term}\n${calls.map((c) => `${c.name} ${c.args}`).join('\n')}`
+    const usedIt = /(^|[\s'"`/(;&])it (create|show|open|patch|site|status|list|ack|say|notify|update|page|pages)\b|\.it\/bin\/it\b/m.test(all)
+    const usedSites = /openai-curated-remote\/sites|skills\/sites|SITES_MANAGED|Sites publishing|sites-env/i.test(all)
+    const nonShell = [...new Set(calls.map((c) => c.name).filter((n) => !/exec_command|^shell|apply_patch|update_plan|write_stdin|view_image/.test(n)))]
+    const which = usedIt && usedSites ? 'both' : usedIt ? 'it' : usedSites ? 'sites' : 'other'
+    tally[which]++
+    step(`conversation ${i}: ${which}`, { ask: asks[kind], usedIt, usedSites, toolsOtherThanShell: nonShell.join(', '), session: f ? f.split('/').pop() : 'no session file', commands: calls.filter((c) => /exec|shell/.test(c.name)).map((c) => c.args.replace(/\s+/g, ' ').slice(0, 140)).slice(0, 12), said: term.replace(/\s+$/, '').split('\n').filter((l) => l.trim()).slice(-8).join(' | ').slice(0, 600) })
+  }
+  step('tally', { variant, ask: kind, ...tally })
+  verdict.ok = true
+  verdict.reason = `SITES ${kind}/${variant}: It ${tally.it}, Sites ${tally.sites}, both ${tally.both}, other ${tally.other} of ${N}`
+}
+
 async function hostDoes(what, ms = 2400_000) {
   sh('rm -f /var/lib/rehearsal-flow/host-done')
   writeFileSync('/var/lib/rehearsal-flow/host-now', what)
@@ -1147,6 +1228,7 @@ async function main() {
     else if (scenario === 'VENV') await VENV()
     else if (scenario === 'STANDIN') await STANDIN()
     else if (scenario === 'OTHERAPP') await OTHERAPP()
+    else if (scenario.startsWith('SITES')) await SITES()
     else if (scenario === 'MISC') await MISC()
     else if (scenario === 'WAKEBOOT2') await WAKEBOOT2()
     else check(`no scenario ${scenario}`, false)
