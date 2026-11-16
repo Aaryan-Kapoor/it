@@ -1453,9 +1453,9 @@ describe('the mode a Claude Code conversation is reopened in', () => {
     expect(list.choices.map((c) => c.id)).toEqual(['bypassPermissions', 'auto', 'acceptEdits', 'default', 'dontAsk', 'conversation'])
     expect(list.choices.map((c) => c.label)).toEqual(['Bypass Permissions', 'Auto', 'Accept edits', 'Manual', 'Don’t Ask', 'The conversation’s own'])
     expect(list.choices.filter((c) => c.recommended).map((c) => c.id)).toEqual(['bypassPermissions'])
-    const bypass = list.choices[0]!.says
-    expect(bypass).toContain('a press on any screen paired with this It, a phone among them, or the words on a page, can lead it to do')
-    expect(bypass).toContain('apart from your own deny and ask rules, your organization’s settings and the few checks Claude Code keeps in every mode')
+    // Each says one straight line of what a reopened conversation may do with nobody there; the rest is in the documents
+    for (const list of [WAKE_MODES['claude-code']!, WAKE_MODES.codex!]) for (const c of list.choices) expect(c.says.length).toBeLessThanOrEqual(90)
+    expect(list.choices[0]!.says).toBe('Runs anything without asking. Works best with It.')
     expect(list.default).toBe('auto')
     // An It from before the choice may run a conversation in any mode up to Bypass Permissions
     expect(WAKE_MODE_LEGACY['claude-code']).toBe('bypassPermissions')

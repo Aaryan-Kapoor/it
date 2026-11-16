@@ -526,31 +526,38 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                   </label>
                 )}
                 {modes && (
-                  <fieldset className="row-detail wake-modes">
-                    <legend className="wake-name wake-modes-name">How it is reopened</legend>
-                    {modes.choices.map((c) => (
-                      <label key={c.id} className="wake-mode">
-                        <input
-                          className="wake-mode-pick"
-                          type="radio"
-                          name={`wake-mode-${machineId}-${h.id}`}
-                          value={c.id}
-                          checked={mode === c.id}
-                          onChange={() => act(chooseMode({ machineId, harness: h.id, mode: c.id }))}
-                          // The starting value, clicked, becomes a choice of the person's own, which a machine on an older It then holds to
-                          onClick={() => {
-                            if (!chosenHere && mode === c.id) act(chooseMode({ machineId, harness: h.id, mode: c.id }))
-                          }}
-                        />
-                        <span className="wake-mode-name">
-                          {c.label}
-                          {c.recommended && <span className="wake-mode-tag">Recommended</span>}
-                          {!chosenHere && c.id === modes.default && <span className="wake-mode-tag">Starting value</span>}
-                        </span>
-                        <span className="row-sub wake-mode-say">{c.says}</span>
-                      </label>
-                    ))}
-                  </fieldset>
+                  <div className="row-detail wake-modes">
+                    <label className="wake-name wake-modes-name" htmlFor={`wake-mode-${machineId}-${h.id}`}>
+                      How {LABEL[h.id] ?? h.id} is reopened
+                    </label>
+                    {modes.choices.length === 1 ? (
+                      // One mode is no choice: its name, as plain text
+                      <span id={`wake-mode-${machineId}-${h.id}`} className="wake-mode-one">
+                        {modes.choices[0]!.label}
+                      </span>
+                    ) : (
+                      <select
+                        id={`wake-mode-${machineId}-${h.id}`}
+                        className="grid-sort wake-mode-pick"
+                        // Nothing chosen shows the starting value as that, and choosing the same mode makes it a choice of the person's own
+                        value={chosenHere ? (mode ?? '') : ''}
+                        onChange={(e) => {
+                          if (e.target.value) act(chooseMode({ machineId, harness: h.id, mode: e.target.value }))
+                        }}
+                      >
+                        {!chosenHere && (
+                          <option value="">{`Starting value: ${modes.choices.find((c) => c.id === modes.default)?.label ?? modes.default}`}</option>
+                        )}
+                        {modes.choices.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.recommended ? `${c.label} (recommended)` : c.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {/* One line, for the mode in force now */}
+                    <span className="row-sub wake-mode-say">{modes.choices.find((c) => c.id === mode)?.says ?? modes.choices[0]!.says}</span>
+                  </div>
                 )}
                 {couldWake && !wakeable && <span className="row-detail row-sub">{noWakeHere(m.system)}</span>}
               </li>

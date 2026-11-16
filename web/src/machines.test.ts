@@ -2,6 +2,7 @@
 // browser with a stand-in backend. What it must get right: such an app is said to be turned off
 // and never to be connecting, Turn back on asks the machine with nothing but the app's name, and
 // what the machine answers is said beside it.
+import { WAKE_MODES } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -165,94 +166,110 @@ describe('how a reopened conversation runs, chosen beside an app’s Auto-wake',
       ],
       ...over,
     })
-  const choices = (name: string) => [...row(name).querySelectorAll<HTMLInputElement>('.wake-modes input[type="radio"]')]
-  const chosen = (name: string) => choices(name).find((c) => c.checked)?.value
+  const pick = (name: string) => row(name).querySelector<HTMLSelectElement>('.wake-modes select')
+  const options = (name: string) => [...(pick(name)?.options ?? [])].map((o) => [o.value, o.textContent])
+  const line = (name: string) => row(name).querySelector('.wake-mode-say')?.textContent
+  const choose = async (name: string, value: string) => {
+    const select = pick(name)!
+    await act(async () => {
+      select.value = value
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+  }
 
-  test('offers each mode Codex itself offers, by Codex’s own names, Full Access marked as recommended, and Approve for me where none was chosen', async () => {
+  test('offers each mode Codex itself offers in a drop-down, by Codex’s own names, Full Access marked as recommended, Approve for me as the starting value, and one line for the mode in force', async () => {
     machines = [connected()]
     await shown()
-    const codex = row('Codex')
-    expect(choices('Codex').map((c) => c.value)).toEqual(['full-access', 'approve-for-me', 'ask', 'read-only'])
-    expect([...codex.querySelectorAll('.wake-mode-name')].map((n) => n.textContent)).toEqual([
-      'Full AccessRecommended',
-      'Approve for meStarting value',
-      'Ask for approval',
-      'Read Only',
+    expect(options('Codex')).toEqual([
+      ['', 'Starting value: Approve for me'],
+      ['full-access', 'Full Access (recommended)'],
+      ['approve-for-me', 'Approve for me'],
+      ['ask', 'Ask for approval'],
+      ['read-only', 'Read Only'],
     ])
-    expect(chosen('Codex')).toBe('approve-for-me')
-    // Each says what a reopened conversation may then do, Full Access both halves of it
-    expect(codex.textContent).toContain('a press on any screen paired with this It, a phone among them, or the words on a page, can lead it to do')
-    expect(codex.textContent).toContain('read and send your files and secrets, change or delete files, and start things that keep running after the turn')
-    expect(codex.textContent).toContain('It allows what it judges to be of low or medium risk even where you never asked for it')
-    expect(codex.textContent).toContain('whatever would ask you is refused')
+    expect(pick('Codex')!.value).toBe('')
+    // A label names the app and is tied to the drop-down, as for any plain select
+    const label = row('Codex').querySelector('.wake-modes label')!
+    expect(label.textContent).toBe('How Codex is reopened')
+    expect(label.getAttribute('for')).toBe(pick('Codex')!.id)
+    // One line, for the mode in force, and nothing more
+    expect(row('Codex').querySelectorAll('.wake-mode-say')).toHaveLength(1)
+    expect(line('Codex')).toBe('Codex’s own reviewer decides each command that would have asked you.')
+    // Shown, nothing is chosen
+    expect(asked.filter((a) => a.name === 'machines:wakeMode')).toEqual([])
     // Choosing asks It with the machine, the app and the mode's name, and nothing else
-    await act(async () => choices('Codex')[0]!.click())
+    await choose('Codex', 'full-access')
     expect(asked).toEqual([{ name: 'machines:wakeMode', args: { machineId: 'machine-1', harness: 'codex', mode: 'full-access' } }])
   })
 
-  test('shows what was chosen, and reads a name it does not know as the mode that allows least', async () => {
+  test('shows what was chosen, with its line, no longer as the starting value, and reads a name it does not know as the mode that allows least', async () => {
     machines = [connected({ wakeModes: [{ harness: 'codex', mode: 'read-only' }] })]
     await shown()
-    expect(chosen('Codex')).toBe('read-only')
+    expect(pick('Codex')!.value).toBe('read-only')
+    expect(options('Codex').map(([v]) => v)).not.toContain('')
+    expect(line('Codex')).toBe('Can read and answer on the page, and change nothing else.')
     act(() => root.unmount())
     host.remove()
     machines = [connected({ wakeModes: [{ harness: 'codex', mode: 'something-newer' }] })]
     await shown()
-    expect(chosen('Codex')).toBe('read-only')
+    expect(pick('Codex')!.value).toBe('read-only')
   })
 
-  test('offers each mode Claude Code itself offers for a run with nobody there, by its own names, and the conversation’s own, Bypass Permissions marked as recommended, and Auto where none was chosen', async () => {
+  test('offers each mode Claude Code itself offers for a run with nobody there, and the conversation’s own, Bypass Permissions recommended and Auto the starting value, which becomes a choice once picked', async () => {
     machines = [connected()]
     await shown()
-    const claude = row('Claude Code')
-    expect(choices('Claude Code').map((c) => c.value)).toEqual(['bypassPermissions', 'auto', 'acceptEdits', 'default', 'dontAsk', 'conversation'])
-    expect([...claude.querySelectorAll('.wake-mode-name')].map((n) => n.textContent)).toEqual([
-      'Bypass PermissionsRecommended',
-      'AutoStarting value',
-      'Accept edits',
-      'Manual',
-      'Don’t Ask',
-      'The conversation’s own',
+    expect(options('Claude Code')).toEqual([
+      ['', 'Starting value: Auto'],
+      ['bypassPermissions', 'Bypass Permissions (recommended)'],
+      ['auto', 'Auto'],
+      ['acceptEdits', 'Accept edits'],
+      ['default', 'Manual'],
+      ['dontAsk', 'Don’t Ask'],
+      ['conversation', 'The conversation’s own'],
     ])
-    expect(chosen('Claude Code')).toBe('auto')
-    // Shown, nothing is chosen: the starting value stays the starting value
+    expect(line('Claude Code')).toBe('Claude Code’s own safety check decides what would have asked you.')
     expect(asked.filter((a) => a.name === 'machines:wakeMode')).toEqual([])
-    expect(claude.textContent).toContain('a press on any screen paired with this It, a phone among them, or the words on a page, can lead it to do')
-    expect(claude.textContent).toContain('Claude Code’s own safety check, a model, decides in your place')
-    await act(async () => choices('Claude Code')[0]!.click())
-    expect(asked).toEqual([{ name: 'machines:wakeMode', args: { machineId: 'machine-1', harness: 'claude-code', mode: 'bypassPermissions' } }])
-    act(() => root.unmount())
-    host.remove()
-    // The starting value clicked is a choice of the person's own, and once chosen is no longer called the starting value
-    machines = [connected()]
-    await shown()
-    asked.length = 0
-    await act(async () => choices('Claude Code')[1]!.click())
+    // Auto picked is a choice of the person's own, which a machine on an older It then holds to
+    await choose('Claude Code', 'auto')
     expect(asked).toEqual([{ name: 'machines:wakeMode', args: { machineId: 'machine-1', harness: 'claude-code', mode: 'auto' } }])
     act(() => root.unmount())
     host.remove()
-    machines = [connected({ wakeModes: [{ harness: 'claude-code', mode: 'auto' }] })]
+    // Once chosen, its line follows what is chosen
+    machines = [connected({ wakeModes: [{ harness: 'claude-code', mode: 'bypassPermissions' }] })]
     await shown()
-    expect(row('Claude Code').textContent).not.toContain('Starting value')
-    asked.length = 0
-    await act(async () => choices('Claude Code')[1]!.click())
-    expect(asked).toEqual([])
+    expect(pick('Claude Code')!.value).toBe('bypassPermissions')
+    expect(line('Claude Code')).toBe('Runs anything without asking. Works best with It.')
     act(() => root.unmount())
     host.remove()
     // A name this It does not know reads as the one that allows least, which the conversation's own is not
     machines = [connected({ wakeModes: [{ harness: 'claude-code', mode: 'something-newer' }] })]
     await shown()
-    expect(chosen('Claude Code')).toBe('dontAsk')
+    expect(pick('Claude Code')!.value).toBe('dontAsk')
   })
 
-  test('is offered for no app the choice would change nothing for, and not where Auto-wake is off', async () => {
+  test('is drawn for any app with an entry, with no code of its own: one mode is shown as its name and its line, not as a drop-down', async () => {
+    WAKE_MODES.pi = { default: 'only', choices: [{ id: 'only', label: 'As it runs', says: 'Runs as it does in a window.' }] }
+    try {
+      machines = [connected()]
+      await shown()
+      expect(pick('Pi')).toBeNull()
+      expect(row('Pi').querySelector('.wake-mode-one')?.textContent).toBe('As it runs')
+      expect(line('Pi')).toBe('Runs as it does in a window.')
+      expect(row('Pi').querySelector('.wake-modes label')?.textContent).toBe('How Pi is reopened')
+    } finally {
+      delete WAKE_MODES.pi
+    }
+  })
+
+  test('is shown for no app without an entry, and not where Auto-wake is off', async () => {
     machines = [connected()]
     await shown()
-    expect(choices('Pi')).toEqual([])
+    expect(row('Pi').querySelector('.wake-modes')).toBeNull()
     act(() => root.unmount())
     host.remove()
     machines = [connected({ wakes: [] })]
     await shown()
-    expect(choices('Codex')).toEqual([])
+    expect(pick('Codex')).toBeNull()
+    expect(pick('Claude Code')).toBeNull()
   })
 })

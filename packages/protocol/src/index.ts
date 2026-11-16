@@ -414,6 +414,7 @@ export const WAKES: readonly Harness[] = ['claude-code', 'codex', 'pi', 'opencod
 export interface WakeModeChoice {
   id: string
   label: string
+  /** One plain line, of about ninety characters at most, of what a reopened conversation may do in this mode with nobody there: the Machines page shows it under the choice. The rest of what is true of it is in the documents. */
   says: string
   /** The mode It works best in, which the Machines page marks so. */
   recommended?: true
@@ -454,32 +455,32 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
         id: 'bypassPermissions',
         label: 'Bypass Permissions',
         recommended: true,
-        says: 'The mode It works best in: a reopened conversation can do everything you can do on this machine, with nothing asked. That is also what a press on any screen paired with this It, a phone among them, or the words on a page, can lead it to do: run any command, read and send your files and secrets, change or delete files, and start things that keep running after the turn. Nothing checks it and nothing asks you, apart from your own deny and ask rules, your organization’s settings and the few checks Claude Code keeps in every mode.',
+        says: 'Runs anything without asking. Works best with It.',
       },
       {
         id: 'auto',
         label: 'Auto',
-        says: 'Ordinary edits in the conversation’s folder, reads, common file commands and what your own rules allow generally run without a check, and for most of what would otherwise ask you Claude Code’s own safety check, a model, decides in your place. It is meant to refuse what goes beyond what was asked or looks driven by what the agent read, and it takes what a page sent for what was asked.',
+        says: 'Claude Code’s own safety check decides what would have asked you.',
       },
       {
         id: 'acceptEdits',
         label: 'Accept edits',
-        says: 'It can edit files in the conversation’s folder and run common file commands there, and any other command that would ask you is refused.',
+        says: 'Edits files in its folder; any other command that would ask you is refused.',
       },
       {
         id: 'default',
         label: 'Manual',
-        says: 'It can run It’s own commands, read files and do what your own Claude Code settings allow, and anything that would ask you is refused.',
+        says: 'Runs It’s commands and reads files; anything that would ask you is refused.',
       },
       {
         id: 'dontAsk',
         label: 'Don’t Ask',
-        says: 'As Manual: it can run It’s own commands, read files and do what your own Claude Code settings allow, and everything else is refused.',
+        says: 'Like Manual: runs It’s commands and reads files, and refuses everything else.',
       },
       {
         id: 'conversation',
         label: 'The conversation’s own',
-        says: 'Each conversation is reopened in the mode it was last in, as Claude Code wrote it down, and one last in Manual is reopened in Auto.',
+        says: 'The mode the conversation was last in, with Manual raised to Auto.',
       },
     ],
   },
@@ -490,22 +491,22 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
         id: 'full-access',
         label: 'Full Access',
         recommended: true,
-        says: 'The mode It works best in: a reopened conversation can do everything you can do on this machine, with no sandbox and nothing asked. That is also what a press on any screen paired with this It, a phone among them, or the words on a page, can lead it to do: run any command, read and send your files and secrets, change or delete files, and start things that keep running after the turn. No reviewer checks it, and nothing asks you.',
+        says: 'Runs anything without asking. Works best with It.',
       },
       {
         id: 'approve-for-me',
         label: 'Approve for me',
-        says: 'Codex’s automatic reviewer, a model, decides in your place whether a command that would ask you may run. It allows what it judges to be of low or medium risk even where you never asked for it, and what it allows can run outside the sandbox.',
+        says: 'Codex’s own reviewer decides each command that would have asked you.',
       },
       {
         id: 'ask',
         label: 'Ask for approval',
-        says: 'It can write in the conversation’s folder and run commands in Codex’s sandbox, with the network on. Nobody is there to approve, so whatever would ask you is refused. On Windows without Codex’s own sandbox, only plain it commands run.',
+        says: 'Works in Codex’s sandbox; anything that would ask you is refused, since nobody is there.',
       },
       {
         id: 'read-only',
         label: 'Read Only',
-        says: 'Its commands can read files and cannot write or use the network, and whatever would ask you is refused. It’s own commands still run outside that, so it can still change pages and publish a file it can read.',
+        says: 'Can read and answer on the page, and change nothing else.',
       },
     ],
   },

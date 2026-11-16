@@ -3389,52 +3389,18 @@ form.row-main {
 }
 .wake-modes {
   display: grid;
-  gap: 8px;
+  gap: 4px;
+  justify-items: start;
   margin: 2px 0 6px;
   padding: 4px 0 6px 48px;
-  border: 0;
   min-width: 0;
 }
-.wake-modes-name {
-  padding: 0 0 4px;
-}
-.wake-mode {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  column-gap: 10px;
-  row-gap: 2px;
-  align-items: start;
-  cursor: pointer;
-}
 .wake-mode-pick {
-  grid-column: 1;
-  grid-row: 1;
-  align-self: start;
-  width: 16px;
-  height: 16px;
-  min-height: 0;
-  margin: 3px 0 0;
-  padding: 0;
+  max-width: 100%;
 }
-.wake-mode-say {
-  grid-column: 2;
-  grid-row: 2;
-}
-.wake-mode-name {
-  grid-column: 2;
-  grid-row: 1;
+.wake-mode-one {
   font-size: 12.5px;
-  font-weight: 550;
   color: var(--fg);
-}
-.wake-mode-tag {
-  margin-left: 8px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  border: 1px solid currentColor;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--ok, var(--fg));
 }
 @media (max-width: 520px) {
   .wake-modes {
