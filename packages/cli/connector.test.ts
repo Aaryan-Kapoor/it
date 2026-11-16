@@ -5945,6 +5945,16 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
       // Made by a timer on the page, with nobody there: such a conversation is reopened three times in five minutes at most
       const claude = { ...click(9), attended: false, session: { harness: 'claude-code', id: '11111111-2222-4333-8444-000000000009' } }
       noteConversation(claude.session, home)
+      // Held by the person in Claude Code's ordinary mode, which asks: a run of it in Auto, the starting value, is one the page says is raised
+      const record = path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', home.replace(/[^A-Za-z0-9]/g, '-'))
+      mkdirSync(record, { recursive: true })
+      writeFileSync(
+        path.join(record, `${claude.session.id}.jsonl`),
+        `${JSON.stringify({ type: 'user', permissionMode: 'default', entrypoint: 'cli', timestamp: new Date(Date.now() - 3_600_000).toISOString(), message: { role: 'user', content: 'hello' } })}\n`,
+      )
+      // Quiet for an hour, as a closed conversation is: one written a moment ago is left alone
+      const anHourAgo = new Date(Date.now() - 3_600_000)
+      utimesSync(path.join(record, `${claude.session.id}.jsonl`), anHourAgo, anHourAgo)
       offered(claude)
       await until(() => stand.t3.asked.length === 1)
       stand.t3.asked[0]!.answer(undefined, true, true)
@@ -5957,9 +5967,17 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
         await pause(300)
         search.near = true
       }
+      // None of those ran, so nothing was said of a mode it ran in, and no run of It's was noted in the conversation's record
+      expect(stand.calls.filter((c) => c.name === 'machines:runNoted')).toEqual([])
+      expect(existsSync(path.join(home, 'claude-runs.json'))).toBe(false)
       // And then T3 Code has said, and nothing stands in the way: it is reopened once more
       await until(() => begins === 5, 8000)
       begun!()
+      // And that run, which goes ahead, is said to run in more than the conversation was last in
+      await until(() => stand.calls.some((c) => c.name === 'machines:runNoted'), 8000)
+      expect(stand.calls.filter((c) => c.name === 'machines:runNoted').map((c) => [c.args.why, c.args.mode, c.args.instead])).toEqual([
+        ['raised', 'default', 'auto'],
+      ])
     } finally {
       clock.restore()
     }
