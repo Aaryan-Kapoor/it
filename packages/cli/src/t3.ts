@@ -387,7 +387,8 @@ function folderTest(shell: { projects?: unknown }, of: { cwd?: string }, platfor
   // case, and T3 Code and an agent app need not write the same: each is written one way before
   // the two are compared
   const windows = platform === 'win32'
-  const stroke = windows ? '\\' : path.sep
+  // The stroke of the system the folders are named for, which a test may name apart from the one it runs on
+  const stroke = windows ? '\\' : '/'
   const plain = (folder: string) => (windows ? folder.replaceAll('/', '\\').toLowerCase() : folder)
   // A folder may also be named by a link to it, which T3 Code may keep and the agent app, which
   // was started in it, does not: on a Mac a folder in /tmp is /private/tmp to the app. So each is

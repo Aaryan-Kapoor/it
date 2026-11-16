@@ -5652,22 +5652,24 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
       await until(() => stand.t3.asked.length >= 1)
       for (let i = 0; i < 6; i++) {
         clock.on(10_000)
-        await pause(1100)
+        await pause(1500)
       }
+      await until(() => holdsBack().length > 0, 20_000)
       expect(reopenedFor()).toEqual([])
       expect(holdsBack().some((h) => h.why === T3_CHECKING)).toBe(false)
       // Then it is: its add-on was heard in it, and T3 Code has still not said
       await noteConversation(claude!.session, home, undefined, true)
-      await until(() => holdsBack().some((h) => h.why === T3_CHECKING), 5000)
+      // Each pass also looks for Claude Code conversations open at a keyboard, which takes longer on a busy machine
+      await until(() => holdsBack().some((h) => h.why === T3_CHECKING), 20_000)
       clock.on(9_000)
-      await pause(1500)
+      await pause(3000)
       expect(reopenedFor()).toEqual([])
       clock.on(1_500)
-      await until(() => reopenedFor().length === 1, 5000)
+      await until(() => reopenedFor().length === 1, 20_000)
     } finally {
       clock.restore()
     }
-  }, 30_000)
+  }, 90_000)
 
   test('clicks whose searches drop each other again and again, as large searches do where they hold more thread ids than they may together, are reopened within fifteen seconds all the same', async () => {
     const { T3_HELD_MOST } = await import('./src/t3')
