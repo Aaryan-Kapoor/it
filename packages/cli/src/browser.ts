@@ -77,7 +77,8 @@ export function noScreen(s: Surroundings): 'ssh' | 'ci' | 'remote' | 'container'
   const stood = standIn(env)
   if (stood === null) return 'no_opener'
   if (stood) return null
-  const found = (env.PATH ?? '').split(path.delimiter).some((dir) => dir && s.exists(path.join(dir, 'xdg-open')))
+  // Only a system that is neither macOS nor Windows comes here, and each of those names its folders as POSIX does
+  const found = (env.PATH ?? '').split(path.posix.delimiter).some((dir) => dir && s.exists(path.posix.join(dir, 'xdg-open')))
   return found ? null : 'no_opener'
 }
 
