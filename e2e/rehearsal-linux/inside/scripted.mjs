@@ -1343,6 +1343,43 @@ async function F499S() {
   check('nothing says the page could not be confirmed', !/could not be confirmed/i.test(all))
 }
 
+/**
+ * A phone on the same network: `it network on`, then It's site opened at the machine's address over
+ * plain http (not a secure context, as on a real phone) in a phone-sized page; its errors read, a
+ * pairing tried, and a page shown on it.
+ */
+async function PHONE() {
+  const net = sh('~/.it/bin/it network on 2>&1')
+  const addr = /http:\/\/(\d+\.\d+\.\d+\.\d+):(\d+)/.exec(net)
+  if (!check('it network on gives an address', !!addr, { said: net.replace(/\s+/g, ' ').slice(0, 300) })) return
+  const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
+  const phone = await ctx.newPage()
+  await phone.setViewportSize({ width: 390, height: 844 }).catch(() => {})
+  const errors = []
+  phone.on('pageerror', (e) => errors.push(String(e).slice(0, 200)))
+  phone.on('console', (m) => { if (m.type() === 'error') errors.push(m.text().slice(0, 200)) })
+  const base = `http://${addr[1]}:${addr[2]}`
+  await phone.goto(base).catch((e) => errors.push(`goto: ${String(e).slice(0, 120)}`))
+  await sleep(6000)
+  const first = (await phone.mainFrame().evaluate(() => document.body.innerText).catch(() => '')).replace(/\s+/g, ' ').slice(0, 300)
+  check('the site loads at the address', first.length > 20, { secure: await phone.evaluate(() => window.isSecureContext).catch(() => null), shows: first, errors: errors.slice(0, 5).join(' | ') })
+  // A pairing link from It, opened at the address instead of localhost
+  const pair = /https?:\/\/localhost:\d+\/pair#[A-Za-z0-9]+/.exec(sh('~/.it/bin/it site --no-open 2>&1'))?.[0]
+  if (pair) {
+    await phone.goto(pair.replace(/https?:\/\/localhost:\d+/, base)).catch((e) => errors.push(`goto: ${String(e).slice(0, 120)}`))
+    await sleep(8000)
+  }
+  const after = (await phone.mainFrame().evaluate(() => document.body.innerText).catch(() => '')).replace(/\s+/g, ' ').slice(0, 300)
+  check('a pairing link opened at the address pairs the phone', /pages|machines|displays|ready/i.test(after) && !/connect this browser/i.test(after), { shows: after, errors: errors.slice(0, 8).join(' | ') })
+  sh('mkdir -p ~/phone && printf "<!doctype html><title>Hello phone</title><h1>Hello phone</h1><button>Tap me</button>" > ~/phone/p.html')
+  sh('~/.it/bin/it create "Hello phone" --id hello-phone --file ~/phone/p.html 2>&1 | head -1')
+  await phone.goto(`${base}/p/hello-phone`).catch(() => {})
+  await sleep(8000)
+  const pg = await shown(phone).catch(() => '')
+  check('a page shows on the phone', /hello phone/i.test(pg), { shows: pg.replace(/\s+/g, ' ').slice(0, 200), errors: errors.slice(0, 10).join(' | ') })
+  sh('~/.it/bin/it network off 2>&1')
+}
+
 /** Where the ask for a star shows: five pages made with `it create`, then It's page list and a page. */
 async function STAR() {
   const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
@@ -1536,6 +1573,7 @@ async function main() {
     else if (scenario === 'STAR') await STAR()
     else if (scenario === 'STOP') await STOP()
     else if (scenario === 'F499S') await F499S()
+    else if (scenario === 'PHONE') await PHONE()
     else if (scenario === 'MISC') await MISC()
     else if (scenario === 'WAKEBOOT2') await WAKEBOOT2()
     else check(`no scenario ${scenario}`, false)
