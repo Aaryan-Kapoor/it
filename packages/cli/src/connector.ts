@@ -27,6 +27,7 @@ import {
   parseJson,
   QUEUES,
   RETENTION,
+  T3_CHECKING,
   TAKES,
   TURN_ON_MS,
   TURNS_ON,
@@ -81,6 +82,7 @@ import {
   T3_HELD_MOST,
   type T3Now,
   type T3Search,
+  t3Counted,
   t3Held,
   t3Refusal,
   t3Running,
@@ -1213,6 +1215,29 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    */
   const T3_ASKED_MS = 5_000
   /**
+   * How long, from when a click first asks, a Claude Code or Codex conversation is kept from
+   * being reopened while T3 Code has yet to say whether one of its threads holds it, and every
+   * thread that works in the conversation's folder has not yet been read. Past that the click
+   * goes the way it would without T3 Code. T3 Code's real server listed three thousand threads in
+   * two thirds of a second and read them four at a time in a few milliseconds each, and gave It a
+   * session in a second or two; a thread that holds a conversation works in its folder, and those
+   * threads are read first. So a T3 Code that is well has said what matters within a few seconds,
+   * and this leaves room for one that is slow, or is asked for It's session for the first time,
+   * without leaving a person's click to wait for one that never answers, or for a search over
+   * every thread of a large workspace, which took a minute and more.
+   */
+  const T3_UNDECIDED_MS = 15_000
+  /**
+   * The conversations for which the search under way has read every thread that works in the
+   * conversation's folder, as T3 Code last listed them, and found that none holds it. A thread
+   * that holds a conversation is one of those, so a click for one of them goes the way it would
+   * without T3 Code, while the search goes on over the rest for the clicks that come after.
+   */
+  const t3Near = new Set<string>()
+  /** The clicks whose reopening has been said to wait for T3 Code, and those whose wait for it has been said to be over. */
+  const t3HeldSaid = new Set<string>()
+  const t3OverSaid = new Set<string>()
+  /**
    * The conversations T3 Code has said it holds in a thread, each with that thread, as written
    * down in It's folder: a click for one goes to its thread and nowhere else. It is not reopened
    * outside T3 Code, and not put into Codex's queue, where its turn would run where the thread
@@ -1351,8 +1376,45 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     if (!key.startsWith('claude-code:') && !key.startsWith('codex:')) return false
     if (t3Only(key)) return true
     if (!t3Seen?.server) return false
+    if (t3Near.has(key)) return false
     const known = t3Known.get(key)
     return !(known !== undefined && known !== 'asking' && known.thread === null && Date.now() - known.at < T3_AGAIN_MS)
+  }
+  /** How many threads the conversation's search has read and found not to hold it, of how many T3 Code listed, for the log. */
+  const t3Count = (key: string): string => {
+    const search = t3Searches.get(key)
+    const { read, listed } = search ? t3Counted(search) : { read: 0, listed: 0 }
+    return `${read} of ${listed} threads read`
+  }
+  /**
+   * Whether a click is kept from reopening its conversation for now, because T3 Code has yet to
+   * say whether one of its threads holds it (`t3Undecided`). One whose clicks go to a thread and
+   * nowhere else always is. Any other is kept for `T3_UNDECIDED_MS` from when the click first
+   * asked, and its page says meanwhile that It is checking: past that it is reopened as it would
+   * be without T3 Code. Each is said once in the log, by code and count.
+   */
+  const t3HoldsBack = (click: Offered, key: string): boolean => {
+    if (!t3Undecided(key)) return false
+    if (t3Only(key)) return true
+    if (!t3Waits.has(click.id)) t3Waits.set(click.id, steady())
+    const waited = steady() - t3Waits.get(click.id)!
+    if (waited >= T3_UNDECIDED_MS) {
+      if (!t3OverSaid.has(click.id)) {
+        t3OverSaid.add(click.id)
+        say(
+          `T3 Code did not say in ${T3_UNDECIDED_MS / 1000} seconds whether one of its threads holds a conversation, so its click goes the way it would without T3 Code (t3_wait_over, ${t3Count(key)})`,
+        )
+      }
+      return false
+    }
+    if (!t3HeldSaid.has(click.id)) {
+      t3HeldSaid.add(click.id)
+      say(`a reopening waits while T3 Code says whether one of its threads holds the conversation (t3_undecided, ${t3Count(key)})`)
+    }
+    // Told only where It keeps it with the click: told as why the conversation could not be woken, it would say that something failed
+    if (tellWay() === 'kept') tellHeld(click, T3_CHECKING)
+    soon(T3_UNDECIDED_MS - waited + 10)
+    return true
   }
   /**
    * Keeps the thread ids that the searches of every conversation hold together to
@@ -1372,6 +1434,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       if (t3Known.get(key) === 'asking') t3Known.delete(key)
       t3Pending.delete(key)
       t3Retries.delete(key)
+      t3Near.delete(key)
     }
   }
   /**
@@ -1414,7 +1477,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       if (!t3Waits.has(click)) t3Waits.set(click, steady())
       until = t3Waits.get(click)! + T3_ASKED_MS
     }
-    const waiting = steady() < until
+    // Not once every thread in the conversation's folder has been read and none holds it
+    const waiting = steady() < until && !t3Near.has(key)
     const stillAsking = () => (waiting ? 'asking' : otherwise('T3 Code has not yet said which thread holds it'))
     if (known === 'asking') return stillAsking()
     // A click waits for a search that is to go on only where it goes on before the click's wait is over
@@ -1425,6 +1489,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       t3Searches.clear()
       t3Pending.clear()
       t3Retries.clear()
+      t3Near.clear()
     }
     t3Known.set(key, 'asking')
     const search = t3Searches.get(key) ?? t3Search()
@@ -1433,10 +1498,12 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     // By the id its pages name and by the one it has now: T3 Code keeps the one it resumes from
     const ids = [...new Set([session.id, threadOf(key)])]
     void t3ThreadOf(server, { harness: session.harness, ids, cwd: conversationFolder(session) }, search)
-      .catch(() => ({ status: 'incomplete' as const, progressed: false }))
+      .catch(() => ({ status: 'incomplete' as const, progressed: false, near: t3Near.has(key) }))
       .then((result) => {
         if (t3Searches.get(key) !== search) return
         let again = 10
+        if ((result.status === 'incomplete' || result.status === 'limited') && result.near) t3Near.add(key)
+        else t3Near.delete(key)
         if (result.status === 'incomplete') {
           // More candidates, unread answers and expired budgets are not evidence of absence.
           // A click's wait is its own, and later batches do not restart it.
@@ -3816,6 +3883,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       now = Date.now()
 
       for (const id of t3Waits.keys()) if (!offeredHere.has(id)) t3Waits.delete(id)
+      for (const said of [t3HeldSaid, t3OverSaid]) for (const id of said) if (!offeredHere.has(id)) said.delete(id)
       // Before anything is decided about any of them: a click the person asked to have tried
       // again may be one that a click behind it would otherwise wait for, or go with
       for (const click of offeredHere.values()) retried(click)
@@ -3858,6 +3926,9 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         const seen = hookSeen.get(click.id)
         const fresh = seen?.tag === tag(click) && performance.now() - seen.at < FRESH_MS
         const forAddOn = listening || (inTurn && fresh && !queuedBefore)
+        // Whether this pass keeps it from reopening while T3 Code has yet to say, or for being open without It's add-on, each of which its page says
+        let heldForT3 = false
+        let shut = false
         // Which of the other ways it goes, asked only where the first does not take it
         const way = forAddOn
           ? undefined
@@ -3868,15 +3939,22 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
               // write it, and refuses another. A run of It's own that is ending holds it until it
               // has gone, which is a moment, and the click is reopened for then.
               // Nor while T3 Code, running here, has yet to say that none of its threads holds it:
-              // reopened outside T3 Code, a conversation a thread holds would run beside the thread
-              reopens: () =>
-                wakes(session.harness, click.at) &&
-                connected(session.harness) &&
-                (!codex || (!reopenedNow.has(key) && codexHold(key) === false)) &&
-                !runtimes.blocksWake(session.harness) &&
-                !t3Undecided(key) &&
+              // reopened outside T3 Code, a conversation a thread holds would run beside the
+              // thread. That is waited for only so long (`t3HoldsBack`)
+              reopens: () => {
+                if (
+                  !wakes(session.harness, click.at) ||
+                  !connected(session.harness) ||
+                  (codex && (reopenedNow.has(key) || codexHold(key) !== false)) ||
+                  runtimes.blocksWake(session.harness)
+                )
+                  return false
+                heldForT3 = t3HoldsBack(click, key)
+                if (heldForT3) return false
                 // Asked last, since it tells the page: only of a click that would otherwise be reopened for
-                !keptShut(click, openThisPass),
+                shut = keptShut(click, openThisPass)
+                return !shut
+              },
             })
         // A Codex that has the conversation open, and whose last turn the person interrupted,
         // keeps what its queue is given until their next message there, and no hook of that
@@ -3891,6 +3969,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           continue
         }
         if (click.heldBack === CODEX_INTERRUPTED) tellHeld(click, null)
+        // Its page said It was checking with T3 Code, and this pass does not keep it for that
+        if (click.heldBack === T3_CHECKING && !heldForT3 && !shut) tellHeld(click, null)
         if (forAddOn) {
           // Route 1: the add-on will ask for it, or the running turn's next hook will
           const asked = steady()
