@@ -438,6 +438,10 @@ export const CONVERSATIONS_OWN = 'conversation'
  * and to the command It starts it with (`carrying`): what is kept is the mode's name, so nothing
  * kept changes. An app that is not here is offered no choice.
  *
+ * Each app here needs its ceiling in `WAKE_MODE_LEGACY` as well: what an It that does not know the
+ * app's modes runs it in at most, by which `runBegan` holds such an It to the person's choice. One
+ * with none is taken to be one that may run its most permissive mode.
+ *
  * `default` is the mode where none was chosen, as on every machine before the choice existed: one
  * line per app, for the owner to change. It only ever steps down this list by itself: a name it
  * does not know, which a newer It may have written, reads as the last choice, and where the app

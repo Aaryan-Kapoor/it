@@ -1425,6 +1425,9 @@ describe('the mode a Claude Code conversation is reopened in', () => {
     } finally {
       delete WAKE_MODES.opencode
     }
+    // Every app with modes has a ceiling for an It that does not know them, one of its own modes
+    for (const [app, list] of Object.entries(WAKE_MODES))
+      expect(list!.choices.map((c) => c.id)).toContain(WAKE_MODE_LEGACY[app as keyof typeof WAKE_MODE_LEGACY])
     // What a machine says it knows: the apps it names, and Codex alone for its old word
     expect(modesKnown(['codex', 'claude-code'])).toEqual(['codex', 'claude-code'])
     expect(modesKnown(true)).toEqual(['codex'])

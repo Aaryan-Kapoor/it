@@ -1,5 +1,6 @@
 import {
   ALIVE,
+  CONVERSATIONS_OWN,
   HARNESSES,
   type Harness,
   LIMITS,
@@ -367,7 +368,8 @@ export const runBegan = mutation({
     // the page says which machine to update; where it allows more, the run goes ahead and the page
     // says the machine runs less. Where they have chosen nothing, it runs as that It always ran it,
     // and nothing is said: an update of the It a machine joined never takes Auto-wake away from it
-    const legacy = WAKE_MODE_LEGACY[s.harness as Harness]
+    // An app with modes and no ceiling of its own is taken to be one an older It may run in its most permissive mode
+    const legacy = WAKE_MODE_LEGACY[s.harness as Harness] ?? WAKE_MODES[s.harness as Harness]?.choices.find((c) => c.id !== CONVERSATIONS_OWN)?.id
     const chosen = (machine.wakeModes ?? []).some((m) => m.harness === s.harness)
     let said = {}
     // An app the machine does not say it knows the modes of is one it runs as an It from before the choice

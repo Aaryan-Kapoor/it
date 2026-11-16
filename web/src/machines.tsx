@@ -559,7 +559,7 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                     )}
                     {/* One line, for the mode in force now: on a machine whose It is from before the choice, what that It does instead */}
                     <span className="row-sub wake-mode-say">
-                      {m.modes !== undefined && !m.modes.includes(h.id)
+                      {!(m.modes ?? []).includes(h.id)
                         ? chosenHere
                           ? 'This machine runs an older It, which holds to this choice only once it is updated.'
                           : `This machine runs an older It, which reopens ${LABEL[h.id] ?? h.id} as it always did until it is updated.`
