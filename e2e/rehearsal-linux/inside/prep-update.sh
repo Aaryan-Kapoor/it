@@ -18,3 +18,5 @@ else
 fi
 chmod 700 /etc/rehearsal-between.sh
 su -l ana -s /bin/bash -c 'grep -o "PATH=[^\"]*" ~/.config/systemd/user/it.service'
+# A terminal opened after the install, as a person opens one: the one the harness opened is older
+su -l ana -s /bin/bash -c 'tmux kill-server 2>/dev/null; tmux new-session -d -s agent -x 104 -y 56 -c /home/ana/work; sleep 2; tmux send-keys -t agent "command -v $(test -x ~/.local/bin/claude && echo claude || echo codex)" Enter'
