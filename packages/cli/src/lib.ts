@@ -40,6 +40,8 @@ export const api: any = anyApi
 
 /** A failure the person or agent can act on. `hint` says what to do next. */
 export class Problem extends Error {
+  /** Set by `translate` on a refusal the backend says is of what was asked, with nothing under way or made by it. */
+  settled?: boolean
   constructor(
     message: string,
     readonly code = 'error',
@@ -1613,13 +1615,16 @@ export async function translate(err: unknown): Promise<never> {
       anothers?: boolean
       notSent?: string
       sharedName?: boolean
+      settled?: boolean
     }
     // A display that was named and takes nothing now is refused with why, which is the code: `not_paired`, `agents_off` or `nowhere`
     const why = typeof data.notSent === 'string' && /^[a-z_]{1,20}$/.test(data.notSent) ? data.notSent : undefined
-    throw new Problem(
+    const refused = new Problem(
       data.message ?? 'Refused.',
       data.noSuchDisplay ? 'no_such_display' : data.anothers ? 'anothers' : data.sharedName ? 'shared_name' : (why ?? data.code ?? 'error'),
     )
+    if (data.settled === true) refused.settled = true
+    throw refused
   }
   const text = String((err as Error)?.message ?? err)
   if (clashed(err)) throw new Problem('It is busy just now. Try again in a moment.', 'unavailable')

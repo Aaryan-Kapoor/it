@@ -114,6 +114,7 @@ import {
   processes,
   SINCE_TOLD,
   STOPPED,
+  signedOut,
   WAS_CUT_OFF,
   WAS_STOPPED,
   windowsProgram,
@@ -631,6 +632,12 @@ export const OPEN_WITHOUT_ADDON =
  */
 export const PI_OPEN_WITHOUT_ADDON =
   'its conversation is open without It’s add-on, as when it was open before It was installed, so It did not start a second copy of it: type /reload in it, or open it again if you closed it, and what you did reaches it'
+/**
+ * What the page says of why a conversation could not be reopened, where its app's last words
+ * show that the app is signed out on this machine (`signedOut`): in It's words, and not the
+ * app's, which for Codex are a status code and a request's id. Shown after "Couldn't wake <app>:".
+ */
+export const signedOutWhy = (app: string): string => `${app} is signed out on this machine, so it could not run: open ${app} and sign in`
 /** What the page says of a click for a Codex conversation that is open and whose last turn the person interrupted (`CODEX_INTERRUPTED` in the protocol). */
 export { CODEX_INTERRUPTED }
 /** What the page says after why a Pi conversation could not be reopened, where it has not loaded It's add-on either (`notLoadedToo`). */
@@ -2822,7 +2829,12 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    */
   const notReopened = async (session: { harness: string; id: string }, why: string) => {
     const words = saidLast.get(follow(keyOf(session.harness, session.id)))
-    const said = words ? `${why}, and its last words were: ${words}` : why
+    const said =
+      words && signedOut(session.harness, words)
+        ? signedOutWhy(APP_NAMES[session.harness] ?? session.harness)
+        : words
+          ? `${why}, and its last words were: ${words}`
+          : why
     // Why its reopening failed is said all the same, since the conversation may be gone for good,
     // and after it what lets it hear the page where it is still open. A conversation known to be
     // open without the add-on is not reopened at all (`keptShut`), so this is said only of one

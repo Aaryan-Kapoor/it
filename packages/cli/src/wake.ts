@@ -270,6 +270,17 @@ export function lastWords(text: string): string | null {
 }
 
 /**
+ * Whether the last words an agent app printed as it ended badly (`lastWords`) show plainly that
+ * it is not signed in on this machine: Codex's refusal by its service with 401 Unauthorized, and
+ * Claude Code's "Not logged in" or its word to run /login. Nothing else is taken for it.
+ */
+export function signedOut(harness: string, words: string): boolean {
+  if (harness === 'codex') return /\b401\b/.test(words) && /\bunauthori[sz]ed\b/i.test(words)
+  if (harness === 'claude-code') return /\bnot logged in\b|(?:^|\s)\/login\b/i.test(words)
+  return false
+}
+
+/**
  * Runs a command that carries a conversation on, in the folder the conversation was held in,
  * with its message on the command's input. Null when the command ran the turn. Otherwise why
  * it did not, for the log, in this program's own words: never what the command printed, which

@@ -54,6 +54,7 @@ import {
   openBy,
   SINCE_TOLD,
   STOPPED,
+  signedOut,
   WAS_CUT_OFF,
   WAS_STOPPED,
   WOKEN,
@@ -1379,6 +1380,23 @@ describe('the last line an app printed', () => {
     expect(lastWords('401 Unauthorized for key sk-or-v1-0123456789abcdef0123456789abcdef0123')).toBe('401 Unauthorized for key …')
     expect(lastWords(`error: ${'x '.repeat(200)}`)!.length).toBe(160)
     expect(lastWords('  \n\n')).toBeNull()
+  })
+})
+
+describe('an app that is signed out', () => {
+  test('is told by its own last words, for Codex and Claude Code alone, and by nothing less plain', () => {
+    const codex = lastWords(
+      'Reading prompt from stdin...\nERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: 9a0b1c2d3e4f5a6b-IAD, request id: req_0123456789abcdef0123456789abcdef\n',
+    )!
+    expect(signedOut('codex', codex)).toBe(true)
+    expect(signedOut('claude-code', 'Not logged in · Please run /login')).toBe(true)
+    expect(signedOut('claude-code', lastWords('Error: Invalid API key · Please run /login\nSession ended.\n')!)).toBe(true)
+    // Another app's words, and other failures, are not
+    expect(signedOut('pi', 'ERROR: unexpected status 401 Unauthorized')).toBe(false)
+    expect(signedOut('codex', 'Not logged in · Please run /login')).toBe(false)
+    expect(signedOut('codex', 'ERROR: unexpected status 429 Too Many Requests')).toBe(false)
+    expect(signedOut('codex', 'ERROR: Missing environment variable: `KEY`.')).toBe(false)
+    expect(signedOut('claude-code', 'Error: wrote ./login.txt and failed')).toBe(false)
   })
 })
 
