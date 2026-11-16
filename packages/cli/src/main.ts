@@ -3638,8 +3638,9 @@ they print JSON.
 
 async function main(argv: string[]): Promise<void> {
   const [cmd, ...rest] = argv
-  // What is said where It is not running names the background service where this folder registered one
-  askRegisteredWith(() => service.installedHereOr('unknown'))
+  // What is said where It is not running names the background service where this folder registered one,
+  // and `it serve` where nothing on the machine could keep It running
+  askRegisteredWith(() => service.installedHereOr('unknown'), service.reachable)
   // Run as a script, it is held to the Node it needs before anything else is done. The standalone program has its own runtime.
   if (!('Bun' in globalThis)) {
     const old = nodeTooOld(process.versions.node)
