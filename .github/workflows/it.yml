@@ -347,6 +347,14 @@ jobs:
         env:
           PROGRAM: ${{ matrix.program }}
         run: IT_BIN="$RUNNER_TEMP/it-programs/$PROGRAM" node e2e/service.mjs
+      # JSON as an agent writes it, through each shell on Windows to the program itself: Windows
+      # PowerShell 5.1 hands it on without its quotes kept, and It reads it whole from its own
+      # command line. PowerShell 7, cmd and Git Bash are run too, as each hands it on its own way
+      - name: JSON given through each Windows shell reaches It whole
+        if: runner.os == 'Windows'
+        env:
+          PROGRAM: ${{ matrix.program }}
+        run: node e2e/windows-json.mjs "$RUNNER_TEMP/it-programs/$PROGRAM"
       # How a conversation that Auto-wake reopened went, under the Bun the Windows program runs
       # on, which hands on only the lowest byte of a child's exit code. Here and not with the unit
       # tests on Windows, whose job does not block a merge.
