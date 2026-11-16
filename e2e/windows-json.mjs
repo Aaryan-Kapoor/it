@@ -128,6 +128,20 @@ for (const [name, run] of shells) {
       `exit ${done.status}, sent ${JSON.stringify(sent)}, said ${done.stderr.trim().slice(0, 400)}`,
     )
   }
+  // Written as the guide has an agent write JSON on Windows: every option before it, a backslash
+  // just before a quote among them, a path with forward slashes, and JSON with a space outside its
+  // strings, which Windows PowerShell puts in quotes of its own. cmd hands JSON on bare, and reads
+  // a space outside its strings as the end of a word, so that form is not written there
+  for (const written of [String.raw`{"dir":"C:\\"}`, '{"folder":"D:/work"}', ...(name === 'cmd' ? [] : ['{"a": 1, "b": "x y"}'])]) {
+    calls.length = 0
+    const done = await run(['patch', 'board', '--if-revision', '3', written])
+    const sent = calls.find((c) => c.path === 'state:patch')?.args
+    check(
+      `${name}: it patch board --if-revision 3 ${written}`,
+      done.status === 0 && sent?.patch === JSON.stringify(JSON.parse(written)) && sent?.baseRevision === 3,
+      `exit ${done.status}, sent ${JSON.stringify(sent)}, said ${done.stderr.trim().slice(0, 400)}`,
+    )
+  }
   calls.length = 0
   const set = await run(['set', 'board', 'order', '["c1","c 2"]'])
   const setSent = calls.find((c) => c.path === 'state:patch')?.args
