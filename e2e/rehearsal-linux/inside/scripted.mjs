@@ -1152,6 +1152,9 @@ async function TWOSAME() {
   const clickOn = async (p, url, re, nth, what, who2, ms = 240_000) => {
     await p.goto(url).catch(() => {})
     await sleep(5000)
+    // The page itself first: It's "Connecting…" can last a while
+    for (let i = 0; i < 20 && !re.test(await shown(p).catch(() => '')); i++) await sleep(2000)
+    step(`${what}: the page as it is`, { shows: (await shown(p).catch(() => '')).replace(/\s+/g, ' ').slice(0, 200) })
     const before = await shown(p)
     const t0 = Date.now()
     const a1 = marks('agent').length, a2 = marks('agent2').length
