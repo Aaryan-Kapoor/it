@@ -59,6 +59,12 @@ export async function answerApp(app, counts = {}) {
       await key('Enter')
       return 'notes'
     }
+    // A notice of Claude Code's own that waits for Enter (auto mode's billing, and the like)
+    if (/Enter to continue · Esc to cancel/i.test(tail) && !/No, exit|trust this folder/i.test(tail)) {
+      step('Claude Code shows a notice; presses Enter')
+      await key('Enter')
+      return 'notice'
+    }
     // The folder question with unnumbered options ("❯ No, exit" above "Yes, I trust this folder")
     if (/Yes, I trust this folder/i.test(tail) && /No, exit/i.test(tail) && !/^\s*(?:│\s*)?[❯›>]?\s*1\.\s+\S/m.test(tail)) {
       for (let i = 0; i < 4 && !/[❯›>]\s*Yes, I trust this folder/i.test(screen()); i++) await key('Down')
