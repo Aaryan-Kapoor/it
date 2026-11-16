@@ -203,7 +203,11 @@ export function jsonPlaces(given: readonly string[]): Map<number, number> {
     const eq = word.indexOf('=')
     const name = eq === -1 ? word.slice(2) : word.slice(2, eq)
     if (!BOOLEAN.has(name) && !VALUED.has(name)) return new Map()
-    if (eq !== -1 || BOOLEAN.has(name)) continue
+    if (eq !== -1 || BOOLEAN.has(name)) {
+      // `--state=…` is a --state as well, and the last one is the one read: none before it is a place
+      if (name === 'state') state = undefined
+      continue
+    }
     const value = given[k + 1]
     if (value === undefined || (value.startsWith('--') && value.length > 2)) return new Map()
     // The value of --state is JSON, and is the whole of it; the value of any other option is not
