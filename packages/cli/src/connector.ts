@@ -191,10 +191,10 @@ const SETTLE_MS = 300
  * Hermes) reads the connector's note again at most every three seconds while none answers it,
  * asks once a second, and gives up on a question after three seconds: so the add-on of every
  * open conversation has asked within seven seconds of the note being written. That holds where
- * the note an add-on read last names a connector that is gone, as after a stop, or one that
- * refuses its word, as after a crash. Where something else has since taken the port a crashed
- * connector left in its note, and answers there, an add-on goes on asking it for half a minute,
- * and is not waited for that long. Reopened before
+ * the connector an add-on last found is gone, or refuses its word, as one at the same socket
+ * does. Where the add-on found it at a port, as on Windows, and something else has taken that
+ * port since and answers there with anything but a refusal, the add-on goes on asking there for
+ * up to half a minute, and is not waited for that long. Reopened before
  * that, an open conversation would run a second copy of itself beside the person's own, with
  * the click. Codex says by its own lock whether a conversation is open, which is known at once.
  */
