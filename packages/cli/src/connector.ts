@@ -1402,6 +1402,18 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     return `${read} of ${listed} threads read`
   }
   /**
+   * Whether a click would be kept from reopening its conversation at this moment for want of
+   * T3 Code's word, as `t3HoldsBack` decides, without telling or logging anything: asked again of
+   * a reopening that waited for its turn, since a thread may have been found to hold the
+   * conversation meanwhile, or a listing may have found a thread of its folder changed.
+   */
+  const t3Unsure = (click: Offered, key: string): boolean => {
+    if (!t3Undecided(key)) return false
+    if (t3Only(key)) return true
+    const from = t3HoldFrom.get(click.id) ?? t3Waits.get(click.id)
+    return from === undefined || steady() - from < T3_UNDECIDED_MS
+  }
+  /**
    * Whether a click is kept from reopening its conversation for now, because T3 Code has yet to
    * say whether one of its threads holds it (`t3Undecided`). One whose clicks go to a thread and
    * nowhere else always is. Any other is kept for `T3_UNDECIDED_MS` from when the click first
@@ -3225,10 +3237,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       if (!stillFor()) return
       // Nor is a conversation reopened once the person has switched that off, or more often than it may be
       if ((reopening && !wakes(harness, click.at)) || (starting && !room(key, someoneThere(click, offered)))) return
-      // Nor once a thread of T3 Code has been found to hold it while the click stood in line,
-      // as a search that went on, or the conversation being heard from, may find: its clicks go
-      // to that thread, and the click is looked at afresh on the next pass
-      if (reopening && t3Only(key)) return
+      // Nor once a thread of T3 Code has been found to hold it while the click stood in line, as
+      // a search that went on, or the conversation being heard from, may find, nor while T3 Code
+      // may yet name one: the click is looked at afresh on the next pass
+      if (reopening && t3Unsure(click, key)) return
       // Codex's queue is for a conversation some Codex has open. One that was closed while this
       // click stood in line is not given it: the click is looked at afresh on the next pass.
       if (!reopening && !t3 && codexOpen(key) !== true) return
@@ -3256,7 +3268,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         awaited(click, Date.now()) ||
         !stillFor() ||
         (reopening && !wakes(harness, click.at)) ||
-        (reopening && t3Only(key)) ||
+        (reopening && t3Unsure(click, key)) ||
         (!reopening && !t3 && codexInterrupted(key))
       ) {
         journal('released', click.id)
@@ -3352,9 +3364,9 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           return
         }
       }
-      // And once more just before the conversation is reopened: a thread of T3 Code found to hold
-      // it while the clicks were being claimed has them, and nothing is run beside it
-      if (reopening && t3Only(key)) {
+      // And once more before the conversation is reopened: a thread of T3 Code found to hold it
+      // while the clicks were being claimed has them, and nothing is run beside it
+      if (reopening && t3Unsure(click, key)) {
         await giveBack()
         journal('released', click.id)
         await release(click.id).catch(() => {})
@@ -3463,8 +3475,9 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           await carry(
             click.session!,
             `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.has(key) ? `\n\n${WAS_STOPPED}` : ''}${toldCutOff ? `\n\n${WAS_CUT_OFF} ${toldLeft}` : ''}`,
-            // Still wanted at the moment it would start: the app connected, and reopening switched on for it
-            () => connected(harness) && wakes(harness, click.at),
+            // Still wanted at the moment it would start: the app connected, reopening switched on
+            // for it, and no thread of T3 Code found to hold it, or about to be, meanwhile
+            () => connected(harness) && wakes(harness, click.at) && !t3Unsure(click, key),
             [click, ...withIt].map((c) => c.id),
             mine,
           ).then((ended) => {

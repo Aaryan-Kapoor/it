@@ -5689,6 +5689,68 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     }
   }, 30_000)
 
+  test('a reopening that is waiting for its click to be claimed when a listing finds a thread of the folder changed gives the click back, and does not run while T3 Code may name that thread', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    let claimed: (() => void) | undefined
+    stand.answer = (name) => {
+      if (name === 'delivery:claim' && !claimed) return new Promise<undefined>((r) => (claimed = () => r(undefined)))
+      return undefined
+    }
+    try {
+      const [claude] = await closedClaude()
+      await until(() => stand.t3.asked.length === 1)
+      stand.t3.asked[0]!.answer(undefined, true, true)
+      await until(() => claimed !== undefined)
+      clock.on(1000)
+      await until(() => stand.t3.asked.length === 2)
+      // The next listing finds one of the folder's threads changed, and its pass has yet to answer
+      stand.t3.asked[1]!.search.near = false
+      claimed!()
+      await until(() => called('delivery:release').includes(claude!.id))
+      await pause(1500)
+      expect(reopenedFor()).toEqual([])
+      stand.t3.asked[1]!.answer('t3-thread-c')
+      await until(() => stand.t3.sent.length === 1, 8000)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      expect(reopenedFor()).toEqual([])
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
+  test('a reopening whose start is being told to It when a thread of T3 Code is found to hold the conversation is not run, and the click goes to the thread', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    let begun: (() => void) | undefined
+    stand.answer = (name) => {
+      // It is told that the run begins, and answers only once the test says
+      if (name === 'machines:runBegan' && !begun) return new Promise<undefined>((r) => (begun = () => r(undefined)))
+      return undefined
+    }
+    try {
+      const [claude] = await closedClaude()
+      // Its folder is known here, so the reopening goes as far as telling It that it begins
+      noteConversation(claude!.session, home)
+      await until(() => stand.t3.asked.length === 1)
+      stand.t3.asked[0]!.answer(undefined, true, true)
+      await until(() => begun !== undefined)
+      clock.on(1000)
+      await until(() => stand.t3.asked.length === 2)
+      stand.t3.asked[1]!.answer('t3-thread-c')
+      await until(() => existsSync(path.join(home, 't3-threads.json')))
+      begun!()
+      await until(() => stand.t3.sent.length === 1, 8000)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      // Nothing was run: the app's own command would have failed here, and said so
+      expect(said.filter((line) => line.includes('was not taken by the reopening'))).toEqual([])
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
   test('a search whose next listing finds a thread of the conversation’s folder changed no longer lets a click past the wait, before that listing’s pass is over', async () => {
     withT3Code()
     stand.t3.slow = true

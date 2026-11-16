@@ -884,8 +884,13 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
       // from the moment the listing shows it changed: here T3 Code does not answer for it in time
       listed.find((t) => t.id === 'site-2')!.updatedAt = '2026-10-03T00:00:00Z'
       threads['site-2'] = null
-      expect(await t3ThreadOf(found.t3, inSite, search, AbortSignal.timeout(500))).toMatchObject({ status: 'incomplete', near: false })
+      const readBefore = found.read.filter((id) => id === 'site-2').length
+      const pass = t3ThreadOf(found.t3, inSite, search, AbortSignal.timeout(3000))
+      // Said while the pass still waits for that thread, and not only once it is over
+      for (let i = 0; i < 200 && found.read.filter((id) => id === 'site-2').length === readBefore; i++) await new Promise((r) => setTimeout(r, 10))
+      expect(found.read.filter((id) => id === 'site-2').length).toBe(readBefore + 1)
       expect(t3NearRead(search)).toBe(false)
+      expect(await pass).toMatchObject({ status: 'incomplete', near: false })
       threads['site-2'] = 'in-site-2'
       // It goes behind the others of its search, and the next search reads it first again, with
       // the last of the workspace: every thread has been read by then, and none holds it
