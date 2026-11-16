@@ -34,7 +34,8 @@
 // chosen for Hermes on the Machines page and once with Approvals. Auto-wake reopens the
 // conversation each time, and its turn runs `rm -r` on a folder, which Hermes flags as dangerous:
 // in YOLO the folder goes, and in Approvals Hermes refuses the command. A conversation that
-// Hermes's gateway holds, as from Hermes 0.22.7, keeps its own approvals, and is refused in both.
+// Hermes's gateway holds, as from Hermes 0.22.7, keeps its own approvals: in YOLO it is reopened
+// with them, which refuse the command here, and in Approvals it is not reopened at all.
 // Hermes before 0.20.5 takes no `--query-file`, and that part is not run there.
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs'
@@ -555,8 +556,9 @@ try {
   // Machines page, and the reopened turn runs `rm -r` on a folder, which Hermes flags as dangerous.
   // In YOLO Hermes runs it, and in Approvals it refuses it, since nobody is there to approve it.
   // Either way the turn goes on to change the page. A conversation that Hermes's gateway holds, as
-  // from Hermes 0.22.7, keeps the approvals it was started with whatever is chosen, and this one
-  // was started with Hermes's own: there the command is refused in both. Hermes before 0.20.5 has
+  // from Hermes 0.22.7, keeps the approvals it was started with, Hermes's own for this one: It
+  // reopens it only in YOLO, where the command is refused, and in Approvals not at all, since it
+  // could not hold it to Approvals, and says why. Hermes before 0.20.5 has
   // no `--query-file`, by which It gives a reopened conversation its message, and It cannot reopen
   // a conversation of it.
   if (!later(version, '0.20.4')) note(`Hermes ${version} takes no --query-file, so It cannot reopen a conversation of it: that part is not run`)
@@ -571,6 +573,7 @@ try {
       ['approvals', 'Approvals'],
     ]) {
       const deletes = mode === 'yolo' && !inGateway
+      const reopens = mode === 'yolo' || !inGateway
       const end = Date.now() + 90_000
       while ((await stopButton.count()) > 0 && Date.now() < end) await sleep(250)
       await stopGateway()
@@ -579,6 +582,22 @@ try {
       mkdirSync(folder, { recursive: true })
       wakeDelete = { folder, mode, said: null }
       await frame.locator('#go').click()
+      if (!reopens) {
+        const said = await until(
+          async () => (existsSync(serviceLog) ? readFileSync(serviceLog, 'utf8') : ''),
+          (log) => log.includes('Hermes keeps this conversation’s own approvals'),
+          60_000,
+        )
+        check(
+          'in Approvals, a conversation Hermes’s gateway holds is not reopened, since It could not hold it to Approvals, and It says why',
+          said.includes('Hermes keeps this conversation’s own approvals') &&
+            existsSync(folder) &&
+            wakeDelete.said === null &&
+            (await it('state', PAGE)).json?.state?.pressed !== `woken-${mode}`,
+          said.split('\n').slice(-6).join('\n'),
+        )
+        continue
+      }
       const changed = await until(
         () => it('state', PAGE),
         (r) => r.json?.state?.pressed === `woken-${mode}`,
@@ -594,7 +613,7 @@ try {
       else
         check(
           mode === 'yolo'
-            ? 'in YOLO, a conversation Hermes’s gateway holds keeps its own approvals, which refuse the command it flags as dangerous: the folder is still there'
+            ? 'in YOLO, a conversation Hermes’s gateway holds is reopened with its own approvals, which here refuse the command it flags as dangerous: the folder is still there'
             : 'in Approvals, Hermes refused the command it flags as dangerous, as nobody was there to approve it: the folder is still there',
           existsSync(folder) && /BLOCKED/.test(wakeDelete.said ?? ''),
           wakeDelete.said,

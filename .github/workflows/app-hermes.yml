@@ -19,9 +19,9 @@ name: Hermes Agent, the real app
 #     refuses the add-on, the click must wait until the command that allows it has been run;
 #   - closes the terminal and Hermes's gateway, and has Auto-wake reopen the conversation once
 #     with YOLO chosen for Hermes on the Machines page and once with Approvals, each turn running a
-#     command Hermes flags as dangerous: YOLO runs it, Approvals refuses it, and a conversation
-#     Hermes's gateway holds keeps its own approvals in both. Hermes before 0.20.5 cannot be
-#     reopened, and that part is not run there.
+#     command Hermes flags as dangerous: YOLO runs it and Approvals refuses it, and a conversation
+#     Hermes's gateway holds is reopened with its own approvals in YOLO and not at all in
+#     Approvals. Hermes before 0.20.5 cannot be reopened, and that part is not run there.
 #
 # It runs on every pull request, on every push to master, once a night and by hand. It is a
 # workflow of its own and blocks no merge: when Hermes publishes a version that It does not work
