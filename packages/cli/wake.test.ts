@@ -459,6 +459,11 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     const reviewed = { argv: [refusing], input: 'a click', app: 'Codex', reviewed: true }
     expect(await carryOn(reviewed, scratch, { harness: 'codex', session: 'x' }, opts)).toBe(CODEX_REVIEW_ENDED)
     expect(await carryOn({ ...reviewed, argv: [bare] }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe(CODEX_REVIEW_ENDED)
+    // With the count as other languages write it
+    for (const [n, count] of ['12\u202f345', '12\u00a0345', '12’345', '12.345', '987'].entries()) {
+      const local = script(`refusing-${n}`, `printf "turn interrupted\\ntokens used\\n${count}\\n" >&2\nexit 1\n`)
+      expect(await carryOn({ ...reviewed, argv: [local] }, scratch, { harness: 'codex', session: 'x' }, opts), count).toBe(CODEX_REVIEW_ENDED)
+    }
     // Not a turn that broke off, so the next one is not told it was cut off
     expect(opts.brokeOff).not.toHaveBeenCalled()
     // Without the reviewer, ended otherwise, or with something printed after it, it is a failure as any is, and is tried again

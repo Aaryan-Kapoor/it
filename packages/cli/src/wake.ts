@@ -142,7 +142,9 @@ export const CODEX_REVIEWED_NOTE =
  */
 export const CODEX_REVIEW_ENDED = 'Codex interrupted the turn itself, as it does once its automatic reviewer has refused too many of the commands in it'
 /** What `codex exec` prints last for a turn that was interrupted: that line, and then how many tokens were used, where it knows. */
-const INTERRUPTED_SAID = /(^|\n)[ \t]*turn interrupted[ \t]*(\r?\n[ \t]*tokens used[ \t]*\r?\n[ \t]*[\d,. _]+)?\s*$/
+// The count is written as the system's language writes numbers: 12,345, 12.345, 12 345 with a
+// space that does not break, 12’345 and the like
+const INTERRUPTED_SAID = /(^|\n)[ \t]*turn interrupted[ \t]*(\r?\n[ \t]*tokens used[ \t]*\r?\n[ \t]*\d[\d\s'’.,_]*)?\s*$/u
 /** Whether what a run printed ends as `codex exec` ends a turn that was interrupted. */
 export const interruptedByCodex = (printed: string): boolean =>
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the colours a terminal is sent
