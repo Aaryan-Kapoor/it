@@ -1266,6 +1266,52 @@ async function IMAGE() {
   check('the agent says on the page what is in the photo', ok, { seconds: Math.round((Date.now() - t0) / 1000), bars: bars.join(' | ').slice(0, 300), page: said, terminal: term })
 }
 
+/**
+ * Stop on the page: a page whose answer takes a while (the agent waits 45 s first), the app quit,
+ * a click, and Stop pressed as soon as the bar offers it. Does an answer still come, and does the
+ * reopened app keep running?
+ */
+async function STOP() {
+  const who = app
+  const ask = 'Make me a page with It where I can pick one of three pizzas. Each time I pick one, first run sleep 45 in the terminal, and only then tell me on the page what you would order with it.'
+  const one = await freshPage(who, ask, PIZZA)
+  if (!one.url) return
+  const p = one.p
+  await quitApp(who)
+  await sleep(20_000)
+  const had = new Set(appProcs(who).map((x) => x.pid))
+  await p.goto(one.url).catch(() => {})
+  await sleep(5000)
+  const before = await shown(p)
+  const t0 = Date.now()
+  const picked = await press(p, PIZZA, 1)
+  step(`the app quit: picks "${picked}"`, { bar: await bar(p) })
+  let stopped = false
+  for (let i = 0; i < 60 && !stopped; i++) {
+    stopped = await p.mainFrame().evaluate(() => {
+      const b = [...document.querySelectorAll('button')].find((x) => /^stop$/i.test(x.innerText.trim()))
+      if (!b) return false
+      b.click()
+      return true
+    }).catch(() => false)
+    if (!stopped) await sleep(1000)
+  }
+  const woke = appProcs(who).filter((x) => !had.has(x.pid))
+  check('Stop is offered while the reopened turn runs', stopped, { seconds: Math.round((Date.now() - t0) / 1000), reopened: woke.map((x) => x.args).join(' | ') || 'none seen' })
+  const bars = []
+  let answered = false
+  while (Date.now() - t0 < 120_000) {
+    const b = await bar(p)
+    if (b && b !== bars.at(-1)) bars.push(b)
+    const now = await shown(p).catch(() => before)
+    if (now !== before && answerLine(before, now, picked ?? '')) answered = true
+    await sleep(2000)
+  }
+  const left = appProcs(who).filter((x) => !had.has(x.pid))
+  check('after Stop, no answer came', !answered, { bars: bars.join(' | ').slice(0, 400) })
+  check('after Stop, the reopened app is not running', left.length === 0, { stillRunning: left.map((x) => x.args).join(' | ') })
+}
+
 /** Where the ask for a star shows: five pages made with `it create`, then It's page list and a page. */
 async function STAR() {
   const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
@@ -1457,6 +1503,7 @@ async function main() {
     else if (scenario === 'TWOSAME') await TWOSAME()
     else if (scenario.startsWith('IMAGE')) await IMAGE()
     else if (scenario === 'STAR') await STAR()
+    else if (scenario === 'STOP') await STOP()
     else if (scenario === 'MISC') await MISC()
     else if (scenario === 'WAKEBOOT2') await WAKEBOOT2()
     else check(`no scenario ${scenario}`, false)
