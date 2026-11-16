@@ -2087,6 +2087,10 @@ describe('What the door passes on to the backend', () => {
     try {
       const answer = await ask(lonely.base, { path: '/health' })
       expect([answer.status, answer.body]).toEqual([502, '{"error":"backend_unreachable"}'])
+      // The log says how the connection to the backend ended, by the system's code for it and in no other words
+      expect(lonely.said.filter((line) => line.startsWith('door refused'))).toEqual([
+        'door refused a request (backend_unreachable), the connection having ended with ECONNREFUSED',
+      ])
     } finally {
       await lonely.stop()
     }
