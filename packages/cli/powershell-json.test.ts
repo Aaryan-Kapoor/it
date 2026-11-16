@@ -112,10 +112,10 @@ describe('JSON given in PowerShell as It says to give it', () => {
     expect(json(` ${value}`, 'The patch', 'it patch p --file <path>')).toEqual({ note: 'two words' })
   })
 
-  test('an apostrophe written as two, and a quotation mark and a backslash written \\u0022 and \\u005c, arrive as themselves', () => {
-    const value = singleQuoted(String.raw`' {\"say\":\"It''s a \u0022yes\u0022, café ★\"}'`)
+  test('an apostrophe written as two, and a quotation mark, a long dash and a backslash written \\u0022, \\u2014 and \\u005c, arrive as themselves', () => {
+    const value = singleQuoted(String.raw`' {\"say\":\"It''s a \u0022yes\u0022 \u2014 café ★\"}'`)
     for (const given of [windowsPowerShell(value), powerShell7(value)])
-      expect(json(given[0]!, 'The answer', undefined, true)).toEqual({ say: `It's a "yes", café ★` })
+      expect(json(given[0]!, 'The answer', undefined, true)).toEqual({ say: `It's a "yes" — café ★` })
     // A backslash at the end of a value, written \u005c, where \\ would run into the \" after it
     const path = singleQuoted(String.raw`' {\"path\":\"C:\u005c\"}'`)
     for (const given of [windowsPowerShell(path), powerShell7(path)]) expect(json(given[0]!, 'The patch', 'it patch p --file <path>')).toEqual({ path: 'C:\\' })

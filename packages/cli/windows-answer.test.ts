@@ -37,9 +37,9 @@ describe.runIf(process.platform === 'win32')('an answer of the tour, as PowerShe
     return JSON.parse(readFileSync(out, 'utf8')) as string[]
   }
   // The words as the guide has them written there: a space before the JSON, an apostrophe as two, a double quotation mark
-  // as \u0022, and none of ’ “ ” or a long dash, which have Codex refuse the command
-  const WRITTEN = String.raw` {\"say\":\"Area = side × side, so it''s 144: a \u0022square\u0022 ★ for café\"}`
-  const MEANT = { say: `Area = side × side, so it's 144: a "square" ★ for café` }
+  // as \u0022 and a long dash as \u2014, since a command with ’ “ ” or a long dash in it is one Codex refuses
+  const WRITTEN = String.raw` {\"say\":\"Area = side × side, so it''s 144 \u2014 a \u0022square\u0022 ★ for café\"}`
+  const MEANT = { say: `Area = side × side, so it's 144 — a "square" ★ for café` }
   for (const shell of ['powershell.exe', 'pwsh'])
     test.runIf(runs(shell))(`in ${shell}, the JSON in single quotes after a space, with its quotes written \\", arrives whole and is read as meant`, () => {
       const args = given(shell, `${program} tour answer k57abc '${WRITTEN}'`)
