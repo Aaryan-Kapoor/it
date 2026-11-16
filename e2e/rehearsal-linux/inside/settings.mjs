@@ -9,6 +9,12 @@ if (app === 'claude') {
   mkdirSync(`${home}/.claude`, { recursive: true })
   const s = existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : {}
   Object.assign(s, { model, effortLevel: effort })
+  // Nothing an agent under test does may leave the machine on the owner's account: Claude Code's own
+  // Artifact tools publish to claude.ai, and the owner's claude.ai connectors reach their documents
+  // and mail. They are denied here, as `apps = false` does for Codex below. (On 2026-11-16 a Claude
+  // Code with It not set up published a private artifact before this was here.)
+  const deny = ['Artifact', 'ArtifactData', 'ArtifactComments', 'mcp__claude_ai_Claude_Docs', 'mcp__claude_ai_Gmail', 'mcp__claude_ai_Google_Drive', 'mcp__claude_ai_Google_Calendar']
+  s.permissions = { ...(s.permissions ?? {}), deny: [...new Set([...(s.permissions?.deny ?? []), ...deny])] }
   writeFileSync(f, `${JSON.stringify(s, null, 2)}\n`)
 } else {
   const f = `${home}/.codex/config.toml`
