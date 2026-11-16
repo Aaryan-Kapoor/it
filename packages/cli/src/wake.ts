@@ -327,10 +327,10 @@ export const autoCouldNotCheck = (printed: string): boolean => /auto mode could 
 /**
  * Why a Hermes conversation that Hermes's gateway holds, as from Hermes 0.22.7, is not reopened in
  * Approvals: it keeps the approvals it was started with, which may be YOLO, and nothing given to one
- * run changes them. It is reopened where YOLO is chosen, which allows all that it can have.
+ * run changes them. It is reopened in YOLO, the starting value, which allows all that it can have.
  */
 export const HERMES_KEEPS_ITS_OWN =
-  'Hermes keeps this conversation’s own approvals, which It cannot hold to Approvals; to reopen it with them, choose YOLO beside Hermes’s Auto-wake under Machines'
+  'Hermes keeps this conversation’s own approvals, which It cannot hold to Approvals; to reopen it with them, choose YOLO, the starting value, beside Hermes’s Auto-wake under Machines'
 
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {
@@ -388,14 +388,15 @@ export interface Carrying {
  * - OpenCode is run as `opencode run`, which refuses whatever the person's OpenCode settings would
  *   ask about, since nobody is there to answer, unless the mode chosen is Auto-approve, given as
  *   `--auto`, under which it approves all that and refuses only what those settings deny.
- * - Hermes is run with its approvals as the person's Hermes settings have them for a one-shot run,
- *   which refuse a command Hermes flags as dangerous unless those settings approve it there, unless
- *   the mode chosen is YOLO, given as `--yolo`, under which Hermes approves every command but its
- *   own hardline blocklist and the person's `approvals.deny` rules. From Hermes 0.22.7 a
+ * - Hermes is run in YOLO, its starting value, given as `--yolo`, under which Hermes approves every
+ *   command but its own hardline blocklist and the person's `approvals.deny` rules, unless Approvals
+ *   is chosen: its approvals as the person's Hermes settings have them for a one-shot run, which
+ *   refuse a command Hermes flags as dangerous unless those settings approve it there. From Hermes 0.22.7 a
  *   conversation is held by Hermes's gateway, and keeps the approvals it was started with: a run's
  *   `--yolo` does not reach it, and nothing else does short of changing the conversation itself or
  *   the person's settings, which It does not do. Such a conversation is reopened, with its own
- *   approvals, only where YOLO is chosen, and not in Approvals (`HERMES_KEEPS_ITS_OWN`).
+ *   approvals, in YOLO, which is also where nothing is chosen, and not in Approvals
+ *   (`HERMES_KEEPS_ITS_OWN`).
  *
  * Each mode is given on the command line of that one run, and nothing is written to the app's own
  * settings. A mode's name that this It does not know is the one that allows least.
@@ -496,10 +497,11 @@ export function carrying(
     const hermes = starting('hermes')
     if (!hermes) return `${app} was not found`
     // A conversation Hermes's gateway holds keeps the approvals it was started with, which `--yolo`
-    // does not reach (Hermes 0.22.7 to 0.23.1), and which may be YOLO. It is reopened only where YOLO
-    // is chosen, which allows all it can have; in Approvals, which It could not hold it to, it is not
+    // does not reach (Hermes 0.22.7 to 0.23.1), and which may be YOLO. It is reopened only in YOLO,
+    // which allows all it can have; in Approvals, which It could not hold it to, it is not, and nor
+    // where no mode is given at all, as no connector gives none for Hermes
     if (inGateway && has.wakeMode !== 'yolo') return HERMES_KEEPS_ITS_OWN
-    // YOLO where it is chosen, and otherwise Hermes's approvals as the person's settings have them
+    // YOLO where it is the mode, and otherwise Hermes's approvals as the person's settings have them
     const yolo = has.wakeMode === 'yolo' && !inGateway ? ['--yolo'] : []
     return { argv: [...hermes, 'chat', '--resume', session, ...yolo, '--query-file', '-'], input: text, app }
   }

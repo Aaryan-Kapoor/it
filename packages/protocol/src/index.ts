@@ -546,12 +546,14 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
       },
     ],
   },
-  // Hermes's `--yolo`, or its approvals, under which a one-shot run refuses a command Hermes flags
-  // as dangerous unless the person's settings approve it there, which is how It always reopened Hermes.
-  // From Hermes 0.22.7 its gateway holds a conversation, which keeps the approvals it was started
-  // with, and a run's `--yolo` does not reach it: such a conversation is reopened only in YOLO
+  // Hermes's `--yolo`, which is the starting value as the owner chose, or its approvals, under which
+  // a one-shot run refuses a command Hermes flags as dangerous unless the person's settings approve
+  // it there, which is how It reopened Hermes before there was a choice. From Hermes 0.22.7 its
+  // gateway holds a conversation, which keeps the approvals it was started with, and a run's
+  // `--yolo` does not reach it: such a conversation is reopened in YOLO, with those approvals, and
+  // not at all where Approvals is chosen
   hermes: {
-    default: 'approvals',
+    default: 'yolo',
     choices: [
       {
         id: 'yolo',
@@ -572,10 +574,10 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
  * Such an It, on a machine that joined this one, ignores the choice. For Codex it gives the
  * workspace sandbox and nothing about who approves, so a reviewer the person chose in their own
  * Codex settings may approve there: at most Approve for me. Pi, OpenCode and Hermes it runs as they
- * are, with nothing on the command line about permissions: Pi in its one way, OpenCode in Ask and
- * Hermes in Approvals, which are the modes where nothing is chosen. Where what is chosen allows less
- * than this, the backend does not let it start a run, and where it allows more, the page says that
- * the machine runs less (see `runBegan`).
+ * are, with nothing on the command line about permissions: Pi in its one way, OpenCode in Ask, which
+ * are their modes where nothing is chosen, and Hermes in Approvals, which allows less than its YOLO
+ * where nothing is chosen. Where what is chosen allows less than this, the backend does not let it
+ * start a run, and where it allows more, the page says that the machine runs less (see `runBegan`).
  */
 export const WAKE_MODE_LEGACY: Partial<Record<Harness, string>> = {
   codex: 'approve-for-me',
