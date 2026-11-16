@@ -977,7 +977,7 @@ async function OTHERAPP() {
     if (i >= 5 && /Type your message|for shortcuts|\/help for commands|ctrl\+o|^\s*[❯>]\s*$|~\/work\s*$/m.test(tail)) break
   }
   await sleep(3000)
-  const askText = 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.'
+  const askText = scenario === 'OTHERAPP-skill' ? 'Use your it skill to make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.' : 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.'
   for (let i = 0; i < 3; i++) {
     step(`types to ${who}: a page${i ? ' (again: it had not taken it)' : ''}`)
     await type(askText)
@@ -1251,7 +1251,7 @@ async function main() {
     else if (scenario === 'RESTARTCLICK') await RESTARTCLICK()
     else if (scenario === 'VENV') await VENV()
     else if (scenario === 'STANDIN') await STANDIN()
-    else if (scenario === 'OTHERAPP') await OTHERAPP()
+    else if (scenario.startsWith('OTHERAPP')) await OTHERAPP()
     else if (scenario.startsWith('SITES')) await SITES()
     else if (scenario === 'MISC') await MISC()
     else if (scenario === 'WAKEBOOT2') await WAKEBOOT2()
