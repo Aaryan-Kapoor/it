@@ -204,7 +204,7 @@ The tour has more pages for a person who asks for more: a menu, the same things 
 it displays
 ```
 
-If the list is empty, or every display in it has `"paired": false`, the person has no screen paired. Tell them to run `it site`, which opens the site in a browser and pairs that browser, and wait for them. Each `it tour show` below brings its page up on the display the person is using, which It chooses by itself, so name none. What `it tour show` prints says which display was asked to bring the page up, in `shownOn`: if that is empty, nobody is looking at the page, so say that in place of the page's line.
+If the list is empty, or every display in it has `"paired": false`, the person has no screen paired. Run `it site` yourself, which opens the site in a browser on this computer where it can and pairs that browser, tell them that a tab has opened where it printed `"opened": true`, give them the link it prints, and wait for them. Each `it tour show` below brings its page up on the display the person is using, which It chooses by itself, so name none. What `it tour show` prints says which display was asked to bring the page up, in `shownOn`: if that is empty, nobody is looking at the page, so say that in place of the page's line.
 
 Each page of the tour has a fixed id, `tour-` and its name, so every command below can be run as it is written. Keep the `id` and `version` printed by each `it tour show`: together they identify the showing now on the screen. In PowerShell, write the words of every command below as the first page's section says for PowerShell.
 
