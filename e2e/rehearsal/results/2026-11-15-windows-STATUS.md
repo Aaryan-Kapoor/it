@@ -13,7 +13,11 @@
 - **New, and it would hurt even on 0.1.43: a woken Codex may run only plain `it …` commands.** `it --% …`, which TOUR.md teaches for PowerShell, and any other command (`Get-Location`) are "rejected: blocked by policy". The page then says "Your agent could not do that" (runs 0415, 0425). Claude Code woken has no such limit.
 - Scenario 11 in part (a folder with a space and accents): the wake works for both apps. The owner's versions: Claude Code 2.1.322 works; Codex 0.167.2's woken turn used `--%` and was refused.
 
-Next: what is left of the earlier list ("Not run, and why"), until about 08:00 UTC.
+- **The final candidate 8af67f7c (#504):** Claude Code open, It restarted, a press waiting: 5 of 5 answered in the window, no second copy (published 0.1.42: 1 of 5 started a second copy). The restart script: `"reopened":0` in 8 of 8. Plain cases no slower.
+- **The worst thing left for the hackathon, on any version:** a woken Codex on Windows cannot send It JSON or any non-ASCII letter. Every tour answer and every `it patch` from a closed Codex conversation fails with "Your agent could not do that" (run 0505, and the forms table below).
+- Run 0505 (recorded, a person): agent-led install of 0.1.43 the guide's way works; the tour's click after Codex is closed is not answered.
+
+Part three stopped at 06:30 UTC. The worker "It: Windows rehearsal, part four" takes over the laptop from here (the stand-in and keep-awake handed over running).
 
 **Paused 17:47-21:30 UTC for the owner**, right after scenario 3 with Codex on bba16ffc. Run 1745-s6-codex had been set up, but no recording and no person had begun. It was stopped and is not counted, and nothing of it was left running. The stand-in and the keep-awake process were ended by their ids at the pause.
 **Next, on resuming (21:33 UTC):** build cb551698 (#497, the `runSync` fix made from the spawnSync proof; #498; #499) and check #497 here; then the first path with Claude Code (the amber box) and with Codex; then scenario 6; then the first path from the real site once 0.1.42 is published.
@@ -87,6 +91,25 @@ Published 0.1.42, as GitHub publishes it (fetched through the stand-in, which al
 - **Claude Code 2.1.325 (run 0435):** before the update, a press in the open conversation was answered. Claude Code ran `it upgrade` without asking ("upgraded from 0.1.42 to 0.1.43… The old version is still running. To switch over, stop it serve where it's running and start it again"). While It was down for the restart, the page said **"Can't reach It. What you do here is saved on this browser, and sent when It is back"**; once 0.1.43 ran, the same tab came back by itself. **A press in the still-open conversation was answered in about 10 s** ("Claude Code is working"; nothing reopened; no "cannot hear" warning). Machines: Claude Code "Add-on loaded", Auto-wake on.
 - **Codex 0.169.0 (run 0440):** Codex **asked for approval** before `it upgrade` ("requires approval: This command can change It on this machine rather than use it"; It's rule). The person said yes; "Updated It to 0.1.43. The running service will use it after a restart." After the restart, **a press in the still-open window was answered** ("Codex is working" → "Done" in 29 s).
 - **Verdict:** an update in the middle of the event, done the way It offers it, keeps open conversations and open pages working with both apps. The person sees "Can't reach It" during the restart, and the tab comes back by itself.
+
+## The FINAL candidate 8af67f7c (#502, #503, #504), on Windows (05:50-06:25 UTC)
+
+Built here from `candidate/0.1.43` at 8af67f7c (`build-8af67f7c.log`), served by the stand-in; launcher PATH, Claude Code signed in by a file, reporting off.
+- **(a) The plain cases, Claude Code 2.1.325 (run 0600): nothing worse than fe8f6e1d.**
+  - A press with the conversation open: answered in the window in about 7 s.
+  - `/exit`, then a press at 06:02:30.4: reopened at 06:02:50.9 (20 s; on fe8f6e1d 13-19 s in runs 0222, 0355 and 0410) and answered by about 06:03:12.
+  - **A CLOSED conversation, with the press made while It was down:** "Can't reach It. Saved on this browser, and sent when It is back". Then It started (connector at 06:04:17.5): **reopened at 06:04:28.4, 10.9 s after the connector started**, which is #504's seven seconds plus the usual pickup (my watcher polls every second), and answered.
+  - **Codex's plain cases on 8af67f7c were not run** (only run 0540's woken-forms test was; its open press and its wakes behaved as on fe8f6e1d apart from the forms).
+- **(b) Claude Code OPEN with a page; It stopped; a press while It is down; It started.** Five tries each, each It restart by the harness (`it-stop`/`it-start`), the open window watched, every `claude --resume` recorded (`reopened-env.mjs`):
+
+| | try 1 | try 2 | try 3 | try 4 | try 5 |
+|---|---|---|---|---|---|
+| **8af67f7c** (run 0600, 06:06-06:13) | window, no reopen | window, no reopen | window, no reopen | window, no reopen | window, no reopen |
+| **published 0.1.42** (run 0615, 06:17-06:24) | window, no reopen | window, no reopen | **second copy**: `claude --resume a4e5f4bb… --print --permission-mode auto …` at 06:20:58.6, seconds after It came up; the open window did **not** answer that press | window, no reopen | window, no reopen |
+
+  **8af67f7c: 5 of 5 answered in the open window, no second copy. Published 0.1.42: 1 of 5 started a second copy beside the open Claude Code** (on Linux 9 of 9; Windows hit it less often here).
+- **(c) `claude-code-restart.mjs`** (commit aba099cd, copied into the candidate's `e2e\apps\`), Claude Code 2.1.325 from npm into a throwaway prefix, `IT_PORT=5660 RESTART_TRIES=8 CLICKS_WAITING=1`, with `IT_BIN` set to the built Windows program. Without it the first turn's Bash tool got "it: command not found", since the Node bundle leaves no `it.exe` in It's folder. Playwright's browser was installed under `D:\it-rehearsal\work\ms-playwright`, not in the owner's profile. **All 8 lines `{"n":…}` show `"reopened":0`** (`turns` 0, `arrivedMs` about 60 s each). 33 of 34 checks passed; the one failure is "every try answered the click in the open conversation", which fails by design with `CLICKS_WAITING=1`. Log: `D:\it-rehearsal\work\restart-check-8af67f7c.log`.
+- **Verdict: #504 does on Windows what it is for. 8af67f7c started no second copy in 5 + 8 tries where 0.1.42 started one in 5. Nothing else was slower, apart from the intended hold of up to 7 s for a click waiting as It starts.** Untouched by the candidate: a woken Codex cannot send JSON (next section), so the tour's click after Codex is closed is still not answered on Windows.
 
 ## What a woken Codex may run on Windows: the facts (for the worker on the other machine; 05:30-05:50 UTC)
 
