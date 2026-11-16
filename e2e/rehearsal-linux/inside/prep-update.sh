@@ -19,4 +19,5 @@ fi
 chmod 700 /etc/rehearsal-between.sh
 su -l ana -s /bin/bash -c 'grep -o "PATH=[^\"]*" ~/.config/systemd/user/it.service'
 # A terminal opened after the install, as a person opens one: the one the harness opened is older
-su -l ana -s /bin/bash -c 'tmux kill-server 2>/dev/null; tmux new-session -d -s agent -x 104 -y 56 -c /home/ana/work; sleep 2; tmux send-keys -t agent "command -v $(test -x ~/.local/bin/claude && echo claude || echo codex)" Enter'
+# kill-server returns before the old server is gone, and a new-session that reaches the dying one fails
+su -l ana -s /bin/bash -c 'tmux kill-server 2>/dev/null; for i in 1 2 3 4 5; do sleep 1; tmux new-session -d -s agent -x 104 -y 56 -c /home/ana/work 2>/dev/null && break; done; sleep 2; tmux send-keys -t agent "command -v $(test -x ~/.local/bin/claude && echo claude || echo codex)" Enter'
