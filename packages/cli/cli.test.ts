@@ -32,6 +32,7 @@ import {
   backend,
   changeWhole,
   clashed,
+  codexMayAsk,
   currentSession,
   forgetMachine,
   harnessEnv,
@@ -1235,6 +1236,20 @@ describe('which conversation a command is run in', () => {
           else expect(note).toBeUndefined()
         })
       }
+
+  test('what is said to Codex alone is withheld only from another app known to have run the command from inside a Codex conversation', () => {
+    const codex = { CODEX_THREAD_ID: 'the-codex-one' }
+    const both = { ...codex, CLAUDE_CODE_SESSION_ID: 'the-claude-one', IT_HARNESS: 'claude-code', IT_SESSION: 'the-claude-one' }
+    expect(codexMayAsk(sessionAsked(codex, unseen))).toBe(true)
+    // Claude Code started from inside Codex, and seen to be the nearer
+    expect(codexMayAsk(sessionAsked(both, () => ['claude-code', 'codex']))).toBe(false)
+    // Codex started from inside Claude Code, which inherited Claude Code's marks
+    expect(codexMayAsk(sessionAsked(both, () => ['codex', 'claude-code']))).toBe(true)
+    // Neither seen, as in a sandbox that hides what is above: Codex may still have run it
+    expect(codexMayAsk(sessionAsked(both, unseen))).toBe(true)
+    expect(codexMayAsk(sessionAsked({ CLAUDE_CODE_SESSION_ID: 'the-claude-one' }, unseen))).toBe(false)
+    expect(codexMayAsk(sessionAsked({}, unseen))).toBe(false)
+  })
 
   test('an inner Claude Code conversation keeps its page when it was started from inside Codex and neither can be seen above', () => {
     const env = { CODEX_THREAD_ID: 'outer-codex', CLAUDE_CODE_SESSION_ID: 'inner-claude', IT_HARNESS: 'claude-code', IT_SESSION: 'inner-claude' }

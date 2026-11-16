@@ -56,11 +56,21 @@ const taken = (port: number): Promise<boolean> =>
 /** The four ports It uses when it counts from one: the site's, the pages', and the backend program's two. */
 const portsFrom = (port: number) => [port, port + PORTS.content, port + PORTS.backendApi, port + PORTS.backendSite]
 
-/** How another first port is named for one command, in the words of the shell this system's terminals speak. */
-const naming = (port: number | undefined): string =>
-  process.platform === 'win32'
-    ? `\`$env:IT_PORT='${port ?? '<port>'}'; it setup --none --no-service\``
-    : `\`IT_PORT=${port ?? '<port>'} it setup --none --no-service\``
+/** How another first port is named for one setup, in the words of the shell this system's terminals speak. */
+const naming = (port: number | undefined, setup: string, platform: NodeJS.Platform): string =>
+  platform === 'win32' ? `\`$env:IT_PORT='${port ?? '<port>'}'; ${setup}\`` : `\`IT_PORT=${port ?? '<port>'} ${setup}\``
+
+/**
+ * What a first setup that found its ports taken says to do, with `free` the first port it found
+ * free. Where another program has them, the person's own It is set up from that port, as a
+ * background service like any other. Where another It has them, this one is a second It, which
+ * is run by hand: there is only one background service per account.
+ */
+export function portHint(another: boolean, free: number | undefined, platform: NodeJS.Platform = process.platform): string {
+  return another
+    ? `Nothing was set up. To run a second It by hand, keep IT_HOME set to this folder and use ${naming(free, 'it setup --none --no-service', platform)}, then \`it serve\`. The port is written into its settings, so it is named this once. There is only one background service per account: setup without --no-service replaces its registration with this folder.`
+    : `Nothing was set up. To set It up on ports nothing else uses, run setup again with IT_PORT before it: ${naming(free, 'it setup', platform)}. The port is written into its settings, so it is named this once.`
+}
 
 /**
  * Before a first run writes anything, whether the ports It would use are free. Another It may
@@ -89,7 +99,7 @@ async function roomAt(port: number): Promise<void> {
       ? `Another It is already running on this machine at port ${port}, which this one would use too: another person’s here, or one set up in another folder.`
       : `Port ${inTheWay} is in use on this machine, and It would use it: it counts its ports from ${port}.`,
     'port_taken',
-    `Nothing was set up. To run a second It by hand, keep IT_HOME set to this folder and use ${naming(free)}, then \`it serve\`. The port is written into its settings, so it is named this once. There is only one background service per account: setup without --no-service replaces its registration with this folder.`,
+    portHint(another, free),
   )
 }
 

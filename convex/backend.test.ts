@@ -8824,6 +8824,41 @@ describe('publication transactions', () => {
     expect(await code(m.as.action(api.publish.begin, { ...request, title: 'Different request' }))).toBe('conflict')
   })
 
+  test('a begin refused for what it asked is said to be settled, and one refused for its identity is not', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    // What an action passes on of a mutation's refusal arrives here as JSON in JSON
+    const refusal = (begun: Promise<unknown>) =>
+      begun.then(
+        () => null,
+        (e: ConvexError<string>) => {
+          let data: unknown = e.data
+          while (typeof data === 'string') data = JSON.parse(data)
+          return data as { code: string; message: string; settled?: boolean }
+        },
+      )
+    await publish(m, 'tour-checklist', { title: 'My checklist', state: '{"added":[],"note":""}' })
+    const tour = { slug: 'tour-checklist', title: 'A checklist', state: '{"added":[],"note":""}', files: page, tour: 'checklist' }
+    expect(await refusal(m.as.action(api.publish.begin, { ...tour, operation: 'tour-conflict-identity' }))).toMatchObject({
+      code: 'conflict',
+      settled: true,
+      message: expect.stringContaining('tour does not own'),
+    })
+    const owner = { machineId: m.id, session: { harness: 'claude', id: 'someone-else' } }
+    const taking = { slug: 'tour-checklist', title: 'Mine', files: page, session: SESSION, take: true, expectedOwner: owner }
+    expect(await refusal(m.as.action(api.publish.begin, { ...taking, operation: 'changed-owner-identity' }))).toMatchObject({
+      code: 'conflict',
+      settled: true,
+      message: expect.stringContaining('changed owner'),
+    })
+    // Nothing was recorded under either identity: the same one can be used again
+    await m.as.action(api.publish.begin, { slug: 'other', title: 'Other', files: page, operation: 'tour-conflict-identity' })
+    const used = await refusal(m.as.action(api.publish.begin, { slug: 'other', title: 'Changed', files: page, operation: 'tour-conflict-identity' }))
+    expect(used).toMatchObject({ code: 'conflict', message: 'That publication identity was used for another request.' })
+    expect(used?.settled).toBeUndefined()
+  })
+
   test('a failed preparation keeps a named publication available to recover', async () => {
     const t = backend()
     await person(t, 'alice')

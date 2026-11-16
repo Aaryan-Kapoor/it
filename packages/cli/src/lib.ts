@@ -35,11 +35,13 @@ import { keepToOwner, keepToOwnerAsync } from './owner'
 import { keepOriginal, putAbsent, removeOriginal, restoreAbsent } from './preserve'
 import { added, shellEnv } from './shell-env'
 
-export const VERSION = '0.1.42'
+export const VERSION = '0.1.43'
 export const api: any = anyApi
 
 /** A failure the person or agent can act on. `hint` says what to do next. */
 export class Problem extends Error {
+  /** Set by `translate` on a refusal the backend says is of what was asked, with nothing under way or made by it. */
+  settled?: boolean
   constructor(
     message: string,
     readonly code = 'error',
@@ -566,8 +568,11 @@ export function backend(): Backend {
  * not known where nothing has told it.
  */
 let registeredHere: () => boolean | 'unknown' = () => 'unknown'
-export const askRegisteredWith = (ask: () => boolean | 'unknown') => {
+/** Whether anything on this machine could keep It running by itself, as `service` tells it, told here in the same way. */
+let keptHere: () => boolean = () => true
+export const askRegisteredWith = (ask: () => boolean | 'unknown', keeps?: () => boolean) => {
   registeredHere = ask
+  if (keeps) keptHere = keeps
 }
 /** What `it serve` is, said beside every way to start It: an agent told to start It with it ran it in its own session. */
 const SERVE_IS = '`it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.'
@@ -578,7 +583,13 @@ const SERVE_IS = '`it serve` runs It only until the terminal it was started in c
  * session, which never returns, and It then lived only as long as the session, with the
  * registered service left stopped.
  */
-export function notRunningHint(registered: boolean | 'unknown' = registeredHere()): string {
+export function notRunningHint(registered: boolean | 'unknown' = registeredHere(), kept: () => boolean = keptHere): string {
+  // Where nothing could keep It running by itself, as in a container, setup has said so already,
+  // and sending the person back to it, or to `it service install`, which refuses there, leads
+  // round in a circle. A service's definition can be on the disk there all the same, as in a
+  // home that a container shares with the machine it runs on
+  if (registered !== 'unknown' && !kept())
+    return `Nothing can keep It running in the background on this machine, which has no systemd for your account that can be reached from here, as in a container. Run \`it serve\` in a terminal of your own and leave that terminal open, or under a supervisor of your own. ${SERVE_IS}`
   if (registered === true)
     return `It's background service is registered on this machine and is not running: \`it service install\` starts it again and keeps it running. ${SERVE_IS}`
   if (registered === false) return `Run \`it setup\`, which starts It and keeps it running in the background. ${SERVE_IS}`
@@ -1613,13 +1624,16 @@ export async function translate(err: unknown): Promise<never> {
       anothers?: boolean
       notSent?: string
       sharedName?: boolean
+      settled?: boolean
     }
     // A display that was named and takes nothing now is refused with why, which is the code: `not_paired`, `agents_off` or `nowhere`
     const why = typeof data.notSent === 'string' && /^[a-z_]{1,20}$/.test(data.notSent) ? data.notSent : undefined
-    throw new Problem(
+    const refused = new Problem(
       data.message ?? 'Refused.',
       data.noSuchDisplay ? 'no_such_display' : data.anothers ? 'anothers' : data.sharedName ? 'shared_name' : (why ?? data.code ?? 'error'),
     )
+    if (data.settled === true) refused.settled = true
+    throw refused
   }
   const text = String((err as Error)?.message ?? err)
   if (clashed(err)) throw new Problem('It is busy just now. Try again in a moment.', 'unavailable')
@@ -1949,6 +1963,16 @@ export function sessionAsked(
   if (!nearest) return as(pair?.harness ?? marked.keys().next().value!, false)
   if (pair && pair.harness !== 'claude-code' && !apps.includes(pair.harness)) return as(pair.harness, false)
   return as(nearest, true)
+}
+
+/**
+ * Whether Codex may be the agent app that ran this command: the app whose conversation it was
+ * taken to be in, or one whose mark was on it too where which app ran it could not be told.
+ * What is said to an agent in Codex alone is withheld only where another app is known to have
+ * run the command, as one started from inside a Codex conversation, which carries Codex's mark.
+ */
+export function codexMayAsk(asked: Asking | undefined): boolean {
+  return asked !== undefined && (asked.session.harness === 'codex' || asked.unsettled.includes('codex'))
 }
 
 /**
